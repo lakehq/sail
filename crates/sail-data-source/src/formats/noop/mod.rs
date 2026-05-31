@@ -2,15 +2,18 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::catalog::Session;
+use datafusion_expr::logical_plan::Extension;
+use datafusion_expr::LogicalPlan;
 use datafusion::logical_expr::TableSource;
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{not_impl_err, plan_err, Result};
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
-use crate::formats::noop::writer::NoopSinkExec;
-
 mod writer;
+mod write_node;
+
+pub use writer::NoopSinkExec;
+pub use write_node::NoopWriteNode;
 
 #[derive(Debug, Default)]
 pub struct NoopTableFormat;
@@ -33,27 +36,21 @@ impl TableFormat for NoopTableFormat {
         &self,
         _ctx: &dyn Session,
         info: SinkInfo,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let SinkInfo {
-            input,
-            partition_by,
-            bucket_by,
-            sort_order: _,
-            ..
-        } = info;
-
-        if is_flow_event_schema(&input.schema()) {
+    ) -> Result<LogicalPlan> {
+        if is_flow_event_schema(info.input.schema().inner()) {
             return plan_err!("cannot write streaming data to noop format");
         }
 
-        if bucket_by.is_some() {
+        if info.bucket_by.is_some() {
             return not_impl_err!("bucketing for noop write format");
         }
 
-        if !partition_by.is_empty() {
+        if !info.partition_by.is_empty() {
             return not_impl_err!("partitioning for noop write format");
         }
 
-        Ok(Arc::new(NoopSinkExec::new(input)))
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(NoopWriteNode::new(Arc::new(info.input))),
+        }))
     }
 }

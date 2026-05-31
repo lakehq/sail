@@ -1,8 +1,13 @@
 use std::sync::Arc;
 
-use datafusion::datasource::file_format::parquet::ParquetFormat;
-use datafusion_common::{DataFusionError, Result};
-use datafusion_datasource::file_format::FileFormat;
+use datafusion::catalog::Session;
+use datafusion::logical_expr::dml::InsertOp;
+use datafusion::physical_expr::LexRequirement;
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion_common::{not_impl_err, DataFusionError, Result};
+use datafusion_datasource::file_sink_config::FileSinkConfig;
+use datafusion_datasource::sink::DataSinkExec;
+use datafusion_datasource_parquet::file_format::ParquetSink;
 
 use crate::listing::source::WriteFormat;
 use crate::options::gen::ParquetWriteOptions;
@@ -13,16 +18,27 @@ pub struct ParquetWriteFormat {
 }
 
 impl WriteFormat for ParquetWriteFormat {
-    fn create_write_format(&self) -> Result<(Arc<dyn FileFormat>, Option<String>)> {
+    fn sink(
+        &self,
+        input: Arc<dyn ExecutionPlan>,
+        _ctx: &dyn Session,
+        conf: FileSinkConfig,
+        order_requirements: Option<LexRequirement>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if conf.insert_op != InsertOp::Append {
+            return not_impl_err!("Overwrites are not implemented yet for Parquet");
+        }
+
         let options = self
             .options
             .clone()
             .into_table_options()
             .map_err(DataFusionError::from)?;
-        let compression = options.global.compression.clone();
-        Ok((
-            Arc::new(ParquetFormat::default().with_options(options)),
-            compression,
-        ))
+        let sink = Arc::new(ParquetSink::new(conf, options));
+        Ok(Arc::new(DataSinkExec::new(
+            input,
+            sink,
+            order_requirements,
+        )) as _)
     }
 }

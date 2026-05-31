@@ -12,7 +12,7 @@ use datafusion::physical_expr::{
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, Result};
 use datafusion_expr::expr::Sort;
-use datafusion_expr::TableSource;
+use datafusion_expr::{LogicalPlan, TableSource};
 
 use crate::catalog::CatalogPartitionField;
 use crate::extension::SessionExtension;
@@ -190,7 +190,21 @@ pub struct SourceInfo {
 /// Information required to create a data writer.
 #[derive(Debug, Clone)]
 pub struct SinkInfo {
-    pub input: Arc<dyn ExecutionPlan>,
+    pub input: LogicalPlan,
+    pub mode: SinkMode,
+    pub partition_by: Vec<CatalogPartitionField>,
+    pub bucket_by: Option<BucketBy>,
+    pub sort_order: Vec<Sort>,
+    /// The sets of options for the data sink.
+    /// A later set of options can override earlier ones.
+    /// The path for the sink is stored under the `"path"` key in options.
+    pub options: Vec<OptionLayer>,
+}
+
+/// Information required to create a physical data writer execution plan.
+#[derive(Debug, Clone)]
+pub struct PhysicalSinkInfo {
+    pub input: Arc<dyn datafusion::physical_plan::ExecutionPlan>,
     pub mode: PhysicalSinkMode,
     pub partition_by: Vec<CatalogPartitionField>,
     pub bucket_by: Option<BucketBy>,
@@ -313,12 +327,12 @@ pub trait TableFormat: Send + Sync {
         Ok(self.create_source(ctx, info).await?.schema())
     }
 
-    /// Creates a `ExecutionPlan` for write.
+    /// Creates a logical plan for write.
     async fn create_writer(
         &self,
         ctx: &dyn Session,
         info: SinkInfo,
-    ) -> Result<Arc<dyn ExecutionPlan>>;
+    ) -> Result<LogicalPlan>;
 
     /// Creates an `ExecutionPlan` for row-level operations (DELETE, UPDATE, MERGE).
     async fn create_row_level_writer(

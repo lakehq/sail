@@ -9,7 +9,8 @@ use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::TableSource;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion_expr::logical_plan::Extension;
+use datafusion_expr::LogicalPlan;
 use datafusion_common::Result;
 use sail_common_datafusion::datasource::{
     OptionLayer, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
@@ -19,6 +20,7 @@ use super::datasource::PythonDataSource;
 use super::discovery::DATA_SOURCE_REGISTRY;
 use super::executor::InProcessExecutor;
 use super::table_provider::PythonTableProvider;
+use super::PythonWriteNode;
 
 /// TableFormat implementation for a Python data source.
 ///
@@ -204,18 +206,15 @@ impl TableFormat for PythonTableFormat {
         &self,
         _ctx: &dyn Session,
         info: SinkInfo,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        use sail_common_datafusion::datasource::PhysicalSinkMode;
-
+    ) -> Result<LogicalPlan> {
         let SinkInfo {
             input,
             mode,
             partition_by,
-            mut options,
+            options,
             ..
         } = info;
 
-        // Warn about unsupported partitionBy (PySpark compat: silently ignored)
         if !partition_by.is_empty() {
             log::warn!(
                 "partitionBy is not supported for Python datasource '{}' and will be ignored. \
@@ -224,68 +223,35 @@ impl TableFormat for PythonTableFormat {
             );
         }
 
-        // The path (if any) is already present in options under the "path" key,
-        // so it will be forwarded to the Python DataSource via self.options["path"]
-        // in __init__ (matches PySpark behavior). No additional injection needed.
-
-        // Map save mode to overwrite bool (PySpark convention).
-        // PySpark's DataSource.writer(schema, overwrite) only receives a boolean:
-        //   Overwrite variants → True, everything else → False.
-        // ErrorIfExists and IgnoreIfExists are pre-write semantics that PySpark
-        // handles at the catalog level for managed tables. For Python datasources
-        // that manage their own storage, the mode is passed as an option so the
-        // datasource can implement its own existence checks if desired.
         let overwrite = matches!(
             mode,
-            PhysicalSinkMode::Overwrite
-                | PhysicalSinkMode::OverwriteIf { .. }
-                | PhysicalSinkMode::OverwritePartitions
+            sail_common_datafusion::datasource::SinkMode::Overwrite
+                | sail_common_datafusion::datasource::SinkMode::OverwriteIf { .. }
+                | sail_common_datafusion::datasource::SinkMode::OverwritePartitions
         );
 
-        // Pass the save mode as an option for datasources that need it
-        let mode_str = match &mode {
-            PhysicalSinkMode::ErrorIfExists => "error",
-            PhysicalSinkMode::IgnoreIfExists => "ignore",
-            PhysicalSinkMode::Append => "append",
-            PhysicalSinkMode::Overwrite => "overwrite",
-            PhysicalSinkMode::OverwriteIf { .. } => "overwrite",
-            PhysicalSinkMode::OverwritePartitions => "overwrite",
-        };
-        options.push(OptionLayer::OptionList {
-            items: vec![("mode".to_string(), mode_str.to_string())],
-        });
-
-        // Create datasource and get writer using the same executor configuration
-        // path as write execution for consistent Python datasource behavior.
         let opaque_options: Vec<HashMap<String, String>> = options
+            .clone()
             .into_iter()
             .map(|l| l.into_opaque_options())
             .collect();
         let datasource = self.create_datasource(&opaque_options)?;
+
+        let schema = Arc::new(input.schema().inner().clone());
         let executor: Arc<dyn super::executor::PythonExecutor> =
             Arc::new(InProcessExecutor::from_app_config());
-        let schema = input.schema();
-        let expected_partitions = input.properties().partitioning.partition_count();
-
         let writer_plan = executor
             .get_writer(datasource.command(), &schema, overwrite)
             .await?;
 
-        let pickled_writer = writer_plan.pickled_writer;
-        let write_exec: Arc<dyn ExecutionPlan> =
-            Arc::new(super::write_exec::PythonDataSourceWriteExec::new(
-                input,
-                pickled_writer.clone(),
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(PythonWriteNode::new(
+                Arc::new(input),
+                writer_plan.pickled_writer,
                 writer_plan.is_arrow,
-            ));
-
-        Ok(Arc::new(
-            super::commit_exec::PythonDataSourceWriteCommitExec::new(
-                write_exec,
-                pickled_writer,
-                expected_partitions,
-            ),
-        ))
+                mode,
+            )),
+        }))
     }
 }
 

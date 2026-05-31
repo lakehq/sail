@@ -18,16 +18,29 @@ use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::stats::Precision;
-use datafusion_common::{project_schema, Statistics};
+use datafusion_common::{internal_err, project_schema, Statistics};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::source::DataSourceExec;
 use futures::{future, stream, Stream, StreamExt};
 use object_store::ObjectStore;
+use sail_common_datafusion::datasource::{create_sort_order, find_path_in_options};
 
+use crate::formats::{
+    arrow::ArrowFormatFactory, avro::AvroFormatFactory, binary::BinaryFormatFactory,
+    csv::CsvFormatFactory, json::JsonFormatFactory, parquet::ParquetFormatFactory,
+    text::TextFormatFactory,
+};
+use crate::listing::file_write::FileWriteNode;
 use crate::listing::source::ListingScanInput;
+use crate::listing::source::FormatFactory;
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::can_be_evaluated_for_partition_pruning;
+use crate::listing::utils::rewrite_utf8view_fields;
+use crate::listing::utils::validate_partitions;
+use crate::listing::utils::{infer_partitions, sample_listing_files};
+use crate::listing::source::WriteFormat;
+use crate::resolve_listing_urls;
 
 /// Result of a file listing operation for listing table scans.
 #[derive(Debug)]
@@ -48,12 +61,100 @@ impl ExtensionPlanner for ListingTablePhysicalPlanner {
     async fn plan_extension(
         &self,
         _planner: &dyn PhysicalPlanner,
-        _node: &dyn UserDefinedLogicalNode,
-        _logical_inputs: &[&LogicalPlan],
-        _physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &SessionState,
+        node: &dyn UserDefinedLogicalNode,
+        logical_inputs: &[&LogicalPlan],
+        physical_inputs: &[Arc<dyn ExecutionPlan>],
+        session_state: &SessionState,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
-        Ok(None)
+        let Some(node) = node.as_any().downcast_ref::<FileWriteNode>() else {
+            return Ok(None);
+        };
+        let [logical_input] = logical_inputs else {
+            return internal_err!("FileWriteNode requires exactly one logical input");
+        };
+        let [physical_input] = physical_inputs else {
+            return internal_err!("FileWriteNode requires exactly one physical input");
+        };
+
+        let Some(path) = find_path_in_options(node.options().options.as_slice()) else {
+            return internal_err!("missing path in listing write options");
+        };
+
+        if node.options().bucket_by.is_some() {
+            return datafusion_common::not_impl_err!("bucketing for listing write");
+        }
+        if node
+            .options()
+            .partition_by
+            .iter()
+            .any(|field| field.transform.is_some())
+        {
+            return datafusion_common::not_impl_err!("partition transforms for listing write");
+        }
+
+        // Always write multi-file output to a directory.
+        let path = if path.ends_with(object_store::path::DELIMITER) {
+            path
+        } else {
+            format!("{path}{}", object_store::path::DELIMITER)
+        };
+
+        let table_paths = crate::url::resolve_listing_urls(session_state, vec![path.clone()]).await?;
+        let object_store_url = table_paths
+            .first()
+            .map(datafusion_datasource::ListingTableUrl::object_store)
+            .ok_or_else(|| datafusion_common::internal_datafusion_err!("empty listing table path"))?;
+
+        let table_partition_cols = node
+            .options()
+            .partition_by
+            .iter()
+            .map(|field| (field.column.clone(), DataType::Null))
+            .collect::<Vec<_>>();
+
+        // Keep DataFusion-compatible behavior: listing writes always append.
+        let insert_op = datafusion::logical_expr::dml::InsertOp::Append;
+
+        let file_extension = match node.format().to_lowercase().as_str() {
+            "parquet" => "parquet",
+            "csv" => "csv",
+            "json" => "json",
+            "text" => "txt",
+            "arrow" => "arrow",
+            "avro" => "avro",
+            "binary" => "",
+            other => {
+                return datafusion_common::plan_err!(
+                    "unsupported listing write format: {other}"
+                )
+            }
+        }
+        .to_string();
+
+        let conf = datafusion::datasource::physical_plan::FileSinkConfig {
+            original_url: path,
+            object_store_url,
+            file_group: Default::default(),
+            table_paths,
+            output_schema: physical_input.schema(),
+            table_partition_cols,
+            insert_op,
+            keep_partition_by_columns: false,
+            file_extension,
+            file_output_mode: datafusion::datasource::physical_plan::FileOutputMode::Automatic,
+        };
+
+        let order_requirements =
+            create_sort_order(session_state, node.options().sort_by.clone(), logical_input.schema())?;
+
+        let write_format = resolve_listing_write_format(
+            session_state,
+            node.format(),
+            node.options().options.clone(),
+        )?;
+
+        let plan = write_format.sink(physical_input.clone(), session_state, conf, order_requirements)?;
+        Ok(Some(plan))
     }
 
     async fn plan_table_scan(
@@ -171,6 +272,30 @@ impl ExtensionPlanner for ListingTablePhysicalPlanner {
 
         Ok(Some(DataSourceExec::from_data_source(config)))
     }
+}
+
+fn resolve_listing_write_format(
+    ctx: &dyn Session,
+    format: &str,
+    options: Vec<sail_common_datafusion::datasource::OptionLayer>,
+) -> datafusion_common::Result<Arc<dyn WriteFormat>> {
+    let format = format.to_lowercase();
+    let write_format: Arc<dyn WriteFormat> = match format.as_str() {
+        "parquet" => Arc::new(ParquetFormatFactory::write(ctx, options)?),
+        "csv" => Arc::new(CsvFormatFactory::write(ctx, options)?),
+        "json" => Arc::new(JsonFormatFactory::write(ctx, options)?),
+        "text" => Arc::new(TextFormatFactory::write(ctx, options)?),
+        "arrow" => Arc::new(ArrowFormatFactory::write(ctx, options)?),
+        "avro" => Arc::new(AvroFormatFactory::write(ctx, options)?),
+        "binary" => Arc::new(BinaryFormatFactory::write(ctx, options)?),
+        _ => {
+            return datafusion_common::plan_err!(
+                "unsupported listing write format: {}",
+                format
+            )
+        }
+    };
+    Ok(write_format)
 }
 
 fn try_create_output_ordering(

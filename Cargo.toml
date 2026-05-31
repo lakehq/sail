@@ -168,8 +168,10 @@ datafusion = { version = "53.1.0", default-features = false, features = [
 ] }
 datafusion-common = { version = "53.1.0", features = ["object_store", "avro"] }
 datafusion-datasource = { version = "53.1.0" }
+datafusion-datasource-csv = { version = "53.1.0" }
 datafusion-datasource-avro = { version = "53.1.0" }
 datafusion-datasource-json = { version = "53.1.0" }
+datafusion-datasource-parquet = { version = "53.1.0" }
 datafusion-expr = { version = "53.1.0", default-features = false }
 datafusion-expr-common = { version = "53.1.0" }
 datafusion-proto = { version = "53.1.0" }

@@ -14,8 +14,8 @@ use sail_common_datafusion::streaming::event::schema::{
     is_flow_event_schema, MARKER_FIELD_NAME, RETRACTED_FIELD_NAME,
 };
 use sail_common_datafusion::streaming::source::{StreamSource, StreamSourceTableProvider};
+use sail_data_source::listing::file_write::FileWriteNode;
 use sail_logical_plan::barrier::BarrierNode;
-use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::range::RangeNode;
 use sail_logical_plan::show_string::ShowStringNode;
 use sail_logical_plan::streaming::collector::StreamCollectorNode;

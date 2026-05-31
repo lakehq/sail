@@ -21,9 +21,9 @@ use sail_common_datafusion::streaming::event::schema::{
     to_flow_event_field_names, to_flow_event_projection,
 };
 use sail_data_source::listing::planner::ListingTablePhysicalPlanner;
+use sail_data_source::planner::DataSourceWritePhysicalPlanner;
 use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::file_delete::FileDeleteNode;
-use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
 use sail_logical_plan::merge::MergeIntoNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
@@ -41,7 +41,6 @@ use sail_logical_plan::streaming::source_wrapper::StreamSourceWrapperNode;
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::file_delete::create_file_delete_physical_plan;
-use sail_physical_plan::file_write::create_file_write_physical_plan;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
 use sail_physical_plan::range::RangeExec;
@@ -76,6 +75,7 @@ impl QueryPlanner for ExtensionQueryPlanner {
         let mut extension_planners = new_lakehouse_extension_planners();
         extension_planners.push(Arc::new(SystemTablePhysicalPlanner));
         extension_planners.push(Arc::new(ListingTablePhysicalPlanner));
+        extension_planners.push(Arc::new(DataSourceWritePhysicalPlanner));
         extension_planners.push(Arc::new(ExtensionPhysicalPlanner));
         let planner = DefaultPhysicalPlanner::with_extension_planners(extension_planners);
         planner
@@ -170,21 +170,6 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 node.names().to_vec(),
                 node.schema().inner().clone(),
             ))
-        } else if let Some(node) = node.as_any().downcast_ref::<FileWriteNode>() {
-            let [logical_input] = logical_inputs else {
-                return internal_err!("FileWriteNode requires exactly one logical input");
-            };
-            let [physical_input] = physical_inputs else {
-                return internal_err!("FileWriteNode requires exactly one physical input");
-            };
-            create_file_write_physical_plan(
-                session_state,
-                planner,
-                logical_input,
-                physical_input.clone(),
-                node.options().clone(),
-            )
-            .await?
         } else if let Some(node) = node.as_any().downcast_ref::<FileDeleteNode>() {
             if !logical_inputs.is_empty() || !physical_inputs.is_empty() {
                 return internal_err!("FileDeleteNode should have no inputs");

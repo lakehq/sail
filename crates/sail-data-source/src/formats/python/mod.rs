@@ -32,6 +32,7 @@ mod filter;
 mod stream;
 mod table_format;
 mod table_provider;
+mod write_node;
 mod write_exec;
 
 // Public exports - always available
@@ -49,4 +50,5 @@ pub use filter::{exprs_to_python_filters, ColumnPath, FilterValue, PythonFilter}
 pub use stream::{PythonDataSourceStream, RowBatchCollector, DEFAULT_BATCH_SIZE};
 pub use table_format::PythonTableFormat;
 pub use table_provider::PythonTableProvider;
+pub use write_node::PythonWriteNode;
 pub use write_exec::PythonDataSourceWriteExec;

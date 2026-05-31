@@ -1,19 +1,22 @@
 mod options;
 mod writer;
+mod write_node;
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::catalog::Session;
+use datafusion_expr::logical_plan::Extension;
+use datafusion_expr::LogicalPlan;
 use datafusion::logical_expr::TableSource;
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{not_impl_err, plan_err, Result};
-use sail_common_datafusion::datasource::{PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat};
+use sail_common_datafusion::datasource::{SinkInfo, SinkMode, SourceInfo, TableFormat};
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
 pub use crate::formats::console::writer::ConsoleSinkExec;
 use crate::options::gen::ConsoleWriteOptions;
 use crate::options::ResolveOptions;
+pub use write_node::ConsoleWriteNode;
 
 /// Write data to stdout for testing purposes.
 #[derive(Debug)]
@@ -37,29 +40,24 @@ impl TableFormat for ConsoleTableFormat {
         &self,
         ctx: &dyn Session,
         info: SinkInfo,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let SinkInfo {
-            input,
-            mode,
-            partition_by,
-            bucket_by,
-            sort_order,
-            options,
-            logical_schema: _,
-        } = info;
-        if !is_flow_event_schema(&input.schema()) {
+    ) -> Result<LogicalPlan> {
+        if !is_flow_event_schema(info.input.schema().inner()) {
             return plan_err!("the console table format only supports streaming data");
         }
-        if !matches!(mode, PhysicalSinkMode::Append) {
+        if !matches!(info.mode, SinkMode::Append) {
             return not_impl_err!("the console table format only supports append mode");
         }
-        if !partition_by.is_empty() {
+        if !info.partition_by.is_empty() {
             return not_impl_err!("the console table format does not support partitioning");
         }
-        if bucket_by.is_some() || sort_order.is_some() {
+        if info.bucket_by.is_some() || !info.sort_order.is_empty() {
             return not_impl_err!("the console table format does not support bucketing");
         }
-        let ConsoleWriteOptions {} = ConsoleWriteOptions::resolve(ctx, options)?;
-        Ok(Arc::new(ConsoleSinkExec::new(input)))
+
+        let ConsoleWriteOptions {} = ConsoleWriteOptions::resolve(ctx, info.options)?;
+
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(ConsoleWriteNode::new(Arc::new(info.input))),
+        }))
     }
 }

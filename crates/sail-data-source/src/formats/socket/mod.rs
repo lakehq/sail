@@ -9,10 +9,10 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::catalog::Session;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::TableSource;
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{not_impl_err, plan_err, Result};
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 use sail_common_datafusion::streaming::source::StreamSourceTableProvider;
+use datafusion_expr::LogicalPlan;
 
 pub use crate::formats::socket::reader::SocketSourceExec;
 use crate::formats::socket::reader::SocketStreamSource;
@@ -68,7 +68,7 @@ impl TableFormat for SocketTableFormat {
         &self,
         _ctx: &dyn Session,
         _info: SinkInfo,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
+    ) -> Result<LogicalPlan> {
         not_impl_err!("socket table format writer")
     }
 }
