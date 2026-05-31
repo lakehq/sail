@@ -123,29 +123,11 @@ impl ScalarUDFImpl for SparkToNumber {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let safe = self.safe;
         let ScalarFunctionArgs { args, .. } = args;
-        make_scalar_function(move |a| spark_to_number_with_mode(a, safe), vec![])(&args)
+        make_scalar_function(move |a| spark_to_number_inner(a, safe), vec![])(&args)
     }
 }
 
-pub fn spark_to_number_with_mode(args: &[ArrayRef], safe: bool) -> Result<ArrayRef> {
-    match spark_to_number_inner(args) {
-        Ok(arr) => Ok(arr),
-        Err(_) if safe => {
-            // try_to_number: row-level parse errors become NULL. We still must
-            // produce a typed Decimal256 array; precision/scale are unknown
-            // without a successful format parse, so use a wide default that
-            // matches Spark's nullable Decimal default.
-            let len = args.first().map(|a| a.len()).unwrap_or(0);
-            Ok(datafusion::arrow::array::new_null_array(
-                &DataType::Decimal256(38, 18),
-                len,
-            ))
-        }
-        Err(e) => Err(e),
-    }
-}
-
-pub fn spark_to_number_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+pub fn spark_to_number_inner(args: &[ArrayRef], safe: bool) -> Result<ArrayRef> {
     if args.len() != 2 {
         return Err(invalid_arg_count_exec_err(
             SparkToNumber::NAME,
@@ -193,11 +175,23 @@ pub fn spark_to_number_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         .map(|value| match value {
             None => Ok(ScalarValue::Decimal256(None, precision, scale)),
             Some(value) => {
-                ParsedNumber::try_from_value(value, &format_spec, &value_regex, &number_components)
-                    .map(|parsed| {
-                        ScalarValue::Decimal256(Some(parsed.value), parsed.precision, parsed.scale)
-                    })
-                    .map_err(|e| exec_datafusion_err!("{}", e))
+                match ParsedNumber::try_from_value(
+                    value,
+                    &format_spec,
+                    &value_regex,
+                    &number_components,
+                ) {
+                    Ok(parsed) => Ok(ScalarValue::Decimal256(
+                        Some(parsed.value),
+                        parsed.precision,
+                        parsed.scale,
+                    )),
+                    // try_to_number: per-row parse failures become NULL with the
+                    // format-derived precision/scale so the output schema still
+                    // matches what `return_field_from_args` promised.
+                    Err(_) if safe => Ok(ScalarValue::Decimal256(None, precision, scale)),
+                    Err(e) => Err(exec_datafusion_err!("{}", e)),
+                }
             }
         })
         .collect::<Result<Vec<ScalarValue>>>();
