@@ -62,9 +62,6 @@ impl ScalarUDFImpl for SparkAbs {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        if arg_types.len() != 1 {
-            return Err(invalid_arg_count_exec_err("abs", (1, 1), arg_types.len()));
-        }
         if arg_types[0].is_numeric()
             || arg_types[0].is_null()
             || matches!(arg_types[0], DataType::Interval(_) | DataType::Duration(_))
@@ -99,9 +96,6 @@ impl ScalarUDFImpl for SparkAbs {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        if args.args.len() != 1 {
-            return Err(invalid_arg_count_exec_err("abs", (1, 1), args.args.len()));
-        }
         // Float/Decimal/UInt/Null have no ANSI overflow concerns; delegate to
         // DataFusion's built-in abs so the kernel stays correct even on
         // bypass paths where `simplify` has not rewritten the call.
@@ -451,14 +445,13 @@ impl ScalarUDFImpl for SparkAbs {
     }
 
     fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
-        if args.len() != 1 {
-            return Err(invalid_arg_count_exec_err("abs", (1, 1), args.len()));
-        }
         // Idempotence: abs(abs(x)) = abs(x).
-        if let Expr::ScalarFunction(inner) = &args[0] {
-            if let Some(inner_abs) = inner.func.inner().as_any().downcast_ref::<Self>() {
-                if inner_abs.ansi_mode == self.ansi_mode {
-                    return Ok(ExprSimplifyResult::Simplified(args[0].clone()));
+        if args.len() == 1 {
+            if let Expr::ScalarFunction(inner) = &args[0] {
+                if let Some(inner_abs) = inner.func.inner().as_any().downcast_ref::<Self>() {
+                    if inner_abs.ansi_mode == self.ansi_mode {
+                        return Ok(ExprSimplifyResult::Simplified(args[0].clone()));
+                    }
                 }
             }
         }
@@ -480,9 +473,6 @@ impl ScalarUDFImpl for SparkAbs {
     }
 
     fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
-        if input.len() != 1 {
-            return Err(invalid_arg_count_exec_err("abs", (1, 1), input.len()));
-        }
         let arg = &input[0];
         let range = &arg.range;
         if range.lower().data_type() != range.upper().data_type() {

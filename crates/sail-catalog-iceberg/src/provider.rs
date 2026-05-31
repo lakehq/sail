@@ -585,10 +585,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         &self.name
     }
 
-    fn requires_identifier_validation_for_default_table_location(&self) -> bool {
-        false
-    }
-
     async fn create_database(
         &self,
         database: &Namespace,

@@ -9,8 +9,9 @@ use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 
 use crate::error::{CatalogError, CatalogResult};
 use crate::provider::{
-    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
-    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    AlterTableOptions, CatalogLocationPolicy, CatalogProvider, CreateDatabaseOptions,
+    CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
+    Namespace,
 };
 
 #[derive(Clone)]
@@ -200,21 +201,8 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         self.inner.get_name()
     }
 
-    fn uses_spark_default_database_location(&self) -> bool {
-        self.inner.uses_spark_default_database_location()
-    }
-
-    fn uses_spark_default_table_location(&self) -> bool {
-        self.inner.uses_spark_default_table_location()
-    }
-
-    fn requires_identifier_validation_for_default_table_location(&self) -> bool {
-        self.inner
-            .requires_identifier_validation_for_default_table_location()
-    }
-
-    fn uses_spark_table_location_qualification(&self) -> bool {
-        self.inner.uses_spark_table_location_qualification()
+    fn location_policy(&self) -> CatalogLocationPolicy {
+        self.inner.location_policy()
     }
 
     async fn create_database(
@@ -405,20 +393,8 @@ mod tests {
             "mock"
         }
 
-        fn uses_spark_default_database_location(&self) -> bool {
-            true
-        }
-
-        fn uses_spark_default_table_location(&self) -> bool {
-            true
-        }
-
-        fn requires_identifier_validation_for_default_table_location(&self) -> bool {
-            true
-        }
-
-        fn uses_spark_table_location_qualification(&self) -> bool {
-            true
+        fn location_policy(&self) -> CatalogLocationPolicy {
+            CatalogLocationPolicy::SPARK_SESSION
         }
 
         async fn create_database(
@@ -836,9 +812,9 @@ mod tests {
             None,
         );
 
-        assert!(provider.uses_spark_default_database_location());
-        assert!(provider.uses_spark_default_table_location());
-        assert!(provider.requires_identifier_validation_for_default_table_location());
-        assert!(provider.uses_spark_table_location_qualification());
+        assert_eq!(
+            provider.location_policy(),
+            CatalogLocationPolicy::SPARK_SESSION
+        );
     }
 }

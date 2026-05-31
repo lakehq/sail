@@ -653,12 +653,9 @@ mod tests {
             .as_any()
             .downcast_ref::<StringArray>()
             .unwrap();
+        assert_eq!(2, value.len());
         assert_eq!("line1", value.value(0));
-        let result = std::panic::catch_unwind(|| value.value(3));
-        assert!(
-            result.is_err(),
-            "Accessing value outside of bounds should panic"
-        );
+        assert_eq!("line2", value.value(1));
     }
 
     #[expect(clippy::unwrap_used)]
