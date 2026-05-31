@@ -9,9 +9,18 @@ from pysail.testing.spark.utils.sql import format_show_string, parse_show_string
 
 
 @pytest.fixture(scope="module")
-def duck():
+def duck(request):
     conn = duckdb.connect()
-    conn.sql("CALL dbgen(sf = 0.001)")
+    try:
+        conn.sql("CALL dbgen(sf = 0.001)")
+    except duckdb.Error as e:
+        message = str(e)
+        if "Failed to download extension" in message or "Could not establish connection" in message:
+            if hasattr(request.config.option, "warn_unused_snapshots"):
+                request.config.option.warn_unused_snapshots = True
+            conn.close()
+            pytest.skip(f"DuckDB TPC-H extension unavailable (likely network issue): {message}")
+        raise
     return conn
 
 

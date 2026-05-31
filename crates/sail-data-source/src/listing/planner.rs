@@ -283,9 +283,7 @@ fn listing_write_file_extension(
         "arrow" => "arrow",
         "avro" => "avro",
         "binary" => "",
-        other => {
-            return datafusion_common::plan_err!("unsupported listing write format: {other}")
-        }
+        other => return datafusion_common::plan_err!("unsupported listing write format: {other}"),
     };
 
     let compression = options.iter().rev().find_map(|layer| {
@@ -329,10 +327,9 @@ fn listing_write_file_extension(
                 )
             }
         };
-        return Ok(parquet_suffix.map_or_else(
-            || base.to_string(),
-            |suffix| format!("{suffix}.{base}"),
-        ));
+        return Ok(
+            parquet_suffix.map_or_else(|| base.to_string(), |suffix| format!("{suffix}.{base}"))
+        );
     }
 
     let wrapper_suffix = match codec.as_str() {

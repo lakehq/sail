@@ -26,6 +26,11 @@ def pytest_configure(config):
     default_ext = getattr(config.option, "default_extension", None)
     if default_ext is None:
         config.option.default_extension = "pysail.testing.snapshot.yaml.YamlSnapshotExtension"
+    # Some test modules are conditionally skipped (e.g., when upstream dependencies
+    # require network access). In such cases, the corresponding snapshot files can
+    # legitimately be unused in a given run.
+    if hasattr(config.option, "warn_unused_snapshots"):
+        config.option.warn_unused_snapshots = True
 
     config.addinivalue_line(
         "markers",

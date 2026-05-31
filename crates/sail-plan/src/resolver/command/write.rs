@@ -261,7 +261,9 @@ impl PlanResolver<'_> {
                 }
                 let schema_for_cond =
                     matches!(mode, WriteMode::TruncateIf { .. }).then_some(input_schema.as_ref());
-                let sink_mode = self.resolve_write_mode(mode, schema_for_cond, state).await?;
+                let sink_mode = self
+                    .resolve_write_mode(mode, schema_for_cond, state)
+                    .await?;
 
                 if !sink_options.iter().any(|layer| match layer {
                     OptionLayer::OptionList { items }
