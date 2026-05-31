@@ -41,6 +41,15 @@ pub trait CatalogProvider: Send + Sync {
         false
     }
 
+    /// Whether Sail should apply Spark session-catalog qualification rules to
+    /// explicit table locations before passing them to the catalog.
+    ///
+    /// V2/native catalogs own relative location semantics, so they should use
+    /// the default `false` and receive relative paths unchanged.
+    fn uses_spark_table_location_qualification(&self) -> bool {
+        false
+    }
+
     /// Creates a new database in the catalog.
     async fn create_database(
         &self,

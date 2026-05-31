@@ -40,6 +40,10 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             .requires_identifier_validation_for_default_table_location()
     }
 
+    fn uses_spark_table_location_qualification(&self) -> bool {
+        self.inner.uses_spark_table_location_qualification()
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,
@@ -215,6 +219,7 @@ mod tests {
     struct MockProvider {
         uses_spark_default_database_location: bool,
         requires_identifier_validation_for_default_table_location: bool,
+        uses_spark_table_location_qualification: bool,
     }
 
     #[async_trait::async_trait]
@@ -229,6 +234,10 @@ mod tests {
 
         fn requires_identifier_validation_for_default_table_location(&self) -> bool {
             self.requires_identifier_validation_for_default_table_location
+        }
+
+        fn uses_spark_table_location_qualification(&self) -> bool {
+            self.uses_spark_table_location_qualification
         }
 
         async fn create_database(
@@ -330,11 +339,13 @@ mod tests {
             inner: Arc::new(MockProvider {
                 uses_spark_default_database_location: true,
                 requires_identifier_validation_for_default_table_location: true,
+                uses_spark_table_location_qualification: true,
             }),
             handle: Handle::current(),
         };
 
         assert!(provider.uses_spark_default_database_location());
         assert!(provider.requires_identifier_validation_for_default_table_location());
+        assert!(provider.uses_spark_table_location_qualification());
     }
 }
