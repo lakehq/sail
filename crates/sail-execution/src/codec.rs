@@ -191,6 +191,7 @@ use sail_function::scalar::string::spark_regexp_extract_all::SparkRegexpExtractA
 use sail_function::scalar::string::spark_sentences::SparkSentences;
 use sail_function::scalar::string::spark_split::SparkSplit;
 use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
+use sail_function::scalar::string::spark_to_char::SparkToChar;
 use sail_function::scalar::string::spark_to_number::SparkToNumber;
 use sail_function::scalar::struct_function::StructFunction;
 use sail_function::scalar::update_struct_field::UpdateStructField;
@@ -2246,6 +2247,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_concat" | "concat" | "array_concat" => {
                 Ok(Arc::new(ScalarUDF::from(SparkConcat::new())))
             }
+            "spark_to_char" => Ok(Arc::new(ScalarUDF::from(SparkToChar::new()))),
+            "spark_to_number" | "to_number" => {
+                Ok(Arc::new(ScalarUDF::from(SparkToNumber::new(false))))
+            }
+            "spark_try_to_number" | "try_to_number" => {
+                Ok(Arc::new(ScalarUDF::from(SparkToNumber::new(true))))
+            }
             "spark_split" | "split" => Ok(Arc::new(ScalarUDF::from(SparkSplit::new()))),
             "regexp_extract_all" => Ok(Arc::new(ScalarUDF::from(SparkRegexpExtractAll::new()))),
             "sentences" => Ok(Arc::new(ScalarUDF::from(SparkSentences::new()))),
@@ -2458,6 +2466,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkToBinary>()
             || node_inner.is::<SparkToChronoFmt>()
             || node_inner.is::<SparkToLargeUtf8>()
+            || node_inner.is::<SparkToChar>()
+            || node_inner.is::<SparkToNumber>()
             || node_inner.is::<SparkToUtf8>()
             || node_inner.is::<SparkToUtf8View>()
             || node_inner.is::<SparkTryAdd>()

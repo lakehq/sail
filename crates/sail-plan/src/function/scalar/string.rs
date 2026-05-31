@@ -4,12 +4,13 @@ use datafusion::functions::regex::expr_fn as regex_fn;
 use datafusion::functions::regex::regexpcount::RegexpCountFunc;
 use datafusion::functions::regex::regexpinstr::RegexpInstrFunc;
 use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::{cast, expr, lit, try_cast, when, ExprSchemable};
+use datafusion_expr::{cast, expr, lit, try_cast, when, Expr, ExprSchemable, ScalarUDF};
 use datafusion_functions_nested::expr_fn::array_element;
 use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::expr_fn as string_fn;
 use datafusion_spark::function::string::format_string::FormatStringFunc;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
 use sail_function::scalar::string::format_number::FormatNumber;
 use sail_function::scalar::string::levenshtein::Levenshtein;
 use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
@@ -24,6 +25,7 @@ use sail_function::scalar::string::spark_regexp_extract_all::SparkRegexpExtractA
 use sail_function::scalar::string::spark_sentences::SparkSentences;
 use sail_function::scalar::string::spark_split::SparkSplit;
 use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
+use sail_function::scalar::string::spark_to_char::SparkToChar;
 use sail_function::scalar::string::spark_to_number::SparkToNumber;
 
 use crate::error::{PlanError, PlanResult};
@@ -320,9 +322,9 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("substring", F::custom(substr)),
         ("substring_index", F::ternary(expr_fn::substr_index)),
         ("to_binary", F::udf(SparkToBinary::new())),
-        ("to_char", F::unknown("to_char")),
+        ("to_char", F::custom(to_char)),
         ("to_number", F::udf(SparkToNumber::new(false))),
-        ("to_varchar", F::unknown("to_varchar")),
+        ("to_varchar", F::custom(to_char)),
         ("translate", F::ternary(expr_fn::translate)),
         ("trim", F::var_arg(rev_args(expr_fn::trim))),
         ("try_to_binary", F::udf(SparkTryToBinary::new())),
@@ -334,4 +336,80 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("validate_utf8", F::custom(validate_utf8)),
         ("strpos", F::binary(expr_fn::strpos)),
     ]
+}
+
+/// Spark's `to_char(expr, fmt)` / `to_varchar(expr, fmt)`:
+/// - For temporal types: converts Java datetime pattern to chrono and calls DF's `to_char`
+/// - For numeric types: formats using Spark's number pattern spec (9/0/S/$/G/D)
+/// - For binary types: decodes using `utf-8`, `base64`, or `hex` format
+fn to_char(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (value, format) = input.arguments.two()?;
+    let schema = input.function_context.schema;
+    let dt = value
+        .get_type(schema.as_ref())
+        .map_err(|e| PlanError::invalid(format!("to_char: cannot resolve input type: {e}")))?;
+
+    if dt.is_temporal() {
+        // Handle standalone fractional-seconds format (e.g. 'SSS', 'SSSSSS').
+        // Chrono's %.Nf always includes a leading dot (".789"), so for all-S
+        // formats we strip it with substr — same logic as date_format.
+        if let Expr::Literal(ref sv, _) = &format {
+            if let Some(Some(fmt)) = sv.try_as_str() {
+                if !fmt.is_empty() && fmt.chars().all(|c| c == 'S') {
+                    let n = fmt.len();
+                    // DataFusion's to_char only supports %.3f / %.6f / %.9f.
+                    // Use the smallest valid precision that covers n, then
+                    // trim to exactly n chars to avoid returning extra digits.
+                    let chrono_precision = if n <= 3 {
+                        3
+                    } else if n <= 6 {
+                        6
+                    } else {
+                        9
+                    };
+                    let chrono_fmt = format!("%.{chrono_precision}f");
+                    let result = expr_fn::to_char(value, lit(chrono_fmt));
+                    // %.Pf produces ".XYZ..." (leading dot + P digits).
+                    // Skip the dot (start=2) and limit to n chars when n < P.
+                    // %.Pf produces ".XYZ..." (leading dot + P digits).
+                    // Skip the dot with substr(2), then limit to n chars when
+                    // we used a higher precision than needed.
+                    let without_dot = expr_fn::substr(result, lit(2i64));
+                    let stripped = if n == chrono_precision {
+                        without_dot
+                    } else {
+                        expr_fn::left(without_dot, lit(n as i64))
+                    };
+                    return Ok(stripped);
+                }
+            }
+        }
+        let chrono_format = ScalarUDF::from(SparkToChronoFmt::new()).call(vec![format]);
+        Ok(expr_fn::to_char(value, chrono_format))
+    } else if dt.is_numeric()
+        || matches!(
+            dt,
+            DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_)
+        )
+    {
+        Ok(ScalarUDF::from(SparkToChar::new()).call(vec![value, format]))
+    } else if matches!(
+        dt,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    ) {
+        // Spark casts STRING to numeric for formatting. Use DOUBLE to avoid
+        // the decimal scale overflow check that DECIMAL(38,18) would trigger.
+        // Under ANSI=false an invalid string returns NULL (TRY_CAST semantics);
+        // under ANSI=true the cast errors, matching Spark's CAST_INVALID_INPUT.
+        let numeric_value = if input.function_context.plan_config.ansi_mode {
+            value.cast_to(&DataType::Float64, schema.as_ref())?
+        } else {
+            try_cast(value, DataType::Float64)
+        };
+        Ok(ScalarUDF::from(SparkToChar::new()).call(vec![numeric_value, format]))
+    } else {
+        Err(PlanError::invalid(format!(
+            "to_char/to_varchar requires a numeric, temporal, or binary type, got {dt}"
+        )))
+    }
 }
