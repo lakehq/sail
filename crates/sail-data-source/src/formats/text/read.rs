@@ -2,15 +2,14 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
-use datafusion::datasource::file_format::FileFormat;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 
-use crate::formats::text::file_format::TextFileFormat;
 use crate::formats::text::source::TextSource;
-use crate::listing::source::{ListingScanInput, ReadFormat};
+use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
+use crate::listing::utils::infer_listing_compression;
 use crate::options::gen::TextReadOptions;
 
 #[derive(Debug, Clone)]
@@ -20,26 +19,26 @@ pub struct TextReadFormat {
 
 #[async_trait::async_trait]
 impl ReadFormat for TextReadFormat {
-    fn create_read_format(
+    async fn infer_compression(
         &self,
-        compression: Option<CompressionTypeVariant>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        let mut options = self
+        _ctx: &dyn Session,
+        files: &[ListingFileSample<'_>],
+    ) -> Result<CompressionTypeVariant> {
+        let options = self
             .options
             .clone()
             .into_table_options()
             .map_err(DataFusionError::from)?;
-        if let Some(compression) = compression {
-            options.compression = compression;
+        if options.compression != CompressionTypeVariant::UNCOMPRESSED {
+            return Ok(options.compression);
         }
-        Ok(Arc::new(TextFileFormat::new(options)))
+        Ok(infer_listing_compression(files)?.unwrap_or(CompressionTypeVariant::UNCOMPRESSED))
     }
 
     async fn infer_schema(
         &self,
         _ctx: &dyn Session,
-        _store: &Arc<dyn object_store::ObjectStore>,
-        _objects: &[object_store::ObjectMeta],
+        _files: &[ListingFileSample<'_>],
         _compression: CompressionTypeVariant,
     ) -> Result<SchemaRef> {
         Ok(Arc::new(Schema::new(vec![Field::new(
@@ -49,19 +48,13 @@ impl ReadFormat for TextReadFormat {
         )])))
     }
 
-    async fn scan(
-        &self,
-        _ctx: &dyn Session,
-        mut input: ListingScanInput,
-    ) -> Result<FileScanConfig> {
+    async fn scan(&self, _ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
         let mut options = self
             .options
             .clone()
             .into_table_options()
             .map_err(DataFusionError::from)?;
-        if let Some(compression) = input.compression.take() {
-            options.compression = compression;
-        }
+        options.compression = input.compression;
 
         let line_sep = options.line_sep.map(|c| c as u8);
         let file_source = Arc::new(TextSource::new(input.schema, options.whole_text, line_sep));
