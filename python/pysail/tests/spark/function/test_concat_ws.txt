@@ -1,0 +1,19 @@
+>>> from datetime import date
+>>> from pyspark.sql import functions as F, types as T
+
+>>> schema = T.StructType([
+...     T.StructField("string_col", T.StringType(), True),
+...     T.StructField("int_col", T.IntegerType(), True),
+...     T.StructField("date_col", T.DateType(), True),
+... ])
+>>> df = spark.createDataFrame([("a", 1, date(2024, 1, 15))], schema)
+>>> df.select(F.concat_ws("-", F.col("string_col"), F.col("int_col"), F.col("date_col"))).collect()
+[Row(concat_ws(-, string_col, int_col, date_col)='a-1-2024-01-15')]
+
+>>> schema = T.StructType([
+...     T.StructField("string_col", T.StringType(), True),
+...     T.StructField("int_col", T.IntegerType(), True),
+... ])
+>>> df = spark.createDataFrame([("a", None)], schema)
+>>> df.select(F.concat_ws("-", F.col("string_col"), F.col("int_col"))).collect()
+[Row(concat_ws(-, string_col, int_col)='a')]

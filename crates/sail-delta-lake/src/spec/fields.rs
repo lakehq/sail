@@ -31,6 +31,7 @@ pub const FIELD_NAME_DELETION_VECTOR: &str = "deletionVector";
 
 // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/scan/data_skipping.rs#L119-L124>
 pub const STATS_FIELD_NUM_RECORDS: &str = "numRecords";
+pub const STATS_FIELD_TIGHT_BOUNDS: &str = "tightBounds";
 pub const STATS_FIELD_MIN_VALUES: &str = "minValues";
 pub const STATS_FIELD_MAX_VALUES: &str = "maxValues";
 pub const STATS_FIELD_NULL_COUNT: &str = "nullCount";

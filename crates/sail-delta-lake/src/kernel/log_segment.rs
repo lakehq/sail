@@ -10,13 +10,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use futures::TryStreamExt;
-
-use crate::spec::{
-    delta_log_prefix_path, delta_log_root_path, last_checkpoint_path, parse_checkpoint_version,
-    parse_commit_version, DeltaResult, LastCheckpointHint,
-};
-use crate::storage::LogStoreRef;
+pub(crate) use crate::delta_log::ReplayedTableHeader;
+use crate::delta_log::{list_log_files, read_last_checkpoint_version_from_store};
+use crate::kernel::checkpoints::read_checkpoint_main_rows_from_checkpoint_file;
+use crate::spec::{is_uuid_checkpoint_filename, DeltaResult};
 
 /// The minimal set of Delta log files needed to reconstruct table state up to a given version.
 #[derive(Debug, Clone, Default)]
@@ -25,6 +22,12 @@ pub struct LogSegmentFiles {
     pub checkpoint_files: Vec<String>,
     /// Commit JSON files sorted by version, strictly newer than the latest checkpoint.
     pub commit_files: Vec<String>,
+    /// V2 checkpoint sidecar files referenced by the latest checkpoint.
+    /// Paths are relative to `_delta_log/` (e.g. `_sidecars/uuid.parquet`).
+    pub sidecar_files: Vec<String>,
+    /// Compacted JSON files that aggregate multiple commit versions.
+    /// Filenames follow the pattern `{start:020}.{end:020}.compacted.json`.
+    pub compaction_files: Vec<String>,
 }
 
 /// Options controlling which commit files are included in the resolved segment.
@@ -32,14 +35,6 @@ pub struct LogSegmentFiles {
 pub struct LogSegmentResolveOptions {
     /// If set, only include commit JSON files whose version falls within `[start, end]`.
     pub commit_version_range: Option<(i64, i64)>,
-}
-
-async fn read_last_checkpoint_version(log_store: &dyn crate::storage::LogStore) -> Option<i64> {
-    let store = log_store.object_store(None);
-    let path = last_checkpoint_path();
-    let bytes = store.get(&path).await.ok()?.bytes().await.ok()?;
-    let hint: LastCheckpointHint = serde_json::from_slice(&bytes).ok()?;
-    Some(hint.version)
 }
 
 /// List all Delta log files up to `max_version` from the given log store.
@@ -50,75 +45,73 @@ async fn read_last_checkpoint_version(log_store: &dyn crate::storage::LogStore) 
 ///
 /// Commit files are **not** filtered against the checkpoint here.
 pub async fn list_log_segment_files(
-    log_store: &LogStoreRef,
+    log_store: &crate::storage::LogStoreRef,
     max_version: i64,
 ) -> DeltaResult<LogSegmentFiles> {
     let store = log_store.object_store(None);
-    let log_root = delta_log_root_path();
-    let offset_version = read_last_checkpoint_version(log_store.as_ref())
+    let offset_version = read_last_checkpoint_version_from_store(store.clone())
         .await
         .map(|v| v.min(max_version).saturating_sub(1))
         .unwrap_or(0);
-    let offset = delta_log_prefix_path(offset_version);
 
-    // Prefer offset listing from `_last_checkpoint`, then fall back to full listing if unsupported.
-    let mut entries = match store
-        .list_with_offset(Some(&log_root), &offset)
-        .try_collect::<Vec<_>>()
-        .await
-    {
-        Ok(entries) => entries,
-        Err(_) => store.list(Some(&log_root)).try_collect::<Vec<_>>().await?,
-    };
-    // Some object stores treat `list_with_offset` as strictly greater-than and can
-    // skip the exact `offset` object. For small tables (only version 0 commit),
-    // that may return empty even though files exist. Fall back to full listing.
-    if entries.is_empty() {
-        entries = store.list(Some(&log_root)).try_collect::<Vec<_>>().await?;
-    }
+    let (_, checkpoint_meta, commit_metas, compaction_metas) =
+        list_log_files(store.clone(), offset_version, max_version).await?;
 
-    let mut checkpoint_candidates: Vec<(i64, String)> = Vec::new();
-    let mut commit_candidates: Vec<(i64, String)> = Vec::new();
+    let mut checkpoint_files: Vec<String> = Vec::new();
+    let mut sidecar_files: Vec<String> = Vec::new();
 
-    for meta in entries {
-        let filename = match meta.location.as_ref().rsplit('/').next() {
-            Some(name) => name,
-            None => continue,
-        };
-        if let Some(version) = parse_checkpoint_version(filename) {
-            if version <= max_version {
-                checkpoint_candidates.push((version, filename.to_string()));
-            }
-            continue;
-        }
-        if let Some(version) = parse_commit_version(filename) {
-            if version <= max_version {
-                commit_candidates.push((version, filename.to_string()));
+    if let Some(meta) = checkpoint_meta {
+        let filename = meta
+            .location
+            .as_ref()
+            .rsplit('/')
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        checkpoint_files.push(filename.clone());
+
+        // Only UUID-named checkpoints (V2) can contain sidecar references.
+        if is_uuid_checkpoint_filename(&filename) {
+            let rows = read_checkpoint_main_rows_from_checkpoint_file(store, meta).await?;
+            for row in &rows {
+                if let Some(ref sidecar) = row.sidecar {
+                    sidecar_files.push(format!("_sidecars/{}", sidecar.path));
+                }
             }
         }
     }
 
-    let latest_checkpoint_version = checkpoint_candidates
-        .iter()
-        .map(|(version, _)| *version)
-        .max();
-    let mut checkpoint_files = match latest_checkpoint_version {
-        Some(version) => checkpoint_candidates
-            .into_iter()
-            .filter_map(|(file_version, filename)| (file_version == version).then_some(filename))
-            .collect::<Vec<_>>(),
-        None => Vec::new(),
-    };
     checkpoint_files.sort();
+    sidecar_files.sort();
 
-    commit_candidates.sort_by(|(av, af), (bv, bf)| av.cmp(bv).then_with(|| af.cmp(bf)));
-    let commit_files = commit_candidates
+    let mut commit_files: Vec<String> = commit_metas
         .into_iter()
-        .map(|(_, filename)| filename)
-        .collect::<Vec<_>>();
+        .filter_map(|(_, meta)| {
+            meta.location
+                .as_ref()
+                .rsplit('/')
+                .next()
+                .map(|s| s.to_string())
+        })
+        .collect();
+    commit_files.sort();
+
+    let mut compaction_files: Vec<String> = compaction_metas
+        .into_iter()
+        .filter_map(|(_, meta)| {
+            meta.location
+                .as_ref()
+                .rsplit('/')
+                .next()
+                .map(|s| s.to_string())
+        })
+        .collect();
+    compaction_files.sort();
 
     Ok(LogSegmentFiles {
         checkpoint_files,
         commit_files,
+        sidecar_files,
+        compaction_files,
     })
 }

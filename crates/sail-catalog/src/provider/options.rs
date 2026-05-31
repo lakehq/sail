@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion_expr::LogicalPlan;
+pub use sail_common_datafusion::catalog::{CatalogPartitionField, PartitionTransform};
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
 };
@@ -22,27 +23,6 @@ pub struct DropDatabaseOptions {
     pub cascade: bool,
 }
 
-// TODO: Upstream changes in sail-plan are needed to expose partition transforms to users
-// via SQL or DataFrame APIs.
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Default, Serialize, Deserialize)]
-pub enum PartitionTransform {
-    #[default]
-    Identity,
-    Year,
-    Month,
-    Day,
-    Hour,
-    Bucket(u32),
-    Truncate(u32),
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
-pub struct CatalogPartitionField {
-    pub column: String,
-    pub transform: Option<PartitionTransform>,
-}
-
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct CreateTableOptions {
     pub columns: Vec<CreateTableColumnOptions>,
@@ -55,8 +35,8 @@ pub struct CreateTableOptions {
     pub bucket_by: Option<CatalogTableBucketBy>,
     pub if_not_exists: bool,
     pub replace: bool,
-    pub options: Vec<(String, String)>,
     pub properties: Vec<(String, String)>,
+    pub is_external: bool,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
@@ -116,4 +96,20 @@ pub struct DropViewOptions {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct DropTemporaryViewOptions {
     pub if_exists: bool,
+}
+
+/// Options for altering a table in a catalog.
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub enum AlterTableOptions {
+    SetTableProperties {
+        properties: Vec<(String, String)>,
+    },
+    UnsetTableProperties {
+        keys: Vec<String>,
+        if_exists: bool,
+    },
+    AlterColumnType {
+        name: Vec<String>,
+        data_type: DataType,
+    },
 }

@@ -39,6 +39,22 @@ SHOW TABLES
 
 In the next few pages, we will explore the different catalog providers supported by Sail and how to configure them.
 
+## Common Options
+
+All remote catalog providers (excluding the [Memory catalog](./memory)) support the following common options for caching database and table listings. This is particularly useful for reducing the number of requests to external services.
+
+- `database_cache_type` (optional): The scope of the database listing cache. Valid values are `none`, `global` (shared across all sessions), and `session` (private to the current session). (default: `none`).
+- `database_cache_size` (optional): Maximum number of entries in the database list cache. `0` = unbounded.
+- `database_cache_ttl_secs` (optional): Time-to-live in seconds for cached database listings. `0` = no expiry.
+- `table_cache_type` (optional): The scope of the table listing cache. Valid values are `none`, `global`, and `session`. (default: `none`).
+- `table_cache_size` (optional): Maximum number of entries in the table list cache. `0` = unbounded.
+- `table_cache_ttl_secs` (optional): Time-to-live in seconds for cached table listings. `0` = no expiry.
+- `view_cache_type` (optional): The scope of the view listing cache. Valid values are `none`, `global`, and `session`. (default: `none`).
+- `view_cache_size` (optional): Maximum number of entries in the view list cache. `0` = unbounded.
+- `view_cache_ttl_secs` (optional): Time-to-live in seconds for cached view listings. `0` = no expiry.
+
+The cache is automatically invalidated when a write operation (like `CREATE TABLE` or `DROP DATABASE`) is performed through Sail.
+
 ## Support Matrix
 
 Here is a list of the supported (:white_check_mark:) catalog providers and the ones that are planned in our roadmap (:construction:).
@@ -50,4 +66,4 @@ Here is a list of the supported (:white_check_mark:) catalog providers and the o
 | [Unity Catalog](./unity)       | :white_check_mark: |
 | [AWS Glue](./glue)             | :white_check_mark: |
 | [OneLake](./onelake)           | :white_check_mark: |
-| Hive Metastore                 | :construction:     |
+| [Hive Metastore](./hms)        | :white_check_mark: |

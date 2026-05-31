@@ -68,6 +68,19 @@ To run the tests against a server launched externally, set the `SPARK_REMOTE` en
 env SPARK_REMOTE="sc://localhost:50051" hatch run pytest
 ```
 
+### Updating Test Snapshots
+
+Some tests use snapshot testing to validate the output.
+If you make changes that affect the output, you may need to update the snapshot files.
+
+The following command updates the snapshot files against the editable package in the `default` environment.
+
+```bash
+hatch run pytest --snapshot-update
+```
+
+You may use the `-k` flag to only update snapshots for specific tests.
+
 ### Testing with Different Spark Versions
 
 The `test` matrix environments allow you to run tests against multiple Spark versions.

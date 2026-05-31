@@ -98,10 +98,12 @@ fn build_spark_config() -> Result<(), Box<dyn std::error::Error>> {
         // Spark 4.1 changes the local relation cache threshold from 64 MB to 1 MB
         // which causes DataFrame creation more likely to fail since we do not support
         // caching local relations as artifacts yet.
-        // Here we override the default value to a very high value (2 GB) to
-        // effectively turn off local relation caching.
+        // Here we override the default value to 2^31-1 (2147483647, Integer.MAX_VALUE)
+        // to effectively turn off local relation caching. We use 2^31-1 instead of 2^31
+        // because the JVM Spark Connect client parses this value with Integer.parseInt,
+        // which overflows for values greater than 2^31-1.
         if entry.key == "spark.sql.session.localRelationCacheThreshold" {
-            entry.default_value = Some("2147483648".to_string())
+            entry.default_value = Some("2147483647".to_string())
         }
         // Spark 4.1 enables safe conversion to Arrow by default, but we turn it off
         // to avoid a few PySpark test failures caused by datetime conversions.
@@ -110,6 +112,28 @@ fn build_spark_config() -> Result<(), Box<dyn std::error::Error>> {
             entry.default_value = Some("false".to_string())
         }
     });
+
+    // The JVM Spark Connect client reads spark.connect.session.planCompression.threshold
+    // to decide whether to compress plans before sending them to the server.
+    // This key is not part of Spark's SQL config (spark_config.json) but the client
+    // expects it to exist. Without it, the client logs a NoSuchElementException warning.
+    if !config
+        .entries
+        .iter()
+        .any(|entry| entry.key == "spark.connect.session.planCompression.threshold")
+    {
+        config.entries.push(SparkConfigEntry {
+            key: "spark.connect.session.planCompression.threshold".to_string(),
+            doc: "Minimum plan size in bytes before the client attempts to compress it."
+                .to_string(),
+            default_value: Some("1048576".to_string()),
+            alternatives: Vec::new(),
+            fallback: None,
+            is_static: false,
+            deprecated: None,
+            removed: None,
+        });
+    }
 
     let keys = config
         .entries

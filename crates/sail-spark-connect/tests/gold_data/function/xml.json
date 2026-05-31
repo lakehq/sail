@@ -244,7 +244,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: xpath"
+        "success": "ok"
       }
     },
     {
@@ -270,7 +270,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: xpath"
+        "success": "ok"
       }
     },
     {
@@ -292,7 +292,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: xpath_boolean"
+        "success": "ok"
       }
     },
     {
@@ -314,7 +314,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: xpath_double"
+        "success": "ok"
       }
     },
     {
@@ -336,7 +336,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: xpath_float"
+        "success": "ok"
       }
     },
     {
@@ -358,7 +358,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: xpath_int"
+        "success": "ok"
       }
     },
     {
@@ -380,7 +380,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: xpath_long"
+        "success": "ok"
       }
     },
     {
@@ -402,7 +402,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: xpath_number"
+        "success": "ok"
       }
     },
     {
@@ -424,7 +424,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: xpath_short"
+        "success": "ok"
       }
     },
     {
@@ -446,7 +446,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: xpath_string"
+        "success": "ok"
       }
     }
   ]

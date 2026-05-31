@@ -15,6 +15,7 @@ use sail_function::scalar::datetime::spark_interval::{
 };
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
+use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
@@ -31,6 +32,21 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        // CAST(expr AS VARIANT) → rewrite to SparkCastToVariant UDF
+        // Must intercept before resolve_data_type converts Variant to Struct.
+        if matches!(cast_to_type, spec::DataType::Variant) {
+            let NamedExpr { expr, name, .. } =
+                self.resolve_named_expression(expr, schema, state).await?;
+            let name = if need_rename_cast(&expr) {
+                let prefix = if is_try { "TRY_" } else { "" };
+                vec![format!("{}CAST({} AS VARIANT)", prefix, name.one()?)]
+            } else {
+                name
+            };
+            let expr = ScalarUDF::new_from_impl(SparkCastToVariant::new()).call(vec![expr]);
+            return Ok(NamedExpr::new(name, expr));
+        }
+
         // Extract the DayTimeInterval field unit before resolving to Arrow type,
         // since it determines the multiplier for numeric-to-interval casts.
         // Spark uses the end field (or start field for single-field intervals)

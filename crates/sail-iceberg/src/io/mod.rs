@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use datafusion::common::DataFusionError;
 use object_store::path::Path as ObjectPath;
+use object_store::ObjectStoreExt;
 use url::Url;
 
 use crate::spec::{FormatVersion, Manifest, ManifestList};
@@ -30,8 +31,7 @@ impl StoreContext {
         base: Arc<dyn object_store::ObjectStore>,
         table_url: &Url,
     ) -> Result<Self, DataFusionError> {
-        let base_path = ObjectPath::parse(table_url.path())
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let base_path = crate::utils::url_to_object_path(table_url)?;
         let prefixed: Arc<dyn object_store::ObjectStore> = Arc::new(
             object_store::prefix::PrefixStore::new(base.clone(), base_path.clone()),
         );
@@ -47,13 +47,7 @@ impl StoreContext {
         raw: &str,
     ) -> Result<(&'a Arc<dyn object_store::ObjectStore>, ObjectPath), DataFusionError> {
         if let Ok(url) = Url::parse(raw) {
-            let p = url.path();
-            let no_leading = p.strip_prefix('/').unwrap_or(p);
-            return Ok((
-                &self.base,
-                ObjectPath::parse(no_leading)
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?,
-            ));
+            return Ok((&self.base, crate::utils::url_to_object_path(&url)?));
         }
         if raw.starts_with(object_store::path::DELIMITER) {
             let no_leading = raw.strip_prefix('/').unwrap_or(raw);
@@ -67,21 +61,17 @@ impl StoreContext {
 
     pub fn resolve_to_absolute_path(&self, raw_path: &str) -> Result<ObjectPath, DataFusionError> {
         if let Ok(url) = Url::parse(raw_path) {
-            let encoded_path = url.path();
-            let path_no_leading = encoded_path.strip_prefix('/').unwrap_or(encoded_path);
-            return ObjectPath::parse(path_no_leading)
-                .map_err(|e| DataFusionError::External(Box::new(e)));
+            return crate::utils::url_to_object_path(&url);
         }
 
         if raw_path.starts_with(object_store::path::DELIMITER) {
             let no_leading = raw_path.strip_prefix('/').unwrap_or(raw_path);
-            return ObjectPath::parse(no_leading)
-                .map_err(|e| DataFusionError::External(Box::new(e)));
+            return Ok(ObjectPath::from(no_leading));
         }
 
         let mut full = self.prefix_path.clone();
         for comp in raw_path.split('/').filter(|s| !s.is_empty()) {
-            full = full.child(comp);
+            full = full.join(comp);
         }
         Ok(full)
     }

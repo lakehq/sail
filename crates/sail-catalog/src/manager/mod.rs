@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use datafusion_expr::{LogicalPlan, ScalarUDF};
 use sail_common_datafusion::extension::SessionExtension;
 
-use crate::error::{CatalogError, CatalogResult};
+use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId, CatalogObjectTracker};
 use crate::provider::{CatalogProvider, Namespace};
 use crate::temp_view::TemporaryViewManager;
@@ -48,7 +48,7 @@ impl CatalogManager {
             .collect::<HashMap<_, _>>();
         if !catalogs.contains_key(options.default_catalog.as_str()) {
             return Err(CatalogError::NotFound(
-                "catalog",
+                CatalogObject::Catalog,
                 options.default_catalog.clone(),
             ));
         }
@@ -223,7 +223,10 @@ impl CatalogManagerState {
 
     pub fn get_catalog(&self, catalog: &str) -> CatalogResult<Arc<dyn CatalogProvider>> {
         let Some(provider) = self.catalogs.get(catalog) else {
-            return Err(CatalogError::NotFound("catalog", catalog.to_string()));
+            return Err(CatalogError::NotFound(
+                CatalogObject::Catalog,
+                catalog.to_string(),
+            ));
         };
         Ok(Arc::clone(provider))
     }

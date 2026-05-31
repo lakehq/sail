@@ -1,4 +1,0 @@
-== Physical Plan ==
-DataSinkExec: sink=ParquetSink(file_groups=[])
-  ProjectionExec: expr=[column1@0 as id, column2@1 as name]
-    DataSourceExec: partitions=1, partition_sizes=[1]

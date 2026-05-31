@@ -64,6 +64,7 @@ pub fn parse_statements(s: &str) -> SqlResult<Vec<Statement>> {
     parse!(s, create_parser)
 }
 
+/// Parses a SQL string containing exactly one statement into an AST.
 pub fn parse_one_statement(s: &str) -> SqlResult<Statement> {
     let mut plan = parse_statements(s)?;
     match (plan.pop(), plan.is_empty()) {

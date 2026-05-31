@@ -72,6 +72,7 @@ pub fn partitioned_file_from_action(
         extensions: None,
         range: None,
         statistics: None,
+        ordering: None,
         metadata_size_hint: None,
     })
 }

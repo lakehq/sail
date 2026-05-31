@@ -20,18 +20,18 @@ use sail_common_datafusion::streaming::event::FlowEvent;
 #[derive(Debug)]
 pub struct StreamSourceAdapterExec {
     input: Arc<dyn ExecutionPlan>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl StreamSourceAdapterExec {
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
         let schema = Arc::new(to_flow_event_schema(&input.schema()));
-        let properties = PlanProperties::new(
+        let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             input.output_partitioning().clone(),
             input.pipeline_behavior(),
             input.boundedness(),
-        );
+        ));
         Self { input, properties }
     }
 
@@ -59,7 +59,7 @@ impl ExecutionPlan for StreamSourceAdapterExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

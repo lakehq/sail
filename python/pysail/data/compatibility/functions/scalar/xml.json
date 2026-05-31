@@ -20,55 +20,46 @@
   {
     "module": "pyspark.sql.functions",
     "function": "xpath",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/231"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "xpath_boolean",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/231"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "xpath_double",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/231"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "xpath_float",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/231"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "xpath_int",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/231"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "xpath_long",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/231"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "xpath_number",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/231"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "xpath_short",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/231"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "xpath_string",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/231"
+    "status": "supported"
   }
 ]

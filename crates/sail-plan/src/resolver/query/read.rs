@@ -4,12 +4,12 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Schema};
 use datafusion::datasource::{provider_as_source, source_as_provider, TableProvider};
 use datafusion_common::{DFSchema, ScalarValue, TableReference};
-use datafusion_expr::{Expr, LogicalPlan, TableScan, TableSource, UNNAMED_TABLE};
+use datafusion_expr::{Expr, LogicalPlan, SubqueryAlias, TableScan, TableSource, UNNAMED_TABLE};
 use rand::{rng, RngExt};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::TableKind;
-use sail_common_datafusion::datasource::{SourceInfo, TableFormatRegistry};
+use sail_common_datafusion::catalog::{TableColumnStatus, TableKind};
+use sail_common_datafusion::datasource::{OptionLayer, SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
@@ -24,6 +24,9 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
+    /// Resolves a named table or view reference into a logical plan node.
+    /// Looks up the name in the catalog and produces the appropriate plan
+    /// depending on whether it's a table, view, or temporary view.
     pub(super) async fn resolve_query_read_named_table(
         &self,
         table: spec::ReadNamedTable,
@@ -35,9 +38,6 @@ impl PlanResolver<'_> {
             sample,
             options,
         } = table;
-        if temporal.is_some() {
-            return Err(PlanError::todo("read table AS OF clause"));
-        }
 
         // Check if the name is in the form `<format>.<path>` where `<format>` is a
         // registered table format. In that case, treat it as a direct data source read.
@@ -45,10 +45,13 @@ impl PlanResolver<'_> {
             let format = format.as_ref().to_ascii_lowercase();
             let registry = self.ctx.extension::<TableFormatRegistry>()?;
             if registry.get(&format).is_ok() {
+                let temporal_options = self
+                    .resolve_time_travel_options(&format, temporal, state)
+                    .await?;
                 let source = spec::ReadDataSource {
                     format: Some(format),
                     schema: None,
-                    options,
+                    options: options.into_iter().chain(temporal_options).collect(),
                     paths: vec![path.as_ref().to_string()],
                     predicates: vec![],
                 };
@@ -63,6 +66,11 @@ impl PlanResolver<'_> {
 
         let table_reference = self.resolve_table_reference(&name)?;
         if let Some(cte) = state.get_cte(&table_reference) {
+            if temporal.is_some() {
+                return Err(PlanError::unsupported(
+                    "SQL time travel is not supported for CTEs",
+                ));
+            }
             let plan = cte.clone();
             return if let Some(table_sample) = sample {
                 self.apply_table_sample(plan, table_sample, state).await
@@ -87,22 +95,28 @@ impl PlanResolver<'_> {
                 partition_by,
                 sort_by,
                 bucket_by,
-                options: table_options,
-                properties: _,
+                properties,
+                is_external: _,
             } => {
                 let schema = Schema::new(columns.iter().map(|x| x.field()).collect::<Vec<_>>());
                 let constraints = self.resolve_catalog_table_constraints(constraints, &schema)?;
+                let temporal_options = self
+                    .resolve_time_travel_options(&format, temporal, state)
+                    .await?;
                 let info = SourceInfo {
                     paths: location.map(|x| vec![x]).unwrap_or_default(),
                     schema: Some(schema),
                     constraints,
-                    partition_by,
+                    partition_by: partition_by.into_iter().map(|field| field.column).collect(),
                     bucket_by: bucket_by.map(|x| x.into()),
                     sort_order: sort_by.into_iter().map(|x| x.into()).collect(),
                     // TODO: detect duplicated keys in each set of options
                     options: vec![
-                        table_options.into_iter().collect(),
-                        options.into_iter().collect(),
+                        OptionLayer::TablePropertyList { items: properties },
+                        OptionLayer::OptionList { items: options },
+                        OptionLayer::OptionList {
+                            items: temporal_options,
+                        },
                     ],
                 };
                 let registry = self.ctx.extension::<TableFormatRegistry>()?;
@@ -119,8 +133,26 @@ impl PlanResolver<'_> {
                     state,
                 )?
             }
-            TableKind::View { .. } => return Err(PlanError::todo("read view")),
+            TableKind::View {
+                definition,
+                columns,
+                comment: _,
+                properties: _,
+            } => {
+                if temporal.is_some() {
+                    return Err(PlanError::unsupported(
+                        "SQL time travel is not supported for views",
+                    ));
+                }
+                self.resolve_table_view(definition, columns, table_reference.clone(), state)
+                    .await?
+            }
             TableKind::TemporaryView { plan, .. } | TableKind::GlobalTemporaryView { plan, .. } => {
+                if temporal.is_some() {
+                    return Err(PlanError::unsupported(
+                        "SQL time travel is not supported for temporary views",
+                    ));
+                }
                 let names = state.register_fields(plan.schema().inner().fields());
                 rename_logical_plan(plan.as_ref().clone(), &names)?
             }
@@ -159,6 +191,32 @@ impl PlanResolver<'_> {
             state,
         )
         .await
+    }
+
+    /// Resolves a persistent view by re-parsing its SQL definition into a logical plan.
+    async fn resolve_table_view(
+        &self,
+        definition: String,
+        columns: Vec<TableColumnStatus>,
+        table_reference: TableReference,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let ast = sail_sql_analyzer::parser::parse_one_statement(&definition)?;
+        let spec_plan = sail_sql_analyzer::statement::from_ast_statement(ast)?;
+        let plan = match spec_plan {
+            spec::Plan::Query(query_plan) => self.resolve_query_plan(query_plan, state).await?,
+            _ => {
+                return Err(PlanError::invalid("view definition must be a query"));
+            }
+        };
+        let plan =
+            LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(Arc::new(plan), table_reference)?);
+        if columns.is_empty() {
+            Ok(plan)
+        } else {
+            let names = state.register_field_names(columns.iter().map(|c| &c.name));
+            Ok(rename_logical_plan(plan, &names)?)
+        }
     }
 
     /// Apply TABLESAMPLE clause to a LogicalPlan
@@ -283,17 +341,58 @@ impl PlanResolver<'_> {
                         python_version: f.python_version().to_string(),
                         eval_type: f.eval_type(),
                         command: f.command().to_vec(),
-                        return_type: f.output_type().clone(),
+                        return_type: f.output_type().cloned(),
                     };
                     let input = self.resolve_query_empty(true)?;
+                    // Combine positional arguments with named_arguments (SQL kwargs like a => 10).
+                    // Named arguments are appended after positional ones, wrapped as NamedArgument
+                    // expressions so that extract_kwargs can process them uniformly.
+                    let all_arguments: Vec<spec::Expr> = arguments
+                        .into_iter()
+                        .chain(named_arguments.into_iter().map(|(key, value)| {
+                            spec::Expr::NamedArgument {
+                                key: key.into(),
+                                value: Box::new(value),
+                            }
+                        }))
+                        .collect();
+                    let (positional_args, kwarg_names) = Self::extract_kwargs(all_arguments);
+                    // Validate: no duplicate kwarg names and no positional arg after a named arg.
+                    {
+                        let mut seen_kwarg_names = std::collections::HashSet::new();
+                        let mut seen_named = false;
+                        for kwarg in &kwarg_names {
+                            match kwarg {
+                                Some(name) => {
+                                    if !seen_kwarg_names.insert(name.as_str()) {
+                                        return Err(PlanError::AnalysisError(format!(
+                                            "[DUPLICATE_ROUTINE_PARAMETER_ASSIGNMENT.DOUBLE_NAMED_ARGUMENT_REFERENCE] \
+                                             Duplicate named argument: '{name}' is assigned more than once."
+                                        )));
+                                    }
+                                    seen_named = true;
+                                }
+                                None => {
+                                    if seen_named {
+                                        return Err(PlanError::AnalysisError(
+                                            "[UNEXPECTED_POSITIONAL_ARGUMENT] \
+                                             Positional argument follows a named (keyword) argument."
+                                                .to_string(),
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
                     let arguments = self
-                        .resolve_named_expressions(arguments, input.schema(), state)
+                        .resolve_named_expressions(positional_args, input.schema(), state)
                         .await?;
                     self.resolve_python_udtf_plan(
                         udtf,
                         &function_name,
                         input,
                         arguments,
+                        &kwarg_names,
                         None,
                         None,
                         f.deterministic(),
@@ -355,12 +454,14 @@ impl PlanResolver<'_> {
         let info = SourceInfo {
             paths,
             schema,
-            // TODO: detect duplicated keys in the set of options
             constraints: Default::default(),
             partition_by: vec![],
             bucket_by: None,
             sort_order: vec![],
-            options: vec![options.into_iter().collect()],
+            // TODO: detect duplicated keys in the set of options
+            options: vec![OptionLayer::OptionList {
+                items: options.into_iter().collect(),
+            }],
         };
         let registry = self.ctx.extension::<TableFormatRegistry>()?;
         let table_source = registry
@@ -415,6 +516,7 @@ impl PlanResolver<'_> {
         let table_source: Arc<dyn TableSource> = if has_duplicates {
             // Preserve existing behavior by wrapping the underlying TableProvider with renaming,
             // but only if this TableSource is DataFusion's DefaultTableSource.
+            // TODO: support duplicate column names for other `TableSource` implementations
             let provider = source_as_provider(&table_source).map_err(|e| {
                 PlanError::unsupported(format!(
                     "duplicate column names require DefaultTableSource-backed TableProvider: {e}"

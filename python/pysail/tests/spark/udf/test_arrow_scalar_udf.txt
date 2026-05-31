@@ -1,0 +1,32 @@
+>>> import pyarrow as pa
+>>> import pyarrow.compute as pc
+>>> from pyspark.sql.functions import arrow_udf
+>>>
+>>> @arrow_udf("long")
+... def square(v: pa.Array) -> pa.Array:
+...     return pc.multiply(v, v)
+...
+>>> spark.range(3).select(square("id")).show()
++----------+
+|square(id)|
++----------+
+|         0|
+|         1|
+|         4|
++----------+
+
+>>> from typing import Iterator
+>>>
+>>> @arrow_udf("long")
+... def increment(it: Iterator[pa.Array]) -> Iterator[pa.Array]:
+...     for v in it:
+...         yield pc.add(v, 1)
+...
+>>> spark.range(3).select(increment("id")).show()
++-------------+
+|increment(id)|
++-------------+
+|            1|
+|            2|
+|            3|
++-------------+

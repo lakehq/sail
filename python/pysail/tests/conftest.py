@@ -25,17 +25,12 @@ def pytest_configure(config):
     # Default Syrupy format is Amber (`.ambr`), but we prefer standard YAML multi-doc files.
     default_ext = getattr(config.option, "default_extension", None)
     if default_ext is None:
-        config.option.default_extension = "pysail.tests.snapshot_yaml.YamlSnapshotExtension"
-    # Store snapshots in `snapshots` directories instead of the default `__snapshots__`.
-    # We set both `config.option.snapshot_dirname` (for Syrupy's `pytest_sessionstart` hook) and
-    # the class attribute directly (in case this conftest is loaded lazily after `pytest_sessionstart`
-    # has already set the class attribute from the default `--snapshot-dirname` option value).
-    snapshot_dirname = getattr(config.option, "snapshot_dirname", None)
-    if snapshot_dirname is None or snapshot_dirname == "__snapshots__":
-        config.option.snapshot_dirname = "snapshots"
-        from syrupy.extensions.base import SnapshotCollectionStorage
+        config.option.default_extension = "pysail.testing.snapshot.yaml.YamlSnapshotExtension"
 
-        SnapshotCollectionStorage.snapshot_dirname = "snapshots"
+    config.addinivalue_line(
+        "markers",
+        "yamlsnapshot: add metadata to customize the YAML snapshot",
+    )
 
     configure_sail_environment()
 
@@ -54,7 +49,8 @@ def configure_sail_environment():
     # snapshot tests involving execution plans.
     os.environ["SAIL_EXECUTION__DEFAULT_PARALLELISM"] = "4"
     # Set the stack size explicitly to assist the configuration removal test.
-    os.environ["SAIL_RUNTIME__STACK_SIZE"] = "8388608"
+    # And we need the larger stack size to support large query plans in the test.
+    os.environ["SAIL_RUNTIME__STACK_SIZE"] = "16777216"
 
     # Ensure the native module can be imported successfully.
     # This allows this function to be future-proof in case we ever change the native module name.

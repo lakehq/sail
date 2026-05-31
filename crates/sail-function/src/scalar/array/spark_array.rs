@@ -111,6 +111,16 @@ impl ScalarUDFImpl for SparkArray {
                     plan_err!("Coercion from {acc:?} to {x:?} failed.")
                 }
             })?;
+        // When any input is a floating-point type (Double/Float), keep it as Double
+        // instead of promoting to Decimal128. Floats support NaN/Infinity which
+        // Decimal128 cannot represent, causing runtime overflow errors.
+        let new_type = if matches!(new_type, DataType::Decimal128(_, _))
+            && arg_types.iter().any(|dt| dt.is_floating())
+        {
+            DataType::Float64
+        } else {
+            new_type
+        };
         Ok(vec![new_type; arg_types.len()])
     }
 }

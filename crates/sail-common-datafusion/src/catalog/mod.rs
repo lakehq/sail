@@ -20,6 +20,24 @@ pub enum CatalogTableConstraint {
     },
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Default, Serialize, Deserialize)]
+pub enum PartitionTransform {
+    #[default]
+    Identity,
+    Year,
+    Month,
+    Day,
+    Hour,
+    Bucket(u32),
+    Truncate(u32),
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct CatalogPartitionField {
+    pub column: String,
+    pub transform: Option<PartitionTransform>,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct CatalogTableBucketBy {
     pub columns: Vec<String>,

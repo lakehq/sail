@@ -1,19 +1,22 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-
 use datafusion::catalog::Session;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_datasource::file_format::FileFormat;
+use datafusion_common::{DataFusionError, Result};
+use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::formats::listing::{DefaultSchemaInfer, ListingFormat, ListingTableFormat, SchemaInfer};
-use crate::formats::text::file_format::TextFileFormat;
-use crate::formats::text::options::{resolve_text_read_options, resolve_text_write_options};
+use crate::listing::source::{FormatFactory, ListingTableFormat};
+use crate::options::gen::{TextReadOptions, TextWriteOptions};
+use crate::options::ResolveOptions;
 
 pub mod file_format;
 pub mod options;
+mod read;
 pub mod reader;
 pub mod source;
+mod write;
 pub mod writer;
+
+pub use read::TextReadFormat;
+pub use write::TextWriteFormat;
 
 pub const DEFAULT_TEXT_EXTENSION: &str = ".txt";
 
@@ -34,39 +37,26 @@ impl Default for TableTextOptions {
     }
 }
 
-pub type TextTableFormat = ListingTableFormat<TextListingFormat>;
+pub type TextTableFormat = ListingTableFormat<TextFormatFactory>;
 
 #[derive(Debug, Default)]
-pub struct TextListingFormat;
+pub struct TextFormatFactory;
 
-impl ListingFormat for TextListingFormat {
-    fn name(&self) -> &'static str {
+impl FormatFactory for TextFormatFactory {
+    type Read = TextReadFormat;
+    type Write = TextWriteFormat;
+
+    fn name() -> &'static str {
         "text"
     }
 
-    fn create_read_format(
-        &self,
-        _ctx: &dyn Session,
-        options: Vec<HashMap<String, String>>,
-        compression: Option<CompressionTypeVariant>,
-    ) -> datafusion_common::Result<Arc<dyn FileFormat>> {
-        let mut options = resolve_text_read_options(options)?;
-        if let Some(compression) = compression {
-            options.compression = compression;
-        }
-        Ok(Arc::new(TextFileFormat::new(options)))
+    fn read(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Read> {
+        let options = TextReadOptions::resolve(ctx, options).map_err(DataFusionError::from)?;
+        Ok(TextReadFormat { options })
     }
 
-    fn create_write_format(
-        &self,
-        _ctx: &dyn Session,
-        options: Vec<HashMap<String, String>>,
-    ) -> datafusion_common::Result<(Arc<dyn FileFormat>, Option<String>)> {
-        let options = resolve_text_write_options(options)?;
-        Ok((Arc::new(TextFileFormat::new(options)), None))
-    }
-
-    fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
-        Arc::new(DefaultSchemaInfer)
+    fn write(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Write> {
+        let options = TextWriteOptions::resolve(ctx, options).map_err(DataFusionError::from)?;
+        Ok(TextWriteFormat { options })
     }
 }

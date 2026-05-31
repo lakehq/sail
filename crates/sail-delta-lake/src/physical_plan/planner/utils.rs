@@ -40,11 +40,11 @@ use super::log_segment::{resolve_log_segment_files, LogSegmentResolveOptions};
 use crate::datasource::{
     simplify_expr, COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, PATH_COLUMN,
 };
-use crate::options::DeltaLogReplayStrategyOption;
+use crate::options::DeltaLogReplayStrategy;
 use crate::physical_plan::{
     create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaLogReplayExec,
-    DeltaPhysicalExprAdapterFactory, DeltaWriterExec, COL_LOG_IS_REMOVE, COL_LOG_VERSION,
-    COL_REPLAY_PATH,
+    DeltaPhysicalExprAdapterFactory, DeltaWriterExec, DeltaWriterExecOptions, COL_LOG_IS_REMOVE,
+    COL_LOG_VERSION, COL_REPLAY_PATH,
 };
 use crate::spec::fields::{
     FIELD_NAME_MODIFICATION_TIME, FIELD_NAME_PATH, FIELD_NAME_SIZE, FIELD_NAME_STATS,
@@ -59,6 +59,8 @@ use crate::table::DeltaSnapshot;
 pub struct LogReplayOptions {
     /// Whether to include `stats_json` in the replay output (as a Utf8 column).
     pub include_stats_json: bool,
+    /// Whether to carry Add-action metadata fields needed to faithfully re-emit an Add action.
+    pub include_extended_add_metadata: bool,
     /// Optional inclusive log version range for commit JSON files.
     pub commit_version_range: Option<(i64, i64)>,
     /// Optional metadata-stage filter applied after log replay.
@@ -78,6 +80,7 @@ impl Default for LogReplayOptions {
         Self {
             // Preserve current behavior: always project stats.
             include_stats_json: true,
+            include_extended_add_metadata: false,
             commit_version_range: None,
             log_filter: None,
             parquet_predicate: None,
@@ -88,6 +91,7 @@ impl Default for LogReplayOptions {
 fn replay_output_schema(
     partition_columns: &[(String, String)],
     include_stats_json: bool,
+    include_extended_add_metadata: bool,
 ) -> SchemaRef {
     let mut fields = vec![
         Field::new(PATH_COLUMN, DataType::Utf8, true),
@@ -101,6 +105,23 @@ fn replay_output_schema(
     }
     if include_stats_json {
         fields.push(Field::new("stats_json", DataType::Utf8, true));
+    }
+    if include_extended_add_metadata {
+        let map_entries = DataType::Struct(
+            vec![
+                Arc::new(Field::new("key", DataType::Utf8, false)),
+                Arc::new(Field::new("value", DataType::Utf8, true)),
+            ]
+            .into(),
+        );
+        fields.push(Field::new(
+            "tags",
+            DataType::Map(Arc::new(Field::new("entries", map_entries, false)), false),
+            true,
+        ));
+        fields.push(Field::new("baseRowId", DataType::Int64, true));
+        fields.push(Field::new("defaultRowCommitVersion", DataType::Int64, true));
+        fields.push(Field::new("clusteringProvider", DataType::Utf8, true));
     }
     Arc::new(Schema::new(fields))
 }
@@ -118,15 +139,18 @@ pub fn build_standard_write_layers(
     let plan = create_sort(plan, ctx.partition_columns().to_vec(), sort_order)?;
 
     let writer_schema = plan.schema();
+    let write_context = ctx.prepare_write_context(&writer_schema, sink_mode, None)?;
     let writer = Arc::new(DeltaWriterExec::new(
         plan,
         ctx.table_url().clone(),
-        ctx.options().clone(),
+        DeltaWriterExecOptions::from(ctx.options().clone())
+            .with_generation_expressions(ctx.generation_expressions().clone()),
+        ctx.metadata_configuration().clone(),
         ctx.partition_columns().to_vec(),
         sink_mode.clone(),
         ctx.table_exists(),
         writer_schema,
-        None,
+        write_context.clone(),
     )?);
 
     // DeltaCommitExec is single-partition; gather writer partitions first.
@@ -139,6 +163,8 @@ pub fn build_standard_write_layers(
         ctx.table_exists(),
         original_schema,
         sink_mode.clone(),
+        ctx.options().user_metadata.clone(),
+        write_context.commit_context.clone(),
     )))
 }
 
@@ -222,6 +248,7 @@ pub async fn build_log_replay_pipeline_with_options(
         snapshot.physical_partition_columns(),
         log_segment_files.checkpoint_files,
         log_segment_files.commit_files,
+        log_segment_files.sidecar_files,
         options,
     )
     .await
@@ -234,6 +261,7 @@ async fn build_log_replay_pipeline_with_files(
     partition_columns: Vec<(String, String)>,
     checkpoint_files: Vec<String>,
     commit_files: Vec<String>,
+    sidecar_files: Vec<String>,
     options: LogReplayOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let log_scan_options = LogScanOptions {
@@ -245,6 +273,7 @@ async fn build_log_replay_pipeline_with_files(
             ctx,
             checkpoint_files,
             commit_files,
+            sidecar_files,
             log_scan_options,
         )
         .await?;
@@ -271,14 +300,19 @@ async fn build_log_replay_pipeline_with_files(
     if input_schema.field_with_name("add").is_err() {
         // Some tables/log ranges contain only metadata/protocol/remove actions.
         // Without any `add` payload there are no data files to replay.
-        let replay: Arc<dyn ExecutionPlan> =
-            Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
-                replay_output_schema(&partition_columns, options.include_stats_json),
-            ));
+        let replay: Arc<dyn ExecutionPlan> = Arc::new(
+            datafusion::physical_plan::empty::EmptyExec::new(replay_output_schema(
+                &partition_columns,
+                options.include_stats_json,
+                options.include_extended_add_metadata,
+            )),
+        );
 
         let replay: Arc<dyn ExecutionPlan> = if let Some(filter) = options.log_filter {
             let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
-            let adapter = adapter_factory.create(filter.table_schema, replay.schema());
+            let adapter = adapter_factory
+                .create(filter.table_schema, replay.schema())
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
             let adapted = adapter
                 .rewrite(filter.predicate)
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -372,6 +406,9 @@ async fn build_log_replay_pipeline_with_files(
     } else {
         "stats_json"
     };
+    let add_field_name = |names: &[&'static str]| -> Option<&'static str> {
+        names.iter().copied().find(|name| has_add_field(name))
+    };
 
     let get_add_field = |field_name: &str| get_field_expr(add_col_expr.clone(), field_name);
     let guard_add = |e: Expr| guard_with(add_is_not_null.clone(), e);
@@ -453,6 +490,57 @@ async fn build_log_replay_pipeline_with_files(
     }
     if let Some(stats_expr) = stats_expr {
         final_proj.push((stats_expr, "stats_json".to_string()));
+    }
+
+    if options.include_extended_add_metadata {
+        if let Some(field) = add_field_name(&["tags"]) {
+            final_proj.push((
+                simplify(guard_add(get_add_field(field)))?,
+                "tags".to_string(),
+            ));
+        }
+        if let Some(field) = add_field_name(&["baseRowId", "base_row_id"]) {
+            final_proj.push((
+                simplify(Expr::Cast(Cast::new(
+                    Box::new(guard_add(get_add_field(field))),
+                    DataType::Int64,
+                )))?,
+                "baseRowId".to_string(),
+            ));
+        }
+        if let Some(field) =
+            add_field_name(&["defaultRowCommitVersion", "default_row_commit_version"])
+        {
+            final_proj.push((
+                simplify(Expr::Cast(Cast::new(
+                    Box::new(guard_add(get_add_field(field))),
+                    DataType::Int64,
+                )))?,
+                "defaultRowCommitVersion".to_string(),
+            ));
+        }
+        if let Some(field) = add_field_name(&["clusteringProvider", "clustering_provider"]) {
+            final_proj.push((
+                simplify(Expr::Cast(Cast::new(
+                    Box::new(guard_add(get_add_field(field))),
+                    DataType::Utf8,
+                )))?,
+                "clusteringProvider".to_string(),
+            ));
+        }
+    }
+
+    // Include the deletion vector struct so DeltaScanByAddsExec can apply per-file DV filtering.
+    let dv_field_name = if has_add_field("deletionVector") {
+        Some("deletionVector")
+    } else if has_add_field("deletion_vector") {
+        Some("deletion_vector")
+    } else {
+        None
+    };
+    if let Some(dv_field) = dv_field_name {
+        let dv_expr = simplify(guard_add(get_add_field(dv_field)))?;
+        final_proj.push((dv_expr, "deletionVector".to_string()));
     }
 
     // Replay key columns (consumed by replay; stripped from replay output schema).
@@ -538,12 +626,12 @@ async fn build_log_replay_pipeline_with_files(
     };
 
     let replay_strategy = ctx.options().delta_log_replay_strategy;
-    let replay_hash_threshold = ctx.options().delta_log_replay_hash_threshold.max(1);
+    let replay_hash_threshold = ctx.options().delta_log_replay_hash_threshold.get();
     let has_checkpoint = !checkpoint_files.is_empty();
     let use_hash = match replay_strategy {
-        DeltaLogReplayStrategyOption::Sort => false,
-        DeltaLogReplayStrategyOption::Hash => has_checkpoint,
-        DeltaLogReplayStrategyOption::Auto => {
+        DeltaLogReplayStrategy::Sort => false,
+        DeltaLogReplayStrategy::Hash => has_checkpoint,
+        DeltaLogReplayStrategy::Auto => {
             has_checkpoint && commit_files.len() <= replay_hash_threshold
         }
     };
@@ -584,7 +672,9 @@ async fn build_log_replay_pipeline_with_files(
 
     let replay: Arc<dyn ExecutionPlan> = if let Some(filter) = options.log_filter {
         let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
-        let adapter = adapter_factory.create(filter.table_schema, replay.schema());
+        let adapter = adapter_factory
+            .create(filter.table_schema, replay.schema())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let adapted = adapter
             .rewrite(filter.predicate)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;

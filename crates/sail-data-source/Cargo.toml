@@ -17,6 +17,8 @@ futures = { workspace = true }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-datasource = { workspace = true }
+datafusion-datasource-avro = { workspace = true }
+datafusion-datasource-json = { workspace = true }
 datafusion-session = { workspace = true }
 object_store = { workspace = true }
 chumsky = { workspace = true }
@@ -38,10 +40,4 @@ once_cell = { workspace = true }
 thiserror = { workspace = true }
 
 [build-dependencies]
-serde = { workspace = true }
-serde_yaml = { workspace = true }
-syn = { workspace = true }
-prettyplease = { workspace = true }
-regex = { workspace = true }
-quote = { workspace = true }
-proc-macro2 = { workspace = true }
+sail-build-scripts = { path = "../sail-build-scripts" }

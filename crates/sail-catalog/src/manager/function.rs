@@ -4,7 +4,7 @@ use datafusion::catalog::TableFunctionImpl;
 use datafusion_expr::ScalarUDF;
 
 use crate::command::CatalogTableFunction;
-use crate::error::{CatalogError, CatalogResult};
+use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::manager::CatalogManager;
 
 impl CatalogManager {
@@ -50,7 +50,10 @@ impl CatalogManager {
         let name = Self::canonical_function_name(name.as_ref());
         let found = state.functions.remove(&name).is_some();
         if !found && !if_exists {
-            return Err(CatalogError::NotFound("function", name.to_string()));
+            return Err(CatalogError::NotFound(
+                CatalogObject::Function,
+                name.to_string(),
+            ));
         }
         Ok(())
     }

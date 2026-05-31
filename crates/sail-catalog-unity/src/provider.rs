@@ -15,13 +15,15 @@ use std::str::FromStr;
 
 use arrow::datatypes::DataType;
 use reqwest::header::HeaderValue;
-use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions,
-    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
+    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
 };
 use sail_catalog::utils::{get_property, quote_namespace_if_needed};
-use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
+use sail_common_datafusion::catalog::{
+    identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
+};
 use secrecy::SecretString;
 use tokio::sync::OnceCell;
 
@@ -277,20 +279,6 @@ impl UnityCatalogProvider {
 
         let comment = comment.or(get_property(&properties, "comment"));
 
-        let options: Vec<_> = properties
-            .extract_if(|k, _| k.trim().to_lowercase().starts_with("options."))
-            .map(|(k, v)| {
-                let trimmed = k.trim().to_string();
-                let stripped =
-                    if trimmed.len() >= 8 && trimmed[..8].eq_ignore_ascii_case("options.") {
-                        trimmed[8..].to_string()
-                    } else {
-                        trimmed
-                    };
-                (stripped, v)
-            })
-            .collect();
-
         if let Some(created_at) = created_at {
             properties.insert("created_at".to_string(), created_at.to_string());
         }
@@ -325,11 +313,11 @@ impl UnityCatalogProvider {
                 constraints: vec![],
                 location: storage_location,
                 format,
-                partition_by,
+                partition_by: identity_partition_fields(&partition_by),
                 sort_by: vec![],
                 bucket_by: None,
-                options,
                 properties,
+                is_external: true,
             },
         })
     }
@@ -423,7 +411,7 @@ impl CatalogProvider for UnityCatalogProvider {
             Err(progenitor_client::Error::UnexpectedResponse(response))
                 if response.status().as_u16() == 404 =>
             {
-                Err(CatalogError::NotFound("schema", full_name))
+                Err(CatalogError::NotFound(CatalogObject::Schema, full_name))
             }
             Err(e) => Err(CatalogError::External(format!("Failed to get schema: {e}"))),
         }
@@ -529,8 +517,8 @@ impl CatalogProvider for UnityCatalogProvider {
             bucket_by,
             if_not_exists,
             replace,
-            options,
             properties,
+            is_external: _,
         } = options;
 
         if replace {
@@ -624,10 +612,6 @@ impl CatalogProvider for UnityCatalogProvider {
             .collect::<CatalogResult<Vec<_>>>()?;
 
         let mut props = HashMap::new();
-        // TODO: Is this correct for options?
-        for (k, v) in options {
-            props.insert(format!("options.{k}"), v);
-        }
         if let Some(c) = &comment {
             props.insert("comment".to_string(), c.to_string());
         }
@@ -691,7 +675,7 @@ impl CatalogProvider for UnityCatalogProvider {
             Err(progenitor_client::Error::UnexpectedResponse(response))
                 if response.status().as_u16() == 404 =>
             {
-                Err(CatalogError::NotFound("table", full_name))
+                Err(CatalogError::NotFound(CatalogObject::Table, full_name))
             }
             Err(e) => Err(CatalogError::External(format!("Failed to get table: {e}"))),
         }
@@ -767,6 +751,20 @@ impl CatalogProvider for UnityCatalogProvider {
             }
             Err(e) => Err(CatalogError::External(format!("Failed to drop table: {e}"))),
         }
+    }
+
+    async fn alter_table(
+        &self,
+        _database: &Namespace,
+        _table: &str,
+        _options: AlterTableOptions,
+    ) -> CatalogResult<()> {
+        // The Unity catalog does not currently propagate ALTER TABLE property changes to
+        // the Unity REST API. However, returning `NotSupported` here would abort a Delta
+        // storage-side commit that has already succeeded. Treat this as a no-op so the
+        // on-disk Delta table remains the source of truth until the REST integration
+        // is wired up.
+        Ok(())
     }
 
     async fn create_view(

@@ -1390,7 +1390,90 @@
     {
       "input": "select * from t cross join lateral (select * from u) uu",
       "output": {
-        "failure": "invalid argument: expected function for lateral table factor"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "lateralJoin": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "project": {
+                          "input": {
+                            "read": {
+                              "namedTable": {
+                                "name": [
+                                  "u"
+                                ],
+                                "temporal": null,
+                                "sample": null,
+                                "options": []
+                              },
+                              "isStreaming": false
+                            },
+                            "planId": null
+                          },
+                          "expressions": [
+                            {
+                              "unresolvedStar": {
+                                "target": null,
+                                "planId": null,
+                                "wildcardOptions": {
+                                  "ilikePattern": null,
+                                  "excludeColumns": null,
+                                  "exceptColumns": null,
+                                  "replaceColumns": null,
+                                  "renameColumns": null
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "planId": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null
+                  },
+                  "joinCondition": null,
+                  "joinType": "cross"
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
@@ -1742,7 +1825,90 @@
     {
       "input": "select * from t inner join lateral (select * from u) uu",
       "output": {
-        "failure": "invalid argument: expected function for lateral table factor"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "lateralJoin": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "project": {
+                          "input": {
+                            "read": {
+                              "namedTable": {
+                                "name": [
+                                  "u"
+                                ],
+                                "temporal": null,
+                                "sample": null,
+                                "options": []
+                              },
+                              "isStreaming": false
+                            },
+                            "planId": null
+                          },
+                          "expressions": [
+                            {
+                              "unresolvedStar": {
+                                "target": null,
+                                "planId": null,
+                                "wildcardOptions": {
+                                  "ilikePattern": null,
+                                  "excludeColumns": null,
+                                  "exceptColumns": null,
+                                  "replaceColumns": null,
+                                  "renameColumns": null
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "planId": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null
+                  },
+                  "joinCondition": null,
+                  "joinType": "inner"
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
@@ -1921,13 +2087,185 @@
     {
       "input": "select * from t join lateral (select * from u) uu",
       "output": {
-        "failure": "invalid argument: expected function for lateral table factor"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "lateralJoin": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "project": {
+                          "input": {
+                            "read": {
+                              "namedTable": {
+                                "name": [
+                                  "u"
+                                ],
+                                "temporal": null,
+                                "sample": null,
+                                "options": []
+                              },
+                              "isStreaming": false
+                            },
+                            "planId": null
+                          },
+                          "expressions": [
+                            {
+                              "unresolvedStar": {
+                                "target": null,
+                                "planId": null,
+                                "wildcardOptions": {
+                                  "ilikePattern": null,
+                                  "excludeColumns": null,
+                                  "exceptColumns": null,
+                                  "replaceColumns": null,
+                                  "renameColumns": null
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "planId": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null
+                  },
+                  "joinCondition": null,
+                  "joinType": "inner"
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "select * from t join lateral (select * from u) uu on true",
       "output": {
-        "failure": "not supported: LATERAL JOIN with criteria"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "lateralJoin": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "project": {
+                          "input": {
+                            "read": {
+                              "namedTable": {
+                                "name": [
+                                  "u"
+                                ],
+                                "temporal": null,
+                                "sample": null,
+                                "options": []
+                              },
+                              "isStreaming": false
+                            },
+                            "planId": null
+                          },
+                          "expressions": [
+                            {
+                              "unresolvedStar": {
+                                "target": null,
+                                "planId": null,
+                                "wildcardOptions": {
+                                  "ilikePattern": null,
+                                  "excludeColumns": null,
+                                  "exceptColumns": null,
+                                  "replaceColumns": null,
+                                  "renameColumns": null
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "planId": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null
+                  },
+                  "joinCondition": {
+                    "literal": {
+                      "boolean": {
+                        "value": true
+                      }
+                    }
+                  },
+                  "joinType": "inner"
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
@@ -2279,7 +2617,90 @@
     {
       "input": "select * from t left join lateral (select * from u) uu",
       "output": {
-        "failure": "invalid argument: expected function for lateral table factor"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "lateralJoin": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "project": {
+                          "input": {
+                            "read": {
+                              "namedTable": {
+                                "name": [
+                                  "u"
+                                ],
+                                "temporal": null,
+                                "sample": null,
+                                "options": []
+                              },
+                              "isStreaming": false
+                            },
+                            "planId": null
+                          },
+                          "expressions": [
+                            {
+                              "unresolvedStar": {
+                                "target": null,
+                                "planId": null,
+                                "wildcardOptions": {
+                                  "ilikePattern": null,
+                                  "excludeColumns": null,
+                                  "exceptColumns": null,
+                                  "replaceColumns": null,
+                                  "renameColumns": null
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "planId": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null
+                  },
+                  "joinCondition": null,
+                  "joinType": "leftOuter"
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
@@ -2458,7 +2879,90 @@
     {
       "input": "select * from t left outer join lateral (select * from u) uu",
       "output": {
-        "failure": "invalid argument: expected function for lateral table factor"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "lateralJoin": {
+                  "left": {
+                    "read": {
+                      "namedTable": {
+                        "name": [
+                          "t"
+                        ],
+                        "temporal": null,
+                        "sample": null,
+                        "options": []
+                      },
+                      "isStreaming": false
+                    },
+                    "planId": null
+                  },
+                  "right": {
+                    "tableAlias": {
+                      "input": {
+                        "project": {
+                          "input": {
+                            "read": {
+                              "namedTable": {
+                                "name": [
+                                  "u"
+                                ],
+                                "temporal": null,
+                                "sample": null,
+                                "options": []
+                              },
+                              "isStreaming": false
+                            },
+                            "planId": null
+                          },
+                          "expressions": [
+                            {
+                              "unresolvedStar": {
+                                "target": null,
+                                "planId": null,
+                                "wildcardOptions": {
+                                  "ilikePattern": null,
+                                  "excludeColumns": null,
+                                  "exceptColumns": null,
+                                  "replaceColumns": null,
+                                  "renameColumns": null
+                                }
+                              }
+                            }
+                          ]
+                        },
+                        "planId": null
+                      },
+                      "name": "uu",
+                      "columns": []
+                    },
+                    "planId": null
+                  },
+                  "joinCondition": null,
+                  "joinType": "leftOuter"
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
       }
     },
     {

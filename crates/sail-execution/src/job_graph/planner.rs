@@ -17,6 +17,8 @@ use datafusion::physical_plan::{
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
+use sail_physical_plan::coalesce::CoalesceExec;
+use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::job_graph::{
@@ -138,9 +140,10 @@ fn ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(
             join.on.clone(),
             join.filter.clone(),
             &join.join_type,
-            join.projection.clone(),
+            join.projection.as_deref().map(|p| p.to_vec()),
             PartitionMode::Partitioned,
             join.null_equality,
+            false,
         )?)))
     })?;
 
@@ -204,8 +207,10 @@ fn build_job_graph(
             build_job_graph(right.clone(), usage, graph)?,
         ]
     } else if plan.as_any().is::<RepartitionExec>()
+        || plan.as_any().is::<ExplicitRepartitionExec>()
         || plan.as_any().is::<CoalescePartitionsExec>()
         || plan.as_any().is::<SortPreservingMergeExec>()
+        || plan.as_any().is::<CoalesceExec>()
     {
         let child = plan.children().one()?;
         // At the stage boundary, we only expect to use the child partition once
@@ -237,11 +242,29 @@ fn build_job_graph(
         match &properties.partitioning {
             Partitioning::UnknownPartitioning(n) => {
                 let n = *n;
-                let properties = properties.with_partitioning(Partitioning::RoundRobinBatch(n));
+                let properties = Arc::new(
+                    properties
+                        .as_ref()
+                        .clone()
+                        .with_partitioning(Partitioning::RoundRobinBatch(n)),
+                );
                 create_shuffle(child, graph, properties, consumption)?
             }
             Partitioning::RoundRobinBatch(_) | Partitioning::Hash(_, _) => {
                 create_shuffle(child, graph, properties, consumption)?
+            }
+        }
+    } else if let Some(repartition) = plan.as_any().downcast_ref::<ExplicitRepartitionExec>() {
+        let properties = repartition.properties().clone();
+        let child = plan.children().one()?;
+        match &properties.partitioning {
+            Partitioning::RoundRobinBatch(channels) => {
+                create_row_shuffle(child, *channels, graph, properties, consumption)?
+            }
+            other => {
+                return Err(ExecutionError::DataFusionError(plan_datafusion_err!(
+                    "unexpected explicit repartition partitioning in distributed planning: {other:?}"
+                )));
             }
         }
     } else if let Some(coalesce) = plan.as_any().downcast_ref::<CoalescePartitionsExec>() {
@@ -258,6 +281,9 @@ fn build_job_graph(
         let child = plan.children().one()?;
         plan.clone()
             .with_new_children(vec![create_merge_input(child, graph)?])?
+    } else if let Some(coalesce) = plan.as_any().downcast_ref::<CoalesceExec>() {
+        let child = plan.children().one()?;
+        create_rescale_input(child, coalesce.output_partitions(), graph)?
     } else if plan.as_any().is::<SystemTableExec>() || plan.as_any().is::<CatalogCommandExec>() {
         plan.children().zero()?;
         create_driver_stage(&plan, graph)?
@@ -292,12 +318,43 @@ fn create_merge_input(
     )))
 }
 
+fn create_rescale_input(
+    plan: &Arc<dyn ExecutionPlan>,
+    output_partitions: usize,
+    graph: &mut JobGraph,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    let (plan, inputs) = rewrite_inputs(plan.clone())?;
+    let stage = Stage {
+        inputs,
+        plan,
+        group: String::new(),
+        mode: OutputMode::Pipelined,
+        distribution: OutputDistribution::RoundRobin { channels: 1 },
+        placement: TaskPlacement::Worker,
+    };
+    let s = graph.stages.len();
+    graph.stages.push(stage);
+    let properties = Arc::new(PlanProperties::new(
+        datafusion::physical_expr::EquivalenceProperties::new(graph.stages[s].plan.schema()),
+        Partitioning::UnknownPartitioning(output_partitions),
+        graph.stages[s].plan.pipeline_behavior(),
+        graph.stages[s].plan.boundedness(),
+    ));
+    Ok(Arc::new(StageInputExec::new(
+        StageInput {
+            stage: s,
+            mode: InputMode::Rescale,
+        },
+        properties,
+    )))
+}
+
 fn create_shuffle(
     plan: &Arc<dyn ExecutionPlan>,
     graph: &mut JobGraph,
     // These are the properties after repartition/coalesce,
     // which are different from the properties of the input plan.
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
     consumption: ShuffleConsumption,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
     let distribution = match properties.partitioning.clone() {
@@ -306,6 +363,38 @@ fn create_shuffle(
         }
         Partitioning::Hash(keys, channels) => OutputDistribution::Hash { keys, channels },
     };
+    let (plan, inputs) = rewrite_inputs(plan.clone())?;
+    let stage = Stage {
+        inputs,
+        plan,
+        group: String::new(),
+        mode: OutputMode::Pipelined,
+        distribution,
+        placement: TaskPlacement::Worker,
+    };
+    let s = graph.stages.len();
+    graph.stages.push(stage);
+    let mode = match consumption {
+        ShuffleConsumption::Single => InputMode::Shuffle,
+        ShuffleConsumption::Multiple => InputMode::Broadcast,
+    };
+    Ok(Arc::new(StageInputExec::new(
+        StageInput { stage: s, mode },
+        properties,
+    )))
+}
+
+/// Creates a shuffle stage with row-level round-robin distribution.
+/// Used for explicit user-requested repartition calls where individual rows
+/// must be distributed evenly across output partitions.
+fn create_row_shuffle(
+    plan: &Arc<dyn ExecutionPlan>,
+    channels: usize,
+    graph: &mut JobGraph,
+    properties: Arc<PlanProperties>,
+    consumption: ShuffleConsumption,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    let distribution = OutputDistribution::RoundRobinRow { channels };
     let (plan, inputs) = rewrite_inputs(plan.clone())?;
     let stage = Stage {
         inputs,
@@ -366,4 +455,93 @@ fn create_driver_stage(
         },
         plan.properties().clone(),
     )))
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use datafusion::physical_expr::Partitioning;
+    use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::repartition::RepartitionExec;
+    use datafusion::physical_plan::union::UnionExec;
+    use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+    use sail_physical_plan::coalesce::CoalesceExec;
+    use sail_physical_plan::repartition::ExplicitRepartitionExec;
+
+    use super::JobGraph;
+    use crate::job_graph::{InputMode, OutputDistribution, StageInput};
+
+    fn schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]))
+    }
+
+    fn empty_plan() -> Arc<dyn ExecutionPlan> {
+        Arc::new(EmptyExec::new(schema()))
+    }
+
+    #[test]
+    fn test_job_graph_distinguishes_batch_and_explicit_round_robin_shuffle() {
+        let generic_graph = JobGraph::try_new(Arc::new(
+            RepartitionExec::try_new(empty_plan(), Partitioning::RoundRobinBatch(4)).unwrap(),
+        ))
+        .unwrap();
+        let explicit_graph = JobGraph::try_new(Arc::new(ExplicitRepartitionExec::new(
+            empty_plan(),
+            Partitioning::RoundRobinBatch(4),
+        )))
+        .unwrap();
+
+        assert_eq!(generic_graph.stages().len(), 2);
+        assert!(matches!(
+            &generic_graph.stages()[0].distribution,
+            OutputDistribution::RoundRobin { channels: 4 }
+        ));
+        assert!(matches!(
+            generic_graph.stages()[1].inputs.as_slice(),
+            [StageInput {
+                stage: 0,
+                mode: InputMode::Shuffle,
+            }]
+        ));
+
+        assert_eq!(explicit_graph.stages().len(), 2);
+        assert!(matches!(
+            &explicit_graph.stages()[0].distribution,
+            OutputDistribution::RoundRobinRow { channels: 4 }
+        ));
+        assert!(matches!(
+            explicit_graph.stages()[1].inputs.as_slice(),
+            [StageInput {
+                stage: 0,
+                mode: InputMode::Shuffle,
+            }]
+        ));
+    }
+
+    #[test]
+    fn test_job_graph_uses_rescale_input_for_coalesce_exec() {
+        let input =
+            UnionExec::try_new(vec![empty_plan(), empty_plan(), empty_plan(), empty_plan()])
+                .unwrap();
+        let graph = JobGraph::try_new(Arc::new(CoalesceExec::new(input, 2))).unwrap();
+
+        assert_eq!(graph.stages().len(), 2);
+        assert_eq!(
+            graph.stages()[1]
+                .plan
+                .output_partitioning()
+                .partition_count(),
+            2
+        );
+        assert!(matches!(
+            graph.stages()[1].inputs.as_slice(),
+            [StageInput {
+                stage: 0,
+                mode: InputMode::Rescale,
+            }]
+        ));
+    }
 }

@@ -97,6 +97,7 @@ impl PlanResolver<'_> {
             .collect::<PlanResult<Vec<Column>>>()
     }
 
+    /// Returns the user-visible field names for a resolved schema.
     pub(super) fn get_field_names(
         schema: &DFSchemaRef,
         state: &PlanResolverState,

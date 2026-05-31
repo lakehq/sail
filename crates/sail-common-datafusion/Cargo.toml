@@ -19,10 +19,13 @@ either = { workspace = true }
 lexical-core = { workspace = true }
 futures = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 async-trait = { workspace = true }
 prost = { workspace = true }
 tonic = { workspace = true }
 pin-project-lite = { workspace = true }
+parquet-variant-compute = { workspace = true }
+parquet-variant-json = { workspace = true }
 tokio = { workspace = true }
 serde_arrow = { workspace = true }
 

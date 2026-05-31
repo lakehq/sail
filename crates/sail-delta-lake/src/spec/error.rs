@@ -42,6 +42,9 @@ pub enum CommitConflictError {
     #[error("Metadata changed since last commit.")]
     MetadataChanged,
 
+    #[error("Domain metadata changed since last commit for domain '{0}'.")]
+    ConcurrentDomainMetadata(String),
+
     #[error("Concurrent transaction failed.")]
     ConcurrentTransaction,
 

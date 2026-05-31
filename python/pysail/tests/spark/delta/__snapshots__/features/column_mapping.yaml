@@ -1,0 +1,191 @@
+# serializer version: 1
+---
+name: "test_create_partitioned_table_with_column_mapping_name_mode_ddl"
+data:
+  metaData:
+    configuration:
+      delta.columnMapping.maxColumnId: '3'
+      delta.columnMapping.mode: name
+    createdTime: <created_time>
+    description: null
+    format:
+      options: {}
+      provider: parquet
+    id: <table_id>
+    name: null
+    partitionColumns:
+    - region
+    schemaString:
+      fields:
+      - metadata:
+          delta.columnMapping.id: 1
+          delta.columnMapping.physicalName: <physical_name_0>
+        name: id
+        nullable: true
+        type: integer
+      - metadata:
+          delta.columnMapping.id: 2
+          delta.columnMapping.physicalName: <physical_name_1>
+        name: data
+        nullable: true
+        type: string
+      - metadata:
+          delta.columnMapping.id: 3
+          delta.columnMapping.physicalName: <physical_name_2>
+        name: region
+        nullable: true
+        type: string
+      type: struct
+  protocol:
+    minReaderVersion: 3
+    minWriterVersion: 7
+    readerFeatures:
+    - columnMapping
+    writerFeatures:
+    - columnMapping
+---
+name: "test_create_table_with_column_mapping_id_mode_ddl_and_first_write_materializes_mapping"
+data:
+  metaData:
+    configuration:
+      delta.columnMapping.maxColumnId: '3'
+      delta.columnMapping.mode: id
+    createdTime: <created_time>
+    description: null
+    format:
+      options: {}
+      provider: parquet
+    id: <table_id>
+    name: null
+    partitionColumns: []
+    schemaString:
+      fields:
+      - metadata:
+          delta.columnMapping.id: 1
+          delta.columnMapping.physicalName: <physical_name_0>
+        name: id
+        nullable: true
+        type: integer
+      - metadata:
+          delta.columnMapping.id: 2
+          delta.columnMapping.physicalName: <physical_name_1>
+        name: name
+        nullable: true
+        type: string
+      - metadata:
+          delta.columnMapping.id: 3
+          delta.columnMapping.physicalName: <physical_name_2>
+        name: value
+        nullable: true
+        type: double
+      type: struct
+  protocol:
+    minReaderVersion: 3
+    minWriterVersion: 7
+    readerFeatures:
+    - columnMapping
+    writerFeatures:
+    - columnMapping
+---
+name: "test_create_table_with_column_mapping_name_mode_ddl_and_first_write_materializes_mapping"
+data:
+  metaData:
+    configuration:
+      delta.columnMapping.maxColumnId: '3'
+      delta.columnMapping.mode: name
+    createdTime: <created_time>
+    description: null
+    format:
+      options: {}
+      provider: parquet
+    id: <table_id>
+    name: null
+    partitionColumns: []
+    schemaString:
+      fields:
+      - metadata:
+          delta.columnMapping.id: 1
+          delta.columnMapping.physicalName: <physical_name_0>
+        name: id
+        nullable: true
+        type: integer
+      - metadata:
+          delta.columnMapping.id: 2
+          delta.columnMapping.physicalName: <physical_name_1>
+        name: name
+        nullable: true
+        type: string
+      - metadata:
+          delta.columnMapping.id: 3
+          delta.columnMapping.physicalName: <physical_name_2>
+        name: value
+        nullable: true
+        type: double
+      type: struct
+  protocol:
+    minReaderVersion: 3
+    minWriterVersion: 7
+    readerFeatures:
+    - columnMapping
+    writerFeatures:
+    - columnMapping
+---
+name: "test_create_table_with_nested_struct_in_column_mapping_name_mode_ddl"
+data:
+  metaData:
+    configuration:
+      delta.columnMapping.maxColumnId: '5'
+      delta.columnMapping.mode: name
+    createdTime: <created_time>
+    description: null
+    format:
+      options: {}
+      provider: parquet
+    id: <table_id>
+    name: null
+    partitionColumns: []
+    schemaString:
+      fields:
+      - metadata:
+          delta.columnMapping.id: 1
+          delta.columnMapping.physicalName: <physical_name_0>
+        name: id
+        nullable: true
+        type: integer
+      - metadata:
+          delta.columnMapping.id: 2
+          delta.columnMapping.physicalName: <physical_name_1>
+        name: user
+        nullable: true
+        type:
+          fields:
+          - metadata:
+              delta.columnMapping.id: 3
+              delta.columnMapping.physicalName: <physical_name_1.0>
+            name: name
+            nullable: true
+            type: string
+          - metadata:
+              delta.columnMapping.id: 4
+              delta.columnMapping.physicalName: <physical_name_1.1>
+            name: age
+            nullable: true
+            type: integer
+          type: struct
+      - metadata:
+          delta.columnMapping.id: 5
+          delta.columnMapping.physicalName: <physical_name_2>
+        name: tags
+        nullable: true
+        type:
+          containsNull: true
+          elementType: string
+          type: array
+      type: struct
+  protocol:
+    minReaderVersion: 3
+    minWriterVersion: 7
+    readerFeatures:
+    - columnMapping
+    writerFeatures:
+    - columnMapping

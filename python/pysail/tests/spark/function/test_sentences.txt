@@ -1,0 +1,55 @@
+>>> spark.sql("SELECT sentences('Hi there! Good morning.') AS result").show(truncate=False)
++...
+|result...|
++...
+|[[Hi, there], [Good, morning]]...|
++...
+<BLANKLINE>
+
+>>> spark.sql("SELECT sentences('Hello world') AS result").show(truncate=False)
++...
+|result...|
++...
+|[[Hello, world]]...|
++...
+<BLANKLINE>
+
+>>> spark.sql("SELECT sentences('What? Yes! OK.') AS result").show(truncate=False)
++...
+|result...|
++...
+|[[What], [Yes], [OK]]...|
++...
+<BLANKLINE>
+
+>>> spark.sql("SELECT sentences(NULL) AS result").show(truncate=False)
++------+
+|result|
++------+
+|NULL  |
++------+
+<BLANKLINE>
+
+>>> spark.sql("SELECT sentences('') AS result").show(truncate=False)
++------+
+|result|
++------+
+|[]    |
++------+
+<BLANKLINE>
+
+>>> spark.sql("SELECT sentences('Hi there!', 'en') AS result").show(truncate=False)
++...
+|result...|
++...
+|[[Hi, there]]...|
++...
+<BLANKLINE>
+
+>>> spark.sql("SELECT sentences('Hi there!', 'en', 'US') AS result").show(truncate=False)
++...
+|result...|
++...
+|[[Hi, there]]...|
++...
+<BLANKLINE>

@@ -1,6 +1,0 @@
-== Physical Plan ==
-ProjectionExec: expr=[#2@0 as key, #3@1 as value]
-  ProjectionExec: expr=[key@0 as #2, value@1 as #3]
-    GlobalLimitExec: skip=0, fetch=1
-      CooperativeExec
-        SystemTableExec: table=options, projection=Some([0, 1]), filters=[BinaryExpr { left: Column { name: "key", index: 0 }, op: Eq, right: Literal { value: Utf8("mode"), field: Field { name: "lit", data_type: Utf8 } }, fail_on_overflow: false }], fetch=Some(1)

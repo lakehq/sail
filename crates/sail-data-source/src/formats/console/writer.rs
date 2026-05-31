@@ -15,12 +15,12 @@ use futures::StreamExt;
 #[derive(Debug)]
 pub struct ConsoleSinkExec {
     input: Arc<dyn ExecutionPlan>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl ConsoleSinkExec {
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Self {
-        let properties = PlanProperties::new(
+        let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(Arc::new(Schema::empty())),
             Partitioning::UnknownPartitioning(
                 input.properties().output_partitioning().partition_count(),
@@ -28,7 +28,7 @@ impl ConsoleSinkExec {
             EmissionType::Final,
             // The node returns no data, so it is bounded.
             Boundedness::Bounded,
-        );
+        ));
         Self { input, properties }
     }
 
@@ -56,7 +56,7 @@ impl ExecutionPlan for ConsoleSinkExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

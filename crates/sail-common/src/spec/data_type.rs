@@ -12,6 +12,28 @@ pub const ARROW_DECIMAL128_MAX_SCALE: i8 = arrow_schema::DECIMAL128_MAX_SCALE;
 pub const ARROW_DECIMAL256_MAX_PRECISION: u8 = arrow_schema::DECIMAL256_MAX_PRECISION;
 pub const ARROW_DECIMAL256_MAX_SCALE: i8 = arrow_schema::DECIMAL256_MAX_SCALE;
 
+/// Spark column metadata key for Arrow field metadata.
+///
+/// Spark stores the entire column metadata dictionary as a JSON-encoded object
+/// under this single key to avoid collisions with other Arrow field metadata
+/// (e.g. extension type keys).
+pub const SPARK_METADATA_JSON_KEY: &str = "SPARK::metadata::json";
+
+/// Sail metadata key for Spark UDT information stored in Arrow field metadata.
+///
+/// This is internal to Sail and should not be exposed as Spark column metadata.
+pub const SAIL_SPARK_UDT_METADATA_KEY: &str = "SAIL::spark::udt";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SparkUdtMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub jvm_class: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub python_class: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub serialized_python_class: Option<String>,
+}
+
 /// Field name for list type.
 pub const SAIL_LIST_FIELD_NAME: &str = "item";
 /// Field name for map type's entries.
@@ -275,6 +297,9 @@ pub enum DataType {
         serialized_python_class: Option<String>,
         sql_type: Box<DataType>,
     },
+    /// Variant type for semi-structured data.
+    /// Corresponds to Spark's VariantType.
+    Variant,
     /// Resolves to either [`DataType::Utf8`] or [`DataType::LargeUtf8`],
     /// based on `config.arrow_use_large_var_types`.
     ConfiguredUtf8 {

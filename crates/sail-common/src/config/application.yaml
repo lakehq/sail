@@ -13,14 +13,10 @@
 - key: runtime.stack_size
   type: number
   default: "8388608"
-  description: The stack size in bytes for each thread.
-
-- key: runtime.enable_secondary
-  type: boolean
-  default: "true"
   description: |
-    Use a secondary Tokio runtime to separate object storage I/O tasks from other operations.
-  experimental: true
+    The stack size in bytes for each thread.
+    The default value works well for common cases, but complex queries involving deeply nested expressions or plans
+    may require a larger stack size to avoid stack overflow during query planning.
 
 - key: runtime.memory_pool.type
   type: string
@@ -717,6 +713,16 @@
     Whether to enable cost-based join reorder in the query optimizer.
   experimental: true
 
+- key: optimizer.expand_views_at_output
+  type: boolean
+  default: "true"
+  description: |
+    Whether the optimizer should coerce view types to non-view types at query output.
+    If the value is `true`, `Utf8View` is coerced to `LargeUtf8` and `BinaryView` is coerced
+    to `LargeBinary` before results leave the query boundary. If the value is `false`, view
+    types pass through to the client.
+  experimental: true
+
 - key: spark.session_timeout_secs
   type: number
   default: "900"
@@ -732,6 +738,14 @@
     The interval in seconds for the server to send empty response to the client
     during long-running operations. The empty response serves as a heartbeat to keep
     the session active.
+  experimental: true
+
+- key: flight.session_timeout_secs
+  type: number
+  default: "3600"
+  description: |
+    The timeout in seconds for idle Flight SQL sessions.
+    Sessions that have been inactive for longer than this duration will be cleaned up.
   experimental: true
 
 - key: telemetry.export_traces

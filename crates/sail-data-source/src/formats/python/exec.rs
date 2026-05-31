@@ -55,7 +55,7 @@ pub struct PythonDataSourceExec {
     /// Partitions for parallel reading
     partitions: Vec<InputPartition>,
     /// Execution plan properties
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl PythonDataSourceExec {
@@ -72,12 +72,12 @@ impl PythonDataSourceExec {
         partitions: Vec<InputPartition>,
     ) -> Self {
         let num_partitions = partitions.len().max(1);
-        let properties = PlanProperties::new(
+        let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             Partitioning::UnknownPartitioning(num_partitions),
             EmissionType::Incremental,
             Boundedness::Bounded,
-        );
+        ));
 
         Self {
             pickled_reader,
@@ -122,7 +122,7 @@ impl ExecutionPlan for PythonDataSourceExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

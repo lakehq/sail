@@ -1,14 +1,17 @@
 use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
 use chrono::{TimeZone, Utc};
 use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, BooleanArray, Date32Array, Float32Array, Float64Array, Int16Array,
-    Int32Array, Int64Array, Int8Array, LargeStringArray, ListArray, MapArray, StringArray,
-    StringBuilder, StructArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
+    FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+    Int8Array, LargeListArray, LargeStringArray, ListArray, MapArray, StringArray, StringBuilder,
+    StringViewArray, StructArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::Result;
+use datafusion_common::{Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TypeSignature,
     Volatility,
@@ -18,6 +21,7 @@ use serde_json::{Map, Value};
 
 use crate::functions_nested_utils::opt_downcast_arg;
 use crate::functions_utils::make_scalar_function;
+use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
 
 /// Macro to simplify downcasting arrays and extracting values as JSON
 macro_rules! downcast_and_convert {
@@ -50,34 +54,23 @@ impl ToJsonOptions {
     pub const DATE_FORMAT_DEFAULT: &'static str = "%Y-%m-%d";
 
     /// Build ToJsonOptions from a DataFusion MapArray of key-value pairs.
-    fn from_map(map: &MapArray) -> Self {
+    fn from_map(map: &MapArray) -> Result<Self> {
         let timestamp_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
-            .map(Self::convert_format)
+            .map(spark_datetime_format_to_chrono_strftime)
+            .transpose()?
             .unwrap_or_else(|| Self::TIMESTAMP_FORMAT_DEFAULT.to_string());
 
         let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
             .as_deref()
-            .map(Self::convert_format)
+            .map(spark_datetime_format_to_chrono_strftime)
+            .transpose()?
             .unwrap_or_else(|| Self::DATE_FORMAT_DEFAULT.to_string());
 
-        Self {
+        Ok(Self {
             timestamp_format,
             date_format,
-        }
-    }
-
-    /// Converts a Spark/Java-style format string (e.g., "yyyy-MM-dd")
-    /// into a format compatible with the `chrono` crate (e.g., "%Y-%m-%d").
-    fn convert_format(fmt: &str) -> String {
-        fmt.replace("yyyy", "%Y")
-            .replace("MM", "%m")
-            .replace("dd", "%d")
-            .replace("HH", "%H")
-            .replace("mm", "%M")
-            .replace("ss", "%S")
-            .replace("SSS", "%.3f")
-            .replace("SSSSSS", "%.6f")
+        })
     }
 }
 
@@ -136,6 +129,29 @@ impl ScalarUDFImpl for SparkToJson {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        // If input is a Variant struct, use the shared variant-to-JSON conversion
+        // (Spark's to_json supports Variant input and ignores options for it)
+        if let Some(field) = args.arg_fields.first() {
+            if matches!(field.data_type(), DataType::Struct(_))
+                && crate::scalar::variant::utils::helper::try_field_as_variant_array(field).is_ok()
+            {
+                let result =
+                    crate::scalar::variant::spark_variant_to_json::variant_to_json_columnar(
+                        &args.args[0],
+                    )?;
+                // variant_to_json_columnar returns Utf8View, but to_json promises Utf8
+                return match result {
+                    ColumnarValue::Scalar(ScalarValue::Utf8View(v)) => {
+                        Ok(ColumnarValue::Scalar(ScalarValue::Utf8(v)))
+                    }
+                    ColumnarValue::Array(arr) => Ok(ColumnarValue::Array(arrow::compute::cast(
+                        &arr,
+                        &DataType::Utf8,
+                    )?)),
+                    other => Ok(other),
+                };
+            }
+        }
         make_scalar_function(to_json_inner, vec![])(&args.args)
     }
 }
@@ -166,7 +182,7 @@ fn to_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 "[INVALID_OPTIONS.NON_MAP_FUNCTION] Invalid options: Must use the `map()` function for options.".to_string(),
             )
         })?;
-        ToJsonOptions::from_map(map_array)
+        ToJsonOptions::from_map(map_array)?
     } else {
         ToJsonOptions::default()
     };
@@ -241,6 +257,11 @@ fn array_value_to_json(array: &ArrayRef, index: usize, options: &ToJsonOptions) 
                 v.to_string()
             ))
         }
+        DataType::Utf8View => {
+            downcast_and_convert!(array, index, StringViewArray, |v: &str| Value::String(
+                v.to_string()
+            ))
+        }
         DataType::Date32 => {
             let arr = array
                 .as_any()
@@ -280,6 +301,24 @@ fn array_value_to_json(array: &ArrayRef, index: usize, options: &ToJsonOptions) 
                 })?;
             struct_to_json(struct_array, index, options)
         }
+        DataType::Binary => {
+            downcast_and_convert!(array, index, BinaryArray, |v: &[u8]| Value::String(
+                BASE64_STANDARD.encode(v)
+            ))
+        }
+        DataType::BinaryView => {
+            downcast_and_convert!(array, index, BinaryViewArray, |v: &[u8]| Value::String(
+                BASE64_STANDARD.encode(v)
+            ))
+        }
+        DataType::FixedSizeBinary(_) => {
+            downcast_and_convert!(
+                array,
+                index,
+                FixedSizeBinaryArray,
+                |v: &[u8]| Value::String(BASE64_STANDARD.encode(v))
+            )
+        }
         DataType::List(_) => {
             let list_array = array.as_any().downcast_ref::<ListArray>().ok_or_else(|| {
                 datafusion_common::DataFusionError::Internal(
@@ -287,6 +326,38 @@ fn array_value_to_json(array: &ArrayRef, index: usize, options: &ToJsonOptions) 
                 )
             })?;
             list_to_json(list_array, index, options)
+        }
+        DataType::FixedSizeList(_, _) => {
+            let values = array
+                .as_any()
+                .downcast_ref::<datafusion::arrow::array::FixedSizeListArray>()
+                .ok_or_else(|| {
+                    datafusion_common::DataFusionError::Internal(
+                        "Failed to downcast to FixedSizeListArray".to_string(),
+                    )
+                })?
+                .value(index);
+            let mut json_values = Vec::with_capacity(values.len());
+            for i in 0..values.len() {
+                json_values.push(array_value_to_json(&values, i, options)?);
+            }
+            Ok(Value::Array(json_values))
+        }
+        DataType::LargeList(_) => {
+            let list_array = array
+                .as_any()
+                .downcast_ref::<LargeListArray>()
+                .ok_or_else(|| {
+                    datafusion_common::DataFusionError::Internal(
+                        "Failed to downcast to LargeListArray".to_string(),
+                    )
+                })?;
+            let values = list_array.value(index);
+            let mut json_values = Vec::with_capacity(values.len());
+            for i in 0..values.len() {
+                json_values.push(array_value_to_json(&values, i, options)?);
+            }
+            Ok(Value::Array(json_values))
         }
         DataType::Map(_, _) => {
             let map_array = array.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
@@ -459,6 +530,16 @@ fn decimal_to_json_number(value: i128, scale: i8) -> Value {
 }
 
 fn number_from_f64(value: f64) -> Value {
+    if value.is_nan() {
+        return Value::String("NaN".to_string());
+    }
+    if value.is_infinite() {
+        return if value.is_sign_positive() {
+            Value::String("Infinity".to_string())
+        } else {
+            Value::String("-Infinity".to_string())
+        };
+    }
     serde_json::Number::from_f64(value)
         .map(Value::Number)
         .unwrap_or_else(|| Value::String(value.to_string()))

@@ -21,9 +21,10 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::spec::{
-    add_struct_type, metadata_struct_type, protocol_struct_type, remove_struct_type,
-    transaction_struct_type, Add, DataType, Metadata, Protocol, Remove, StructField, StructType,
-    Transaction,
+    add_struct_type, checkpoint_metadata_struct_type, domain_metadata_struct_type,
+    metadata_struct_type, protocol_struct_type, remove_struct_type, sidecar_struct_type,
+    transaction_struct_type, Add, CheckpointMetadata, DataType, DomainMetadata, Metadata, Protocol,
+    Remove, Sidecar, StructField, StructType, Transaction,
 };
 
 // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/checkpoint/mod.rs#L126-L135>
@@ -44,17 +45,31 @@ pub struct CheckpointActionRow {
     pub protocol: Option<Protocol>,
     #[serde(rename = "txn", skip_serializing_if = "Option::is_none")]
     pub txn: Option<Transaction>,
+    #[serde(rename = "domainMetadata", skip_serializing_if = "Option::is_none")]
+    pub domain_metadata: Option<DomainMetadata>,
+    #[serde(rename = "checkpointMetadata", skip_serializing_if = "Option::is_none")]
+    pub checkpoint_metadata: Option<CheckpointMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidecar: Option<Sidecar>,
 }
 
 impl CheckpointActionRow {
     pub fn struct_type() -> StructType {
-        // TODO: sidecar
         StructType::new_unchecked([
             StructField::nullable("add", DataType::from(add_struct_type())),
             StructField::nullable("remove", DataType::from(remove_struct_type())),
             StructField::nullable("metaData", DataType::from(metadata_struct_type())),
             StructField::nullable("protocol", DataType::from(protocol_struct_type())),
             StructField::nullable("txn", DataType::from(transaction_struct_type())),
+            StructField::nullable(
+                "domainMetadata",
+                DataType::from(domain_metadata_struct_type()),
+            ),
+            StructField::nullable(
+                "checkpointMetadata",
+                DataType::from(checkpoint_metadata_struct_type()),
+            ),
+            StructField::nullable("sidecar", DataType::from(sidecar_struct_type())),
         ])
     }
 }

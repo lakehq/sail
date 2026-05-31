@@ -117,7 +117,7 @@ impl ExecutionPlan for TracingExec {
         self.inner.schema()
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         self.inner.properties()
     }
 
@@ -204,11 +204,6 @@ impl ExecutionPlan for TracingExec {
         self.inner.metrics()
     }
 
-    #[expect(deprecated)]
-    fn statistics(&self) -> Result<Statistics> {
-        self.inner.statistics()
-    }
-
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
         self.inner.partition_statistics(partition)
     }
@@ -234,6 +229,10 @@ impl ExecutionPlan for TracingExec {
         _projection: &ProjectionExec,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         Ok(None)
+    }
+
+    fn with_preserve_order(&self, _preserve_order: bool) -> Option<Arc<dyn ExecutionPlan>> {
+        None
     }
 
     fn gather_filters_for_pushdown(

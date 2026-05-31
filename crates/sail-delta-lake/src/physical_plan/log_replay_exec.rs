@@ -67,7 +67,7 @@ pub struct DeltaLogReplayExec {
     // purely for observability (EXPLAIN); populated by the planner when available
     checkpoint_files: Vec<String>,
     commit_files: Vec<String>,
-    cache: PlanProperties,
+    cache: Arc<PlanProperties>,
 }
 
 impl DeltaLogReplayExec {
@@ -81,12 +81,12 @@ impl DeltaLogReplayExec {
     ) -> Self {
         let schema = Self::output_schema(&input.schema());
         let output_partitions = input.output_partitioning().partition_count().max(1);
-        let cache = PlanProperties::new(
+        let cache = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(output_partitions),
             EmissionType::Final,
             Boundedness::Bounded,
-        );
+        ));
         Self {
             mode: ReplayMode::Sort { input },
             table_url,
@@ -113,12 +113,12 @@ impl DeltaLogReplayExec {
             .partition_count()
             .max(commits.output_partitioning().partition_count())
             .max(1);
-        let cache = PlanProperties::new(
+        let cache = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(output_partitions),
             EmissionType::Final,
             Boundedness::Bounded,
-        );
+        ));
         Self {
             mode: ReplayMode::Hash {
                 checkpoint,
@@ -566,7 +566,7 @@ impl ExecutionPlan for DeltaLogReplayExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
 
@@ -863,18 +863,18 @@ mod tests {
     #[derive(Debug)]
     struct OneBatchExec {
         batch: RecordBatch,
-        cache: PlanProperties,
+        cache: Arc<PlanProperties>,
     }
 
     impl OneBatchExec {
         fn new(batch: RecordBatch) -> Self {
             let schema = batch.schema();
-            let cache = PlanProperties::new(
+            let cache = Arc::new(PlanProperties::new(
                 EquivalenceProperties::new(schema),
                 Partitioning::UnknownPartitioning(1),
                 EmissionType::Final,
                 Boundedness::Bounded,
-            );
+            ));
             Self { batch, cache }
         }
     }
@@ -900,7 +900,7 @@ mod tests {
             self
         }
 
-        fn properties(&self) -> &PlanProperties {
+        fn properties(&self) -> &Arc<PlanProperties> {
             &self.cache
         }
 

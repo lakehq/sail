@@ -3,14 +3,14 @@ use std::collections::{HashMap, HashSet};
 
 use aws_sdk_glue::types::{SerDeInfo, StorageDescriptor, TableInput};
 use aws_sdk_glue::Client;
-use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
+use sail_catalog::hive_format::HiveStorageFormat;
 use sail_catalog::provider::{
     CatalogProvider, CreateTableColumnOptions, CreateTableOptions, Namespace, PartitionTransform,
 };
 use sail_common_datafusion::catalog::TableStatus;
 
 use crate::data_type::arrow_to_glue_type;
-use crate::format::GlueStorageFormat;
 use crate::GlueCatalogProvider;
 
 /// Validated options for Hive table creation.
@@ -44,7 +44,7 @@ pub(crate) async fn create_hive_table(
         properties,
     } = validate_hive_options(options)?;
 
-    let format_info = GlueStorageFormat::from_format(&format)?;
+    let format_info = HiveStorageFormat::from_format(&format)?;
 
     let (regular_columns, partition_columns) = build_glue_columns(columns, &partition_by)?;
 
@@ -74,7 +74,10 @@ pub(crate) async fn create_hive_table(
                 if if_not_exists {
                     provider.get_table(database, table).await
                 } else {
-                    Err(CatalogError::AlreadyExists("table", table.to_string()))
+                    Err(CatalogError::AlreadyExists(
+                        CatalogObject::Table,
+                        table.to_string(),
+                    ))
                 }
             } else {
                 Err(CatalogError::External(format!(
@@ -98,8 +101,8 @@ fn validate_hive_options(options: CreateTableOptions) -> CatalogResult<Validated
         bucket_by,
         if_not_exists,
         replace,
-        options: table_options,
         properties,
+        is_external: _,
     } = options;
 
     if replace {
@@ -115,11 +118,6 @@ fn validate_hive_options(options: CreateTableOptions) -> CatalogResult<Validated
     if !sort_by.is_empty() {
         return Err(CatalogError::NotSupported(
             "AWS Glue catalog does not support SORT BY".to_string(),
-        ));
-    }
-    if !table_options.is_empty() {
-        return Err(CatalogError::NotSupported(
-            "AWS Glue catalog does not support OPTIONS".to_string(),
         ));
     }
     if bucket_by.is_some() {
@@ -188,7 +186,7 @@ fn build_glue_columns(
 /// Builds a Glue StorageDescriptor from column definitions and format info.
 fn build_storage_descriptor(
     columns: Vec<aws_sdk_glue::types::Column>,
-    format_info: &GlueStorageFormat,
+    format_info: &HiveStorageFormat,
     location: Option<&str>,
 ) -> StorageDescriptor {
     let serde_info = SerDeInfo::builder()

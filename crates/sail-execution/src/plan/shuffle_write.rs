@@ -17,9 +17,27 @@ use datafusion::physical_plan::{
 };
 use futures::future::try_join_all;
 use futures::StreamExt;
+use sail_physical_plan::repartition::RowRoundRobinPartitioner;
 
 use crate::plan::ListListDisplay;
 use crate::stream::writer::{TaskStreamSinkState, TaskStreamWriter, TaskWriteLocation};
+
+enum ShufflePartitioner {
+    Batch(BatchPartitioner),
+    RoundRobin(RowRoundRobinPartitioner),
+}
+
+impl ShufflePartitioner {
+    fn partition<F>(&mut self, batch: RecordBatch, f: F) -> Result<()>
+    where
+        F: FnMut(usize, RecordBatch) -> Result<()>,
+    {
+        match self {
+            Self::Batch(partitioner) => partitioner.partition(batch, f),
+            Self::RoundRobin(partitioner) => partitioner.partition(batch, f),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ShuffleWriteExec {
@@ -28,9 +46,12 @@ pub struct ShuffleWriteExec {
     /// The partition count for the shuffle output can be different from the
     /// partition count of the input plan.
     shuffle_partitioning: Partitioning,
+    /// Whether to use row-level round-robin partitioning instead of batch-level.
+    /// This is used for explicit user-requested repartition calls.
+    row_based: bool,
     /// For each input partition, a list of locations to write to.
     locations: Vec<Vec<TaskWriteLocation>>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
     writer: Arc<dyn TaskStreamWriter>,
 }
 
@@ -40,6 +61,7 @@ impl ShuffleWriteExec {
         locations: Vec<Vec<TaskWriteLocation>>,
         writer: Arc<dyn TaskStreamWriter>,
         partitioning: Partitioning,
+        row_based: bool,
     ) -> Self {
         let partitioning = match partitioning {
             Partitioning::Hash(expr, n) if expr.is_empty() => Partitioning::UnknownPartitioning(n),
@@ -54,7 +76,7 @@ impl ShuffleWriteExec {
             }
             _ => partitioning,
         };
-        let properties = PlanProperties::new(
+        let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(Arc::new(Schema::empty())),
             // The shuffle write plan has the same number of partitions as the input plan.
             // For each partition that are executed, the data is further partitioned according to
@@ -66,10 +88,11 @@ impl ShuffleWriteExec {
             Boundedness::Unbounded {
                 requires_infinite_memory: false,
             },
-        );
+        ));
         Self {
             plan,
             shuffle_partitioning: partitioning,
+            row_based,
             locations,
             properties,
             writer,
@@ -81,8 +104,9 @@ impl DisplayAs for ShuffleWriteExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         write!(
             f,
-            "ShuffleWriteExec: partitioning={}, locations={}",
+            "ShuffleWriteExec: partitioning={}, row_based={}, locations={}",
             self.shuffle_partitioning,
+            self.row_based,
             ListListDisplay(&self.locations),
         )
     }
@@ -97,7 +121,7 @@ impl ExecutionPlan for ShuffleWriteExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
@@ -140,23 +164,36 @@ impl ExecutionPlan for ShuffleWriteExec {
             );
         }
         let stream = self.plan.execute(partition, context)?;
-        // TODO: Revisit this
-        let shuffle_partitioning = match &self.shuffle_partitioning {
-            Partitioning::UnknownPartitioning(size) => Partitioning::RoundRobinBatch(*size),
-            shuffle_partitioning => shuffle_partitioning.clone(),
-        };
         // TODO: Support metrics in batch partitioner
         let num_input_partitions = self
             .plan
             .properties()
             .output_partitioning()
             .partition_count();
-        let partitioner = BatchPartitioner::try_new(
-            shuffle_partitioning,
-            Default::default(),
-            partition,
-            num_input_partitions,
-        )?;
+        let partitioner = match &self.shuffle_partitioning {
+            Partitioning::Hash(_, _) => ShufflePartitioner::Batch(BatchPartitioner::try_new(
+                self.shuffle_partitioning.clone(),
+                Default::default(),
+                partition,
+                num_input_partitions,
+            )?),
+            Partitioning::RoundRobinBatch(size) | Partitioning::UnknownPartitioning(size) => {
+                if self.row_based {
+                    ShufflePartitioner::RoundRobin(RowRoundRobinPartitioner::new(
+                        *size,
+                        partition,
+                        num_input_partitions,
+                    )?)
+                } else {
+                    ShufflePartitioner::Batch(BatchPartitioner::try_new(
+                        Partitioning::RoundRobinBatch(*size),
+                        Default::default(),
+                        partition,
+                        num_input_partitions,
+                    )?)
+                }
+            }
+        };
         let empty = RecordBatch::new_empty(self.schema());
         let output = futures::stream::once(async move {
             shuffle_write(writer, stream, &locations, partitioner).await?;
@@ -173,7 +210,7 @@ async fn shuffle_write(
     writer: Arc<dyn TaskStreamWriter>,
     mut stream: SendableRecordBatchStream,
     locations: &[TaskWriteLocation],
-    mut partitioner: BatchPartitioner,
+    mut partitioner: ShufflePartitioner,
 ) -> Result<()> {
     let schema = stream.schema();
     let mut partition_sinks = {

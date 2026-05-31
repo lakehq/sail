@@ -1,44 +1,87 @@
-use datafusion::functions::expr_fn;
-use datafusion_expr::{expr, not, Operator};
-use sail_common_datafusion::utils::items::ItemTaker;
+use std::sync::Arc;
 
-use crate::error::PlanResult;
+use datafusion::functions::expr_fn;
+use datafusion_common::ScalarValue;
+use datafusion_expr::{expr, lit, not, Operator, ScalarUDF};
+use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
+
+use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
-fn like(expr: expr::Expr, pattern: expr::Expr) -> expr::Expr {
-    expr::Expr::Like(expr::Like {
+fn extract_escape_char(escape_expr: expr::Expr) -> PlanResult<Option<char>> {
+    match escape_expr {
+        expr::Expr::Literal(ScalarValue::Utf8(Some(ref s)), _)
+        | expr::Expr::Literal(ScalarValue::Utf8View(Some(ref s)), _)
+        | expr::Expr::Literal(ScalarValue::LargeUtf8(Some(ref s)), _) => {
+            let mut chars = s.chars();
+            match (chars.next(), chars.next()) {
+                (Some(c), None) => Ok(Some(c)),
+                _ => Err(PlanError::invalid(
+                    "escape character must be a single character",
+                )),
+            }
+        }
+        _ => Err(PlanError::invalid(
+            "escape character must be a string literal",
+        )),
+    }
+}
+
+fn build_like_expr(input: ScalarFunctionInput, case_insensitive: bool) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
+    let n = arguments.len();
+    match n {
+        2 => {
+            let (value, pattern) = arguments.two()?;
+            Ok(expr::Expr::Like(expr::Like {
+                negated: false,
+                expr: Box::new(value),
+                pattern: Box::new(pattern),
+                case_insensitive,
+                escape_char: None,
+            }))
+        }
+        3 => {
+            let (value, pattern, escape) = arguments.three()?;
+            let escape_char = extract_escape_char(escape)?;
+            // Arrow's LIKE kernel only supports `\` as the escape character.
+            // For any other escape, wrap the pattern in a UDF that rewrites
+            // it so Arrow sees `\` as the effective escape; then build an
+            // `Expr::Like` with `escape_char: Some('\\')` to be explicit
+            // about the escape that the rewritten pattern actually uses.
+            let (pattern, escape_char) = match escape_char {
+                Some(c) if c != '\\' => {
+                    let rewritten = expr::Expr::ScalarFunction(expr::ScalarFunction {
+                        func: Arc::new(ScalarUDF::from(RewriteLikePatternFunc::new())),
+                        args: vec![pattern, lit(c.to_string())],
+                    });
+                    (rewritten, Some('\\'))
+                }
+                _ => (pattern, escape_char),
+            };
+            Ok(expr::Expr::Like(expr::Like {
+                negated: false,
+                expr: Box::new(value),
+                pattern: Box::new(pattern),
+                case_insensitive,
+                escape_char,
+            }))
+        }
+        _ => Err(PlanError::invalid(format!(
+            "like/ilike expects 2 or 3 arguments, got {n}"
+        ))),
+    }
+}
+
+fn rlike(expr: expr::Expr, pattern: expr::Expr) -> expr::Expr {
+    expr::Expr::SimilarTo(expr::Like {
         negated: false,
         expr: Box::new(expr),
         pattern: Box::new(pattern),
         case_insensitive: false,
         escape_char: None,
     })
-}
-
-fn ilike(expr: expr::Expr, pattern: expr::Expr) -> expr::Expr {
-    expr::Expr::Like(expr::Like {
-        negated: false,
-        expr: Box::new(expr),
-        pattern: Box::new(pattern),
-        case_insensitive: true,
-        escape_char: None,
-    })
-}
-
-fn rlike(expr: expr::Expr, pattern: expr::Expr) -> expr::Expr {
-    // FIXME: There is no `PhysicalExpr` for `Expr::SimilarTo` in DataFusion.
-    //  create_physical_expr in datafusion/planner/src/planner doesn't have a `SimilarTo` match arm.
-    //  which leads to the error:
-    //      not_impl_err!("Physical plan does not support logical expression {other:?}")
-    //  Once the physical expr for `SimilarTo` is implemented, use the code below for performance:
-    //     expr::Expr::SimilarTo(expr::Like {
-    //         negated: false,
-    //         expr: Box::new(expr),
-    //         pattern: Box::new(pattern),
-    //         case_insensitive: false,
-    //         escape_char: None,
-    //     })
-    expr_fn::regexp_like(expr, pattern, None)
 }
 
 fn is_in_list(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -65,7 +108,7 @@ pub(super) fn list_built_in_predicate_functions() -> Vec<(&'static str, ScalarFu
         (">", F::binary_op(Operator::Gt)),
         (">=", F::binary_op(Operator::GtEq)),
         ("and", F::binary_op(Operator::And)),
-        ("ilike", F::binary(ilike)),
+        ("ilike", F::custom(|input| build_like_expr(input, true))),
         // TODO:
         //  If we want to prevent `IN` as a function in SQL,
         //  we can remove that from the built-in functions,
@@ -77,7 +120,7 @@ pub(super) fn list_built_in_predicate_functions() -> Vec<(&'static str, ScalarFu
             F::unary(|x| expr::Expr::IsNotNull(Box::new(x))),
         ),
         ("isnull", F::unary(|x| expr::Expr::IsNull(Box::new(x)))),
-        ("like", F::binary(like)),
+        ("like", F::custom(|input| build_like_expr(input, false))),
         ("not", F::unary(not)),
         ("or", F::binary_op(Operator::Or)),
         ("regexp", F::binary(rlike)),

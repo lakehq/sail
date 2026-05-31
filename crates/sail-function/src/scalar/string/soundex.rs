@@ -1,9 +1,9 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{ArrayRef, OffsetSizeTrait, StringArray};
+use datafusion::arrow::array::{ArrayRef, GenericStringArray, OffsetSizeTrait, StringArray};
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::cast::as_generic_string_array;
+use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::{exec_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
@@ -41,8 +41,11 @@ impl ScalarUDFImpl for Soundex {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
+    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
+        match &arg_types[0] {
+            DataType::LargeUtf8 => Ok(DataType::LargeUtf8),
+            _ => Ok(DataType::Utf8),
+        }
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -51,9 +54,8 @@ impl ScalarUDFImpl for Soundex {
             return exec_err!("`soundex` function requires 1 argument, got {}", args.len());
         }
         match args[0].data_type() {
-            DataType::Utf8 | DataType::Utf8View => {
-                make_scalar_function(soundex::<i32>, vec![])(&args)
-            }
+            DataType::Utf8 => make_scalar_function(soundex::<i32>, vec![])(&args),
+            DataType::Utf8View => make_scalar_function(soundex_view, vec![])(&args),
             DataType::LargeUtf8 => make_scalar_function(soundex::<i64>, vec![])(&args),
             other => {
                 exec_err!("unsupported data type {other:?} for function `soundex`")
@@ -83,13 +85,16 @@ fn classify_char(c: char) -> SoundexChar {
     }
 }
 
-/// Computes the 4-character Soundex code for a string.
+/// Computes the Soundex code for a string (Spark-compatible).
+///
+/// Spark returns the input unchanged if the first character is not ASCII alphabetic.
 fn compute_soundex(s: &str) -> String {
-    let mut chars = s.chars().filter(|c| c.is_ascii_alphabetic());
+    let mut chars = s.chars();
 
+    // Spark: if the first character is not a letter, return the input as-is.
     let first_char = match chars.next() {
-        Some(c) => c.to_ascii_uppercase(),
-        None => return "".to_string(),
+        Some(c) if c.is_ascii_alphabetic() => c.to_ascii_uppercase(),
+        _ => return s.to_string(),
     };
 
     let mut result = String::with_capacity(4);
@@ -126,14 +131,22 @@ fn compute_soundex(s: &str) -> String {
     result
 }
 
-/// Applies Soundex to each element in a string array.
+/// Applies Soundex to each element in a Utf8/LargeUtf8 string array.
 fn soundex<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let str_array = as_generic_string_array::<T>(&args[0])?;
+    let result = str_array
+        .iter()
+        .map(|opt_str| opt_str.map(compute_soundex))
+        .collect::<GenericStringArray<T>>();
+    Ok(Arc::new(result) as ArrayRef)
+}
 
+/// Applies Soundex to each element in a Utf8View string array.
+fn soundex_view(args: &[ArrayRef]) -> Result<ArrayRef> {
+    let str_array = as_string_view_array(&args[0])?;
     let result = str_array
         .iter()
         .map(|opt_str| opt_str.map(compute_soundex))
         .collect::<StringArray>();
-
     Ok(Arc::new(result) as ArrayRef)
 }

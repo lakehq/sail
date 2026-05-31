@@ -21,7 +21,7 @@ pub struct SystemTableExec {
     projection: Option<Vec<usize>>,
     filters: Vec<Arc<dyn PhysicalExpr>>,
     fetch: Option<usize>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl SystemTableExec {
@@ -36,12 +36,12 @@ impl SystemTableExec {
         } else {
             table.schema()
         };
-        let properties = PlanProperties::new(
+        let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
             EmissionType::Final,
             Boundedness::Bounded,
-        );
+        ));
         Ok(Self {
             table,
             projection,
@@ -90,7 +90,7 @@ impl ExecutionPlan for SystemTableExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

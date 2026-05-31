@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion_common::tree_node::{TreeNode, TreeNodeRewriter};
-use datafusion_common::Column;
+use datafusion_common::{Column, DFSchemaRef, TableReference};
 use datafusion_expr::expr::{FieldMetadata, ScalarFunction};
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::utils::{columnize_expr, expand_qualified_wildcard, expand_wildcard};
@@ -16,6 +16,7 @@ use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
+use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 use crate::resolver::tree::PlanRewriter;
 use crate::resolver::PlanResolver;
@@ -35,6 +36,8 @@ impl PlanResolver<'_> {
         let expr = self.resolve_named_expressions(expr, schema, state).await?;
         let (input, expr) = self.rewrite_wildcard(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
+        let (input, expr) =
+            self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
@@ -79,6 +82,46 @@ impl PlanResolver<'_> {
             )))
         }
 
+        fn expand_outer_wildcard(
+            qualifier_filter: Option<&TableReference>,
+            input_schema: &DFSchemaRef,
+            state: &PlanResolverState,
+            projected: &mut Vec<NamedExpr>,
+        ) -> PlanResult<()> {
+            if qualifier_filter.is_none() && !input_schema.fields().is_empty() {
+                return Ok(());
+            }
+
+            if let Some(expected) = qualifier_filter {
+                let qualifier_in_input = input_schema
+                    .iter()
+                    .any(|(q, _)| q.is_some_and(|q| *q == *expected));
+                if qualifier_in_input {
+                    return Ok(());
+                }
+            }
+
+            if let Some(outer_schema) = state.get_outer_query_schema() {
+                for (qualifier, field) in outer_schema.iter() {
+                    if let Some(expected) = qualifier_filter {
+                        if qualifier.is_none_or(|q| expected != q) {
+                            continue;
+                        }
+                    }
+                    let info = state.get_field_info(field.name())?;
+                    if info.is_hidden() {
+                        continue;
+                    }
+                    let outer_col = Expr::OuterReferenceColumn(
+                        field.clone(),
+                        Column::new(qualifier.cloned(), field.name()),
+                    );
+                    projected.push(NamedExpr::new(vec![info.name().to_string()], outer_col));
+                }
+            }
+            Ok(())
+        }
+
         let schema = input.schema();
         let mut projected = vec![];
         for e in expr {
@@ -97,15 +140,22 @@ impl PlanResolver<'_> {
                     for e in expand_wildcard(schema, &input, Some(&options))? {
                         projected.extend(to_named_expr(e, state)?)
                     }
+                    expand_outer_wildcard(None, schema, state, &mut projected)?;
                 }
                 #[expect(deprecated)]
                 Expr::Wildcard {
                     qualifier: Some(qualifier),
                     options,
                 } => {
-                    for e in expand_qualified_wildcard(&qualifier, schema, Some(&options))? {
-                        projected.extend(to_named_expr(e, state)?)
+                    let qualifier_in_input = schema
+                        .iter()
+                        .any(|(q, _)| q.is_some_and(|q| *q == qualifier));
+                    if qualifier_in_input {
+                        for e in expand_qualified_wildcard(&qualifier, schema, Some(&options))? {
+                            projected.extend(to_named_expr(e, state)?)
+                        }
                     }
+                    expand_outer_wildcard(Some(&qualifier), schema, state, &mut projected)?;
                 }
                 _ => projected.push(NamedExpr {
                     name,

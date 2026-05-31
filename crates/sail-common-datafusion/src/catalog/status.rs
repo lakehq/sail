@@ -1,9 +1,20 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::arrow::datatypes::{DataType, Field, Fields};
+use datafusion_common::{plan_err, Result};
 use datafusion_expr::LogicalPlan;
 
-use crate::catalog::{CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort};
+use crate::catalog::{
+    CatalogPartitionField, CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
+};
+use crate::column_features::ColumnFeaturesBuilder;
+use crate::session::plan::PlanFormatter;
+
+/// Metadata key used by Spark Connect's column protocol for generation
+/// expressions. This is an input/output boundary value translated to the
+/// engine's canonical [`crate::column_features::ColumnFeatureKey`] at the
+/// protocol layer.
+pub const SPARK_GENERATION_EXPRESSION_METADATA_KEY: &str = "GENERATION_EXPRESSION";
 
 #[derive(Debug, Clone)]
 pub struct DatabaseStatus {
@@ -30,11 +41,19 @@ pub enum TableKind {
         constraints: Vec<CatalogTableConstraint>,
         location: Option<String>,
         format: String,
-        partition_by: Vec<String>,
+        partition_by: Vec<CatalogPartitionField>,
         sort_by: Vec<CatalogTableSort>,
         bucket_by: Option<CatalogTableBucketBy>,
-        options: Vec<(String, String)>,
         properties: Vec<(String, String)>,
+        /// Whether the table is external. When `false` the table is managed.
+        ///
+        /// This flag is purely informational at present: Sail always creates
+        /// tables as external (`EXTERNAL=TRUE`, `table_type = EXTERNAL_TABLE`)
+        /// and does not differentiate managed vs external behavior for
+        /// operations like `DROP TABLE` (metadata-only; data is preserved). The flag
+        /// exists so that `type_name()` correctly reports the table type that
+        /// was recorded in the HMS metastore by other engines (e.g. Spark).
+        is_external: bool,
     },
     View {
         definition: String,
@@ -77,11 +96,23 @@ impl TableKind {
 
     pub fn type_name(&self) -> &str {
         match self {
-            TableKind::Table { .. } => "MANAGED",
+            TableKind::Table {
+                is_external: true, ..
+            } => "EXTERNAL",
+            TableKind::Table {
+                is_external: false, ..
+            } => "MANAGED",
             TableKind::View { .. } => "VIEW",
             TableKind::TemporaryView { .. } => "TEMPORARY",
             TableKind::GlobalTemporaryView { .. } => "TEMPORARY",
         }
+    }
+
+    pub fn is_temporary(&self) -> bool {
+        matches!(
+            self,
+            TableKind::TemporaryView { .. } | TableKind::GlobalTemporaryView { .. }
+        )
     }
 
     pub fn properties(&self) -> &[(String, String)] {
@@ -167,6 +198,28 @@ impl TableStatus {
 
         rows
     }
+
+    pub fn show_table_extended_information(&self, formatter: &dyn PlanFormatter) -> Result<String> {
+        let mut output = String::new();
+
+        for (key, value) in self.describe_extended_metadata() {
+            output.push_str(&format!("{key}: {value}\n"));
+        }
+
+        output.push_str("Schema: root\n");
+        for column in self.kind.columns() {
+            let data_type = formatter
+                .data_type_to_simple_string(&column.data_type)
+                .unwrap_or_else(|_| "invalid".to_string());
+            let nullable = if column.nullable { "true" } else { "false" };
+            output.push_str(&format!(
+                " |-- {}: {} (nullable = {})\n",
+                column.name, data_type, nullable
+            ));
+        }
+
+        Ok(output)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -184,6 +237,145 @@ pub struct TableColumnStatus {
 
 impl TableColumnStatus {
     pub fn field(&self) -> Field {
-        Field::new(self.name.clone(), self.data_type.clone(), self.nullable)
+        let mut metadata = std::collections::HashMap::new();
+        if let Some(expr) = &self.generated_always_as {
+            let builder = ColumnFeaturesBuilder::new().with_generation_expression(expr.clone());
+            metadata.extend(builder.build());
+        }
+        if let Some(comment) = &self.comment {
+            metadata.insert("comment".to_string(), comment.clone());
+        }
+        let field = Field::new(self.name.clone(), self.data_type.clone(), self.nullable);
+        if metadata.is_empty() {
+            field
+        } else {
+            field.with_metadata(metadata)
+        }
     }
+}
+
+pub fn alter_column_type(
+    columns: &mut [TableColumnStatus],
+    path: &[String],
+    data_type: DataType,
+) -> Result<()> {
+    let Some((name, nested_path)) = path.split_first() else {
+        return plan_err!("ALTER COLUMN TYPE requires a column name");
+    };
+    let Some(column) = columns.iter_mut().find(|column| column.name == *name) else {
+        return plan_err!("column '{}' does not exist", path.join("."));
+    };
+    if nested_path.is_empty() {
+        column.data_type = data_type;
+    } else {
+        column.data_type = alter_nested_data_type(&column.data_type, nested_path, data_type)?;
+    }
+    Ok(())
+}
+
+fn alter_nested_data_type(
+    current: &DataType,
+    path: &[String],
+    data_type: DataType,
+) -> Result<DataType> {
+    let Some((name, nested_path)) = path.split_first() else {
+        return Ok(data_type);
+    };
+    match current {
+        DataType::Struct(fields) => {
+            let mut found = false;
+            let fields = fields
+                .iter()
+                .map(|field| {
+                    if field.name() == name {
+                        found = true;
+                        let new_type = alter_nested_data_type(
+                            field.data_type(),
+                            nested_path,
+                            data_type.clone(),
+                        )?;
+                        Ok(Arc::new(
+                            Field::new(field.name().clone(), new_type, field.is_nullable())
+                                .with_metadata(field.metadata().clone()),
+                        ))
+                    } else {
+                        Ok(Arc::clone(field))
+                    }
+                })
+                .collect::<Result<Vec<_>>>()?;
+            if !found {
+                return plan_err!("column path segment '{}' does not exist", name);
+            }
+            Ok(DataType::Struct(Fields::from(fields)))
+        }
+        DataType::List(field) if name == "element" => Ok(DataType::List(Arc::new(
+            Field::new(
+                field.name().clone(),
+                alter_nested_data_type(field.data_type(), nested_path, data_type)?,
+                field.is_nullable(),
+            )
+            .with_metadata(field.metadata().clone()),
+        ))),
+        DataType::LargeList(field) if name == "element" => Ok(DataType::LargeList(Arc::new(
+            Field::new(
+                field.name().clone(),
+                alter_nested_data_type(field.data_type(), nested_path, data_type)?,
+                field.is_nullable(),
+            )
+            .with_metadata(field.metadata().clone()),
+        ))),
+        DataType::Map(field, sorted) => {
+            let DataType::Struct(entries) = field.data_type() else {
+                return plan_err!("map field must contain key/value entries");
+            };
+            let mut fields = Vec::with_capacity(entries.len());
+            let mut found = false;
+            for entry in entries {
+                if entry.name() == name {
+                    found = true;
+                    let new_type =
+                        alter_nested_data_type(entry.data_type(), nested_path, data_type.clone())?;
+                    fields.push(Arc::new(
+                        Field::new(entry.name().clone(), new_type, entry.is_nullable())
+                            .with_metadata(entry.metadata().clone()),
+                    ));
+                } else {
+                    fields.push(Arc::clone(entry));
+                }
+            }
+            if !found {
+                return plan_err!(
+                    "expected 'key' or 'value' for map column path, found '{}'",
+                    name
+                );
+            }
+            Ok(DataType::Map(
+                Arc::new(
+                    Field::new(
+                        field.name().clone(),
+                        DataType::Struct(Fields::from(fields)),
+                        false,
+                    )
+                    .with_metadata(field.metadata().clone()),
+                ),
+                *sorted,
+            ))
+        }
+        other => plan_err!(
+            "cannot resolve ALTER COLUMN TYPE path segment '{}' through {}",
+            name,
+            other
+        ),
+    }
+}
+
+pub fn identity_partition_fields(columns: &[String]) -> Vec<CatalogPartitionField> {
+    columns
+        .iter()
+        .cloned()
+        .map(|column| CatalogPartitionField {
+            column,
+            transform: None,
+        })
+        .collect()
 }

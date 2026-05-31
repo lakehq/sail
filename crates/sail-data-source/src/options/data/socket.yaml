@@ -1,0 +1,79 @@
+- key: host
+  description: |
+    The host to connect to when reading from a socket.
+  supported: true
+  rust_type: String
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - host
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.host
+      parser: crate::options::parsers::parse_string
+
+- key: port
+  description: |
+    The port to connect to when reading from a socket.
+  supported: true
+  rust_type: u16
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - port
+      parser: crate::options::parsers::parse_u16
+    - type: table_property
+      keys:
+        - option.port
+      parser: crate::options::parsers::parse_u16
+
+- key: max_batch_size
+  description: |
+    The maximum number of rows to include in a single batch when reading from a socket.
+  default:
+    value: "1000"
+    parser: crate::options::parsers::parse_usize
+  supported: true
+  rust_type: usize
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - max_batch_size
+        - maxBatchSize
+      parser: crate::options::parsers::parse_usize
+    - type: table_property
+      keys:
+        - option.max_batch_size
+        - option.maxBatchSize
+      parser: crate::options::parsers::parse_usize
+
+- key: timeout_sec
+  description: |
+    The timeout in seconds for reading from a socket.
+    If no more data is received within the timeout duration since receiving the first row,
+    a batch will be returned with the rows received so far.
+  default:
+    value: "1"
+    parser: crate::options::parsers::parse_u64
+  supported: true
+  rust_type: u64
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - timeout_sec
+        - timeoutSec
+      parser: crate::options::parsers::parse_u64
+    - type: table_property
+      keys:
+        - option.timeout_sec
+        - option.timeoutSec
+      parser: crate::options::parsers::parse_u64

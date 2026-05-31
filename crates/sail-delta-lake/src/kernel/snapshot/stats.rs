@@ -1,3 +1,23 @@
+// https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/LICENSE.txt
+//
+// Copyright (2020) QP Hou and a number of other contributors.
+// Portions Copyright 2025-2026 LakeSail, Inc.
+// Modified in 2026 by LakeSail, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// [Credit]: <https://github.com/delta-io/delta-rs/blob/5575ad16bf641420404611d65f4ad7626e9acb16/crates/core/src/kernel/snapshot/log_data.rs>
+
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -15,6 +35,7 @@ use datafusion::physical_plan::Accumulator;
 use log::warn;
 
 use super::DeltaSnapshot;
+use crate::schema::arrow_field_physical_name;
 use crate::spec::fields::{
     FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_SIZE, FIELD_NAME_STATS_PARSED,
     STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES, STATS_FIELD_NULL_COUNT,
@@ -213,6 +234,8 @@ impl<'a> SnapshotPruningStats<'a> {
     fn pick_stats(&self, column: &Column, stats_field: &'static str) -> Option<ArrayRef> {
         let schema = self.snapshot.schema();
         let field = schema.field_with_name(&column.name).ok()?;
+        let physical_name =
+            arrow_field_physical_name(field, self.snapshot.effective_column_mapping_mode());
         // See issue #1214. Binary type does not support natural order which is required for Datafusion to prune
         if matches!(
             field.data_type(),
@@ -237,10 +260,10 @@ impl<'a> SnapshotPruningStats<'a> {
                         return None;
                     }
                 };
-            return nested_struct_column_exact_or_path(partition_values, &column.name).cloned();
+            return nested_struct_column_exact_or_path(partition_values, physical_name).cloned();
         }
 
-        nested_column(self.stats, stats_field, &column.name)
+        nested_column(self.stats, stats_field, physical_name)
             .ok()
             .cloned()
     }

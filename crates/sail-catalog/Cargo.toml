@@ -7,8 +7,6 @@ edition = { workspace = true }
 workspace = true
 
 [dependencies]
-sail-common-datafusion = { path = "../sail-common-datafusion" }
-
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
@@ -19,3 +17,8 @@ lazy_static = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+moka = { workspace = true }
+log = { workspace = true }
+
+sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-common = { path = "../sail-common" }

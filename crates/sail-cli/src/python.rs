@@ -43,6 +43,8 @@ impl Modules {
         "_sail_cli_spark_shell",
         include_str!("python/spark_shell.py"),
     );
+    pub const SPARK_RUN: Module<()> =
+        Module::new("_sail_cli_spark_run", include_str!("python/spark_run.py"));
     pub const SPARK_MCP_SERVER: Module<()> = Module::new(
         "_sail_cli_spark_mcp_server",
         include_str!("python/spark_mcp_server.py"),

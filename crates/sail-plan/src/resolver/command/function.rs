@@ -34,7 +34,7 @@ impl PlanResolver<'_> {
             function.python_version,
             function.eval_type,
             function.command,
-            function.output_type,
+            Some(function.output_type),
             deterministic,
         );
 

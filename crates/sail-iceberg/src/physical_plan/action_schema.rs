@@ -1,7 +1,9 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock};
 
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{
+    DataType, Field, FieldRef, Schema, SchemaRef, UnionFields, UnionMode,
+};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use serde::{Deserialize, Serialize};
@@ -33,6 +35,7 @@ pub struct CommitMeta {
     pub row_count: u64,
     pub operation: Operation,
     pub requirements: Vec<TableRequirement>,
+    pub table_properties: Vec<(String, String)>,
     pub schema: Option<IcebergSchema>,
     pub partition_spec: Option<PartitionSpec>,
 }
@@ -44,6 +47,8 @@ pub struct CommitMetaAction {
     pub operation: String,
     /// Requirements are relatively small but hard to trace into Arrow schema; keep as JSON.
     pub requirements_json: String,
+    /// Table properties are applied only when bootstrapping new table metadata.
+    pub table_properties_json: String,
     /// Optional Iceberg Schema JSON (rare) to avoid huge Arrow schema.
     pub schema_json: Option<String>,
     /// Optional PartitionSpec JSON (rare) to avoid huge Arrow schema.
@@ -100,6 +105,35 @@ pub struct ActionRow {
     pub action: ExecAction,
 }
 
+fn partition_value_union_type() -> DataType {
+    // serde_arrow 0.14 always creates non-null Union arrays (UnionBuilder::is_nullable = false).
+    // The union variants match the PartitionValue enum definition order.
+    #[expect(
+        clippy::unwrap_used,
+        reason = "partition_value_union_type is a process-global constant."
+    )]
+    let union_fields = UnionFields::try_new(
+        [0i8, 1, 2, 3, 4, 5, 6, 7, 8],
+        [
+            Arc::new(Field::new("Boolean", DataType::Boolean, false)),
+            Arc::new(Field::new("Int", DataType::Int32, false)),
+            Arc::new(Field::new("Long", DataType::Int64, false)),
+            Arc::new(Field::new("Float", DataType::Float32, false)),
+            Arc::new(Field::new("Double", DataType::Float64, false)),
+            Arc::new(Field::new("String", DataType::Utf8, false)),
+            Arc::new(Field::new("Int128", DataType::Utf8, false)),
+            Arc::new(Field::new("UInt128", DataType::Utf8, false)),
+            Arc::new(Field::new(
+                "Binary",
+                DataType::List(Arc::new(Field::new("element", DataType::UInt8, false))),
+                false,
+            )),
+        ],
+    )
+    .unwrap();
+    DataType::Union(union_fields, UnionMode::Dense)
+}
+
 fn map_type_i32_u64() -> DataType {
     // Arrow Map is represented as `Map<entries: Struct<keys: Int32, values: UInt64>>`.
     let entries_struct = DataType::Struct(
@@ -135,6 +169,18 @@ fn iceberg_action_tracing_options(
             opts.overwrite(
                 "action.add.null_value_counts",
                 Field::new("null_value_counts", map_type_i32_u64(), false),
+            )
+        })
+        .and_then(|opts| {
+            // serde_arrow 0.14 always produces non-null Union arrays (UnionBuilder::is_nullable
+            // is hardcoded to false). Override the partition field so that the static schema
+            // matches the actual serialized data, preventing Arrow 58's RecordBatch::try_new
+            // from rejecting the nullability mismatch.
+            let partition_item =
+                Arc::new(Field::new("element", partition_value_union_type(), false));
+            opts.overwrite(
+                "action.add.partition",
+                Field::new("partition", DataType::List(partition_item), false),
             )
         })
         .map_err(|e| format!("failed to build serde_arrow tracing options: {e}"))
@@ -340,6 +386,8 @@ pub fn encode_add_data_files(data_files: Vec<DataFile>) -> Result<RecordBatch> {
 pub fn encode_commit_meta(meta: CommitMeta) -> Result<RecordBatch> {
     let requirements_json = serde_json::to_string(&meta.requirements)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let table_properties_json = serde_json::to_string(&meta.table_properties)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let schema_json = meta
         .schema
         .as_ref()
@@ -359,6 +407,7 @@ pub fn encode_commit_meta(meta: CommitMeta) -> Result<RecordBatch> {
             row_count: meta.row_count,
             operation: meta.operation.as_str().to_string(),
             requirements_json,
+            table_properties_json,
             schema_json,
             partition_spec_json,
         }),
@@ -389,6 +438,9 @@ pub fn decode_actions_and_meta_from_batch(
                 let requirements: Vec<TableRequirement> =
                     serde_json::from_str(&m.requirements_json)
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let table_properties: Vec<(String, String)> =
+                    serde_json::from_str(&m.table_properties_json)
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let schema: Option<IcebergSchema> = m
                     .schema_json
                     .as_deref()
@@ -406,6 +458,7 @@ pub fn decode_actions_and_meta_from_batch(
                     row_count: m.row_count,
                     operation: parse_operation(&m.operation)?,
                     requirements,
+                    table_properties,
                     schema,
                     partition_spec,
                 });
@@ -456,6 +509,7 @@ mod tests {
             row_count: 10,
             operation: Operation::Append,
             requirements: vec![TableRequirement::NotExist],
+            table_properties: vec![],
             schema: None,
             partition_spec: None,
         };

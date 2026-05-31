@@ -84,6 +84,9 @@ pub fn create_add(
         stats: Some(stats_string),
         tags: None,
         deletion_vector: None,
+        // TODO(row-tracking): Keep row IDs unset until writer-side high-water-mark allocation is
+        // implemented. Now row-tracking tables are still rejected by commit-time protocol
+        // checks.
         base_row_id: None,
         default_row_commit_version: None,
         clustering_provider: None,
@@ -225,6 +228,7 @@ fn stats_from_metadata(
         max_values,
         num_records: num_rows,
         null_count,
+        tight_bounds: true,
     })
 }
 

@@ -154,7 +154,7 @@ impl PlanResolver<'_> {
                     let scalars = if scalars.is_empty() {
                         new_empty_array(&data_type)
                     } else {
-                        ScalarValue::iter_to_array(scalars.into_iter()).map_err(|e| {
+                        ScalarValue::iter_to_array(scalars).map_err(|e| {
                             PlanError::internal(format!(
                                 "Resolve Literal: Error creating large list array: {e}"
                             ))
@@ -188,7 +188,7 @@ impl PlanResolver<'_> {
                     let scalars = if scalars.is_empty() {
                         new_empty_array(&data_type)
                     } else {
-                        ScalarValue::iter_to_array(scalars.into_iter()).map_err(|e| {
+                        ScalarValue::iter_to_array(scalars).map_err(|e| {
                             PlanError::internal(format!(
                                 "Resolve Literal: Error creating large list array: {e}"
                             ))
@@ -215,7 +215,7 @@ impl PlanResolver<'_> {
 
                 if let Some(values) = values {
                     let mut builder: ScalarStructBuilder = ScalarStructBuilder::new();
-                    for (literal, field) in values.into_iter().zip(fields.into_iter()) {
+                    for (literal, field) in values.into_iter().zip(&fields) {
                         let scalar = self.resolve_literal(literal, state)?;
                         builder = builder.with_scalar(field, scalar);
                     }

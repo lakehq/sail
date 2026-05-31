@@ -1,0 +1,17 @@
+[package]
+name = "sail-build-scripts"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+lazy_static = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+quote = { workspace = true }
+proc-macro2 = { workspace = true }
+syn = { workspace = true }
+prettyplease = { workspace = true }
+regex = { workspace = true }

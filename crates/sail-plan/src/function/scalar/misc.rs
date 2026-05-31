@@ -14,6 +14,7 @@ use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::misc::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
+use sail_function::scalar::misc::spark_partition_id::SparkPartitionId;
 use sail_function::scalar::misc::version::SparkVersion;
 
 use crate::error::{PlanError, PlanResult};
@@ -159,7 +160,7 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ("reflect", F::unknown("reflect")),
         ("schema_of_avro", F::unknown("schema_of_avro")),
         ("session_user", F::custom(current_user)),
-        ("spark_partition_id", F::unknown("spark_partition_id")),
+        ("spark_partition_id", F::udf(SparkPartitionId::new())),
         ("to_avro", F::unknown("to_avro")),
         ("to_protobuf", F::unknown("to_protobuf")),
         ("try_aes_encrypt", F::udf(SparkTryAESEncrypt::new())),

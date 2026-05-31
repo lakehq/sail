@@ -1,0 +1,19 @@
+>>> import pyarrow as pa
+>>> import pyarrow.compute as pc
+>>>
+>>> def diff(l, r):
+...     return pa.table({
+...         "id": l.column("id").slice(0, 1),
+...         "d": [pc.subtract(pc.mean(l.column("v")), pc.mean(r.column("v"))).as_py()],
+...     })
+...
+>>> df1 = spark.createDataFrame([(1, 1.0), (1, 2.0)], ["id", "v"])
+>>> df2 = spark.createDataFrame([(1, 5.0)], ["id", "v"])
+>>> df1.groupby("id").cogroup(df2.groupby("id")).applyInArrow(
+...     diff, schema="id long, d double"
+... ).show()
++---+----+
+| id|   d|
++---+----+
+|  1|-3.5|
++---+----+

@@ -3,12 +3,14 @@ import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
 
-from pysail.tests.spark.utils import escape_sql_string_literal, is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 
 @pytest.fixture(autouse=True)
 def tables(spark, tmp_path):
     location = str(tmp_path / "t1")
+    (tmp_path / "t1").mkdir(parents=True, exist_ok=True)
     spark.sql(f"CREATE TABLE t1 (id LONG, name STRING, age LONG) LOCATION '{escape_sql_string_literal(location)}'")
     yield
     spark.sql("DROP TABLE t1")
@@ -16,6 +18,7 @@ def tables(spark, tmp_path):
     spark.sql("DROP TABLE IF EXISTS t3")
     spark.sql("DROP TABLE IF EXISTS t4")
     spark.sql("DROP TABLE IF EXISTS t5")
+    spark.sql("DROP TABLE IF EXISTS t6")
 
 
 def test_insert_into_with_values(spark):
@@ -133,6 +136,91 @@ def test_save_as_table(spark, tmp_path):
         df.write.saveAsTable("t2", mode="overwrite", path=location)
         actual = spark.sql("SELECT * FROM t2").toPandas()
         assert_frame_equal(actual, expected(1))
+
+
+@pytest.mark.catalog_integration
+def test_save_as_table_without_path_surfaces_managed(spark):
+    table_name = "t_managed_default"
+    df = spark.createDataFrame([(1, "Alice")], schema="id LONG, name STRING")
+    try:
+        df.write.saveAsTable(table_name)
+        table = spark.catalog.getTable(table_name)
+        assert table.tableType == "MANAGED"
+
+        show_rows = spark.sql(f"SHOW TABLE EXTENDED LIKE '{table_name}'").collect()
+        show_row = next(row for row in show_rows if row.tableName == table_name)
+        assert "Type: MANAGED" in show_row.information
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+@pytest.mark.catalog_integration
+def test_save_as_table_with_path_surfaces_external(spark, tmp_path):
+    table_name = "t_external_path"
+    location = str(tmp_path / table_name)
+    (tmp_path / table_name).mkdir(parents=True, exist_ok=True)
+    df = spark.createDataFrame([(1, "Alice")], schema="id LONG, name STRING")
+    try:
+        df.write.saveAsTable(table_name, path=location)
+        table = spark.catalog.getTable(table_name)
+        assert table.tableType == "EXTERNAL"
+
+        show_rows = spark.sql(f"SHOW TABLE EXTENDED LIKE '{table_name}'").collect()
+        show_row = next(row for row in show_rows if row.tableName == table_name)
+        assert "Type: EXTERNAL" in show_row.information
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def test_create_or_replace_table_as_select(spark, tmp_path):
+    location = str(tmp_path / "t7")
+    table_name = "t7"
+
+    try:
+        spark.sql(
+            f"""
+            CREATE OR REPLACE TABLE {table_name}
+                USING DELTA
+            LOCATION '{escape_sql_string_literal(location)}'
+            AS SELECT 1 AS id, 'Alice' AS name
+            """
+        )
+        actual = spark.sql(f"SELECT * FROM {table_name}").toPandas()  # noqa: S608
+        expected = pd.DataFrame({"id": [1], "name": ["Alice"]})
+        assert_frame_equal(actual, expected, check_dtype=False)
+
+        spark.sql(
+            f"""
+            CREATE OR REPLACE TABLE {table_name}
+                USING DELTA
+            LOCATION '{escape_sql_string_literal(location)}'
+            AS SELECT 2 AS id, 'Bob' AS name
+            """
+        )
+        actual = spark.sql(f"SELECT * FROM {table_name}").toPandas()  # noqa: S608
+        expected = pd.DataFrame({"id": [2], "name": ["Bob"]})
+        assert_frame_equal(actual, expected, check_dtype=False)
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Spark does not handle v1 and v2 tables properly")
+def test_save_as_table_append_creates_table(spark):
+    # `saveAsTable` with `mode="append"` should create the table if it does not exist.
+    df = spark.createDataFrame([(1, "Alice"), (2, "Bob")], schema="id LONG, name STRING")
+    df.write.saveAsTable("t6", mode="append")
+
+    actual = spark.sql("SELECT * FROM t6 ORDER BY id").toPandas()
+    expected = pd.DataFrame({"id": [1, 2], "name": ["Alice", "Bob"]})
+    assert_frame_equal(actual, expected)
+
+    # Appending again should add more rows.
+    df2 = spark.createDataFrame([(3, "Charlie")], schema="id LONG, name STRING")
+    df2.write.saveAsTable("t6", mode="append")
+
+    actual = spark.sql("SELECT * FROM t6 ORDER BY id").toPandas()
+    expected = pd.DataFrame({"id": [1, 2, 3], "name": ["Alice", "Bob", "Charlie"]})
+    assert_frame_equal(actual, expected)
 
 
 @pytest.mark.skipif(is_jvm_spark(), reason="Spark does not handle v1 and v2 tables properly")

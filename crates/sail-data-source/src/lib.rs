@@ -1,5 +1,6 @@
+pub mod error;
 pub mod formats;
-mod listing;
+pub mod listing;
 pub mod options;
 mod url;
 mod utils;

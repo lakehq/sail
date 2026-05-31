@@ -29,6 +29,11 @@ pub(crate) fn partition_ranges(
     if values.num_rows() == 0 {
         return Ok(partitions);
     }
+    if logical_partition_columns.len() != physical_partition_columns.len() {
+        return Err(DeltaTableError::schema(
+            "logical and physical partition column counts do not match",
+        ));
+    }
 
     if logical_partition_columns.is_empty() {
         partitions.push(PartitionRange {
@@ -72,7 +77,7 @@ pub(crate) fn partition_ranges(
             push_partition_range(
                 &mut partitions,
                 values,
-                logical_partition_columns,
+                physical_partition_columns,
                 &partition_indices,
                 start,
                 i,
@@ -84,7 +89,7 @@ pub(crate) fn partition_ranges(
     push_partition_range(
         &mut partitions,
         values,
-        logical_partition_columns,
+        physical_partition_columns,
         &partition_indices,
         start,
         rows.num_rows(),
@@ -96,7 +101,7 @@ pub(crate) fn partition_ranges(
 fn push_partition_range(
     out: &mut Vec<PartitionRange>,
     values: &RecordBatch,
-    logical_partition_columns: &[String],
+    physical_partition_columns: &[String],
     partition_indices: &[usize],
     start: usize,
     end: usize,
@@ -116,7 +121,7 @@ fn push_partition_range(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let partition_values = logical_partition_columns
+    let partition_values = physical_partition_columns
         .iter()
         .cloned()
         .zip(partition_key_iter)

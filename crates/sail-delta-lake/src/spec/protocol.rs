@@ -18,6 +18,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::spec::properties::TableProperties;
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -28,11 +29,33 @@ pub enum TableFeature {
     Invariants,
     CheckConstraints,
     ChangeDataFeed,
+    #[serde(rename = "allowColumnDefaults")]
+    AllowColumnDefaults,
     GeneratedColumns,
     IdentityColumns,
     ColumnMapping,
+    DeletionVectors,
+    RowTracking,
+    DomainMetadata,
+    #[serde(rename = "v2Checkpoint")]
+    V2Checkpoint,
+    #[serde(rename = "inCommitTimestamp")]
+    InCommitTimestamp,
     #[serde(rename = "timestampNtz")]
     TimestampWithoutTimezone,
+    // Keep official names for newer protocol features so parsing succeeds and
+    // ProtocolChecker can decide support explicitly.
+    #[serde(rename = "icebergCompatV1")]
+    IcebergCompatV1,
+    #[serde(rename = "icebergCompatV2")]
+    IcebergCompatV2,
+    Clustering,
+    VacuumProtocolCheck,
+    VariantType,
+    #[serde(rename = "typeWidening-preview")]
+    TypeWideningPreview,
+    TypeWidening,
+    CatalogManaged,
     #[serde(other)]
     Unknown,
 }
@@ -44,10 +67,24 @@ impl TableFeature {
             Self::Invariants => "invariants",
             Self::CheckConstraints => "checkConstraints",
             Self::ChangeDataFeed => "changeDataFeed",
+            Self::AllowColumnDefaults => "allowColumnDefaults",
             Self::GeneratedColumns => "generatedColumns",
             Self::IdentityColumns => "identityColumns",
             Self::ColumnMapping => "columnMapping",
+            Self::DeletionVectors => "deletionVectors",
+            Self::RowTracking => "rowTracking",
+            Self::DomainMetadata => "domainMetadata",
+            Self::V2Checkpoint => "v2Checkpoint",
+            Self::InCommitTimestamp => "inCommitTimestamp",
             Self::TimestampWithoutTimezone => "timestampNtz",
+            Self::IcebergCompatV1 => "icebergCompatV1",
+            Self::IcebergCompatV2 => "icebergCompatV2",
+            Self::Clustering => "clustering",
+            Self::VacuumProtocolCheck => "vacuumProtocolCheck",
+            Self::VariantType => "variantType",
+            Self::TypeWideningPreview => "typeWidening-preview",
+            Self::TypeWidening => "typeWidening",
+            Self::CatalogManaged => "catalogManaged",
             Self::Unknown => "unknown",
         }
     }
@@ -58,13 +95,71 @@ impl TableFeature {
             "invariants" => Ok(Self::Invariants),
             "checkConstraints" => Ok(Self::CheckConstraints),
             "changeDataFeed" => Ok(Self::ChangeDataFeed),
+            "allowColumnDefaults" => Ok(Self::AllowColumnDefaults),
             "generatedColumns" => Ok(Self::GeneratedColumns),
             "identityColumns" => Ok(Self::IdentityColumns),
             "columnMapping" => Ok(Self::ColumnMapping),
+            "deletionVectors" => Ok(Self::DeletionVectors),
+            "rowTracking" => Ok(Self::RowTracking),
+            "domainMetadata" => Ok(Self::DomainMetadata),
+            "v2Checkpoint" => Ok(Self::V2Checkpoint),
+            "inCommitTimestamp" => Ok(Self::InCommitTimestamp),
             "timestampNtz" => Ok(Self::TimestampWithoutTimezone),
+            "icebergCompatV1" => Ok(Self::IcebergCompatV1),
+            "icebergCompatV2" => Ok(Self::IcebergCompatV2),
+            "clustering" => Ok(Self::Clustering),
+            "vacuumProtocolCheck" => Ok(Self::VacuumProtocolCheck),
+            "variantType" => Ok(Self::VariantType),
+            "typeWidening-preview" => Ok(Self::TypeWideningPreview),
+            "typeWidening" => Ok(Self::TypeWidening),
+            "catalogManaged" => Ok(Self::CatalogManaged),
             _ => Err(DeltaTableError::generic(format!(
                 "Unknown table feature: {value}"
             ))),
+        }
+    }
+
+    /// Returns `true` if this feature requires reader support (readerVersion >= 3).
+    pub fn is_reader_feature(&self) -> bool {
+        matches!(
+            self,
+            Self::ColumnMapping
+                | Self::DeletionVectors
+                | Self::TimestampWithoutTimezone
+                | Self::V2Checkpoint
+                | Self::VacuumProtocolCheck
+                | Self::CatalogManaged
+                | Self::VariantType
+                | Self::TypeWideningPreview
+                | Self::TypeWidening
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TableFeature;
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn table_feature_string_mappings_include_recent_protocol_features() {
+        let cases = [
+            (TableFeature::IcebergCompatV1, "icebergCompatV1"),
+            (TableFeature::IcebergCompatV2, "icebergCompatV2"),
+            (TableFeature::Clustering, "clustering"),
+            (TableFeature::VacuumProtocolCheck, "vacuumProtocolCheck"),
+            (TableFeature::VariantType, "variantType"),
+            (TableFeature::TypeWideningPreview, "typeWidening-preview"),
+            (TableFeature::TypeWidening, "typeWidening"),
+            (TableFeature::CatalogManaged, "catalogManaged"),
+        ];
+
+        for (feature, expected_name) in cases {
+            assert_eq!(feature.as_str(), expected_name);
+            assert_eq!(
+                TableFeature::parse_str_name(expected_name).unwrap(),
+                feature
+            );
         }
     }
 }
@@ -110,5 +205,25 @@ impl Protocol {
 
     pub fn writer_features(&self) -> Option<&[TableFeature]> {
         self.writer_features.as_deref()
+    }
+
+    /// Returns `true` if the table protocol explicitly declares the given reader feature.
+    pub fn has_reader_feature(&self, feature: &TableFeature) -> bool {
+        self.reader_features()
+            .is_some_and(|features| features.contains(feature))
+    }
+
+    /// Returns `true` if the table protocol explicitly declares the given writer feature.
+    pub fn has_writer_feature(&self, feature: &TableFeature) -> bool {
+        self.writer_features()
+            .is_some_and(|features| features.contains(feature))
+    }
+
+    pub fn supports_in_commit_timestamps(&self) -> bool {
+        self.min_writer_version() >= 7 && self.has_writer_feature(&TableFeature::InCommitTimestamp)
+    }
+
+    pub fn is_in_commit_timestamps_enabled(&self, table_properties: &TableProperties) -> bool {
+        self.supports_in_commit_timestamps() && table_properties.enable_in_commit_timestamps()
     }
 }

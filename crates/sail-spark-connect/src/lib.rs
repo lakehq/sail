@@ -13,8 +13,6 @@ mod streaming;
 
 pub use proto::data_type_json::JsonDataType;
 
-const SPARK_VERSION: &str = "4.1.1";
-
 pub mod spark {
     #[expect(clippy::all, clippy::allow_attributes)]
     pub mod connect {

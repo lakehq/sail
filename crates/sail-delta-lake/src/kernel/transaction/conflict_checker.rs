@@ -24,8 +24,8 @@ use std::collections::HashSet;
 
 use crate::kernel::DeltaOperation;
 use crate::spec::{
-    Action, Add, CommitConflictError, CommitInfo, DeltaError, DeltaResult, IsolationLevel,
-    Metadata, Protocol, Remove, Transaction,
+    Action, Add, CommitAction, CommitConflictError, CommitInfo, DeltaError, DeltaResult,
+    IsolationLevel, Metadata, Protocol, Remove, Transaction,
 };
 use crate::storage::{get_actions, LogStore};
 use crate::table::DeltaSnapshot;
@@ -36,8 +36,8 @@ pub(crate) struct TransactionInfo<'a> {
     txn_id: String,
     /// appIds that have been seen by the transaction
     read_app_ids: HashSet<String>,
-    /// delta log actions that the transaction wants to commit
-    actions: &'a [Action],
+    /// delta log actions that the transaction wants to commit (commit-only actions)
+    actions: &'a [CommitAction],
     /// read snapshot used for the transaction
     read_snapshot: &'a DeltaSnapshot,
     /// Whether the transaction tainted the whole table
@@ -47,12 +47,12 @@ pub(crate) struct TransactionInfo<'a> {
 impl<'a> TransactionInfo<'a> {
     pub fn try_new(
         read_snapshot: &'a DeltaSnapshot,
-        actions: &'a [Action],
+        actions: &'a [CommitAction],
         read_whole_table: bool,
     ) -> DeltaResult<Self> {
         let mut read_app_ids = HashSet::<String>::new();
         for action in actions.iter() {
-            if let Action::Txn(Transaction { app_id, .. }) = action {
+            if let CommitAction::Txn(Transaction { app_id, .. }) = action {
                 read_app_ids.insert(app_id.clone());
             }
         }
@@ -62,12 +62,12 @@ impl<'a> TransactionInfo<'a> {
 
     pub fn new(
         read_snapshot: &'a DeltaSnapshot,
-        actions: &'a [Action],
+        actions: &'a [CommitAction],
         read_whole_table: bool,
     ) -> Self {
         let mut read_app_ids = HashSet::<String>::new();
         for action in actions.iter() {
-            if let Action::Txn(Transaction { app_id, .. }) = action {
+            if let CommitAction::Txn(Transaction { app_id, .. }) = action {
                 read_app_ids.insert(app_id.clone());
             }
         }
@@ -84,7 +84,7 @@ impl<'a> TransactionInfo<'a> {
     pub fn metadata_changed(&self) -> bool {
         self.actions
             .iter()
-            .any(|a| matches!(a, Action::Metadata(_)))
+            .any(|a| matches!(a, CommitAction::Metadata(_)))
     }
 
     // TODO: properly handle predicates in the PhysicalPlan
@@ -117,16 +117,28 @@ impl<'a> TransactionInfo<'a> {
 
     pub fn protocol_action(&self) -> Option<&Protocol> {
         self.actions.iter().find_map(|a| match a {
-            Action::Protocol(p) => Some(p),
+            CommitAction::Protocol(p) => Some(p),
             _ => None,
         })
     }
 
     pub fn metadata_action(&self) -> Option<&Metadata> {
         self.actions.iter().find_map(|a| match a {
-            Action::Metadata(m) => Some(m),
+            CommitAction::Metadata(m) => Some(m),
             _ => None,
         })
+    }
+
+    pub fn domain_metadata_domains(&self) -> HashSet<String> {
+        self.actions
+            .iter()
+            .filter_map(|action| match action {
+                CommitAction::DomainMetadata(domain_metadata) => {
+                    Some(domain_metadata.domain.clone())
+                }
+                _ => None,
+            })
+            .collect()
     }
 }
 
@@ -197,6 +209,17 @@ impl WinningCommitSummary {
             .cloned()
             .filter_map(|action| match action {
                 Action::Protocol(protocol) => Some(protocol),
+                _ => None,
+            })
+            .collect()
+    }
+
+    pub fn domain_metadata_domains(&self) -> HashSet<String> {
+        self.actions
+            .iter()
+            .cloned()
+            .filter_map(|action| match action {
+                Action::DomainMetadata(domain_metadata) => Some(domain_metadata.domain),
                 _ => None,
             })
             .collect()
@@ -298,6 +321,7 @@ impl<'a> ConflictChecker<'a> {
     pub fn check_conflicts(&self) -> Result<(), CommitConflictError> {
         self.check_protocol_compatibility()?;
         self.check_no_metadata_updates()?;
+        self.check_no_domain_metadata_conflicts()?;
         self.check_for_added_files_that_should_have_been_read_by_current_txn()?;
         self.check_for_deleted_files_against_current_txn_read_files()?;
         self.check_for_deleted_files_against_current_txn_deleted_files()?;
@@ -354,6 +378,22 @@ impl<'a> ConflictChecker<'a> {
             }
         }
         Ok(())
+    }
+
+    fn check_no_domain_metadata_conflicts(&self) -> Result<(), CommitConflictError> {
+        let txn_domains = self.txn_info.domain_metadata_domains();
+        if txn_domains.is_empty() {
+            return Ok(());
+        }
+
+        let winning_domains = self.winning_commit_summary.domain_metadata_domains();
+        if let Some(domain) = txn_domains.intersection(&winning_domains).next() {
+            Err(CommitConflictError::ConcurrentDomainMetadata(
+                (*domain).clone(),
+            ))
+        } else {
+            Ok(())
+        }
     }
 
     /// Check if the new files added by the already committed transactions
@@ -456,7 +496,7 @@ impl<'a> ConflictChecker<'a> {
             .iter()
             .cloned()
             .filter_map(|action| match action {
-                Action::Remove(remove) => Some(remove.path),
+                CommitAction::Remove(remove) => Some(remove.path),
                 _ => None,
             })
             .collect();

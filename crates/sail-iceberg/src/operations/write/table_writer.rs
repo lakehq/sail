@@ -18,6 +18,7 @@ use datafusion::arrow::datatypes::{FieldRef, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use object_store::path::Path as ObjectPath;
+use object_store::ObjectStoreExt;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
 use url::Url;

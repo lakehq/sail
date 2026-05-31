@@ -130,7 +130,7 @@ impl PlanResolver<'_> {
         }
         let filter_expr = outer_refs
             .into_iter()
-            .zip(subquery_cols.into_iter())
+            .zip(subquery_cols)
             .map(|(outer, inner_col)| Expr::eq(Expr::Column(inner_col), outer))
             .reduce(Expr::and)
             .ok_or_else(|| PlanError::invalid("empty IN subquery values"))?;

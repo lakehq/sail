@@ -1,0 +1,334 @@
+# serializer version: 1
+---
+name: "test_append_write_reports_numfiles_numoutputrows_and_numoutputbytes"
+data:
+  operation: WRITE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 766
+    numAddedFiles: 1
+    numFiles: 1
+    numOutputBytes: 766
+    numOutputFiles: 1
+    numOutputRows: 3
+    writeTimeMs: <time_ms>
+---
+name: "test_conditional_merge_counts_source_rows_without_actions"
+data:
+  operation: MERGE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 4072
+    numAddedFiles: 4
+    numFiles: 4
+    numOutputBytes: 4072
+    numOutputFiles: 4
+    numOutputRows: 6
+    numRemovedBytes: 1069
+    numRemovedFiles: 1
+    numSourceRows: 4
+    numTargetBytesAdded: 4072
+    numTargetBytesRemoved: 1069
+    numTargetChangeFilesAdded: 0
+    numTargetDeletionVectorsAdded: 0
+    numTargetDeletionVectorsRemoved: 0
+    numTargetDeletionVectorsUpdated: 0
+    numTargetFilesAdded: 4
+    numTargetFilesRemoved: 1
+    numTargetRowsCopied: 4
+    numTargetRowsDeleted: 0
+    numTargetRowsInserted: 1
+    numTargetRowsMatchedDeleted: 0
+    numTargetRowsMatchedUpdated: 1
+    numTargetRowsNotMatchedBySourceDeleted: 0
+    numTargetRowsNotMatchedBySourceUpdated: 0
+    numTargetRowsUpdated: 1
+    numTouchedRows: 5
+    rewriteTimeMs: <time_ms>
+    scanTimeMs: <time_ms>
+    writeTimeMs: <time_ms>
+---
+name: "test_datapredicate_delete_reports_numdeletedrows_and_numcopiedrows"
+data:
+  operation: DELETE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 734
+    numAddedChangeFiles: 0
+    numAddedFiles: 1
+    numCopiedRows: 3
+    numDeletedRows: 2
+    numDeletionVectorsAdded: 0
+    numDeletionVectorsRemoved: 0
+    numDeletionVectorsUpdated: 0
+    numFiles: 1
+    numOutputBytes: 734
+    numOutputFiles: 1
+    numOutputRows: 3
+    numRemovedBytes: 751
+    numRemovedFiles: 1
+    numTouchedRows: 5
+    rewriteTimeMs: <time_ms>
+    scanTimeMs: <time_ms>
+    writeTimeMs: <time_ms>
+---
+name: "test_dv_delete_reports_numdeletionvectorsadded_and_zero_numcopiedrows"
+data:
+  operation: DELETE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedChangeFiles: 0
+    numAddedFiles: 1
+    numCopiedRows: 0
+    numDeletedRows: 1
+    numDeletionVectorsAdded: 1
+    numDeletionVectorsRemoved: 0
+    numDeletionVectorsUpdated: 0
+    numRemovedFiles: 1
+    scanTimeMs: <time_ms>
+---
+name: "test_dv_delete_updates_an_existing_deletion_vector"
+data:
+  operation: DELETE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedChangeFiles: 0
+    numAddedFiles: 1
+    numCopiedRows: 0
+    numDeletedRows: 1
+    numDeletionVectorsAdded: 1
+    numDeletionVectorsRemoved: 1
+    numDeletionVectorsUpdated: 1
+    numRemovedFiles: 1
+    scanTimeMs: <time_ms>
+---
+name: "test_full_merge_reports_detailed_target_row_counters"
+data:
+  operation: MERGE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 4035
+    numAddedFiles: 4
+    numFiles: 4
+    numOutputBytes: 4035
+    numOutputFiles: 4
+    numOutputRows: 4
+    numRemovedBytes: 1069
+    numRemovedFiles: 1
+    numSourceRows: 3
+    numTargetBytesAdded: 4035
+    numTargetBytesRemoved: 1069
+    numTargetChangeFilesAdded: 0
+    numTargetDeletionVectorsAdded: 0
+    numTargetDeletionVectorsRemoved: 0
+    numTargetDeletionVectorsUpdated: 0
+    numTargetFilesAdded: 4
+    numTargetFilesRemoved: 1
+    numTargetRowsCopied: 1
+    numTargetRowsDeleted: 2
+    numTargetRowsInserted: 1
+    numTargetRowsMatchedDeleted: 1
+    numTargetRowsMatchedUpdated: 1
+    numTargetRowsNotMatchedBySourceDeleted: 1
+    numTargetRowsNotMatchedBySourceUpdated: 1
+    numTargetRowsUpdated: 2
+    numTouchedRows: 5
+    rewriteTimeMs: <time_ms>
+    scanTimeMs: <time_ms>
+    writeTimeMs: <time_ms>
+---
+name: "test_full_merge_reports_target_file_and_byte_counters"
+data:
+  operation: MERGE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 2945
+    numAddedFiles: 3
+    numFiles: 3
+    numOutputBytes: 2945
+    numOutputFiles: 3
+    numOutputRows: 3
+    numRemovedBytes: 1017
+    numRemovedFiles: 1
+    numSourceRows: 3
+    numTargetBytesAdded: 2945
+    numTargetBytesRemoved: 1017
+    numTargetChangeFilesAdded: 0
+    numTargetDeletionVectorsAdded: 0
+    numTargetDeletionVectorsRemoved: 0
+    numTargetDeletionVectorsUpdated: 0
+    numTargetFilesAdded: 3
+    numTargetFilesRemoved: 1
+    numTargetRowsCopied: 1
+    numTargetRowsDeleted: 1
+    numTargetRowsInserted: 1
+    numTargetRowsUpdated: 1
+    numTouchedRows: 3
+    rewriteTimeMs: <time_ms>
+    scanTimeMs: <time_ms>
+    writeTimeMs: <time_ms>
+---
+name: "test_insertonly_merge_counts_duplicate_target_matches_once_per_source_row"
+data:
+  operation: MERGE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 985
+    numAddedFiles: 1
+    numFiles: 1
+    numOutputBytes: 985
+    numOutputFiles: 1
+    numOutputRows: 1
+    numSourceRows: 3
+    numTargetBytesAdded: 985
+    numTargetChangeFilesAdded: 0
+    numTargetDeletionVectorsAdded: 0
+    numTargetDeletionVectorsRemoved: 0
+    numTargetDeletionVectorsUpdated: 0
+    numTargetFilesAdded: 1
+    numTargetRowsCopied: 0
+    numTargetRowsDeleted: 0
+    numTargetRowsInserted: 1
+    numTargetRowsMatchedDeleted: 0
+    numTargetRowsMatchedUpdated: 0
+    numTargetRowsNotMatchedBySourceDeleted: 0
+    numTargetRowsNotMatchedBySourceUpdated: 0
+    numTargetRowsUpdated: 0
+    rewriteTimeMs: <time_ms>
+    writeTimeMs: <time_ms>
+---
+name: "test_insertonly_merge_fastappends_without_removing_files"
+data:
+  operation: MERGE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 985
+    numAddedFiles: 1
+    numFiles: 1
+    numOutputBytes: 985
+    numOutputFiles: 1
+    numOutputRows: 1
+    numSourceRows: 3
+    numTargetBytesAdded: 985
+    numTargetChangeFilesAdded: 0
+    numTargetDeletionVectorsAdded: 0
+    numTargetDeletionVectorsRemoved: 0
+    numTargetDeletionVectorsUpdated: 0
+    numTargetFilesAdded: 1
+    numTargetRowsCopied: 0
+    numTargetRowsDeleted: 0
+    numTargetRowsInserted: 1
+    numTargetRowsMatchedDeleted: 0
+    numTargetRowsMatchedUpdated: 0
+    numTargetRowsNotMatchedBySourceDeleted: 0
+    numTargetRowsNotMatchedBySourceUpdated: 0
+    numTargetRowsUpdated: 0
+    rewriteTimeMs: <time_ms>
+    writeTimeMs: <time_ms>
+---
+name: "test_merge_delete_on_dv_table_reports_target_deletion_vector_update_counters"
+data:
+  operation: MERGE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 0
+    numAddedFiles: 1
+    numFiles: 0
+    numOutputBytes: 0
+    numOutputFiles: 0
+    numOutputRows: 0
+    numRemovedFiles: 1
+    numSourceRows: 1
+    numTargetBytesAdded: 0
+    numTargetChangeFilesAdded: 0
+    numTargetDeletionVectorsAdded: 1
+    numTargetDeletionVectorsRemoved: 1
+    numTargetDeletionVectorsUpdated: 1
+    numTargetFilesAdded: 1
+    numTargetFilesRemoved: 1
+    numTargetRowsCopied: 0
+    numTargetRowsDeleted: 1
+    numTargetRowsInserted: 0
+    numTargetRowsMatchedDeleted: 0
+    numTargetRowsMatchedUpdated: 0
+    numTargetRowsNotMatchedBySourceDeleted: 0
+    numTargetRowsNotMatchedBySourceUpdated: 0
+    numTargetRowsUpdated: 0
+    rewriteTimeMs: <time_ms>
+    writeTimeMs: <time_ms>
+---
+name: "test_partitiononly_delete_removes_whole_files_without_scanning"
+data:
+  operation: DELETE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 0
+    numAddedChangeFiles: 0
+    numAddedFiles: 0
+    numCopiedRows: 0
+    numDeletedRows: 2
+    numDeletionVectorsAdded: 0
+    numDeletionVectorsRemoved: 0
+    numDeletionVectorsUpdated: 0
+    numFiles: 0
+    numOutputBytes: 0
+    numOutputFiles: 0
+    numOutputRows: 0
+    numRemovedBytes: 463
+    numRemovedFiles: 1
+    numTouchedRows: 2
+    rewriteTimeMs: <time_ms>
+    scanTimeMs: <time_ms>
+    writeTimeMs: <time_ms>
+---
+name: "test_replacewhere_overwrite_reports_added_and_removed_counters"
+data:
+  operation: WRITE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 1488
+    numAddedFiles: 2
+    numFiles: 2
+    numOutputBytes: 1488
+    numOutputFiles: 2
+    numOutputRows: 3
+    numRemovedBytes: 766
+    numRemovedFiles: 1
+    numTouchedRows: 3
+    scanTimeMs: <time_ms>
+    writeTimeMs: <time_ms>
+---
+name: "test_targetonly_merge_actions_report_zero_source_rows"
+data:
+  operation: MERGE
+  operationMetrics:
+    executionTimeMs: <time_ms>
+    numAddedBytes: 1084
+    numAddedFiles: 1
+    numFiles: 1
+    numOutputBytes: 1084
+    numOutputFiles: 1
+    numOutputRows: 4
+    numRemovedBytes: 1069
+    numRemovedFiles: 1
+    numSourceRows: 0
+    numTargetBytesAdded: 1084
+    numTargetBytesRemoved: 1069
+    numTargetChangeFilesAdded: 0
+    numTargetDeletionVectorsAdded: 0
+    numTargetDeletionVectorsRemoved: 0
+    numTargetDeletionVectorsUpdated: 0
+    numTargetFilesAdded: 1
+    numTargetFilesRemoved: 1
+    numTargetRowsCopied: 3
+    numTargetRowsDeleted: 1
+    numTargetRowsInserted: 0
+    numTargetRowsMatchedDeleted: 0
+    numTargetRowsMatchedUpdated: 0
+    numTargetRowsNotMatchedBySourceDeleted: 1
+    numTargetRowsNotMatchedBySourceUpdated: 1
+    numTargetRowsUpdated: 1
+    numTouchedRows: 5
+    rewriteTimeMs: <time_ms>
+    scanTimeMs: <time_ms>
+    writeTimeMs: <time_ms>

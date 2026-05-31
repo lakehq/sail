@@ -10,7 +10,6 @@ pub struct RuntimeManager {
     //  Ideally IO bound tasks should be run on the primary runtime,
     //  and CPU bound tasks on the secondary runtime.
     io: Runtime,
-    io_runtime_for_object_store: bool,
 }
 
 impl RuntimeManager {
@@ -26,22 +25,13 @@ impl RuntimeManager {
     pub fn try_new(config: &RuntimeConfig) -> CommonResult<Self> {
         let primary = Self::build_runtime(config.stack_size)?;
         let io = Self::build_runtime(config.stack_size)?;
-        Ok(Self {
-            primary,
-            io,
-            io_runtime_for_object_store: config.enable_secondary,
-        })
+        Ok(Self { primary, io })
     }
 
     pub fn handle(&self) -> RuntimeHandle {
         let primary = self.primary.handle().clone();
         let io = self.io.handle().clone();
-        let io_runtime_for_object_store = self.io_runtime_for_object_store;
-        RuntimeHandle {
-            primary,
-            io,
-            io_runtime_for_object_store,
-        }
+        RuntimeHandle { primary, io }
     }
 
     fn build_runtime(stack_size: usize) -> CommonResult<Runtime> {
@@ -57,16 +47,11 @@ impl RuntimeManager {
 pub struct RuntimeHandle {
     primary: Handle,
     io: Handle,
-    io_runtime_for_object_store: bool,
 }
 
 impl RuntimeHandle {
-    pub fn new(primary: Handle, io: Handle, io_runtime_for_object_store: bool) -> Self {
-        Self {
-            primary,
-            io,
-            io_runtime_for_object_store,
-        }
+    pub fn new(primary: Handle, io: Handle) -> Self {
+        Self { primary, io }
     }
 
     pub fn primary(&self) -> &Handle {
@@ -75,9 +60,5 @@ impl RuntimeHandle {
 
     pub fn io(&self) -> &Handle {
         &self.io
-    }
-
-    pub fn io_runtime_for_object_store(&self) -> bool {
-        self.io_runtime_for_object_store
     }
 }

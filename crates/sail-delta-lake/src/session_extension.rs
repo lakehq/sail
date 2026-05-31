@@ -6,7 +6,7 @@ use datafusion_common::{DataFusionError, Result};
 use moka::future::Cache as FutureCache;
 use url::Url;
 
-use crate::kernel::DeltaTableConfig;
+use crate::kernel::DeltaSnapshotConfig;
 use crate::storage::StorageConfig;
 use crate::table::{open_table_with_object_store_and_table_config_at_version, DeltaSnapshot};
 
@@ -75,7 +75,7 @@ pub(crate) async fn load_table_uncached(
         .object_store_registry
         .get_store(table_url)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let table_config = DeltaTableConfig {
+    let table_config = DeltaSnapshotConfig {
         require_files: false,
         ..Default::default()
     };

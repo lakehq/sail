@@ -1,6 +1,6 @@
 [project]
 name = "pysail"
-version = "0.5.2"
+version = "0.6.3"
 description = "Sail Python library"
 authors = [
     { name = "LakeSail", email = "hello@lakesail.com" },
@@ -42,7 +42,7 @@ test = [
     "syrupy>=5.0,<6",
     "jinja2>=3.1,<4",
     "pillow>=10.3.0,<11",
-    "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
+    "pyiceberg[sql-sqlite,pyiceberg-core]==0.11.1",
     "pydantic>=2.11,<2.12",
     "jedi>=0.19.2,<0.20",
     "jsonpath-ng>=1.6,<2",
@@ -50,13 +50,21 @@ test = [
     "moto[glue]>=5,<6",
     "testcontainers>=4,<5",
     "connectorx>=0.3,<1",
+    "vortex-data>=0.64,<1; platform_system != 'Windows'",
+    "pyarrow>=24.0,<25",
+    "adbc-driver-flightsql>=1.0,<2",
+    "adbc-driver-manager>=1.0,<2",
 ]
 mcp = [
     "mcp>=1.0.0,<2",
 ]
 jdbc = [
-    "connectorx>=0.3,<1",
-    "pyarrow>=10.0,<20",
+    "connectorx>=0.3",
+    "pyarrow>=10.0",
+]
+vortex = [
+    "vortex-data>=0.64; platform_system != 'Windows'",
+    "pyarrow>=10.0",
 ]
 
 [project.urls]
@@ -98,14 +106,18 @@ dependencies = [
     "mcp>=1.0,<2",
     "boto3>=1.38,<2",
     "pillow>=10.3.0,<11",
-    "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
+    "pyiceberg[sql-sqlite,pyiceberg-core]==0.11.1",
     "pydantic>=2.11,<2.12",
     "jedi>=0.19.2,<0.20",
     "jsonpath-ng>=1.6,<2",
     "PyYAML>=6.0,<7",
+    "pyarrow>=24.0,<25",
+    "adbc-driver-flightsql>=1.0,<2",
+    "adbc-driver-manager>=1.0,<2",
     "moto[glue]>=5,<6",
     "testcontainers>=4,<5",
     "connectorx>=0.3,<1",
+    "vortex-data>=0.64,<1; platform_system != 'Windows'",
 ]
 path = ".venvs/default"
 
@@ -148,14 +160,18 @@ dependencies = [
     "jinja2>=3.1,<4",
     "duckdb>=1.1,<2",
     "pillow>=10.3.0,<11",
-    "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
+    "pyiceberg[sql-sqlite,pyiceberg-core]==0.11.1",
     "pydantic>=2.11,<2.12",
     "jedi>=0.19.2,<0.20",
     "jsonpath-ng>=1.6,<2",
     "PyYAML>=6.0,<7",
+    "pyarrow>=24.0,<25",
+    "adbc-driver-flightsql>=1.0,<2",
+    "adbc-driver-manager>=1.0,<2",
     "moto[glue]>=5,<6",
     "testcontainers>=4,<5",
     "connectorx>=0.3,<1",
+    "vortex-data>=0.64,<1; platform_system != 'Windows'",
 ]
 
 [[tool.hatch.envs.test.matrix]]

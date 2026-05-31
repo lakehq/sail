@@ -2,25 +2,43 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, StructArray};
-use datafusion::arrow::datatypes::{DataType, Field, Fields};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
-pub fn to_struct_array(args: &[ArrayRef], field_names: &[String]) -> Result<ArrayRef> {
+pub fn to_struct_array(
+    args: &[ArrayRef],
+    field_names: &[String],
+    arg_fields: &[FieldRef],
+) -> Result<ArrayRef> {
     if args.is_empty() {
         return exec_err!("struct requires at least one argument");
+    }
+    if args.len() != field_names.len() || args.len() != arg_fields.len() {
+        return exec_err!(
+            "struct: mismatched lengths: args={}, field_names={}, arg_fields={}",
+            args.len(),
+            field_names.len(),
+            arg_fields.len()
+        );
     }
 
     let vec: Vec<_> = args
         .iter()
         .zip(field_names.iter())
-        .map(|(arg, field_name)| {
+        .zip(arg_fields.iter())
+        .map(|((arg, field_name), arg_field)| {
             Ok((
-                Arc::new(Field::new(
-                    field_name.as_str(),
-                    arg.data_type().clone(),
-                    true,
-                )),
+                Arc::new(
+                    Field::new(
+                        field_name.as_str(),
+                        arg.data_type().clone(),
+                        arg_field.is_nullable(),
+                    )
+                    .with_metadata(arg_field.metadata().clone()),
+                ),
                 arg.clone(),
             ))
         })
@@ -61,21 +79,43 @@ impl ScalarUDFImpl for StructFunction {
         &self.signature
     }
 
-    fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        let fields = arg_types
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        datafusion_common::internal_err!(
+            "StructFunction: return_type() is not used; return_field_from_args() is implemented"
+        )
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let fields: Vec<Field> = args
+            .arg_fields
             .iter()
             .zip(self.field_names.iter())
-            .map(|(dt, field_name)| Ok(Field::new(field_name.clone(), dt.clone(), true)))
-            .collect::<Result<Vec<Field>>>()?;
-        Ok(DataType::Struct(Fields::from(fields)))
+            .map(|(arg_field, field_name)| {
+                Field::new(
+                    field_name.clone(),
+                    arg_field.data_type().clone(),
+                    arg_field.is_nullable(),
+                )
+                .with_metadata(arg_field.metadata().clone())
+            })
+            .collect();
+
+        // The struct value itself is never NULL — only child fields may be.
+        // StructArray::from() creates no null bitmap, and Spark's struct()
+        // always returns non-nullable.
+        let struct_type = DataType::Struct(Fields::from(fields));
+        Ok(Arc::new(Field::new(self.name(), struct_type, false)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs { args, .. } = args;
+        let ScalarFunctionArgs {
+            args, arg_fields, ..
+        } = args;
         let arrays = ColumnarValue::values_to_arrays(&args)?;
         Ok(ColumnarValue::Array(to_struct_array(
             arrays.as_slice(),
             self.field_names.as_slice(),
+            &arg_fields,
         )?))
     }
 }

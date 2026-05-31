@@ -115,6 +115,7 @@ mod tests {
                 None,
                 PartitionMode::CollectLeft,
                 NullEquality::NullEqualsNothing,
+                false, // null_aware
             )
             .unwrap(),
         ) as Arc<dyn ExecutionPlan>;
@@ -157,6 +158,7 @@ mod tests {
                 None,
                 PartitionMode::CollectLeft,
                 NullEquality::NullEqualsNothing,
+                false, // null_aware
             )
             .unwrap(),
         ) as Arc<dyn ExecutionPlan>;
@@ -191,6 +193,7 @@ mod tests {
                 None,
                 PartitionMode::Partitioned,
                 NullEquality::NullEqualsNothing,
+                false, // null_aware
             )
             .unwrap(),
         ) as Arc<dyn ExecutionPlan>;
