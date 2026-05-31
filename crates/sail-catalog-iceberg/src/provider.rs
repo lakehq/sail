@@ -16,9 +16,10 @@ use std::sync::Arc;
 use percent_encoding::percent_decode_str;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
-    AlterTableOptions, CatalogPartitionField, CatalogProvider, CreateDatabaseOptions,
-    CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
-    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
+    namespace_location_from_properties, AlterTableOptions, CatalogPartitionField, CatalogProvider,
+    CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions,
+    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    PartitionTransform,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
 use sail_common_datafusion::catalog::{
@@ -93,10 +94,11 @@ impl IcebergRestCatalogProvider {
     }
 
     fn namespace_location(properties: Option<&HashMap<String, String>>) -> Option<String> {
-        let props = properties?;
-        get_property(props, "location")
-            .or_else(|| get_property(props, "warehouse"))
-            .or_else(|| get_property(props, "path"))
+        namespace_location_from_properties(
+            properties?
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        )
     }
 
     pub fn new(name: String, props: HashMap<String, String>) -> Self {

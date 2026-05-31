@@ -32,6 +32,15 @@ pub trait CatalogProvider: Send + Sync {
         false
     }
 
+    /// Whether Spark session-catalog semantics should synthesize a default
+    /// table location when table creation omits an explicit storage location.
+    ///
+    /// Native catalogs own absent table-location semantics and should use the
+    /// default `false`.
+    fn uses_spark_default_table_location(&self) -> bool {
+        false
+    }
+
     /// Whether Sail should validate table identifiers before deriving a default
     /// table location from them.
     ///

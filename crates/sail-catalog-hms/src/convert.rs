@@ -6,8 +6,8 @@ use pilota::{AHashMap, FastStr};
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::hive_format::{HiveDetectedFormat, HiveStorageFormat};
 use sail_catalog::provider::{
-    CreateDatabaseOptions, CreateTableColumnOptions, CreateViewColumnOptions, CreateViewOptions,
-    Namespace,
+    namespace_location_from_properties, CreateDatabaseOptions, CreateTableColumnOptions,
+    CreateViewColumnOptions, CreateViewOptions, Namespace,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
@@ -64,7 +64,13 @@ pub(crate) fn database_to_status(
             .location_uri
             .as_ref()
             .map(ToString::to_string)
-            .or_else(|| namespace_location_from_properties(&properties)),
+            .or_else(|| {
+                namespace_location_from_properties(
+                    properties
+                        .iter()
+                        .map(|(key, value)| (key.as_str(), value.as_str())),
+                )
+            }),
         properties,
     })
 }
@@ -611,25 +617,6 @@ pub(crate) fn map_to_vec(values: Option<&AHashMap<FastStr, FastStr>>) -> Vec<(St
         .collect();
     values.sort();
     values
-}
-
-fn namespace_location_from_properties(properties: &[(String, String)]) -> Option<String> {
-    properties
-        .iter()
-        .find(|(key, _)| key.eq_ignore_ascii_case("location"))
-        .map(|(_, value)| value.clone())
-        .or_else(|| {
-            properties
-                .iter()
-                .find(|(key, _)| key.eq_ignore_ascii_case("warehouse"))
-                .map(|(_, value)| value.clone())
-        })
-        .or_else(|| {
-            properties
-                .iter()
-                .find(|(key, _)| key.eq_ignore_ascii_case("path"))
-                .map(|(_, value)| value.clone())
-        })
 }
 
 fn build_columns(
