@@ -36,11 +36,7 @@ use crate::listing::source::ListingScanInput;
 use crate::listing::source::FormatFactory;
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::can_be_evaluated_for_partition_pruning;
-use crate::listing::utils::rewrite_utf8view_fields;
-use crate::listing::utils::validate_partitions;
-use crate::listing::utils::{infer_partitions, sample_listing_files};
 use crate::listing::source::WriteFormat;
-use crate::resolve_listing_urls;
 
 /// Result of a file listing operation for listing table scans.
 #[derive(Debug)]

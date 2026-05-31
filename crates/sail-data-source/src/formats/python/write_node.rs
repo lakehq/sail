@@ -4,7 +4,7 @@ use std::sync::Arc;
 use datafusion_common::{DFSchema, DFSchemaRef};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use educe::Educe;
-use sail_common_datafusion::datasource::{OptionLayer, SinkMode};
+use sail_common_datafusion::datasource::SinkMode;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]

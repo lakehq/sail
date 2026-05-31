@@ -10,7 +10,6 @@ use datafusion_common::internal_err;
 use sail_common_datafusion::datasource::{
     create_sort_order, PhysicalSinkInfo, PhysicalSinkMode, SinkMode,
 };
-use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::logical::table_source::DeltaTableSource;
 use crate::physical::scan_planner::plan_delta_scan;

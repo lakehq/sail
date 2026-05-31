@@ -13,7 +13,7 @@ use datafusion_expr::logical_plan::Extension;
 use datafusion_expr::LogicalPlan;
 use datafusion_common::Result;
 use sail_common_datafusion::datasource::{
-    OptionLayer, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
+    SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
 };
 
 use super::datasource::PythonDataSource;

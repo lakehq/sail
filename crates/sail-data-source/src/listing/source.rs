@@ -1,6 +1,5 @@
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -8,14 +7,12 @@ use datafusion::arrow::datatypes::{DataType, Field, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::physical_plan::FileSinkConfig;
 use datafusion::execution::object_store::ObjectStoreUrl;
-use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_expr::LexRequirement;
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{not_impl_err, plan_err, Result, Statistics};
-use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::{ListingTableUrl, TableSchema};

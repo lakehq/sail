@@ -221,7 +221,6 @@ impl PlanResolver<'_> {
         }
         let input_schema = input.schema().inner().clone();
         let mut format = format.unwrap_or_default();
-        let mut sink_mode = SinkMode::ErrorIfExists;
         let mut sink_partition_by = partition_by.clone();
         let mut sink_sort_by = self
             .resolve_sort_orders(sort_by.clone(), true, input.schema(), state)
@@ -232,7 +231,7 @@ impl PlanResolver<'_> {
             .map(|items| OptionLayer::OptionList { items })
             .collect::<Vec<_>>();
         let mut preconditions = vec![];
-        match target {
+        let sink_mode = match target {
             WriteTarget::DataSource => {
                 if !table_properties.is_empty() {
                     return Err(PlanError::invalid(
@@ -261,9 +260,7 @@ impl PlanResolver<'_> {
                 }
                 let schema_for_cond =
                     matches!(mode, WriteMode::TruncateIf { .. }).then_some(input_schema.as_ref());
-                sink_mode = self
-                    .resolve_write_mode(mode, schema_for_cond, state)
-                    .await?;
+                self.resolve_write_mode(mode, schema_for_cond, state).await?
             }
             WriteTarget::Table {
                 table,
@@ -444,9 +441,8 @@ impl PlanResolver<'_> {
                     preconditions.push(Arc::new(self.resolve_catalog_command(command)?));
                 }
 
-                sink_mode = self
-                    .resolve_write_mode(mode, schema_for_cond.as_ref(), state)
-                    .await?;
+                self.resolve_write_mode(mode, schema_for_cond.as_ref(), state)
+                    .await?
             }
         };
 
