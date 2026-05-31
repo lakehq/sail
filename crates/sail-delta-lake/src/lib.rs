@@ -27,10 +27,12 @@ pub mod spec;
 pub mod storage;
 pub mod table;
 pub mod table_format;
+pub mod write_node;
 
 pub use logical::DeltaTableSource;
 pub use table::create_delta_source;
 pub use table_format::DeltaTableFormat;
+pub use write_node::DeltaWriteNode;
 
 pub use crate::kernel::DeltaSnapshotConfig;
 pub use crate::spec::{DeltaError, DeltaError as DeltaTableError, DeltaResult};

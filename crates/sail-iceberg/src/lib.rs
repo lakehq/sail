@@ -22,6 +22,7 @@ pub mod spec;
 pub mod table;
 pub mod table_format;
 pub mod utils;
+pub mod write_node;
 
 pub use datasource::type_converter::*;
 pub use datasource::*;
@@ -41,3 +42,4 @@ pub use physical_plan::IcebergWriterExecOptions;
 pub use schema_evolution::*;
 pub use spec::*;
 pub use table_format::*;
+pub use write_node::IcebergWriteNode;

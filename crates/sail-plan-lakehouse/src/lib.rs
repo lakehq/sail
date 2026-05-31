@@ -11,10 +11,8 @@ use sail_data_source::resolve_listing_urls;
 use sail_delta_lake::table::open_table_with_object_store_and_table_config;
 use sail_delta_lake::DeltaSnapshotConfig;
 use sail_logical_plan::file_delete::FileDeleteNode;
-use sail_logical_plan::file_write::FileWriteNode;
 use sail_logical_plan::merge::{MergeCardinalityCheckNode, RowLevelWriteNode};
 use sail_physical_plan::file_delete::create_file_delete_physical_plan;
-use sail_physical_plan::file_write::create_file_write_physical_plan;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::row_level_write::create_row_level_write_physical_plan;
 use url::Url;
@@ -73,27 +71,6 @@ impl ExtensionPlanner for DeltaExtensionPlanner {
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         session_state: &SessionState,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
-        if let Some(node) = node.as_any().downcast_ref::<FileWriteNode>() {
-            if !is_lakehouse_format(node.options().format.as_str()) {
-                return Ok(None);
-            }
-            let [logical_input] = logical_inputs else {
-                return internal_err!("FileWriteNode requires exactly one logical input");
-            };
-            let [physical_input] = physical_inputs else {
-                return internal_err!("FileWriteNode requires exactly one physical input");
-            };
-            let plan = create_file_write_physical_plan(
-                session_state,
-                planner,
-                logical_input,
-                physical_input.clone(),
-                node.options().clone(),
-            )
-            .await?;
-            return Ok(Some(plan));
-        }
-
         if let Some(node) = node.as_any().downcast_ref::<FileDeleteNode>() {
             if !is_lakehouse_format(node.options().format.as_str()) {
                 return Ok(None);

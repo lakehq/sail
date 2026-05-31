@@ -18,16 +18,18 @@ use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion_expr::{Extension, LogicalPlan};
 use object_store::ObjectStoreExt;
 use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::{
-    find_path_in_options, OptionLayer, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat,
-    TableFormatRegistry,
+    find_path_in_options, OptionLayer, PhysicalSinkInfo, PhysicalSinkMode, SinkInfo, SourceInfo,
+    TableFormat, TableFormatRegistry,
 };
 use sail_data_source::options::gen::{IcebergReadOptions, IcebergWriteOptions};
 use sail_data_source::options::ResolveOptions;
 use url::Url;
 
+use crate::IcebergWriteNode;
 use crate::datasource::provider::IcebergTableProvider;
 use crate::io::StoreContext;
 use crate::logical::IcebergTableSource;
@@ -54,34 +56,17 @@ impl IcebergTableFormat {
     pub fn register(registry: &TableFormatRegistry) -> Result<()> {
         registry.register(Arc::new(Self))
     }
-}
 
-#[async_trait]
-impl TableFormat for IcebergTableFormat {
-    fn name(&self) -> &str {
-        "iceberg"
-    }
-
-    async fn create_source(
-        &self,
+    pub(crate) async fn create_physical_writer(
         ctx: &dyn Session,
-        info: SourceInfo,
-    ) -> Result<Arc<dyn TableSource>> {
-        let provider = build_iceberg_provider(ctx, info).await?;
-        Ok(Arc::new(IcebergTableSource::new(provider)))
-    }
-
-    async fn create_writer(
-        &self,
-        ctx: &dyn Session,
-        info: SinkInfo,
+        info: PhysicalSinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         use datafusion::physical_plan::empty::EmptyExec;
 
         let Some(path) = find_path_in_options(&info.options) else {
             return plan_err!("missing path in Iceberg table options");
         };
-        let SinkInfo {
+        let PhysicalSinkInfo {
             input,
             mode,
             partition_by,
@@ -184,6 +169,47 @@ impl TableFormat for IcebergTableFormat {
         let builder = IcebergPlanBuilder::new(input, table_config, mode, physical_sort, ctx);
         let exec = builder.build().await?;
         Ok(exec)
+    }
+}
+
+#[async_trait]
+impl TableFormat for IcebergTableFormat {
+    fn name(&self) -> &str {
+        "iceberg"
+    }
+
+    async fn create_source(
+        &self,
+        ctx: &dyn Session,
+        info: SourceInfo,
+    ) -> Result<Arc<dyn TableSource>> {
+        let provider = build_iceberg_provider(ctx, info).await?;
+        Ok(Arc::new(IcebergTableSource::new(provider)))
+    }
+
+    async fn create_writer(
+        &self,
+        _ctx: &dyn Session,
+        info: SinkInfo,
+    ) -> Result<LogicalPlan> {
+        if find_path_in_options(&info.options).is_none() {
+            return plan_err!("missing path in Iceberg table options");
+        }
+
+        if info.bucket_by.is_some() {
+            return not_impl_err!("bucketing for Iceberg format");
+        }
+
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(IcebergWriteNode::new(
+                Arc::new(info.input),
+                info.mode,
+                info.partition_by,
+                info.bucket_by,
+                info.sort_order,
+                info.options,
+            )),
+        }))
     }
 
     async fn alter_table_properties(

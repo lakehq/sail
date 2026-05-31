@@ -8,10 +8,11 @@ use datafusion::common::{not_impl_err, plan_err, DFSchema, DataFusionError, Resu
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion_expr::{Extension, LogicalPlan};
 use sail_common_datafusion::column_features::ColumnFeatures;
 use sail_common_datafusion::datasource::{
     find_path_in_options, MergeStrategy, OptionLayer, PhysicalSinkMode, RowLevelCommand,
-    RowLevelWriteInfo, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
+    PhysicalSinkInfo, RowLevelWriteInfo, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_data_source::options::gen::{DeltaReadOptions, DeltaWriteOptions};
@@ -19,6 +20,7 @@ use sail_data_source::options::ResolveOptions;
 use sail_data_source::resolve_listing_urls;
 use url::Url;
 
+use crate::DeltaWriteNode;
 use crate::kernel::DeltaSnapshotConfig;
 use crate::physical_plan::planner::{
     plan_delete, plan_delete_mor, plan_merge, plan_merge_mor, DeltaPhysicalPlanner,
@@ -48,59 +50,15 @@ impl DeltaTableFormat {
         registry.register(Arc::new(Self))?;
         Ok(())
     }
-}
 
-#[async_trait]
-impl TableFormat for DeltaTableFormat {
-    fn name(&self) -> &str {
-        "delta"
-    }
-
-    async fn create_source(
-        &self,
+    pub(crate) async fn create_physical_writer(
         ctx: &dyn Session,
-        info: SourceInfo,
-    ) -> Result<Arc<dyn TableSource>> {
-        let SourceInfo {
-            paths,
-            schema,
-            constraints: _,
-            partition_by: _,
-            bucket_by: _,
-            sort_order: _,
-            options,
-        } = info;
-        let table_url = Self::parse_table_url(ctx, paths).await?;
-        let options = DeltaReadOptions::resolve(ctx, options)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        create_delta_source(ctx, table_url, schema, options).await
-    }
-
-    async fn infer_schema(&self, ctx: &dyn Session, info: SourceInfo) -> Result<SchemaRef> {
-        let SourceInfo {
-            paths,
-            schema,
-            constraints: _,
-            partition_by: _,
-            bucket_by: _,
-            sort_order: _,
-            options,
-        } = info;
-        let table_url = Self::parse_table_url(ctx, paths).await?;
-        let options = DeltaReadOptions::resolve(ctx, options)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        infer_delta_logical_schema(ctx, table_url, schema, options).await
-    }
-
-    async fn create_writer(
-        &self,
-        ctx: &dyn Session,
-        info: SinkInfo,
+        info: PhysicalSinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let Some(path) = find_path_in_options(&info.options) else {
             return plan_err!("missing path in Delta table options");
         };
-        let SinkInfo {
+        let PhysicalSinkInfo {
             input,
             mode,
             partition_by,
@@ -254,6 +212,80 @@ impl TableFormat for DeltaTableFormat {
         let sink_exec = planner.create_plan(input, unified_mode, sort_order).await?;
 
         Ok(sink_exec)
+    }
+}
+
+#[async_trait]
+impl TableFormat for DeltaTableFormat {
+    fn name(&self) -> &str {
+        "delta"
+    }
+
+    async fn create_source(
+        &self,
+        ctx: &dyn Session,
+        info: SourceInfo,
+    ) -> Result<Arc<dyn TableSource>> {
+        let SourceInfo {
+            paths,
+            schema,
+            constraints: _,
+            partition_by: _,
+            bucket_by: _,
+            sort_order: _,
+            options,
+        } = info;
+        let table_url = Self::parse_table_url(ctx, paths).await?;
+        let options = DeltaReadOptions::resolve(ctx, options)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        create_delta_source(ctx, table_url, schema, options).await
+    }
+
+    async fn infer_schema(&self, ctx: &dyn Session, info: SourceInfo) -> Result<SchemaRef> {
+        let SourceInfo {
+            paths,
+            schema,
+            constraints: _,
+            partition_by: _,
+            bucket_by: _,
+            sort_order: _,
+            options,
+        } = info;
+        let table_url = Self::parse_table_url(ctx, paths).await?;
+        let options = DeltaReadOptions::resolve(ctx, options)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        infer_delta_logical_schema(ctx, table_url, schema, options).await
+    }
+
+    async fn create_writer(
+        &self,
+        _ctx: &dyn Session,
+        info: SinkInfo,
+    ) -> Result<LogicalPlan> {
+        if find_path_in_options(&info.options).is_none() {
+            return plan_err!("missing path in Delta table options");
+        }
+
+        if is_flow_event_schema(info.input.schema().inner()) {
+            return not_impl_err!("writing streaming data to Delta table");
+        }
+        if info.bucket_by.is_some() {
+            return not_impl_err!("bucketing for Delta format");
+        }
+        if info.partition_by.iter().any(|field| field.transform.is_some()) {
+            return not_impl_err!("partition transforms for Delta format");
+        }
+
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(DeltaWriteNode::new(
+                Arc::new(info.input),
+                info.mode,
+                info.partition_by,
+                info.bucket_by,
+                info.sort_order,
+                info.options,
+            )),
+        }))
     }
 
     async fn create_row_level_writer(
