@@ -13,16 +13,16 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow_schema::extension::ExtensionType;
 use datafusion::arrow::datatypes::{
     validate_decimal_precision_and_scale, DataType as ArrowDataType,
     Decimal128Type as ArrowDecimal128Type, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
 };
 use datafusion_common::{plan_datafusion_err, plan_err, Result};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+use parquet_variant_compute::VariantType;
 use rust_decimal::prelude::ToPrimitive;
-use sail_common::spec::{
-    EXTENSION_TYPE_NAME_KEY, SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, VARIANT_EXTENSION_NAME,
-};
+use sail_common::spec::{SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME};
 use serde_json;
 
 use crate::spec::types::values::Literal;
@@ -83,8 +83,8 @@ pub fn iceberg_field_to_arrow(field: &NestedField) -> Result<ArrowField> {
 
     if is_iceberg_variant_type(&field.field_type) {
         metadata.insert(
-            EXTENSION_TYPE_NAME_KEY.to_string(),
-            VARIANT_EXTENSION_NAME.to_string(),
+            arrow_schema::extension::EXTENSION_TYPE_NAME_KEY.to_string(),
+            VariantType::NAME.to_string(),
         );
     }
 
@@ -183,10 +183,7 @@ fn is_iceberg_variant_type(iceberg_type: &Type) -> bool {
 }
 
 fn is_variant_arrow_field(field: &ArrowField) -> bool {
-    field
-        .metadata()
-        .get(EXTENSION_TYPE_NAME_KEY)
-        .is_some_and(|name| name == VARIANT_EXTENSION_NAME)
+    field.extension_type_name() == Some(VariantType::NAME)
 }
 
 fn is_unshredded_variant_arrow_type(arrow_type: &ArrowDataType) -> bool {

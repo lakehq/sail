@@ -180,7 +180,9 @@ impl TaskRunner {
             }
         };
         let partitioning = output.partitioning(context, &schema, self.codec.as_ref())?;
-        let shuffle = ShuffleWriteExec::new(plan, locations, Arc::new(accessor), partitioning);
+        let row_based = output.row_based();
+        let shuffle =
+            ShuffleWriteExec::new(plan, locations, Arc::new(accessor), partitioning, row_based);
         Ok(Arc::new(shuffle))
     }
 }

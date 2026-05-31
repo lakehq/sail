@@ -19,7 +19,6 @@ use datafusion::arrow::array::{ArrayRef, BooleanArray, Int64Array};
 use datafusion::arrow::buffer::BooleanBuffer;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::stats::ColumnStatistics;
 use datafusion::execution::context::TaskContext;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -33,11 +32,14 @@ use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr
 use futures::stream::{self, StreamExt, TryStreamExt};
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
-use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
+use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
 use url::Url;
 
-use crate::datasource::scan::{FileScanParams, TableStatsMode};
-use crate::datasource::{build_file_scan_config, df_logical_schema, DeltaScanConfig};
+use crate::datasource::scan::{
+    file_scan_projection_for_schema, map_statistics_to_schema, sanitize_statistics_for_schema,
+    FileScanParams, TableStatsMode,
+};
+use crate::datasource::{build_file_scan_config, DeltaScanConfig};
 use crate::deletion_vector::DeletionVectorBitmap;
 use crate::physical_plan::{decode_adds_from_batch, meta_adds, COL_ACTION};
 use crate::schema::{arrow_field_physical_name, get_physical_schema};
@@ -57,7 +59,6 @@ struct ScanByAddsStreamState {
     table_version: i64,
     output_schema: SchemaRef,
     scan_config: DeltaScanConfig,
-    projection: Option<Vec<usize>>,
     limit: Option<usize>,
     pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
 
@@ -68,7 +69,6 @@ struct ScanByAddsStreamState {
     session_state: Option<datafusion::execution::SessionState>,
     file_schema: Option<SchemaRef>,
     partition_columns: Option<Vec<String>>,
-    logical_names: Option<Vec<String>>,
 
     // control
     partition_scan: Option<bool>,
@@ -79,7 +79,6 @@ struct ScanByAddsStreamState {
 }
 
 impl ScanByAddsStreamState {
-    #[expect(clippy::too_many_arguments)]
     fn new(
         input: SendableRecordBatchStream,
         context: Arc<TaskContext>,
@@ -87,7 +86,6 @@ impl ScanByAddsStreamState {
         table_version: i64,
         output_schema: SchemaRef,
         scan_config: DeltaScanConfig,
-        projection: Option<Vec<usize>>,
         limit: Option<usize>,
         pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
     ) -> Self {
@@ -98,7 +96,6 @@ impl ScanByAddsStreamState {
             table_version,
             output_schema,
             scan_config,
-            projection,
             limit,
             pushdown_filter,
             table_opened: false,
@@ -107,7 +104,6 @@ impl ScanByAddsStreamState {
             session_state: None,
             file_schema: None,
             partition_columns: None,
-            logical_names: None,
             partition_scan: None,
             emitted_partition_empty: false,
             pending_adds: Vec::new(),
@@ -149,27 +145,9 @@ impl ScanByAddsStreamState {
 
         let mut scan_config = self.scan_config.clone();
         if scan_config.schema.is_none() {
-            let schema = snapshot_state
-                .input_schema()
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let schema = Arc::new(snapshot_state.schema().clone());
             scan_config.schema = Some(schema);
         }
-
-        let logical_schema = df_logical_schema(
-            snapshot_state.as_ref(),
-            &scan_config.file_column_name,
-            &scan_config.row_index_column_name,
-            &scan_config.commit_version_column_name,
-            &scan_config.commit_timestamp_column_name,
-            scan_config.schema.clone(),
-        )
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        let logical_names = logical_schema
-            .fields()
-            .iter()
-            .map(|f| f.name().clone())
-            .collect::<Vec<_>>();
 
         let table_partition_cols = snapshot_state.metadata().partition_columns();
         let kmode = snapshot_state.effective_column_mapping_mode();
@@ -201,7 +179,6 @@ impl ScanByAddsStreamState {
         self.session_state = Some(session_state);
         self.file_schema = Some(file_schema);
         self.partition_columns = Some(partition_columns);
-        self.logical_names = Some(logical_names);
         self.scan_config = scan_config;
         self.table_opened = true;
         Ok(())
@@ -245,11 +222,6 @@ impl ScanByAddsStreamState {
             .file_schema
             .as_ref()
             .ok_or_else(|| DataFusionError::Internal("missing file_schema".into()))?
-            .clone();
-        let logical_names = self
-            .logical_names
-            .as_ref()
-            .ok_or_else(|| DataFusionError::Internal("missing logical_names".into()))?
             .clone();
 
         // Split adds into files with deletion vectors and files without.
@@ -303,7 +275,6 @@ impl ScanByAddsStreamState {
                     session_state,
                     std::slice::from_ref(add),
                     file_schema.clone(),
-                    &logical_names,
                 )?;
 
                 let maybe_bitmap = maybe_bitmap.map(Arc::new);
@@ -345,7 +316,6 @@ impl ScanByAddsStreamState {
                 session_state,
                 &plain_adds,
                 file_schema.clone(),
-                &logical_names,
             )?;
             all_streams.extend(streams);
         }
@@ -388,7 +358,6 @@ impl ScanByAddsStreamState {
                     session_state,
                     std::slice::from_ref(add),
                     file_schema.clone(),
-                    &logical_names,
                 )?;
 
                 let bitmap = Arc::new(bitmap);
@@ -425,34 +394,37 @@ impl ScanByAddsStreamState {
         session_state: &dyn datafusion::catalog::Session,
         adds: &[crate::spec::Add],
         file_schema: SchemaRef,
-        logical_names: &[String],
     ) -> Result<Vec<SendableRecordBatchStream>> {
         let mut scan_config = self.scan_config.clone();
-        let row_index_idx = scan_config
+        let row_index_name = scan_config
             .row_index_column_name
-            .as_ref()
-            .and_then(|name| logical_names.iter().position(|x| x == name));
+            .clone()
+            .filter(|name| self.output_schema.field_with_name(name).is_ok());
         scan_config.row_index_column_name = None;
 
-        let file_projection = match (self.projection.as_ref(), row_index_idx) {
-            (Some(projection), Some(row_index_idx)) => Some(
-                projection
-                    .iter()
-                    .copied()
-                    .filter(|idx| *idx != row_index_idx)
-                    .collect::<Vec<_>>(),
-            ),
-            (Some(projection), None) => Some(projection.clone()),
-            (None, _) => None,
-        };
-        let file_logical_names = match row_index_idx {
-            Some(row_index_idx) => logical_names
+        let file_output_schema = if let Some(row_index_name) = &row_index_name {
+            let fields = self
+                .output_schema
+                .fields()
                 .iter()
-                .enumerate()
-                .filter_map(|(idx, name)| (idx != row_index_idx).then_some(name.clone()))
-                .collect::<Vec<_>>(),
-            None => logical_names.to_vec(),
+                .filter(|field| field.name() != row_index_name)
+                .cloned()
+                .collect::<Vec<_>>();
+            Arc::new(Schema::new(fields))
+        } else {
+            Arc::clone(&self.output_schema)
         };
+        let file_projection = file_scan_projection_for_schema(
+            snapshot,
+            &scan_config,
+            &file_schema,
+            &file_output_schema,
+        )?;
+        let file_logical_names = file_output_schema
+            .fields()
+            .iter()
+            .map(|field| field.name().clone())
+            .collect::<Vec<_>>();
 
         let file_scan_config = build_file_scan_config(
             snapshot,
@@ -461,7 +433,7 @@ impl ScanByAddsStreamState {
             &scan_config,
             FileScanParams {
                 pruning_mask: None,
-                projection: file_projection.as_ref(),
+                projection: Some(&file_projection),
                 limit: self.limit,
                 pushdown_filter: self.pushdown_filter.clone(),
                 sort_order: None,
@@ -475,12 +447,8 @@ impl ScanByAddsStreamState {
         let partitions = file_scan_config.file_groups.len().max(1);
         let scan_exec =
             datafusion::datasource::source::DataSourceExec::from_data_source(file_scan_config);
-        let scan_exec = rename_projected_physical_plan(
-            scan_exec,
-            &file_logical_names,
-            file_projection.as_ref(),
-        )
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let scan_exec = rename_physical_plan(scan_exec, &file_logical_names)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         let mut streams = Vec::with_capacity(partitions);
         for partition in 0..partitions {
@@ -771,7 +739,6 @@ impl ExecutionPlan for DeltaScanByAddsExec {
         let table_version = self.version;
         let output_schema = self.schema();
         let scan_config = self.scan_config.clone();
-        let projection = self.projection.clone();
         let limit = self.limit;
         let pushdown_filter = self.pushdown_filter.clone();
         let state = ScanByAddsStreamState::new(
@@ -781,7 +748,6 @@ impl ExecutionPlan for DeltaScanByAddsExec {
             table_version,
             Arc::clone(&output_schema),
             scan_config,
-            projection,
             limit,
             pushdown_filter,
         );
@@ -869,89 +835,14 @@ impl ExecutionPlan for DeltaScanByAddsExec {
     }
 }
 
-pub(crate) fn map_statistics_to_schema(
-    statistics: &Statistics,
-    source_schema: &SchemaRef,
-    target_schema: &SchemaRef,
-) -> Statistics {
-    let column_statistics = target_schema
-        .fields()
-        .iter()
-        .map(|field| {
-            let mut column_statistics = source_schema
-                .index_of(field.name())
-                .ok()
-                .and_then(|idx| statistics.column_statistics.get(idx).cloned())
-                .unwrap_or_else(ColumnStatistics::new_unknown);
-            sanitize_column_statistics_for_field(
-                &mut column_statistics,
-                field.name(),
-                field.data_type(),
-            );
-            column_statistics
-        })
-        .collect();
-
-    Statistics {
-        num_rows: statistics.num_rows,
-        total_byte_size: statistics.total_byte_size,
-        column_statistics,
-    }
-}
-
 fn sanitize_statistics_to_schema(mut statistics: Statistics, schema: &SchemaRef) -> Statistics {
     if statistics.column_statistics.len() != schema.fields().len() {
         return Statistics::new_unknown(schema.as_ref());
     }
 
-    for (field, column_stats) in schema
-        .fields()
-        .iter()
-        .zip(&mut statistics.column_statistics)
-    {
-        sanitize_column_statistics_for_field(column_stats, field.name(), field.data_type());
-    }
+    sanitize_statistics_for_schema(schema, &mut statistics);
 
     statistics
-}
-
-fn sanitize_column_statistics_for_field(
-    column_stats: &mut ColumnStatistics,
-    _column_name: &str,
-    data_type: &datafusion::arrow::datatypes::DataType,
-) {
-    column_stats.min_value = sanitize_bound_for_type(&column_stats.min_value, data_type);
-    column_stats.max_value = sanitize_bound_for_type(&column_stats.max_value, data_type);
-}
-
-fn sanitize_bound_for_type(
-    bound: &datafusion::common::stats::Precision<datafusion::common::ScalarValue>,
-    data_type: &datafusion::arrow::datatypes::DataType,
-) -> datafusion::common::stats::Precision<datafusion::common::ScalarValue> {
-    let sanitize_value = |value: &datafusion::common::ScalarValue| {
-        if value.is_null() {
-            return None;
-        }
-        if value.data_type() == *data_type {
-            return Some(value.clone());
-        }
-        value
-            .cast_to(data_type)
-            .ok()
-            .filter(|casted| !casted.is_null())
-    };
-
-    match bound {
-        datafusion::common::stats::Precision::Exact(value) => sanitize_value(value)
-            .map(datafusion::common::stats::Precision::Exact)
-            .unwrap_or(datafusion::common::stats::Precision::Absent),
-        datafusion::common::stats::Precision::Inexact(value) => sanitize_value(value)
-            .map(datafusion::common::stats::Precision::Inexact)
-            .unwrap_or(datafusion::common::stats::Precision::Absent),
-        datafusion::common::stats::Precision::Absent => {
-            datafusion::common::stats::Precision::Absent
-        }
-    }
 }
 
 impl DisplayAs for DeltaScanByAddsExec {
@@ -994,7 +885,8 @@ mod tests {
     use datafusion_common::{DataFusionError, Result, ScalarValue};
     use url::Url;
 
-    use super::{map_statistics_to_schema, DeltaScanByAddsExec};
+    use super::DeltaScanByAddsExec;
+    use crate::datasource::scan::map_statistics_to_schema;
 
     #[test]
     fn test_map_statistics_to_schema_by_name() {
