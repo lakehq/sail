@@ -404,56 +404,10 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
             })
         }
         Expr::Like(expr, not, _, quantifier, pattern, escape) => {
-            let expr = from_ast_expression(*expr)?;
-            let pattern = from_ast_quantified_pattern(quantifier, *pattern)?;
-            let mut arguments = vec![expr, pattern];
-            if let Some(escape) = from_ast_pattern_escape_string(escape)? {
-                arguments.push(spec::Expr::Literal(spec::Literal::Utf8 {
-                    value: Some(escape.to_string()),
-                }))
-            };
-            let expr = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                function_name: spec::ObjectName::bare("like"),
-                arguments,
-                named_arguments: vec![],
-                is_distinct: false,
-                is_user_defined_function: false,
-                is_internal: None,
-                ignore_nulls: None,
-                filter: None,
-                order_by: None,
-            });
-            if not.is_some() {
-                Ok(negated(expr))
-            } else {
-                Ok(expr)
-            }
+            from_ast_like(*expr, not.is_some(), quantifier, *pattern, escape, "like")
         }
         Expr::ILike(expr, not, _, quantifier, pattern, escape) => {
-            let expr = from_ast_expression(*expr)?;
-            let pattern = from_ast_quantified_pattern(quantifier, *pattern)?;
-            let mut arguments = vec![expr, pattern];
-            if let Some(escape) = from_ast_pattern_escape_string(escape)? {
-                arguments.push(spec::Expr::Literal(spec::Literal::Utf8 {
-                    value: Some(escape.to_string()),
-                }));
-            };
-            let expr = spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                function_name: spec::ObjectName::bare("ilike"),
-                arguments,
-                named_arguments: vec![],
-                is_distinct: false,
-                is_user_defined_function: false,
-                is_internal: None,
-                ignore_nulls: None,
-                filter: None,
-                order_by: None,
-            });
-            if not.is_some() {
-                Ok(negated(expr))
-            } else {
-                Ok(expr)
-            }
+            from_ast_like(*expr, not.is_some(), quantifier, *pattern, escape, "ilike")
         }
         Expr::RLike(expr, not, _, pattern) => {
             let expr = from_ast_expression(*expr)?;
@@ -1012,32 +966,21 @@ pub(crate) fn from_ast_identifier_list(identifiers: IdentList) -> SqlResult<Vec<
     Ok(names.into_items().map(|x| x.value.into()).collect())
 }
 
-fn from_ast_quantified_pattern(
-    quantifier: Option<PatternQuantifier>,
-    pattern: Expr,
-) -> SqlResult<spec::Expr> {
-    let Some(quantifier) = quantifier else {
-        return from_ast_expression(pattern);
-    };
-    let quantifier = match quantifier {
-        PatternQuantifier::All(_) => "all",
-        PatternQuantifier::Any(_) => "any",
-        PatternQuantifier::Some(_) => "some",
-    };
-    let Expr::Atom(AtomExpr::Tuple(_, arguments, _)) = pattern else {
-        return Err(SqlError::invalid("quantified pattern expression"));
-    };
-    let arguments = arguments
-        .into_items()
-        .map(|x| {
-            let NamedExpr { expr, alias: None } = x else {
-                return Err(SqlError::invalid("pattern expression with alias"));
-            };
-            from_ast_expression(expr)
-        })
-        .collect::<SqlResult<Vec<_>>>()?;
-    Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-        function_name: spec::ObjectName::bare(quantifier),
+/// Builds a `like`/`ilike` call `function_name(value, pattern [, escape])`.
+fn like_call(
+    function_name: &str,
+    value: spec::Expr,
+    pattern: spec::Expr,
+    escape_char: Option<char>,
+) -> spec::Expr {
+    let mut arguments = vec![value, pattern];
+    if let Some(escape) = escape_char {
+        arguments.push(spec::Expr::Literal(spec::Literal::Utf8 {
+            value: Some(escape.to_string()),
+        }));
+    }
+    spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+        function_name: spec::ObjectName::bare(function_name),
         arguments,
         named_arguments: vec![],
         is_distinct: false,
@@ -1046,7 +989,87 @@ fn from_ast_quantified_pattern(
         ignore_nulls: None,
         filter: None,
         order_by: None,
+    })
+}
+
+/// Left-associatively combines `terms` with the boolean function `function_name`
+/// (`and` or `or`).
+fn reduce_boolean(
+    function_name: &str,
+    terms: impl IntoIterator<Item = spec::Expr>,
+) -> SqlResult<spec::Expr> {
+    let mut terms = terms.into_iter();
+    let first = terms
+        .next()
+        .ok_or_else(|| SqlError::invalid("quantified pattern requires at least one pattern"))?;
+    Ok(terms.fold(first, |acc, term| {
+        spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+            function_name: spec::ObjectName::bare(function_name),
+            arguments: vec![acc, term],
+            named_arguments: vec![],
+            is_distinct: false,
+            is_user_defined_function: false,
+            is_internal: None,
+            ignore_nulls: None,
+            filter: None,
+            order_by: None,
+        })
     }))
+}
+
+/// Resolves a `LIKE`/`ILIKE` predicate, including the quantified
+/// `LIKE ALL/ANY/SOME (...)` forms.
+///
+/// Without a quantifier this is a single `like`/`ilike` call, negated as a whole
+/// when `NOT` is present. With a quantifier the predicate is desugared into a
+/// boolean chain of per-pattern `like`/`ilike` calls, matching Spark's
+/// `LikeAll`/`LikeAny` semantics: `NOT` is pushed into each pattern while the
+/// connective is preserved (`ALL` -> `AND`, `ANY`/`SOME` -> `OR`). For example
+/// `x NOT LIKE ALL (a, b)` becomes `(x NOT LIKE a) AND (x NOT LIKE b)`.
+fn from_ast_like(
+    value: Expr,
+    is_not: bool,
+    quantifier: Option<PatternQuantifier>,
+    pattern: Expr,
+    escape: Option<PatternEscape>,
+    function_name: &str,
+) -> SqlResult<spec::Expr> {
+    let value = from_ast_expression(value)?;
+    let escape_char = from_ast_pattern_escape_string(escape)?;
+
+    let Some(quantifier) = quantifier else {
+        let pattern = from_ast_expression(pattern)?;
+        let expr = like_call(function_name, value, pattern, escape_char);
+        return if is_not { Ok(negated(expr)) } else { Ok(expr) };
+    };
+
+    let connective = match quantifier {
+        PatternQuantifier::All(_) => "and",
+        PatternQuantifier::Any(_) | PatternQuantifier::Some(_) => "or",
+    };
+    // A parenthesized list with multiple patterns parses as a `Tuple`, while a
+    // single pattern `(p)` parses as a plain (grouped) expression.
+    let patterns: Vec<spec::Expr> = match pattern {
+        Expr::Atom(AtomExpr::Tuple(_, items, _)) => items
+            .into_items()
+            .map(|x| {
+                let NamedExpr { expr, alias: None } = x else {
+                    return Err(SqlError::invalid("pattern expression with alias"));
+                };
+                from_ast_expression(expr)
+            })
+            .collect::<SqlResult<Vec<_>>>()?,
+        other => vec![from_ast_expression(other)?],
+    };
+    let terms = patterns.into_iter().map(|pattern| {
+        let term = like_call(function_name, value.clone(), pattern, escape_char);
+        if is_not {
+            negated(term)
+        } else {
+            term
+        }
+    });
+    reduce_boolean(connective, terms)
 }
 
 fn from_ast_pattern_escape_string(escape: Option<PatternEscape>) -> SqlResult<Option<char>> {

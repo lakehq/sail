@@ -6,29 +6,54 @@
         "success": {
           "unresolvedFunction": {
             "functionName": [
-              "ilike"
+              "and"
             ],
             "arguments": [
               {
-                "unresolvedAttribute": {
-                  "name": [
-                    "a"
-                  ],
-                  "planId": null,
-                  "isMetadataColumn": false
-                }
-              },
-              {
                 "unresolvedFunction": {
                   "functionName": [
-                    "all"
+                    "ilike"
                   ],
                   "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null,
+                        "isMetadataColumn": false
+                      }
+                    },
                     {
                       "literal": {
                         "utf8": {
                           "value": "Foo%"
                         }
+                      }
+                    }
+                  ],
+                  "namedArguments": [],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false,
+                  "isInternal": null,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": [
+                    "ilike"
+                  ],
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     },
                     {
@@ -73,29 +98,54 @@
         "success": {
           "unresolvedFunction": {
             "functionName": [
-              "ilike"
+              "or"
             ],
             "arguments": [
               {
-                "unresolvedAttribute": {
-                  "name": [
-                    "a"
-                  ],
-                  "planId": null,
-                  "isMetadataColumn": false
-                }
-              },
-              {
                 "unresolvedFunction": {
                   "functionName": [
-                    "any"
+                    "ilike"
                   ],
                   "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null,
+                        "isMetadataColumn": false
+                      }
+                    },
                     {
                       "literal": {
                         "utf8": {
                           "value": "FOO%"
                         }
+                      }
+                    }
+                  ],
+                  "namedArguments": [],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false,
+                  "isInternal": null,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": [
+                    "ilike"
+                  ],
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     },
                     {
@@ -140,29 +190,54 @@
         "success": {
           "unresolvedFunction": {
             "functionName": [
-              "ilike"
+              "or"
             ],
             "arguments": [
               {
-                "unresolvedAttribute": {
-                  "name": [
-                    "a"
-                  ],
-                  "planId": null,
-                  "isMetadataColumn": false
-                }
-              },
-              {
                 "unresolvedFunction": {
                   "functionName": [
-                    "some"
+                    "ilike"
                   ],
                   "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null,
+                        "isMetadataColumn": false
+                      }
+                    },
                     {
                       "literal": {
                         "utf8": {
                           "value": "FOO%"
                         }
+                      }
+                    }
+                  ],
+                  "namedArguments": [],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false,
+                  "isInternal": null,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": [
+                    "ilike"
+                  ],
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     },
                     {
@@ -346,29 +421,54 @@
         "success": {
           "unresolvedFunction": {
             "functionName": [
-              "like"
+              "and"
             ],
             "arguments": [
               {
-                "unresolvedAttribute": {
-                  "name": [
-                    "a"
-                  ],
-                  "planId": null,
-                  "isMetadataColumn": false
-                }
-              },
-              {
                 "unresolvedFunction": {
                   "functionName": [
-                    "all"
+                    "like"
                   ],
                   "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null,
+                        "isMetadataColumn": false
+                      }
+                    },
                     {
                       "literal": {
                         "utf8": {
                           "value": "foo%"
                         }
+                      }
+                    }
+                  ],
+                  "namedArguments": [],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false,
+                  "isInternal": null,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": [
+                    "like"
+                  ],
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     },
                     {
@@ -413,29 +513,54 @@
         "success": {
           "unresolvedFunction": {
             "functionName": [
-              "like"
+              "or"
             ],
             "arguments": [
               {
-                "unresolvedAttribute": {
-                  "name": [
-                    "a"
-                  ],
-                  "planId": null,
-                  "isMetadataColumn": false
-                }
-              },
-              {
                 "unresolvedFunction": {
                   "functionName": [
-                    "any"
+                    "like"
                   ],
                   "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null,
+                        "isMetadataColumn": false
+                      }
+                    },
                     {
                       "literal": {
                         "utf8": {
                           "value": "foo%"
                         }
+                      }
+                    }
+                  ],
+                  "namedArguments": [],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false,
+                  "isInternal": null,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": [
+                    "like"
+                  ],
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     },
                     {
@@ -480,29 +605,54 @@
         "success": {
           "unresolvedFunction": {
             "functionName": [
-              "like"
+              "or"
             ],
             "arguments": [
               {
-                "unresolvedAttribute": {
-                  "name": [
-                    "a"
-                  ],
-                  "planId": null,
-                  "isMetadataColumn": false
-                }
-              },
-              {
                 "unresolvedFunction": {
                   "functionName": [
-                    "some"
+                    "like"
                   ],
                   "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null,
+                        "isMetadataColumn": false
+                      }
+                    },
                     {
                       "literal": {
                         "utf8": {
                           "value": "foo%"
                         }
+                      }
+                    }
+                  ],
+                  "namedArguments": [],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false,
+                  "isInternal": null,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": [
+                    "like"
+                  ],
+                  "arguments": [
+                    {
+                      "unresolvedAttribute": {
+                        "name": [
+                          "a"
+                        ],
+                        "planId": null,
+                        "isMetadataColumn": false
                       }
                     },
                     {
@@ -547,35 +697,76 @@
         "success": {
           "unresolvedFunction": {
             "functionName": [
-              "not"
+              "and"
             ],
             "arguments": [
               {
                 "unresolvedFunction": {
                   "functionName": [
-                    "ilike"
+                    "not"
                   ],
                   "arguments": [
                     {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "a"
-                        ],
-                        "planId": null,
-                        "isMetadataColumn": false
-                      }
-                    },
-                    {
                       "unresolvedFunction": {
                         "functionName": [
-                          "all"
+                          "ilike"
                         ],
                         "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
                           {
                             "literal": {
                               "utf8": {
                                 "value": "foo%"
                               }
+                            }
+                          }
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "isInternal": null,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
+                    }
+                  ],
+                  "namedArguments": [],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false,
+                  "isInternal": null,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": [
+                    "not"
+                  ],
+                  "arguments": [
+                    {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "ilike"
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -623,35 +814,76 @@
         "success": {
           "unresolvedFunction": {
             "functionName": [
-              "not"
+              "or"
             ],
             "arguments": [
               {
                 "unresolvedFunction": {
                   "functionName": [
-                    "ilike"
+                    "not"
                   ],
                   "arguments": [
                     {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "a"
-                        ],
-                        "planId": null,
-                        "isMetadataColumn": false
-                      }
-                    },
-                    {
                       "unresolvedFunction": {
                         "functionName": [
-                          "any"
+                          "ilike"
                         ],
                         "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
                           {
                             "literal": {
                               "utf8": {
                                 "value": "foo%"
                               }
+                            }
+                          }
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "isInternal": null,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
+                    }
+                  ],
+                  "namedArguments": [],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false,
+                  "isInternal": null,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": [
+                    "not"
+                  ],
+                  "arguments": [
+                    {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "ilike"
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -699,35 +931,76 @@
         "success": {
           "unresolvedFunction": {
             "functionName": [
-              "not"
+              "or"
             ],
             "arguments": [
               {
                 "unresolvedFunction": {
                   "functionName": [
-                    "ilike"
+                    "not"
                   ],
                   "arguments": [
                     {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "a"
-                        ],
-                        "planId": null,
-                        "isMetadataColumn": false
-                      }
-                    },
-                    {
                       "unresolvedFunction": {
                         "functionName": [
-                          "some"
+                          "ilike"
                         ],
                         "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
                           {
                             "literal": {
                               "utf8": {
                                 "value": "foo%"
                               }
+                            }
+                          }
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "isInternal": null,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
+                    }
+                  ],
+                  "namedArguments": [],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false,
+                  "isInternal": null,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": [
+                    "not"
+                  ],
+                  "arguments": [
+                    {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "ilike"
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -962,35 +1235,76 @@
         "success": {
           "unresolvedFunction": {
             "functionName": [
-              "not"
+              "and"
             ],
             "arguments": [
               {
                 "unresolvedFunction": {
                   "functionName": [
-                    "like"
+                    "not"
                   ],
                   "arguments": [
                     {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "a"
-                        ],
-                        "planId": null,
-                        "isMetadataColumn": false
-                      }
-                    },
-                    {
                       "unresolvedFunction": {
                         "functionName": [
-                          "all"
+                          "like"
                         ],
                         "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
                           {
                             "literal": {
                               "utf8": {
                                 "value": "foo%"
                               }
+                            }
+                          }
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "isInternal": null,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
+                    }
+                  ],
+                  "namedArguments": [],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false,
+                  "isInternal": null,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": [
+                    "not"
+                  ],
+                  "arguments": [
+                    {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "like"
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -1038,35 +1352,76 @@
         "success": {
           "unresolvedFunction": {
             "functionName": [
-              "not"
+              "or"
             ],
             "arguments": [
               {
                 "unresolvedFunction": {
                   "functionName": [
-                    "like"
+                    "not"
                   ],
                   "arguments": [
                     {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "a"
-                        ],
-                        "planId": null,
-                        "isMetadataColumn": false
-                      }
-                    },
-                    {
                       "unresolvedFunction": {
                         "functionName": [
-                          "any"
+                          "like"
                         ],
                         "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
                           {
                             "literal": {
                               "utf8": {
                                 "value": "foo%"
                               }
+                            }
+                          }
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "isInternal": null,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
+                    }
+                  ],
+                  "namedArguments": [],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false,
+                  "isInternal": null,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": [
+                    "not"
+                  ],
+                  "arguments": [
+                    {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "like"
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -1114,35 +1469,76 @@
         "success": {
           "unresolvedFunction": {
             "functionName": [
-              "not"
+              "or"
             ],
             "arguments": [
               {
                 "unresolvedFunction": {
                   "functionName": [
-                    "like"
+                    "not"
                   ],
                   "arguments": [
                     {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "a"
-                        ],
-                        "planId": null,
-                        "isMetadataColumn": false
-                      }
-                    },
-                    {
                       "unresolvedFunction": {
                         "functionName": [
-                          "some"
+                          "like"
                         ],
                         "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
                           {
                             "literal": {
                               "utf8": {
                                 "value": "foo%"
                               }
+                            }
+                          }
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "isInternal": null,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
+                    }
+                  ],
+                  "namedArguments": [],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false,
+                  "isInternal": null,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
+                }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": [
+                    "not"
+                  ],
+                  "arguments": [
+                    {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "like"
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -1397,29 +1793,54 @@
               {
                 "unresolvedFunction": {
                   "functionName": [
-                    "ilike"
+                    "and"
                   ],
                   "arguments": [
                     {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "a"
-                        ],
-                        "planId": null,
-                        "isMetadataColumn": false
-                      }
-                    },
-                    {
                       "unresolvedFunction": {
                         "functionName": [
-                          "all"
+                          "ilike"
                         ],
                         "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
                           {
                             "literal": {
                               "utf8": {
                                 "value": "foO%"
                               }
+                            }
+                          }
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "isInternal": null,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "ilike"
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -1473,29 +1894,54 @@
               {
                 "unresolvedFunction": {
                   "functionName": [
-                    "ilike"
+                    "or"
                   ],
                   "arguments": [
                     {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "a"
-                        ],
-                        "planId": null,
-                        "isMetadataColumn": false
-                      }
-                    },
-                    {
                       "unresolvedFunction": {
                         "functionName": [
-                          "any"
+                          "ilike"
                         ],
                         "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
                           {
                             "literal": {
                               "utf8": {
                                 "value": "FOO%"
                               }
+                            }
+                          }
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "isInternal": null,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "ilike"
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -1549,29 +1995,54 @@
               {
                 "unresolvedFunction": {
                   "functionName": [
-                    "ilike"
+                    "or"
                   ],
                   "arguments": [
                     {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "a"
-                        ],
-                        "planId": null,
-                        "isMetadataColumn": false
-                      }
-                    },
-                    {
                       "unresolvedFunction": {
                         "functionName": [
-                          "some"
+                          "ilike"
                         ],
                         "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
                           {
                             "literal": {
                               "utf8": {
                                 "value": "FOO%"
                               }
+                            }
+                          }
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "isInternal": null,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "ilike"
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -1625,29 +2096,54 @@
               {
                 "unresolvedFunction": {
                   "functionName": [
-                    "like"
+                    "and"
                   ],
                   "arguments": [
                     {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "a"
-                        ],
-                        "planId": null,
-                        "isMetadataColumn": false
-                      }
-                    },
-                    {
                       "unresolvedFunction": {
                         "functionName": [
-                          "all"
+                          "like"
                         ],
                         "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
                           {
                             "literal": {
                               "utf8": {
                                 "value": "foo%"
                               }
+                            }
+                          }
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "isInternal": null,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "like"
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -1701,29 +2197,54 @@
               {
                 "unresolvedFunction": {
                   "functionName": [
-                    "like"
+                    "or"
                   ],
                   "arguments": [
                     {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "a"
-                        ],
-                        "planId": null,
-                        "isMetadataColumn": false
-                      }
-                    },
-                    {
                       "unresolvedFunction": {
                         "functionName": [
-                          "any"
+                          "like"
                         ],
                         "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
                           {
                             "literal": {
                               "utf8": {
                                 "value": "foo%"
                               }
+                            }
+                          }
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "isInternal": null,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "like"
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
@@ -1777,29 +2298,54 @@
               {
                 "unresolvedFunction": {
                   "functionName": [
-                    "like"
+                    "or"
                   ],
                   "arguments": [
                     {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "a"
-                        ],
-                        "planId": null,
-                        "isMetadataColumn": false
-                      }
-                    },
-                    {
                       "unresolvedFunction": {
                         "functionName": [
-                          "some"
+                          "like"
                         ],
                         "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          },
                           {
                             "literal": {
                               "utf8": {
                                 "value": "foo%"
                               }
+                            }
+                          }
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "isInternal": null,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
+                    },
+                    {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "like"
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "a"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
                             }
                           },
                           {
