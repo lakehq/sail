@@ -65,6 +65,9 @@ pub enum TaskOutputDistribution {
     RoundRobin {
         channels: usize,
     },
+    RoundRobinRow {
+        channels: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -422,6 +425,13 @@ impl From<TaskOutputDistribution> for gen::TaskOutputDistribution {
                     },
                 )
             }
+            TaskOutputDistribution::RoundRobinRow { channels } => {
+                gen::task_output_distribution::Kind::RoundRobinRow(
+                    gen::TaskOutputRoundRobinRowDistribution {
+                        channels: channels as u64,
+                    },
+                )
+            }
         };
         gen::TaskOutputDistribution { kind: Some(kind) }
     }
@@ -442,6 +452,11 @@ impl TryFrom<gen::TaskOutputDistribution> for TaskOutputDistribution {
             Some(gen::task_output_distribution::Kind::RoundRobin(
                 gen::TaskOutputRoundRobinDistribution { channels },
             )) => Ok(TaskOutputDistribution::RoundRobin {
+                channels: channels as usize,
+            }),
+            Some(gen::task_output_distribution::Kind::RoundRobinRow(
+                gen::TaskOutputRoundRobinRowDistribution { channels },
+            )) => Ok(TaskOutputDistribution::RoundRobinRow {
                 channels: channels as usize,
             }),
             None => Err(ExecutionError::InvalidArgument(
@@ -549,6 +564,7 @@ impl TaskOutput {
         match self.distribution {
             TaskOutputDistribution::Hash { channels, .. } => channels,
             TaskOutputDistribution::RoundRobin { channels, .. } => channels,
+            TaskOutputDistribution::RoundRobinRow { channels, .. } => channels,
         }
     }
 
@@ -606,9 +622,17 @@ impl TaskOutput {
                     .collect::<ExecutionResult<Vec<_>>>()?;
                 Ok(Partitioning::Hash(keys, *channels))
             }
-            TaskOutputDistribution::RoundRobin { channels } => {
+            TaskOutputDistribution::RoundRobin { channels }
+            | TaskOutputDistribution::RoundRobinRow { channels } => {
                 Ok(Partitioning::RoundRobinBatch(*channels))
             }
         }
+    }
+
+    pub fn row_based(&self) -> bool {
+        matches!(
+            &self.distribution,
+            TaskOutputDistribution::RoundRobinRow { .. }
+        )
     }
 }
