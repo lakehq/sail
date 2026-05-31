@@ -12,9 +12,9 @@ use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use futures::{StreamExt, TryStreamExt};
+use object_store::{ObjectMeta, ObjectStore};
 
-use crate::listing::source::{ListingFileMeta, ListingScanInput, ReadFormat};
-use crate::listing::utils::ListingFileSample;
+use crate::listing::source::{ListingFileMeta, ListingFileSample, ListingScanInput, ReadFormat};
 use crate::options::gen::ParquetReadOptions;
 
 #[derive(Debug, Clone)]
@@ -32,12 +32,21 @@ fn fail_for_encryption_factory(options: &TableParquetOptions) -> Result<()> {
     }
 }
 
-impl ParquetReadFormat {
-    async fn infer_schema_for_objects(
+#[async_trait::async_trait]
+impl ReadFormat for ParquetReadFormat {
+    async fn infer_compression(
+        &self,
+        _ctx: &dyn Session,
+        _files: &[ListingFileSample<'_>],
+    ) -> Result<CompressionTypeVariant> {
+        Ok(CompressionTypeVariant::UNCOMPRESSED)
+    }
+
+    async fn infer_schema(
         &self,
         ctx: &dyn Session,
-        store: &Arc<dyn object_store::ObjectStore>,
-        objects: &[object_store::ObjectMeta],
+        files: &[ListingFileSample<'_>],
+        _compression: CompressionTypeVariant,
     ) -> Result<SchemaRef> {
         let options = self.options.clone().into_table_options();
         fail_for_encryption_factory(&options)?;
@@ -53,8 +62,12 @@ impl ParquetReadFormat {
         let metadata_size_hint = options.global.metadata_size_hint;
         let metadata_fetch_concurrency = ctx.config_options().execution.meta_fetch_concurrency;
 
+        let objects = files
+            .iter()
+            .flat_map(|group| group.objects.iter().map(|object| (&group.store, object)));
+
         let mut schemas: Vec<(object_store::path::Path, Schema)> = futures::stream::iter(objects)
-            .map(|object| async {
+            .map(|(store, object)| async {
                 let schema = DFParquetMetadata::new(store.as_ref(), object)
                     .with_metadata_size_hint(metadata_size_hint)
                     .with_file_metadata_cache(Some(Arc::clone(&metadata_cache)))
@@ -94,50 +107,13 @@ impl ParquetReadFormat {
 
         Ok(Arc::new(merged))
     }
-}
-
-#[async_trait::async_trait]
-impl ReadFormat for ParquetReadFormat {
-    async fn infer_compression(
-        &self,
-        _ctx: &dyn Session,
-        _files: &[ListingFileSample<'_>],
-    ) -> Result<CompressionTypeVariant> {
-        Ok(CompressionTypeVariant::UNCOMPRESSED)
-    }
-
-    async fn infer_schema(
-        &self,
-        ctx: &dyn Session,
-        files: &[ListingFileSample<'_>],
-        _compression: CompressionTypeVariant,
-    ) -> Result<SchemaRef> {
-        let mut schemas_by_url = vec![];
-        for file_sample in files {
-            if file_sample.objects.is_empty() {
-                continue;
-            }
-            let schema = self
-                .infer_schema_for_objects(ctx, &file_sample.store, &file_sample.objects)
-                .await?;
-            schemas_by_url.push((file_sample.url.as_str().to_string(), schema));
-        }
-
-        // Stable ordering for deterministic schema inference.
-        schemas_by_url.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
-
-        let schemas = schemas_by_url
-            .into_iter()
-            .map(|(_, schema)| Arc::unwrap_or_clone(schema));
-        Ok(Arc::new(Schema::try_merge(schemas)?))
-    }
 
     async fn infer_file_meta(
         &self,
         ctx: &dyn Session,
-        store: &Arc<dyn object_store::ObjectStore>,
+        store: &Arc<dyn ObjectStore>,
+        object: &ObjectMeta,
         file_schema: SchemaRef,
-        object: &object_store::ObjectMeta,
         _compression: CompressionTypeVariant,
     ) -> Result<ListingFileMeta> {
         let options = self.options.clone().into_table_options();

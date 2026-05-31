@@ -7,8 +7,7 @@ use datafusion_common::Result;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 
 use crate::formats::binary::source::BinarySource;
-use crate::listing::source::{ListingScanInput, ReadFormat};
-use crate::listing::utils::ListingFileSample;
+use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
 use crate::options::gen::BinaryReadOptions;
 
 #[derive(Debug, Clone)]

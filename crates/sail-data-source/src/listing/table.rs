@@ -7,22 +7,23 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::logical_expr::expr::Sort;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableSource, TableType};
+use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{Constraints, Result};
-use datafusion_datasource::TableSchema;
+use datafusion_datasource::{ListingTableUrl, TableSchema};
 
 use crate::listing::source::ReadFormat;
 use crate::listing::utils::can_be_evaluated_for_partition_pruning;
 
 #[derive(Clone, Debug)]
 pub struct ListingTableSourceConfig {
-    pub table_paths: Vec<datafusion_datasource::ListingTableUrl>,
+    pub table_paths: Vec<ListingTableUrl>,
     pub schema: TableSchema,
     pub constraints: Constraints,
     pub file_sort_order: Vec<Vec<Sort>>,
     pub collect_stat: bool,
     pub target_partitions: usize,
     pub read_format: Arc<dyn ReadFormat>,
-    pub compression: Option<datafusion_common::parsers::CompressionTypeVariant>,
+    pub compression: CompressionTypeVariant,
 }
 
 /// A [`TableSource`] that represents reading one or more files via listing.

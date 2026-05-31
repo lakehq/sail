@@ -8,8 +8,8 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 
 use crate::formats::text::source::TextSource;
-use crate::listing::source::{ListingScanInput, ReadFormat};
-use crate::listing::utils::{infer_listing_compression, ListingFileSample};
+use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
+use crate::listing::utils::infer_listing_compression;
 use crate::options::gen::TextReadOptions;
 
 #[derive(Debug, Clone)]
@@ -32,25 +32,7 @@ impl ReadFormat for TextReadFormat {
         if options.compression != CompressionTypeVariant::UNCOMPRESSED {
             return Ok(options.compression);
         }
-
-        let mut inferred: Option<CompressionTypeVariant> = None;
-        for file_sample in files {
-            if file_sample.objects.is_empty() {
-                continue;
-            }
-            let compression = infer_listing_compression(&file_sample.objects)?;
-            match inferred {
-                None => inferred = Some(compression),
-                Some(prev) if prev == compression => {}
-                Some(prev) => {
-                    return Err(DataFusionError::Plan(format!(
-                        "Found mixed compression types in listing paths: {prev:?} and {compression:?}"
-                    )));
-                }
-            }
-        }
-
-        Ok(inferred.unwrap_or(CompressionTypeVariant::UNCOMPRESSED))
+        Ok(infer_listing_compression(files)?.unwrap_or(CompressionTypeVariant::UNCOMPRESSED))
     }
 
     async fn infer_schema(
@@ -66,19 +48,13 @@ impl ReadFormat for TextReadFormat {
         )])))
     }
 
-    async fn scan(
-        &self,
-        _ctx: &dyn Session,
-        mut input: ListingScanInput,
-    ) -> Result<FileScanConfig> {
+    async fn scan(&self, _ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
         let mut options = self
             .options
             .clone()
             .into_table_options()
             .map_err(DataFusionError::from)?;
-        if let Some(compression) = input.compression.take() {
-            options.compression = compression;
-        }
+        options.compression = input.compression;
 
         let line_sep = options.line_sep.map(|c| c as u8);
         let file_source = Arc::new(TextSource::new(input.schema, options.whole_text, line_sep));

@@ -9,8 +9,7 @@ use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuil
 use datafusion_datasource_avro::avro_to_arrow::read_avro_schema_from_reader;
 use object_store::{GetResultPayload, ObjectStoreExt};
 
-use crate::listing::source::{ListingScanInput, ReadFormat};
-use crate::listing::utils::ListingFileSample;
+use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
 
 #[derive(Debug, Default, Clone)]
 pub struct AvroReadFormat;
@@ -32,9 +31,9 @@ impl ReadFormat for AvroReadFormat {
         _compression: CompressionTypeVariant,
     ) -> Result<SchemaRef> {
         let mut schemas = vec![];
-        for file_sample in files {
-            for object in &file_sample.objects {
-                let r = file_sample.store.as_ref().get(&object.location).await?;
+        for group in files {
+            for object in &group.objects {
+                let r = group.store.as_ref().get(&object.location).await?;
                 let schema = match r.payload {
                     #[cfg(not(target_arch = "wasm32"))]
                     GetResultPayload::File(mut file, _) => read_avro_schema_from_reader(&mut file)?,

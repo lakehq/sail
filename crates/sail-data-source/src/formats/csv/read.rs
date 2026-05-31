@@ -13,69 +13,13 @@ use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use object_store::ObjectStoreExt;
 
-use crate::listing::source::{ListingScanInput, ReadFormat};
-use crate::listing::utils::{infer_listing_compression, ListingFileSample};
+use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
+use crate::listing::utils::infer_listing_compression;
 use crate::options::gen::CsvReadOptions;
 
 #[derive(Debug, Clone)]
 pub struct CsvReadFormat {
     pub(super) options: CsvReadOptions,
-}
-
-impl CsvReadFormat {
-    async fn infer_schema_for_objects(
-        &self,
-        ctx: &dyn Session,
-        store: &Arc<dyn object_store::ObjectStore>,
-        objects: &[object_store::ObjectMeta],
-        compression: CompressionTypeVariant,
-    ) -> Result<SchemaRef> {
-        let mut options = self.options.clone().into_table_options()?;
-        options.compression = compression;
-
-        let csv_format = CsvFormat::default().with_options(options.clone());
-
-        let mut schemas: Vec<Schema> = vec![];
-        let Some(mut records_to_read) = options.schema_infer_max_rec else {
-            // `into_table_options` always sets `schema_infer_max_records` to `Some`
-            unreachable!();
-        };
-
-        for object in objects {
-            let stream = store.get(&object.location).await?;
-            let stream: BoxStream<'static, Result<Bytes>> = stream
-                .into_stream()
-                .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
-                .boxed();
-
-            let stream = csv_format
-                .read_to_delimited_chunks_from_stream(stream)
-                .await;
-            let (schema, records_read) = csv_format
-                .infer_schema_from_stream(ctx, records_to_read, stream)
-                .await
-                .map_err(|err| {
-                    DataFusionError::Context(
-                        format!("Error when processing CSV file {}", &object.location),
-                        Box::new(err),
-                    )
-                })?;
-
-            records_to_read = records_to_read.saturating_sub(records_read);
-            schemas.push(schema);
-            if records_to_read == 0 {
-                break;
-            }
-        }
-
-        let mut schema = Schema::try_merge(schemas)?;
-        if !self.options.infer_schema {
-            schema = super::convert_string_columns(schema);
-        }
-        schema = super::rename_default_csv_columns(schema);
-
-        Ok(Arc::new(schema))
-    }
 }
 
 #[async_trait::async_trait]
@@ -93,25 +37,7 @@ impl ReadFormat for CsvReadFormat {
         if options.compression != CompressionTypeVariant::UNCOMPRESSED {
             return Ok(options.compression);
         }
-
-        let mut inferred: Option<CompressionTypeVariant> = None;
-        for file_sample in files {
-            if file_sample.objects.is_empty() {
-                continue;
-            }
-            let compression = infer_listing_compression(&file_sample.objects)?;
-            match inferred {
-                None => inferred = Some(compression),
-                Some(prev) if prev == compression => {}
-                Some(prev) => {
-                    return Err(DataFusionError::Plan(format!(
-                        "Found mixed compression types in listing paths: {prev:?} and {compression:?}"
-                    )));
-                }
-            }
-        }
-
-        Ok(inferred.unwrap_or(CompressionTypeVariant::UNCOMPRESSED))
+        Ok(infer_listing_compression(files)?.unwrap_or(CompressionTypeVariant::UNCOMPRESSED))
     }
 
     async fn infer_schema(
@@ -120,38 +46,62 @@ impl ReadFormat for CsvReadFormat {
         files: &[ListingFileSample<'_>],
         compression: CompressionTypeVariant,
     ) -> Result<SchemaRef> {
-        let mut schemas_by_url = vec![];
-        for file_sample in files {
-            if file_sample.objects.is_empty() {
-                continue;
+        let mut options = self.options.clone().into_table_options()?;
+        options.compression = compression;
+
+        let csv_format = CsvFormat::default().with_options(options.clone());
+
+        let mut schemas: Vec<Schema> = vec![];
+        let Some(mut records_to_read) = options.schema_infer_max_rec else {
+            // `into_table_options` always sets `schema_infer_max_records` to `Some`
+            unreachable!();
+        };
+
+        'outer: for group in files {
+            for object in &group.objects {
+                let stream = group.store.get(&object.location).await?;
+                let stream: BoxStream<'static, Result<Bytes>> = stream
+                    .into_stream()
+                    .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
+                    .boxed();
+
+                let stream = csv_format
+                    .read_to_delimited_chunks_from_stream(stream)
+                    .await;
+                let (schema, records_read) = csv_format
+                    .infer_schema_from_stream(ctx, records_to_read, stream)
+                    .await
+                    .map_err(|err| {
+                        DataFusionError::Context(
+                            format!("Error when processing CSV file {}", &object.location),
+                            Box::new(err),
+                        )
+                    })?;
+
+                records_to_read = records_to_read.saturating_sub(records_read);
+                schemas.push(schema);
+                if records_to_read == 0 {
+                    break 'outer;
+                }
             }
-            let schema = self
-                .infer_schema_for_objects(
-                    ctx,
-                    &file_sample.store,
-                    &file_sample.objects,
-                    compression,
-                )
-                .await?;
-            schemas_by_url.push((file_sample.url.as_str().to_string(), schema));
         }
 
-        schemas_by_url.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
-        let schemas = schemas_by_url
-            .into_iter()
-            .map(|(_, schema)| Arc::unwrap_or_clone(schema));
-        Ok(Arc::new(Schema::try_merge(schemas)?))
+        let mut schema = Schema::try_merge(schemas)?;
+        if !self.options.infer_schema {
+            schema = super::convert_string_columns(schema);
+        }
+        schema = super::rename_default_csv_columns(schema);
+
+        Ok(Arc::new(schema))
     }
 
-    async fn scan(&self, ctx: &dyn Session, mut input: ListingScanInput) -> Result<FileScanConfig> {
+    async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
         let mut options = self
             .options
             .clone()
             .into_table_options()
             .map_err(DataFusionError::from)?;
-        if let Some(compression) = input.compression.take() {
-            options.compression = compression;
-        }
+        options.compression = input.compression;
 
         // Consult configuration options for default values
         let has_header = options
