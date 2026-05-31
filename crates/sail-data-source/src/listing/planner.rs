@@ -18,7 +18,6 @@ use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::stats::Precision;
 use datafusion_common::{project_schema, Statistics};
 use datafusion_datasource::file_groups::FileGroup;
@@ -280,7 +279,7 @@ async fn list_files_for_scan<'a>(
             store.as_ref(),
             table_path,
             filters,
-            &source.config().file_extension,
+            "",
             &partition_cols,
         )
     }))
@@ -375,12 +374,9 @@ async fn do_collect_statistics_and_ordering(
         .infer_file_meta(
             ctx,
             store,
-            source.config().schema.file_schema().clone(),
             meta,
-            source
-                .config()
-                .compression
-                .unwrap_or(CompressionTypeVariant::UNCOMPRESSED),
+            source.config().schema.file_schema().clone(),
+            source.config().compression,
         )
         .await?;
     let statistics = Arc::new(file_meta.statistics);

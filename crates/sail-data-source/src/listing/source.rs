@@ -7,7 +7,6 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, Field, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::file_format::FileFormat;
-use datafusion::datasource::listing::{ListingOptions, ListingTableConfig};
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::dml::InsertOp;
@@ -19,7 +18,8 @@ use datafusion_common::{internal_err, not_impl_err, plan_err, GetExt, Result, St
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfig;
-use datafusion_datasource::TableSchema;
+use datafusion_datasource::{ListingTableUrl, TableSchema};
+use object_store::{ObjectMeta, ObjectStore};
 use sail_common_datafusion::datasource::{
     find_path_in_options, get_partition_columns_and_file_schema, OptionLayer, SinkInfo, SourceInfo,
     TableFormat,
@@ -27,6 +27,10 @@ use sail_common_datafusion::datasource::{
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
 use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
+use crate::listing::utils::{
+    infer_partitions, rewrite_utf8view_fields, sample_listing_files, validate_partitions,
+};
+use crate::resolve_listing_urls;
 use crate::utils::split_parquet_compression_string;
 
 /// A trait for creating format instances when reading and writing listing files.
@@ -47,23 +51,17 @@ pub trait FormatFactory: Debug + Send + Sync + 'static {
 /// A trait for format-specific logic for reading listing files.
 #[async_trait]
 pub trait ReadFormat: Debug + Send + Sync + 'static {
-    fn create_read_format(
+    async fn infer_compression(
         &self,
-        compression: Option<CompressionTypeVariant>,
-    ) -> Result<Arc<dyn FileFormat>>;
-
-    /// Per-read override for the file extension used when listing files.
-    /// Returning `None` keeps the default extension supplied by `ListingOptions`.
-    fn file_extension_override(&self) -> Result<Option<String>> {
-        Ok(None)
-    }
+        ctx: &dyn Session,
+        files: &[ListingFileSample<'_>],
+    ) -> Result<CompressionTypeVariant>;
 
     /// Infer the file schema from the given files.
     async fn infer_schema(
         &self,
         ctx: &dyn Session,
-        store: &Arc<dyn object_store::ObjectStore>,
-        objects: &[object_store::ObjectMeta],
+        files: &[ListingFileSample<'_>],
         compression: CompressionTypeVariant,
     ) -> Result<SchemaRef>;
 
@@ -72,9 +70,9 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
     async fn infer_file_meta(
         &self,
         ctx: &dyn Session,
-        store: &Arc<dyn object_store::ObjectStore>,
+        store: &Arc<dyn ObjectStore>,
+        object: &ObjectMeta,
         file_schema: SchemaRef,
-        object: &object_store::ObjectMeta,
         compression: CompressionTypeVariant,
     ) -> Result<ListingFileMeta> {
         let _ = (ctx, store, object, compression);
@@ -86,6 +84,13 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
 
     /// Build a scan configuration for listing reads.
     async fn scan(&self, ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig>;
+}
+
+#[derive(Debug)]
+pub struct ListingFileSample<'a> {
+    pub url: &'a ListingTableUrl,
+    pub store: Arc<dyn ObjectStore>,
+    pub objects: Vec<ObjectMeta>,
 }
 
 #[derive(Debug, Clone)]
@@ -106,7 +111,7 @@ pub struct ListingScanInput {
     pub statistics: Statistics,
     pub partitioned_by_file_group: bool,
     pub schema: TableSchema,
-    pub compression: Option<CompressionTypeVariant>,
+    pub compression: CompressionTypeVariant,
 }
 
 /// A trait for format-specific logic for writing listing files.
@@ -141,62 +146,19 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         } = info;
 
         let read_format = T::read(ctx, options)?;
-        let urls = crate::url::resolve_listing_urls(ctx, paths).await?;
-        let file_format = read_format.create_read_format(None)?;
-        let extension_with_compression =
-            file_format.compression_type().and_then(|compression_type| {
-                match file_format.get_ext_with_compression(&compression_type) {
-                    // if the extension is the same as the file format, we don't need to add it
-                    Ok(ext) if ext != file_format.get_ext() => Some(ext),
-                    _ => None,
-                }
-            });
-        let file_extension_override = read_format.file_extension_override()?;
+        let urls = resolve_listing_urls(ctx, paths).await?;
+        let sampled_files = sample_listing_files(ctx, &urls).await?;
+        let compression = read_format.infer_compression(ctx, &sampled_files).await?;
 
-        let config = ctx.config();
-        let mut listing_options = ListingOptions::new(file_format)
-            .with_target_partitions(config.target_partitions())
-            .with_collect_stat(config.collect_statistics());
-        if let Some(ext) = file_extension_override {
-            listing_options = listing_options.with_file_extension(ext);
-        }
-
-        let (schema, partition_by) = match schema {
+        let (schema, partition_fields) = match schema {
             Some(schema) if !schema.fields().is_empty() => {
-                // Detect compression from the actual files so e.g.
-                // `data.csv.gz` plus an explicit schema works without
-                // `option("compression", "gzip")`.
-                crate::listing::utils::detect_listing_compression(
-                    ctx,
-                    &urls,
-                    &mut listing_options,
-                    &extension_with_compression,
-                    &read_format,
-                )
-                .await?;
-                // When the caller did not supply partition columns, auto-
-                // discover them from `key=value` segments in the listing
-                // paths (matching the no-schema branch's behavior via
-                // `infer_partitions_from_path`). Without this, columns
-                // that exist only in the directory tree (e.g. `part=x/`)
-                // are treated as file columns, and the parquet/CSV reader
-                // fails because the file itself doesn't contain them.
-                //
-                // `ListingOptions::infer_partitions` uses DataFusion's
-                // case-sensitive `list_all_files`, so we have to clear
-                // the file-extension filter first or files like
-                // `data.PARQUET` won't be visible during discovery.
+                // When the partition columns are not specified, auto-discover
+                // them from `key=value` segments in the listing paths.
+                // Without this, columns that exist only in the directory tree
+                // are treated as file columns, and the file reader fails
+                // because the file itself does not contain them.
                 let partition_by = if partition_by.is_empty() {
-                    listing_options.file_extension = "".to_string();
-                    let mut discovered = vec![];
-                    for url in &urls {
-                        for name in listing_options.infer_partitions(ctx, url).await? {
-                            if !discovered.contains(&name) {
-                                discovered.push(name);
-                            }
-                        }
-                    }
-                    discovered
+                    infer_partitions(&sampled_files)?
                         .into_iter()
                         .filter(|name| {
                             schema
@@ -204,86 +166,45 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
                                 .iter()
                                 .any(|f| f.name().eq_ignore_ascii_case(name))
                         })
-                        .collect()
+                        .collect::<Vec<_>>()
                 } else {
                     partition_by
                 };
-                let (partition_by, schema) =
+                let (partition_fields, schema) =
                     get_partition_columns_and_file_schema(&schema, partition_by)?;
-                (Arc::new(schema), partition_by)
+                (Arc::new(schema), partition_fields)
             }
             _ => {
-                let schema = crate::listing::utils::resolve_listing_schema(
-                    ctx,
-                    &urls,
-                    &mut listing_options,
-                    &extension_with_compression,
-                    &read_format,
-                )
-                .await?;
-                let partition_by = partition_by
+                let schema = read_format
+                    .infer_schema(ctx, &sampled_files, compression)
+                    .await?;
+                let schema = rewrite_utf8view_fields(schema);
+
+                let partition_by = if partition_by.is_empty() {
+                    infer_partitions(&sampled_files)?
+                } else {
+                    partition_by
+                };
+
+                // TODO: infer concrete partition types from observed values to match
+                //   the `spark.sql.sources.partitionColumnTypeInference.enabled` option.
+                let partition_fields = partition_by
                     .into_iter()
-                    .map(|col| (col, DataType::Utf8))
+                    .map(|col| Arc::new(Field::new(col, DataType::Utf8, false)))
                     .collect();
-                (schema, partition_by)
+                (schema, partition_fields)
             }
         };
 
-        // Clear the file-extension filter on the listing options so that
-        // DataFusion's scan-time listing accepts every file admitted by the
-        // URL (which in turn excludes hidden files via the default glob
-        // attached in `resolve_listing_urls`). This matches Spark's
-        // behavior of reading every non-hidden file in a directory
-        // regardless of its extension.
-        let listing_options = listing_options
-            .with_file_extension("")
-            .with_file_sort_order(vec![sort_order])
-            .with_table_partition_cols(partition_by);
-
-        let config = ListingTableConfig::new_with_multi_paths(urls);
-        let config = if listing_options.table_partition_cols.is_empty() {
-            config
-                .with_listing_options(listing_options)
-                .infer_partitions_from_path(ctx)
-                .await?
-        } else {
-            for url in config.table_paths.iter() {
-                listing_options.validate_partitions(ctx, url).await?;
-            }
-            config.with_listing_options(listing_options)
-        };
-        // The schema must be set after the listing options, otherwise it will panic.
-        let config = config.with_schema(schema);
-        let config = crate::listing::utils::rewrite_listing_partitions(config)?;
-
-        let listing_options = config.options.ok_or_else(|| {
-            datafusion_common::internal_datafusion_err!(
-                "listing options should be present in the config"
-            )
-        })?;
-
-        let compression = listing_options
-            .format
-            .compression_type()
-            .map(|c| *c.get_variant());
-
-        let file_schema = config.file_schema.ok_or_else(|| {
-            datafusion_common::internal_datafusion_err!("listing file schema should be present")
-        })?;
-        let partition_fields = listing_options
-            .table_partition_cols
-            .iter()
-            .map(|(col, data_type)| Arc::new(Field::new(col, data_type.clone(), false)))
-            .collect::<Vec<_>>();
+        validate_partitions(&sampled_files, &partition_fields)?;
 
         let source = ListingTableSource::try_new(ListingTableSourceConfig {
-            table_paths: config.table_paths,
-            file_extension: listing_options.file_extension,
-            schema: TableSchema::new(file_schema, partition_fields),
+            table_paths: urls,
+            schema: TableSchema::new(schema, partition_fields),
             constraints,
-            file_sort_order: listing_options.file_sort_order,
-            collect_stat: listing_options.collect_stat,
-            target_partitions: listing_options.target_partitions,
+            file_sort_order: vec![sort_order],
+            collect_stat: ctx.config().collect_statistics(),
+            target_partitions: ctx.config().target_partitions(),
             read_format: Arc::new(read_format),
             compression,
         })?;
