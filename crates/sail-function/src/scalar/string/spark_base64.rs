@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig, STANDARD};
@@ -39,10 +38,6 @@ impl SparkBase64 {
 }
 
 impl ScalarUDFImpl for SparkBase64 {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_base64"
     }
@@ -121,8 +116,8 @@ impl ScalarUDFImpl for SparkBase64 {
             ColumnarValue::Array(array) => match array.data_type() {
                 DataType::Binary => {
                     let array = array
-                        .as_any()
-                        .downcast_ref::<BinaryArray>()
+
+                        .as_any().downcast_ref::<BinaryArray>()
                         .ok_or_else(|| {
                             exec_datafusion_err!(
                                 "Spark `base64`: Failed to downcast Expr to BinaryArray"
@@ -136,8 +131,8 @@ impl ScalarUDFImpl for SparkBase64 {
                 }
                 DataType::BinaryView => {
                     let array = array
-                        .as_any()
-                        .downcast_ref::<BinaryViewArray>()
+
+                        .as_any().downcast_ref::<BinaryViewArray>()
                         .ok_or_else(|| {
                             exec_datafusion_err!(
                                 "Spark `base64`: Failed to downcast Expr to BinaryViewArray"
@@ -151,8 +146,8 @@ impl ScalarUDFImpl for SparkBase64 {
                 }
                 DataType::FixedSizeBinary(_) => {
                     let array = array
-                        .as_any()
-                        .downcast_ref::<FixedSizeBinaryArray>()
+
+                        .as_any().downcast_ref::<FixedSizeBinaryArray>()
                         .ok_or_else(|| {
                             exec_datafusion_err!(
                                 "Spark `base64`: Failed to downcast Expr to FixedSizeBinaryArray"
@@ -166,8 +161,8 @@ impl ScalarUDFImpl for SparkBase64 {
                 }
                 DataType::LargeBinary => {
                     let array = array
-                        .as_any()
-                        .downcast_ref::<LargeBinaryArray>()
+
+                        .as_any().downcast_ref::<LargeBinaryArray>()
                         .ok_or_else(|| {
                             exec_datafusion_err!(
                                 "Spark `base64`: Failed to downcast Expr to LargeBinaryArray"
@@ -181,8 +176,8 @@ impl ScalarUDFImpl for SparkBase64 {
                 }
                 DataType::Utf8 => {
                     let array = array
-                        .as_any()
-                        .downcast_ref::<StringArray>()
+
+                        .as_any().downcast_ref::<StringArray>()
                         .ok_or_else(|| {
                             exec_datafusion_err!(
                                 "Spark `base64`: Failed to downcast Expr to StringArray"
@@ -196,8 +191,8 @@ impl ScalarUDFImpl for SparkBase64 {
                 }
                 DataType::LargeUtf8 => {
                     let array = array
-                        .as_any()
-                        .downcast_ref::<LargeStringArray>()
+
+                        .as_any().downcast_ref::<LargeStringArray>()
                         .ok_or_else(|| {
                             exec_datafusion_err!(
                                 "Spark `base64`: Failed to downcast Expr to LargeStringArray"
@@ -211,8 +206,8 @@ impl ScalarUDFImpl for SparkBase64 {
                 }
                 DataType::Utf8View => {
                     let array = array
-                        .as_any()
-                        .downcast_ref::<StringViewArray>()
+
+                        .as_any().downcast_ref::<StringViewArray>()
                         .ok_or_else(|| {
                             exec_datafusion_err!(
                                 "Spark `base64`: Failed to downcast Expr to StringViewArray"
@@ -335,10 +330,6 @@ fn decode_spark_base64_array<'a>(
 }
 
 impl ScalarUDFImpl for SparkUnbase64 {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_unbase64"
     }

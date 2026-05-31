@@ -26,7 +26,6 @@
 //! - Programmatic access via `ctx.collect_metrics()`
 //! - UI dashboards for execution bottleneck visualization
 //!
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
@@ -116,10 +115,6 @@ impl DisplayAs for PythonDataSourceExec {
 impl ExecutionPlan for PythonDataSourceExec {
     fn name(&self) -> &'static str {
         "PythonDataSourceExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

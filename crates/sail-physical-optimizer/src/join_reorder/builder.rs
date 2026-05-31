@@ -101,10 +101,9 @@ impl GraphBuilder {
     /// Returns a map of the plan's output columns to our stable IDs.
     fn visit_plan(&mut self, plan: Arc<dyn ExecutionPlan>) -> Result<ColumnMap> {
         trace!("Visiting plan: {}", plan.name());
-        let any_plan = plan.as_any();
 
         // TODO: Extend to support `SortMergeJoinExec`.
-        if let Some(join_plan) = any_plan.downcast_ref::<HashJoinExec>() {
+        if let Some(join_plan) = plan.downcast_ref::<HashJoinExec>() {
             if join_plan.join_type() == &JoinType::Inner {
                 trace!(
                     "Visiting hash join ({:?}): {}",
@@ -122,7 +121,7 @@ impl GraphBuilder {
             );
         }
 
-        if let Some(proj_plan) = any_plan.downcast_ref::<ProjectionExec>() {
+        if let Some(proj_plan) = plan.downcast_ref::<ProjectionExec>() {
             trace!("Visiting projection: {}", proj_plan.name());
             // Only "see through" projections that are a pure column passthrough
             // (possibly pruning/reordering/renaming/duplicating columns).
@@ -149,7 +148,7 @@ impl GraphBuilder {
         // it's either a boundary (leaf of our graph) or not part of a reorderable region.
         // AggregateExec and other transformation nodes are not part of reorderable regions.
 
-        if any_plan.is::<AggregateExec>() {
+        if plan.is::<AggregateExec>() {
             trace!("AggregateExec encountered - not part of reorderable region");
             return Err(DataFusionError::Internal(
                 "AggregateExec is not part of a reorderable join region".to_string(),
@@ -339,7 +338,7 @@ impl GraphBuilder {
 
     fn decompose_conjuncts(expr: &Arc<dyn PhysicalExpr>) -> Vec<Arc<dyn PhysicalExpr>> {
         let mut result = Vec::new();
-        if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
+        if let Some(binary) = expr.downcast_ref::<BinaryExpr>() {
             match binary.op() {
                 Operator::And => {
                     result.extend(Self::decompose_conjuncts(binary.left()));
@@ -366,7 +365,7 @@ impl GraphBuilder {
             return false;
         }
         for p in exprs.iter() {
-            let Some(c) = p.expr.as_any().downcast_ref::<Column>() else {
+            let Some(c) = p.expr.downcast_ref::<Column>() else {
                 return false;
             };
             let idx = c.index();
@@ -528,7 +527,7 @@ impl GraphBuilder {
 
         let expr_arc = Arc::clone(expr);
         let transformed = expr_arc.transform(|node| {
-            if let Some(col) = node.as_any().downcast_ref::<Column>() {
+            if let Some(col) = node.downcast_ref::<Column>() {
                 let i = col.index();
                 // Safeguard: if index out of bounds, return error
                 if i >= indices.len() {
@@ -571,7 +570,7 @@ impl GraphBuilder {
         for proj_expr in proj_plan.expr() {
             let expr = &proj_expr.expr;
             // Try to parse expression directly as a single stable column
-            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+            if let Some(col) = expr.downcast_ref::<Column>() {
                 // This is a simple column reference, like `SELECT a FROM ...`
                 // `col.index()` is its index in the input Schema
                 let entry = input_map.get(col.index()).cloned().ok_or_else(|| {
@@ -611,57 +610,58 @@ impl GraphBuilder {
         // statistics from its *input* (pre-filter) so we retain the most original/accurate
         // datasource stats (e.g., Parquet), and apply the filter's selectivity as a penalty
         // factor to initial cardinality.
-        let (stats, initial_cardinality, base_cardinality) = if plan.as_any().is::<FilterExec>() {
-            // NOTE: We still keep FilterExec as the boundary leaf (filter-boundary strategy), but
-            // we must avoid
-            // an inconsistent stats state where num_rows is "post-filter" while distinct_count
-            // (and thus TDom) remains "pre-filter". That mismatch can cause greedy join ordering
-            // to prefer catastrophic NLJs.
-            //
-            // We therefore:
-            // - read base (pre-filter) datasource statistics from beneath the filter chain, and
-            // - estimate a selectivity factor for the filter predicate(s), and
-            // - apply that selectivity to num_rows / total_byte_size (inexact) while preserving
-            //   base column stats as a best-effort proxy for join planning.
-            let (pre_filter_plan, selectivity) =
-                self.peel_filter_chain_and_estimate_selectivity(plan.clone())?;
-            let pre_stats = pre_filter_plan.partition_statistics(None)?;
-            let base = match pre_stats.num_rows {
-                Precision::Exact(count) => count as f64,
-                Precision::Inexact(count) => count as f64,
-                Precision::Absent => 1000.0,
-            };
+        let (stats, initial_cardinality, base_cardinality) =
+            if plan.downcast_ref::<FilterExec>().is_some() {
+                // NOTE: We still keep FilterExec as the boundary leaf (filter-boundary strategy), but
+                // we must avoid
+                // an inconsistent stats state where num_rows is "post-filter" while distinct_count
+                // (and thus TDom) remains "pre-filter". That mismatch can cause greedy join ordering
+                // to prefer catastrophic NLJs.
+                //
+                // We therefore:
+                // - read base (pre-filter) datasource statistics from beneath the filter chain, and
+                // - estimate a selectivity factor for the filter predicate(s), and
+                // - apply that selectivity to num_rows / total_byte_size (inexact) while preserving
+                //   base column stats as a best-effort proxy for join planning.
+                let (pre_filter_plan, selectivity) =
+                    self.peel_filter_chain_and_estimate_selectivity(plan.clone())?;
+                let pre_stats = Arc::unwrap_or_clone(pre_filter_plan.partition_statistics(None)?);
+                let base = match pre_stats.num_rows {
+                    Precision::Exact(count) => count as f64,
+                    Precision::Inexact(count) => count as f64,
+                    Precision::Absent => 1000.0,
+                };
 
-            let mut adjusted = pre_stats.to_inexact();
-            adjusted.num_rows = adjusted.num_rows.with_estimated_selectivity(selectivity);
-            adjusted.total_byte_size = adjusted
-                .total_byte_size
-                .with_estimated_selectivity(selectivity);
+                let mut adjusted = pre_stats.to_inexact();
+                adjusted.num_rows = adjusted.num_rows.with_estimated_selectivity(selectivity);
+                adjusted.total_byte_size = adjusted
+                    .total_byte_size
+                    .with_estimated_selectivity(selectivity);
 
-            (adjusted, base * selectivity, base)
-        } else if plan.as_any().is::<ProjectionExec>() {
-            // Preserve ProjectionExec as a relation leaf, but prefer its input statistics
-            // (ProjectionExec may not have accurate stats of its own).
-            let mut cur = plan.clone();
-            while let Some(p) = cur.as_any().downcast_ref::<ProjectionExec>() {
-                cur = p.input().clone();
-            }
-            let stats = cur.partition_statistics(None)?;
-            let initial_cardinality = match stats.num_rows {
-                Precision::Exact(count) => count as f64,
-                Precision::Inexact(count) => count as f64,
-                Precision::Absent => 1000.0, // Default estimation
+                (adjusted, base * selectivity, base)
+            } else if plan.downcast_ref::<ProjectionExec>().is_some() {
+                // Preserve ProjectionExec as a relation leaf, but prefer its input statistics
+                // (ProjectionExec may not have accurate stats of its own).
+                let mut cur = plan.clone();
+                while let Some(p) = cur.downcast_ref::<ProjectionExec>() {
+                    cur = p.input().clone();
+                }
+                let stats = Arc::unwrap_or_clone(cur.partition_statistics(None)?);
+                let initial_cardinality = match stats.num_rows {
+                    Precision::Exact(count) => count as f64,
+                    Precision::Inexact(count) => count as f64,
+                    Precision::Absent => 1000.0, // Default estimation
+                };
+                (stats, initial_cardinality, initial_cardinality)
+            } else {
+                let stats = Arc::unwrap_or_clone(plan.partition_statistics(None)?);
+                let initial_cardinality = match stats.num_rows {
+                    Precision::Exact(count) => count as f64,
+                    Precision::Inexact(count) => count as f64,
+                    Precision::Absent => 1000.0, // Default estimation
+                };
+                (stats, initial_cardinality, initial_cardinality)
             };
-            (stats, initial_cardinality, initial_cardinality)
-        } else {
-            let stats = plan.partition_statistics(None)?;
-            let initial_cardinality = match stats.num_rows {
-                Precision::Exact(count) => count as f64,
-                Precision::Inexact(count) => count as f64,
-                Precision::Absent => 1000.0, // Default estimation
-            };
-            (stats, initial_cardinality, initial_cardinality)
-        };
 
         let relation_node = RelationNode::new(
             plan.clone(),
@@ -702,9 +702,9 @@ impl GraphBuilder {
         let mut cur = plan;
         let mut selectivity: f64 = 1.0;
 
-        while let Some(filter) = cur.as_any().downcast_ref::<FilterExec>() {
+        while let Some(filter) = cur.downcast_ref::<FilterExec>() {
             let input = filter.input().clone();
-            let input_stats = input.partition_statistics(None)?;
+            let input_stats = Arc::unwrap_or_clone(input.partition_statistics(None)?);
             let input_schema = input.schema();
 
             let sel = self.estimate_filter_selectivity(
@@ -768,7 +768,7 @@ impl GraphBuilder {
         schema: &datafusion::arrow::datatypes::SchemaRef,
         input_stats: &datafusion::common::Statistics,
     ) -> Option<f64> {
-        let bin = expr.as_any().downcast_ref::<BinaryExpr>()?;
+        let bin = expr.downcast_ref::<BinaryExpr>()?;
         match bin.op() {
             Operator::And => {
                 let l = Self::estimate_selectivity_from_stats(bin.left(), schema, input_stats)?;
@@ -800,13 +800,13 @@ impl GraphBuilder {
 
         // Normalize into (Column, Literal) if possible.
         let (col, lit) = if let (Some(c), Some(l)) = (
-            bin.left().as_any().downcast_ref::<Column>(),
-            bin.right().as_any().downcast_ref::<Literal>(),
+            bin.left().downcast_ref::<Column>(),
+            bin.right().downcast_ref::<Literal>(),
         ) {
             (c, l)
         } else if let (Some(l), Some(c)) = (
-            bin.left().as_any().downcast_ref::<Literal>(),
-            bin.right().as_any().downcast_ref::<Column>(),
+            bin.left().downcast_ref::<Literal>(),
+            bin.right().downcast_ref::<Column>(),
         ) {
             // Flip operator direction if needed.
             // For Eq it's symmetric; for inequalities we can invert.
@@ -909,7 +909,7 @@ impl GraphBuilder {
         expr: &Arc<dyn PhysicalExpr>,
         column_map: &ColumnMap,
     ) -> Result<Option<StableColumn>> {
-        if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+        if let Some(col) = expr.downcast_ref::<Column>() {
             // This is a direct column reference
             if let Some(entry) = column_map.get(col.index()) {
                 match entry {

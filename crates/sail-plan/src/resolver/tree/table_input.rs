@@ -34,7 +34,7 @@ impl TreeNodeRewriter for TableInputRewriter<'_> {
         let Expr::ScalarFunction(ScalarFunction { func, .. }) = &node else {
             return Ok(Transformed::no(node));
         };
-        let Some(table) = func.inner().as_any().downcast_ref::<TableInput>() else {
+        let Some(table) = func.inner().downcast_ref::<TableInput>() else {
             return Ok(Transformed::no(node));
         };
         let plan = mem::replace(&mut self.plan, empty_logical_plan());

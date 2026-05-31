@@ -17,7 +17,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema, Schem
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{exec_err, Result, ScalarValue};
 use datafusion::functions::core::getfield::GetFieldFunc;
-use datafusion::physical_expr::expressions::{self, CastColumnExpr, Column, Literal};
+use datafusion::physical_expr::expressions::{self, CastExpr, Column, Literal};
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapterFactory};
 use datafusion_common::nested_struct::validate_struct_compatibility;
@@ -113,7 +113,7 @@ impl<'a> IcebergPhysicalExprRewriter<'a> {
         if let Some(transformed) = self.try_rewrite_struct_field_access(&expr)? {
             return Ok(Transformed::yes(transformed));
         }
-        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+        if let Some(column) = expr.downcast_ref::<Column>() {
             return self.rewrite_column(Arc::clone(&expr), column);
         }
         Ok(Transformed::no(expr))
@@ -138,10 +138,7 @@ impl<'a> IcebergPhysicalExprRewriter<'a> {
             None => return Ok(None),
         };
 
-        let lit = match field_name_expr
-            .as_any()
-            .downcast_ref::<expressions::Literal>()
-        {
+        let lit = match field_name_expr.downcast_ref::<expressions::Literal>() {
             Some(lit) => lit,
             None => return Ok(None),
         };
@@ -150,7 +147,7 @@ impl<'a> IcebergPhysicalExprRewriter<'a> {
             None => return Ok(None),
         };
 
-        let column = match source_expr.as_any().downcast_ref::<Column>() {
+        let column = match source_expr.downcast_ref::<Column>() {
             Some(column) => column,
             None => return Ok(None),
         };
@@ -291,9 +288,8 @@ impl<'a> IcebergPhysicalExprRewriter<'a> {
             }
         }
 
-        Ok(Transformed::yes(Arc::new(CastColumnExpr::new(
+        Ok(Transformed::yes(Arc::new(CastExpr::new_with_target_field(
             column_expr,
-            Arc::new(physical_field.clone()),
             Arc::new(logical_field.clone()),
             None,
         ))))

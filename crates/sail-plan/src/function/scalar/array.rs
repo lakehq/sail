@@ -202,10 +202,10 @@ fn arrays_overlap(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
     let (left, right) = arguments.two()?;
 
-    let same_type_null_only_array = expr::Expr::Cast(expr::Cast {
-        expr: Box::new(make_array(vec![lit(ScalarValue::Null)])),
-        data_type: left.get_type(function_context.schema)?,
-    });
+    let same_type_null_only_array = expr::Expr::Cast(expr::Cast::new(
+        Box::new(make_array(vec![lit(ScalarValue::Null)])),
+        left.get_type(function_context.schema)?,
+    ));
 
     let left_has_null = expr_fn::array_has_any(left.clone(), same_type_null_only_array.clone());
     let right_has_null = expr_fn::array_has_any(left.clone(), same_type_null_only_array);

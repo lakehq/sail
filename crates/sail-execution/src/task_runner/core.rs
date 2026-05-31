@@ -117,7 +117,7 @@ impl TaskRunner {
         plan: Arc<dyn ExecutionPlan>,
     ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
         let result = plan.transform(|node| {
-            if let Some(ds) = node.as_any().downcast_ref::<DataSourceExec>() {
+            if let Some(ds) = node.downcast_ref::<DataSourceExec>() {
                 if let Some((base_config, _parquet)) = ds.downcast_to_file_source::<ParquetSource>()
                 {
                     let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
@@ -146,7 +146,7 @@ impl TaskRunner {
     {
         let handle = ctx.handle();
         let result = plan.transform(move |node| {
-            if let Some(placeholder) = node.as_any().downcast_ref::<StageInputExec<usize>>() {
+            if let Some(placeholder) = node.downcast_ref::<StageInputExec<usize>>() {
                 let Some(input) = inputs.get(*placeholder.input()) else {
                     return internal_err!(
                         "stage input index {} out of bounds for {}",

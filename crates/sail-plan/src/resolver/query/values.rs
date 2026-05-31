@@ -53,11 +53,9 @@ impl PlanResolver<'_> {
             value.iter().enumerate().for_each(|(idx, expr)| {
                 if let Expr::Cast(cast) = expr {
                     if let Expr::Literal(sv, _) = cast.expr.as_ref() {
-                        if let Some(true) = sv
-                            .try_as_str()
-                            .flatten()
-                            .map(|s| s.to_uppercase() == "NAN" && cast.data_type.is_numeric())
-                        {
+                        if let Some(true) = sv.try_as_str().flatten().map(|s| {
+                            s.to_uppercase() == "NAN" && cast.field.data_type().is_numeric()
+                        }) {
                             nan_positions.insert(idx);
                         }
                     }

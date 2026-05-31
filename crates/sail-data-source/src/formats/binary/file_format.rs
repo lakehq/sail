@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -39,10 +38,6 @@ impl BinaryFileFormat {
 
 #[async_trait::async_trait]
 impl FileFormat for BinaryFileFormat {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn get_ext(&self) -> String {
         "".to_string()
     }

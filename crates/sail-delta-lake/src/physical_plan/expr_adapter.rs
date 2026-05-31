@@ -118,7 +118,7 @@ impl<'a> DeltaPhysicalExprRewriter<'a> {
         if let Some(transformed) = self.try_rewrite_struct_field_access(&expr)? {
             return Ok(Transformed::yes(transformed));
         }
-        if let Some(column) = expr.as_any().downcast_ref::<Column>() {
+        if let Some(column) = expr.downcast_ref::<Column>() {
             return self.rewrite_column(Arc::clone(&expr), column);
         }
 
@@ -144,10 +144,7 @@ impl<'a> DeltaPhysicalExprRewriter<'a> {
             None => return Ok(None),
         };
 
-        let lit = match field_name_expr
-            .as_any()
-            .downcast_ref::<expressions::Literal>()
-        {
+        let lit = match field_name_expr.downcast_ref::<expressions::Literal>() {
             Some(lit) => lit,
             None => return Ok(None),
         };
@@ -156,7 +153,7 @@ impl<'a> DeltaPhysicalExprRewriter<'a> {
             None => return Ok(None),
         };
 
-        let column = match source_expr.as_any().downcast_ref::<Column>() {
+        let column = match source_expr.downcast_ref::<Column>() {
             Some(column) => column,
             None => return Ok(None),
         };
@@ -404,10 +401,6 @@ impl DeltaCastColumnExpr {
 }
 
 impl PhysicalExpr for DeltaCastColumnExpr {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
         Ok(self.target_field.data_type().clone())
     }

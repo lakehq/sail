@@ -10,7 +10,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -212,10 +211,6 @@ impl IcebergCommitExec {
 impl ExecutionPlan for IcebergCommitExec {
     fn name(&self) -> &'static str {
         "IcebergCommitExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

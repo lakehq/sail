@@ -17,7 +17,6 @@
 // limitations under the License.
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/execution.rs>
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -98,8 +97,8 @@ impl<'a> SourceMetricColumn<'a> {
         match column.data_type() {
             DataType::UInt64 => {
                 let values = column
-                    .as_any()
-                    .downcast_ref::<UInt64Array>()
+
+                    .as_any().downcast_ref::<UInt64Array>()
                     .ok_or_else(|| {
                         DataFusionError::Internal(format!(
                             "failed to downcast {MERGE_SOURCE_METRIC_COLUMN} as UInt64"
@@ -109,8 +108,8 @@ impl<'a> SourceMetricColumn<'a> {
             }
             DataType::Int64 => {
                 let values = column
-                    .as_any()
-                    .downcast_ref::<Int64Array>()
+
+                    .as_any().downcast_ref::<Int64Array>()
                     .ok_or_else(|| {
                         DataFusionError::Internal(format!(
                             "failed to downcast {MERGE_SOURCE_METRIC_COLUMN} as Int64"
@@ -384,10 +383,6 @@ impl DeltaWriterExec {
 impl ExecutionPlan for DeltaWriterExec {
     fn name(&self) -> &'static str {
         "DeltaWriterExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

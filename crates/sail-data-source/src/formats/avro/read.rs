@@ -6,7 +6,7 @@ use datafusion::datasource::physical_plan::AvroSource;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::Result;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
-use datafusion_datasource_avro::avro_to_arrow::read_avro_schema_from_reader;
+use datafusion_datasource_avro::read_avro_schema_from_reader;
 use object_store::{GetResultPayload, ObjectStoreExt};
 
 use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
