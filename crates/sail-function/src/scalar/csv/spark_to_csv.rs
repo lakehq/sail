@@ -477,17 +477,19 @@ fn format_field_to_csv(
             )
         }
 
-        DataType::FixedSizeList(field, length) => {
+        DataType::FixedSizeList(field, _) => {
             let arr = array
                 .as_any()
                 .downcast_ref::<FixedSizeListArray>()
                 .ok_or_else(|| {
                     DataFusionError::Execution("Expected FixedSizeListArray".to_string())
                 })?;
-            let values = arr
-                .values()
-                .slice(row_idx * (*length as usize), *length as usize);
-            format_list_to_csv(&values, field.data_type(), options, session_timezone)
+            format_list_to_csv(
+                &arr.value(row_idx),
+                field.data_type(),
+                options,
+                session_timezone,
+            )
         }
 
         DataType::Map(_, _) => {
@@ -630,6 +632,7 @@ fn format_struct_to_csv(
 
 fn append_nested_null(output: &mut String, options: &SparkToCsvOptions) {
     if options.null_value_set {
+        // Spark prefixes nested nullValue with a space, including first list/struct elements.
         output.push(' ');
         output.push_str(&options.null_value);
     }
@@ -653,8 +656,8 @@ fn scalar_to_display_string(scalar: &ScalarValue) -> String {
         ScalarValue::UInt16(Some(v)) => v.to_string(),
         ScalarValue::UInt32(Some(v)) => v.to_string(),
         ScalarValue::UInt64(Some(v)) => v.to_string(),
-        ScalarValue::Float32(Some(v)) => format_float(*v as f64),
-        ScalarValue::Float64(Some(v)) => format_float(*v),
+        ScalarValue::Float32(Some(v)) => format_float32(*v),
+        ScalarValue::Float64(Some(v)) => format_float64(*v),
         ScalarValue::Binary(Some(v))
         | ScalarValue::LargeBinary(Some(v))
         | ScalarValue::BinaryView(Some(v))
@@ -696,13 +699,29 @@ fn format_binary(value: &[u8]) -> String {
     output
 }
 
-fn format_float(value: f64) -> String {
+fn format_float32(value: f32) -> String {
     if value.is_nan() {
         "NaN".to_string()
-    } else if value == f64::INFINITY {
-        "Infinity".to_string()
-    } else if value == f64::NEG_INFINITY {
-        "-Infinity".to_string()
+    } else if value.is_infinite() {
+        if value.is_sign_positive() {
+            "Infinity".to_string()
+        } else {
+            "-Infinity".to_string()
+        }
+    } else {
+        value.to_string()
+    }
+}
+
+fn format_float64(value: f64) -> String {
+    if value.is_nan() {
+        "NaN".to_string()
+    } else if value.is_infinite() {
+        if value.is_sign_positive() {
+            "Infinity".to_string()
+        } else {
+            "-Infinity".to_string()
+        }
     } else {
         value.to_string()
     }
@@ -764,6 +783,7 @@ fn parse_bool_option(value: Option<&str>, option_name: &str, default: bool) -> R
 /// - leading/trailing whitespace is trimmed by default
 /// - empty strings use `emptyValue`, which defaults to `""`
 /// - fields are quoted for separator/newline, `quoteAll`, or quote characters when escaping is enabled
+/// - quote characters are escaped after quoting, even when quoting was forced by another reason
 /// - NULL fields are handled upstream and never reach this function
 fn write_csv_field(value: &str, options: &SparkToCsvOptions) -> String {
     let mut value = value;
@@ -809,8 +829,8 @@ fn write_csv_field(value: &str, options: &SparkToCsvOptions) -> String {
 #[expect(clippy::unwrap_used)]
 mod tests {
     use datafusion::arrow::array::{
-        BooleanArray, Date32Array, Decimal128Array, Float64Array, Int32Array, Int64Array,
-        ListArray, StringArray, StructArray,
+        BooleanArray, Date32Array, Decimal128Array, FixedSizeListArray, Float32Array, Float64Array,
+        Int32Array, Int64Array, ListArray, StringArray, StructArray,
     };
     use datafusion::arrow::buffer::OffsetBuffer;
     use datafusion::arrow::datatypes::{DataType, Field, Fields};
@@ -928,6 +948,27 @@ mod tests {
         assert_eq!(output.value(0), "1.5,1000000");
         assert_eq!(output.value(1), "0,0");
         assert_eq!(output.value(2), ",-7"); // null float → empty string
+        Ok(())
+    }
+
+    #[test]
+    fn test_to_csv_float32_uses_float_display() -> Result<()> {
+        let fields = Fields::from(vec![Arc::new(Field::new("value", DataType::Float32, true))]);
+        let col = Arc::new(Float32Array::from(vec![
+            Some(1.2_f32),
+            Some(f32::NAN),
+            Some(f32::INFINITY),
+            Some(f32::NEG_INFINITY),
+        ])) as ArrayRef;
+
+        let struct_array = make_struct_array(fields, vec![col], None);
+        let result = spark_to_csv_inner(&[struct_array], DEFAULT_SESSION_TIMEZONE)?;
+
+        let output = result.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(output.value(0), "1.2");
+        assert_eq!(output.value(1), "NaN");
+        assert_eq!(output.value(2), "Infinity");
+        assert_eq!(output.value(3), "-Infinity");
         Ok(())
     }
 
@@ -1155,6 +1196,65 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_to_csv_fixed_size_list_slice_uses_row_offset() -> Result<()> {
+        let item_field = Arc::new(Field::new("item", DataType::Int32, true));
+        let values =
+            Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)])) as ArrayRef;
+        let fixed_array = Arc::new(FixedSizeListArray::try_new(
+            item_field.clone(),
+            2,
+            values,
+            None,
+        )?);
+        let sliced = Arc::new(fixed_array.slice(1, 1)) as ArrayRef;
+
+        let fields = Fields::from(vec![Arc::new(Field::new(
+            "items",
+            DataType::FixedSizeList(item_field, 2),
+            true,
+        ))]);
+        let struct_array = make_struct_array(fields, vec![sliced], None);
+        let result = spark_to_csv_inner(&[struct_array], DEFAULT_SESSION_TIMEZONE)?;
+
+        let output = result.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(output.value(0), "\"[3, 4]\"");
+        Ok(())
+    }
+
+    #[test]
+    fn test_to_csv_nested_null_value_matches_spark_spacing() -> Result<()> {
+        let options = SparkToCsvOptions {
+            null_value: "-".to_string(),
+            null_value_set: true,
+            ..SparkToCsvOptions::default()
+        };
+
+        let values = Arc::new(Int32Array::from(vec![None, Some(1)])) as ArrayRef;
+        assert_eq!(
+            format_list_to_csv(
+                &values,
+                &DataType::Int32,
+                &options,
+                DEFAULT_SESSION_TIMEZONE,
+            )?,
+            "[ -, 1]"
+        );
+
+        let fields = Fields::from(vec![
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            Arc::new(Field::new("b", DataType::Int32, true)),
+        ]);
+        let col_a = Arc::new(Int32Array::from(vec![None])) as ArrayRef;
+        let col_b = Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef;
+        let struct_array = StructArray::new(fields, vec![col_a, col_b], None);
+        assert_eq!(
+            format_struct_to_csv(&struct_array, 0, &options, DEFAULT_SESSION_TIMEZONE)?,
+            "{ -, 1}"
+        );
+        Ok(())
+    }
+
     /// Nested STRUCT fields that are null serialize as empty strings —
     /// mirrors test_from_csv_schema_nested_struct.
     #[test]
@@ -1371,6 +1471,29 @@ mod tests {
         let output = result.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(output.value(0), "\"say \\\"hello\\\"\",2");
         Ok(())
+    }
+
+    #[test]
+    fn test_to_csv_escape_quotes_false_still_escapes_when_quoted() {
+        let options = SparkToCsvOptions {
+            escape_quotes: false,
+            ..SparkToCsvOptions::default()
+        };
+        assert_eq!(write_csv_field("say \"hello\"", &options), "say \"hello\"");
+        assert_eq!(
+            write_csv_field("hello, \"world\"", &options),
+            "\"hello, \\\"world\\\"\""
+        );
+
+        let quote_all_options = SparkToCsvOptions {
+            escape_quotes: false,
+            quote_all: true,
+            ..SparkToCsvOptions::default()
+        };
+        assert_eq!(
+            write_csv_field("say \"hello\"", &quote_all_options),
+            "\"say \\\"hello\\\"\""
+        );
     }
 
     /// Empty string fields (not null) are always quoted, matches Spark behaviour
