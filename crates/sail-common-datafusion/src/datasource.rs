@@ -328,11 +328,7 @@ pub trait TableFormat: Send + Sync {
     }
 
     /// Creates a logical plan for write.
-    async fn create_writer(
-        &self,
-        ctx: &dyn Session,
-        info: SinkInfo,
-    ) -> Result<LogicalPlan>;
+    async fn create_writer(&self, ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan>;
 
     /// Creates an `ExecutionPlan` for row-level operations (DELETE, UPDATE, MERGE).
     async fn create_row_level_writer(

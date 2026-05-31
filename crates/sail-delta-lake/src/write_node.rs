@@ -110,4 +110,3 @@ impl UserDefinedLogicalNodeCore for DeltaWriteNode {
         Some(vec![(0..self.input.schema().fields().len()).collect()])
     }
 }
-

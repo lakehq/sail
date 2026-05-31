@@ -11,8 +11,8 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::{Extension, LogicalPlan};
 use sail_common_datafusion::column_features::ColumnFeatures;
 use sail_common_datafusion::datasource::{
-    find_path_in_options, MergeStrategy, OptionLayer, PhysicalSinkMode, RowLevelCommand,
-    PhysicalSinkInfo, RowLevelWriteInfo, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
+    find_path_in_options, MergeStrategy, OptionLayer, PhysicalSinkInfo, PhysicalSinkMode,
+    RowLevelCommand, RowLevelWriteInfo, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_data_source::options::gen::{DeltaReadOptions, DeltaWriteOptions};
@@ -20,7 +20,6 @@ use sail_data_source::options::ResolveOptions;
 use sail_data_source::resolve_listing_urls;
 use url::Url;
 
-use crate::DeltaWriteNode;
 use crate::kernel::DeltaSnapshotConfig;
 use crate::physical_plan::planner::{
     plan_delete, plan_delete_mor, plan_merge, plan_merge_mor, DeltaPhysicalPlanner,
@@ -39,7 +38,7 @@ use crate::table::{
     infer_delta_logical_schema, open_table_with_object_store,
     open_table_with_object_store_and_table_config,
 };
-use crate::{create_delta_source, DeltaTableError};
+use crate::{create_delta_source, DeltaTableError, DeltaWriteNode};
 
 /// Delta Lake implementation of [`TableFormat`].
 #[derive(Debug)]
@@ -257,11 +256,7 @@ impl TableFormat for DeltaTableFormat {
         infer_delta_logical_schema(ctx, table_url, schema, options).await
     }
 
-    async fn create_writer(
-        &self,
-        _ctx: &dyn Session,
-        info: SinkInfo,
-    ) -> Result<LogicalPlan> {
+    async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
         if find_path_in_options(&info.options).is_none() {
             return plan_err!("missing path in Delta table options");
         }
@@ -272,7 +267,11 @@ impl TableFormat for DeltaTableFormat {
         if info.bucket_by.is_some() {
             return not_impl_err!("bucketing for Delta format");
         }
-        if info.partition_by.iter().any(|field| field.transform.is_some()) {
+        if info
+            .partition_by
+            .iter()
+            .any(|field| field.transform.is_some())
+        {
             return not_impl_err!("partition transforms for Delta format");
         }
 

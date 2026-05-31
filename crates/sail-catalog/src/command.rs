@@ -678,7 +678,6 @@ mod tests {
     use async_trait::async_trait;
     use datafusion::catalog::Session;
     use datafusion::execution::context::SessionConfig;
-    use datafusion::physical_plan::ExecutionPlan;
     use datafusion::prelude::SessionContext;
     use datafusion_common::not_impl_err;
     use datafusion_expr::TableSource;
@@ -900,7 +899,7 @@ mod tests {
             &self,
             _ctx: &dyn Session,
             _info: SinkInfo,
-        ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        ) -> datafusion_common::Result<datafusion_expr::LogicalPlan> {
             not_impl_err!("unused in test")
         }
 

@@ -29,7 +29,6 @@ use sail_data_source::options::gen::{IcebergReadOptions, IcebergWriteOptions};
 use sail_data_source::options::ResolveOptions;
 use url::Url;
 
-use crate::IcebergWriteNode;
 use crate::datasource::provider::IcebergTableProvider;
 use crate::io::StoreContext;
 use crate::logical::IcebergTableSource;
@@ -45,6 +44,7 @@ use crate::utils::metadata::metadata_files_for_version;
 use crate::utils::partition_transform::{
     catalog_partition_field_from_iceberg, format_partition_exprs,
 };
+use crate::IcebergWriteNode;
 
 const MAX_ALTER_TABLE_PROPERTIES_COMMIT_RETRIES: usize = 5;
 
@@ -187,11 +187,7 @@ impl TableFormat for IcebergTableFormat {
         Ok(Arc::new(IcebergTableSource::new(provider)))
     }
 
-    async fn create_writer(
-        &self,
-        _ctx: &dyn Session,
-        info: SinkInfo,
-    ) -> Result<LogicalPlan> {
+    async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
         if find_path_in_options(&info.options).is_none() {
             return plan_err!("missing path in Iceberg table options");
         }

@@ -91,4 +91,3 @@ impl UserDefinedLogicalNodeCore for FileWriteNode {
         Some(vec![(0..self.input.schema().fields().len()).collect()])
     }
 }
-

@@ -38,10 +38,6 @@ impl WriteFormat for JsonWriteFormat {
 
         let writer_options = JsonWriterOptions::try_from(&options)?;
         let sink = Arc::new(JsonSink::new(conf, writer_options));
-        Ok(Arc::new(DataSinkExec::new(
-            input,
-            sink,
-            order_requirements,
-        )) as _)
+        Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
 }

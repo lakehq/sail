@@ -9,12 +9,10 @@ use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::TableSource;
+use datafusion_common::Result;
 use datafusion_expr::logical_plan::Extension;
 use datafusion_expr::LogicalPlan;
-use datafusion_common::Result;
-use sail_common_datafusion::datasource::{
-    SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
-};
+use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat, TableFormatRegistry};
 
 use super::datasource::PythonDataSource;
 use super::discovery::DATA_SOURCE_REGISTRY;
@@ -202,11 +200,7 @@ impl TableFormat for PythonTableFormat {
         Ok(provider_as_source(Arc::new(provider)))
     }
 
-    async fn create_writer(
-        &self,
-        _ctx: &dyn Session,
-        info: SinkInfo,
-    ) -> Result<LogicalPlan> {
+    async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
         let SinkInfo {
             input,
             mode,

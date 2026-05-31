@@ -20,7 +20,8 @@ use sail_common_datafusion::catalog::{
 };
 use sail_common_datafusion::column_features::{ColumnFeatures, ColumnFeaturesBuilder};
 use sail_common_datafusion::datasource::{
-    find_path_in_options, BucketBy, OptionLayer, SinkInfo, SinkMode, SourceInfo, TableFormatRegistry,
+    find_path_in_options, BucketBy, OptionLayer, SinkInfo, SinkMode, SourceInfo,
+    TableFormatRegistry,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
@@ -260,7 +261,29 @@ impl PlanResolver<'_> {
                 }
                 let schema_for_cond =
                     matches!(mode, WriteMode::TruncateIf { .. }).then_some(input_schema.as_ref());
-                self.resolve_write_mode(mode, schema_for_cond, state).await?
+                let sink_mode = self.resolve_write_mode(mode, schema_for_cond, state).await?;
+
+                if !sink_options.iter().any(|layer| match layer {
+                    OptionLayer::OptionList { items }
+                    | OptionLayer::TablePropertyList { items } => {
+                        items.iter().any(|(k, _)| k.eq_ignore_ascii_case("mode"))
+                    }
+                    _ => false,
+                }) {
+                    let value = match &sink_mode {
+                        SinkMode::ErrorIfExists => "errorifexists",
+                        SinkMode::IgnoreIfExists => "ignore",
+                        SinkMode::Append => "append",
+                        SinkMode::Overwrite
+                        | SinkMode::OverwriteIf { .. }
+                        | SinkMode::OverwritePartitions => "overwrite",
+                    };
+                    sink_options.push(OptionLayer::OptionList {
+                        items: vec![("mode".to_string(), value.to_string())],
+                    });
+                }
+
+                sink_mode
             }
             WriteTarget::Table {
                 table,
@@ -312,17 +335,20 @@ impl PlanResolver<'_> {
                             "cannot specify table properties when writing to an existing table",
                         ));
                     }
-                    info.validate_sink_info(&format, &sink_partition_by, &sink_bucket_by, &sink_sort_by)?;
+                    info.validate_sink_info(
+                        &format,
+                        &sink_partition_by,
+                        &sink_bucket_by,
+                        &sink_sort_by,
+                    )?;
                     input = self
                         .rewrite_write_input(input, column_match, info, state)
                         .await?;
-                    if sink_partition_by.is_empty()
-                        || !info.format.eq_ignore_ascii_case("iceberg")
+                    if sink_partition_by.is_empty() || !info.format.eq_ignore_ascii_case("iceberg")
                     {
                         sink_partition_by = info.partition_by.clone();
                     }
-                    sink_sort_by =
-                        info.sort_by.iter().cloned().map(|x| x.into()).collect();
+                    sink_sort_by = info.sort_by.iter().cloned().map(|x| x.into()).collect();
                     sink_bucket_by = info.bucket_by.clone().map(|x| x.into());
                     let location = info.location.clone().ok_or_else(|| {
                         PlanError::invalid(format!("table does not have a location: {table:?}"))

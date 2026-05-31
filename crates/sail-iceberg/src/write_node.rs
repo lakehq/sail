@@ -110,4 +110,3 @@ impl UserDefinedLogicalNodeCore for IcebergWriteNode {
         Some(vec![(0..self.input.schema().fields().len()).collect()])
     }
 }
-

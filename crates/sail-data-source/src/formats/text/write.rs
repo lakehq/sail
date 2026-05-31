@@ -8,8 +8,7 @@ use datafusion_common::{not_impl_err, DataFusionError, Result};
 use datafusion_datasource::file_sink_config::FileSinkConfig;
 use datafusion_datasource::sink::DataSinkExec;
 
-use crate::formats::text::writer::TextWriterOptions;
-use crate::formats::text::writer::TextSink;
+use crate::formats::text::writer::{TextSink, TextWriterOptions};
 use crate::listing::source::WriteFormat;
 use crate::options::gen::TextWriteOptions;
 
@@ -37,10 +36,6 @@ impl WriteFormat for TextWriteFormat {
             .map_err(DataFusionError::from)?;
         let writer_options = TextWriterOptions::try_from(&options)?;
         let sink = Arc::new(TextSink::new(conf, writer_options));
-        Ok(Arc::new(DataSinkExec::new(
-            input,
-            sink,
-            order_requirements,
-        )) as _)
+        Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
 }

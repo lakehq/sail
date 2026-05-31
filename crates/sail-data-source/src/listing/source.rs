@@ -16,15 +16,14 @@ use datafusion_common::{not_impl_err, plan_err, Result, Statistics};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::{ListingTableUrl, TableSchema};
+use datafusion_expr::logical_plan::Extension;
+use datafusion_expr::LogicalPlan;
 use object_store::{ObjectMeta, ObjectStore};
 use sail_common_datafusion::datasource::{
     find_path_in_options, get_partition_columns_and_file_schema, OptionLayer, SinkInfo, SourceInfo,
     TableFormat,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
-
-use datafusion_expr::logical_plan::Extension;
-use datafusion_expr::LogicalPlan;
 
 use crate::listing::file_write::{FileWriteNode, FileWriteOptions};
 use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
@@ -217,11 +216,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         Ok(Arc::new(source))
     }
 
-    async fn create_writer(
-        &self,
-        _ctx: &dyn Session,
-        info: SinkInfo,
-    ) -> Result<LogicalPlan> {
+    async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
         if find_path_in_options(&info.options).is_none() {
             return plan_err!("missing path in listing table options");
         }

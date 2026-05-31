@@ -64,4 +64,3 @@ impl ExtensionPlanner for DataSourceWritePhysicalPlanner {
         Ok(None)
     }
 }
-

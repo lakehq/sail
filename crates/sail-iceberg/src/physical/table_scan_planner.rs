@@ -38,7 +38,11 @@ impl ExtensionPlanner for IcebergTablePhysicalPlanner {
             return internal_err!("IcebergWriteNode requires exactly one physical input");
         };
 
-        let sort_order = create_sort_order(session_state, node.sort_order().to_vec(), logical_input.schema())?;
+        let sort_order = create_sort_order(
+            session_state,
+            node.sort_order().to_vec(),
+            logical_input.schema(),
+        )?;
         let mode = to_physical_sink_mode(node.mode());
 
         let info = PhysicalSinkInfo {

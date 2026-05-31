@@ -48,10 +48,6 @@ impl WriteFormat for CsvWriteFormat {
 
         let writer_options = CsvWriterOptions::try_from(&options)?;
         let sink = Arc::new(CsvSink::new(conf, writer_options));
-        Ok(Arc::new(DataSinkExec::new(
-            input,
-            sink,
-            order_requirements,
-        )) as _)
+        Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
 }

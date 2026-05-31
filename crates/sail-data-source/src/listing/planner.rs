@@ -26,17 +26,17 @@ use futures::{future, stream, Stream, StreamExt};
 use object_store::ObjectStore;
 use sail_common_datafusion::datasource::{create_sort_order, find_path_in_options};
 
-use crate::formats::{
-    arrow::ArrowFormatFactory, avro::AvroFormatFactory, binary::BinaryFormatFactory,
-    csv::CsvFormatFactory, json::JsonFormatFactory, parquet::ParquetFormatFactory,
-    text::TextFormatFactory,
-};
+use crate::formats::arrow::ArrowFormatFactory;
+use crate::formats::avro::AvroFormatFactory;
+use crate::formats::binary::BinaryFormatFactory;
+use crate::formats::csv::CsvFormatFactory;
+use crate::formats::json::JsonFormatFactory;
+use crate::formats::parquet::ParquetFormatFactory;
+use crate::formats::text::TextFormatFactory;
 use crate::listing::file_write::FileWriteNode;
-use crate::listing::source::ListingScanInput;
-use crate::listing::source::FormatFactory;
+use crate::listing::source::{FormatFactory, ListingScanInput, WriteFormat};
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::can_be_evaluated_for_partition_pruning;
-use crate::listing::source::WriteFormat;
 
 /// Result of a file listing operation for listing table scans.
 #[derive(Debug)]
@@ -95,11 +95,14 @@ impl ExtensionPlanner for ListingTablePhysicalPlanner {
             format!("{path}{}", object_store::path::DELIMITER)
         };
 
-        let table_paths = crate::url::resolve_listing_urls(session_state, vec![path.clone()]).await?;
+        let table_paths =
+            crate::url::resolve_listing_urls(session_state, vec![path.clone()]).await?;
         let object_store_url = table_paths
             .first()
             .map(datafusion_datasource::ListingTableUrl::object_store)
-            .ok_or_else(|| datafusion_common::internal_datafusion_err!("empty listing table path"))?;
+            .ok_or_else(|| {
+                datafusion_common::internal_datafusion_err!("empty listing table path")
+            })?;
 
         let table_partition_cols = node
             .options()
@@ -111,21 +114,8 @@ impl ExtensionPlanner for ListingTablePhysicalPlanner {
         // Keep DataFusion-compatible behavior: listing writes always append.
         let insert_op = datafusion::logical_expr::dml::InsertOp::Append;
 
-        let file_extension = match node.format().to_lowercase().as_str() {
-            "parquet" => "parquet",
-            "csv" => "csv",
-            "json" => "json",
-            "text" => "txt",
-            "arrow" => "arrow",
-            "avro" => "avro",
-            "binary" => "",
-            other => {
-                return datafusion_common::plan_err!(
-                    "unsupported listing write format: {other}"
-                )
-            }
-        }
-        .to_string();
+        let file_extension =
+            listing_write_file_extension(node.format(), node.options().options.as_slice())?;
 
         let conf = datafusion::datasource::physical_plan::FileSinkConfig {
             original_url: path,
@@ -140,8 +130,11 @@ impl ExtensionPlanner for ListingTablePhysicalPlanner {
             file_output_mode: datafusion::datasource::physical_plan::FileOutputMode::Automatic,
         };
 
-        let order_requirements =
-            create_sort_order(session_state, node.options().sort_by.clone(), logical_input.schema())?;
+        let order_requirements = create_sort_order(
+            session_state,
+            node.options().sort_by.clone(),
+            logical_input.schema(),
+        )?;
 
         let write_format = resolve_listing_write_format(
             session_state,
@@ -149,7 +142,12 @@ impl ExtensionPlanner for ListingTablePhysicalPlanner {
             node.options().options.clone(),
         )?;
 
-        let plan = write_format.sink(physical_input.clone(), session_state, conf, order_requirements)?;
+        let plan = write_format.sink(
+            physical_input.clone(),
+            session_state,
+            conf,
+            order_requirements,
+        )?;
         Ok(Some(plan))
     }
 
@@ -270,6 +268,93 @@ impl ExtensionPlanner for ListingTablePhysicalPlanner {
     }
 }
 
+fn listing_write_file_extension(
+    format: &str,
+    options: &[sail_common_datafusion::datasource::OptionLayer],
+) -> datafusion_common::Result<String> {
+    use sail_common_datafusion::datasource::OptionLayer;
+
+    let format = format.to_lowercase();
+    let base = match format.as_str() {
+        "parquet" => "parquet",
+        "csv" => "csv",
+        "json" => "json",
+        "text" => "txt",
+        "arrow" => "arrow",
+        "avro" => "avro",
+        "binary" => "",
+        other => {
+            return datafusion_common::plan_err!("unsupported listing write format: {other}")
+        }
+    };
+
+    let compression = options.iter().rev().find_map(|layer| {
+        let items = match layer {
+            OptionLayer::OptionList { items } => items,
+            OptionLayer::TablePropertyList { items } => items,
+            _ => return None,
+        };
+        items.iter().find_map(|(k, v)| {
+            if k.eq_ignore_ascii_case("compression") {
+                Some(v.trim().to_string())
+            } else {
+                None
+            }
+        })
+    });
+    let Some(compression) = compression.filter(|v| !v.is_empty()) else {
+        if format == "parquet" {
+            return Ok("zst.parquet".to_string());
+        }
+        return Ok(base.to_string());
+    };
+
+    let codec = compression
+        .split_once('(')
+        .map(|(head, _)| head)
+        .unwrap_or(compression.as_str())
+        .trim()
+        .to_lowercase();
+
+    if format == "parquet" {
+        let parquet_suffix = match codec.as_str() {
+            "snappy" => Some("snappy"),
+            "gzip" | "gz" => Some("gz"),
+            "zstd" | "zst" => Some("zst"),
+            "lz4" => Some("lz4"),
+            "uncompressed" | "none" => None,
+            other => {
+                return datafusion_common::plan_err!(
+                    "unsupported parquet compression codec for listing write: {other}"
+                )
+            }
+        };
+        return Ok(parquet_suffix.map_or_else(
+            || base.to_string(),
+            |suffix| format!("{suffix}.{base}"),
+        ));
+    }
+
+    let wrapper_suffix = match codec.as_str() {
+        "gzip" | "gz" => Some("gz"),
+        "bzip2" | "bz2" => Some("bz2"),
+        "xz" => Some("xz"),
+        "zstd" | "zst" => Some("zst"),
+        "uncompressed" | "none" => None,
+        other => {
+            return datafusion_common::plan_err!(
+                "unsupported compression codec for listing write: {other}"
+            )
+        }
+    };
+
+    Ok(match (base.is_empty(), wrapper_suffix) {
+        (_, None) => base.to_string(),
+        (true, Some(suffix)) => suffix.to_string(),
+        (false, Some(suffix)) => format!("{base}.{suffix}"),
+    })
+}
+
 fn resolve_listing_write_format(
     ctx: &dyn Session,
     format: &str,
@@ -284,12 +369,7 @@ fn resolve_listing_write_format(
         "arrow" => Arc::new(ArrowFormatFactory::write(ctx, options)?),
         "avro" => Arc::new(AvroFormatFactory::write(ctx, options)?),
         "binary" => Arc::new(BinaryFormatFactory::write(ctx, options)?),
-        _ => {
-            return datafusion_common::plan_err!(
-                "unsupported listing write format: {}",
-                format
-            )
-        }
+        _ => return datafusion_common::plan_err!("unsupported listing write format: {}", format),
     };
     Ok(write_format)
 }

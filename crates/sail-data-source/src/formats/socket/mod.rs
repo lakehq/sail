@@ -10,9 +10,9 @@ use datafusion::catalog::Session;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::TableSource;
 use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion_expr::LogicalPlan;
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 use sail_common_datafusion::streaming::source::StreamSourceTableProvider;
-use datafusion_expr::LogicalPlan;
 
 pub use crate::formats::socket::reader::SocketSourceExec;
 use crate::formats::socket::reader::SocketStreamSource;
@@ -64,11 +64,7 @@ impl TableFormat for SocketTableFormat {
         )))
     }
 
-    async fn create_writer(
-        &self,
-        _ctx: &dyn Session,
-        _info: SinkInfo,
-    ) -> Result<LogicalPlan> {
+    async fn create_writer(&self, _ctx: &dyn Session, _info: SinkInfo) -> Result<LogicalPlan> {
         not_impl_err!("socket table format writer")
     }
 }

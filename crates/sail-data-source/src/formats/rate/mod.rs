@@ -10,9 +10,9 @@ use datafusion::catalog::Session;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::TableSource;
 use datafusion_common::{plan_err, Result};
+use datafusion_expr::LogicalPlan;
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 use sail_common_datafusion::streaming::source::StreamSourceTableProvider;
-use datafusion_expr::LogicalPlan;
 
 pub use crate::formats::rate::reader::RateSourceExec;
 use crate::formats::rate::reader::RateStreamSource;
@@ -82,11 +82,7 @@ impl TableFormat for RateTableFormat {
         )))
     }
 
-    async fn create_writer(
-        &self,
-        _ctx: &dyn Session,
-        _info: SinkInfo,
-    ) -> Result<LogicalPlan> {
+    async fn create_writer(&self, _ctx: &dyn Session, _info: SinkInfo) -> Result<LogicalPlan> {
         plan_err!("the rate table format does not support writing")
     }
 }

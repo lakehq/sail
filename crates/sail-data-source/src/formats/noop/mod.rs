@@ -2,18 +2,18 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion_expr::logical_plan::Extension;
-use datafusion_expr::LogicalPlan;
 use datafusion::logical_expr::TableSource;
 use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion_expr::logical_plan::Extension;
+use datafusion_expr::LogicalPlan;
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
-mod writer;
 mod write_node;
+mod writer;
 
-pub use writer::NoopSinkExec;
 pub use write_node::NoopWriteNode;
+pub use writer::NoopSinkExec;
 
 #[derive(Debug, Default)]
 pub struct NoopTableFormat;
@@ -32,11 +32,7 @@ impl TableFormat for NoopTableFormat {
         not_impl_err!("noop format does not support reading")
     }
 
-    async fn create_writer(
-        &self,
-        _ctx: &dyn Session,
-        info: SinkInfo,
-    ) -> Result<LogicalPlan> {
+    async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
         if is_flow_event_schema(info.input.schema().inner()) {
             return plan_err!("cannot write streaming data to noop format");
         }

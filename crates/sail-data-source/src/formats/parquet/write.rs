@@ -35,10 +35,6 @@ impl WriteFormat for ParquetWriteFormat {
             .into_table_options()
             .map_err(DataFusionError::from)?;
         let sink = Arc::new(ParquetSink::new(conf, options));
-        Ok(Arc::new(DataSinkExec::new(
-            input,
-            sink,
-            order_requirements,
-        )) as _)
+        Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)
     }
 }
