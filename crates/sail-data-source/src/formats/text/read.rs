@@ -9,7 +9,7 @@ use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuil
 
 use crate::formats::text::source::TextSource;
 use crate::listing::source::{ListingScanInput, ReadFormat};
-use crate::listing::utils::infer_listing_compression;
+use crate::listing::utils::{infer_listing_compression, ListingFileSample};
 use crate::options::gen::TextReadOptions;
 
 #[derive(Debug, Clone)]
@@ -22,8 +22,7 @@ impl ReadFormat for TextReadFormat {
     async fn infer_compression(
         &self,
         _ctx: &dyn Session,
-        _store: &Arc<dyn object_store::ObjectStore>,
-        objects: &[object_store::ObjectMeta],
+        files: &[ListingFileSample<'_>],
     ) -> Result<CompressionTypeVariant> {
         let options = self
             .options
@@ -33,14 +32,31 @@ impl ReadFormat for TextReadFormat {
         if options.compression != CompressionTypeVariant::UNCOMPRESSED {
             return Ok(options.compression);
         }
-        infer_listing_compression(objects)
+
+        let mut inferred: Option<CompressionTypeVariant> = None;
+        for file_sample in files {
+            if file_sample.objects.is_empty() {
+                continue;
+            }
+            let compression = infer_listing_compression(&file_sample.objects)?;
+            match inferred {
+                None => inferred = Some(compression),
+                Some(prev) if prev == compression => {}
+                Some(prev) => {
+                    return Err(DataFusionError::Plan(format!(
+                        "Found mixed compression types in listing paths: {prev:?} and {compression:?}"
+                    )));
+                }
+            }
+        }
+
+        Ok(inferred.unwrap_or(CompressionTypeVariant::UNCOMPRESSED))
     }
 
     async fn infer_schema(
         &self,
         _ctx: &dyn Session,
-        _store: &Arc<dyn object_store::ObjectStore>,
-        _objects: &[object_store::ObjectMeta],
+        _files: &[ListingFileSample<'_>],
         _compression: CompressionTypeVariant,
     ) -> Result<SchemaRef> {
         Ok(Arc::new(Schema::new(vec![Field::new(

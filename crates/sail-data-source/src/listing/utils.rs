@@ -15,6 +15,12 @@ use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
+pub struct ListingFileSample<'a> {
+    pub url: &'a ListingTableUrl,
+    pub store: Arc<dyn ObjectStore>,
+    pub objects: Vec<ObjectMeta>,
+}
+
 pub fn rewrite_utf8view_fields(schema: Arc<Schema>) -> Arc<Schema> {
     // TODO: Spark doesn't support Utf8View
     let new_fields: Vec<Field> = schema
@@ -90,23 +96,27 @@ pub fn infer_listing_compression(objects: &[ObjectMeta]) -> Result<CompressionTy
 ///
 /// File extensions are intentionally ignored since `ListingTableUrl` carries the filtering glob
 /// already, and Spark reads every non-hidden file regardless of extension.
-pub async fn sample_listing_files(
+pub async fn sample_listing_files<'a>(
     ctx: &dyn Session,
-    urls: &[ListingTableUrl],
-) -> Result<Vec<(Arc<dyn ObjectStore>, Vec<ObjectMeta>)>> {
-    let mut file_groups = vec![];
+    urls: &'a [ListingTableUrl],
+) -> Result<Vec<ListingFileSample<'a>>> {
+    let mut file_samples = vec![];
     for url in urls {
         let store = ctx.runtime_env().object_store(url)?;
-        let files: Vec<_> = list_all_files(url, ctx, store.as_ref())
+        let objects: Vec<_> = list_all_files(url, ctx, store.as_ref())
             .await?
             // Empty files can't contribute to schema / partition inference and may error when read.
             .try_filter(|meta| futures::future::ready(meta.size > 0))
             .take(10)
             .try_collect()
             .await?;
-        file_groups.push((store, files));
+        file_samples.push(ListingFileSample {
+            url,
+            store,
+            objects,
+        });
     }
-    Ok(file_groups)
+    Ok(file_samples)
 }
 
 pub fn infer_partition_names(
@@ -155,7 +165,7 @@ pub fn infer_partition_names(
     Ok(inferred.unwrap_or_default())
 }
 
-pub fn validate_partitions(
+fn validate_partitions_for_url(
     table_path: &ListingTableUrl,
     objects: &[ObjectMeta],
     table_partition_cols: &[(String, DataType)],
@@ -205,7 +215,17 @@ pub fn validate_partitions(
     Ok(())
 }
 
-pub fn infer_partitions(
+pub fn validate_partitions(
+    files: &[ListingFileSample<'_>],
+    table_partition_cols: &[(String, DataType)],
+) -> Result<()> {
+    for file_sample in files {
+        validate_partitions_for_url(file_sample.url, &file_sample.objects, table_partition_cols)?;
+    }
+    Ok(())
+}
+
+fn infer_partitions_for_url(
     table_path: &ListingTableUrl,
     objects: &[ObjectMeta],
 ) -> Result<Vec<(String, DataType)>> {
@@ -227,6 +247,13 @@ pub fn infer_partitions(
     });
 
     Ok(partitions)
+}
+
+pub fn infer_partitions(files: &[ListingFileSample<'_>]) -> Result<Vec<(String, DataType)>> {
+    let Some(sample) = files.iter().find(|sample| !sample.objects.is_empty()) else {
+        return Ok(vec![]);
+    };
+    infer_partitions_for_url(sample.url, &sample.objects)
 }
 
 pub async fn list_all_files<'a>(

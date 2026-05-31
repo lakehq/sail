@@ -14,7 +14,7 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::ObjectStoreExt;
 
 use crate::listing::source::{ListingScanInput, ReadFormat};
-use crate::listing::utils::infer_listing_compression;
+use crate::listing::utils::{infer_listing_compression, ListingFileSample};
 use crate::options::gen::CsvReadOptions;
 
 #[derive(Debug, Clone)]
@@ -22,26 +22,8 @@ pub struct CsvReadFormat {
     pub(super) options: CsvReadOptions,
 }
 
-#[async_trait::async_trait]
-impl ReadFormat for CsvReadFormat {
-    async fn infer_compression(
-        &self,
-        _ctx: &dyn Session,
-        _store: &Arc<dyn object_store::ObjectStore>,
-        objects: &[object_store::ObjectMeta],
-    ) -> Result<CompressionTypeVariant> {
-        let options = self
-            .options
-            .clone()
-            .into_table_options()
-            .map_err(DataFusionError::from)?;
-        if options.compression != CompressionTypeVariant::UNCOMPRESSED {
-            return Ok(options.compression);
-        }
-        infer_listing_compression(objects)
-    }
-
-    async fn infer_schema(
+impl CsvReadFormat {
+    async fn infer_schema_for_objects(
         &self,
         ctx: &dyn Session,
         store: &Arc<dyn object_store::ObjectStore>,
@@ -93,6 +75,72 @@ impl ReadFormat for CsvReadFormat {
         schema = super::rename_default_csv_columns(schema);
 
         Ok(Arc::new(schema))
+    }
+}
+
+#[async_trait::async_trait]
+impl ReadFormat for CsvReadFormat {
+    async fn infer_compression(
+        &self,
+        _ctx: &dyn Session,
+        files: &[ListingFileSample<'_>],
+    ) -> Result<CompressionTypeVariant> {
+        let options = self
+            .options
+            .clone()
+            .into_table_options()
+            .map_err(DataFusionError::from)?;
+        if options.compression != CompressionTypeVariant::UNCOMPRESSED {
+            return Ok(options.compression);
+        }
+
+        let mut inferred: Option<CompressionTypeVariant> = None;
+        for file_sample in files {
+            if file_sample.objects.is_empty() {
+                continue;
+            }
+            let compression = infer_listing_compression(&file_sample.objects)?;
+            match inferred {
+                None => inferred = Some(compression),
+                Some(prev) if prev == compression => {}
+                Some(prev) => {
+                    return Err(DataFusionError::Plan(format!(
+                        "Found mixed compression types in listing paths: {prev:?} and {compression:?}"
+                    )));
+                }
+            }
+        }
+
+        Ok(inferred.unwrap_or(CompressionTypeVariant::UNCOMPRESSED))
+    }
+
+    async fn infer_schema(
+        &self,
+        ctx: &dyn Session,
+        files: &[ListingFileSample<'_>],
+        compression: CompressionTypeVariant,
+    ) -> Result<SchemaRef> {
+        let mut schemas_by_url = vec![];
+        for file_sample in files {
+            if file_sample.objects.is_empty() {
+                continue;
+            }
+            let schema = self
+                .infer_schema_for_objects(
+                    ctx,
+                    &file_sample.store,
+                    &file_sample.objects,
+                    compression,
+                )
+                .await?;
+            schemas_by_url.push((file_sample.url.as_str().to_string(), schema));
+        }
+
+        schemas_by_url.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+        let schemas = schemas_by_url
+            .into_iter()
+            .map(|(_, schema)| Arc::unwrap_or_clone(schema));
+        Ok(Arc::new(Schema::try_merge(schemas)?))
     }
 
     async fn scan(&self, ctx: &dyn Session, mut input: ListingScanInput) -> Result<FileScanConfig> {

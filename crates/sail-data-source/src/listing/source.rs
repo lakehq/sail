@@ -26,7 +26,7 @@ use sail_common_datafusion::datasource::{
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
 use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
-use crate::listing::utils::rewrite_utf8view_fields;
+use crate::listing::utils::{rewrite_utf8view_fields, ListingFileSample};
 use crate::utils::split_parquet_compression_string;
 
 /// A trait for creating format instances when reading and writing listing files.
@@ -50,16 +50,14 @@ pub trait ReadFormat: Debug + Send + Sync + 'static {
     async fn infer_compression(
         &self,
         ctx: &dyn Session,
-        store: &Arc<dyn object_store::ObjectStore>,
-        objects: &[object_store::ObjectMeta],
+        files: &[ListingFileSample<'_>],
     ) -> Result<CompressionTypeVariant>;
 
     /// Infer the file schema from the given files.
     async fn infer_schema(
         &self,
         ctx: &dyn Session,
-        store: &Arc<dyn object_store::ObjectStore>,
-        objects: &[object_store::ObjectMeta],
+        files: &[ListingFileSample<'_>],
         compression: CompressionTypeVariant,
     ) -> Result<SchemaRef>;
 
@@ -138,34 +136,18 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
 
         let read_format = T::read(ctx, options)?;
         let urls = crate::url::resolve_listing_urls(ctx, paths).await?;
-        let sampled_file_groups = crate::listing::utils::sample_listing_files(ctx, &urls).await?;
-        let sampled_empty = sampled_file_groups
-            .iter()
-            .all(|(_, files)| files.is_empty());
+        let sampled_files = crate::listing::utils::sample_listing_files(ctx, &urls).await?;
+        let sampled_empty = sampled_files.iter().all(|sample| sample.objects.is_empty());
 
         let inferred_compression = if sampled_empty {
             None
         } else {
-            let mut inferred: Option<CompressionTypeVariant> = None;
-            for (store, files) in &sampled_file_groups {
-                if files.is_empty() {
-                    continue;
-                }
-                let compression = read_format.infer_compression(ctx, store, files).await?;
-                if compression == CompressionTypeVariant::UNCOMPRESSED {
-                    continue;
-                }
-                match inferred {
-                    None => inferred = Some(compression),
-                    Some(prev) if prev == compression => {}
-                    Some(prev) => {
-                        return plan_err!(
-                            "Found mixed compression types in listing paths: {prev:?} and {compression:?}"
-                        );
-                    }
-                }
+            let compression = read_format.infer_compression(ctx, &sampled_files).await?;
+            if compression == CompressionTypeVariant::UNCOMPRESSED {
+                None
+            } else {
+                Some(compression)
             }
-            inferred
         };
         let compression_for_inference =
             inferred_compression.unwrap_or(CompressionTypeVariant::UNCOMPRESSED);
@@ -181,13 +163,11 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
                 // fails because the file itself doesn't contain them.
                 let partition_by = if partition_by.is_empty() {
                     let mut discovered = vec![];
-                    for (idx, (_store, files)) in sampled_file_groups.iter().enumerate() {
-                        let url = urls.get(idx).ok_or_else(|| {
-                            datafusion_common::internal_datafusion_err!(
-                                "sampled file groups and listing URLs should have the same length"
-                            )
-                        })?;
-                        for name in crate::listing::utils::infer_partition_names(url, files)? {
+                    for file_sample in sampled_files.iter() {
+                        for name in crate::listing::utils::infer_partition_names(
+                            file_sample.url,
+                            &file_sample.objects,
+                        )? {
                             if !discovered.contains(&name) {
                                 discovered.push(name);
                             }
@@ -219,19 +199,11 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
                     return plan_err!("No files found in the specified paths: {urls}")?;
                 }
 
-                let mut schemas = vec![];
-                for (store, files) in sampled_file_groups.iter() {
-                    if files.is_empty() {
-                        continue;
-                    }
-                    let schema = read_format
-                        .infer_schema(ctx, store, files, compression_for_inference)
-                        .await?;
-                    schemas.push(Arc::unwrap_or_clone(schema));
-                }
-                let schema = rewrite_utf8view_fields(Arc::new(
-                    datafusion::arrow::datatypes::Schema::try_merge(schemas)?,
-                ));
+                let schema = rewrite_utf8view_fields(
+                    read_format
+                        .infer_schema(ctx, &sampled_files, compression_for_inference)
+                        .await?,
+                );
                 let partition_by = partition_by
                     .into_iter()
                     .map(|col| (col, DataType::Utf8))
@@ -241,24 +213,12 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         };
 
         let partition_by = if partition_by.is_empty() {
-            sampled_file_groups
-                .first()
-                .and_then(|(_store, files)| urls.first().map(|url| (url, files)))
-                .map(|(url, files)| crate::listing::utils::infer_partitions(url, files))
-                .transpose()?
-                .unwrap_or_default()
+            crate::listing::utils::infer_partitions(&sampled_files)?
         } else {
             partition_by
         };
 
-        for (idx, (_store, files)) in sampled_file_groups.iter().enumerate() {
-            let url = urls.get(idx).ok_or_else(|| {
-                datafusion_common::internal_datafusion_err!(
-                    "sampled file groups and listing URLs should have the same length"
-                )
-            })?;
-            crate::listing::utils::validate_partitions(url, files, &partition_by)?;
-        }
+        crate::listing::utils::validate_partitions(&sampled_files, &partition_by)?;
 
         let partition_fields = partition_by
             .iter()

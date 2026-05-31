@@ -10,6 +10,7 @@ use datafusion_datasource_avro::avro_to_arrow::read_avro_schema_from_reader;
 use object_store::{GetResultPayload, ObjectStoreExt};
 
 use crate::listing::source::{ListingScanInput, ReadFormat};
+use crate::listing::utils::ListingFileSample;
 
 #[derive(Debug, Default, Clone)]
 pub struct AvroReadFormat;
@@ -19,8 +20,7 @@ impl ReadFormat for AvroReadFormat {
     async fn infer_compression(
         &self,
         _ctx: &dyn Session,
-        _store: &Arc<dyn object_store::ObjectStore>,
-        _objects: &[object_store::ObjectMeta],
+        _files: &[ListingFileSample<'_>],
     ) -> Result<CompressionTypeVariant> {
         Ok(CompressionTypeVariant::UNCOMPRESSED)
     }
@@ -28,24 +28,25 @@ impl ReadFormat for AvroReadFormat {
     async fn infer_schema(
         &self,
         _ctx: &dyn Session,
-        store: &Arc<dyn object_store::ObjectStore>,
-        objects: &[object_store::ObjectMeta],
+        files: &[ListingFileSample<'_>],
         _compression: CompressionTypeVariant,
     ) -> Result<SchemaRef> {
         let mut schemas = vec![];
-        for object in objects {
-            let r = store.as_ref().get(&object.location).await?;
-            let schema = match r.payload {
-                #[cfg(not(target_arch = "wasm32"))]
-                GetResultPayload::File(mut file, _) => read_avro_schema_from_reader(&mut file)?,
-                GetResultPayload::Stream(_) => {
-                    // Fetching entire file to get schema is potentially wasteful but required for
-                    // stream payloads.
-                    let data = r.bytes().await?;
-                    read_avro_schema_from_reader(&mut data.as_ref())?
-                }
-            };
-            schemas.push(schema);
+        for file_sample in files {
+            for object in &file_sample.objects {
+                let r = file_sample.store.as_ref().get(&object.location).await?;
+                let schema = match r.payload {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    GetResultPayload::File(mut file, _) => read_avro_schema_from_reader(&mut file)?,
+                    GetResultPayload::Stream(_) => {
+                        // Fetching entire file to get schema is potentially wasteful but required for
+                        // stream payloads.
+                        let data = r.bytes().await?;
+                        read_avro_schema_from_reader(&mut data.as_ref())?
+                    }
+                };
+                schemas.push(schema);
+            }
         }
         Ok(Arc::new(Schema::try_merge(schemas)?))
     }

@@ -8,6 +8,7 @@ use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuil
 
 use crate::formats::binary::source::BinarySource;
 use crate::listing::source::{ListingScanInput, ReadFormat};
+use crate::listing::utils::ListingFileSample;
 use crate::options::gen::BinaryReadOptions;
 
 #[derive(Debug, Clone)]
@@ -20,8 +21,7 @@ impl ReadFormat for BinaryReadFormat {
     async fn infer_compression(
         &self,
         _ctx: &dyn Session,
-        _store: &Arc<dyn object_store::ObjectStore>,
-        _objects: &[object_store::ObjectMeta],
+        _files: &[ListingFileSample<'_>],
     ) -> Result<CompressionTypeVariant> {
         Ok(CompressionTypeVariant::UNCOMPRESSED)
     }
@@ -29,8 +29,7 @@ impl ReadFormat for BinaryReadFormat {
     async fn infer_schema(
         &self,
         ctx: &dyn Session,
-        _store: &Arc<dyn object_store::ObjectStore>,
-        _objects: &[object_store::ObjectMeta],
+        _files: &[ListingFileSample<'_>],
         _compression: CompressionTypeVariant,
     ) -> Result<SchemaRef> {
         let tz = Arc::from(

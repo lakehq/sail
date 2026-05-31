@@ -14,6 +14,7 @@ use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuil
 use futures::{StreamExt, TryStreamExt};
 
 use crate::listing::source::{ListingFileMeta, ListingScanInput, ReadFormat};
+use crate::listing::utils::ListingFileSample;
 use crate::options::gen::ParquetReadOptions;
 
 #[derive(Debug, Clone)]
@@ -31,23 +32,12 @@ fn fail_for_encryption_factory(options: &TableParquetOptions) -> Result<()> {
     }
 }
 
-#[async_trait::async_trait]
-impl ReadFormat for ParquetReadFormat {
-    async fn infer_compression(
-        &self,
-        _ctx: &dyn Session,
-        _store: &Arc<dyn object_store::ObjectStore>,
-        _objects: &[object_store::ObjectMeta],
-    ) -> Result<CompressionTypeVariant> {
-        Ok(CompressionTypeVariant::UNCOMPRESSED)
-    }
-
-    async fn infer_schema(
+impl ParquetReadFormat {
+    async fn infer_schema_for_objects(
         &self,
         ctx: &dyn Session,
         store: &Arc<dyn object_store::ObjectStore>,
         objects: &[object_store::ObjectMeta],
-        _compression: CompressionTypeVariant,
     ) -> Result<SchemaRef> {
         let options = self.options.clone().into_table_options();
         fail_for_encryption_factory(&options)?;
@@ -103,6 +93,43 @@ impl ReadFormat for ParquetReadFormat {
         };
 
         Ok(Arc::new(merged))
+    }
+}
+
+#[async_trait::async_trait]
+impl ReadFormat for ParquetReadFormat {
+    async fn infer_compression(
+        &self,
+        _ctx: &dyn Session,
+        _files: &[ListingFileSample<'_>],
+    ) -> Result<CompressionTypeVariant> {
+        Ok(CompressionTypeVariant::UNCOMPRESSED)
+    }
+
+    async fn infer_schema(
+        &self,
+        ctx: &dyn Session,
+        files: &[ListingFileSample<'_>],
+        _compression: CompressionTypeVariant,
+    ) -> Result<SchemaRef> {
+        let mut schemas_by_url = vec![];
+        for file_sample in files {
+            if file_sample.objects.is_empty() {
+                continue;
+            }
+            let schema = self
+                .infer_schema_for_objects(ctx, &file_sample.store, &file_sample.objects)
+                .await?;
+            schemas_by_url.push((file_sample.url.as_str().to_string(), schema));
+        }
+
+        // Stable ordering for deterministic schema inference.
+        schemas_by_url.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+
+        let schemas = schemas_by_url
+            .into_iter()
+            .map(|(_, schema)| Arc::unwrap_or_clone(schema));
+        Ok(Arc::new(Schema::try_merge(schemas)?))
     }
 
     async fn infer_file_meta(

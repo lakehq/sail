@@ -17,6 +17,7 @@ use object_store::path::Path;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore, ObjectStoreExt};
 
 use crate::listing::source::{ListingScanInput, ReadFormat};
+use crate::listing::utils::ListingFileSample;
 
 #[derive(Debug, Default, Clone)]
 pub struct ArrowReadFormat;
@@ -40,24 +41,13 @@ async fn is_object_in_arrow_ipc_file_format(
     Ok(bytes.len() >= 6 && bytes[0..6] == ARROW_MAGIC)
 }
 
-#[async_trait::async_trait]
-impl ReadFormat for ArrowReadFormat {
-    async fn infer_compression(
+impl ArrowReadFormat {
+    async fn infer_schema_for_objects(
         &self,
-        _ctx: &dyn Session,
-        _store: &Arc<dyn ObjectStore>,
-        _objects: &[object_store::ObjectMeta],
-    ) -> Result<CompressionTypeVariant> {
-        Ok(CompressionTypeVariant::UNCOMPRESSED)
-    }
-
-    async fn infer_schema(
-        &self,
-        _ctx: &dyn Session,
         store: &Arc<dyn ObjectStore>,
         objects: &[object_store::ObjectMeta],
-        _compression: CompressionTypeVariant,
     ) -> Result<SchemaRef> {
+        let _ = self;
         let mut schemas = vec![];
         for object in objects {
             let r = store.as_ref().get(&object.location).await?;
@@ -83,6 +73,41 @@ impl ReadFormat for ArrowReadFormat {
             };
             schemas.push(schema.as_ref().clone());
         }
+        Ok(Arc::new(Schema::try_merge(schemas)?))
+    }
+}
+
+#[async_trait::async_trait]
+impl ReadFormat for ArrowReadFormat {
+    async fn infer_compression(
+        &self,
+        _ctx: &dyn Session,
+        _files: &[ListingFileSample<'_>],
+    ) -> Result<CompressionTypeVariant> {
+        Ok(CompressionTypeVariant::UNCOMPRESSED)
+    }
+
+    async fn infer_schema(
+        &self,
+        _ctx: &dyn Session,
+        files: &[ListingFileSample<'_>],
+        _compression: CompressionTypeVariant,
+    ) -> Result<SchemaRef> {
+        let mut schemas_by_url = vec![];
+        for file_sample in files {
+            if file_sample.objects.is_empty() {
+                continue;
+            }
+            let schema = self
+                .infer_schema_for_objects(&file_sample.store, &file_sample.objects)
+                .await?;
+            schemas_by_url.push((file_sample.url.as_str().to_string(), schema));
+        }
+
+        schemas_by_url.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+        let schemas = schemas_by_url
+            .into_iter()
+            .map(|(_, schema)| Arc::unwrap_or_clone(schema));
         Ok(Arc::new(Schema::try_merge(schemas)?))
     }
 
