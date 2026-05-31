@@ -37,18 +37,6 @@
   },
   {
     "module": "pyspark.sql.functions",
-    "function": "variant_explode",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/862"
-  },
-  {
-    "module": "pyspark.sql.functions",
-    "function": "variant_explode_outer",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/862"
-  },
-  {
-    "module": "pyspark.sql.functions",
     "function": "variant_get",
     "status": "supported"
   },

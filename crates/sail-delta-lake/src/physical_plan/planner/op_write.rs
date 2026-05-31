@@ -85,6 +85,8 @@ async fn build_full_overwrite_plan(
     let plan = create_sort(plan, ctx.partition_columns().to_vec(), sort_order)?;
 
     let writer_schema = plan.schema();
+    let write_context =
+        ctx.prepare_write_context(&writer_schema, &PhysicalSinkMode::Overwrite, None)?;
     let writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaWriterExec::new(
         plan,
         ctx.table_url().clone(),
@@ -95,7 +97,7 @@ async fn build_full_overwrite_plan(
         PhysicalSinkMode::Overwrite,
         ctx.table_exists(),
         writer_schema,
-        None,
+        write_context.clone(),
     )?);
 
     // For existing tables, build a remove plan from the active file set and union it with the
@@ -141,6 +143,7 @@ async fn build_full_overwrite_plan(
         input_schema,
         PhysicalSinkMode::Overwrite,
         ctx.options().user_metadata.clone(),
+        write_context.commit_context.clone(),
     )))
 }
 
@@ -200,11 +203,26 @@ async fn build_overwrite_if_plan(
         },
         predicate: predicate_source.clone(),
     });
+    let writer_options = DeltaWriterExecOptions::from(ctx.options().clone())
+        .with_generation_expressions(ctx.generation_expressions().clone());
+    let write_context = crate::physical_plan::prepare_delta_write_context(
+        ctx.table_url(),
+        Some(snapshot_state.as_ref()),
+        &writer_options,
+        ctx.metadata_configuration(),
+        ctx.partition_columns(),
+        &PhysicalSinkMode::OverwriteIf {
+            condition: None,
+            source: predicate_source.clone(),
+        },
+        ctx.table_exists(),
+        &union_plan.schema(),
+        operation_override,
+    )?;
     let writer = Arc::new(DeltaWriterExec::new(
         Arc::clone(&union_plan),
         ctx.table_url().clone(),
-        DeltaWriterExecOptions::from(ctx.options().clone())
-            .with_generation_expressions(ctx.generation_expressions().clone()),
+        writer_options,
         ctx.metadata_configuration().clone(),
         ctx.partition_columns().to_vec(),
         PhysicalSinkMode::OverwriteIf {
@@ -213,7 +231,7 @@ async fn build_overwrite_if_plan(
         },
         ctx.table_exists(),
         union_plan.schema(),
-        operation_override,
+        write_context.clone(),
     )?);
 
     let partition_only = !predicate_requires_stats(&condition_expr, &partition_columns);
@@ -259,6 +277,7 @@ async fn build_overwrite_if_plan(
             source: predicate_source,
         },
         ctx.options().user_metadata.clone(),
+        write_context.commit_context.clone(),
     )))
 }
 

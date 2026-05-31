@@ -96,6 +96,7 @@ impl PlanResolver<'_> {
                 sort_by,
                 bucket_by,
                 properties,
+                is_external: _,
             } => {
                 let schema = Schema::new(columns.iter().map(|x| x.field()).collect::<Vec<_>>());
                 let constraints = self.resolve_catalog_table_constraints(constraints, &schema)?;
@@ -515,6 +516,7 @@ impl PlanResolver<'_> {
         let table_source: Arc<dyn TableSource> = if has_duplicates {
             // Preserve existing behavior by wrapping the underlying TableProvider with renaming,
             // but only if this TableSource is DataFusion's DefaultTableSource.
+            // TODO: support duplicate column names for other `TableSource` implementations
             let provider = source_as_provider(&table_source).map_err(|e| {
                 PlanError::unsupported(format!(
                     "duplicate column names require DefaultTableSource-backed TableProvider: {e}"

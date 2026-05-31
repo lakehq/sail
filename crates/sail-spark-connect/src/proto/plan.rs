@@ -1435,6 +1435,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 Ok(spec::CommandNode::CreateTable {
                     table: from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                     definition: spec::TableDefinition {
+                        external: true,
                         columns,
                         comment: None,
                         constraints: vec![],
@@ -1461,6 +1462,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     schema,
                     options,
                 } = x;
+                let options: Vec<(String, String)> = options.into_iter().collect();
                 let schema = schema.required("create external table schema")?;
                 let schema: spec::DataType = schema.try_into()?;
                 let schema = schema.into_schema(DEFAULT_FIELD_NAME, true);
@@ -1472,6 +1474,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 Ok(spec::CommandNode::CreateTable {
                     table: from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                     definition: spec::TableDefinition {
+                        external: false,
                         columns,
                         comment: description,
                         constraints: vec![],
@@ -1484,7 +1487,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         cluster_by: vec![],
                         if_not_exists: false,
                         replace: false,
-                        options: options.into_iter().collect(),
+                        options,
                         properties: vec![],
                     },
                 })

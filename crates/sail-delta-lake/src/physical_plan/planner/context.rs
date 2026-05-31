@@ -17,13 +17,20 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result};
 use object_store::ObjectStore;
+use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_data_source::options::gen::DeltaWriteOptions;
 use url::Url;
 
 use super::log_segment::LogSegmentFiles;
 use crate::kernel::DeltaSnapshotConfig;
+use crate::physical_plan::{
+    prepare_delta_write_context, DeltaCommitContext, DeltaWriteContext, DeltaWriterExecOptions,
+};
 use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
-use crate::table::{open_table_with_object_store_and_table_config, DeltaTable};
+use crate::table::{
+    create_delta_table_with_object_store, open_table_with_object_store_and_table_config,
+    DeltaSnapshot, DeltaTable,
+};
 
 /// Configuration shared by all Delta planners.
 #[derive(Clone)]
@@ -40,6 +47,7 @@ pub struct DeltaPlannerConfig {
     /// Delta commit (new tables) even when the physical planner strips the arrow
     /// field metadata set at logical-plan construction time.
     pub generation_expressions: HashMap<String, String>,
+    pub table_snapshot: Option<Arc<DeltaSnapshot>>,
 }
 
 impl DeltaPlannerConfig {
@@ -59,6 +67,7 @@ impl DeltaPlannerConfig {
             table_schema_for_cond,
             table_exists,
             generation_expressions: HashMap::new(),
+            table_snapshot: None,
         }
     }
 
@@ -67,6 +76,11 @@ impl DeltaPlannerConfig {
         generation_expressions: HashMap<String, String>,
     ) -> Self {
         self.generation_expressions = generation_expressions;
+        self
+    }
+
+    pub fn with_table_snapshot(mut self, table_snapshot: Option<Arc<DeltaSnapshot>>) -> Self {
+        self.table_snapshot = table_snapshot;
         self
     }
 }
@@ -125,6 +139,37 @@ impl<'a> PlannerContext<'a> {
         &self.config.generation_expressions
     }
 
+    pub fn table_snapshot(&self) -> Option<&Arc<DeltaSnapshot>> {
+        self.config.table_snapshot.as_ref()
+    }
+
+    pub fn commit_context(&self) -> DeltaCommitContext {
+        self.table_snapshot()
+            .map(|snapshot| DeltaCommitContext::from_snapshot(snapshot.as_ref()))
+            .unwrap_or_default()
+    }
+
+    pub fn prepare_write_context(
+        &self,
+        input_schema: &SchemaRef,
+        sink_mode: &PhysicalSinkMode,
+        operation_override: Option<crate::kernel::DeltaOperation>,
+    ) -> Result<DeltaWriteContext> {
+        let options = DeltaWriterExecOptions::from(self.options().clone())
+            .with_generation_expressions(self.generation_expressions().clone());
+        prepare_delta_write_context(
+            self.table_url(),
+            self.table_snapshot().map(|snapshot| snapshot.as_ref()),
+            &options,
+            self.metadata_configuration(),
+            self.partition_columns(),
+            sink_mode,
+            self.table_exists(),
+            input_schema,
+            operation_override,
+        )
+    }
+
     pub fn into_config(self) -> DeltaPlannerConfig {
         self.config
     }
@@ -173,13 +218,26 @@ impl<'a> PlannerContext<'a> {
             ..Default::default()
         };
 
-        open_table_with_object_store_and_table_config(
-            self.config.table_url.clone(),
-            object_store,
-            StorageConfig,
-            table_config,
-        )
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))
+        if let Some(snapshot) = &self.config.table_snapshot {
+            let mut table = create_delta_table_with_object_store(
+                self.config.table_url.clone(),
+                object_store,
+                StorageConfig,
+            )
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            table.config = table_config;
+            table.state = Some(Arc::clone(snapshot));
+            Ok(table)
+        } else {
+            open_table_with_object_store_and_table_config(
+                self.config.table_url.clone(),
+                object_store,
+                StorageConfig,
+                table_config,
+            )
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))
+        }
     }
 }

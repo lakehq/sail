@@ -1,0 +1,21 @@
+# serializer version: 1
+---
+name: "test_explain_variant_explode_shows_physical_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#5@0 as pos, #6@1 as key, #7@2 as value]
+      ProjectionExec: expr=[get_field(#1@0, pos) as #5, get_field(#1@0, key) as #6, get_field(#1@0, value) as #7]
+        UnnestExec
+          ProjectionExec: expr=[spark_variant_explode({metadata:010000,value:03020002040c010c02}) as #1]
+            PlaceholderRowExec
+---
+name: "test_explain_variant_explode_outer_shows_physical_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#5@0 as pos, #6@1 as key, #7@2 as value]
+      ProjectionExec: expr=[get_field(#1@0, pos) as #5, get_field(#1@0, key) as #6, get_field(#1@0, value) as #7]
+        UnnestExec
+          ProjectionExec: expr=[spark_variant_explode({metadata:1101000161,value:02010000020c01}) as #1]
+            PlaceholderRowExec

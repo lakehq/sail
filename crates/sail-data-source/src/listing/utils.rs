@@ -3,9 +3,11 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::datasource::listing::helpers::expr_applicable_for_cols;
 use datafusion::datasource::listing::{ListingOptions, ListingTableConfig};
 use datafusion::execution::cache::cache_manager::CachedFileList;
 use datafusion::execution::cache::TableScopedPath;
+use datafusion::logical_expr::Expr;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_err, plan_err, DataFusionError, GetExt, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
@@ -44,12 +46,16 @@ pub async fn resolve_listing_schema<R: ReadFormat>(
     )?;
 
     let mut schemas = vec![];
+    let compression = options
+        .format
+        .compression_type()
+        .map(|c| *c.get_variant())
+        .unwrap_or(CompressionTypeVariant::UNCOMPRESSED);
     for (store, files) in file_groups.iter() {
-        let schema_inferrer = read_format.schema_inferrer();
-        let schema = schema_inferrer
-            .get_schema(ctx, store, files, options)
+        let schema = read_format
+            .infer_schema(ctx, store, files, compression)
             .await?;
-        schemas.push(schema);
+        schemas.push(Arc::unwrap_or_clone(schema));
     }
     let schema = Schema::try_merge(schemas)?;
 
@@ -328,4 +334,11 @@ pub fn rewrite_listing_partitions(mut config: ListingTableConfig) -> Result<List
             }
         });
     Ok(config)
+}
+
+pub fn can_be_evaluated_for_partition_pruning(
+    partition_column_names: &[&str],
+    expr: &Expr,
+) -> bool {
+    !partition_column_names.is_empty() && expr_applicable_for_cols(partition_column_names, expr)
 }

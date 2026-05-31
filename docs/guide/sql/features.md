@@ -78,39 +78,39 @@ But some extensions support these statements for lakehouse tables (e.g., Delta L
 
 ### Catalog Management
 
-| Statement               | Supported                    |
-| ----------------------- | ---------------------------- |
-| `ALTER DATABASE`        | :construction:               |
-| `ALTER TABLE`           | :construction:               |
-| `ALTER VIEW`            | :construction:               |
-| `ANALYZE TABLE`         | :construction:               |
-| `CREATE DATABASE`       | :white_check_mark:           |
-| `CREATE FUNCTION`       | :construction:               |
-| `CREATE TABLE`          | :white_check_mark: (partial) |
-| `CREATE TEMPORARY VIEW` | :white_check_mark:           |
-| `CREATE VIEW`           | :construction:               |
-| `DESCRIBE DATABASE`     | :construction:               |
-| `DESCRIBE FUNCTION`     | :construction:               |
-| `DESCRIBE TABLE`        | :white_check_mark:           |
-| `DROP DATABASE`         | :white_check_mark:           |
-| `DROP FUNCTION`         | :construction:               |
-| `DROP TABLE`            | :white_check_mark:           |
-| `DROP VIEW`             | :white_check_mark:           |
-| `REFRESH <path>`        | :construction:               |
-| `REFRESH FUNCTION`      | :construction:               |
-| `REFRESH TABLE`         | :construction:               |
-| `REPAIR TABLE`          | :construction:               |
-| `SHOW COLUMNS`          | :white_check_mark:           |
-| `SHOW CREATE TABLE`     | :construction:               |
-| `SHOW DATABASES`        | :white_check_mark:           |
-| `SHOW FUNCTIONS`        | :construction:               |
-| `SHOW PARTITIONS`       | :construction:               |
-| `SHOW TABLE`            | :construction:               |
-| `SHOW TABLES`           | :white_check_mark:           |
-| `SHOW TBLPROPERTIES`    | :construction:               |
-| `SHOW VIEWS`            | :white_check_mark:           |
-| `TRUNCATE TABLE`        | :construction:               |
-| `USE DATABASE`          | :white_check_mark:           |
+| Statement               | Supported          |
+| ----------------------- | ------------------ |
+| `ALTER DATABASE`        | :construction:     |
+| `ALTER TABLE`           | :construction:     |
+| `ALTER VIEW`            | :construction:     |
+| `ANALYZE TABLE`         | :construction:     |
+| `CREATE DATABASE`       | :white_check_mark: |
+| `CREATE FUNCTION`       | :construction:     |
+| `CREATE TABLE`          | :white_check_mark: |
+| `CREATE TEMPORARY VIEW` | :white_check_mark: |
+| `CREATE VIEW`           | :construction:     |
+| `DESCRIBE DATABASE`     | :construction:     |
+| `DESCRIBE FUNCTION`     | :construction:     |
+| `DESCRIBE TABLE`        | :white_check_mark: |
+| `DROP DATABASE`         | :white_check_mark: |
+| `DROP FUNCTION`         | :construction:     |
+| `DROP TABLE`            | :white_check_mark: |
+| `DROP VIEW`             | :white_check_mark: |
+| `REFRESH <path>`        | :construction:     |
+| `REFRESH FUNCTION`      | :construction:     |
+| `REFRESH TABLE`         | :construction:     |
+| `REPAIR TABLE`          | :construction:     |
+| `SHOW COLUMNS`          | :white_check_mark: |
+| `SHOW CREATE TABLE`     | :construction:     |
+| `SHOW DATABASES`        | :white_check_mark: |
+| `SHOW FUNCTIONS`        | :construction:     |
+| `SHOW PARTITIONS`       | :construction:     |
+| `SHOW TABLE`            | :construction:     |
+| `SHOW TABLES`           | :white_check_mark: |
+| `SHOW TBLPROPERTIES`    | :construction:     |
+| `SHOW VIEWS`            | :white_check_mark: |
+| `TRUNCATE TABLE`        | :construction:     |
+| `USE DATABASE`          | :white_check_mark: |
 
 Currently, Sail only supports in-memory catalog, which means the databases and tables are available only within the
 session.

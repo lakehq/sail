@@ -1,7 +1,9 @@
+mod cache;
 mod namespace;
 mod options;
 mod runtime;
 
+pub use cache::*;
 pub use namespace::*;
 pub use options::*;
 pub use runtime::*;

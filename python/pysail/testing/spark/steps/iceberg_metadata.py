@@ -10,12 +10,16 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
 from pyiceberg.avro.file import AvroFile
-from pyiceberg.io.pyarrow import PyArrowFileIO
+from pyiceberg.io.pyarrow import PyArrowFile, PyArrowFileIO
 from pyiceberg.manifest import MANIFEST_LIST_FILE_SCHEMAS, ManifestContent, PartitionFieldSummary
 from pyspark.sql import Row
 from pytest_bdd import given, parsers, then
+
+from pysail.testing.spark.steps.delta_log import _get_by_path, _parse_expected_value
 
 if TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
@@ -133,6 +137,14 @@ def _current_snapshot(metadata: dict) -> dict:
     raise AssertionError(msg)
 
 
+def _pyarrow_input_file(io: PyArrowFileIO, location: str) -> PyArrowFile:
+    parsed = urlparse(location)
+    if parsed.scheme != "file":
+        return io.new_input(location)
+    path = url2pathname(f"//{parsed.netloc}{parsed.path}" if parsed.netloc else parsed.path)
+    return PyArrowFile(location=location, path=path, fs=io.fs_by_scheme("file", ""))
+
+
 def _current_manifest_list(metadata: dict) -> dict:
     snapshot = _current_snapshot(metadata)
     manifest_list = snapshot.get("manifest-list")
@@ -142,7 +154,7 @@ def _current_manifest_list(metadata: dict) -> dict:
 
     io = PyArrowFileIO()
     with AvroFile(
-        io.new_input(manifest_list),
+        _pyarrow_input_file(io, manifest_list),
         MANIFEST_LIST_FILE_SCHEMAS[format_version],
         read_types={508: PartitionFieldSummary},
         read_enums={517: ManifestContent},
@@ -603,6 +615,26 @@ def check_iceberg_metadata_matches_snapshot(variables, snapshot: SnapshotAsserti
     sanitized = _sanitize_iceberg_metadata(metadata)
 
     assert snapshot == sanitized
+
+
+@then("iceberg metadata contains")
+def check_iceberg_metadata_contains(variables, datatable):
+    """Assert that specific fields in the latest Iceberg table metadata match expected values."""
+    location = variables.get("location")
+    assert location is not None, "expected variable `location` to be defined for iceberg metadata inspection"
+
+    metadata = _find_latest_metadata(Path(location.path))
+
+    assert datatable is not None, "expected a datatable: | path | value |"
+    header, *rows = datatable
+    assert header[:2] == ["path", "value"], "expected datatable header: path | value"
+    for row in rows:
+        if not row or not row[0].strip():
+            continue
+        path, raw = row[0], row[1] if len(row) > 1 else ""
+        expected = _parse_expected_value(raw)
+        actual = _get_by_path(metadata, path)
+        assert actual == expected, f"path {path!r} expected {expected!r}, got {actual!r}"
 
 
 @then("iceberg current manifest list matches snapshot")

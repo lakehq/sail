@@ -166,7 +166,11 @@ impl ScalarUDFImpl for SparkToChar {
         // Exact decimal path: Decimal128 with scale > 0 (avoids f64 precision loss for
         // values with more than ~15 significant digits).
         let decimal128_input_scale = if let DataType::Decimal128(_, s) = args[0].data_type() {
-            if s > 0 { Some(s as usize) } else { None }
+            if s > 0 {
+                Some(s as usize)
+            } else {
+                None
+            }
         } else {
             None
         };
@@ -306,15 +310,15 @@ impl ScalarUDFImpl for SparkToChar {
                         .collect();
                     Ok(ColumnarValue::Array(Arc::new(result)))
                 } else if let Some(in_scale) = decimal128_input_scale {
-                    let dec_arr = arr
-                        .as_any()
-                        .downcast_ref::<Decimal128Array>()
-                        .ok_or_else(|| {
-                            datafusion_common::DataFusionError::Internal(format!(
-                                "to_char: expected Decimal128Array, got {:?}",
-                                arr.data_type()
-                            ))
-                        })?;
+                    let dec_arr =
+                        arr.as_any()
+                            .downcast_ref::<Decimal128Array>()
+                            .ok_or_else(|| {
+                                datafusion_common::DataFusionError::Internal(format!(
+                                    "to_char: expected Decimal128Array, got {:?}",
+                                    arr.data_type()
+                                ))
+                            })?;
                     let result: StringArray = dec_arr
                         .iter()
                         .map(|opt: Option<i128>| {

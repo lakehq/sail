@@ -21,6 +21,7 @@ use crate::functions_utils::make_scalar_function;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkToNumber {
+    safe: bool,
     signature: Signature,
 }
 
@@ -47,16 +48,21 @@ lazy_static! {
 impl SparkToNumber {
     pub const NAME: &'static str = "to_number";
 
-    pub fn new() -> Self {
+    pub fn new(safe: bool) -> Self {
         Self {
+            safe,
             signature: Signature::string(2, Volatility::Immutable),
         }
+    }
+
+    pub fn safe(&self) -> bool {
+        self.safe
     }
 }
 
 impl Default for SparkToNumber {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
@@ -115,8 +121,27 @@ impl ScalarUDFImpl for SparkToNumber {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let safe = self.safe;
         let ScalarFunctionArgs { args, .. } = args;
-        make_scalar_function(spark_to_number_inner, vec![])(&args)
+        make_scalar_function(move |a| spark_to_number_with_mode(a, safe), vec![])(&args)
+    }
+}
+
+pub fn spark_to_number_with_mode(args: &[ArrayRef], safe: bool) -> Result<ArrayRef> {
+    match spark_to_number_inner(args) {
+        Ok(arr) => Ok(arr),
+        Err(_) if safe => {
+            // try_to_number: row-level parse errors become NULL. We still must
+            // produce a typed Decimal256 array; precision/scale are unknown
+            // without a successful format parse, so use a wide default that
+            // matches Spark's nullable Decimal default.
+            let len = args.first().map(|a| a.len()).unwrap_or(0);
+            Ok(datafusion::arrow::array::new_null_array(
+                &DataType::Decimal256(38, 18),
+                len,
+            ))
+        }
+        Err(e) => Err(e),
     }
 }
 

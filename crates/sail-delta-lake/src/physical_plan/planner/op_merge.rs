@@ -38,7 +38,7 @@ use super::context::PlannerContext;
 use super::utils::LogReplayOptions;
 use crate::datasource::PATH_COLUMN;
 use crate::kernel::{DeltaOperation, MergePredicate};
-use crate::physical_plan::{DeltaCommitExec, DeltaWriterExec};
+use crate::physical_plan::{prepare_delta_write_context, DeltaCommitExec, DeltaWriterExec};
 
 /// Internal metadata columns stripped before passing rows to DeltaWriterExec.
 ///
@@ -111,6 +111,18 @@ pub async fn build_merge_plan(
         None
     };
 
+    let write_context = prepare_delta_write_context(
+        ctx.table_url(),
+        Some(snapshot_state.as_ref()),
+        &options,
+        ctx.metadata_configuration(),
+        &partition_columns,
+        &PhysicalSinkMode::Append,
+        true,
+        &writer_input.schema(),
+        merge_operation.clone(),
+    )?;
+
     assemble_commit_plan(
         writer_input,
         remove_source,
@@ -121,8 +133,8 @@ pub async fn build_merge_plan(
         partition_columns,
         true, // table exists
         table_schema,
-        merge_operation,
         ctx.options().user_metadata.clone(),
+        write_context,
     )
 }
 
@@ -180,6 +192,18 @@ pub async fn build_merge_plan_mor(
         Arc::clone(&expanded)
     };
     let writer_input = strip_internal_columns(writer_input)?;
+    let writer_schema = writer_input.schema();
+    let write_context = prepare_delta_write_context(
+        ctx.table_url(),
+        Some(snapshot_state.as_ref()),
+        &options,
+        ctx.metadata_configuration(),
+        &partition_columns,
+        &PhysicalSinkMode::Append,
+        true,
+        &writer_schema,
+        merge_operation.clone(),
+    )?;
 
     let writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaWriterExec::new(
         writer_input,
@@ -190,7 +214,7 @@ pub async fn build_merge_plan_mor(
         PhysicalSinkMode::Append,
         true,
         table_schema.clone(),
-        merge_operation.clone(),
+        write_context.clone(),
     )?);
 
     let commit_input: Arc<dyn ExecutionPlan> =
@@ -245,6 +269,7 @@ pub async fn build_merge_plan_mor(
         table_schema,
         PhysicalSinkMode::Append,
         ctx.options().user_metadata.clone(),
+        write_context.commit_context.clone(),
     )))
 }
 

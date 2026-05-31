@@ -115,6 +115,36 @@ impl Clone for DeltaSnapshot {
 }
 
 impl DeltaSnapshot {
+    pub(crate) fn from_metadata_only_parts(
+        log_store: &dyn LogStore,
+        config: DeltaSnapshotConfig,
+        version: i64,
+        protocol: Protocol,
+        metadata: Metadata,
+        txns: HashMap<String, Transaction>,
+        domain_metadata: HashMap<String, DomainMetadata>,
+        commit_timestamps: BTreeMap<i64, i64>,
+    ) -> DeltaResult<Self> {
+        let arrow_schema = Arc::new(metadata.parse_schema_arrow()?);
+        let table_properties = TableProperties::from(metadata.configuration().iter());
+
+        Ok(Self {
+            version,
+            table_url: log_store.config().location.clone(),
+            config,
+            protocol,
+            metadata,
+            table_properties,
+            arrow_schema,
+            adds: Arc::new(Vec::new()),
+            removes: Arc::new(Vec::new()),
+            app_txns: Arc::new(txns),
+            domain_metadata: Arc::new(domain_metadata),
+            commit_timestamps: Arc::new(commit_timestamps),
+            files_batch: OnceCell::new(),
+        })
+    }
+
     pub(crate) async fn try_new(
         log_store: &dyn LogStore,
         config: DeltaSnapshotConfig,
@@ -312,6 +342,14 @@ impl DeltaSnapshot {
 
     pub fn domain_metadata(&self) -> &HashMap<String, DomainMetadata> {
         self.domain_metadata.as_ref()
+    }
+
+    pub(crate) fn app_txns(&self) -> &HashMap<String, Transaction> {
+        self.app_txns.as_ref()
+    }
+
+    pub(crate) fn commit_timestamps(&self) -> &BTreeMap<i64, i64> {
+        self.commit_timestamps.as_ref()
     }
 
     pub fn load_config(&self) -> &DeltaSnapshotConfig {

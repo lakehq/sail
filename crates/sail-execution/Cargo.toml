@@ -35,6 +35,7 @@ datafusion-spark = { workspace = true }
 arrow-flight = { workspace = true }
 log = { workspace = true }
 futures = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 kube = { workspace = true }
 k8s-openapi = { workspace = true }
