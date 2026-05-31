@@ -2,8 +2,7 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
-use datafusion::execution::SessionState;
-use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::execution::{SendableRecordBatchStream, SessionState, TaskContext};
 use datafusion::physical_expr::{
     Distribution, EquivalenceProperties, LexRequirement, Partitioning,
 };
@@ -15,8 +14,7 @@ use datafusion_common::{plan_err, DFSchemaRef, DataFusionError, Result};
 use datafusion_expr::LogicalPlan;
 use futures::TryStreamExt;
 use sail_catalog::manager::CatalogManager;
-use sail_common_datafusion::catalog::CatalogPartitionField;
-use sail_common_datafusion::catalog::TableKind;
+use sail_common_datafusion::catalog::{CatalogPartitionField, TableKind};
 use sail_common_datafusion::datasource::{
     create_sort_order, find_path_in_options, BucketBy, OptionLayer, PhysicalSinkMode, SinkInfo,
     SinkMode, TableFormatRegistry,
