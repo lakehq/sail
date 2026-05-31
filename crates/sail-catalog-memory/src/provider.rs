@@ -64,6 +64,10 @@ impl CatalogProvider for MemoryCatalogProvider {
         true
     }
 
+    fn uses_spark_table_location_qualification(&self) -> bool {
+        true
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,

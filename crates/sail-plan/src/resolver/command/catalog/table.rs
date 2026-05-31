@@ -53,20 +53,8 @@ impl PlanResolver<'_> {
         let constraints = self.resolve_table_constraints(constraints)?;
         let format = self.resolve_catalog_table_format(file_format)?;
         let location = if let Some(location) = location {
-            use crate::config::qualify_table_location;
-            let [qualifier @ .., _] = table.parts() else {
-                return Err(PlanError::invalid("missing table name"));
-            };
-            let catalog_manager = self.ctx.extension::<CatalogManager>()?;
-            let db_location = catalog_manager
-                .get_database_by_qualifier(qualifier)
-                .await
-                .map(|status| database_location(&status))?;
-            qualify_table_location(
-                &location,
-                db_location.as_deref(),
-                &self.config.default_warehouse_directory,
-            )
+            self.resolve_explicit_table_location(&table, &location)
+                .await?
         } else {
             self.resolve_default_table_location(&table).await?
         };
@@ -182,20 +170,9 @@ impl PlanResolver<'_> {
         let format = self.resolve_catalog_table_format(file_format)?;
         let mut write_options = options;
         if let Some(location) = location {
-            use crate::config::qualify_table_location;
-            let [qualifier @ .., _] = table.parts() else {
-                return Err(PlanError::invalid("missing table name"));
-            };
-            let catalog_manager = self.ctx.extension::<CatalogManager>()?;
-            let db_location = catalog_manager
-                .get_database_by_qualifier(qualifier)
-                .await
-                .map(|status| database_location(&status))?;
-            let location = qualify_table_location(
-                &location,
-                db_location.as_deref(),
-                &self.config.default_warehouse_directory,
-            );
+            let location = self
+                .resolve_explicit_table_location(&table, &location)
+                .await?;
             write_options.push(("path".to_string(), location));
         }
 
@@ -223,6 +200,32 @@ impl PlanResolver<'_> {
             .with_options(write_options);
 
         self.resolve_write_with_builder(input, builder, state).await
+    }
+
+    async fn resolve_explicit_table_location(
+        &self,
+        table: &spec::ObjectName,
+        location: &str,
+    ) -> PlanResult<String> {
+        use crate::config::{qualify_absolute_table_location, qualify_table_location};
+        let [qualifier @ .., _] = table.parts() else {
+            return Err(PlanError::invalid("missing table name"));
+        };
+        let catalog_manager = self.ctx.extension::<CatalogManager>()?;
+        let provider = catalog_manager.database_provider_by_qualifier(qualifier)?;
+        if provider.uses_spark_table_location_qualification() {
+            let db_location = catalog_manager
+                .get_database_by_qualifier(qualifier)
+                .await
+                .map(|status| database_location(&status))?;
+            Ok(qualify_table_location(
+                location,
+                db_location.as_deref(),
+                &self.config.default_warehouse_directory,
+            ))
+        } else {
+            Ok(qualify_absolute_table_location(location))
+        }
     }
 
     pub(in super::super) async fn resolve_default_table_location(
@@ -680,9 +683,12 @@ mod tests {
         async fn get_table(
             &self,
             _database: &Namespace,
-            _table: &str,
+            table: &str,
         ) -> sail_catalog::error::CatalogResult<TableStatus> {
-            unreachable!()
+            Err(sail_catalog::error::CatalogError::NotFound(
+                sail_catalog::error::CatalogObject::Table,
+                table.to_string(),
+            ))
         }
 
         async fn list_tables(
@@ -848,6 +854,23 @@ mod tests {
         Ok(options)
     }
 
+    fn direct_create_table_options(plan: LogicalPlan) -> PlanResult<CreateTableOptions> {
+        let LogicalPlan::Extension(extension) = plan else {
+            return Err(PlanError::internal("expected extension logical plan"));
+        };
+        let command = extension
+            .node
+            .as_any()
+            .downcast_ref::<CatalogCommandNode>()
+            .ok_or_else(|| PlanError::internal("expected catalog command node"))?
+            .command()
+            .clone();
+        let sail_catalog::command::CatalogCommand::CreateTable { options, .. } = command else {
+            return Err(PlanError::internal("expected create table command"));
+        };
+        Ok(options)
+    }
+
     #[test]
     fn namespace_location_prefers_location_then_warehouse_then_path() {
         assert_eq!(
@@ -939,6 +962,51 @@ mod tests {
             )
             .await
             .map(|_| ())?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_native_create_table_preserves_explicit_relative_location() -> PlanResult<()> {
+        let ctx = create_session("native")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+
+        let plan = resolver
+            .resolve_catalog_create_table(
+                spec::ObjectName::from(["default", "explicit_location"]),
+                table_definition(Some("relative/table"), None),
+                &mut state,
+            )
+            .await?;
+        let options = direct_create_table_options(plan)?;
+
+        assert_eq!(options.location.as_deref(), Some("relative/table"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_spark_create_table_qualifies_explicit_relative_location() -> PlanResult<()> {
+        let ctx = create_session("sail")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+
+        let plan = resolver
+            .resolve_catalog_create_table(
+                spec::ObjectName::from(["default", "explicit_location"]),
+                table_definition(Some("relative/table"), None),
+                &mut state,
+            )
+            .await?;
+        let options = direct_create_table_options(plan)?;
+        let location = options
+            .location
+            .ok_or_else(|| PlanError::internal("expected location"))?;
+
+        assert!(
+            location.ends_with("/relative/table"),
+            "unexpected location: {location}"
+        );
+        assert_ne!(location, "relative/table");
         Ok(())
     }
 
@@ -1042,6 +1110,27 @@ mod tests {
         let options = resolved_create_table_options(plan)?;
         assert!(options.is_external);
         assert!(options.location.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_native_ctas_preserves_explicit_relative_location() -> PlanResult<()> {
+        let ctx = create_session("native")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+
+        let plan = resolver
+            .resolve_catalog_create_table_as_select(
+                spec::ObjectName::from(["default", "ctas_location"]),
+                table_definition(Some("relative/table"), Some("parquet")),
+                ctas_query(),
+                &mut state,
+            )
+            .await?;
+
+        let options = resolved_create_table_options(plan)?;
+        assert!(options.is_external);
+        assert_eq!(options.location.as_deref(), Some("relative/table"));
         Ok(())
     }
 

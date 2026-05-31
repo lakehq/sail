@@ -132,6 +132,18 @@ pub fn qualify_table_location(
     }
 }
 
+/// Qualifies only absolute explicit table `LOCATION` values.
+///
+/// Spark V2 leaves relative table locations to the catalog implementation, but
+/// still normalizes absolute filesystem paths and preserves fully qualified URIs.
+pub fn qualify_absolute_table_location(value: &str) -> String {
+    if is_qualified_uri(value) || Path::new(value).is_absolute() {
+        normalize_path(value)
+    } else {
+        value.to_string()
+    }
+}
+
 /// Qualifies a database `LOCATION` for `CREATE DATABASE`.
 ///
 /// Matches Spark's `makeQualifiedDBObjectPath`:
@@ -282,6 +294,27 @@ mod tests {
         assert_eq!(
             qualify_table_location("nested/table", None, "/tmp/warehouse"),
             "/tmp/warehouse/nested/table"
+        );
+    }
+
+    #[test]
+    fn test_qualify_absolute_table_location_preserves_relative_path() {
+        assert_eq!(
+            qualify_absolute_table_location("nested/table"),
+            "nested/table"
+        );
+        assert_eq!(qualify_absolute_table_location("~/table"), "~/table");
+    }
+
+    #[test]
+    fn test_qualify_absolute_table_location_normalizes_absolute_path() {
+        assert_eq!(
+            qualify_absolute_table_location("/tmp/database/../table"),
+            "/tmp/table"
+        );
+        assert_eq!(
+            qualify_absolute_table_location("s3://bucket/database/../table"),
+            "s3://bucket/database/../table"
         );
     }
 

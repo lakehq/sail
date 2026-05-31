@@ -3,7 +3,8 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 pub use sail_common::path::{
-    qualify_database_location, qualify_table_location, qualify_warehouse_directory,
+    qualify_absolute_table_location, qualify_database_location, qualify_table_location,
+    qualify_warehouse_directory,
 };
 use sail_python_udf::config::PySparkUdfConfig;
 
