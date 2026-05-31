@@ -191,6 +191,9 @@ Feature: percentile() window function computes running percentiles
 
   Rule: Multiple partitions with different percentiles
 
+    # Sail returns the mathematically exact value 2.8 for p90 of [1,2,3].
+    # Spark JVM returns 2.8000000000000003 due to floating point arithmetic.
+    @sail-only
     Scenario: partition by with p50 and p90
       When query
       """
