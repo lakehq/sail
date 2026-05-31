@@ -5,7 +5,7 @@ use datafusion::common::NullEquality;
 use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::Operator;
 use datafusion::physical_expr::expressions::BinaryExpr;
-use log::trace;
+use log::{debug, trace};
 
 use crate::join_reorder::graph::{JoinEdge, QueryGraph, StableColumn};
 use crate::join_reorder::join_set::JoinSet;
@@ -64,10 +64,18 @@ pub struct CardinalityEstimator {
     initial_distinct_counts: HashMap<StableColumn, f64>,
     /// Null fraction (0.0 to 1.0) for each column.
     null_fractions: HashMap<StableColumn, f64>,
+    /// Fallback null fraction applied when a column's `null_count` statistic
+    /// is `Precision::Absent`. Sourced from `JoinReorderOptions`.
+    null_fraction_absent_default: f64,
 }
 
 impl CardinalityEstimator {
-    pub fn new(graph: QueryGraph) -> Self {
+    /// Construct an estimator. `null_fraction_absent_default` (typically
+    /// sourced from [`crate::join_reorder::JoinReorderOptions`]) is the null
+    /// fraction assumed for join-key columns whose `null_count` statistic is
+    /// [`datafusion::common::stats::Precision::Absent`]. A value of `0.0`
+    /// preserves the pre-#1456 behavior (no penalty for unknown columns).
+    pub fn new(graph: QueryGraph, null_fraction_absent_default: f64) -> Self {
         let mut estimator = Self {
             graph,
             cardinality_cache: HashMap::new(),
@@ -75,10 +83,12 @@ impl CardinalityEstimator {
             column_to_equiv_set: HashMap::new(),
             initial_distinct_counts: HashMap::new(),
             null_fractions: HashMap::new(),
+            null_fraction_absent_default,
         };
 
         estimator.populate_column_statistics();
         estimator.init_equivalence_sets();
+        estimator.report_missing_null_statistics();
 
         trace!(
             "CardinalityEstimator: Initialized with {} equivalence sets.",
@@ -144,6 +154,38 @@ impl CardinalityEstimator {
                     }
                 }
             }
+        }
+    }
+
+    /// Emit a diagnostic listing equi-join keys whose `null_count` statistic
+    /// is `Precision::Absent`. The null-aware adjustment falls back to
+    /// [`Self::null_fraction_absent_default`] for those columns, so operators
+    /// reading this log can either improve their stats collection or raise
+    /// the knob to bias the optimizer.
+    fn report_missing_null_statistics(&self) {
+        let join_key_columns: HashSet<&StableColumn> = self
+            .graph
+            .edges
+            .iter()
+            .flat_map(|edge| {
+                edge.equi_pairs
+                    .iter()
+                    .flat_map(|(left, right)| [left, right])
+            })
+            .collect();
+        let missing: Vec<String> = join_key_columns
+            .iter()
+            .filter(|col| !self.null_fractions.contains_key(**col))
+            .map(|col| format!("R{}.{}", col.relation_id, col.name))
+            .collect();
+        if !missing.is_empty() {
+            debug!(
+                "CardinalityEstimator: {} join key column(s) lack null_count stats; \
+                 null-aware adjustment falls back to null_fraction_absent_default={}: {:?}",
+                missing.len(),
+                self.null_fraction_absent_default,
+                missing,
+            );
         }
     }
 
@@ -358,11 +400,21 @@ impl CardinalityEstimator {
             }
             for (left_col, right_col) in &edge.equi_pairs {
                 if seen.insert(left_col) {
-                    let non_null = 1.0 - self.null_fractions.get(left_col).copied().unwrap_or(0.0);
+                    let non_null = 1.0
+                        - self
+                            .null_fractions
+                            .get(left_col)
+                            .copied()
+                            .unwrap_or(self.null_fraction_absent_default);
                     adjustment *= non_null;
                 }
                 if seen.insert(right_col) {
-                    let non_null = 1.0 - self.null_fractions.get(right_col).copied().unwrap_or(0.0);
+                    let non_null = 1.0
+                        - self
+                            .null_fractions
+                            .get(right_col)
+                            .copied()
+                            .unwrap_or(self.null_fraction_absent_default);
                     adjustment *= non_null;
                 }
             }
@@ -578,7 +630,7 @@ mod tests {
             vec![],
         ))?;
 
-        let estimator = CardinalityEstimator::new(graph);
+        let estimator = CardinalityEstimator::new(graph, 0.0);
         let out = estimator.estimate_join_cardinality(1_000_000.0, 1_000_000.0, &[0]);
 
         // For theta joins, we should not estimate an unrealistically tiny output.
@@ -590,14 +642,14 @@ mod tests {
     #[test]
     fn test_cardinality_estimator_creation() {
         let graph = create_test_graph();
-        let estimator = CardinalityEstimator::new(graph);
+        let estimator = CardinalityEstimator::new(graph, 0.0);
         assert_eq!(estimator.equivalence_sets.len(), 0); // No edges means no equivalence sets
     }
 
     #[test]
     fn test_single_relation_cardinality() {
         let graph = create_test_graph();
-        let mut estimator = CardinalityEstimator::new(graph);
+        let mut estimator = CardinalityEstimator::new(graph, 0.0);
 
         let single_set = JoinSet::new_singleton(0).unwrap();
         let cardinality = match estimator.estimate_cardinality(single_set) {
@@ -645,7 +697,7 @@ mod tests {
         use crate::join_reorder::graph::JoinEdge;
 
         let graph = create_test_graph();
-        let estimator = CardinalityEstimator::new(graph);
+        let estimator = CardinalityEstimator::new(graph, 0.0);
 
         // Create a simple equi-join edge (id = id)
         let left_col = Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>;
@@ -774,7 +826,7 @@ mod tests {
         );
         let _ = graph.add_edge(edge12);
 
-        let estimator: CardinalityEstimator = CardinalityEstimator::new(graph);
+        let estimator: CardinalityEstimator = CardinalityEstimator::new(graph, 0.0);
 
         // {0,1} → edge 0–1
         let s01: JoinSet = JoinSet::new_singleton(0)
@@ -901,7 +953,7 @@ mod tests {
         );
         graph.add_edge(edge)?;
 
-        let estimator = CardinalityEstimator::new(graph);
+        let estimator = CardinalityEstimator::new(graph, 0.0);
         let s01 = JoinSet::from_iter([0, 1])?;
         let edges = estimator.get_edges_contained_in_set(s01);
         assert_eq!(edges.len(), 1);
@@ -966,7 +1018,7 @@ mod tests {
             )],
         ))?;
 
-        let estimator = CardinalityEstimator::new(graph);
+        let estimator = CardinalityEstimator::new(graph, 0.0);
         let s01 = JoinSet::from_iter([0, 1])?;
         let edges = estimator.get_edges_contained_in_set(s01);
         assert_eq!(edges.len(), 1);
@@ -1033,7 +1085,7 @@ mod tests {
         );
         graph.add_edge(edge)?;
 
-        let estimator = CardinalityEstimator::new(graph);
+        let estimator = CardinalityEstimator::new(graph, 0.0);
         let s01 = JoinSet::from_iter([0, 1])?;
         let edges = estimator.get_edges_contained_in_set(s01);
         assert_eq!(edges.len(), 1);
@@ -1114,7 +1166,7 @@ mod tests {
             ],
         ))?;
 
-        let estimator = CardinalityEstimator::new(graph);
+        let estimator = CardinalityEstimator::new(graph, 0.0);
         let s01 = JoinSet::from_iter([0, 1])?;
         let edges = estimator.get_edges_contained_in_set(s01);
         assert_eq!(edges.len(), 1);
@@ -1197,7 +1249,7 @@ mod tests {
             ],
         ))?;
 
-        let estimator = CardinalityEstimator::new(graph);
+        let estimator = CardinalityEstimator::new(graph, 0.0);
         let s01 = JoinSet::from_iter([0, 1])?;
         let edges = estimator.get_edges_contained_in_set(s01);
         assert_eq!(edges.len(), 1);
@@ -1214,7 +1266,7 @@ mod tests {
         // R1: 1000 rows, 500 nulls (50% null)
         let mut graph = create_graph_with_null_stats(1000, 200, 1000, 500);
         add_equi_edge(&mut graph);
-        let estimator = CardinalityEstimator::new(graph);
+        let estimator = CardinalityEstimator::new(graph, 0.0);
 
         // Without nulls: 1000 * 1000 / tdom * 1.0
         // With nulls: ... * (0.8 * 0.5) = ... * 0.4
@@ -1231,7 +1283,7 @@ mod tests {
         // R1: 2000 rows, 0 nulls
         let mut graph = create_graph_with_null_stats(1000, 0, 2000, 0);
         add_equi_edge(&mut graph);
-        let estimator = CardinalityEstimator::new(graph);
+        let estimator = CardinalityEstimator::new(graph, 0.0);
 
         let card = estimator.estimate_join_cardinality(1000.0, 2000.0, &[0]);
 
@@ -1246,7 +1298,7 @@ mod tests {
         // When null_count is Absent, null_fractions map is empty,
         // unwrap_or(0.0) means no adjustment — same as before.
         let graph = create_test_graph(); // uses Statistics::new_unknown
-        let estimator = CardinalityEstimator::new(graph);
+        let estimator = CardinalityEstimator::new(graph, 0.0);
 
         // No edges, so null_fractions won't affect anything.
         // But verify the map is empty for unknown stats.
@@ -1257,12 +1309,39 @@ mod tests {
     }
 
     #[test]
+    fn test_absent_null_stats_uses_default_fallback() {
+        // Same shape as `test_no_nulls_no_adjustment` (no null_count), but
+        // configure the estimator with a non-zero fallback. The adjustment
+        // should now bite even though the stats are absent.
+        let mut graph = create_graph_with_null_stats(1000, 0, 2000, 0);
+        add_equi_edge(&mut graph);
+        // Clear null_count to Absent on both relations so the fallback kicks in.
+        for rel in &mut graph.relations {
+            for col in &mut rel.statistics.column_statistics {
+                col.null_count = datafusion::common::stats::Precision::Absent;
+            }
+        }
+
+        let baseline = CardinalityEstimator::new(graph.clone(), 0.0);
+        let baseline_card = baseline.estimate_join_cardinality(1000.0, 2000.0, &[0]);
+
+        let tuned = CardinalityEstimator::new(graph, 0.1);
+        let tuned_card = tuned.estimate_join_cardinality(1000.0, 2000.0, &[0]);
+
+        // Tuned estimator multiplies by (1-0.1)*(1-0.1) = 0.81 vs baseline 1.0.
+        assert!(
+            (tuned_card - baseline_card * 0.81).abs() < 1.0,
+            "tuned={tuned_card}, baseline={baseline_card}"
+        );
+    }
+
+    #[test]
     fn test_all_nulls_minimal_cardinality() {
         // R0: 1000 rows, 1000 nulls (100% null)
         // R1: 1000 rows, 0 nulls
         let mut graph = create_graph_with_null_stats(1000, 1000, 1000, 0);
         add_equi_edge(&mut graph);
-        let estimator = CardinalityEstimator::new(graph);
+        let estimator = CardinalityEstimator::new(graph, 0.0);
 
         let card = estimator.estimate_join_cardinality(1000.0, 1000.0, &[0]);
 
@@ -1281,7 +1360,7 @@ mod tests {
         add_equi_edge(&mut graph);
         // Override null_equality to NullEqualsNull
         graph.edges[0].null_equality = NullEquality::NullEqualsNull;
-        let estimator = CardinalityEstimator::new(graph);
+        let estimator = CardinalityEstimator::new(graph, 0.0);
 
         let card = estimator.estimate_join_cardinality(1000.0, 1000.0, &[0]);
 
@@ -1400,7 +1479,7 @@ mod tests {
             vec![(fact_col, dim2_col)],
         ));
 
-        let estimator = CardinalityEstimator::new(graph);
+        let estimator = CardinalityEstimator::new(graph, 0.0);
 
         // Both edges connect to fact.fk — it should only contribute (1-0.2)=0.8 once.
         // dim1.fk and dim2.fk have 0 nulls → factor = 1.0 each.
