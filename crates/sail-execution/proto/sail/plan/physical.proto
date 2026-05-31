@@ -102,6 +102,7 @@ message ExtendedScalarUdf {
     SparkMakeTimestampNtzUdf spark_make_timestamp_ntz = 21;
     ConvertTzUdf convert_tz = 22;
     SparkToCsvUdf spark_to_csv = 23;
+    ParseUrlUdf parse_url = 24;
   }
 }
 
@@ -202,6 +203,10 @@ message SparkAbsUdf {
 
 message SparkFromCsvUdf {
   string session_timezone = 1;
+}
+
+message ParseUrlUdf {
+  bool safe = 1;
 }
 
 message SparkToCsvUdf {
