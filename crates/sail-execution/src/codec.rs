@@ -212,6 +212,7 @@ use sail_iceberg::physical_plan::{
     IcebergScanByDataFilesExec, IcebergWriterExec,
 };
 use sail_iceberg::IcebergWriterExecOptions;
+use sail_logical_plan::rand::RandMode;
 use sail_logical_plan::range::Range;
 use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::barrier::BarrierExec;
@@ -220,6 +221,7 @@ use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
+use sail_physical_plan::rand::RandExec;
 use sail_physical_plan::range::RangeExec;
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
 use sail_physical_plan::show_string::ShowStringExec;
@@ -1040,6 +1042,27 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 self.try_decode_plan(&input, ctx)?,
                 usize::try_from(output_partitions).map_err(|e| plan_datafusion_err!("{e}"))?,
             ))),
+            NodeKind::Rand(gen::RandExecNode {
+                input,
+                column_name,
+                seed,
+                mode,
+                schema,
+            }) => {
+                let schema = Arc::new(self.try_decode_schema(&schema)?);
+                let mode = match mode.as_str() {
+                    "Uniform" => RandMode::Uniform,
+                    "Gaussian" => RandMode::Gaussian,
+                    other => return Err(plan_datafusion_err!("unknown RandMode: {other}")),
+                };
+                Ok(Arc::new(RandExec::try_new(
+                    self.try_decode_plan(&input, ctx)?,
+                    column_name,
+                    seed,
+                    mode,
+                    schema,
+                )?))
+            }
             NodeKind::RelaxedTzCast(gen::RelaxedTzCastExecNode { input, schema }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let schema = Arc::new(self.try_decode_schema(&schema)?);
@@ -1853,6 +1876,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 output_partitions: u64::try_from(coalesce.output_partitions())
                     .map_err(|e| plan_datafusion_err!("{e}"))?,
+            })
+        } else if let Some(rand_exec) = node.as_any().downcast_ref::<RandExec>() {
+            let input = self.try_encode_plan(rand_exec.input().clone())?;
+            let schema = self.try_encode_schema(rand_exec.schema().as_ref())?;
+            let mode = match rand_exec.mode() {
+                RandMode::Uniform => "Uniform",
+                RandMode::Gaussian => "Gaussian",
+            };
+            NodeKind::Rand(gen::RandExecNode {
+                input,
+                column_name: rand_exec.column_name().to_string(),
+                seed: rand_exec.seed(),
+                mode: mode.to_string(),
+                schema,
             })
         } else if let Some(relaxed_tz_cast) = node.as_any().downcast_ref::<RelaxedTzCastExec>() {
             let input = self.try_encode_plan(relaxed_tz_cast.input().clone())?;
