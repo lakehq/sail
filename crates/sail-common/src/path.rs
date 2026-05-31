@@ -3,39 +3,6 @@ use std::path::{Path, PathBuf};
 
 use url::Url;
 
-fn home_directory() -> Option<String> {
-    std::env::var("HOME")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            std::env::var("USERPROFILE")
-                .ok()
-                .filter(|value| !value.is_empty())
-        })
-        .or_else(|| {
-            let drive = std::env::var("HOMEDRIVE").ok()?;
-            let path = std::env::var("HOMEPATH").ok()?;
-            if drive.is_empty() || path.is_empty() {
-                None
-            } else {
-                Some(format!("{drive}{path}"))
-            }
-        })
-}
-
-/// Expands a leading `~` to the current user's home directory when available.
-/// Returns the value unchanged if it does not start with `~` or if no home directory is set.
-pub fn expand_tilde(value: &str) -> String {
-    if let Some(rest) = value.strip_prefix('~') {
-        if rest.is_empty() || rest.starts_with('/') {
-            if let Some(home) = home_directory() {
-                return format!("{home}{rest}");
-            }
-        }
-    }
-    value.to_string()
-}
-
 fn is_qualified_uri(value: &str) -> bool {
     // Scheme length > 1 excludes single-letter Windows drive prefixes (e.g., `C:\`).
     Url::parse(value)
@@ -92,20 +59,19 @@ pub fn normalize_path(value: &str) -> String {
 /// If the value is already a fully qualified URL (e.g., `s3://`, `file://`)
 /// or an absolute filesystem path, it is returned unchanged. Otherwise,
 /// the relative path is resolved against the current working directory.
-/// Leading `~` is expanded to `$HOME` and `..` components are normalized.
+/// `..` components are normalized.
 pub fn qualify_warehouse_directory(value: &str) -> String {
-    let value = expand_tilde(value);
-    if is_qualified_uri(&value) {
-        return value;
+    if is_qualified_uri(value) {
+        return value.to_string();
     }
-    let path = Path::new(&value);
+    let path = Path::new(value);
     if path.is_absolute() {
-        return normalize_path(&value);
+        return normalize_path(value);
     }
     // Resolve relative path against CWD, matching Spark's SharedState behavior.
     match std::env::current_dir() {
         Ok(cwd) => normalize_path(&cwd.join(path).to_string_lossy()),
-        Err(_) => value,
+        Err(_) => value.to_string(),
     }
 }
 
@@ -119,16 +85,15 @@ pub fn qualify_table_location(
     database_location: Option<&str>,
     warehouse_directory: &str,
 ) -> String {
-    let value = expand_tilde(value);
-    if is_qualified_uri(&value) || Path::new(&value).is_absolute() {
-        return normalize_path(&value);
+    if is_qualified_uri(value) || Path::new(value).is_absolute() {
+        return normalize_path(value);
     }
     let base = database_location.unwrap_or(warehouse_directory);
     if is_qualified_uri(base) {
-        join_uri_path(base, &value)
+        join_uri_path(base, value)
     } else {
         let base = qualify_warehouse_directory(base);
-        normalize_path(&Path::new(&base).join(&value).to_string_lossy())
+        normalize_path(&Path::new(&base).join(value).to_string_lossy())
     }
 }
 
@@ -155,15 +120,14 @@ pub fn qualify_database_location(
     warehouse_directory: &str,
 ) -> String {
     if let Some(loc) = location {
-        let loc = expand_tilde(loc);
-        if is_qualified_uri(&loc) || Path::new(&loc).is_absolute() {
-            normalize_path(&loc)
+        if is_qualified_uri(loc) || Path::new(loc).is_absolute() {
+            normalize_path(loc)
         } else {
             let base = qualify_warehouse_directory(warehouse_directory);
             if is_qualified_uri(&base) {
-                join_uri_path(&base, &loc)
+                join_uri_path(&base, loc)
             } else {
-                normalize_path(&Path::new(&base).join(&loc).to_string_lossy())
+                normalize_path(&Path::new(&base).join(loc).to_string_lossy())
             }
         }
     } else {
@@ -180,21 +144,6 @@ pub fn qualify_database_location(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_expand_tilde() {
-        match home_directory() {
-            Some(home) => {
-                assert_eq!(expand_tilde("~/foo"), format!("{home}/foo"));
-                assert_eq!(expand_tilde("~"), home);
-            }
-            None => {
-                assert_eq!(expand_tilde("~/foo"), "~/foo");
-                assert_eq!(expand_tilde("~"), "~");
-            }
-        }
-        assert_eq!(expand_tilde("/bar"), "/bar");
-    }
 
     #[test]
     fn test_normalize_path() {
@@ -243,6 +192,20 @@ mod tests {
         assert!(
             result.ends_with("spark-warehouse"),
             "resolved path should end with the relative name: {result}"
+        );
+    }
+
+    #[test]
+    fn test_qualify_warehouse_directory_treats_tilde_as_relative_path() {
+        let cwd = std::env::current_dir();
+        assert!(
+            cwd.is_ok(),
+            "current_dir should be available for path tests"
+        );
+        let cwd = cwd.unwrap_or_default().to_string_lossy().to_string();
+        assert_eq!(
+            qualify_warehouse_directory("~/spark-warehouse"),
+            normalize_path(&format!("{cwd}/~/spark-warehouse"))
         );
     }
 
@@ -298,6 +261,14 @@ mod tests {
     }
 
     #[test]
+    fn test_qualify_table_location_treats_tilde_as_relative_path() {
+        assert_eq!(
+            qualify_table_location("~/table", Some("/tmp/database"), "/tmp/warehouse"),
+            "/tmp/database/~/table"
+        );
+    }
+
+    #[test]
     fn test_qualify_absolute_table_location_preserves_relative_path() {
         assert_eq!(
             qualify_absolute_table_location("nested/table"),
@@ -323,6 +294,14 @@ mod tests {
         assert_eq!(
             qualify_database_location(Some("relative/db"), "my_db", "file:/tmp/warehouse"),
             "file:/tmp/warehouse/relative/db"
+        );
+    }
+
+    #[test]
+    fn test_qualify_database_location_treats_tilde_as_relative_path() {
+        assert_eq!(
+            qualify_database_location(Some("~/db"), "my_db", "/tmp/warehouse"),
+            "/tmp/warehouse/~/db"
         );
     }
 

@@ -61,9 +61,10 @@ Feature: Glue catalog database operations
       """
       SHOW DATABASES LIKE 'ine_db'
       """
-    Then query result
-      | name   | catalog | description | locationUri |
-      | ine_db | sail    | original    | NULL        |
+    Then query result has row where "name" is "ine_db"
+    Then query result row where "name" is "ine_db" has "catalog" equal to "sail"
+    Then query result row where "name" is "ine_db" has "description" equal to "original"
+    Then query result row where "name" is "ine_db" has "locationUri" containing "spark-warehouse/ine_db.db"
 
   Scenario: Non-existent database does not appear in listing
     When query
@@ -154,23 +155,23 @@ Feature: Glue catalog database operations
       """
       SHOW DATABASES LIKE 'list_db_one'
       """
-    Then query result
-      | name        | catalog | description | locationUri |
-      | list_db_one | sail    | NULL        | NULL        |
+    Then query result has row where "name" is "list_db_one"
+    Then query result row where "name" is "list_db_one" has "catalog" equal to "sail"
+    Then query result row where "name" is "list_db_one" has "locationUri" containing "spark-warehouse/list_db_one.db"
     When query
       """
       SHOW DATABASES LIKE 'list_db_two'
       """
-    Then query result
-      | name        | catalog | description | locationUri |
-      | list_db_two | sail    | NULL        | NULL        |
+    Then query result has row where "name" is "list_db_two"
+    Then query result row where "name" is "list_db_two" has "catalog" equal to "sail"
+    Then query result row where "name" is "list_db_two" has "locationUri" containing "spark-warehouse/list_db_two.db"
     When query
       """
       SHOW DATABASES LIKE 'list_other_db'
       """
-    Then query result
-      | name          | catalog | description | locationUri |
-      | list_other_db | sail    | NULL        | NULL        |
+    Then query result has row where "name" is "list_other_db"
+    Then query result row where "name" is "list_other_db" has "catalog" equal to "sail"
+    Then query result row where "name" is "list_other_db" has "locationUri" containing "spark-warehouse/list_other_db.db"
 
   Scenario: Database with only properties and no location is retrievable
     Given statement

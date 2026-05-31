@@ -5,9 +5,9 @@ use pilota::{AHashMap, FastStr};
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::hive_format::HiveCatalogFormat;
 use sail_catalog::provider::{
-    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
-    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
-    PartitionTransform,
+    AlterTableOptions, CatalogLocationPolicy, CatalogProvider, CreateDatabaseOptions,
+    CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
+    Namespace, PartitionTransform,
 };
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
@@ -784,20 +784,8 @@ impl CatalogProvider for HmsCatalogProvider {
         &self.name
     }
 
-    fn uses_spark_default_database_location(&self) -> bool {
-        true
-    }
-
-    fn uses_spark_default_table_location(&self) -> bool {
-        true
-    }
-
-    fn requires_identifier_validation_for_default_table_location(&self) -> bool {
-        true
-    }
-
-    fn uses_spark_table_location_qualification(&self) -> bool {
-        true
+    fn location_policy(&self) -> CatalogLocationPolicy {
+        CatalogLocationPolicy::SPARK_SESSION
     }
 
     async fn create_database(

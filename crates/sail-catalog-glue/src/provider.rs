@@ -9,9 +9,9 @@ use aws_sdk_glue::Client;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::hive_format::HiveDetectedFormat;
 use sail_catalog::provider::{
-    namespace_location_from_properties, AlterTableOptions, CatalogProvider, CreateDatabaseOptions,
-    CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
-    DropTableOptions, DropViewOptions, Namespace,
+    namespace_location_from_properties, AlterTableOptions, CatalogLocationPolicy, CatalogProvider,
+    CreateDatabaseOptions, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
+    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
@@ -335,20 +335,8 @@ impl CatalogProvider for GlueCatalogProvider {
         &self.name
     }
 
-    fn uses_spark_default_database_location(&self) -> bool {
-        true
-    }
-
-    fn uses_spark_default_table_location(&self) -> bool {
-        true
-    }
-
-    fn requires_identifier_validation_for_default_table_location(&self) -> bool {
-        true
-    }
-
-    fn uses_spark_table_location_qualification(&self) -> bool {
-        true
+    fn location_policy(&self) -> CatalogLocationPolicy {
+        CatalogLocationPolicy::SPARK_SESSION
     }
 
     async fn create_database(

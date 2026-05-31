@@ -4,8 +4,9 @@ use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 use tokio::runtime::Handle;
 
 use super::{
-    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
-    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    AlterTableOptions, CatalogLocationPolicy, CatalogProvider, CreateDatabaseOptions,
+    CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
+    Namespace,
 };
 use crate::error::{CatalogError, CatalogResult};
 
@@ -31,21 +32,8 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
         self.inner.get_name()
     }
 
-    fn uses_spark_default_database_location(&self) -> bool {
-        self.inner.uses_spark_default_database_location()
-    }
-
-    fn uses_spark_default_table_location(&self) -> bool {
-        self.inner.uses_spark_default_table_location()
-    }
-
-    fn requires_identifier_validation_for_default_table_location(&self) -> bool {
-        self.inner
-            .requires_identifier_validation_for_default_table_location()
-    }
-
-    fn uses_spark_table_location_qualification(&self) -> bool {
-        self.inner.uses_spark_table_location_qualification()
+    fn location_policy(&self) -> CatalogLocationPolicy {
+        self.inner.location_policy()
     }
 
     async fn create_database(
@@ -221,10 +209,7 @@ mod tests {
     use super::*;
 
     struct MockProvider {
-        uses_spark_default_database_location: bool,
-        uses_spark_default_table_location: bool,
-        requires_identifier_validation_for_default_table_location: bool,
-        uses_spark_table_location_qualification: bool,
+        location_policy: CatalogLocationPolicy,
     }
 
     #[async_trait::async_trait]
@@ -233,20 +218,8 @@ mod tests {
             "mock"
         }
 
-        fn uses_spark_default_database_location(&self) -> bool {
-            self.uses_spark_default_database_location
-        }
-
-        fn uses_spark_default_table_location(&self) -> bool {
-            self.uses_spark_default_table_location
-        }
-
-        fn requires_identifier_validation_for_default_table_location(&self) -> bool {
-            self.requires_identifier_validation_for_default_table_location
-        }
-
-        fn uses_spark_table_location_qualification(&self) -> bool {
-            self.uses_spark_table_location_qualification
+        fn location_policy(&self) -> CatalogLocationPolicy {
+            self.location_policy
         }
 
         async fn create_database(
@@ -346,17 +319,14 @@ mod tests {
     async fn test_runtime_aware_provider_preserves_spark_default_database_location_capability() {
         let provider = RuntimeAwareCatalogProvider {
             inner: Arc::new(MockProvider {
-                uses_spark_default_database_location: true,
-                uses_spark_default_table_location: true,
-                requires_identifier_validation_for_default_table_location: true,
-                uses_spark_table_location_qualification: true,
+                location_policy: CatalogLocationPolicy::SPARK_SESSION,
             }),
             handle: Handle::current(),
         };
 
-        assert!(provider.uses_spark_default_database_location());
-        assert!(provider.uses_spark_default_table_location());
-        assert!(provider.requires_identifier_validation_for_default_table_location());
-        assert!(provider.uses_spark_table_location_qualification());
+        assert_eq!(
+            provider.location_policy(),
+            CatalogLocationPolicy::SPARK_SESSION
+        );
     }
 }

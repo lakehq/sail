@@ -647,6 +647,7 @@ mod tests {
     use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
     use sail_common_datafusion::session::plan::PlanService;
     use sail_logical_plan::barrier::BarrierNode;
+    use sail_logical_plan::file_write::{FileWriteNode, FileWriteOptions};
 
     use super::database_location;
     use crate::catalog::{CatalogCommandNode, SparkCatalogObjectDisplay};
@@ -890,6 +891,26 @@ mod tests {
             return Err(PlanError::internal("expected create table command"));
         };
         Ok(options)
+    }
+
+    fn resolved_file_write_options(plan: &LogicalPlan) -> PlanResult<FileWriteOptions> {
+        let LogicalPlan::Extension(extension) = plan else {
+            return Err(PlanError::internal("expected extension logical plan"));
+        };
+        let barrier = extension
+            .node
+            .as_any()
+            .downcast_ref::<BarrierNode>()
+            .ok_or_else(|| PlanError::internal("expected barrier node"))?;
+        let LogicalPlan::Extension(extension) = barrier.plan() else {
+            return Err(PlanError::internal("expected extension write plan"));
+        };
+        let node = extension
+            .node
+            .as_any()
+            .downcast_ref::<FileWriteNode>()
+            .ok_or_else(|| PlanError::internal("expected file write node"))?;
+        Ok(node.options().clone())
     }
 
     fn direct_create_table_options(plan: LogicalPlan) -> PlanResult<CreateTableOptions> {
@@ -1289,31 +1310,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_native_ctas_without_location_rejects_catalog_owned_location() -> PlanResult<()> {
+    async fn test_native_ctas_without_location_delegates_location_to_catalog() -> PlanResult<()> {
         let ctx = create_session("native")?;
         let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
         let mut state = PlanResolverState::new();
 
-        let err = match resolver
+        let plan = resolver
             .resolve_catalog_create_table_as_select(
                 spec::ObjectName::from(["default", "ctas_without_location"]),
                 table_definition(None, Some("parquet")),
                 ctas_query(),
                 &mut state,
             )
-            .await
-        {
-            Ok(plan) => {
-                return Err(PlanError::internal(format!(
-                    "expected error, got: {plan:?}"
-                )));
-            }
-            Err(err) => err,
-        };
+            .await?;
 
-        assert!(
-            err.to_string().contains("explicit table location"),
-            "unexpected error: {err}"
+        let write_options = resolved_file_write_options(&plan)?;
+        let options = resolved_create_table_options(plan)?;
+        assert_eq!(options.location, None);
+        assert!(!options.is_external);
+        assert_eq!(
+            write_options.catalog_table,
+            Some(vec![
+                "default".to_string(),
+                "ctas_without_location".to_string()
+            ])
         );
         Ok(())
     }

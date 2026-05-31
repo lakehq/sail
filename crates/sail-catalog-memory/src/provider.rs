@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use dashmap::{DashMap, Entry};
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
-    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions,
-    CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
-    DropTableOptions, DropViewOptions, Namespace,
+    AlterTableOptions, CatalogLocationPolicy, CatalogProvider, CreateDatabaseOptions,
+    CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
+    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
@@ -56,20 +56,8 @@ impl CatalogProvider for MemoryCatalogProvider {
         &self.name
     }
 
-    fn uses_spark_default_database_location(&self) -> bool {
-        true
-    }
-
-    fn uses_spark_default_table_location(&self) -> bool {
-        true
-    }
-
-    fn requires_identifier_validation_for_default_table_location(&self) -> bool {
-        true
-    }
-
-    fn uses_spark_table_location_qualification(&self) -> bool {
-        true
+    fn location_policy(&self) -> CatalogLocationPolicy {
+        CatalogLocationPolicy::SPARK_SESSION
     }
 
     async fn create_database(

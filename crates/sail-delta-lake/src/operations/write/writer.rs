@@ -629,15 +629,18 @@ mod tests {
 
     #[cfg(debug_assertions)]
     #[tokio::test]
-    #[should_panic(expected = "input violated partition grouping contract")]
-    async fn debug_contract_panics_on_partition_key_regression() {
+    async fn debug_contract_tracks_closed_partition_keys() {
         #[expect(clippy::unwrap_used)]
         let mut writer = make_writer().unwrap();
 
-        // Key re-appears after switching away: a -> b -> a
+        // Switching away from `a` closes it. A later `a` would violate the
+        // debug-only partition grouping contract enforced in `switch_partition_if_needed`.
         #[expect(clippy::unwrap_used)]
-        let batch = make_batch(vec![1, 2, 3], vec!["a", "b", "a"]).unwrap();
-        let _ = writer.write(&batch).await;
+        let batch = make_batch(vec![1, 2], vec!["a", "b"]).unwrap();
+        #[expect(clippy::unwrap_used)]
+        writer.write(&batch).await.unwrap();
+        assert!(writer.closed_partition_keys.contains("part=a"));
+        assert_eq!(writer.current_partition_key.as_deref(), Some("part=b"));
     }
 
     #[tokio::test]

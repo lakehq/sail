@@ -13,6 +13,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 pub struct FileWriteOptions {
     pub format: String,
     pub mode: SinkMode,
+    pub catalog_table: Option<Vec<String>>,
     pub partition_by: Vec<CatalogPartitionField>,
     pub sort_by: Vec<Sort>,
     pub bucket_by: Option<BucketBy>,
