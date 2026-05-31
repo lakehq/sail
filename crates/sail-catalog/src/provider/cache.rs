@@ -204,6 +204,10 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         self.inner.uses_spark_default_database_location()
     }
 
+    fn uses_spark_default_table_location(&self) -> bool {
+        self.inner.uses_spark_default_table_location()
+    }
+
     fn requires_identifier_validation_for_default_table_location(&self) -> bool {
         self.inner
             .requires_identifier_validation_for_default_table_location()
@@ -402,6 +406,10 @@ mod tests {
         }
 
         fn uses_spark_default_database_location(&self) -> bool {
+            true
+        }
+
+        fn uses_spark_default_table_location(&self) -> bool {
             true
         }
 
@@ -829,6 +837,7 @@ mod tests {
         );
 
         assert!(provider.uses_spark_default_database_location());
+        assert!(provider.uses_spark_default_table_location());
         assert!(provider.requires_identifier_validation_for_default_table_location());
         assert!(provider.uses_spark_table_location_qualification());
     }

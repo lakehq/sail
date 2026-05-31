@@ -9,9 +9,9 @@ use aws_sdk_glue::Client;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::hive_format::HiveDetectedFormat;
 use sail_catalog::provider::{
-    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
-    CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions,
-    DropViewOptions, Namespace,
+    namespace_location_from_properties, AlterTableOptions, CatalogProvider, CreateDatabaseOptions,
+    CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
+    DropTableOptions, DropViewOptions, Namespace,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
@@ -91,10 +91,11 @@ impl GlueCatalogProvider {
             catalog: self.name.clone(),
             database: vec![name.to_string()],
             comment: db.description().map(|s| s.to_string()),
-            location: db
-                .location_uri()
-                .map(|s| s.to_string())
-                .or_else(|| namespace_location_from_properties(&properties)),
+            location: db.location_uri().map(|s| s.to_string()).or_else(|| {
+                namespace_location_from_properties(
+                    properties.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                )
+            }),
             properties,
         })
     }
@@ -328,25 +329,6 @@ impl GlueCatalogProvider {
     }
 }
 
-fn namespace_location_from_properties(properties: &[(String, String)]) -> Option<String> {
-    properties
-        .iter()
-        .find(|(key, _)| key.eq_ignore_ascii_case("location"))
-        .map(|(_, value)| value.clone())
-        .or_else(|| {
-            properties
-                .iter()
-                .find(|(key, _)| key.eq_ignore_ascii_case("warehouse"))
-                .map(|(_, value)| value.clone())
-        })
-        .or_else(|| {
-            properties
-                .iter()
-                .find(|(key, _)| key.eq_ignore_ascii_case("path"))
-                .map(|(_, value)| value.clone())
-        })
-}
-
 #[async_trait::async_trait]
 impl CatalogProvider for GlueCatalogProvider {
     fn get_name(&self) -> &str {
@@ -354,6 +336,10 @@ impl CatalogProvider for GlueCatalogProvider {
     }
 
     fn uses_spark_default_database_location(&self) -> bool {
+        true
+    }
+
+    fn uses_spark_default_table_location(&self) -> bool {
         true
     }
 

@@ -365,7 +365,12 @@ impl PlanResolver<'_> {
                         file_write_options.options.push(OptionLayer::OptionList {
                             items: vec![("path".to_string(), location.clone())],
                         });
-                    } else {
+                    } else if !write_options_had_location {
+                        if !self.uses_spark_default_table_location(&table)? {
+                            return Err(PlanError::unsupported(
+                                "CREATE TABLE AS SELECT for this catalog requires an explicit table location",
+                            ));
+                        }
                         let default_location = self.resolve_default_table_location(&table).await?;
                         file_write_options.options.insert(
                             0,
