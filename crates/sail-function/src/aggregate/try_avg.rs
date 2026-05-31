@@ -43,6 +43,17 @@ impl Debug for TryAvgFunction {
     }
 }
 
+/// Spark-compatible `try_avg` accumulator.
+///
+/// Differences vs Spark:
+/// - Uses integer division instead of full decimal rescaling
+///   (Spark uses `DecimalDivideWithOverflowCheck` for scaled division)
+/// - Does not increase result scale (Spark returns `DECIMAL(p+4, s+4)`,
+///   we return `DECIMAL(p+4, s)` to simplify the division path)
+/// - Preserves Spark TRY semantics: runtime errors (e.g. overflow) yield NULL instead of failing
+///
+/// Reference (Spark Average implementation):
+/// <https://github.com/apache/spark/blob/v4.0.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Average.scala>
 #[derive(Debug, Clone)]
 struct TryAvgAccumulator {
     dtype: DataType,
@@ -52,6 +63,9 @@ struct TryAvgAccumulator {
     sum_ym_i64: Option<i64>,
     count: i64,
     failed: bool,
+    /// Input decimal precision/scale, stored from the first `update_batch` call.
+    /// Used for Spark-compatible overflow detection in both sum and result.
+    input_precision: Option<(u8, i8)>,
 }
 
 impl TryAvgAccumulator {
@@ -64,6 +78,7 @@ impl TryAvgAccumulator {
             sum_ym_i64: None,
             count: 0,
             failed: false,
+            input_precision: None,
         }
     }
 
@@ -123,7 +138,14 @@ impl TryAvgAccumulator {
         }
     }
 
-    fn update_dec128(&mut self, arr: &Decimal128Array, p: u8, _s: i8) {
+    fn update_dec128(&mut self, arr: &Decimal128Array, _p: u8, _s: i8) {
+        // Derive effective precision from the *input* array type, not the widened return type.
+        let (input_p, input_s) = match arr.data_type() {
+            DataType::Decimal128(p, s) => (*p, *s),
+            _ => (_p, _s),
+        };
+        let effective_p = spark_accumulator_effective_precision(input_p, input_s);
+        self.input_precision = Some((input_p, input_s));
         if self.failed {
             return;
         }
@@ -143,7 +165,7 @@ impl TryAvgAccumulator {
                 },
             };
             if let Some(sum) = self.sum_dec128 {
-                if exceeds_decimal128_precision(sum, p) {
+                if exceeds_decimal128_precision(sum, effective_p) {
                     self.failed = true;
                     return;
                 }
@@ -213,7 +235,24 @@ impl TryAvgAccumulator {
                     }
 
                     if let Some(q) = total.checked_div(denom) {
-                        if exceeds_decimal128_precision(q, *p) {
+                        // Spark's result type: DECIMAL(min(p_in+4,38), min(s_in+4,38))
+                        // The avg result must fit in result_p total digits.
+                        // Since we do not rescale the numerator before division (unlike Spark),
+                        // the result is computed at input scale instead of result scale.
+                        // Approximate Spark's result precision constraints:
+                        // max integer digits = result_p - result_s + input_s
+                        // = min(p_in+4,38) - min(s_in+4,38) + s_in
+                        // which simplifies to min(p_in+4,38) - 4 when s_in < 34 (common Spark case).
+                        // https://github.com/apache/spark/blob/v4.0.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Average.scala#L62
+                        let max_digits = if let Some((p_in, s_in)) = self.input_precision {
+                            let result_p = (p_in as i16 + 4).min(38) as u8;
+                            let result_s = (s_in as i16 + 4).clamp(0, 38) as u8;
+                            let input_s = s_in.max(0) as u8;
+                            result_p.saturating_sub(result_s) + input_s
+                        } else {
+                            *p
+                        };
+                        if exceeds_decimal128_precision(q, max_digits) {
                             ScalarValue::Decimal128(None, *p, *s)
                         } else {
                             ScalarValue::Decimal128(Some(q), *p, *s)
@@ -363,7 +402,14 @@ impl Accumulator for TryAvgAccumulator {
 
         // 3) merge sums
         match self.dtype {
-            DataType::Decimal128(p, _s) => {
+            DataType::Decimal128(ref p, ref s) => {
+                // Use stored input precision from update_batch,
+                // falling back to return type if not yet set (first merge).
+                let effective_p = if let Some((p_in, s_in)) = self.input_precision {
+                    spark_accumulator_effective_precision(p_in, s_in)
+                } else {
+                    spark_accumulator_effective_precision(*p, *s)
+                };
                 let array = downcast_value!(states[0], Decimal128Array);
                 for value in array.iter().flatten() {
                     let next = match self.sum_dec128 {
@@ -377,7 +423,7 @@ impl Accumulator for TryAvgAccumulator {
                         },
                     };
 
-                    if exceeds_decimal128_precision(next, p) {
+                    if exceeds_decimal128_precision(next, effective_p) {
                         self.failed = true;
                         return Ok(());
                     }
@@ -442,6 +488,20 @@ fn pow10_i128(p: u8) -> Option<i128> {
     Some(v)
 }
 
+/// Computes the effective precision for overflow detection in Spark's try_avg accumulator.
+///
+/// Spark uses `DecimalType.bounded(p + 10, s)` for the intermediate sum:
+/// <https://github.com/apache/spark/blob/v4.0.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Average.scala#L73>
+///
+/// `bounded` clamps to `DECIMAL(min(p+10, 38), s)` — the scale stays the same,
+/// only precision increases by 10.
+/// For DECIMAL(38,0) → acc DECIMAL(38,0) → effective_p = 38.
+/// For DECIMAL(5,0) → acc DECIMAL(15,0) → effective_p = 15.
+/// For DECIMAL(30,0) → acc DECIMAL(38,0) → effective_p = 38.
+fn spark_accumulator_effective_precision(p: u8, _s: i8) -> u8 {
+    (p as i16 + 10).clamp(0, 38) as u8
+}
+
 fn exceeds_decimal128_precision(sum: i128, p: u8) -> bool {
     if let Some(max_plus_one) = pow10_i128(p) {
         let max = max_plus_one - 1;
@@ -471,7 +531,12 @@ impl AggregateUDFImpl for TryAvgFunction {
         let result_type = match *dt {
             Null => Float64,
             Decimal128(p, s) => {
-                let p2 = std::cmp::min(p + 10, 38);
+                // NOTE: Spark returns DECIMAL(min(p+4,38), min(s+4,38)) with scaled division.
+                // We only increase precision and keep the original scale, using integer
+                // division instead of full decimal rescaling. Overflow checks approximate
+                // Spark's result type integer digit capacity.
+                // https://github.com/apache/spark/blob/v4.0.0/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/aggregate/Average.scala#L62
+                let p2 = std::cmp::min(p + 4, 38);
                 Decimal128(p2, s)
             }
             Interval(IntervalUnit::YearMonth) => Interval(IntervalUnit::YearMonth),
@@ -499,12 +564,7 @@ impl AggregateUDFImpl for TryAvgFunction {
         let sum_dt = args.return_field.data_type().clone();
         Ok(vec![
             Field::new(format_state_name(args.name, "sum"), sum_dt.clone(), true).into(),
-            Field::new(
-                format_state_name(args.name, "count"),
-                DataType::Int64,
-                false,
-            )
-            .into(),
+            Field::new(format_state_name(args.name, "count"), DataType::Int64, true).into(),
             Field::new(
                 format_state_name(args.name, "failed"),
                 DataType::Boolean,
@@ -678,8 +738,8 @@ mod tests {
     }
 
     #[test]
-    fn try_avg_decimal_overflow_sets_failed() -> datafusion::common::Result<()> {
-        let p = 15u8;
+    fn try_avg_decimal_no_overflow_small_values() -> datafusion::common::Result<()> {
+        let p = 9u8;
         let s = 0i8;
         let mut acc = TryAvgAccumulator::new(DataType::Decimal128(p, s));
         acc.update_batch(&[dec128(5, s, vec![Some(90_000), Some(20_000)])?])?;
@@ -775,7 +835,7 @@ mod tests {
         assert_eq!(f.return_type(&[DataType::Float64])?, DataType::Float64);
         assert_eq!(
             f.return_type(&[DataType::Decimal128(10, 2)])?,
-            DataType::Decimal128(20, 2)
+            DataType::Decimal128(14, 2)
         );
         Ok(())
     }
@@ -816,36 +876,36 @@ mod tests {
 
     #[test]
     fn decimal_10_2_sum_and_schema_widened() -> datafusion::common::Result<()> {
-        // input: DECIMAL(10,2)  -> return DECIMAL(20,2)
+        // input: DECIMAL(10,2)  -> return DECIMAL(14,2)
         let f = TryAvgFunction::new();
         assert_eq!(
             f.return_type(&[DataType::Decimal128(10, 2)])?,
-            DataType::Decimal128(20, 2),
-            "Spark needs precision+10"
+            DataType::Decimal128(14, 2),
+            "Spark uses precision+4"
         );
 
-        let mut acc = TryAvgAccumulator::new(DataType::Decimal128(20, 2));
+        let mut acc = TryAvgAccumulator::new(DataType::Decimal128(14, 2));
         acc.update_batch(&[dec128(10, 2, vec![Some(123), Some(477)])?])?;
         // sum=600,count=2 => avg=300
-        assert_eq!(acc.evaluate()?, ScalarValue::Decimal128(Some(300), 20, 2));
+        assert_eq!(acc.evaluate()?, ScalarValue::Decimal128(Some(300), 14, 2));
         Ok(())
     }
 
     #[test]
     fn decimal_5_0_widened_avg() -> datafusion::common::Result<()> {
-        // input: DECIMAL(5,0) -> return DECIMAL(15,0)
+        // input: DECIMAL(5,0) -> return DECIMAL(9,0)
         // vals [90000,20000] => sum=110000,count=2 => avg=55000
         let f = TryAvgFunction::new();
         assert_eq!(
             f.return_type(&[DataType::Decimal128(5, 0)])?,
-            DataType::Decimal128(15, 0)
+            DataType::Decimal128(9, 0)
         );
 
-        let mut acc = TryAvgAccumulator::new(DataType::Decimal128(15, 0));
+        let mut acc = TryAvgAccumulator::new(DataType::Decimal128(9, 0));
         acc.update_batch(&[dec128(5, 0, vec![Some(90_000), Some(20_000)])?])?;
         assert_eq!(
             acc.evaluate()?,
-            ScalarValue::Decimal128(Some(55_000), 15, 0)
+            ScalarValue::Decimal128(Some(55_000), 9, 0)
         );
         Ok(())
     }
@@ -899,6 +959,72 @@ mod tests {
         let mut acc = TryAvgAccumulator::new(DataType::Interval(IntervalUnit::YearMonth));
         acc.update_batch(&[ym(vec![Some(i32::MAX), Some(1)])?])?;
         assert_eq!(acc.evaluate()?, ScalarValue::IntervalYearMonth(None));
+        Ok(())
+    }
+
+    // -------- spark_accumulator_effective_precision --------
+
+    #[test]
+    fn effective_precision_decimal_10_2() {
+        // DECIMAL(10,2): acc DECIMAL(20,2) → effective_p = 20
+        assert_eq!(spark_accumulator_effective_precision(10, 2), 20);
+    }
+
+    #[test]
+    fn effective_precision_decimal_38_0() {
+        // DECIMAL(38,0): acc DECIMAL(38,0) → effective_p = 38 (clamped)
+        assert_eq!(spark_accumulator_effective_precision(38, 0), 38);
+    }
+
+    #[test]
+    fn effective_precision_clamps_at_38() {
+        // DECIMAL(36,0): acc_p = min(46,38) = 38
+        assert_eq!(spark_accumulator_effective_precision(36, 0), 38);
+    }
+
+    #[test]
+    fn effective_precision_small_decimal() {
+        // DECIMAL(5,0): acc DECIMAL(15,0) → effective_p = 15
+        assert_eq!(spark_accumulator_effective_precision(5, 0), 15);
+    }
+
+    #[test]
+    fn effective_precision_negative_scale() {
+        // DECIMAL(10,-2): acc_p = min(20,38) = 20
+        assert_eq!(spark_accumulator_effective_precision(10, -2), 20);
+    }
+
+    // -------- exceeds_decimal128_precision --------
+
+    #[test]
+    fn exceeds_precision_within_bounds() {
+        assert!(!exceeds_decimal128_precision(0, 1));
+        assert!(!exceeds_decimal128_precision(9, 1));
+        assert!(!exceeds_decimal128_precision(-9, 1));
+    }
+
+    #[test]
+    fn exceeds_precision_out_of_bounds() {
+        assert!(exceeds_decimal128_precision(10, 1));
+        assert!(exceeds_decimal128_precision(-10, 1));
+    }
+
+    #[test]
+    fn exceeds_precision_at_p38() {
+        let max = super::pow10_i128(38).map(|v| v - 1);
+        assert!(max.is_some());
+        let max = max.map(|v| !exceeds_decimal128_precision(v, 38));
+        assert_eq!(max, Some(true));
+    }
+
+    // -------- effective_precision stored for merge --------
+
+    #[test]
+    fn update_stores_input_precision() -> datafusion::common::Result<()> {
+        // Input DECIMAL(30,0) stored for overflow checks
+        let mut acc = TryAvgAccumulator::new(DataType::Decimal128(34, 0));
+        acc.update_batch(&[dec128(30, 0, vec![Some(100)])?])?;
+        assert_eq!(acc.input_precision, Some((30, 0)));
         Ok(())
     }
 }
