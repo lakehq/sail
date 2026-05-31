@@ -42,6 +42,47 @@ Feature: Delta Lake Variant support
       | id | a | b     | payload_json        |
       | 1  | 1 | delta | {"a":1,"b":"delta"} |
 
+  Scenario: Write and read a Variant column with preview VariantType feature
+    Given variable location for temporary directory delta_variant_preview
+    Given final statement
+      """
+      DROP TABLE IF EXISTS delta_variant_preview_table
+      """
+    Given statement template
+      """
+      CREATE TABLE delta_variant_preview_table (
+        id INT,
+        payload VARIANT
+      )
+      USING DELTA
+      LOCATION {{ location.sql }}
+      TBLPROPERTIES ('delta.feature.variantType-preview' = 'supported')
+      """
+    Given statement
+      """
+      INSERT INTO delta_variant_preview_table
+      SELECT 1, parse_json('{"a":1,"b":"preview"}')
+      """
+    Then delta log first commit protocol and metadata contains
+      | path                                 | value           |
+      | protocol.minReaderVersion            | 3               |
+      | protocol.minWriterVersion            | 7               |
+      | protocol.readerFeatures              | ["variantType-preview"] |
+      | protocol.writerFeatures              | ["variantType-preview", "appendOnly", "invariants"] |
+      | metaData.schemaString.fields[1].type | "variant"       |
+    When query
+      """
+      SELECT
+        id,
+        variant_get(payload, '$.a', 'int') AS a,
+        variant_get(payload, '$.b', 'string') AS b
+      FROM delta_variant_preview_table
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | a | b       |
+      | 1  | 1 | preview |
+
   Scenario: Create table with VariantShredding table property
     Given variable location for temporary directory delta_variant_shredding_protocol
     Given final statement
