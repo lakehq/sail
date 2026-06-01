@@ -246,8 +246,6 @@ impl ProtocolChecker {
         protocol: &Protocol,
         variant_shredding_enabled: bool,
     ) -> Result<(), TransactionError> {
-        // `variantType` is validated against the effective schema separately; Spark can attach a
-        // shredding feature to a table that currently has no Variant columns.
         if variant_shredding_enabled
             && !(protocol.min_reader_version() >= 3
                 && protocol.min_writer_version() >= 7

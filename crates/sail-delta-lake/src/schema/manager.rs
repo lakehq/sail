@@ -224,8 +224,6 @@ pub fn protocol_for_create(
     for feature in explicit_features {
         match feature {
             TableFeature::VariantShredding | TableFeature::VariantShreddingPreview => {
-                // Spark allows shredding features on tables with no Variant columns; `variantType`
-                // is added only by the schema-driven path above.
                 enable_variant_shredding_feature(
                     &mut reader_features,
                     &mut writer_features,
