@@ -153,6 +153,20 @@ Feature: Theta sketch functions
         | union_result | intersection_result |
         | 0            | 0                   |
 
+    Scenario: theta_intersection_agg skips null-only partial sketch states
+      When query
+        """
+        SELECT theta_sketch_estimate(theta_intersection_agg(sketch)) AS result
+        FROM (
+          SELECT CAST(NULL AS BINARY) AS sketch FROM range(0, 2, 1, 1)
+          UNION ALL
+          SELECT theta_sketch_agg(col) AS sketch FROM VALUES (1), (2) AS tab(col)
+        ) AS sketches
+        """
+      Then query result
+        | result |
+        | 2      |
+
     Scenario: theta sketch aggregates work as window functions with default arguments
       When query
         """

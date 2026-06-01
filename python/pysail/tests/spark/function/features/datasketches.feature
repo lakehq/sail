@@ -69,6 +69,20 @@ Feature: DataSketches functions
         | result |
         | 1      |
 
+    Scenario: hll_union_agg skips null-only partial sketch states
+      When query
+        """
+        SELECT hll_sketch_estimate(hll_union_agg(sketch, false)) AS result
+        FROM (
+          SELECT CAST(NULL AS BINARY) AS sketch FROM range(0, 2, 1, 1)
+          UNION ALL
+          SELECT hll_sketch_agg(col) AS sketch FROM VALUES (1) AS tab(col)
+        ) AS sketches
+        """
+      Then query result
+        | result |
+        | 1      |
+
     Scenario: HLL sketch aggregates work as window functions with default arguments
       When query
         """

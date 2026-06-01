@@ -264,7 +264,7 @@ impl Accumulator for HllUnionAggAccumulator {
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
-        Ok(vec![ScalarValue::Binary(Some(self.evaluate_bytes()))])
+        Ok(vec![ScalarValue::Binary(self.sketch.clone())])
     }
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
