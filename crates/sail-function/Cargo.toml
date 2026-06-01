@@ -34,6 +34,7 @@ aes = { workspace = true }
 aes-gcm = { workspace = true }
 cbc = { workspace = true }
 base64 = { workspace = true }
+datasketches = { workspace = true }
 num = { workspace = true }
 half = { workspace = true }
 url = { workspace = true }
