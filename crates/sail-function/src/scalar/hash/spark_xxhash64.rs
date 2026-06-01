@@ -35,7 +35,7 @@ impl ScalarUDFImpl for SparkXxhash64 {
     }
 
     fn name(&self) -> &str {
-        "spark_xxhash64"
+        "xxhash64"
     }
 
     fn signature(&self) -> &Signature {
@@ -51,7 +51,7 @@ impl ScalarUDFImpl for SparkXxhash64 {
         let length = args.len();
         if length < 1 {
             return Err(DataFusionError::Internal(
-                "spark_xxhash64 requires at least one argument".to_string(),
+                "xxhash64 requires at least one argument".to_string(),
             ));
         }
         args.push(ColumnarValue::Scalar(ScalarValue::Int64(Some(42))));

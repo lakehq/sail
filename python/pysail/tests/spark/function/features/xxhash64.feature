@@ -29,6 +29,26 @@ Feature: xxhash64() returns 64-bit xxHash
         | result              |
         | 4450643625805672383 |
 
+    Scenario: xxhash64 uses column inputs
+      When query
+        """
+        SELECT c1, c2, xxhash64(c1, c2)
+        FROM VALUES ('ABC', 'DEF') AS t(c1, c2)
+        """
+      Then query result
+        | c1  | c2  | xxhash64(c1, c2)    |
+        | ABC | DEF | 3233247871021311208 |
+
+    Scenario: xxhash64 expands wildcard inputs
+      When query
+        """
+        SELECT c1, c2, xxhash64(*)
+        FROM VALUES ('ABC', 'DEF') AS t(c1, c2)
+        """
+      Then query result
+        | c1  | c2  | xxhash64(c1, c2)    |
+        | ABC | DEF | 3233247871021311208 |
+
   Rule: Null handling
 
     Scenario: xxhash64 null input
@@ -39,3 +59,12 @@ Feature: xxhash64() returns 64-bit xxHash
       Then query result
         | result |
         | 42     |
+
+  Rule: Invalid inputs
+
+    Scenario: xxhash64 rejects zero arguments
+      When query
+        """
+        SELECT xxhash64() AS result
+        """
+      Then query error (?s).*xxhash64.*requires at least one argument.*

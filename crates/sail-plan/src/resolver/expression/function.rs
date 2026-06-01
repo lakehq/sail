@@ -19,6 +19,17 @@ use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
+    fn column_display_name(
+        column: &datafusion_common::Column,
+        state: &PlanResolverState,
+    ) -> PlanResult<Option<String>> {
+        let info = state.get_field_info(column.name())?;
+        if info.is_hidden() {
+            return Ok(None);
+        }
+        Ok(Some(info.name().to_string()))
+    }
+
     pub(super) async fn resolve_expression_function(
         &self,
         function: spec::UnresolvedFunction,
@@ -81,11 +92,30 @@ impl PlanResolver<'_> {
         // to a string literal before resolution.
         let arguments = Self::convert_date_part_argument(&canonical_function_name, arguments);
 
+        // The resolution order here (UDF → built-in scalar → built-in aggregate) must match
+        // the function-dispatch order in the `let func = ...` chain below.
         let (argument_display_names, arguments) = if canonical_function_name == "struct" {
             self.resolve_struct_expressions_and_names(arguments, schema, state)
                 .await?
-        } else {
+        } else if catalog_manager
+            .get_function(&canonical_function_name)?
+            .is_some()
+            || get_built_in_function(&canonical_function_name).is_ok()
+        {
+            // For scalar functions and UDFs, expand any wildcard argument into the visible
+            // column list, matching PySpark's `_invoke_function_over_columns` semantics
+            // (e.g., `hash(*)` or `xxhash64(*)` expand to individual column references).
+            self.resolve_wildcard_expressions_and_names(arguments, schema, state)
+                .await?
+        } else if get_built_in_aggregate_function(&canonical_function_name).is_ok() {
+            // For aggregate functions, preserve wildcard arguments (e.g., `COUNT(*)`) as-is.
+            // Wildcard expansion for aggregates is handled separately below
+            // (e.g., `COUNT(DISTINCT *)` and the `COUNT(*) → COUNT(1)` rewrite).
             self.resolve_expressions_and_names(arguments, schema, state)
+                .await?
+        } else {
+            // For unknown functions, resolve arguments without expanding wildcards, to allow passing
+            self.resolve_wildcard_expressions_and_names(arguments, schema, state)
                 .await?
         };
 
@@ -270,17 +300,6 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<(Vec<String>, Vec<expr::Expr>)> {
-        fn column_display_name(
-            column: &datafusion_common::Column,
-            state: &PlanResolverState,
-        ) -> PlanResult<Option<String>> {
-            let info = state.get_field_info(column.name())?;
-            if info.is_hidden() {
-                return Ok(None);
-            }
-            Ok(Some(info.name().to_string()))
-        }
-
         let mut names: Vec<String> = vec![];
         let mut exprs: Vec<expr::Expr> = vec![];
 
@@ -311,7 +330,7 @@ impl PlanResolver<'_> {
                                 "column expected for expanded wildcard expression in struct, got: {e:?}"
                             )));
                         };
-                        if let Some(display_name) = column_display_name(&column, state)? {
+                        if let Some(display_name) = Self::column_display_name(&column, state)? {
                             names.push(display_name);
                             exprs.push(Expr::Column(column));
                         }
@@ -342,6 +361,69 @@ impl PlanResolver<'_> {
                     }
                 }
 
+                other => {
+                    names.push(name.one()?);
+                    exprs.push(other);
+                }
+            }
+        }
+
+        Ok((names, exprs))
+    }
+
+    /// Resolves function arguments while expanding wildcard arguments to visible columns.
+    ///
+    /// When PySpark calls a function with `'*'` (e.g., `hash('*')`, `xxhash64('*')`),
+    /// the Spark Connect protocol sends `UnresolvedStar`, which resolves to `Expr::Wildcard`.
+    /// This method expands such wildcard arguments to the individual visible columns,
+    /// matching PySpark's `_invoke_function_over_columns` behavior.
+    ///
+    /// Unlike `resolve_struct_expressions_and_names`, this helper only expands
+    /// wildcards and otherwise preserves the resolved argument expression as-is.
+    async fn resolve_wildcard_expressions_and_names(
+        &self,
+        expressions: Vec<spec::Expr>,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(Vec<String>, Vec<expr::Expr>)> {
+        let mut names: Vec<String> = vec![];
+        let mut exprs: Vec<expr::Expr> = vec![];
+
+        for expression in expressions {
+            let NamedExpr { name, expr, .. } = self
+                .resolve_named_expression(expression, schema, state)
+                .await?;
+
+            match expr {
+                // Expand wildcard to visible column references so that functions
+                // receiving `*` from PySpark (e.g., `hash(*)`, `xxhash64(*)`,
+                // `coalesce(*)`) see the expanded column list at plan time.
+                // TODO: remove the `#[expect(deprecated)]` once DataFusion replaces
+                // the deprecated `Expr::Wildcard` variant.
+                #[expect(deprecated)]
+                Expr::Wildcard { qualifier, options } => {
+                    let plan = LogicalPlan::EmptyRelation(EmptyRelation {
+                        produce_one_row: false,
+                        schema: schema.clone(),
+                    });
+
+                    let expanded = match qualifier {
+                        Some(q) => expand_qualified_wildcard(&q, schema, Some(&options))?,
+                        None => expand_wildcard(schema, &plan, Some(&options))?,
+                    };
+
+                    for e in expanded {
+                        let Expr::Column(column) = e else {
+                            return Err(PlanError::internal(format!(
+                                "column expected for expanded wildcard expression, got: {e:?}"
+                            )));
+                        };
+                        if let Some(display_name) = Self::column_display_name(&column, state)? {
+                            names.push(display_name);
+                            exprs.push(Expr::Column(column));
+                        }
+                    }
+                }
                 other => {
                     names.push(name.one()?);
                     exprs.push(other);
