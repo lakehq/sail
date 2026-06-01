@@ -7,6 +7,9 @@ use arrow_schema::extension::{
 use datafusion::arrow::datatypes as adt;
 use parquet_variant_compute::VariantType;
 use sail_common::geoarrow::extension::GeoArrowWkbType;
+use sail_common::spark::extension::{
+    SparkDayTimeIntervalType, SparkIntervalMetadata, SparkYearMonthIntervalType,
+};
 use sail_common::spec;
 use sail_common::spec::{
     SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
@@ -61,6 +64,54 @@ fn validate_geography_srid(srid: i32) -> PlanResult<()> {
         )));
     }
     Ok(())
+}
+
+fn day_time_interval_field_number(field: spec::IntervalFieldType) -> PlanResult<i32> {
+    match field {
+        spec::IntervalFieldType::Day => Ok(0),
+        spec::IntervalFieldType::Hour => Ok(1),
+        spec::IntervalFieldType::Minute => Ok(2),
+        spec::IntervalFieldType::Second => Ok(3),
+        field => Err(PlanError::invalid(format!(
+            "{field:?} is not valid for a day-time interval"
+        ))),
+    }
+}
+
+fn year_month_interval_field_number(field: spec::IntervalFieldType) -> PlanResult<i32> {
+    match field {
+        spec::IntervalFieldType::Year => Ok(0),
+        spec::IntervalFieldType::Month => Ok(1),
+        field => Err(PlanError::invalid(format!(
+            "{field:?} is not valid for a year-month interval"
+        ))),
+    }
+}
+
+fn day_time_interval_metadata(
+    start_field: Option<spec::IntervalFieldType>,
+    end_field: Option<spec::IntervalFieldType>,
+) -> PlanResult<SparkIntervalMetadata> {
+    Ok(SparkIntervalMetadata::new(
+        start_field
+            .map(day_time_interval_field_number)
+            .transpose()?,
+        end_field.map(day_time_interval_field_number).transpose()?,
+    ))
+}
+
+fn year_month_interval_metadata(
+    start_field: Option<spec::IntervalFieldType>,
+    end_field: Option<spec::IntervalFieldType>,
+) -> PlanResult<SparkIntervalMetadata> {
+    Ok(SparkIntervalMetadata::new(
+        start_field
+            .map(year_month_interval_field_number)
+            .transpose()?,
+        end_field
+            .map(year_month_interval_field_number)
+            .transpose()?,
+    ))
 }
 
 impl PlanResolver<'_> {
@@ -282,8 +333,10 @@ impl PlanResolver<'_> {
                 // Variant layout using Binary for PySpark compatibility.
                 // parquet-variant uses BinaryView internally but we convert to Binary
                 let fields = adt::Fields::from(vec![
-                    adt::Field::new("metadata", adt::DataType::Binary, false),
                     adt::Field::new("value", adt::DataType::Binary, false),
+                    adt::Field::new("metadata", adt::DataType::Binary, false).with_metadata(
+                        HashMap::from([("variant".to_string(), "true".to_string())]),
+                    ),
                 ]);
                 Ok(adt::DataType::Struct(fields))
             }
@@ -356,6 +409,30 @@ impl PlanResolver<'_> {
                     ext["crs"] = serde_json::Value::String(crs);
                 }
                 metadata.insert(EXTENSION_TYPE_METADATA_KEY.to_string(), ext.to_string());
+                data_type
+            }
+            spec::DataType::Interval {
+                interval_unit: spec::IntervalUnit::DayTime,
+                start_field,
+                end_field,
+            } => {
+                for (key, value) in day_time_interval_metadata(*start_field, *end_field)?
+                    .arrow_metadata(SparkDayTimeIntervalType::NAME)
+                {
+                    metadata.insert(key, value);
+                }
+                data_type
+            }
+            spec::DataType::Interval {
+                interval_unit: spec::IntervalUnit::YearMonth,
+                start_field,
+                end_field,
+            } => {
+                for (key, value) in year_month_interval_metadata(*start_field, *end_field)?
+                    .arrow_metadata(SparkYearMonthIntervalType::NAME)
+                {
+                    metadata.insert(key, value);
+                }
                 data_type
             }
             spec::DataType::Variant => {
