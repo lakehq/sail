@@ -102,6 +102,7 @@ use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
 use sail_function::aggregate::count_min_sketch::CountMinSketchFunction;
+use sail_function::aggregate::grouping_id::GroupingIdFunction;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
 use sail_function::aggregate::hll_sketch::{HllSketchAggFunction, HllUnionAggFunction};
 use sail_function::aggregate::kurtosis::KurtosisFunction;
@@ -2652,6 +2653,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "count_min_sketch" => {
                     Ok(Arc::new(AggregateUDF::from(CountMinSketchFunction::new())))
                 }
+                "grouping_id" => Ok(Arc::new(AggregateUDF::from(GroupingIdFunction::new()))),
                 "histogram_numeric" => Ok(Arc::new(AggregateUDF::from(
                     HistogramNumericFunction::new(),
                 ))),
@@ -2768,6 +2770,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<BitmapConstructAggFunction>()
             || node.inner().as_any().is::<BitmapOrAggFunction>()
             || node.inner().as_any().is::<CountMinSketchFunction>()
+            || node.inner().as_any().is::<GroupingIdFunction>()
             || node.inner().as_any().is::<HistogramNumericFunction>()
             || node.inner().as_any().is::<HllSketchAggFunction>()
             || node.inner().as_any().is::<HllUnionAggFunction>()

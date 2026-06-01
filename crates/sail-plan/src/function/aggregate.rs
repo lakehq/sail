@@ -19,6 +19,7 @@ use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
 use sail_function::aggregate::count_min_sketch::CountMinSketchFunction;
+use sail_function::aggregate::grouping_id::GroupingIdFunction;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
 use sail_function::aggregate::hll_sketch::{HllSketchAggFunction, HllUnionAggFunction};
 use sail_function::aggregate::kurtosis::KurtosisFunction;
@@ -67,6 +68,30 @@ fn avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             filter: input.filter,
             order_by: input.order_by,
             null_treatment,
+        },
+    }))
+}
+
+fn grouping_id(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let AggFunctionInput {
+        arguments,
+        distinct,
+        ignore_nulls,
+        filter,
+        order_by,
+        function_context: _,
+    } = input;
+    if distinct || ignore_nulls.is_some() || filter.is_some() || !order_by.is_empty() {
+        return Err(PlanError::invalid("invalid grouping_id function clause"));
+    }
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(GroupingIdFunction::new())),
+        params: AggregateFunctionParams {
+            args: arguments,
+            distinct: false,
+            filter: None,
+            order_by: vec![],
+            null_treatment: None,
         },
     }))
 }
@@ -661,7 +686,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("first", F::custom(first_value)),
         ("first_value", F::custom(first_value)),
         ("grouping", F::default(grouping::grouping_udaf)),
-        ("grouping_id", F::unknown("grouping_id")),
+        ("grouping_id", F::custom(grouping_id)),
         ("histogram_numeric", F::custom(histogram_numeric)),
         ("hll_sketch_agg", F::custom(hll_sketch_agg)),
         ("hll_union_agg", F::custom(hll_union_agg)),
