@@ -62,12 +62,20 @@ Feature: DataSketches functions
     Scenario: hll_union_agg empty result matches Spark union lgConfigK
       When query
         """
-        SELECT hll_sketch_estimate(hll_union(hll_union_agg(NULL), hll_sketch_agg(col, 21), false)) AS result
+        SELECT hll_sketch_estimate(hll_union(hll_union_agg(NULL), hll_sketch_agg(col, 12), false)) AS result
         FROM VALUES (1) AS tab(col)
         """
       Then query result
         | result |
         | 1      |
+
+    Scenario: hll_union_agg empty result rejects different lgConfigK
+      When query
+        """
+        SELECT hll_sketch_estimate(hll_union(hll_union_agg(NULL), hll_sketch_agg(col, 21), false)) AS result
+        FROM VALUES (1) AS tab(col)
+        """
+      Then query error cannot union HLL sketches with different lgConfigK values
 
     Scenario: hll_union_agg skips null-only partial sketch states
       When query

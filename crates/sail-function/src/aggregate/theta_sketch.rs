@@ -357,7 +357,9 @@ impl ThetaIntersectionAggAccumulator {
     fn evaluate_bytes(&self) -> Result<Vec<u8>> {
         match &self.sketch {
             Some(sketch) => Ok(sketch.clone()),
-            None => empty_compact_sketch_bytes(),
+            None => exec_err!(
+                "theta_intersection_agg cannot produce a result without any non-null input sketches"
+            ),
         }
     }
 }

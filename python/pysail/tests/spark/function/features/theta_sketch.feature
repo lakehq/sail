@@ -142,16 +142,37 @@ Feature: Theta sketch functions
         | result |
         | 2      |
 
-    Scenario: theta sketch aggregate set operations accept untyped null sketch inputs
+    Scenario: theta_union_agg accepts untyped null sketch inputs
       When query
         """
-        SELECT
-          theta_sketch_estimate(theta_union_agg(NULL)) AS union_result,
-          theta_sketch_estimate(theta_intersection_agg(NULL)) AS intersection_result
+        SELECT theta_sketch_estimate(theta_union_agg(NULL)) AS result
         """
       Then query result
-        | union_result | intersection_result |
-        | 0            | 0                   |
+        | result |
+        | 0      |
+
+    Scenario: theta_intersection_agg rejects untyped null sketch inputs
+      When query
+        """
+        SELECT theta_sketch_estimate(theta_intersection_agg(NULL)) AS result
+        """
+      Then query error theta_intersection_agg cannot produce a result without any non-null input sketches
+
+    Scenario: theta_intersection_agg rejects typed null sketch inputs
+      When query
+        """
+        SELECT theta_sketch_estimate(theta_intersection_agg(CAST(NULL AS BINARY))) AS result
+        """
+      Then query error theta_intersection_agg cannot produce a result without any non-null input sketches
+
+    Scenario: theta_intersection_agg rejects empty inputs
+      When query
+        """
+        SELECT theta_sketch_estimate(theta_intersection_agg(CAST(col AS BINARY))) AS result
+        FROM VALUES (CAST(NULL AS BINARY)) AS tab(col)
+        WHERE false
+        """
+      Then query error theta_intersection_agg cannot produce a result without any non-null input sketches
 
     Scenario: theta_intersection_agg skips null-only partial sketch states
       When query

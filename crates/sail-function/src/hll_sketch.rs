@@ -10,7 +10,6 @@ use datasketches::hll::{HllSketch, HllType, HllUnion};
 pub(crate) const MIN_LG_CONFIG_K: i32 = 4;
 pub(crate) const MAX_LG_CONFIG_K: i32 = 21;
 pub const DEFAULT_LG_CONFIG_K: i32 = 12;
-const DEFAULT_UNION_LG_CONFIG_K: u8 = 21;
 
 pub(crate) fn validate_lg_config_k(value: i32, function_name: &str) -> Result<u8> {
     if !(MIN_LG_CONFIG_K..=MAX_LG_CONFIG_K).contains(&value) {
@@ -31,7 +30,7 @@ pub(crate) fn empty_hll_sketch_bytes() -> Vec<u8> {
 }
 
 pub(crate) fn empty_hll_union_bytes() -> Vec<u8> {
-    new_hll_sketch(DEFAULT_UNION_LG_CONFIG_K).serialize()
+    new_hll_sketch(DEFAULT_LG_CONFIG_K as u8).serialize()
 }
 
 pub(crate) fn estimate_hll_sketch(bytes: &[u8], function_name: &str) -> Result<i64> {
