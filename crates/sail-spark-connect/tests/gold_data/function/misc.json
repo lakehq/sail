@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_bigint"
+        "failure": "not supported: unknown function: kll_sketch_to_string_bigint"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_bigint"
+        "failure": "not supported: unknown function: kll_sketch_merge_bigint"
       }
     },
     {
@@ -63,7 +63,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_double"
+        "failure": "not supported: unknown function: kll_sketch_to_string_double"
       }
     },
     {
@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_double"
+        "failure": "not supported: unknown function: kll_sketch_merge_double"
       }
     },
     {
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_float"
+        "failure": "not supported: unknown function: kll_sketch_to_string_float"
       }
     },
     {
@@ -129,7 +129,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_float"
+        "failure": "not supported: unknown function: kll_sketch_merge_float"
       }
     },
     {
@@ -945,7 +945,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_bigint"
+        "failure": "not supported: unknown function: kll_sketch_get_n_bigint"
       }
     },
     {
@@ -967,7 +967,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_double"
+        "failure": "not supported: unknown function: kll_sketch_get_n_double"
       }
     },
     {
@@ -989,7 +989,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_float"
+        "failure": "not supported: unknown function: kll_sketch_get_n_float"
       }
     },
     {
@@ -1011,7 +1011,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_bigint"
+        "failure": "not supported: unknown function: kll_sketch_get_quantile_bigint"
       }
     },
     {
@@ -1033,7 +1033,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_double"
+        "failure": "not supported: unknown function: kll_sketch_get_quantile_double"
       }
     },
     {
@@ -1055,7 +1055,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_float"
+        "failure": "not supported: unknown function: kll_sketch_get_quantile_float"
       }
     },
     {
@@ -1077,7 +1077,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_bigint"
+        "failure": "not supported: unknown function: kll_sketch_get_rank_bigint"
       }
     },
     {
@@ -1099,7 +1099,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_double"
+        "failure": "not supported: unknown function: kll_sketch_get_rank_double"
       }
     },
     {
@@ -1121,7 +1121,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_float"
+        "failure": "not supported: unknown function: kll_sketch_get_rank_float"
       }
     },
     {

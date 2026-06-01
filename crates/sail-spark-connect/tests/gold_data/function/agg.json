@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_bigint"
+        "failure": "not supported: unknown function: kll_sketch_to_string_bigint"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_bigint"
+        "failure": "not supported: unknown function: kll_sketch_to_string_bigint"
       }
     },
     {
@@ -63,7 +63,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_double"
+        "failure": "not supported: unknown function: kll_sketch_to_string_double"
       }
     },
     {
@@ -85,7 +85,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_double"
+        "failure": "not supported: unknown function: kll_sketch_to_string_double"
       }
     },
     {
@@ -107,7 +107,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_float"
+        "failure": "not supported: unknown function: kll_sketch_to_string_float"
       }
     },
     {
@@ -129,7 +129,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: kll_sketch_agg_float"
+        "failure": "not supported: unknown function: kll_sketch_to_string_float"
       }
     },
     {

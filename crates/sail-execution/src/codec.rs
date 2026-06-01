@@ -102,6 +102,9 @@ use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
+use sail_function::aggregate::kll_sketch_agg::{
+    KllSketchAggBigintFunction, KllSketchAggDoubleFunction, KllSketchAggFloatFunction,
+};
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
@@ -2626,6 +2629,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "histogram_numeric" => Ok(Arc::new(AggregateUDF::from(
                     HistogramNumericFunction::new(),
                 ))),
+                "kll_sketch_agg_bigint" => Ok(Arc::new(AggregateUDF::from(
+                    KllSketchAggBigintFunction::new(),
+                ))),
+                "kll_sketch_agg_double" => Ok(Arc::new(AggregateUDF::from(
+                    KllSketchAggDoubleFunction::new(),
+                ))),
+                "kll_sketch_agg_float" => Ok(Arc::new(AggregateUDF::from(
+                    KllSketchAggFloatFunction::new(),
+                ))),
                 "kurtosis" => Ok(Arc::new(AggregateUDF::from(KurtosisFunction::new()))),
                 "max_by" => Ok(Arc::new(AggregateUDF::from(MaxByFunction::new()))),
                 "min_by" => Ok(Arc::new(AggregateUDF::from(MinByFunction::new()))),
@@ -2730,6 +2742,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<BitmapConstructAggFunction>()
             || node.inner().as_any().is::<BitmapOrAggFunction>()
             || node.inner().as_any().is::<HistogramNumericFunction>()
+            || node.inner().as_any().is::<KllSketchAggBigintFunction>()
+            || node.inner().as_any().is::<KllSketchAggDoubleFunction>()
+            || node.inner().as_any().is::<KllSketchAggFloatFunction>()
             || node.inner().as_any().is::<KurtosisFunction>()
             || node.inner().as_any().is::<MaxByFunction>()
             || node.inner().as_any().is::<MinByFunction>()
