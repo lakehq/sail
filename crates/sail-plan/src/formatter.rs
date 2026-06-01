@@ -464,9 +464,34 @@ impl PlanFormatter for SparkPlanFormatter {
                 let (value, list) = arguments.at_least_one()?;
                 Ok(format!("({value} IN ({}))", list.join(", ")))
             }
-            "case" | "when" => {
+            "when" => {
                 let mut result = String::from("CASE");
                 let mut i = 0;
+                while i < arguments.len() {
+                    if i + 1 < arguments.len() {
+                        result.push_str(&format!(
+                            " WHEN {} THEN {}",
+                            arguments[i],
+                            arguments[i + 1]
+                        ));
+                        i += 2;
+                    } else {
+                        result.push_str(&format!(" ELSE {}", arguments[i]));
+                        break;
+                    }
+                }
+                result.push_str(" END");
+                Ok(result)
+            }
+            "case" => {
+                // Simple CASE: first argument is the operand
+                let mut result = String::from("CASE");
+                if arguments.is_empty() {
+                    result.push_str(" END");
+                    return Ok(result);
+                }
+                result.push_str(&format!(" {}", arguments[0]));
+                let mut i = 1;
                 while i < arguments.len() {
                     if i + 1 < arguments.len() {
                         result.push_str(&format!(

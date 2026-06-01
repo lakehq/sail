@@ -601,6 +601,14 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         } => {
             let operand = operand.map(|x| from_ast_expression(*x)).transpose()?;
             let mut arguments = vec![];
+            // When there is an operand (simple CASE form: CASE col WHEN val THEN ...),
+            // pass the operand as the first argument without expanding into equality
+            // comparisons. This preserves the simple form so that DataFusion's
+            // LiteralLookupTable optimization can activate.
+            let function_name = if operand.is_some() { "case" } else { "when" };
+            if let Some(operand) = operand {
+                arguments.push(operand);
+            }
             once(*first_condition)
                 .chain(other_conditions)
                 .try_for_each::<_, SqlResult<_>>(|x| {
@@ -610,23 +618,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                         then: _,
                         result,
                     } = x;
-                    let condition = from_ast_expression(condition)?;
-                    let condition = if let Some(ref operand) = operand {
-                        spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                            function_name: spec::ObjectName::bare("=="),
-                            arguments: vec![operand.clone(), condition],
-                            named_arguments: vec![],
-                            is_distinct: false,
-                            is_user_defined_function: false,
-                            is_internal: None,
-                            ignore_nulls: None,
-                            filter: None,
-                            order_by: None,
-                        })
-                    } else {
-                        condition
-                    };
-                    arguments.push(condition);
+                    arguments.push(from_ast_expression(condition)?);
                     arguments.push(from_ast_expression(result)?);
                     Ok(())
                 })?;
@@ -635,7 +627,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 arguments.push(from_ast_expression(result)?);
             }
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
-                function_name: spec::ObjectName::bare("when"),
+                function_name: spec::ObjectName::bare(function_name),
                 arguments,
                 named_arguments: vec![],
                 is_distinct: false,
@@ -1061,5 +1053,54 @@ fn from_ast_pattern_escape_string(escape: Option<PatternEscape>) -> SqlResult<Op
         _ => Err(SqlError::invalid(format!(
             "invalid escape character: {value}"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use sail_common::spec;
+
+    use crate::error::SqlResult;
+    use crate::expression::from_ast_expression;
+    use crate::parser::parse_expression;
+
+    fn analyze_expression(sql: &str) -> SqlResult<spec::Expr> {
+        let ast = parse_expression(sql)?;
+        from_ast_expression(ast)
+    }
+
+    #[test]
+    fn test_simple_case_preserves_operand_form() -> SqlResult<()> {
+        // Simple CASE (with operand) must produce function name "case"
+        // so the resolver builds Expr::Case { expr: Some(...) },
+        // enabling DataFusion's LiteralLookupTable optimization.
+        let expr = analyze_expression("CASE col WHEN 1 THEN 'a' WHEN 2 THEN 'b' ELSE 'c' END")?;
+        assert!(
+            matches!(&expr, spec::Expr::UnresolvedFunction(f) if f.function_name == spec::ObjectName::bare("case")),
+            "expected UnresolvedFunction with name 'case', got: {expr:?}"
+        );
+        let spec::Expr::UnresolvedFunction(f) = &expr else {
+            unreachable!()
+        };
+        // First argument is the operand, followed by value/result pairs, then ELSE
+        // operand + 2 pairs (4 args) + else = 6 total
+        assert_eq!(f.arguments.len(), 6);
+        Ok(())
+    }
+
+    #[test]
+    fn test_searched_case_uses_when_form() -> SqlResult<()> {
+        // Searched CASE (without operand) must produce function name "when"
+        let expr = analyze_expression("CASE WHEN x > 0 THEN 'pos' ELSE 'neg' END")?;
+        assert!(
+            matches!(&expr, spec::Expr::UnresolvedFunction(f) if f.function_name == spec::ObjectName::bare("when")),
+            "expected UnresolvedFunction with name 'when', got: {expr:?}"
+        );
+        let spec::Expr::UnresolvedFunction(f) = &expr else {
+            unreachable!()
+        };
+        // condition + result + else = 3 arguments
+        assert_eq!(f.arguments.len(), 3);
+        Ok(())
     }
 }
