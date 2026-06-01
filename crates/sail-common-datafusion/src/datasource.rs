@@ -32,6 +32,12 @@ pub const MERGE_ROW_INDEX_COLUMN: &str = "__sail_file_row_index";
 /// Value is one of the [`RowLevelOperationType`] integer constants.
 pub const OPERATION_COLUMN: &str = "__sail_operation_type";
 
+/// Internal write option carrying the fully qualified catalog table name as a JSON string.
+///
+/// Table formats use this to coordinate storage commits with catalog commits. It is injected by
+/// the planner and must not be persisted as a user table property.
+pub const CATALOG_TABLE_OPTION: &str = "__sail.catalog.table";
+
 /// Internal column carrying pre-aggregated MERGE source row counts on
 /// [`RowLevelOperationType::SourceMetric`] rows.
 pub const MERGE_SOURCE_METRIC_COLUMN: &str = "__sail_merge_source_metric";

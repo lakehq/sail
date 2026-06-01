@@ -661,6 +661,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sink_mode,
                 user_metadata,
                 commit_context,
+                catalog_table,
             }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let sink_schema = self.try_decode_schema(&sink_schema)?;
@@ -686,6 +687,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     sink_mode,
                     user_metadata,
                     commit_context,
+                    (!catalog_table.is_empty()).then_some(catalog_table),
                 )))
             }
             NodeKind::DeltaScanByAdds(gen::DeltaScanByAddsExecNode {
@@ -1591,6 +1593,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 commit_context: Some(
                     self.try_encode_delta_commit_context(delta_commit_exec.commit_context())?,
                 ),
+                catalog_table: delta_commit_exec
+                    .catalog_table()
+                    .map(|table| table.to_vec())
+                    .unwrap_or_default(),
             })
         } else if let Some(delta_scan_by_adds_exec) =
             node.as_any().downcast_ref::<DeltaScanByAddsExec>()

@@ -31,7 +31,8 @@ pub use log::{
     is_json_checkpoint_filename, is_uuid_checkpoint_filename, last_checkpoint_path,
     parse_checkpoint_version, parse_checksum_version, parse_commit_version,
     parse_compacted_json_versions, parse_version_prefix, sidecar_file_path, sidecars_dir_path,
-    temp_commit_path, uuid_checkpoint_path, DELTA_LOG_DIR, LAST_CHECKPOINT_FILE, SIDECARS_DIR,
+    staged_commit_path, temp_commit_path, uuid_checkpoint_path, DELTA_LOG_DIR,
+    LAST_CHECKPOINT_FILE, SIDECARS_DIR,
 };
 pub use metadata::{Format, Metadata};
 pub use operation::{DeltaOperation, MergePredicate, SaveMode};

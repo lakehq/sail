@@ -96,6 +96,7 @@ pub fn assemble_commit_plan(
         PhysicalSinkMode::Append,
         user_metadata,
         write_context.commit_context.clone(),
+        None,
     )))
 }
 

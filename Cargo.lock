@@ -7428,6 +7428,7 @@ dependencies = [
  "sail-common-datafusion",
  "serde",
  "serde_arrow",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -7692,6 +7693,7 @@ dependencies = [
  "percent-encoding",
  "regex",
  "roaring",
+ "sail-catalog",
  "sail-common",
  "sail-common-datafusion",
  "sail-data-source",

@@ -14,13 +14,18 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use arrow::datatypes::DataType;
+use progenitor_client::ClientInfo;
 use reqwest::header::HeaderValue;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
-    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
-    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    AlterTableOptions, CatalogProvider, CommitTableOptions, CreateDatabaseOptions,
+    CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
+    Namespace,
 };
 use sail_catalog::utils::{get_property, quote_namespace_if_needed};
+use sail_common_datafusion::catalog::delta::{
+    DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
+};
 use sail_common_datafusion::catalog::{
     identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
 };
@@ -221,6 +226,7 @@ impl UnityCatalogProvider {
             table_type,
             updated_at,
             updated_by,
+            ..
         } = table_info;
 
         let name = name.unwrap_or_default();
@@ -289,7 +295,11 @@ impl UnityCatalogProvider {
             properties.insert("owner".to_string(), owner);
         }
         if let Some(table_id) = table_id {
-            properties.insert("table_id".to_string(), table_id);
+            properties.insert(
+                DELTA_UNITY_TABLE_ID_LEGACY_KEY.to_string(),
+                table_id.clone(),
+            );
+            properties.insert(DELTA_UNITY_TABLE_ID_KEY.to_string(), table_id);
         }
         if let Some(updated_at) = updated_at {
             properties.insert("updated_at".to_string(), updated_at.to_string());
@@ -297,6 +307,9 @@ impl UnityCatalogProvider {
         if let Some(updated_by) = updated_by {
             properties.insert("updated_by".to_string(), updated_by);
         }
+        let is_external = table_type
+            .as_ref()
+            .is_none_or(|table_type| matches!(table_type, types::TableType::External));
         if let Some(table_type) = table_type {
             properties.insert("table_type".to_string(), table_type.to_string());
         }
@@ -317,7 +330,7 @@ impl UnityCatalogProvider {
                 sort_by: vec![],
                 bucket_by: None,
                 properties,
-                is_external: true,
+                is_external,
             },
         })
     }
@@ -505,7 +518,6 @@ impl CatalogProvider for UnityCatalogProvider {
         table: &str,
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
-        // Only external table creation is supported according to the Unity Catalog OpenAPI spec.
         let CreateTableOptions {
             columns,
             comment,
@@ -518,7 +530,7 @@ impl CatalogProvider for UnityCatalogProvider {
             if_not_exists,
             replace,
             properties,
-            is_external: _,
+            is_external,
         } = options;
 
         if replace {
@@ -557,6 +569,13 @@ impl CatalogProvider for UnityCatalogProvider {
             .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
 
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
+        if !is_external && if_not_exists {
+            match self.get_table(database, table).await {
+                Ok(status) => return Ok(status),
+                Err(CatalogError::NotFound(_, _)) => {}
+                Err(e) => return Err(e),
+            }
+        }
 
         let data_source_format = types::DataSourceFormat::from_str(&format.trim().to_uppercase())
             .map_err(|e| {
@@ -619,18 +638,46 @@ impl CatalogProvider for UnityCatalogProvider {
             props.insert(k, v);
         }
 
+        let table_type = if is_external {
+            types::TableType::External
+        } else {
+            types::TableType::Managed
+        };
+        let storage_location = if is_external {
+            location.ok_or_else(|| {
+                CatalogError::External(
+                    "Storage location is required for external Unity Catalog tables".to_string(),
+                )
+            })?
+        } else {
+            let request = types::CreateStagingTable::builder()
+                .name(table)
+                .catalog_name(&catalog_name)
+                .schema_name(&schema_name);
+            let response = client
+                .create_staging_table()
+                .body(request)
+                .send()
+                .await
+                .map_err(|e| {
+                    CatalogError::External(format!("Failed to create staging table: {e}"))
+                })?;
+            response.into_inner().staging_location.ok_or_else(|| {
+                CatalogError::External(
+                    "Unity Catalog staging table response is missing a staging location"
+                        .to_string(),
+                )
+            })?
+        };
+
         let request = types::CreateTable::builder()
             .name(table)
             .catalog_name(&catalog_name)
             .schema_name(&schema_name)
-            .table_type(types::TableType::External)
+            .table_type(table_type)
             .data_source_format(data_source_format)
             .columns(unity_columns)
-            .storage_location(location.ok_or_else(|| {
-                CatalogError::External(
-                    "Storage location is required for Unity Catalog tables".to_string(),
-                )
-            })?)
+            .storage_location(storage_location)
             .comment(comment)
             .properties(if props.is_empty() {
                 None
@@ -649,6 +696,16 @@ impl CatalogProvider for UnityCatalogProvider {
                 if response.status().as_u16() == 409 && if_not_exists =>
             {
                 self.get_table(database, table).await
+            }
+            Err(progenitor_client::Error::UnexpectedResponse(response)) => {
+                let status = response.status();
+                let body = response
+                    .text()
+                    .await
+                    .unwrap_or_else(|e| format!("<failed to read response body: {e}>"));
+                Err(CatalogError::External(format!(
+                    "Failed to create table: HTTP {status}: {body}"
+                )))
             }
             Err(e) => Err(CatalogError::External(format!(
                 "Failed to create table: {e}"
@@ -735,21 +792,32 @@ impl CatalogProvider for UnityCatalogProvider {
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
         let full_name = Self::get_full_table_name(&catalog_name, &schema_name, table);
 
-        let result = client.delete_table().full_name(&full_name).send().await;
-
-        match result {
-            Ok(_) => Ok(()),
-            Err(progenitor_client::Error::InvalidResponsePayload(bytes, _))
-                if bytes.as_ref() == b"200 OK" =>
-            {
-                Ok(())
-            }
-            Err(progenitor_client::Error::UnexpectedResponse(response))
-                if response.status().as_u16() == 404 && if_exists =>
-            {
-                Ok(())
-            }
-            Err(e) => Err(CatalogError::External(format!("Failed to drop table: {e}"))),
+        let url = format!(
+            "{}/tables/{}",
+            client.baseurl,
+            progenitor_client::encode_path(&full_name)
+        );
+        let response = client
+            .client
+            .delete(url)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .header(
+                reqwest::header::HeaderName::from_static("api-version"),
+                Client::api_version(),
+            )
+            .send()
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to drop table: {e}")))?;
+        let status = response.status();
+        if status.is_success() || (status.as_u16() == 404 && if_exists) {
+            Ok(())
+        } else {
+            let body = response.text().await.unwrap_or_else(|e| {
+                format!("failed to read Unity Catalog error response body: {e}")
+            });
+            Err(CatalogError::External(format!(
+                "Failed to drop table: HTTP {status}: {body}"
+            )))
         }
     }
 
@@ -765,6 +833,82 @@ impl CatalogProvider for UnityCatalogProvider {
         // on-disk Delta table remains the source of truth until the REST integration
         // is wired up.
         Ok(())
+    }
+
+    async fn commit_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: CommitTableOptions,
+    ) -> CatalogResult<TableStatus> {
+        if !options.format.eq_ignore_ascii_case("delta") {
+            return Err(CatalogError::NotSupported(format!(
+                "Unity Catalog commit for {} tables",
+                options.format
+            )));
+        }
+        if !options.requirements.is_empty() {
+            return Err(CatalogError::NotSupported(
+                "Unity Catalog Delta commits do not support generic commit requirements"
+                    .to_string(),
+            ));
+        }
+        let [update] = options.updates.as_slice() else {
+            return Err(CatalogError::InvalidArgument(
+                "Unity Catalog Delta commit expects exactly one update payload".to_string(),
+            ));
+        };
+        let request: types::DeltaCommit = serde_json::from_value(update.clone()).map_err(|e| {
+            CatalogError::InvalidArgument(format!("Invalid Delta commit payload: {e}"))
+        })?;
+
+        let client = self
+            .get_client()
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
+
+        let url = format!("{}/delta/preview/commits", client.baseurl);
+        let response = client
+            .client
+            .post(url)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .header(
+                reqwest::header::HeaderName::from_static("api-version"),
+                Client::api_version(),
+            )
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| {
+                CatalogError::External(format!(
+                    "Failed to commit Delta table to Unity Catalog: {e}"
+                ))
+            })?;
+        let status = response.status();
+        if status.is_success() {
+            return self.get_table(database, table).await;
+        }
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|e| format!("failed to read Unity Catalog error response body: {e}"));
+        if status.as_u16() == 409 {
+            Err(CatalogError::Conflict(format!(
+                "Unity Catalog Delta commit conflict: HTTP {status}: {body}"
+            )))
+        } else if status.as_u16() == 400 {
+            Err(CatalogError::InvalidArgument(format!(
+                "Unity Catalog Delta commit invalid argument: HTTP {status}: {body}"
+            )))
+        } else if status.as_u16() == 501 {
+            Err(CatalogError::NotSupported(
+                "Unity Catalog Delta commit endpoint".to_string(),
+            ))
+        } else {
+            Err(CatalogError::External(format!(
+                "Failed to commit Delta table to Unity Catalog: HTTP {status}: {body}"
+            )))
+        }
     }
 
     async fn create_view(

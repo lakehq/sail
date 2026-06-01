@@ -355,3 +355,34 @@ Feature: Unity Catalog table operations
     Then query result
       | database                           | tableName | isTemporary |
       | sail_test_catalog.unity_table_test | sib_b     | false       |
+
+  Scenario: Managed Delta table writes are coordinated by Unity Catalog
+    Given Unity Catalog managed Delta table unity_table_test.managed_delta_t exists with id and name columns
+    Given final Unity Catalog managed table cleanup for unity_table_test.managed_delta_t
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_t VALUES
+        (1, 'one'),
+        (2, 'two')
+      """
+    Given variable location for table unity_table_test.managed_delta_t
+    When query
+      """
+      SELECT id, name FROM unity_table_test.managed_delta_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name  |
+      | 1  | one   |
+      | 2  | two   |
+    Then Unity Catalog table unity_table_test.managed_delta_t is a managed Delta table
+    Then Unity Catalog table unity_table_test.managed_delta_t table id matches Delta metadata in location
+    Then staged Delta commit for version 1 exists in location
+    Then Unity Catalog Delta commit for table unity_table_test.managed_delta_t version 1 exists
+    Then delta log first commit protocol and metadata contains
+      | path                                                | value                                      |
+      | protocol.minReaderVersion                          | 3                                          |
+      | protocol.minWriterVersion                          | 7                                          |
+      | protocol.readerFeatures                            | ["catalogManaged"]                         |
+      | protocol.writerFeatures                            | ["catalogManaged","inCommitTimestamp"]     |
+      | metaData.configuration["delta.feature.catalogManaged"] | "supported"                             |
+      | metaData.configuration["delta.enableInCommitTimestamps"] | "true"                                |

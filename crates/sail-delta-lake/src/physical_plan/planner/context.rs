@@ -48,6 +48,7 @@ pub struct DeltaPlannerConfig {
     /// field metadata set at logical-plan construction time.
     pub generation_expressions: HashMap<String, String>,
     pub table_snapshot: Option<Arc<DeltaSnapshot>>,
+    pub catalog_table: Option<Vec<String>>,
 }
 
 impl DeltaPlannerConfig {
@@ -68,6 +69,7 @@ impl DeltaPlannerConfig {
             table_exists,
             generation_expressions: HashMap::new(),
             table_snapshot: None,
+            catalog_table: None,
         }
     }
 
@@ -81,6 +83,11 @@ impl DeltaPlannerConfig {
 
     pub fn with_table_snapshot(mut self, table_snapshot: Option<Arc<DeltaSnapshot>>) -> Self {
         self.table_snapshot = table_snapshot;
+        self
+    }
+
+    pub fn with_catalog_table(mut self, catalog_table: Option<Vec<String>>) -> Self {
+        self.catalog_table = catalog_table;
         self
     }
 }
@@ -141,6 +148,10 @@ impl<'a> PlannerContext<'a> {
 
     pub fn table_snapshot(&self) -> Option<&Arc<DeltaSnapshot>> {
         self.config.table_snapshot.as_ref()
+    }
+
+    pub fn catalog_table(&self) -> Option<&Vec<String>> {
+        self.config.catalog_table.as_ref()
     }
 
     pub fn commit_context(&self) -> DeltaCommitContext {

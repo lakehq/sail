@@ -32,18 +32,30 @@ use datafusion::physical_plan::{
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::stream::{self, StreamExt};
+use object_store::{Error as ObjectStoreError, ObjectStoreExt, PutMode, PutOptions};
+use sail_catalog::error::CatalogError;
+use sail_catalog::manager::CatalogManager;
+use sail_catalog::provider::CommitTableOptions;
+use sail_common_datafusion::catalog::delta::{unity_table_id_value, DELTA_UNITY_TABLE_ID_KEY};
+use sail_common_datafusion::catalog::TableKind;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
 
-use crate::kernel::transaction::{CommitBuilder, CommitProperties, OperationMetrics};
+use crate::kernel::transaction::{
+    CatalogManagedStagedCommit, CommitBuilder, CommitProperties, FinalizedCommit,
+    Metrics as CommitFinalMetrics, OperationMetrics,
+};
 use crate::kernel::{DeltaOperation, DeltaSnapshotConfig, SaveMode};
 use crate::physical_plan::action_schema::ExecCommitMeta;
 use crate::physical_plan::{decode_actions_and_meta_from_batch, DeltaCommitContext, COL_ACTION};
 use crate::schema::{
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
 };
-use crate::spec::{contains_variant_arrow, CommitAction, StructType};
-use crate::storage::{get_object_store_from_context, StorageConfig};
+use crate::spec::{
+    commit_path, contains_variant_arrow, CommitAction, Protocol, StructType, TableFeature,
+};
+use crate::storage::{get_object_store_from_context, LogStoreRef, StorageConfig};
 use crate::table::{
     create_delta_table_with_object_store, open_table_with_object_store_and_table_config,
     open_table_with_object_store_and_table_config_at_version,
@@ -66,11 +78,13 @@ pub struct DeltaCommitExec {
     /// Per-commit user-defined metadata to record in `commitInfo.userMetadata`.
     user_metadata: Option<String>,
     commit_context: DeltaCommitContext,
+    catalog_table: Option<Vec<String>>,
     metrics: ExecutionPlanMetricsSet,
     cache: Arc<PlanProperties>,
 }
 
 impl DeltaCommitExec {
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         table_url: Url,
@@ -80,6 +94,7 @@ impl DeltaCommitExec {
         sink_mode: PhysicalSinkMode,
         user_metadata: Option<String>,
         commit_context: DeltaCommitContext,
+        catalog_table: Option<Vec<String>>,
     ) -> Self {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "count",
@@ -96,6 +111,7 @@ impl DeltaCommitExec {
             sink_mode,
             user_metadata,
             commit_context,
+            catalog_table,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
         }
@@ -141,6 +157,216 @@ impl DeltaCommitExec {
     pub fn commit_context(&self) -> &DeltaCommitContext {
         &self.commit_context
     }
+
+    pub fn catalog_table(&self) -> Option<&[String]> {
+        self.catalog_table.as_deref()
+    }
+
+    async fn load_catalog_managed_table(
+        context: &Arc<TaskContext>,
+        catalog_table: &[String],
+        table_url: &Url,
+    ) -> Result<Option<DeltaCatalogManagedTable>> {
+        let manager = context.extension::<CatalogManager>()?;
+        let status = manager
+            .get_table(catalog_table)
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let TableKind::Table {
+            location,
+            format,
+            properties,
+            is_external,
+            ..
+        } = status.kind
+        else {
+            return Ok(None);
+        };
+        if !format.eq_ignore_ascii_case("delta") {
+            return Ok(None);
+        }
+        let is_managed = !is_external
+            || properties.iter().any(|(key, value)| {
+                key.eq_ignore_ascii_case("table_type") && value.eq_ignore_ascii_case("MANAGED")
+            });
+        if !is_managed {
+            return Ok(None);
+        }
+        // Managed Delta tables from non-Unity catalogs do not participate in
+        // Unity coordinated commits, so the UC table id is the opt-in marker.
+        let table_id = match unity_table_id_value(
+            properties
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        ) {
+            Some(table_id) => table_id.to_string(),
+            None => return Ok(None),
+        };
+
+        Ok(Some(DeltaCatalogManagedTable {
+            table_id,
+            table_uri: location.unwrap_or_else(|| table_url.to_string()),
+        }))
+    }
+
+    fn enable_catalog_managed_create_actions(
+        final_actions: &mut [CommitAction],
+        table_id: &str,
+    ) -> Result<()> {
+        let mut saw_protocol = false;
+        let mut saw_metadata = false;
+        for action in final_actions {
+            match action {
+                CommitAction::Protocol(protocol) => {
+                    *protocol = Self::protocol_with_catalog_managed(protocol);
+                    saw_protocol = true;
+                }
+                CommitAction::Metadata(metadata) => {
+                    *metadata = metadata
+                        .clone()
+                        .add_config_key(
+                            "delta.feature.catalogManaged".to_string(),
+                            "supported".to_string(),
+                        )
+                        .add_config_key(
+                            "delta.enableInCommitTimestamps".to_string(),
+                            "true".to_string(),
+                        )
+                        .add_config_key(DELTA_UNITY_TABLE_ID_KEY.to_string(), table_id.to_string());
+                    saw_metadata = true;
+                }
+                _ => {}
+            }
+        }
+        if !saw_protocol || !saw_metadata {
+            return Err(DataFusionError::Internal(
+                "catalog-managed Delta table creation requires Protocol and Metadata actions"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn protocol_with_catalog_managed(protocol: &Protocol) -> Protocol {
+        let mut reader_features = protocol
+            .reader_features()
+            .map(|features| features.to_vec())
+            .unwrap_or_default();
+        let mut writer_features = protocol
+            .writer_features()
+            .map(|features| features.to_vec())
+            .unwrap_or_default();
+        if !reader_features.contains(&TableFeature::CatalogManaged) {
+            reader_features.push(TableFeature::CatalogManaged);
+        }
+        for feature in [
+            TableFeature::CatalogManaged,
+            TableFeature::InCommitTimestamp,
+        ] {
+            if !writer_features.contains(&feature) {
+                writer_features.push(feature);
+            }
+        }
+        Protocol::new(
+            protocol.min_reader_version().max(3),
+            protocol.min_writer_version().max(7),
+            Some(reader_features),
+            Some(writer_features),
+        )
+    }
+
+    fn is_catalog_managed_commit(
+        reference: Option<&Arc<crate::table::DeltaSnapshot>>,
+        actions: &[CommitAction],
+    ) -> bool {
+        let protocol = actions
+            .iter()
+            .rev()
+            .find_map(|action| match action {
+                CommitAction::Protocol(protocol) => Some(protocol),
+                _ => None,
+            })
+            .or_else(|| reference.map(|snapshot| snapshot.protocol()));
+        protocol.is_some_and(|protocol| {
+            protocol.has_reader_feature(&TableFeature::CatalogManaged)
+                && protocol.has_writer_feature(&TableFeature::CatalogManaged)
+        })
+    }
+
+    async fn commit_catalog_managed_table(
+        context: &Arc<TaskContext>,
+        catalog_table: &[String],
+        table: &DeltaCatalogManagedTable,
+        staged: &CatalogManagedStagedCommit,
+    ) -> Result<()> {
+        let manager = context.extension::<CatalogManager>()?;
+        let mut update = serde_json::json!({
+            "table_id": table.table_id,
+            "table_uri": table.table_uri,
+            "commit_info": {
+                "version": staged.version,
+                "timestamp": staged.in_commit_timestamp,
+                "file_name": staged.file_name,
+                "file_size": staged.file_size,
+                "file_modification_timestamp": staged.file_modification_timestamp,
+            }
+        });
+        if staged.version > 0 {
+            update["latest_backfilled_version"] = serde_json::json!(staged.version - 1);
+        }
+        manager
+            .commit_table(
+                catalog_table,
+                CommitTableOptions {
+                    format: "delta".to_string(),
+                    requirements: vec![],
+                    updates: vec![update],
+                },
+            )
+            .await
+            .map(|_| ())
+            .map_err(|err| match err {
+                CatalogError::Conflict(message) => {
+                    DataFusionError::Execution(format!("Delta catalog commit conflict: {message}"))
+                }
+                other => DataFusionError::External(Box::new(other)),
+            })
+    }
+
+    async fn publish_staged_commit(
+        log_store: &LogStoreRef,
+        staged: &CatalogManagedStagedCommit,
+    ) -> Result<()> {
+        let store = log_store.object_store(None);
+        let bytes = store
+            .get(&staged.staged_path)
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .bytes()
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        match store
+            .put_opts(
+                &commit_path(staged.version),
+                bytes.into(),
+                PutOptions {
+                    mode: PutMode::Create,
+                    ..Default::default()
+                },
+            )
+            .await
+        {
+            Ok(_) => Ok(()),
+            Err(ObjectStoreError::AlreadyExists { .. }) => Ok(()),
+            Err(err) => Err(DataFusionError::External(Box::new(err))),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct DeltaCatalogManagedTable {
+    table_id: String,
+    table_uri: String,
 }
 
 #[async_trait]
@@ -190,6 +416,7 @@ impl ExecutionPlan for DeltaCommitExec {
             self.sink_mode.clone(),
             self.user_metadata.clone(),
             self.commit_context.clone(),
+            self.catalog_table.clone(),
         )))
     }
 
@@ -222,6 +449,7 @@ impl ExecutionPlan for DeltaCommitExec {
         let sink_schema = self.sink_schema.clone();
         let user_metadata = self.user_metadata.clone();
         let commit_context = self.commit_context.clone();
+        let catalog_table = self.catalog_table.clone();
         let schema = self.schema();
         let future = async move {
             let _elapsed_compute_timer = elapsed_compute.timer();
@@ -352,31 +580,24 @@ impl ExecutionPlan for DeltaCommitExec {
                 return Ok(batch);
             }
 
+            let catalog_managed_table = match catalog_table.as_deref() {
+                Some(catalog_table) => {
+                    Self::load_catalog_managed_table(&context, catalog_table, &table_url).await?
+                }
+                None => None,
+            };
             // For new tables, always ensure Protocol + Metadata are present and use Create.
             // Even if the writer supplied an operation (e.g., Overwrite), the first commit
             // must initialize the table with protocol and metadata.
             let (operation, final_actions) = if !table_exists {
-                let protocol_in_actions = final_actions.iter().find_map(|a| match a {
-                    CommitAction::Protocol(p) => Some(p.clone()),
-                    _ => None,
-                });
-                let metadata_in_actions = final_actions.iter().find_map(|a| match a {
-                    CommitAction::Metadata(m) => Some(m.clone()),
-                    _ => None,
-                });
-
-                if let (Some(protocol), Some(metadata)) = (protocol_in_actions, metadata_in_actions)
-                {
-                    (
-                        DeltaOperation::Create {
-                            mode: SaveMode::ErrorIfExists,
-                            location: table_url.to_string(),
-                            protocol: Box::new(protocol),
-                            metadata: Box::new(metadata),
-                        },
-                        final_actions,
-                    )
-                } else {
+                let mut create_actions = final_actions;
+                let has_protocol = create_actions
+                    .iter()
+                    .any(|action| matches!(action, CommitAction::Protocol(_)));
+                let has_metadata = create_actions
+                    .iter()
+                    .any(|action| matches!(action, CommitAction::Metadata(_)));
+                if !has_protocol || !has_metadata {
                     // Construct minimal protocol/metadata and insert them
                     let normalized_sink = normalize_delta_schema(&sink_schema);
                     let protocol = protocol_for_create(
@@ -398,21 +619,47 @@ impl ExecutionPlan for DeltaCommitExec {
                     )
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-                    let mut updated_actions = final_actions;
                     // Insert in order: Protocol, then Metadata
-                    updated_actions.insert(0, CommitAction::Metadata(metadata.clone()));
-                    updated_actions.insert(0, CommitAction::Protocol(protocol.clone()));
-
-                    (
-                        DeltaOperation::Create {
-                            mode: SaveMode::ErrorIfExists,
-                            location: table_url.to_string(),
-                            protocol: Box::new(protocol),
-                            metadata: Box::new(metadata),
-                        },
-                        updated_actions,
-                    )
+                    create_actions.insert(0, CommitAction::Metadata(metadata));
+                    create_actions.insert(0, CommitAction::Protocol(protocol));
                 }
+                if let Some(table) = catalog_managed_table.as_ref() {
+                    Self::enable_catalog_managed_create_actions(
+                        &mut create_actions,
+                        &table.table_id,
+                    )?;
+                }
+                let protocol = create_actions
+                    .iter()
+                    .find_map(|action| match action {
+                        CommitAction::Protocol(protocol) => Some(protocol.clone()),
+                        _ => None,
+                    })
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "Delta table creation requires a Protocol action".to_string(),
+                        )
+                    })?;
+                let metadata = create_actions
+                    .iter()
+                    .find_map(|action| match action {
+                        CommitAction::Metadata(metadata) => Some(metadata.clone()),
+                        _ => None,
+                    })
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(
+                            "Delta table creation requires a Metadata action".to_string(),
+                        )
+                    })?;
+                (
+                    DeltaOperation::Create {
+                        mode: SaveMode::ErrorIfExists,
+                        location: table_url.to_string(),
+                        protocol: Box::new(protocol),
+                        metadata: Box::new(metadata),
+                    },
+                    create_actions,
+                )
             } else {
                 (
                     operation.clone().unwrap_or(DeltaOperation::Write {
@@ -516,15 +763,54 @@ impl ExecutionPlan for DeltaCommitExec {
 
             operation_metrics.finalize_for(&operation);
 
-            let finalized_commit = CommitBuilder::from(
+            let commit_uses_catalog_managed_protocol =
+                Self::is_catalog_managed_commit(reference.as_ref(), &final_actions);
+            if commit_uses_catalog_managed_protocol && catalog_managed_table.is_none() {
+                return Err(DataFusionError::Plan(
+                    "catalog-managed Delta writes require a managed catalog table reference"
+                        .to_string(),
+                ));
+            }
+            let use_catalog_managed_commit =
+                catalog_managed_table.is_some() && commit_uses_catalog_managed_protocol;
+
+            let pre_commit = CommitBuilder::from(
                 CommitProperties::default()
                     .with_operation_metrics(operation_metrics)
                     .with_user_metadata(user_metadata),
             )
             .with_actions(final_actions)
-            .build(reference, log_store, operation)
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            .build(reference.clone(), log_store.clone(), operation);
+
+            let finalized_commit = if let Some(table) = catalog_managed_table
+                .as_ref()
+                .filter(|_| use_catalog_managed_commit)
+            {
+                let catalog_table = catalog_table.as_deref().ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "catalog-managed Delta commit missing catalog table reference".to_string(),
+                    )
+                })?;
+                let staged = pre_commit
+                    .into_staged_commit_future()
+                    .await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                Self::commit_catalog_managed_table(&context, catalog_table, table, &staged).await?;
+                Self::publish_staged_commit(&log_store, &staged).await?;
+                FinalizedCommit {
+                    snapshot: None,
+                    version: staged.version,
+                    metrics: CommitFinalMetrics {
+                        num_retries: staged.metrics.num_retries,
+                        new_checkpoint_created: false,
+                        num_log_files_cleaned_up: 0,
+                    },
+                }
+            } else {
+                pre_commit
+                    .await
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+            };
 
             let retries =
                 usize::try_from(finalized_commit.metrics.num_retries).unwrap_or(usize::MAX);

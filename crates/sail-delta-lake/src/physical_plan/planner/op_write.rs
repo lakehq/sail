@@ -144,6 +144,7 @@ async fn build_full_overwrite_plan(
         PhysicalSinkMode::Overwrite,
         ctx.options().user_metadata.clone(),
         write_context.commit_context.clone(),
+        ctx.catalog_table().cloned(),
     )))
 }
 
@@ -278,6 +279,7 @@ async fn build_overwrite_if_plan(
         },
         ctx.options().user_metadata.clone(),
         write_context.commit_context.clone(),
+        ctx.catalog_table().cloned(),
     )))
 }
 

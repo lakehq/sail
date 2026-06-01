@@ -250,5 +250,6 @@ pub async fn build_delete_plan_mor(
         sail_common_datafusion::datasource::PhysicalSinkMode::Append,
         ctx.options().user_metadata.clone(),
         DeltaCommitContext::from_snapshot(snapshot_state.as_ref()),
+        ctx.catalog_table().cloned(),
     )))
 }
