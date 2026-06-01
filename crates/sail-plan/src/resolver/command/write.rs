@@ -21,6 +21,7 @@ use sail_common_datafusion::catalog::{
 use sail_common_datafusion::column_features::{ColumnFeatures, ColumnFeaturesBuilder};
 use sail_common_datafusion::datasource::{
     find_path_in_options, BucketBy, OptionLayer, SinkMode, SourceInfo, TableFormatRegistry,
+    CATALOG_TABLE_OPTION,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
@@ -432,7 +433,7 @@ impl PlanResolver<'_> {
                     let sort_by = self.resolve_catalog_table_sort(sort_by)?;
                     let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
                     let command = CatalogCommand::CreateTable {
-                        table: table.into(),
+                        table: table.clone().into(),
                         options: CreateTableOptions {
                             columns,
                             comment: None,
@@ -450,6 +451,18 @@ impl PlanResolver<'_> {
                     };
                     preconditions.push(Arc::new(self.resolve_catalog_command(command)?));
                 }
+
+                let catalog_table = table
+                    .parts()
+                    .iter()
+                    .map(|part| part.as_ref().to_string())
+                    .collect::<Vec<_>>();
+                let catalog_table = serde_json::to_string(&catalog_table).map_err(|e| {
+                    PlanError::internal(format!("failed to encode catalog table reference: {e}"))
+                })?;
+                file_write_options.options.push(OptionLayer::OptionList {
+                    items: vec![(CATALOG_TABLE_OPTION.to_string(), catalog_table)],
+                });
 
                 file_write_options.mode = self
                     .resolve_write_mode(mode, schema_for_cond.as_ref(), state)

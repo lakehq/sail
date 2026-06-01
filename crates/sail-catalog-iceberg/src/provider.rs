@@ -16,11 +16,13 @@ use std::sync::Arc;
 use percent_encoding::percent_decode_str;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
-    AlterTableOptions, CatalogPartitionField, CatalogProvider, CreateDatabaseOptions,
-    CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
-    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
+    AlterTableOptions, CatalogPartitionField, CatalogProvider, CommitTableOptions,
+    CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions,
+    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    PartitionTransform,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
+use sail_common_datafusion::catalog::managed::METADATA_LOCATION_KEY;
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort, DatabaseStatus,
     TableColumnStatus, TableKind, TableStatus,
@@ -115,7 +117,10 @@ impl IcebergRestCatalogProvider {
         }
     }
 
-    fn init_client(&self, catalog_config: &RestCatalogConfig) -> CatalogResult<ApiClient> {
+    fn init_client_config(
+        &self,
+        catalog_config: &RestCatalogConfig,
+    ) -> CatalogResult<Configuration> {
         let mut client_config = Configuration::new();
         client_config.user_agent = Some("Sail".to_string());
         client_config.base_path = catalog_config.uri.to_string();
@@ -132,7 +137,13 @@ impl IcebergRestCatalogProvider {
                 _ => {}
             }
         }
-        Ok(ApiClient::new(Arc::new(client_config)))
+        Ok(client_config)
+    }
+
+    fn init_client(&self, catalog_config: &RestCatalogConfig) -> CatalogResult<ApiClient> {
+        Ok(ApiClient::new(Arc::new(
+            self.init_client_config(catalog_config)?,
+        )))
     }
 
     async fn load_catalog_config(
@@ -226,6 +237,92 @@ impl IcebergRestCatalogProvider {
             result.push_str(s.as_ref());
         }
         Ok(result)
+    }
+
+    async fn commit_table_request(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: CommitTableOptions,
+    ) -> CatalogResult<crate::models::CommitTableResponse> {
+        if !options.format.eq_ignore_ascii_case("iceberg") {
+            return Err(CatalogError::NotSupported(format!(
+                "Iceberg REST catalog cannot commit '{}' tables",
+                options.format
+            )));
+        }
+
+        let (_client, catalog_config) = self.load_client_and_merged_config().await?;
+        let client_config = self.init_client_config(catalog_config)?;
+        let namespace = Self::namespace_string(catalog_config, database)?;
+        let prefix = catalog_config
+            .props
+            .get(REST_CATALOG_PROP_PREFIX)
+            .map(|prefix| format!("/{}", crate::apis::urlencode(prefix)))
+            .unwrap_or_default();
+        let uri = format!(
+            "{}/v1{prefix}/namespaces/{namespace}/tables/{table}",
+            client_config.base_path,
+            namespace = crate::apis::urlencode(namespace),
+            table = crate::apis::urlencode(table)
+        );
+        let body = serde_json::json!({
+            "identifier": {
+                "namespace": Vec::<String>::from(database.clone()),
+                "name": table,
+            },
+            "requirements": options.requirements,
+            "updates": options.updates,
+        });
+
+        let mut request = client_config.client.post(uri);
+        if let Some(user_agent) = client_config.user_agent {
+            request = request.header(reqwest::header::USER_AGENT, user_agent);
+        }
+        if let Some(token) = client_config.oauth_access_token {
+            request = request.bearer_auth(token);
+        }
+        if let Some(token) = client_config.bearer_access_token {
+            request = request.bearer_auth(token);
+        }
+
+        let response = request
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to commit table: {e}")))?;
+        let status = response.status();
+        let content = response
+            .text()
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to read commit response: {e}")))?;
+
+        if status.is_success() {
+            serde_json::from_str(&content).map_err(|e| {
+                CatalogError::External(format!("Failed to parse commit response: {e}"))
+            })
+        } else if status == reqwest::StatusCode::NOT_FOUND {
+            Err(CatalogError::NotFound(
+                CatalogObject::Table,
+                format!(
+                    "{}.{}",
+                    quote_namespace_if_needed(database),
+                    quote_name_if_needed(table)
+                ),
+            ))
+        } else if status == reqwest::StatusCode::CONFLICT {
+            Err(CatalogError::Conflict(format!(
+                "Iceberg REST catalog commit conflict for {}.{}: {content}",
+                quote_namespace_if_needed(database),
+                quote_name_if_needed(table)
+            )))
+        } else {
+            Err(CatalogError::External(format!(
+                "Failed to commit Iceberg table {}.{}: status {status}: {content}",
+                quote_namespace_if_needed(database),
+                quote_name_if_needed(table)
+            )))
+        }
     }
 
     /// Converts an Iceberg REST API table load result into a catalog `TableStatus`.
@@ -403,7 +500,7 @@ impl IcebergRestCatalogProvider {
         let comment = get_property(&properties, "comment");
 
         if let Some(metadata_location) = result.metadata_location {
-            properties.insert("metadata-location".to_string(), metadata_location);
+            properties.insert(METADATA_LOCATION_KEY.to_string(), metadata_location);
         }
         properties.insert(
             "metadata.format-version".to_string(),
@@ -542,7 +639,7 @@ impl IcebergRestCatalogProvider {
 
         let comment = get_property(&properties, "comment");
 
-        properties.insert("metadata-location".to_string(), result.metadata_location);
+        properties.insert(METADATA_LOCATION_KEY.to_string(), result.metadata_location);
         properties.insert("metadata.view-uuid".to_string(), view_uuid);
         properties.insert(
             "metadata.format-version".to_string(),
@@ -994,6 +1091,22 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         Err(CatalogError::NotSupported(
             "alter table in Iceberg catalog".to_string(),
         ))
+    }
+
+    async fn commit_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: CommitTableOptions,
+    ) -> CatalogResult<TableStatus> {
+        let response = self.commit_table_request(database, table, options).await?;
+        let result = crate::models::LoadTableResult {
+            metadata_location: Some(response.metadata_location),
+            metadata: response.metadata,
+            config: None,
+            storage_credentials: None,
+        };
+        self.load_table_result_to_status(table, database, result)
     }
 
     async fn create_view(

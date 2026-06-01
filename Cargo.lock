@@ -7428,6 +7428,7 @@ dependencies = [
  "sail-common-datafusion",
  "serde",
  "serde_arrow",
+ "serde_json",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -7856,6 +7857,7 @@ dependencies = [
  "parquet",
  "parquet-variant-compute",
  "rust_decimal",
+ "sail-catalog",
  "sail-common",
  "sail-common-datafusion",
  "sail-data-source",

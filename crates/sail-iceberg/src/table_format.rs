@@ -19,10 +19,11 @@ use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
 use object_store::ObjectStoreExt;
+use sail_common_datafusion::catalog::managed::metadata_location_value;
 use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::{
     find_path_in_options, OptionLayer, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat,
-    TableFormatRegistry,
+    TableFormatRegistry, CATALOG_TABLE_OPTION,
 };
 use sail_data_source::options::gen::{IcebergReadOptions, IcebergWriteOptions};
 use sail_data_source::options::ResolveOptions;
@@ -36,7 +37,7 @@ use crate::physical_plan::IcebergWriterExecOptions;
 use crate::spec::{MetadataLog, PartitionSpec, Schema, Snapshot, TableMetadata};
 use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
-    metadata_file_version_from_path,
+    metadata_file_version_from_path, metadata_location_to_object_path_string,
 };
 use crate::table::{find_latest_metadata_file, Table};
 use crate::utils::metadata::metadata_files_for_version;
@@ -96,6 +97,8 @@ impl TableFormat for IcebergTableFormat {
         }
 
         let table_url = Self::parse_table_url(vec![path]).await?;
+        let catalog_table = catalog_table_from_options(&options)?;
+        let metadata_location = metadata_location_from_options(&options);
         let (options, table_properties) = split_iceberg_write_options_and_table_properties(options);
         let iceberg_options = IcebergWriteOptions::resolve(ctx, options)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -105,7 +108,10 @@ impl TableFormat for IcebergTableFormat {
             .object_store_registry
             .get_store(&table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let exists_res = find_latest_metadata_file(&store, &table_url).await;
+        let exists_res = match metadata_location.as_deref() {
+            Some(location) => metadata_location_to_object_path_string(location),
+            None => find_latest_metadata_file(&store, &table_url).await,
+        };
         let table_exists = exists_res.is_ok();
 
         match mode {
@@ -123,7 +129,9 @@ impl TableFormat for IcebergTableFormat {
 
         // Get existing partition spec (encoded as partition expressions) if table exists
         let existing_partition_columns = if table_exists {
-            let table = Table::load(ctx, table_url.clone()).await?;
+            let table =
+                Table::load_with_metadata_location(ctx, table_url.clone(), metadata_location)
+                    .await?;
             Some(Self::partition_columns_from_metadata(&table)?)
         } else {
             None
@@ -165,6 +173,13 @@ impl TableFormat for IcebergTableFormat {
 
         let mut options = IcebergWriterExecOptions::from(iceberg_options);
         options.table_properties = table_properties;
+        if let Some(catalog_table) = catalog_table {
+            options.table_properties.push((
+                CATALOG_TABLE_OPTION.to_string(),
+                serde_json::to_string(&catalog_table)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?,
+            ));
+        }
         let table_config = IcebergTableConfig {
             table_url,
             partition_columns: resolved_partition_columns,
@@ -321,15 +336,16 @@ pub async fn create_iceberg_provider(
     table_url: Url,
     options: IcebergReadOptions,
 ) -> Result<Arc<dyn TableProvider>> {
-    Ok(create_iceberg_provider_concrete(ctx, table_url, options).await?)
+    Ok(create_iceberg_provider_concrete(ctx, table_url, options, None).await?)
 }
 
 pub(crate) async fn create_iceberg_provider_concrete(
     ctx: &dyn Session,
     table_url: Url,
     options: IcebergReadOptions,
+    metadata_location: Option<String>,
 ) -> Result<Arc<IcebergTableProvider>> {
-    let table = Table::load(ctx, table_url).await?;
+    let table = Table::load_with_metadata_location(ctx, table_url, metadata_location).await?;
     let provider = table.to_provider(&options)?;
     Ok(Arc::new(provider))
 }
@@ -349,9 +365,10 @@ async fn build_iceberg_provider(
     } = info;
 
     let table_url = IcebergTableFormat::parse_table_url(paths).await?;
+    let metadata_location = metadata_location_from_options(&options);
     let iceberg_options = IcebergReadOptions::resolve(ctx, options)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    create_iceberg_provider_concrete(ctx, table_url, iceberg_options).await
+    create_iceberg_provider_concrete(ctx, table_url, iceberg_options, metadata_location).await
 }
 
 /// Load metadata and pick snapshot per options (precedence: snapshot_id > ref > timestamp > current).
@@ -421,6 +438,50 @@ impl IcebergTableFormat {
 
         Ok(columns)
     }
+}
+
+pub(crate) fn metadata_location_from_properties(properties: &[(String, String)]) -> Option<String> {
+    metadata_location_value(
+        properties
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    )
+    .map(ToString::to_string)
+}
+
+pub(crate) fn metadata_location_from_options(options: &[OptionLayer]) -> Option<String> {
+    options.iter().rev().find_map(|layer| match layer {
+        OptionLayer::TablePropertyList { items } | OptionLayer::OptionList { items } => {
+            metadata_location_from_properties(items)
+        }
+        _ => None,
+    })
+}
+
+pub(crate) fn catalog_table_from_properties(
+    properties: &[(String, String)],
+) -> Result<Option<Vec<String>>> {
+    properties
+        .iter()
+        .rev()
+        .find(|(key, _)| key == CATALOG_TABLE_OPTION)
+        .map(|(_, value)| {
+            serde_json::from_str::<Vec<String>>(value)
+                .map_err(|e| DataFusionError::Plan(format!("invalid catalog table reference: {e}")))
+        })
+        .transpose()
+}
+
+fn catalog_table_from_options(options: &[OptionLayer]) -> Result<Option<Vec<String>>> {
+    for layer in options.iter().rev() {
+        let OptionLayer::OptionList { items } = layer else {
+            continue;
+        };
+        if let Some(table) = catalog_table_from_properties(items)? {
+            return Ok(Some(table));
+        }
+    }
+    Ok(None)
 }
 
 fn split_iceberg_write_options_and_table_properties(

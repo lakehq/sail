@@ -12,6 +12,8 @@ use sail_common_datafusion::catalog::{
     alter_column_type, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
 };
 
+use crate::managed_table;
+
 struct MemoryDatabase {
     status: DatabaseStatus,
     tables: HashMap<String, TableStatus>,
@@ -319,6 +321,9 @@ impl CatalogProvider for MemoryCatalogProvider {
                 AlterTableOptions::SetTableProperties {
                     properties: new_props,
                 } => {
+                    managed_table::validate_metadata_location_precondition(
+                        table, properties, &new_props,
+                    )?;
                     for (key, value) in new_props {
                         if let Some(existing) = properties.iter_mut().find(|(k, _)| k == &key) {
                             existing.1 = value;
