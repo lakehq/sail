@@ -2197,7 +2197,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: grouping_id"
+        "success": "ok"
       }
     },
     {
