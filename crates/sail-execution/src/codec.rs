@@ -6,8 +6,8 @@ use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Schema, TimeUnit};
 use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::common::{
-    plan_datafusion_err, plan_err, Constraint, Constraints, JoinSide, Result, ScalarValue,
-    Statistics,
+    plan_datafusion_err, plan_err, Constraint, Constraints, DFSchema, JoinSide, Result,
+    ScalarValue, Statistics,
 };
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::memory::MemorySourceConfig;
@@ -77,7 +77,7 @@ use prost::Message;
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
 use sail_common_datafusion::catalog::{CatalogPartitionField, PartitionTransform};
-use sail_common_datafusion::datasource::PhysicalSinkMode;
+use sail_common_datafusion::datasource::{BucketBy, OptionLayer, PhysicalSinkMode};
 use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_data_source::formats::binary::source::BinarySource;
@@ -217,6 +217,7 @@ use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
+use sail_physical_plan::file_write::DeferredCatalogTableWriteExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
@@ -1305,6 +1306,59 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let plan = self.try_decode_plan(&plan, ctx)?;
                 Ok(Arc::new(BarrierExec::new(preconditions, plan)))
             }
+            NodeKind::DeferredCatalogTableWrite(gen::DeferredCatalogTableWriteExecNode {
+                input,
+                format,
+                sink_mode,
+                catalog_table,
+                partition_by,
+                bucket_by_json,
+                sort_order,
+                options_json,
+                logical_schema,
+            }) => {
+                let input = self.try_decode_plan(&input, ctx)?;
+                let sink_mode = match sink_mode {
+                    Some(mode) => mode,
+                    None => {
+                        return plan_err!("Missing sink_mode for DeferredCatalogTableWriteExec")
+                    }
+                };
+                let sink_mode =
+                    self.try_decode_physical_sink_mode(sink_mode, input.schema().as_ref(), ctx)?;
+                let partition_by = partition_by
+                    .into_iter()
+                    .map(|field| self.try_decode_catalog_partition_field(field))
+                    .collect::<Result<Vec<_>>>()?;
+                let bucket_by = bucket_by_json
+                    .as_deref()
+                    .map(|value| self.try_decode_json::<BucketBy>(value, "BucketBy"))
+                    .transpose()?;
+                let sort_order = sort_order
+                    .as_ref()
+                    .map(|ordering| {
+                        self.try_decode_lex_ordering(ordering, input.schema().as_ref(), ctx)
+                            .map(LexRequirement::from)
+                    })
+                    .transpose()?;
+                let options = self
+                    .try_decode_json::<Vec<OptionLayer>>(&options_json, "deferred write options")?;
+                let logical_schema = Arc::new(DFSchema::try_from(
+                    self.try_decode_schema(&logical_schema)?,
+                )?);
+
+                Ok(Arc::new(DeferredCatalogTableWriteExec::new(
+                    input,
+                    format,
+                    sink_mode,
+                    catalog_table,
+                    partition_by,
+                    bucket_by,
+                    sort_order,
+                    options,
+                    logical_schema,
+                )))
+            }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
         }
     }
@@ -2029,6 +2083,41 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::Barrier(gen::BarrierExecNode {
                 preconditions,
                 plan,
+            })
+        } else if let Some(deferred_write_exec) = node
+            .as_any()
+            .downcast_ref::<DeferredCatalogTableWriteExec>()
+        {
+            let input = self.try_encode_plan(deferred_write_exec.input().clone())?;
+            let sink_mode = self.try_encode_physical_sink_mode(deferred_write_exec.mode())?;
+            let partition_by = deferred_write_exec
+                .partition_by()
+                .iter()
+                .map(Self::try_encode_catalog_partition_field)
+                .collect::<Result<Vec<_>>>()?;
+            let bucket_by_json = deferred_write_exec
+                .bucket_by()
+                .map(|bucket_by| self.try_encode_json(bucket_by, "BucketBy"))
+                .transpose()?;
+            let sort_order = deferred_write_exec
+                .sort_order()
+                .map(|ordering| self.try_encode_lex_ordering(&LexOrdering::from(ordering.clone())))
+                .transpose()?;
+            let options_json =
+                self.try_encode_json(deferred_write_exec.options(), "deferred write options")?;
+            let logical_schema =
+                self.try_encode_schema(deferred_write_exec.logical_schema().inner())?;
+
+            NodeKind::DeferredCatalogTableWrite(gen::DeferredCatalogTableWriteExecNode {
+                input,
+                format: deferred_write_exec.format().to_string(),
+                sink_mode: Some(sink_mode),
+                catalog_table: deferred_write_exec.catalog_table().to_vec(),
+                partition_by,
+                bucket_by_json,
+                sort_order,
+                options_json,
+                logical_schema,
             })
         } else {
             return plan_err!("unsupported physical plan node: {node:?}");
@@ -3119,7 +3208,11 @@ impl RemoteExecutionCodec {
             .map_err(|e| plan_datafusion_err!("failed to decode {description}: {e}"))
     }
 
-    fn try_encode_json<T: Serialize>(&self, value: &T, description: &str) -> Result<String> {
+    fn try_encode_json<T: Serialize + ?Sized>(
+        &self,
+        value: &T,
+        description: &str,
+    ) -> Result<String> {
         serde_json::to_string(value)
             .map_err(|e| plan_datafusion_err!("failed to encode {description}: {e}"))
     }
@@ -3866,6 +3959,17 @@ impl RemoteExecutionCodec {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::Schema;
+    use datafusion::execution::{SessionStateBuilder, TaskContext};
+    use datafusion::logical_expr::LogicalPlanBuilder;
+    use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_planner::DefaultPhysicalPlanner;
+    use sail_common_datafusion::datasource::SinkMode;
+    use sail_logical_plan::file_write::FileWriteOptions;
+    use sail_physical_plan::file_write::create_file_write_physical_plan;
+
     use super::*;
 
     fn round_trip_udf(udf: ScalarUDF) -> Result<Arc<ScalarUDF>> {
@@ -3883,6 +3987,40 @@ mod tests {
         assert!(decoded.inner().as_any().is::<SparkVariantExplodeUdf>());
         assert_eq!(decoded.name(), "spark_variant_explode");
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_round_trip_deferred_catalog_table_write_exec() -> Result<()> {
+        let session_state = SessionStateBuilder::new().build();
+        let logical_input = LogicalPlanBuilder::empty(false).build()?;
+        let physical_input = Arc::new(EmptyExec::new(Arc::new(Schema::empty()))) as Arc<_>;
+        let plan = create_file_write_physical_plan(
+            &session_state,
+            &DefaultPhysicalPlanner::default(),
+            &logical_input,
+            physical_input,
+            FileWriteOptions {
+                format: "parquet".to_string(),
+                mode: SinkMode::Append,
+                catalog_table: Some(vec![
+                    "native".to_string(),
+                    "default".to_string(),
+                    "items".to_string(),
+                ]),
+                partition_by: vec![],
+                sort_by: vec![],
+                bucket_by: None,
+                options: vec![],
+            },
+        )
+        .await?;
+
+        let codec = RemoteExecutionCodec;
+        let encoded = codec.try_encode_plan(plan.clone())?;
+        let decoded = codec.try_decode_plan(&encoded, &TaskContext::default())?;
+
+        assert_eq!(decoded.name(), plan.name());
         Ok(())
     }
 }

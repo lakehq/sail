@@ -2,7 +2,9 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
-use datafusion::execution::{SendableRecordBatchStream, SessionState, TaskContext};
+use datafusion::execution::{
+    SendableRecordBatchStream, SessionState, SessionStateBuilder, TaskContext,
+};
 use datafusion::physical_expr::{
     Distribution, EquivalenceProperties, LexRequirement, Partitioning,
 };
@@ -56,18 +58,15 @@ pub async fn create_file_write_physical_plan(
     if let Some(catalog_table) = catalog_table.filter(|_| find_path_in_options(&options).is_none())
     {
         return Ok(Arc::new(DeferredCatalogTableWriteExec::new(
-            ctx.clone(),
             physical_input,
-            DeferredCatalogTableWriteInfo {
-                format,
-                mode,
-                catalog_table,
-                partition_by,
-                bucket_by,
-                sort_order,
-                options,
-                logical_schema: logical_input.schema().clone(),
-            },
+            format,
+            mode,
+            catalog_table,
+            partition_by,
+            bucket_by,
+            sort_order,
+            options,
+            logical_input.schema().clone(),
         )));
     }
     let info = SinkInfo {
@@ -97,19 +96,34 @@ struct DeferredCatalogTableWriteInfo {
 }
 
 #[derive(Debug)]
-struct DeferredCatalogTableWriteExec {
-    state: SessionState,
+pub struct DeferredCatalogTableWriteExec {
     input: Arc<dyn ExecutionPlan>,
     info: DeferredCatalogTableWriteInfo,
     properties: Arc<PlanProperties>,
 }
 
 impl DeferredCatalogTableWriteExec {
-    fn new(
-        state: SessionState,
+    pub fn new(
         input: Arc<dyn ExecutionPlan>,
-        info: DeferredCatalogTableWriteInfo,
+        format: String,
+        mode: PhysicalSinkMode,
+        catalog_table: Vec<String>,
+        partition_by: Vec<CatalogPartitionField>,
+        bucket_by: Option<BucketBy>,
+        sort_order: Option<LexRequirement>,
+        options: Vec<OptionLayer>,
+        logical_schema: DFSchemaRef,
     ) -> Self {
+        let info = DeferredCatalogTableWriteInfo {
+            format,
+            mode,
+            catalog_table,
+            partition_by,
+            bucket_by,
+            sort_order,
+            options,
+            logical_schema,
+        };
         let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(Arc::new(Schema::empty())),
             Partitioning::UnknownPartitioning(
@@ -119,11 +133,46 @@ impl DeferredCatalogTableWriteExec {
             Boundedness::Bounded,
         ));
         Self {
-            state,
             input,
             info,
             properties,
         }
+    }
+
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
+
+    pub fn format(&self) -> &str {
+        &self.info.format
+    }
+
+    pub fn mode(&self) -> &PhysicalSinkMode {
+        &self.info.mode
+    }
+
+    pub fn catalog_table(&self) -> &[String] {
+        &self.info.catalog_table
+    }
+
+    pub fn partition_by(&self) -> &[CatalogPartitionField] {
+        &self.info.partition_by
+    }
+
+    pub fn bucket_by(&self) -> Option<&BucketBy> {
+        self.info.bucket_by.as_ref()
+    }
+
+    pub fn sort_order(&self) -> Option<&LexRequirement> {
+        self.info.sort_order.as_ref()
+    }
+
+    pub fn options(&self) -> &[OptionLayer] {
+        &self.info.options
+    }
+
+    pub fn logical_schema(&self) -> &DFSchemaRef {
+        &self.info.logical_schema
     }
 }
 
@@ -169,9 +218,15 @@ impl ExecutionPlan for DeferredCatalogTableWriteExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         match (children.pop(), children.is_empty()) {
             (Some(child), true) => Ok(Arc::new(Self::new(
-                self.state.clone(),
                 child,
-                self.info.clone(),
+                self.info.format.clone(),
+                self.info.mode.clone(),
+                self.info.catalog_table.clone(),
+                self.info.partition_by.clone(),
+                self.info.bucket_by.clone(),
+                self.info.sort_order.clone(),
+                self.info.options.clone(),
+                self.info.logical_schema.clone(),
             ))),
             _ => plan_err!("{} should have exactly one child", self.name()),
         }
@@ -182,7 +237,6 @@ impl ExecutionPlan for DeferredCatalogTableWriteExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let state = self.state.clone();
         let input = self.input.clone();
         let info = self.info.clone();
         let schema = self.schema();
@@ -215,10 +269,17 @@ impl ExecutionPlan for DeferredCatalogTableWriteExec {
                 options,
                 logical_schema: Some(info.logical_schema),
             };
+            let session_state = SessionStateBuilder::new()
+                .with_config(context.session_config().clone())
+                .with_runtime_env(context.runtime_env())
+                .with_scalar_functions(context.scalar_functions().values().cloned().collect())
+                .with_aggregate_functions(context.aggregate_functions().values().cloned().collect())
+                .with_window_functions(context.window_functions().values().cloned().collect())
+                .build();
             let registry = context.extension::<TableFormatRegistry>()?;
             let plan = registry
                 .get(&info.format)?
-                .create_writer(&state, sink)
+                .create_writer(&session_state, sink)
                 .await?;
             plan.execute(partition, context)
         })

@@ -63,6 +63,7 @@ message ExtendedPhysicalPlanNode {
     DeletionVectorWriterExecNode deletion_vector_writer = 48;
     DeletionVectorRowsWriterExecNode deletion_vector_rows_writer = 49;
     CoalesceExecNode coalesce = 50;
+    DeferredCatalogTableWriteExecNode deferred_catalog_table_write = 51;
   }
 }
 
@@ -682,6 +683,18 @@ message SparkPartitionIdExecNode {
 message CoalesceExecNode {
   bytes input = 1;
   uint64 output_partitions = 2;
+}
+
+message DeferredCatalogTableWriteExecNode {
+  bytes input = 1;
+  string format = 2;
+  PhysicalSinkMode sink_mode = 3;
+  repeated string catalog_table = 4;
+  repeated CatalogPartitionFieldNode partition_by = 5;
+  optional string bucket_by_json = 6;
+  LexOrdering sort_order = 7;
+  string options_json = 8;
+  bytes logical_schema = 9;
 }
 
 message RelaxedTzCastExecNode {

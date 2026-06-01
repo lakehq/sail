@@ -6,7 +6,7 @@ use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use super::validate_location_identifier;
-use crate::config::qualify_database_location;
+use crate::config::{qualify_absolute_database_location, qualify_database_location};
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::PlanResolver;
 
@@ -33,14 +33,14 @@ impl PlanResolver<'_> {
         if provider.uses_spark_default_database_location() {
             validate_location_identifier(&database_name, "database")?;
         }
-        let location = if location.is_some() || provider.uses_spark_default_database_location() {
+        let location = if provider.uses_spark_default_database_location() {
             Some(qualify_database_location(
                 location.as_deref(),
                 &database_name,
                 &self.config.default_warehouse_directory,
             ))
         } else {
-            None
+            location.as_deref().map(qualify_absolute_database_location)
         };
         let command = CatalogCommand::CreateDatabase {
             database: database.into(),
@@ -326,6 +326,21 @@ mod tests {
         let options = resolved_create_database_options(plan)?;
 
         assert_eq!(options.location, None);
+        Ok(())
+    }
+
+    #[test]
+    fn test_native_create_database_preserves_explicit_relative_location() -> PlanResult<()> {
+        let ctx = create_session("native")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+
+        let plan = resolver.resolve_catalog_create_database(
+            spec::ObjectName::bare("native_db"),
+            database_definition(Some("relative/db")),
+        )?;
+        let options = resolved_create_database_options(plan)?;
+
+        assert_eq!(options.location.as_deref(), Some("relative/db"));
         Ok(())
     }
 }
