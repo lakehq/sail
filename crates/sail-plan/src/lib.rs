@@ -31,11 +31,39 @@ pub async fn execute_logical_plan(ctx: &SessionContext, plan: LogicalPlan) -> Re
     Ok(df)
 }
 
+/// Write the current ANSI flag into the DataFusion `SessionContext` so that
+/// upstream UDFs reading `ConfigOptions.execution.enable_ansi_mode` see the
+/// value the client requested via `SET spark.sql.ansi.enabled = …`. No-op if
+/// the flag is already at the target value (avoids needless write-lock churn
+/// on the shared `SessionState`).
+fn sync_ansi_mode_to_ctx(ctx: &SessionContext, ansi: bool) {
+    let current = ctx
+        .state_ref()
+        .read()
+        .config_options()
+        .execution
+        .enable_ansi_mode;
+    if current == ansi {
+        return;
+    }
+    let state_ref = ctx.state_ref();
+    let mut state = state_ref.write();
+    state.config_mut().options_mut().execution.enable_ansi_mode = ansi;
+}
+
 pub async fn resolve_and_execute_plan(
     ctx: &SessionContext,
     config: Arc<PlanConfig>,
     plan: spec::Plan,
 ) -> PlanResult<(Arc<dyn ExecutionPlan>, Vec<StringifiedPlan>)> {
+    // Propagate Sail's `PlanConfig.ansi_mode` (sourced from
+    // `spark.sql.ansi.enabled` via `SparkRuntimeConfig`) into DataFusion's
+    // `SessionConfig.options().execution.enable_ansi_mode`. Upstream
+    // `datafusion_spark` UDFs such as `SparkPmod` / `SparkMod` read the flag
+    // from there at invoke time, so without this sync they always behave as
+    // ANSI=false regardless of what the client SET.
+    sync_ansi_mode_to_ctx(ctx, config.ansi_mode);
+
     let mut info = vec![];
     let resolver = PlanResolver::new(ctx, config);
     let NamedPlan { plan, fields } = resolver.resolve_named_plan(plan).await?;
