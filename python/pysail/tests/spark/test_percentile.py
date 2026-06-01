@@ -37,7 +37,8 @@ def test_percentile_disc_basic(spark):
 
     # Sorted: [10, 20, 30, 40, 50]
     # 50th percentile (discrete) = 30 (actual value, not interpolated)
-    expected = pd.DataFrame({"median": [30]})
+    # Spark always returns DOUBLE from percentile_disc, regardless of input type.
+    expected = pd.DataFrame({"median": [30.0]})
     pd.testing.assert_frame_equal(actual, expected)
 
 
@@ -68,7 +69,7 @@ def test_percentile_disc_with_group_by(spark):
 
     # Group A: [10, 20, 30] -> median = 20
     # Group B: [100, 200, 300, 400] -> median = 200
-    expected = pd.DataFrame({"category": ["A", "B"], "median": [20, 200]})
+    expected = pd.DataFrame({"category": ["A", "B"], "median": [20.0, 200.0]})
     pd.testing.assert_frame_equal(actual, expected)
 
 
@@ -89,7 +90,7 @@ def test_percentile_disc_edge_cases(spark):
 
     # 0th percentile = min = 5
     # 100th percentile = max = 20
-    expected = pd.DataFrame({"p0": [5], "p100": [20]})
+    expected = pd.DataFrame({"p0": [5.0], "p100": [20.0]})
     pd.testing.assert_frame_equal(actual, expected)
 
 
@@ -108,5 +109,5 @@ def test_percentile_disc_with_nulls(spark):
 
     # Non-null values: [10, 20, 30, 40, 50]
     # 50th percentile (discrete) = 30
-    expected = pd.DataFrame({"median": [30]})
+    expected = pd.DataFrame({"median": [30.0]})
     pd.testing.assert_frame_equal(actual, expected)
