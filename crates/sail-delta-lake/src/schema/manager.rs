@@ -243,14 +243,14 @@ pub fn protocol_for_create(
 
     // `delta.enableVariantShredding = "true"` activates the preview feature unless the
     // table explicitly selected a variant-shredding feature.
-    if table_properties.enable_variant_shredding() {
-        if !has_variant_shredding_feature(&reader_features, &writer_features) {
-            enable_variant_shredding_feature(
-                &mut reader_features,
-                &mut writer_features,
-                TableFeature::VariantShreddingPreview,
-            );
-        }
+    if table_properties.enable_variant_shredding()
+        && !has_variant_shredding_feature(&reader_features, &writer_features)
+    {
+        enable_variant_shredding_feature(
+            &mut reader_features,
+            &mut writer_features,
+            TableFeature::VariantShreddingPreview,
+        );
     }
 
     // `delta.enableDeletionVectors = "true"` implicitly activates DeletionVectors.
