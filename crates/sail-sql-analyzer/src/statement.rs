@@ -280,6 +280,22 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             let node = spec::CommandNode::ShowTableExtended { database, pattern };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
+        Statement::ShowTableProperties {
+            show: _,
+            table_properties: _,
+            name,
+            property_key,
+        } => {
+            let table = from_ast_object_name(name)?;
+            let property_key = property_key
+                .map(|(_, key, _)| from_ast_property_key(key))
+                .transpose()?;
+            let node = spec::CommandNode::ShowTableProperties {
+                table,
+                property_key,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::ShowCreateTable { .. } => Err(SqlError::todo("SHOW CREATE TABLE")),
         Statement::ShowColumns {
             show: _,
@@ -1669,14 +1685,7 @@ impl TryFrom<Vec<CreateViewClause>> for CreateViewClauses {
 
 fn from_ast_property(property: PropertyKeyValue) -> SqlResult<(String, Option<String>)> {
     let PropertyKeyValue { key, value } = property;
-    let key = match key {
-        PropertyKey::Name(ObjectName(parts)) => parts
-            .into_items()
-            .map(|x| x.value)
-            .collect::<Vec<_>>()
-            .join("."),
-        PropertyKey::Literal(x) => from_ast_string(x)?,
-    };
+    let key = from_ast_property_key(key)?;
     let value = if let Some((_, value)) = value {
         let value = match value {
             PropertyValue::String(x) => from_ast_string(x)?,
@@ -1735,15 +1744,19 @@ fn from_ast_property_key_list(properties: PropertyKeyList) -> SqlResult<Vec<Stri
     } = properties;
     properties
         .into_items()
-        .map(|key| match key {
-            PropertyKey::Name(ObjectName(parts)) => Ok(parts
-                .into_items()
-                .map(|x| x.value)
-                .collect::<Vec<_>>()
-                .join(".")),
-            PropertyKey::Literal(x) => from_ast_string(x),
-        })
+        .map(from_ast_property_key)
         .collect::<SqlResult<Vec<_>>>()
+}
+
+fn from_ast_property_key(key: PropertyKey) -> SqlResult<String> {
+    match key {
+        PropertyKey::Name(ObjectName(parts)) => Ok(parts
+            .into_items()
+            .map(|x| x.value)
+            .collect::<Vec<_>>()
+            .join(".")),
+        PropertyKey::Literal(x) => from_ast_string(x),
+    }
 }
 
 fn from_ast_partition(

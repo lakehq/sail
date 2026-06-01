@@ -7660,6 +7660,14 @@
               }
             },
             {
+              "name": "Option(Tuple(Operator(LeftParenthesis), PropertyKey, Operator(RightParenthesis)))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Tuple(Operator(LeftParenthesis), PropertyKey, Operator(RightParenthesis))"
+                }
+              }
+            },
+            {
               "name": "Option(Tuple(Operator(LeftParenthesis), Sequence(ViewColumn, Operator(Comma)), Operator(RightParenthesis)))",
               "node": {
                 "optional": {
@@ -9391,6 +9399,22 @@
                       },
                       {
                         "nonTerminal": "Tuple(Keyword(Like), StringLiteral)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Show)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Tblproperties)"
+                      },
+                      {
+                        "nonTerminal": "ObjectName"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Operator(LeftParenthesis), PropertyKey, Operator(RightParenthesis)))"
                       }
                     ]
                   },
@@ -11186,6 +11210,22 @@
                 "sequence": [
                   {
                     "nonTerminal": "Operator(LeftParenthesis)"
+                  },
+                  {
+                    "nonTerminal": "Operator(RightParenthesis)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "Tuple(Operator(LeftParenthesis), PropertyKey, Operator(RightParenthesis))",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Operator(LeftParenthesis)"
+                  },
+                  {
+                    "nonTerminal": "PropertyKey"
                   },
                   {
                     "nonTerminal": "Operator(RightParenthesis)"

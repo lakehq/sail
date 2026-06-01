@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
@@ -10,11 +11,12 @@ use datafusion::physical_expr::{
     create_physical_sort_exprs, LexOrdering, LexRequirement, PhysicalSortRequirement,
 };
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, Result};
+use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, DataFusionError, Result};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::TableSource;
+use url::Url;
 
-use crate::catalog::CatalogPartitionField;
+use crate::catalog::{CatalogPartitionField, PartitionTransform, TableColumnStatus};
 use crate::extension::SessionExtension;
 use crate::logical_expr::ExprWithSource;
 
@@ -206,6 +208,94 @@ pub struct SinkInfo {
     pub logical_schema: Option<datafusion_common::DFSchemaRef>,
 }
 
+/// Storage-backed metadata normalized for Spark-compat catalog commands.
+#[derive(Debug, Clone)]
+pub struct StorageTableMetadata {
+    pub columns: Vec<TableColumnStatus>,
+    pub comment: Option<String>,
+    pub location: Option<String>,
+    pub provider: String,
+    pub partition_columns: Vec<CatalogPartitionField>,
+    pub properties: Vec<(String, String)>,
+}
+
+/// Converts a table location into a URL.
+///
+/// Accepts fully qualified URLs (`file://`, `s3://`, ...) and absolute filesystem paths.
+/// Relative paths are rejected — catalog-stored table locations must be absolute.
+pub fn is_relative_location(location: &str) -> bool {
+    if let Ok(url) = Url::parse(location) {
+        // Reject single-letter "schemes" that `Url::parse` accepts on
+        // Windows for drive-letter paths like `C:/tmp/table`.
+        if url.scheme().len() > 1 {
+            return false;
+        }
+    }
+    !Path::new(location).is_absolute()
+}
+
+pub fn location_to_url(location: &str, format_name: &str) -> Result<Url> {
+    if let Ok(url) = Url::parse(location) {
+        // Reject single-letter "schemes" that `Url::parse` accepts on
+        // Windows for drive-letter paths like `C:/tmp/table`.
+        if url.scheme().len() > 1 {
+            return Ok(url);
+        }
+    }
+    if is_relative_location(location) {
+        return Err(DataFusionError::Plan(format!(
+            "relative path '{location}' is not supported for {format_name} table location; \
+             use an absolute path or a fully qualified URL (file://, s3://, etc.)"
+        )));
+    }
+    let path = Path::new(location);
+    Url::from_directory_path(path)
+        .or_else(|_| Url::from_file_path(path))
+        .map_err(|_| DataFusionError::Plan(format!("invalid {format_name} table path: {location}")))
+}
+
+/// Converts an Arrow schema to catalog columns with partition flags.
+///
+/// Only identity partition sources are marked as partition columns. Hidden
+/// transformed partitions such as `days(ts)` or `bucket(8, id)` do not map to
+/// physical schema fields and should not mark their source columns as direct
+/// partition columns in catalog output.
+pub fn arrow_schema_to_columns(
+    schema: &Schema,
+    partition_columns: &[CatalogPartitionField],
+) -> Vec<TableColumnStatus> {
+    let identity_partition_columns: HashSet<String> = partition_columns
+        .iter()
+        .filter(|field| {
+            matches!(
+                field.transform.unwrap_or(PartitionTransform::Identity),
+                PartitionTransform::Identity
+            )
+        })
+        .map(|field| field.column.to_ascii_lowercase())
+        .collect();
+    let bucket_columns: HashSet<String> = partition_columns
+        .iter()
+        .filter(|field| matches!(field.transform, Some(PartitionTransform::Bucket(_))))
+        .map(|field| field.column.to_ascii_lowercase())
+        .collect();
+    schema
+        .fields()
+        .iter()
+        .map(|field| TableColumnStatus {
+            name: field.name().to_string(),
+            data_type: field.data_type().clone(),
+            nullable: field.is_nullable(),
+            comment: field.metadata().get("comment").cloned(),
+            default: None,
+            generated_always_as: None,
+            is_partition: identity_partition_columns.contains(&field.name().to_ascii_lowercase()),
+            is_bucket: bucket_columns.contains(&field.name().to_ascii_lowercase()),
+            is_cluster: false,
+        })
+        .collect()
+}
+
 /// Returns the path from options, or `None` if not set.
 /// Checks the `"path"` key first, then `"location"`.
 /// Key comparison is case-insensitive.
@@ -337,6 +427,22 @@ pub trait TableFormat: Send + Sync {
     /// Defaults to [`MergeStrategy::Eager`]. Override for Merge-on-Read formats.
     fn merge_strategy(&self) -> MergeStrategy {
         MergeStrategy::Eager
+    }
+
+    /// Load normalized storage-backed metadata for a table location.
+    ///
+    /// Implementations should return Spark-compatible metadata derived from storage
+    /// (schema, partition columns, comment/location/provider, and properties).
+    async fn load_storage_table_metadata(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+    ) -> Result<StorageTableMetadata> {
+        let _ = (runtime_env, path);
+        not_impl_err!(
+            "Storage metadata loading not supported for {} format",
+            self.name()
+        )
     }
 
     /// Alters table properties (SET/UNSET TBLPROPERTIES).
@@ -515,5 +621,52 @@ mod tests {
             "Error during planning: No table format found for: unknown"
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+
+    use super::arrow_schema_to_columns;
+    use crate::catalog::{CatalogPartitionField, PartitionTransform};
+
+    #[test]
+    fn arrow_schema_to_columns_marks_identity_partitions_case_insensitively() {
+        let schema = Schema::new(vec![
+            Field::new("Ts", DataType::Int32, true),
+            Field::new("value", DataType::Int32, true),
+        ]);
+
+        let columns = arrow_schema_to_columns(
+            &schema,
+            &[CatalogPartitionField {
+                column: "ts".to_string(),
+                transform: None,
+            }],
+        );
+
+        assert!(columns[0].is_partition);
+        assert!(!columns[1].is_partition);
+    }
+
+    #[test]
+    fn arrow_schema_to_columns_marks_bucket_transforms_without_partition_flags() {
+        let schema = Schema::new(vec![
+            Field::new("id", DataType::Int32, true),
+            Field::new("value", DataType::Int32, true),
+        ]);
+
+        let columns = arrow_schema_to_columns(
+            &schema,
+            &[CatalogPartitionField {
+                column: "id".to_string(),
+                transform: Some(PartitionTransform::Bucket(8)),
+            }],
+        );
+
+        assert!(!columns[0].is_partition);
+        assert!(columns[0].is_bucket);
+        assert!(!columns[1].is_bucket);
     }
 }

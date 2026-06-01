@@ -107,12 +107,14 @@ pub fn parse_time(s: &str) -> SqlResult<TimeValue> {
 
 #[cfg(test)]
 mod tests {
+    use sail_common::spec;
     use sail_sql_parser::ast::query::Query;
-    use sail_sql_parser::ast::statement::Statement;
+    use sail_sql_parser::ast::statement::{PropertyKey, Statement};
     use sail_sql_parser::tree::TreeText;
 
     use crate::error::SqlResult;
     use crate::parser::{parse_one_statement, parse_statements};
+    use crate::statement::from_ast_statement;
 
     #[test]
     fn test_parse() -> SqlResult<()> {
@@ -146,6 +148,31 @@ mod tests {
             parse_one_statement("SELECT U&\"a#2014b#+002014c\"   UESCAPE '#'")?.text(),
             "SELECT U&\"a#2014b#+002014c\" UESCAPE '#' "
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_show_tblproperties_with_unquoted_dotted_key() -> SqlResult<()> {
+        let statement = parse_one_statement("SHOW TBLPROPERTIES test (a.b.c)")?;
+        assert!(matches!(
+            &statement,
+            Statement::ShowTableProperties {
+                property_key: Some((_, PropertyKey::Name(_), _)),
+                ..
+            }
+        ));
+
+        let plan = from_ast_statement(statement)?;
+        assert!(matches!(
+            plan,
+            spec::Plan::Command(spec::CommandPlan {
+                node: spec::CommandNode::ShowTableProperties {
+                    property_key: Some(ref key),
+                    ..
+                },
+                ..
+            }) if key == "a.b.c"
+        ));
         Ok(())
     }
 }
