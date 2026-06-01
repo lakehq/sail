@@ -11,7 +11,7 @@ use datafusion::scalar::ScalarValue;
 use parquet_variant_compute::{cast_to_variant, VariantType};
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
-use crate::scalar::variant::spark_json_to_variant::convert_binaryview_to_binary;
+use crate::scalar::variant::spark_parse_json::convert_binaryview_to_binary;
 
 /// Recursively checks if a DataType contains Null (VOID) anywhere.
 fn contains_void_type(dt: &DataType) -> bool {

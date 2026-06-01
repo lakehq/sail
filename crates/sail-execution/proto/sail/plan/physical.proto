@@ -102,6 +102,7 @@ message ExtendedScalarUdf {
     SparkMakeTimestampNtzUdf spark_make_timestamp_ntz = 21;
     ConvertTzUdf convert_tz = 22;
     SparkToCsvUdf spark_to_csv = 23;
+    SparkParseJsonUdf spark_parse_json = 24;
   }
 }
 
@@ -198,6 +199,10 @@ message SparkNextDayUdf {
 
 message SparkAbsUdf {
   bool ansi_mode = 1;
+}
+
+message SparkParseJsonUdf {
+  bool safe = 1;
 }
 
 message SparkFromCsvUdf {
