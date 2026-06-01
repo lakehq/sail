@@ -440,6 +440,11 @@ impl PlanResolver<'_> {
                     data_type: self.resolve_data_type(&data_type, state)?,
                 }
             }
+            spec::AlterTableOperation::AddCheckConstraint { .. } => {
+                return Err(PlanError::unsupported(
+                    "ALTER TABLE ADD CONSTRAINT is only supported for Delta Lake tables",
+                ));
+            }
             spec::AlterTableOperation::Unknown => {
                 return Err(PlanError::todo("unsupported ALTER TABLE operation"));
             }

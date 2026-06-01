@@ -1934,6 +1934,16 @@ fn from_ast_alter_table_operation(
             name: from_ast_object_name(name)?,
             data_type: from_ast_data_type(data_type)?,
         }),
+        AlterTableOperation::AddConstraint {
+            name, expression, ..
+        } => {
+            let expression_source = expression.text().trim().to_string();
+            Ok(spec::AlterTableOperation::AddCheckConstraint {
+                name: name.value.into(),
+                expression: from_ast_expression(expression)?,
+                expression_source,
+            })
+        }
         AlterTableOperation::RenameTable { .. }
         | AlterTableOperation::RenamePartition { .. }
         | AlterTableOperation::DropColumns { .. }

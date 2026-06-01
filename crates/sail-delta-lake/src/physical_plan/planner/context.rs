@@ -47,6 +47,10 @@ pub struct DeltaPlannerConfig {
     /// Delta commit (new tables) even when the physical planner strips the arrow
     /// field metadata set at logical-plan construction time.
     pub generation_expressions: HashMap<String, String>,
+    /// Logical schema override used for Delta metadata planning. It can carry
+    /// nullability/metadata that the physical plan schema cannot represent after
+    /// projection rewrites.
+    pub metadata_schema: Option<SchemaRef>,
     pub table_snapshot: Option<Arc<DeltaSnapshot>>,
 }
 
@@ -67,6 +71,7 @@ impl DeltaPlannerConfig {
             table_schema_for_cond,
             table_exists,
             generation_expressions: HashMap::new(),
+            metadata_schema: None,
             table_snapshot: None,
         }
     }
@@ -76,6 +81,11 @@ impl DeltaPlannerConfig {
         generation_expressions: HashMap<String, String>,
     ) -> Self {
         self.generation_expressions = generation_expressions;
+        self
+    }
+
+    pub fn with_metadata_schema(mut self, metadata_schema: Option<SchemaRef>) -> Self {
+        self.metadata_schema = metadata_schema;
         self
     }
 
@@ -139,6 +149,10 @@ impl<'a> PlannerContext<'a> {
         &self.config.generation_expressions
     }
 
+    pub fn metadata_schema(&self) -> Option<&SchemaRef> {
+        self.config.metadata_schema.as_ref()
+    }
+
     pub fn table_snapshot(&self) -> Option<&Arc<DeltaSnapshot>> {
         self.config.table_snapshot.as_ref()
     }
@@ -157,6 +171,7 @@ impl<'a> PlannerContext<'a> {
     ) -> Result<DeltaWriteContext> {
         let options = DeltaWriterExecOptions::from(self.options().clone())
             .with_generation_expressions(self.generation_expressions().clone());
+        let input_schema = self.metadata_schema().unwrap_or(input_schema);
         prepare_delta_write_context(
             self.table_url(),
             self.table_snapshot().map(|snapshot| snapshot.as_ref()),

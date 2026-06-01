@@ -112,4 +112,8 @@ pub enum AlterTableOptions {
         name: Vec<String>,
         data_type: DataType,
     },
+    AddCheckConstraint {
+        name: String,
+        expression: String,
+    },
 }
