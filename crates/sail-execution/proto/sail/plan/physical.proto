@@ -131,6 +131,7 @@ message PySparkUdf {
   repeated bytes input_types = 5;
   bytes output_type = 6;
   PySparkUdfConfig config = 7;
+  map<string, string> output_metadata = 8;
 }
 
 message PySparkCoGroupMapUdf {

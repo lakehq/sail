@@ -2059,6 +2059,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input_types,
                 output_type,
                 config,
+                output_metadata,
             }) => {
                 let kind = self.try_decode_pyspark_udf_kind(kind)?;
                 let input_types = input_types
@@ -2077,6 +2078,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     deterministic,
                     input_types,
                     output_type,
+                    output_metadata.into_iter().collect(),
                     Arc::new(config),
                 );
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -2498,6 +2500,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 .collect::<Result<Vec<_>>>()?;
             let output_type = self.try_encode_data_type(func.output_type())?;
             let config = self.try_encode_pyspark_udf_config(func.config())?;
+            let output_metadata = func.output_metadata().iter().cloned().collect();
             UdfKind::PySpark(gen::PySparkUdf {
                 kind,
                 name: func.name().to_string(),
@@ -2506,6 +2509,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input_types,
                 output_type,
                 config: Some(config),
+                output_metadata,
             })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<PySparkCoGroupMapUDF>() {
             let left_types = func

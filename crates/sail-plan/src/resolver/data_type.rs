@@ -287,9 +287,7 @@ impl PlanResolver<'_> {
                 ]);
                 Ok(adt::DataType::Struct(fields))
             }
-            DataType::UserDefined { .. } => Err(PlanError::unsupported(
-                "user defined data type should only exist in a field",
-            )),
+            DataType::UserDefined { sql_type, .. } => self.resolve_data_type(sql_type, state),
         }
     }
 

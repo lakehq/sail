@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::ops::{Div, Mul};
 use std::sync::Arc;
 
@@ -19,6 +20,10 @@ use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
+use crate::resolver::function::{
+    user_defined_type_metadata, UDT_JVM_CLASS_METADATA_KEY, UDT_PYTHON_CLASS_METADATA_KEY,
+    UDT_SERIALIZED_PYTHON_CLASS_METADATA_KEY,
+};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
@@ -60,9 +65,47 @@ impl PlanResolver<'_> {
             } => end_field.or(*start_field),
             _ => None,
         };
-        let cast_to_type = self.resolve_data_type(&cast_to_type, state)?;
         let NamedExpr { expr, name, .. } =
             self.resolve_named_expression(expr, schema, state).await?;
+        let output_metadata = if let spec::DataType::UserDefined {
+            jvm_class,
+            python_class,
+            serialized_python_class,
+            ..
+        } = &cast_to_type
+        {
+            let (_, field) = expr.to_field(schema)?;
+            let metadata = field.metadata();
+            let is_source_udt = [
+                UDT_JVM_CLASS_METADATA_KEY,
+                UDT_PYTHON_CLASS_METADATA_KEY,
+                UDT_SERIALIZED_PYTHON_CLASS_METADATA_KEY,
+            ]
+            .into_iter()
+            .any(|key| metadata.contains_key(key));
+            let is_same_udt = udt_metadata_matches(metadata, UDT_JVM_CLASS_METADATA_KEY, jvm_class)
+                && udt_metadata_matches(metadata, UDT_PYTHON_CLASS_METADATA_KEY, python_class)
+                && udt_metadata_matches(
+                    metadata,
+                    UDT_SERIALIZED_PYTHON_CLASS_METADATA_KEY,
+                    serialized_python_class,
+                );
+            if is_source_udt && !is_same_udt {
+                let source_udt = udt_metadata_display_name(metadata);
+                let target_udt = udt_display_name(
+                    jvm_class.as_deref(),
+                    python_class.as_deref(),
+                    serialized_python_class.as_deref(),
+                );
+                return Err(PlanError::AnalysisError(format!(
+                    "cannot cast between different user-defined data types: source {source_udt}, target {target_udt}"
+                )));
+            }
+            user_defined_type_metadata(&cast_to_type)
+        } else {
+            vec![]
+        };
+        let cast_to_type = self.resolve_data_type(&cast_to_type, state)?;
         let expr_type = expr.get_type(schema)?;
         let name = if need_rename_cast(&expr) {
             let service = self.ctx.extension::<PlanService>()?;
@@ -163,7 +206,7 @@ impl PlanResolver<'_> {
             (_, to, true) => try_cast(expr, to),
             (_, to, _) => cast(expr, to),
         };
-        Ok(NamedExpr::new(name, expr))
+        Ok(NamedExpr::new(name, expr).with_metadata(output_metadata))
     }
 }
 
@@ -186,4 +229,39 @@ fn need_rename_cast(expr: &expr::Expr) -> bool {
         expr::Expr::TryCast(try_cast) => need_rename_cast(try_cast.expr.as_ref()),
         _ => true,
     }
+}
+
+fn udt_metadata_matches(
+    metadata: &HashMap<String, String>,
+    key: &str,
+    expected: &Option<String>,
+) -> bool {
+    match (metadata.get(key), expected.as_ref()) {
+        (Some(actual), Some(expected)) => actual == expected,
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn udt_metadata_display_name(metadata: &HashMap<String, String>) -> &str {
+    udt_display_name(
+        metadata.get(UDT_JVM_CLASS_METADATA_KEY).map(String::as_str),
+        metadata
+            .get(UDT_PYTHON_CLASS_METADATA_KEY)
+            .map(String::as_str),
+        metadata
+            .get(UDT_SERIALIZED_PYTHON_CLASS_METADATA_KEY)
+            .map(String::as_str),
+    )
+}
+
+fn udt_display_name<'a>(
+    jvm_class: Option<&'a str>,
+    python_class: Option<&'a str>,
+    serialized_python_class: Option<&'a str>,
+) -> &'a str {
+    python_class
+        .or(jvm_class)
+        .or(serialized_python_class)
+        .unwrap_or("<unknown>")
 }
