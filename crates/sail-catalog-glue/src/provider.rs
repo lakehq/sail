@@ -9,9 +9,9 @@ use aws_sdk_glue::Client;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::hive_format::HiveDetectedFormat;
 use sail_catalog::provider::{
-    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
-    CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions,
-    DropViewOptions, Namespace,
+    namespace_location_from_properties, AlterTableOptions, CatalogLocationPolicy, CatalogProvider,
+    CreateDatabaseOptions, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
+    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
@@ -91,7 +91,11 @@ impl GlueCatalogProvider {
             catalog: self.name.clone(),
             database: vec![name.to_string()],
             comment: db.description().map(|s| s.to_string()),
-            location: db.location_uri().map(|s| s.to_string()),
+            location: db.location_uri().map(|s| s.to_string()).or_else(|| {
+                namespace_location_from_properties(
+                    properties.iter().map(|(k, v)| (k.as_str(), v.as_str())),
+                )
+            }),
             properties,
         })
     }
@@ -329,6 +333,10 @@ impl GlueCatalogProvider {
 impl CatalogProvider for GlueCatalogProvider {
     fn get_name(&self) -> &str {
         &self.name
+    }
+
+    fn location_policy(&self) -> CatalogLocationPolicy {
+        CatalogLocationPolicy::SPARK_SESSION
     }
 
     async fn create_database(
@@ -807,5 +815,27 @@ impl CatalogProvider for GlueCatalogProvider {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use aws_sdk_glue::types::Database;
+
+    use super::GlueCatalogProvider;
+
+    #[test]
+    fn database_to_status_falls_back_to_namespace_properties(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let provider = GlueCatalogProvider::new("glue".to_string(), Default::default());
+        let database = Database::builder()
+            .name("db")
+            .parameters("warehouse", "s3://warehouse/db")
+            .parameters("path", "s3://path/db")
+            .build()?;
+
+        let status = provider.database_to_status(&database)?;
+        assert_eq!(status.location.as_deref(), Some("s3://warehouse/db"));
+        Ok(())
     }
 }

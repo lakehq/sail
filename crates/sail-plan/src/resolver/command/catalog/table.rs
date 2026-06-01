@@ -6,12 +6,13 @@ use sail_catalog::provider::{
 };
 use sail_common::spec;
 use sail_common_datafusion::catalog::{
-    CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
+    CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort, DatabaseStatus,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::utils::items::ItemTaker;
 
+use super::validate_location_identifier;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
@@ -41,6 +42,7 @@ impl PlanResolver<'_> {
             properties,
         } = definition;
 
+        let mut options = options;
         let is_external = external || spec::has_path_or_location(location.as_deref(), &options);
         if row_format.is_some() {
             return Err(PlanError::todo("ROW FORMAT in CREATE TABLE statement"));
@@ -50,12 +52,24 @@ impl PlanResolver<'_> {
         }
         let mut columns = self.resolve_table_columns(columns, state)?;
         let constraints = self.resolve_table_constraints(constraints)?;
-        let location = if let Some(location) = location {
-            location
-        } else {
-            self.resolve_default_table_location(&table).await?
-        };
         let format = self.resolve_catalog_table_format(file_format)?;
+        let location = if let Some(location) = location {
+            Some(
+                self.resolve_explicit_table_location(&table, &location)
+                    .await?,
+            )
+        } else if let Some(location) = table_location_from_options(&options) {
+            let location = self
+                .resolve_explicit_table_location(&table, location)
+                .await?;
+            self.qualify_table_location_options(&table, &mut options)
+                .await?;
+            Some(location)
+        } else if self.uses_spark_default_table_location(&table)? {
+            Some(self.resolve_default_table_location(&table).await?)
+        } else {
+            None
+        };
         let partition_by =
             self.resolve_catalog_table_partition_by(partition_by, &mut columns, state)?;
         let sort_by = self.resolve_catalog_table_sort(sort_by)?;
@@ -71,7 +85,7 @@ impl PlanResolver<'_> {
                 columns,
                 comment,
                 constraints,
-                location: Some(location),
+                location,
                 format,
                 partition_by,
                 sort_by,
@@ -150,14 +164,12 @@ impl PlanResolver<'_> {
                 "Schema may not be specified in a Create Table As Select (CTAS) statement.",
             ));
         }
-
         // Column definitions are not allowed in PARTITIONED BY for CTAS.
         let partition_by_exprs = partition_by
             .into_iter()
             .map(|item| match item {
                 spec::PartitionColumn::Definition(_) => Err(PlanError::invalid(
-                    "column definitions are not allowed in PARTITIONED BY \
-                     for CREATE TABLE AS SELECT statement",
+                    "column definitions are not allowed in PARTITIONED BY for CREATE TABLE AS SELECT statement",
                 )),
                 spec::PartitionColumn::Expression(expr) => Ok(expr),
             })
@@ -170,7 +182,13 @@ impl PlanResolver<'_> {
         let format = self.resolve_catalog_table_format(file_format)?;
         let mut write_options = options;
         if let Some(location) = location {
+            let location = self
+                .resolve_explicit_table_location(&table, &location)
+                .await?;
             write_options.push(("path".to_string(), location));
+        } else {
+            self.qualify_table_location_options(&table, &mut write_options)
+                .await?;
         }
 
         // Set write mode based on create-or-replace / if-not-exists semantics.
@@ -199,60 +217,84 @@ impl PlanResolver<'_> {
         self.resolve_write_with_builder(input, builder, state).await
     }
 
+    async fn resolve_explicit_table_location(
+        &self,
+        table: &spec::ObjectName,
+        location: &str,
+    ) -> PlanResult<String> {
+        use crate::config::{qualify_absolute_table_location, qualify_table_location};
+        let [qualifier @ .., _] = table.parts() else {
+            return Err(PlanError::invalid("missing table name"));
+        };
+        let catalog_manager = self.ctx.extension::<CatalogManager>()?;
+        let provider = catalog_manager.database_provider_by_qualifier(qualifier)?;
+        if provider.uses_spark_table_location_qualification() {
+            let db_location = catalog_manager
+                .get_database_by_qualifier(qualifier)
+                .await
+                .map(|status| database_location(&status))?;
+            Ok(qualify_table_location(
+                location,
+                db_location.as_deref(),
+                &self.config.default_warehouse_directory,
+            ))
+        } else {
+            Ok(qualify_absolute_table_location(location))
+        }
+    }
+
     pub(in super::super) async fn resolve_default_table_location(
         &self,
         table: &spec::ObjectName,
     ) -> PlanResult<String> {
+        use crate::config::qualify_table_location;
         let [qualifier @ .., last] = table.parts() else {
             return Err(PlanError::invalid("missing table name"));
         };
         let name: String = last.clone().into();
-        // For characters in the table name that are not alphanumeric, `-`, or `_`,
-        // replace with a fixed-width hex encoding of the Unicode code point:
-        // `u+XXXX` for U+0000..U+FFFF and `U+XXXXXXXX` for U+10000..U+10FFFF.
-        let name: String = name
-            .chars()
-            .map(|c| {
-                if c.is_alphanumeric() || c == '-' || c == '_' {
-                    c.to_string()
-                } else {
-                    let v = c as u32;
-                    if v <= 0xFFFF {
-                        format!("u+{v:04X}")
-                    } else {
-                        format!("U+{v:08X}")
-                    }
-                }
-            })
-            .collect();
-        // We use our own logic to map tables to locations. This avoids conflicts
-        // and avoids issues with special characters in table names.
-        // Note that this is different from how Spark handles table locations
-        // for the default catalog.
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
+        let provider = catalog_manager.database_provider_by_qualifier(qualifier)?;
+        if provider.requires_identifier_validation_for_default_table_location() {
+            validate_location_identifier(&name, "table")?;
+        }
         let location = catalog_manager
             .get_database_by_qualifier(qualifier)
-            .await?
-            .location;
-        let (base, suffix) = match &location {
-            Some(loc) => (
-                loc.trim_end_matches(object_store::path::DELIMITER),
-                String::new(),
-            ),
-            None => (
-                self.config
-                    .default_warehouse_directory
-                    .trim_end_matches(object_store::path::DELIMITER),
-                format!("-{}", uuid::Uuid::new_v4()),
-            ),
-        };
-        Ok(format!(
-            "{}{}{}{}",
-            base,
-            object_store::path::DELIMITER,
-            name,
-            suffix,
+            .await
+            .map(|status| database_location(&status))?;
+
+        Ok(qualify_table_location(
+            &name,
+            location.as_deref(),
+            &self.config.default_warehouse_directory,
         ))
+    }
+
+    pub(in super::super) fn uses_spark_default_table_location(
+        &self,
+        table: &spec::ObjectName,
+    ) -> PlanResult<bool> {
+        let [qualifier @ .., _] = table.parts() else {
+            return Err(PlanError::invalid("missing table name"));
+        };
+        let catalog_manager = self.ctx.extension::<CatalogManager>()?;
+        let provider = catalog_manager.database_provider_by_qualifier(qualifier)?;
+        Ok(provider.uses_spark_default_table_location())
+    }
+
+    async fn qualify_table_location_options(
+        &self,
+        table: &spec::ObjectName,
+        options: &mut [(String, String)],
+    ) -> PlanResult<()> {
+        for (key, value) in options {
+            if is_table_location_option(key) && !value.trim().is_empty() {
+                let location = value.clone();
+                *value = self
+                    .resolve_explicit_table_location(table, &location)
+                    .await?;
+            }
+        }
+        Ok(())
     }
 
     fn resolve_catalog_table_partition_by(
@@ -275,8 +317,7 @@ impl PlanResolver<'_> {
                     {
                         if existing.data_type != resolved.data_type {
                             return Err(PlanError::invalid(format!(
-                                "partition column '{}' has incompatible type: \
-                                 column definition has {:?} but PARTITIONED BY clause has {:?}",
+                                "partition column '{}' has incompatible type: column definition has {:?} but PARTITIONED BY clause has {:?}",
                                 resolved.name, existing.data_type, resolved.data_type
                             )));
                         }
@@ -565,4 +606,735 @@ fn extract_sort_int_arg(args: &[spec::Expr], index: usize, description: &str) ->
         )));
     }
     Ok(value)
+}
+
+fn database_location(status: &DatabaseStatus) -> Option<String> {
+    status.location.clone()
+}
+
+fn table_location_from_options(options: &[(String, String)]) -> Option<&str> {
+    let find = |key: &str| {
+        options.iter().find_map(|(k, v)| {
+            if k.eq_ignore_ascii_case(key) && !v.trim().is_empty() {
+                Some(v.as_str())
+            } else {
+                None
+            }
+        })
+    };
+    find("path").or_else(|| find("location"))
+}
+
+fn is_table_location_option(key: &str) -> bool {
+    key.eq_ignore_ascii_case("path") || key.eq_ignore_ascii_case("location")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use datafusion::execution::SessionStateBuilder;
+    use datafusion::logical_expr::LogicalPlan;
+    use datafusion::prelude::SessionContext;
+    use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
+    use sail_catalog::provider::{
+        AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
+        CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    };
+    use sail_common::spec;
+    use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
+    use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
+    use sail_common_datafusion::session::plan::PlanService;
+    use sail_logical_plan::barrier::BarrierNode;
+    use sail_logical_plan::file_write::{FileWriteNode, FileWriteOptions};
+
+    use super::database_location;
+    use crate::catalog::{CatalogCommandNode, SparkCatalogObjectDisplay};
+    use crate::error::{PlanError, PlanResult};
+    use crate::formatter::SparkPlanFormatter;
+    use crate::resolver::state::PlanResolverState;
+    use crate::resolver::PlanResolver;
+    use crate::PlanConfig;
+
+    struct NativeNamespaceProvider;
+
+    #[async_trait::async_trait]
+    impl CatalogProvider for NativeNamespaceProvider {
+        fn get_name(&self) -> &str {
+            "native"
+        }
+
+        async fn create_database(
+            &self,
+            _database: &Namespace,
+            _options: CreateDatabaseOptions,
+        ) -> sail_catalog::error::CatalogResult<DatabaseStatus> {
+            unreachable!()
+        }
+
+        async fn get_database(
+            &self,
+            database: &Namespace,
+        ) -> sail_catalog::error::CatalogResult<DatabaseStatus> {
+            Ok(DatabaseStatus {
+                catalog: "native".to_string(),
+                database: database.clone().into(),
+                comment: None,
+                location: None,
+                properties: vec![],
+            })
+        }
+
+        async fn list_databases(
+            &self,
+            prefix: Option<&Namespace>,
+        ) -> sail_catalog::error::CatalogResult<Vec<DatabaseStatus>> {
+            Ok(vec![DatabaseStatus {
+                catalog: "native".to_string(),
+                database: prefix
+                    .cloned()
+                    .map(Into::into)
+                    .unwrap_or_else(|| vec!["default".to_string()]),
+                comment: None,
+                location: None,
+                properties: vec![],
+            }])
+        }
+
+        async fn drop_database(
+            &self,
+            _database: &Namespace,
+            _options: DropDatabaseOptions,
+        ) -> sail_catalog::error::CatalogResult<()> {
+            unreachable!()
+        }
+
+        async fn create_table(
+            &self,
+            _database: &Namespace,
+            _table: &str,
+            _options: CreateTableOptions,
+        ) -> sail_catalog::error::CatalogResult<TableStatus> {
+            unreachable!()
+        }
+
+        async fn get_table(
+            &self,
+            _database: &Namespace,
+            table: &str,
+        ) -> sail_catalog::error::CatalogResult<TableStatus> {
+            Err(sail_catalog::error::CatalogError::NotFound(
+                sail_catalog::error::CatalogObject::Table,
+                table.to_string(),
+            ))
+        }
+
+        async fn list_tables(
+            &self,
+            _database: &Namespace,
+        ) -> sail_catalog::error::CatalogResult<Vec<TableStatus>> {
+            unreachable!()
+        }
+
+        async fn drop_table(
+            &self,
+            _database: &Namespace,
+            _table: &str,
+            _options: DropTableOptions,
+        ) -> sail_catalog::error::CatalogResult<()> {
+            unreachable!()
+        }
+
+        async fn alter_table(
+            &self,
+            _database: &Namespace,
+            _table: &str,
+            _options: AlterTableOptions,
+        ) -> sail_catalog::error::CatalogResult<()> {
+            unreachable!()
+        }
+
+        async fn create_view(
+            &self,
+            _database: &Namespace,
+            _view: &str,
+            _options: CreateViewOptions,
+        ) -> sail_catalog::error::CatalogResult<TableStatus> {
+            unreachable!()
+        }
+
+        async fn get_view(
+            &self,
+            _database: &Namespace,
+            _view: &str,
+        ) -> sail_catalog::error::CatalogResult<TableStatus> {
+            unreachable!()
+        }
+
+        async fn list_views(
+            &self,
+            _database: &Namespace,
+        ) -> sail_catalog::error::CatalogResult<Vec<TableStatus>> {
+            unreachable!()
+        }
+
+        async fn drop_view(
+            &self,
+            _database: &Namespace,
+            _view: &str,
+            _options: DropViewOptions,
+        ) -> sail_catalog::error::CatalogResult<()> {
+            unreachable!()
+        }
+    }
+
+    fn create_session(default_catalog: &str) -> PlanResult<SessionContext> {
+        let mut state = SessionStateBuilder::new().build();
+        let catalog_manager = CatalogManager::try_new(CatalogManagerOptions {
+            catalogs: HashMap::from([
+                (
+                    "sail".to_string(),
+                    Arc::new(sail_catalog_memory::MemoryCatalogProvider::new(
+                        "sail".to_string(),
+                        vec![Arc::from("default")].try_into()?,
+                        None,
+                        None,
+                    )) as Arc<dyn CatalogProvider>,
+                ),
+                (
+                    "native".to_string(),
+                    Arc::new(NativeNamespaceProvider) as Arc<dyn CatalogProvider>,
+                ),
+                (
+                    "nested/table".to_string(),
+                    Arc::new(NativeNamespaceProvider) as Arc<dyn CatalogProvider>,
+                ),
+            ]),
+            default_catalog: default_catalog.to_string(),
+            default_database: vec!["default".to_string()],
+            global_temporary_database: vec!["global_temp".to_string()],
+        })?;
+        let plan_service = PlanService::new(
+            Box::new(DefaultCatalogDisplay::<SparkCatalogObjectDisplay>::default()),
+            Box::new(SparkPlanFormatter),
+        );
+        state.config_mut().set_extension(Arc::new(catalog_manager));
+        state.config_mut().set_extension(Arc::new(plan_service));
+        Ok(SessionContext::new_with_state(state))
+    }
+
+    fn table_definition(
+        location: Option<&str>,
+        file_format: Option<&str>,
+    ) -> spec::TableDefinition {
+        spec::TableDefinition {
+            external: false,
+            columns: vec![],
+            comment: None,
+            constraints: vec![],
+            location: location.map(ToString::to_string),
+            file_format: file_format.map(|format| spec::TableFileFormat::General {
+                format: format.to_string(),
+            }),
+            row_format: None,
+            partition_by: vec![],
+            sort_by: vec![],
+            bucket_by: None,
+            cluster_by: vec![],
+            if_not_exists: false,
+            replace: false,
+            options: vec![],
+            properties: vec![],
+        }
+    }
+
+    fn ctas_query() -> spec::QueryPlan {
+        spec::QueryPlan::new(spec::QueryNode::LocalRelation {
+            data: None,
+            schema: Some(spec::Schema {
+                fields: vec![spec::Field {
+                    name: "id".to_string(),
+                    data_type: spec::DataType::Int32,
+                    nullable: true,
+                    metadata: vec![],
+                }]
+                .into(),
+            }),
+        })
+    }
+
+    fn resolved_create_table_options(plan: LogicalPlan) -> PlanResult<CreateTableOptions> {
+        let LogicalPlan::Extension(extension) = plan else {
+            return Err(PlanError::internal("expected extension logical plan"));
+        };
+        let barrier = extension
+            .node
+            .as_any()
+            .downcast_ref::<BarrierNode>()
+            .ok_or_else(|| PlanError::internal("expected barrier node"))?;
+        let precondition = barrier
+            .preconditions()
+            .first()
+            .ok_or_else(|| PlanError::internal("expected catalog precondition"))?;
+        let LogicalPlan::Extension(extension) = precondition.as_ref() else {
+            return Err(PlanError::internal("expected extension precondition"));
+        };
+        let command = extension
+            .node
+            .as_any()
+            .downcast_ref::<CatalogCommandNode>()
+            .ok_or_else(|| PlanError::internal("expected catalog command node"))?
+            .command()
+            .clone();
+        let sail_catalog::command::CatalogCommand::CreateTable { options, .. } = command else {
+            return Err(PlanError::internal("expected create table command"));
+        };
+        Ok(options)
+    }
+
+    fn resolved_file_write_options(plan: &LogicalPlan) -> PlanResult<FileWriteOptions> {
+        let LogicalPlan::Extension(extension) = plan else {
+            return Err(PlanError::internal("expected extension logical plan"));
+        };
+        let barrier = extension
+            .node
+            .as_any()
+            .downcast_ref::<BarrierNode>()
+            .ok_or_else(|| PlanError::internal("expected barrier node"))?;
+        let LogicalPlan::Extension(extension) = barrier.plan() else {
+            return Err(PlanError::internal("expected extension write plan"));
+        };
+        let node = extension
+            .node
+            .as_any()
+            .downcast_ref::<FileWriteNode>()
+            .ok_or_else(|| PlanError::internal("expected file write node"))?;
+        Ok(node.options().clone())
+    }
+
+    fn direct_create_table_options(plan: LogicalPlan) -> PlanResult<CreateTableOptions> {
+        let LogicalPlan::Extension(extension) = plan else {
+            return Err(PlanError::internal("expected extension logical plan"));
+        };
+        let command = extension
+            .node
+            .as_any()
+            .downcast_ref::<CatalogCommandNode>()
+            .ok_or_else(|| PlanError::internal("expected catalog command node"))?
+            .command()
+            .clone();
+        let sail_catalog::command::CatalogCommand::CreateTable { options, .. } = command else {
+            return Err(PlanError::internal("expected create table command"));
+        };
+        Ok(options)
+    }
+
+    #[test]
+    fn database_location_prefers_explicit_location_over_properties() {
+        let status = DatabaseStatus {
+            catalog: "test".to_string(),
+            database: vec!["db".to_string()],
+            comment: None,
+            location: Some("s3://bucket/explicit".to_string()),
+            properties: vec![("warehouse".to_string(), "s3://bucket/warehouse".to_string())],
+        };
+        assert_eq!(
+            database_location(&status).as_deref(),
+            Some("s3://bucket/explicit")
+        );
+    }
+
+    #[test]
+    fn database_location_does_not_interpret_provider_properties() {
+        let status = DatabaseStatus {
+            catalog: "test".to_string(),
+            database: vec!["db".to_string()],
+            comment: None,
+            location: None,
+            properties: vec![("warehouse".to_string(), "s3://bucket/warehouse".to_string())],
+        };
+        assert_eq!(database_location(&status), None);
+    }
+
+    #[tokio::test]
+    async fn test_create_table_rejects_invalid_name_for_default_location() -> PlanResult<()> {
+        let ctx = create_session("sail")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+
+        let err = match resolver
+            .resolve_catalog_create_table(
+                spec::ObjectName::from(["default", "../escaped"]),
+                table_definition(None, None),
+                &mut state,
+            )
+            .await
+        {
+            Ok(plan) => {
+                return Err(PlanError::internal(format!(
+                    "expected error, got: {plan:?}"
+                )))
+            }
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains("invalid table name"),
+            "unexpected error: {err}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_create_table_allows_invalid_name_for_explicit_location() -> PlanResult<()> {
+        let ctx = create_session("sail")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+
+        resolver
+            .resolve_catalog_create_table(
+                spec::ObjectName::from(["default", "nested/table"]),
+                table_definition(Some("relative/table"), None),
+                &mut state,
+            )
+            .await
+            .map(|_| ())?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_native_create_table_preserves_explicit_relative_location() -> PlanResult<()> {
+        let ctx = create_session("native")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+
+        let plan = resolver
+            .resolve_catalog_create_table(
+                spec::ObjectName::from(["default", "explicit_location"]),
+                table_definition(Some("relative/table"), None),
+                &mut state,
+            )
+            .await?;
+        let options = direct_create_table_options(plan)?;
+
+        assert_eq!(options.location.as_deref(), Some("relative/table"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_native_create_table_without_location_delegates_location_to_catalog(
+    ) -> PlanResult<()> {
+        let ctx = create_session("native")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+
+        let plan = resolver
+            .resolve_catalog_create_table(
+                spec::ObjectName::from(["default", "catalog_owned_location"]),
+                table_definition(None, None),
+                &mut state,
+            )
+            .await?;
+        let options = direct_create_table_options(plan)?;
+
+        assert_eq!(options.location, None);
+        assert!(!options.is_external);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_spark_create_table_without_location_synthesizes_default_location(
+    ) -> PlanResult<()> {
+        let ctx = create_session("sail")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+
+        let plan = resolver
+            .resolve_catalog_create_table(
+                spec::ObjectName::from(["default", "managed_location"]),
+                table_definition(None, None),
+                &mut state,
+            )
+            .await?;
+        let options = direct_create_table_options(plan)?;
+        let location = options
+            .location
+            .ok_or_else(|| PlanError::internal("expected location"))?;
+
+        assert!(
+            location.ends_with("/managed_location"),
+            "unexpected location: {location}"
+        );
+        assert!(!options.is_external);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_spark_create_table_qualifies_explicit_relative_location() -> PlanResult<()> {
+        let ctx = create_session("sail")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+
+        let plan = resolver
+            .resolve_catalog_create_table(
+                spec::ObjectName::from(["default", "explicit_location"]),
+                table_definition(Some("relative/table"), None),
+                &mut state,
+            )
+            .await?;
+        let options = direct_create_table_options(plan)?;
+        let location = options
+            .location
+            .ok_or_else(|| PlanError::internal("expected location"))?;
+
+        assert!(
+            location.ends_with("/relative/table"),
+            "unexpected location: {location}"
+        );
+        assert_ne!(location, "relative/table");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_spark_create_table_with_path_option_uses_qualified_path_as_location(
+    ) -> PlanResult<()> {
+        let ctx = create_session("sail")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+        let mut definition = table_definition(None, None);
+        definition
+            .options
+            .push(("path".to_string(), "relative/table".to_string()));
+
+        let plan = resolver
+            .resolve_catalog_create_table(
+                spec::ObjectName::from(["default", "path_option"]),
+                definition,
+                &mut state,
+            )
+            .await?;
+        let options = direct_create_table_options(plan)?;
+        let location = options
+            .location
+            .ok_or_else(|| PlanError::internal("expected location"))?;
+
+        assert!(options.is_external);
+        assert!(
+            location.ends_with("/relative/table"),
+            "unexpected location: {location}"
+        );
+        assert_ne!(location, "relative/table");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_native_create_table_with_path_option_preserves_relative_location(
+    ) -> PlanResult<()> {
+        let ctx = create_session("native")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+        let mut definition = table_definition(None, None);
+        definition
+            .options
+            .push(("path".to_string(), "relative/table".to_string()));
+
+        let plan = resolver
+            .resolve_catalog_create_table(
+                spec::ObjectName::from(["default", "path_option"]),
+                definition,
+                &mut state,
+            )
+            .await?;
+        let options = direct_create_table_options(plan)?;
+
+        assert!(options.is_external);
+        assert_eq!(options.location.as_deref(), Some("relative/table"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ctas_rejects_invalid_name_for_default_location() -> PlanResult<()> {
+        let ctx = create_session("sail")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+
+        let err = match resolver
+            .resolve_default_table_location(&spec::ObjectName::from(["default", "../escaped"]))
+            .await
+        {
+            Ok(location) => {
+                return Err(PlanError::internal(format!(
+                    "expected error, got: {location:?}"
+                )));
+            }
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains("invalid"),
+            "unexpected error: {err}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_native_default_location_allows_invalid_name() -> PlanResult<()> {
+        let ctx = create_session("native")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+
+        resolver
+            .resolve_default_table_location(&spec::ObjectName::from(["default", "nested/table"]))
+            .await
+            .map(|_| ())?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_default_table_location_uses_qualifier_provider_not_table_name_provider(
+    ) -> PlanResult<()> {
+        let ctx = create_session("sail")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+
+        let err = match resolver
+            .resolve_default_table_location(&spec::ObjectName::bare("nested/table"))
+            .await
+        {
+            Ok(location) => {
+                return Err(PlanError::internal(format!(
+                    "expected error, got: {location:?}"
+                )));
+            }
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains("invalid"),
+            "unexpected error: {err}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ctas_without_location_remains_managed() -> PlanResult<()> {
+        let ctx = create_session("sail")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+
+        let plan = resolver
+            .resolve_catalog_create_table_as_select(
+                spec::ObjectName::from(["default", "ctas_managed"]),
+                table_definition(None, Some("parquet")),
+                ctas_query(),
+                &mut state,
+            )
+            .await?;
+
+        let options = resolved_create_table_options(plan)?;
+        assert!(!options.is_external);
+        assert!(options.location.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ctas_with_location_is_external() -> PlanResult<()> {
+        let ctx = create_session("sail")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+
+        let plan = resolver
+            .resolve_catalog_create_table_as_select(
+                spec::ObjectName::from(["default", "ctas_location"]),
+                table_definition(Some("relative/table"), Some("parquet")),
+                ctas_query(),
+                &mut state,
+            )
+            .await?;
+
+        let options = resolved_create_table_options(plan)?;
+        assert!(options.is_external);
+        assert!(options.location.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_native_ctas_preserves_explicit_relative_location() -> PlanResult<()> {
+        let ctx = create_session("native")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+
+        let plan = resolver
+            .resolve_catalog_create_table_as_select(
+                spec::ObjectName::from(["default", "ctas_location"]),
+                table_definition(Some("relative/table"), Some("parquet")),
+                ctas_query(),
+                &mut state,
+            )
+            .await?;
+
+        let options = resolved_create_table_options(plan)?;
+        assert!(options.is_external);
+        assert_eq!(options.location.as_deref(), Some("relative/table"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ctas_with_path_option_is_external() -> PlanResult<()> {
+        let ctx = create_session("sail")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+        let mut definition = table_definition(None, Some("parquet"));
+        definition
+            .options
+            .push(("path".to_string(), "relative/table".to_string()));
+
+        let plan = resolver
+            .resolve_catalog_create_table_as_select(
+                spec::ObjectName::from(["default", "ctas_path_option"]),
+                definition,
+                ctas_query(),
+                &mut state,
+            )
+            .await?;
+
+        let options = resolved_create_table_options(plan)?;
+        assert!(options.is_external);
+        let location = options
+            .location
+            .ok_or_else(|| PlanError::internal("expected location"))?;
+        assert!(
+            location.ends_with("/relative/table"),
+            "unexpected location: {location}"
+        );
+        assert_ne!(location, "relative/table");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_native_ctas_without_location_delegates_location_to_catalog() -> PlanResult<()> {
+        let ctx = create_session("native")?;
+        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        let mut state = PlanResolverState::new();
+
+        let plan = resolver
+            .resolve_catalog_create_table_as_select(
+                spec::ObjectName::from(["default", "ctas_without_location"]),
+                table_definition(None, Some("parquet")),
+                ctas_query(),
+                &mut state,
+            )
+            .await?;
+
+        let write_options = resolved_file_write_options(&plan)?;
+        let options = resolved_create_table_options(plan)?;
+        assert_eq!(options.location, None);
+        assert!(!options.is_external);
+        assert_eq!(
+            write_options.catalog_table,
+            Some(vec![
+                "default".to_string(),
+                "ctas_without_location".to_string()
+            ])
+        );
+        Ok(())
+    }
 }

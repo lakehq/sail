@@ -9,8 +9,9 @@ use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 
 use crate::error::{CatalogError, CatalogResult};
 use crate::provider::{
-    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
-    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    AlterTableOptions, CatalogLocationPolicy, CatalogProvider, CreateDatabaseOptions,
+    CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
+    Namespace,
 };
 
 #[derive(Clone)]
@@ -200,6 +201,10 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         self.inner.get_name()
     }
 
+    fn location_policy(&self) -> CatalogLocationPolicy {
+        self.inner.location_policy()
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,
@@ -386,6 +391,10 @@ mod tests {
     impl CatalogProvider for MockProvider {
         fn get_name(&self) -> &str {
             "mock"
+        }
+
+        fn location_policy(&self) -> CatalogLocationPolicy {
+            CatalogLocationPolicy::SPARK_SESSION
         }
 
         async fn create_database(
@@ -785,5 +794,27 @@ mod tests {
         // Second call - should hit cache (meaning max_capacity(0) was NOT applied)
         provider.list_databases(None).await.unwrap();
         assert_eq!(mock.db_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_caching_provider_preserves_spark_default_database_location_capability() {
+        let mock = Arc::new(MockProvider {
+            db_calls: AtomicUsize::new(0),
+            table_calls: AtomicUsize::new(0),
+            view_calls: AtomicUsize::new(0),
+        });
+        let provider = CachingCatalogProvider::new(
+            mock,
+            CatalogCacheConfig {
+                database_cache_type: sail_common::config::CacheType::Session,
+                ..Default::default()
+            },
+            None,
+        );
+
+        assert_eq!(
+            provider.location_policy(),
+            CatalogLocationPolicy::SPARK_SESSION
+        );
     }
 }

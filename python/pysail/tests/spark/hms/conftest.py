@@ -22,10 +22,6 @@ from testcontainers.core.waiting_utils import wait_for_logs
 if TYPE_CHECKING:
     from collections.abc import Generator
 
-# We skip the tests for now since it may cause issues
-# when running the tests in installed packages.
-pytest.skip("not working", allow_module_level=True)
-
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     """Auto-mark HMS tests and deselect them unless explicitly opted in."""
@@ -141,6 +137,12 @@ def _spark_s3_options(endpoint: str) -> dict[str, str]:
         "spark.hadoop.fs.s3a.endpoint.region": "us-east-1",
         "spark.hadoop.fs.s3a.path.style.access": "true",
         "spark.hadoop.fs.s3a.connection.ssl.enabled": "false",
+        "spark.hadoop.fs.s3a.connection.establish.timeout": "30000",
+        "spark.hadoop.fs.s3a.connection.timeout": "200000",
+        "spark.hadoop.fs.s3a.multipart.purge.age": "86400000",
+        "spark.hadoop.fs.s3a.retry.interval": "500",
+        "spark.hadoop.fs.s3a.retry.throttle.interval": "100",
+        "spark.hadoop.fs.s3a.threads.keepalivetime": "60",
         "spark.hadoop.fs.s3a.access.key": _MINIO_USER,
         "spark.hadoop.fs.s3a.secret.key": _MINIO_PASSWORD,
         "spark.hadoop.fs.s3a.aws.credentials.provider": ("org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider"),

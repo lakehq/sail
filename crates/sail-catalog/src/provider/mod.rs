@@ -11,6 +11,41 @@ use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 
 use crate::error::CatalogResult;
 
+/// Planner-side location semantics for a catalog.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd)]
+pub struct CatalogLocationPolicy {
+    /// Synthesize a Spark default database location when `CREATE DATABASE`
+    /// omits `LOCATION`.
+    pub spark_default_database_location: bool,
+    /// Synthesize a Spark default table location when table creation omits an
+    /// explicit storage location.
+    pub spark_default_table_location: bool,
+    /// Validate table identifiers before deriving Spark default table locations
+    /// from them.
+    pub validate_default_table_location_identifier: bool,
+    /// Apply Spark session-catalog qualification rules to explicit table
+    /// locations before passing them to the catalog.
+    pub spark_table_location_qualification: bool,
+}
+
+impl CatalogLocationPolicy {
+    /// Native/V2-style catalogs own namespace and table location semantics.
+    pub const CATALOG_OWNED: Self = Self {
+        spark_default_database_location: false,
+        spark_default_table_location: false,
+        validate_default_table_location_identifier: false,
+        spark_table_location_qualification: false,
+    };
+
+    /// Spark session/HMS/Glue-like catalogs use planner-side Spark location behavior.
+    pub const SPARK_SESSION: Self = Self {
+        spark_default_database_location: true,
+        spark_default_table_location: true,
+        validate_default_table_location_identifier: true,
+        spark_table_location_qualification: true,
+    };
+}
+
 /// A trait that defines the interface for a catalog.
 /// A catalog contains *databases*, where each database has a multi-level name
 /// that represents a *namespace*.
@@ -21,6 +56,49 @@ pub trait CatalogProvider: Send + Sync {
     /// Note that the same catalog can be registered under different names
     /// in different sessions.
     fn get_name(&self) -> &str;
+
+    /// Whether Spark session-catalog semantics should synthesize a default
+    /// database location when `CREATE DATABASE` omits `LOCATION`.
+    ///
+    /// This models planner behavior rather than a raw backend API requirement:
+    /// some catalogs accept an unset location but Spark still manufactures one
+    /// before delegating the operation.
+    fn uses_spark_default_database_location(&self) -> bool {
+        self.location_policy().spark_default_database_location
+    }
+
+    /// Whether Spark session-catalog semantics should synthesize a default
+    /// table location when table creation omits an explicit storage location.
+    ///
+    /// Native catalogs own absent table-location semantics and should use the
+    /// default `false`.
+    fn uses_spark_default_table_location(&self) -> bool {
+        self.location_policy().spark_default_table_location
+    }
+
+    /// Whether Sail should validate table identifiers before deriving a default
+    /// table location from them.
+    ///
+    /// Catalogs that own their own namespace/table location semantics should
+    /// return `false`.
+    fn requires_identifier_validation_for_default_table_location(&self) -> bool {
+        self.location_policy()
+            .validate_default_table_location_identifier
+    }
+
+    /// Whether Sail should apply Spark session-catalog qualification rules to
+    /// explicit table locations before passing them to the catalog.
+    ///
+    /// V2/native catalogs own relative location semantics, so they should use
+    /// the default `false` and receive relative paths unchanged.
+    fn uses_spark_table_location_qualification(&self) -> bool {
+        self.location_policy().spark_table_location_qualification
+    }
+
+    /// Location policy for the catalog.
+    fn location_policy(&self) -> CatalogLocationPolicy {
+        CatalogLocationPolicy::CATALOG_OWNED
+    }
 
     /// Creates a new database in the catalog.
     async fn create_database(

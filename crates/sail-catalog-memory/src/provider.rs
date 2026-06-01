@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use dashmap::{DashMap, Entry};
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
-    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions,
-    CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
-    DropTableOptions, DropViewOptions, Namespace,
+    AlterTableOptions, CatalogLocationPolicy, CatalogProvider, CreateDatabaseOptions,
+    CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
+    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
@@ -29,6 +29,7 @@ impl MemoryCatalogProvider {
         name: String,
         initial_database: Namespace,
         initial_database_comment: Option<String>,
+        initial_database_location: Option<String>,
     ) -> Self {
         let databases = DashMap::new();
         databases.insert(
@@ -38,7 +39,7 @@ impl MemoryCatalogProvider {
                     catalog: name.clone(),
                     database: initial_database.into(),
                     comment: initial_database_comment,
-                    location: None,
+                    location: initial_database_location,
                     properties: vec![],
                 },
                 tables: HashMap::new(),
@@ -53,6 +54,10 @@ impl MemoryCatalogProvider {
 impl CatalogProvider for MemoryCatalogProvider {
     fn get_name(&self) -> &str {
         &self.name
+    }
+
+    fn location_policy(&self) -> CatalogLocationPolicy {
+        CatalogLocationPolicy::SPARK_SESSION
     }
 
     async fn create_database(

@@ -6,8 +6,8 @@ use pilota::{AHashMap, FastStr};
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::hive_format::{HiveDetectedFormat, HiveStorageFormat};
 use sail_catalog::provider::{
-    CreateDatabaseOptions, CreateTableColumnOptions, CreateViewColumnOptions, CreateViewOptions,
-    Namespace,
+    namespace_location_from_properties, CreateDatabaseOptions, CreateTableColumnOptions,
+    CreateViewColumnOptions, CreateViewOptions, Namespace,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
@@ -54,13 +54,24 @@ pub(crate) fn database_to_status(
         .name
         .as_ref()
         .ok_or_else(|| CatalogError::External("Database is missing a name".to_string()))?;
+    let properties = map_to_vec(database.parameters.as_ref());
 
     Ok(DatabaseStatus {
         catalog: catalog.to_string(),
         database: vec![name.to_string()],
         comment: database.description.as_ref().map(ToString::to_string),
-        location: database.location_uri.as_ref().map(ToString::to_string),
-        properties: map_to_vec(database.parameters.as_ref()),
+        location: database
+            .location_uri
+            .as_ref()
+            .map(ToString::to_string)
+            .or_else(|| {
+                namespace_location_from_properties(
+                    properties
+                        .iter()
+                        .map(|(key, value)| (key.as_str(), value.as_str())),
+                )
+            }),
+        properties,
     })
 }
 
@@ -709,25 +720,27 @@ mod tests {
     use pilota::{AHashMap, FastStr};
     use sail_catalog::hive_format::HiveStorageFormat;
     use sail_catalog::provider::{
-        CreateTableColumnOptions, CreateViewColumnOptions, CreateViewOptions,
+        CreateTableColumnOptions, CreateViewColumnOptions, CreateViewOptions, Namespace,
     };
+    use sail_common_datafusion::catalog::TableKind;
 
     use super::{
         build_generic_table, build_view, columns_from_spark_properties, database_to_status,
-        inject_spark_metadata, is_view_table, map_to_vec, validate_namespace, GenericTableFormat,
-        COMMENT_KEY, SPARK_DATASOURCE_PROVIDER_KEY, SPARK_SCHEMA_KEY, VIRTUAL_VIEW_TYPE,
+        inject_spark_metadata, is_view_table, map_to_vec, table_to_status, validate_namespace,
+        GenericTableFormat, COMMENT_KEY, SPARK_DATASOURCE_PROVIDER_KEY, SPARK_SCHEMA_KEY,
+        VIRTUAL_VIEW_TYPE,
     };
-    use crate::hms::{FieldSchema, SerDeInfo, StorageDescriptor, Table};
+    use crate::hms::{Database, FieldSchema, SerDeInfo, StorageDescriptor, Table};
 
     #[test]
     fn test_validate_namespace_rejects_nested_namespaces() {
-        let namespace = sail_catalog::provider::Namespace::try_from(vec!["a", "b"]).unwrap();
+        let namespace = Namespace::try_from(vec!["a", "b"]).unwrap();
         assert!(validate_namespace(&namespace).is_err());
     }
 
     #[test]
     fn test_database_to_status_reads_properties() {
-        let database = crate::hms::Database {
+        let database = Database {
             name: Some("default".into()),
             description: Some("test".into()),
             parameters: Some([("k".into(), "v".into())].into_iter().collect()),
@@ -739,6 +752,43 @@ mod tests {
         assert_eq!(status.database, vec!["default".to_string()]);
         assert_eq!(status.comment.as_deref(), Some("test"));
         assert_eq!(status.properties, vec![("k".to_string(), "v".to_string())]);
+    }
+
+    #[test]
+    fn test_database_to_status_preserves_file_uri_locations() {
+        let database = Database {
+            name: Some("default".into()),
+            location_uri: Some("file:/tmp/warehouse/default.db".into()),
+            ..Default::default()
+        };
+
+        let status = database_to_status("hms", &database).unwrap();
+        assert_eq!(
+            status.location.as_deref(),
+            Some("file:/tmp/warehouse/default.db")
+        );
+    }
+
+    #[test]
+    fn test_database_to_status_falls_back_to_namespace_properties() {
+        let database = Database {
+            name: Some("default".into()),
+            parameters: Some(
+                [
+                    ("warehouse".into(), "s3://warehouse/default.db".into()),
+                    ("path".into(), "s3://path/default.db".into()),
+                ]
+                .into_iter()
+                .collect(),
+            ),
+            ..Default::default()
+        };
+
+        let status = database_to_status("hms", &database).unwrap();
+        assert_eq!(
+            status.location.as_deref(),
+            Some("s3://warehouse/default.db")
+        );
     }
 
     #[test]
@@ -841,7 +891,7 @@ mod tests {
 
     #[test]
     fn test_table_to_status_reports_textfile_format() {
-        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let namespace = Namespace::try_from(vec!["default"]).unwrap();
         let table = build_generic_table(
             "default",
             "items",
@@ -864,9 +914,9 @@ mod tests {
         )
         .unwrap();
 
-        let status = super::table_to_status("hms", &namespace, &table).unwrap();
+        let status = table_to_status("hms", &namespace, &table).unwrap();
         match status.kind {
-            sail_common_datafusion::catalog::TableKind::Table { format, .. } => {
+            TableKind::Table { format, .. } => {
                 assert_eq!(format, "textfile");
             }
             other => panic!("expected table, got {other:?}"),
@@ -875,7 +925,7 @@ mod tests {
 
     #[test]
     fn test_table_to_status_converts_partition_columns_to_identity_fields() {
-        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let namespace = Namespace::try_from(vec!["default"]).unwrap();
         let table = build_generic_table(
             "default",
             "items",
@@ -908,9 +958,9 @@ mod tests {
         )
         .unwrap();
 
-        let status = super::table_to_status("hms", &namespace, &table).unwrap();
+        let status = table_to_status("hms", &namespace, &table).unwrap();
         match status.kind {
-            sail_common_datafusion::catalog::TableKind::Table { partition_by, .. } => {
+            TableKind::Table { partition_by, .. } => {
                 assert_eq!(
                     partition_by,
                     vec![sail_common_datafusion::catalog::CatalogPartitionField {
@@ -996,7 +1046,7 @@ mod tests {
 
     #[test]
     fn test_table_to_status_uses_spark_schema_and_hides_internal_properties() {
-        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let namespace = Namespace::try_from(vec!["default"]).unwrap();
         let mut table = build_generic_table(
             "default",
             "items",
@@ -1054,9 +1104,9 @@ mod tests {
         )
         .unwrap();
 
-        let status = super::table_to_status("hms", &namespace, &table).unwrap();
+        let status = table_to_status("hms", &namespace, &table).unwrap();
         match status.kind {
-            sail_common_datafusion::catalog::TableKind::Table {
+            TableKind::Table {
                 format,
                 columns,
                 properties,
@@ -1076,7 +1126,7 @@ mod tests {
 
     #[test]
     fn test_table_to_status_reads_split_spark_schema_metadata() {
-        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let namespace = Namespace::try_from(vec!["default"]).unwrap();
         let fields = vec![
             Field::new("id", DataType::Int64, false),
             Field::new(
@@ -1159,10 +1209,10 @@ mod tests {
             ..Default::default()
         };
 
-        let status = super::table_to_status("hms", &namespace, &table).unwrap();
+        let status = table_to_status("hms", &namespace, &table).unwrap();
 
         match status.kind {
-            sail_common_datafusion::catalog::TableKind::Table {
+            TableKind::Table {
                 format,
                 columns,
                 properties,
@@ -1185,7 +1235,7 @@ mod tests {
 
     #[test]
     fn test_table_to_status_rejects_spark_schema_missing_partition_column() {
-        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let namespace = Namespace::try_from(vec!["default"]).unwrap();
         let schema = serde_json::to_string(
             &crate::data_type::spark_struct_json_from_fields(&[Field::new(
                 "id",
@@ -1210,7 +1260,7 @@ mod tests {
             ..Default::default()
         };
 
-        let error = super::table_to_status("hms", &namespace, &table).unwrap_err();
+        let error = table_to_status("hms", &namespace, &table).unwrap_err();
 
         assert!(error
             .to_string()
@@ -1219,7 +1269,7 @@ mod tests {
 
     #[test]
     fn test_table_to_status_uses_hms_partition_keys_when_spark_partition_metadata_disagrees() {
-        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let namespace = Namespace::try_from(vec!["default"]).unwrap();
         let schema = serde_json::to_string(
             &crate::data_type::spark_struct_json_from_fields(&[
                 Field::new("id", DataType::Int64, false),
@@ -1259,9 +1309,9 @@ mod tests {
             ..Default::default()
         };
 
-        let status = super::table_to_status("hms", &namespace, &table).unwrap();
+        let status = table_to_status("hms", &namespace, &table).unwrap();
         match status.kind {
-            sail_common_datafusion::catalog::TableKind::Table {
+            TableKind::Table {
                 columns,
                 partition_by,
                 ..
@@ -1290,7 +1340,7 @@ mod tests {
 
     #[test]
     fn test_table_to_status_rejects_incomplete_split_spark_schema_metadata() {
-        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let namespace = Namespace::try_from(vec!["default"]).unwrap();
         let table = Table {
             table_name: Some("items".into()),
             sd: Some(StorageDescriptor::default()),
@@ -1301,7 +1351,7 @@ mod tests {
             ..Default::default()
         };
 
-        let error = super::table_to_status("hms", &namespace, &table).unwrap_err();
+        let error = table_to_status("hms", &namespace, &table).unwrap_err();
 
         assert!(error
             .to_string()
@@ -1310,7 +1360,7 @@ mod tests {
 
     #[test]
     fn test_table_to_status_falls_back_to_hms_columns_without_spark_schema() {
-        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let namespace = Namespace::try_from(vec!["default"]).unwrap();
         let table = Table {
             table_name: Some("events".into()),
             table_type: Some(super::EXTERNAL_TABLE_TYPE.into()),
@@ -1365,9 +1415,9 @@ mod tests {
             ..Default::default()
         };
 
-        let status = super::table_to_status("hms", &namespace, &table).unwrap();
+        let status = table_to_status("hms", &namespace, &table).unwrap();
         match status.kind {
-            sail_common_datafusion::catalog::TableKind::Table {
+            TableKind::Table {
                 columns,
                 partition_by,
                 properties,
@@ -1527,10 +1577,10 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(schema_json.as_str()).unwrap();
         assert_eq!(parsed, serde_json::json!({"type": "struct", "fields": []}));
 
-        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
-        let status = super::table_to_status("hms", &namespace, &table).unwrap();
+        let namespace = Namespace::try_from(vec!["default"]).unwrap();
+        let status = table_to_status("hms", &namespace, &table).unwrap();
         match status.kind {
-            sail_common_datafusion::catalog::TableKind::Table { columns, .. } => {
+            TableKind::Table { columns, .. } => {
                 assert!(
                     columns.is_empty(),
                     "Expected empty columns, got {columns:?}"
@@ -1542,7 +1592,7 @@ mod tests {
 
     #[test]
     fn test_injected_spark_metadata_preserves_mixed_complex_columns_and_partitions() {
-        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let namespace = Namespace::try_from(vec!["default"]).unwrap();
         let mut table = build_generic_table(
             "default",
             "mixed_events",
@@ -1708,9 +1758,9 @@ mod tests {
         )
         .unwrap();
 
-        let status = super::table_to_status("hms", &namespace, &table).unwrap();
+        let status = table_to_status("hms", &namespace, &table).unwrap();
         match status.kind {
-            sail_common_datafusion::catalog::TableKind::Table {
+            TableKind::Table {
                 columns,
                 partition_by,
                 properties,
@@ -1837,5 +1887,60 @@ mod tests {
         .unwrap_err();
         assert!(error.to_string().contains("EXTERNAL"));
         assert!(error.to_string().contains("Spark-internal"));
+    }
+
+    #[test]
+    fn test_table_to_status_preserves_file_uri_locations() {
+        let namespace = Namespace::try_from(vec!["default"]).unwrap();
+        let table = Table {
+            table_name: Some("items".into()),
+            sd: Some(StorageDescriptor {
+                location: Some("file:/tmp/warehouse/default.db/items".into()),
+                cols: Some(vec![FieldSchema {
+                    name: Some("id".into()),
+                    r#type: Some("int".into()),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let status = table_to_status("hms", &namespace, &table).unwrap();
+        match status.kind {
+            TableKind::Table { location, .. } => {
+                assert_eq!(
+                    location.as_deref(),
+                    Some("file:/tmp/warehouse/default.db/items")
+                );
+            }
+            other => panic!("expected table, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_table_to_status_preserves_non_local_uri_locations() {
+        let namespace = Namespace::try_from(vec!["default"]).unwrap();
+        let table = Table {
+            table_name: Some("items".into()),
+            sd: Some(StorageDescriptor {
+                location: Some("s3://warehouse/default.db/items".into()),
+                cols: Some(vec![FieldSchema {
+                    name: Some("id".into()),
+                    r#type: Some("int".into()),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let status = table_to_status("hms", &namespace, &table).unwrap();
+        match status.kind {
+            TableKind::Table { location, .. } => {
+                assert_eq!(location.as_deref(), Some("s3://warehouse/default.db/items"));
+            }
+            other => panic!("expected table, got {other:?}"),
+        }
     }
 }

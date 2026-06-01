@@ -17,8 +17,9 @@ use arrow::datatypes::DataType;
 use reqwest::header::HeaderValue;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
-    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
-    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    namespace_location_from_properties, AlterTableOptions, CatalogProvider, CreateDatabaseOptions,
+    CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
+    Namespace,
 };
 use sail_catalog::utils::{get_property, quote_namespace_if_needed};
 use sail_common_datafusion::catalog::{
@@ -194,7 +195,11 @@ impl UnityCatalogProvider {
             catalog: self.name.clone(),
             database,
             comment: schema_info.comment,
-            location: get_property(&properties, "location"),
+            location: namespace_location_from_properties(
+                properties
+                    .iter()
+                    .map(|(key, value)| (key.as_str(), value.as_str())),
+            ),
             properties: properties.into_iter().collect(),
         }
     }

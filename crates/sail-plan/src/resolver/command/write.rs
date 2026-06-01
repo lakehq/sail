@@ -225,6 +225,7 @@ impl PlanResolver<'_> {
             // The mode will be set later so the value here is just a placeholder.
             mode: SinkMode::ErrorIfExists,
             format: format.unwrap_or_default(),
+            catalog_table: None,
             partition_by: partition_by.clone(),
             sort_by: self
                 .resolve_sort_orders(sort_by.clone(), true, input.schema(), state)
@@ -365,15 +366,28 @@ impl PlanResolver<'_> {
                         file_write_options.options.push(OptionLayer::OptionList {
                             items: vec![("path".to_string(), location.clone())],
                         });
-                    } else {
-                        let default_location = self.resolve_default_table_location(&table).await?;
-                        file_write_options.options.insert(
-                            0,
-                            OptionLayer::OptionList {
-                                items: vec![("path".to_string(), default_location)],
-                            },
-                        );
-                    };
+                    } else if !write_options_had_location {
+                        let uses_spark_default_location =
+                            self.uses_spark_default_table_location(&table)?;
+                        if uses_spark_default_location {
+                            let default_location =
+                                self.resolve_default_table_location(&table).await?;
+                            file_write_options.options.insert(
+                                0,
+                                OptionLayer::OptionList {
+                                    items: vec![("path".to_string(), default_location)],
+                                },
+                            );
+                        } else {
+                            file_write_options.catalog_table = Some(
+                                table
+                                    .parts()
+                                    .iter()
+                                    .map(|part| part.as_ref().to_string())
+                                    .collect(),
+                            );
+                        }
+                    }
                     if file_write_options
                         .partition_by
                         .iter()

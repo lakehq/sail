@@ -16,9 +16,10 @@ use std::sync::Arc;
 use percent_encoding::percent_decode_str;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
-    AlterTableOptions, CatalogPartitionField, CatalogProvider, CreateDatabaseOptions,
-    CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
-    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
+    namespace_location_from_properties, AlterTableOptions, CatalogPartitionField, CatalogProvider,
+    CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions,
+    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    PartitionTransform,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
 use sail_common_datafusion::catalog::{
@@ -89,6 +90,14 @@ impl IcebergRestCatalogProvider {
         matches!(
             key.trim().to_ascii_lowercase().as_str(),
             "namespace-separator" | "namespaceseparator" | "namespace_separator"
+        )
+    }
+
+    fn namespace_location(properties: Option<&HashMap<String, String>>) -> Option<String> {
+        namespace_location_from_properties(
+            properties?
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
         )
     }
 
@@ -614,10 +623,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     .properties
                     .as_ref()
                     .and_then(|p| get_property(p, "comment"));
-                let location = result
-                    .properties
-                    .as_ref()
-                    .and_then(|p| get_property(p, "location"));
+                let location = Self::namespace_location(result.properties.as_ref());
                 let properties: Vec<_> =
                     result.properties.unwrap_or_default().into_iter().collect();
 
@@ -672,10 +678,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .properties
             .as_ref()
             .and_then(|p| get_property(p, "comment"));
-        let location = result
-            .properties
-            .as_ref()
-            .and_then(|p| get_property(p, "location"));
+        let location = Self::namespace_location(result.properties.as_ref());
         let properties: Vec<_> = result.properties.unwrap_or_default().into_iter().collect();
 
         Ok(DatabaseStatus {
@@ -2866,6 +2869,43 @@ mod tests {
         assert_eq!(result.database, vec!["db3".to_string()]);
         assert_eq!(result.comment, Some("case insensitive".to_string()));
         assert_eq!(result.location, Some("s3://bucket/db3".to_string()));
+
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/db4"),
+            serde_json::json!({
+                "namespace": ["db4"],
+                "properties": {
+                    "warehouse": "s3://bucket/from-warehouse"
+                }
+            }),
+        )
+        .await;
+
+        let namespace = Namespace::try_from(vec!["db4".to_string()]).unwrap();
+        let result = ctx.catalog.get_database(&namespace).await.unwrap();
+
+        assert_eq!(result.database, vec!["db4".to_string()]);
+        assert_eq!(
+            result.location,
+            Some("s3://bucket/from-warehouse".to_string())
+        );
+
+        ctx.mock_get_json(
+            &ctx.path("/namespaces/db5"),
+            serde_json::json!({
+                "namespace": ["db5"],
+                "properties": {
+                    "path": "s3://bucket/from-path"
+                }
+            }),
+        )
+        .await;
+
+        let namespace = Namespace::try_from(vec!["db5".to_string()]).unwrap();
+        let result = ctx.catalog.get_database(&namespace).await.unwrap();
+
+        assert_eq!(result.database, vec!["db5".to_string()]);
+        assert_eq!(result.location, Some("s3://bucket/from-path".to_string()));
     }
 
     #[tokio::test]

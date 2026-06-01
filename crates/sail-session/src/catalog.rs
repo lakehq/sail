@@ -39,6 +39,7 @@ pub fn create_catalog_manager(
                         name.clone(),
                         initial_database.clone().try_into()?,
                         initial_database_comment.clone(),
+                        None,
                     );
                     Ok((name.clone(), Arc::new(provider)))
                 }

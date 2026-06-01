@@ -7458,6 +7458,7 @@ dependencies = [
  "datafusion",
  "futures",
  "libloading 0.8.9",
+ "log",
  "pilota",
  "sail-catalog",
  "sail-common",
@@ -7593,6 +7594,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "toml 0.8.23",
+ "url",
 ]
 
 [[package]]

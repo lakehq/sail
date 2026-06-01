@@ -13,6 +13,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, Result};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::TableSource;
+use serde::{Deserialize, Serialize};
 
 use crate::catalog::CatalogPartitionField;
 use crate::extension::SessionExtension;
@@ -39,7 +40,7 @@ pub const MERGE_SOURCE_METRIC_COLUMN: &str = "__sail_merge_source_metric";
 /// A layer of options that can be applied to a data source.
 /// Multiple layers are used to represent different sources of options,
 /// applied in order so that later layers override earlier ones.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum OptionLayer {
     /// Options stored as table properties in a catalog.
     TablePropertyList { items: Vec<(String, String)> },
@@ -166,7 +167,7 @@ pub enum PhysicalSinkMode {
     OverwritePartitions,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct BucketBy {
     pub columns: Vec<String>,
     pub num_buckets: usize,

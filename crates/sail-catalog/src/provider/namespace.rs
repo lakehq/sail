@@ -81,3 +81,59 @@ impl Namespace {
             && self.tail.iter().zip(other.tail.iter()).all(|(a, b)| a == b)
     }
 }
+
+pub fn namespace_location_from_properties<'a, I>(properties: I) -> Option<String>
+where
+    I: IntoIterator<Item = (&'a str, &'a str)>,
+{
+    let mut warehouse = None;
+    let mut path = None;
+    for (key, value) in properties {
+        match key.to_ascii_lowercase().as_str() {
+            "location" => return Some(value.to_owned()),
+            "warehouse" if warehouse.is_none() => warehouse = Some(value.to_string()),
+            "path" if path.is_none() => path = Some(value.to_string()),
+            _ => {}
+        }
+    }
+    warehouse.or(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::namespace_location_from_properties;
+
+    #[test]
+    fn namespace_location_prefers_location_then_warehouse_then_path() {
+        let properties = [
+            ("warehouse".to_string(), "s3://bucket/warehouse".to_string()),
+            ("location".to_string(), "s3://bucket/location".to_string()),
+            ("path".to_string(), "s3://bucket/path".to_string()),
+        ];
+        assert_eq!(
+            namespace_location_from_properties(
+                properties.iter().map(|(k, v)| (k.as_str(), v.as_str()))
+            ),
+            Some("s3://bucket/location".to_string())
+        );
+
+        let properties = [
+            ("path".to_string(), "s3://bucket/path".to_string()),
+            ("warehouse".to_string(), "s3://bucket/warehouse".to_string()),
+        ];
+        assert_eq!(
+            namespace_location_from_properties(
+                properties.iter().map(|(k, v)| (k.as_str(), v.as_str()))
+            ),
+            Some("s3://bucket/warehouse".to_string())
+        );
+
+        let properties = [("path".to_string(), "s3://bucket/path".to_string())];
+        assert_eq!(
+            namespace_location_from_properties(
+                properties.iter().map(|(k, v)| (k.as_str(), v.as_str()))
+            ),
+            Some("s3://bucket/path".to_string())
+        );
+    }
+}

@@ -4,6 +4,7 @@ pub mod debug;
 pub mod error;
 pub mod geoarrow;
 pub mod object;
+pub mod path;
 pub mod runtime;
 pub mod spec;
 pub mod string;
