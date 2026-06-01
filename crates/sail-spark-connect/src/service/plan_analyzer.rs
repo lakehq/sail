@@ -1,4 +1,11 @@
+use std::collections::BTreeSet;
+use std::hash::{DefaultHasher, Hash, Hasher};
+
+use datafusion::logical_expr::LogicalPlan;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
+use datafusion_datasource::file_scan_config::FileScanConfig;
+use datafusion_datasource::source::DataSourceExec;
 use log::warn;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -114,10 +121,61 @@ pub(crate) async fn handle_analyze_is_streaming(
 }
 
 pub(crate) async fn handle_analyze_input_files(
-    _ctx: &SessionContext,
-    _request: InputFilesRequest,
+    ctx: &SessionContext,
+    request: InputFilesRequest,
 ) -> SparkResult<InputFilesResponse> {
-    Err(SparkError::todo("handle analyze input files"))
+    let spark = ctx.extension::<SparkSession>()?;
+    let InputFilesRequest { plan } = request;
+    let plan = plan.required("plan")?;
+    let resolver = PlanResolver::new(ctx, spark.plan_config()?);
+    let NamedPlan { plan, .. } = resolver
+        .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
+        .await?;
+    let df = sail_plan::execute_logical_plan(ctx, plan).await?;
+    let (session_state, logical_plan) = df.into_parts();
+    let logical_plan = session_state.optimize(&logical_plan)?;
+    let physical_plan = session_state
+        .query_planner()
+        .create_physical_plan(&logical_plan, &session_state)
+        .await?;
+
+    let mut files = BTreeSet::new();
+    collect_input_files(physical_plan.as_ref(), &mut files);
+
+    Ok(InputFilesResponse {
+        files: files.into_iter().collect(),
+    })
+}
+
+fn collect_input_files(plan: &dyn ExecutionPlan, files: &mut BTreeSet<String>) {
+    if let Some(ds_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
+        if let Some(file_scan_config) = ds_exec
+            .data_source()
+            .as_any()
+            .downcast_ref::<FileScanConfig>()
+        {
+            let base_url = file_scan_config.object_store_url.as_str();
+            for file_group in &file_scan_config.file_groups {
+                for file in file_group.iter() {
+                    let location = file.object_meta.location.as_ref();
+                    files.insert(format_input_file_url(base_url, location));
+                }
+            }
+        }
+    }
+    for child in plan.children() {
+        collect_input_files(child.as_ref(), files);
+    }
+}
+
+fn format_input_file_url(base_url: &str, location: &str) -> String {
+    let base_url = base_url.trim_end_matches('/');
+    let location = location.trim_start_matches('/');
+    if base_url == "file:" {
+        format!("file:///{location}")
+    } else {
+        format!("{base_url}/{location}")
+    }
 }
 
 pub(crate) async fn handle_analyze_spark_version(
@@ -142,17 +200,42 @@ pub(crate) async fn handle_analyze_ddl_parse(
 }
 
 pub(crate) async fn handle_analyze_same_semantics(
-    _ctx: &SessionContext,
-    _request: SameSemanticsRequest,
+    ctx: &SessionContext,
+    request: SameSemanticsRequest,
 ) -> SparkResult<SameSemanticsResponse> {
-    Err(SparkError::todo("handle analyze same semantics"))
+    let SameSemanticsRequest {
+        target_plan,
+        other_plan,
+    } = request;
+    let target_plan = target_plan.required("target plan")?;
+    let other_plan = other_plan.required("other plan")?;
+    let target_plan = resolve_logical_plan(ctx, target_plan).await?;
+    let other_plan = resolve_logical_plan(ctx, other_plan).await?;
+    Ok(SameSemanticsResponse {
+        result: target_plan == other_plan,
+    })
+}
+
+async fn resolve_logical_plan(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<LogicalPlan> {
+    let spark = ctx.extension::<SparkSession>()?;
+    let resolver = PlanResolver::new(ctx, spark.plan_config()?);
+    let NamedPlan { plan, .. } = resolver
+        .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
+        .await?;
+    Ok(plan)
 }
 
 pub(crate) async fn handle_analyze_semantic_hash(
-    _ctx: &SessionContext,
-    _request: SemanticHashRequest,
+    ctx: &SessionContext,
+    request: SemanticHashRequest,
 ) -> SparkResult<SemanticHashResponse> {
-    Err(SparkError::todo("handle analyze semantic hash"))
+    let SemanticHashRequest { plan } = request;
+    let plan = plan.required("plan")?;
+    let plan = resolve_logical_plan(ctx, plan).await?;
+    let mut hasher = DefaultHasher::new();
+    plan.hash(&mut hasher);
+    let hash = hasher.finish() as i32;
+    Ok(SemanticHashResponse { result: hash })
 }
 
 pub(crate) async fn handle_analyze_persist(

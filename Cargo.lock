@@ -8118,7 +8118,9 @@ version = "0.6.3"
 dependencies = [
  "arrow-schema",
  "async-stream",
+ "crc32fast",
  "datafusion",
+ "datafusion-datasource",
  "fastrace",
  "futures",
  "lazy_static",

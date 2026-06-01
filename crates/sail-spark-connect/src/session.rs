@@ -1,5 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -40,6 +41,23 @@ impl Debug for SparkSession {
             .field("user_id", &self.user_id)
             .field("options", &self.options)
             .finish()
+    }
+}
+
+impl Drop for SparkSession {
+    fn drop(&mut self) {
+        let state = match self.state.get_mut() {
+            Ok(state) => state,
+            Err(error) => error.into_inner(),
+        };
+        if let Some(dir) = state.artifact_dir.take() {
+            if let Err(error) = std::fs::remove_dir_all(&dir) {
+                log::warn!(
+                    "Failed to remove Spark session artifact directory {}: {error}",
+                    dir.display()
+                );
+            }
+        }
     }
 }
 
@@ -288,12 +306,44 @@ impl SparkSession {
         state.streaming_queries.reset_stopped_queries();
         Ok(())
     }
+
+    /// Returns the path to the session-specific artifact directory.
+    /// The directory is created lazily on first access.
+    pub(crate) fn artifact_dir(&self) -> SparkResult<PathBuf> {
+        let mut state = self.state.lock()?;
+        if let Some(dir) = &state.artifact_dir {
+            return Ok(dir.clone());
+        }
+        let dir = std::env::temp_dir()
+            .join("sail-artifacts")
+            .join(&self.session_id);
+        std::fs::create_dir_all(&dir).map_err(|e| {
+            SparkError::internal(format!("failed to create artifact directory: {e}"))
+        })?;
+        state.artifact_dir = Some(dir.clone());
+        Ok(dir)
+    }
+
+    /// Tracks an artifact name as added to this session.
+    pub(crate) fn add_artifact(&self, name: String) -> SparkResult<()> {
+        let mut state = self.state.lock()?;
+        state.artifacts.insert(name);
+        Ok(())
+    }
+
+    /// Returns whether an artifact with the given name has been added to this session.
+    pub(crate) fn has_artifact(&self, name: &str) -> SparkResult<bool> {
+        let state = self.state.lock()?;
+        Ok(state.artifacts.contains(name))
+    }
 }
 
 struct SparkSessionState {
     config: SparkRuntimeConfig,
     executors: HashMap<String, Arc<Executor>>,
     streaming_queries: StreamingQueryManager,
+    artifacts: HashSet<String>,
+    artifact_dir: Option<PathBuf>,
 }
 
 impl SparkSessionState {
@@ -302,6 +352,8 @@ impl SparkSessionState {
             config: SparkRuntimeConfig::new(),
             executors: HashMap::new(),
             streaming_queries: StreamingQueryManager::new(),
+            artifacts: HashSet::new(),
+            artifact_dir: None,
         }
     }
 }
