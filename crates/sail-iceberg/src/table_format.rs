@@ -62,6 +62,169 @@ impl TableFormat for IcebergTableFormat {
         "iceberg"
     }
 
+    async fn create_table(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        info: sail_common_datafusion::datasource::CreateTableInfo,
+    ) -> Result<()> {
+        let sail_common_datafusion::datasource::CreateTableInfo {
+            path,
+            schema,
+            partition_by,
+            mut properties,
+            operation,
+            generated_columns: _,
+        } = info;
+
+        let table_url = Self::parse_table_url(vec![path]).await?;
+        let object_store = runtime_env
+            .object_store_registry
+            .get_store(&table_url)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let store_ctx = StoreContext::new(object_store.clone(), &table_url)?;
+
+        let existing_metadata = match find_latest_metadata_file(&object_store, &table_url).await {
+            Ok(path) => Some(path),
+            Err(DataFusionError::Plan(message))
+                if message.contains("No metadata files found in table location") =>
+            {
+                None
+            }
+            Err(e) => return Err(e),
+        };
+
+        match (&existing_metadata, operation) {
+            (Some(_), operation) if operation.is_if_not_exists() => return Ok(()),
+            (Some(_), operation)
+                if !operation.replaces_existing_storage() && schema.fields().is_empty() =>
+            {
+                return Ok(());
+            }
+            (Some(_), operation) if !operation.replaces_existing_storage() => {
+                return plan_err!("Iceberg table already exists at path: {table_url}");
+            }
+            _ => {}
+        }
+
+        if schema.fields().is_empty() {
+            return plan_err!("Iceberg CREATE TABLE requires a non-empty schema");
+        }
+
+        let mut iceberg_schema =
+            crate::datasource::type_converter::arrow_schema_to_iceberg(schema.as_ref())?;
+        iceberg_schema =
+            crate::schema_evolution::SchemaEvolver::assign_schema_field_ids(&iceberg_schema)?;
+
+        let mut partition_spec_builder = PartitionSpec::builder();
+        for field in &partition_by {
+            let source_id = iceberg_schema
+                .field_id_by_name(&field.column)
+                .ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "Partition column mismatch: column '{}' not found in schema",
+                        crate::utils::partition_transform::format_partition_expr(field)
+                    ))
+                })?;
+            partition_spec_builder = partition_spec_builder.add_field(
+                source_id,
+                crate::utils::partition_transform::partition_field_name(field),
+                crate::utils::partition_transform::iceberg_transform_from_partition_field(field),
+            );
+        }
+        let partition_spec = partition_spec_builder.build();
+
+        let mut table_properties = properties
+            .drain()
+            .filter(|(key, _)| !is_catalog_encoded_option(key))
+            .collect::<Vec<_>>();
+        table_properties.sort_by(|(a, _), (b, _)| a.cmp(b));
+        let (requested_format_version, metadata_properties) =
+            crate::properties::metadata_properties_from_table_properties(&table_properties)?;
+        let format_version = requested_format_version.max(
+            crate::operations::helpers::format_version_for_schema(&iceberg_schema),
+        );
+
+        let current_version = existing_metadata
+            .as_deref()
+            .and_then(metadata_file_version_from_path)
+            .unwrap_or(0);
+        let next_version = current_version + 1;
+        let existing_for_next = metadata_files_for_version(&store_ctx, next_version).await?;
+        if !existing_for_next.is_empty() {
+            return plan_err!(
+                "Iceberg metadata file for version {next_version} already exists at {table_url}"
+            );
+        }
+
+        let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
+        let mut table_metadata = TableMetadata {
+            format_version,
+            table_uuid: None,
+            location: table_url.to_string(),
+            last_sequence_number: 0,
+            last_updated_ms: timestamp_ms,
+            last_column_id: iceberg_schema.highest_field_id(),
+            schemas: vec![iceberg_schema.clone()],
+            current_schema_id: iceberg_schema.schema_id(),
+            partition_specs: vec![partition_spec.clone()],
+            default_spec_id: partition_spec.spec_id(),
+            last_partition_id: partition_spec.highest_field_id().unwrap_or(0),
+            properties: metadata_properties,
+            current_snapshot_id: None,
+            next_row_id: None,
+            encryption_keys: vec![],
+            snapshots: vec![],
+            snapshot_log: vec![],
+            metadata_log: existing_metadata
+                .iter()
+                .map(|metadata_file| MetadataLog {
+                    timestamp_ms,
+                    metadata_file: metadata_file.clone(),
+                })
+                .collect(),
+            sort_orders: vec![],
+            default_sort_order_id: None,
+            refs: Default::default(),
+            statistics: vec![],
+            partition_statistics: vec![],
+        };
+        table_metadata.ensure_required_format_fields();
+
+        let metadata_json = table_metadata
+            .to_json()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let file_extension = metadata_file_extension_from_properties(&table_metadata.properties)?;
+        let metadata_rel = format!("metadata/v{next_version}{file_extension}");
+        let metadata_bytes = encode_metadata_file(&metadata_rel, &metadata_json)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let metadata_path = object_store::path::Path::from(metadata_rel.as_str());
+        let put_opts = object_store::PutOptions {
+            mode: object_store::PutMode::Create,
+            ..Default::default()
+        };
+        store_ctx
+            .prefixed
+            .put_opts(
+                &metadata_path,
+                object_store::PutPayload::from(Bytes::from(metadata_bytes)),
+                put_opts,
+            )
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let hint_path = object_store::path::Path::from("metadata/version-hint.text");
+        store_ctx
+            .prefixed
+            .put(
+                &hint_path,
+                object_store::PutPayload::from(Bytes::from(next_version.to_string())),
+            )
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        Ok(())
+    }
+
     async fn create_source(
         &self,
         ctx: &dyn Session,
@@ -436,13 +599,17 @@ fn split_iceberg_write_options_and_table_properties(
                 table_properties.extend(
                     items
                         .iter()
-                        .filter(|(key, _)| !key.starts_with("option."))
+                        .filter(|(key, _)| !is_catalog_encoded_option(key))
                         .cloned(),
                 );
             }
         })
         .collect();
     (clean_options, table_properties)
+}
+
+fn is_catalog_encoded_option(key: &str) -> bool {
+    key.starts_with("option.")
 }
 
 fn alter_table_properties_conflict_error() -> DataFusionError {
@@ -453,6 +620,8 @@ fn alter_table_properties_conflict_error() -> DataFusionError {
 
 #[cfg(test)]
 mod tests {
+    use sail_common_datafusion::datasource::CreateTableOperation;
+
     use super::*;
 
     #[test]
@@ -504,5 +673,159 @@ mod tests {
             iceberg_options.write_folder_storage_path.as_deref(),
             Some("legacy_data")
         );
+    }
+
+    #[test]
+    fn create_table_materializes_metadata_only_iceberg_table() -> Result<()> {
+        futures::executor::block_on(async {
+            let unique = format!(
+                "sail-iceberg-create-table-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .as_nanos()
+            );
+            let dir = std::env::temp_dir().join(unique);
+            std::fs::create_dir_all(&dir).map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let table_url = Url::from_directory_path(&dir).map_err(|()| {
+                DataFusionError::Plan(format!("invalid temp directory path: {}", dir.display()))
+            })?;
+
+            let ctx = datafusion::execution::context::SessionContext::default();
+            IcebergTableFormat
+                .create_table(
+                    ctx.runtime_env(),
+                    sail_common_datafusion::datasource::CreateTableInfo {
+                        path: table_url.to_string(),
+                        schema: Arc::new(datafusion::arrow::datatypes::Schema::new(vec![
+                            datafusion::arrow::datatypes::Field::new(
+                                "id",
+                                datafusion::arrow::datatypes::DataType::Int64,
+                                false,
+                            ),
+                        ])),
+                        partition_by: vec![CatalogPartitionField {
+                            column: "id".to_string(),
+                            transform: Some(
+                                sail_common_datafusion::catalog::PartitionTransform::Bucket(8),
+                            ),
+                        }],
+                        properties: std::collections::HashMap::from([
+                            ("format-version".to_string(), "2".to_string()),
+                            ("option.metadataAsDataRead".to_string(), "true".to_string()),
+                            ("custom.key".to_string(), "custom-value".to_string()),
+                        ]),
+                        operation: CreateTableOperation::Create,
+                        generated_columns: std::collections::HashMap::new(),
+                    },
+                )
+                .await?;
+
+            let state = ctx.state();
+            let table = Table::load(&state, table_url.clone()).await?;
+            let metadata = table.metadata();
+            assert!(metadata.current_snapshot_id.is_none());
+            assert!(metadata.snapshots.is_empty());
+            assert_eq!(metadata.schemas.len(), 1);
+            let schema = metadata.current_schema().ok_or_else(|| {
+                DataFusionError::Plan("missing current schema after CREATE TABLE".to_string())
+            })?;
+            assert_eq!(schema.fields().len(), 1);
+            let spec = metadata.default_partition_spec().ok_or_else(|| {
+                DataFusionError::Plan(
+                    "missing default partition spec after CREATE TABLE".to_string(),
+                )
+            })?;
+            assert_eq!(spec.fields().len(), 1);
+            assert_eq!(spec.fields()[0].name, "id_bucket");
+            assert!(!metadata
+                .properties
+                .contains_key("option.metadataAsDataRead"));
+            assert_eq!(
+                metadata.properties.get("custom.key").map(String::as_str),
+                Some("custom-value")
+            );
+
+            std::fs::remove_dir_all(&dir).map_err(|e| DataFusionError::External(Box::new(e)))?;
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn create_table_if_not_exists_preserves_existing_iceberg_metadata() -> Result<()> {
+        futures::executor::block_on(async {
+            let unique = format!(
+                "sail-iceberg-create-table-if-not-exists-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .as_nanos()
+            );
+            let dir = std::env::temp_dir().join(unique);
+            std::fs::create_dir_all(&dir).map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let table_url = Url::from_directory_path(&dir).map_err(|()| {
+                DataFusionError::Plan(format!("invalid temp directory path: {}", dir.display()))
+            })?;
+            let ctx = datafusion::execution::context::SessionContext::default();
+            let create_info = |schema: datafusion::arrow::datatypes::Schema| {
+                sail_common_datafusion::datasource::CreateTableInfo {
+                    path: table_url.to_string(),
+                    schema: Arc::new(schema),
+                    partition_by: vec![],
+                    properties: std::collections::HashMap::new(),
+                    operation: CreateTableOperation::Create,
+                    generated_columns: std::collections::HashMap::new(),
+                }
+            };
+
+            IcebergTableFormat
+                .create_table(
+                    ctx.runtime_env(),
+                    create_info(datafusion::arrow::datatypes::Schema::new(vec![
+                        datafusion::arrow::datatypes::Field::new(
+                            "id",
+                            datafusion::arrow::datatypes::DataType::Int64,
+                            false,
+                        ),
+                    ])),
+                )
+                .await?;
+
+            let object_store = ctx
+                .runtime_env()
+                .object_store_registry
+                .get_store(&table_url)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let first_metadata = find_latest_metadata_file(&object_store, &table_url).await?;
+
+            IcebergTableFormat
+                .create_table(
+                    ctx.runtime_env(),
+                    create_info(datafusion::arrow::datatypes::Schema::empty()),
+                )
+                .await?;
+            let adopted_metadata = find_latest_metadata_file(&object_store, &table_url).await?;
+            assert_eq!(first_metadata, adopted_metadata);
+
+            let mut second_info = create_info(datafusion::arrow::datatypes::Schema::new(vec![
+                datafusion::arrow::datatypes::Field::new(
+                    "different",
+                    datafusion::arrow::datatypes::DataType::Utf8,
+                    true,
+                ),
+            ]));
+            second_info.operation = CreateTableOperation::CreateIfNotExists;
+            IcebergTableFormat
+                .create_table(ctx.runtime_env(), second_info)
+                .await?;
+
+            let second_metadata = find_latest_metadata_file(&object_store, &table_url).await?;
+            assert_eq!(first_metadata, second_metadata);
+
+            std::fs::remove_dir_all(&dir).map_err(|e| DataFusionError::External(Box::new(e)))?;
+            Ok(())
+        })
     }
 }

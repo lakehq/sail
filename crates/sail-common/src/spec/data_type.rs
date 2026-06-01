@@ -19,6 +19,9 @@ pub const ARROW_DECIMAL256_MAX_SCALE: i8 = arrow_schema::DECIMAL256_MAX_SCALE;
 /// (e.g. extension type keys).
 pub const SPARK_METADATA_JSON_KEY: &str = "SPARK::metadata::json";
 
+pub use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
+pub const VARIANT_EXTENSION_NAME: &str = "arrow.parquet.variant";
+
 /// Sail metadata key for Spark UDT information stored in Arrow field metadata.
 ///
 /// This is internal to Sail and should not be exposed as Spark column metadata.

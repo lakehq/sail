@@ -328,6 +328,10 @@ impl CatalogProvider for OneLakeCatalogProvider {
         &self.name
     }
 
+    fn supports_generic_create_table_materialization(&self, _format: &str) -> bool {
+        false
+    }
+
     async fn create_database(
         &self,
         _database: &Namespace,
@@ -427,6 +431,8 @@ impl CatalogProvider for OneLakeCatalogProvider {
         _table: &str,
         _options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
+        // TODO: Revisit when OneLake exposes a create-table API; this
+        // provider is read-only here and performs no materialization.
         Err(CatalogError::NotSupported(
             "OneLake catalog does not support creating tables via API".to_string(),
         ))

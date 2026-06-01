@@ -331,6 +331,13 @@ impl CatalogProvider for GlueCatalogProvider {
         &self.name
     }
 
+    fn supports_generic_create_table_materialization(&self, format: &str) -> bool {
+        // Glue's OpenTableFormatInput API creates Iceberg metadata and catalog
+        // state together. Delta still uses the Hive-style Glue table path and
+        // needs Sail's generic Delta log materialization.
+        format.eq_ignore_ascii_case("delta")
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,
@@ -502,6 +509,8 @@ impl CatalogProvider for GlueCatalogProvider {
         let client = self.get_client().await?;
         let format_lower = options.format.to_lowercase();
 
+        // TODO: Keep aws-sdk-glue up to date; Iceberg creation is handled by
+        // Glue OpenTableFormatInput, while other formats only register metadata.
         if format_lower == "iceberg" {
             iceberg::create_iceberg_table(self, client, database, table, options).await
         } else {

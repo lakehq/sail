@@ -167,6 +167,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             if_not_exists,
             replace,
             properties,
+            defer_materialize: _,
             is_external,
         } = options;
         if !format.eq_ignore_ascii_case("iceberg")
@@ -200,6 +201,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                     nullable,
                     comment,
                     default,
+                    metadata: _,
                     generated_always_as,
                 } = x;
                 let is_partition = partition_by

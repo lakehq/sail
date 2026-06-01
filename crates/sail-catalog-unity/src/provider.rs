@@ -329,6 +329,13 @@ impl CatalogProvider for UnityCatalogProvider {
         &self.name
     }
 
+    fn supports_generic_create_table_materialization(&self, _format: &str) -> bool {
+        // Unity Catalog controls storage locations and credentials. The generic
+        // create-table path must not pre-initialize Delta logs with Sail's
+        // ambient object-store credentials.
+        false
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,
@@ -505,7 +512,9 @@ impl CatalogProvider for UnityCatalogProvider {
         table: &str,
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
-        // Only external table creation is supported according to the Unity Catalog OpenAPI spec.
+        // TODO: Regenerate types from the Unity Catalog OpenAPI spec and wire
+        // the staging-table + temp-credential flow; this legacy path registers
+        // external tables only and does not initialize storage.
         let CreateTableOptions {
             columns,
             comment,
@@ -518,6 +527,7 @@ impl CatalogProvider for UnityCatalogProvider {
             if_not_exists,
             replace,
             properties,
+            defer_materialize: _,
             is_external: _,
         } = options;
 

@@ -607,6 +607,7 @@ async fn test_create_table() {
             nullable: true,
             comment: None,
             default: None,
+            metadata: vec![],
             generated_always_as: None,
         },
         CreateTableColumnOptions {
@@ -622,6 +623,7 @@ async fn test_create_table() {
             nullable: false,
             comment: Some("meow".to_string()),
             default: None,
+            metadata: vec![],
             generated_always_as: None,
         },
         CreateTableColumnOptions {
@@ -640,6 +642,7 @@ async fn test_create_table() {
             nullable: true,
             comment: None,
             default: None,
+            metadata: vec![],
             generated_always_as: None,
         },
         CreateTableColumnOptions {
@@ -651,6 +654,7 @@ async fn test_create_table() {
             nullable: true,
             comment: None,
             default: None,
+            metadata: vec![],
             generated_always_as: None,
         },
     ];
@@ -671,6 +675,7 @@ async fn test_create_table() {
                 if_not_exists: false,
                 replace: false,
                 properties: vec![],
+                defer_materialize: false,
                 is_external: true,
             },
         )
@@ -804,6 +809,7 @@ async fn test_create_table() {
                 if_not_exists: false,
                 replace: false,
                 properties: vec![],
+                defer_materialize: false,
                 is_external: true,
             },
         )
@@ -826,6 +832,7 @@ async fn test_create_table() {
                 if_not_exists: true,
                 replace: false,
                 properties: vec![],
+                defer_materialize: false,
                 is_external: true,
             },
         )
@@ -839,6 +846,7 @@ async fn test_create_table() {
             nullable: true,
             comment: None,
             default: None,
+            metadata: vec![],
             generated_always_as: None,
         },
         CreateTableColumnOptions {
@@ -847,6 +855,7 @@ async fn test_create_table() {
             nullable: false,
             comment: Some("meow".to_string()),
             default: None,
+            metadata: vec![],
             generated_always_as: None,
         },
         CreateTableColumnOptions {
@@ -855,6 +864,7 @@ async fn test_create_table() {
             nullable: true,
             comment: None,
             default: None,
+            metadata: vec![],
             generated_always_as: None,
         },
     ];
@@ -881,6 +891,7 @@ async fn test_create_table() {
                     ("owner".to_string(), "mr. meow".to_string()),
                     ("team".to_string(), "data-eng".to_string()),
                 ],
+                defer_materialize: false,
                 is_external: true,
             },
         )
@@ -1005,6 +1016,7 @@ async fn test_get_table() {
             nullable: true,
             comment: None,
             default: None,
+            metadata: vec![],
             generated_always_as: None,
         },
         CreateTableColumnOptions {
@@ -1013,6 +1025,7 @@ async fn test_get_table() {
             nullable: false,
             comment: Some("meow".to_string()),
             default: None,
+            metadata: vec![],
             generated_always_as: None,
         },
         CreateTableColumnOptions {
@@ -1021,6 +1034,7 @@ async fn test_get_table() {
             nullable: true,
             comment: None,
             default: None,
+            metadata: vec![],
             generated_always_as: None,
         },
     ];
@@ -1047,6 +1061,7 @@ async fn test_get_table() {
                     ("owner".to_string(), "mr. meow".to_string()),
                     ("team".to_string(), "data-eng".to_string()),
                 ],
+                defer_materialize: false,
                 is_external: true,
             },
         )
@@ -1177,6 +1192,7 @@ async fn test_list_tables() {
         nullable: false,
         comment: None,
         default: None,
+        metadata: vec![],
         generated_always_as: None,
     }];
 
@@ -1199,6 +1215,7 @@ async fn test_list_tables() {
                 if_not_exists: false,
                 replace: false,
                 properties: vec![],
+                defer_materialize: false,
                 is_external: true,
             },
         )
@@ -1221,6 +1238,7 @@ async fn test_list_tables() {
                 if_not_exists: false,
                 replace: false,
                 properties: vec![],
+                defer_materialize: false,
                 is_external: true,
             },
         )
@@ -1273,6 +1291,7 @@ async fn test_drop_table() {
         nullable: false,
         comment: None,
         default: None,
+        metadata: vec![],
         generated_always_as: None,
     }];
 
@@ -1292,6 +1311,7 @@ async fn test_drop_table() {
                 if_not_exists: false,
                 replace: false,
                 properties: vec![],
+                defer_materialize: false,
                 is_external: true,
             },
         )

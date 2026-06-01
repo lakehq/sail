@@ -102,6 +102,7 @@ fn validate_hive_options(options: CreateTableOptions) -> CatalogResult<Validated
         if_not_exists,
         replace,
         properties,
+        defer_materialize: _,
         is_external: _,
     } = options;
 

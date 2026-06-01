@@ -766,6 +766,13 @@ impl CatalogProvider for HmsCatalogProvider {
         &self.name
     }
 
+    fn supports_generic_create_table_materialization(&self, format: &str) -> bool {
+        // This HMS provider creates Hive-style generic table records. It
+        // supports Delta + Parquet storage registration, but not Iceberg's
+        // HiveCatalog metadata-location protocol.
+        format.eq_ignore_ascii_case("delta")
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,
@@ -924,6 +931,8 @@ impl CatalogProvider for HmsCatalogProvider {
         table: &str,
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
+        // TODO: Keep hive_metastore crate up to date; HMS may create warehouse
+        // directories, but Delta log initialization remains table-format-side.
         let format = options.format.trim().to_lowercase();
 
         if options.replace {
@@ -1244,6 +1253,7 @@ mod tests {
                         nullable: false,
                         comment: None,
                         default: None,
+                        metadata: vec![],
                         generated_always_as: None,
                     }],
                     comment: None,
@@ -1256,6 +1266,7 @@ mod tests {
                     if_not_exists: false,
                     replace: false,
                     properties: vec![],
+                    defer_materialize: false,
                     is_external: true,
                 },
             )

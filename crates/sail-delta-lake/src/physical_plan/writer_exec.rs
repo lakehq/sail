@@ -60,7 +60,9 @@ use crate::physical_plan::writer_options::DeltaWriterExecOptions;
 use crate::physical_plan::{
     delta_action_schema, encode_actions, DeltaWriteContext, ExecCommitMeta,
 };
-use crate::spec::{Action, ColumnMappingMode, StructType};
+use crate::spec::{
+    Action, ColumnMappingMode, ColumnMetadataKey, MetadataValue, StructField, StructType,
+};
 use crate::storage::get_object_store_from_context;
 
 /// Counts internal row intent tags before they are stripped from writer input.
@@ -977,6 +979,53 @@ impl DeltaWriterExec {
         RecordBatch::try_new(final_schema.clone(), adapted_columns)
             .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
     }
+}
+
+/// Attach `delta.generationExpression` metadata to top-level fields based on a column-name keyed map.
+///
+/// DataFusion's physical planner may strip `Field::metadata` set via
+/// `Expr::Alias::with_metadata` when lowering logical expressions to arrow, which
+/// means a downstream `StructType::try_from(arrow_schema)` loses per-field
+/// generation expressions. This helper re-attaches them from a map resolved at
+/// plan-build time from the logical schema.
+pub(crate) fn inject_generation_expressions(
+    schema: StructType,
+    generation_expressions: &HashMap<String, String>,
+) -> StructType {
+    let fields = schema.into_fields().map(|field| {
+        if let Some(expr) = generation_expressions.get(&field.name) {
+            let existing_expr = field
+                .metadata
+                .get(ColumnMetadataKey::GenerationExpression.as_ref())
+                .and_then(|v| match v {
+                    MetadataValue::String(s) => Some(s.clone()),
+                    _ => None,
+                });
+            if existing_expr.as_deref() == Some(expr.as_str()) {
+                field
+            } else {
+                let StructField {
+                    name,
+                    data_type,
+                    nullable,
+                    mut metadata,
+                } = field;
+                metadata.insert(
+                    ColumnMetadataKey::GenerationExpression.as_ref().to_string(),
+                    MetadataValue::String(expr.clone()),
+                );
+                StructField {
+                    name,
+                    data_type,
+                    nullable,
+                    metadata,
+                }
+            }
+        } else {
+            field
+        }
+    });
+    StructType::new_unchecked(fields)
 }
 
 fn reinterpret_timestamp_timezone(

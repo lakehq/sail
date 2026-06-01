@@ -45,6 +45,36 @@ pub enum PersistStrategy {
     NewVersion,
 }
 
+fn version_hint_from_metadata_path(path: &str) -> Result<String> {
+    metadata_file_version_from_path(path)
+        .map(|version| version.to_string())
+        .ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "cannot determine Iceberg metadata version from path: {path}"
+            ))
+        })
+}
+
+fn in_place_version_hint_from_metadata_path(path: &str) -> Result<String> {
+    let file_name = path.rsplit('/').next().ok_or_else(|| {
+        DataFusionError::Plan(format!(
+            "cannot determine Iceberg metadata file name from path: {path}"
+        ))
+    })?;
+    // Numeric hints are only unambiguous for Hadoop-style vN metadata files.
+    // Catalog-style metadata files (00000-uuid.metadata.json) must be hinted by
+    // file name so static readers do not translate "0" to v0.metadata.json.
+    if file_name.starts_with('v') {
+        version_hint_from_metadata_path(path)
+    } else if metadata_file_version_from_path(path).is_some() {
+        Ok(file_name.to_string())
+    } else {
+        Err(DataFusionError::Plan(format!(
+            "cannot determine Iceberg metadata version from path: {path}"
+        )))
+    }
+}
+
 /// Bootstrap operation for SnapshotProducer
 struct BootstrapOperation;
 
@@ -345,12 +375,7 @@ pub async fn bootstrap_first_snapshot(
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-            // Extract metadata filename for version-hint
-            let metadata_filename = if let Some(fname) = rel_name.rsplit('/').next() {
-                fname.to_string()
-            } else {
-                rel_name.clone()
-            };
+            let version_hint = in_place_version_hint_from_metadata_path(&rel_name)?;
 
             // Write version-hint
             let hint_path = object_store::path::Path::from("metadata/version-hint.text");
@@ -358,9 +383,7 @@ pub async fn bootstrap_first_snapshot(
                 .prefixed
                 .put(
                     &hint_path,
-                    object_store::PutPayload::from(Bytes::from(
-                        metadata_filename.as_bytes().to_vec(),
-                    )),
+                    object_store::PutPayload::from(Bytes::from(version_hint.into_bytes())),
                 )
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -398,4 +421,35 @@ pub async fn bootstrap_first_snapshot(
     }
 
     Ok(table_meta)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_hint_from_metadata_path_uses_numeric_version() -> Result<()> {
+        assert_eq!(
+            version_hint_from_metadata_path("metadata/v1.metadata.json")?,
+            "1"
+        );
+        assert_eq!(
+            version_hint_from_metadata_path("metadata/v2.gz.metadata.json")?,
+            "2"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn in_place_version_hint_matches_metadata_naming_convention() -> Result<()> {
+        assert_eq!(
+            in_place_version_hint_from_metadata_path("metadata/v1.metadata.json")?,
+            "1"
+        );
+        assert_eq!(
+            in_place_version_hint_from_metadata_path("metadata/00003-1234.metadata.json")?,
+            "00003-1234.metadata.json"
+        );
+        Ok(())
+    }
 }

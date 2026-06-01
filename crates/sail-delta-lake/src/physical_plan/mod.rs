@@ -62,6 +62,7 @@ pub use scan_by_adds_exec::DeltaScanByAddsExec;
 pub use write_context::{
     prepare_delta_write_context, DeltaCommitContext, DeltaSnapshotContext, DeltaWriteContext,
 };
+pub(crate) use writer_exec::inject_generation_expressions;
 pub use writer_exec::DeltaWriterExec;
 pub use writer_options::DeltaWriterExecOptions;
 

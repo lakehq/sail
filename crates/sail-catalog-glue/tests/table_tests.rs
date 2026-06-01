@@ -71,6 +71,7 @@ async fn test_create_table() {
                 if_not_exists: false,
                 replace: false,
                 properties: vec![("owner".to_string(), "test_user".to_string())],
+                defer_materialize: false,
                 is_external: true,
             },
         )
@@ -192,6 +193,7 @@ async fn test_get_table() {
                 if_not_exists: false,
                 replace: false,
                 properties: vec![("key1".to_string(), "value1".to_string())],
+                defer_materialize: false,
                 is_external: true,
             },
         )
@@ -421,6 +423,7 @@ async fn test_storage_formats() {
                     if_not_exists: false,
                     replace: false,
                     properties: vec![],
+                    defer_materialize: false,
                     is_external: true,
                 },
             )
@@ -599,6 +602,7 @@ async fn test_partition_transforms() {
                 if_not_exists: false,
                 replace: false,
                 properties: vec![],
+                defer_materialize: false,
                 is_external: true,
             },
         )
@@ -662,6 +666,7 @@ async fn test_hive_rejects_transforms() {
                 if_not_exists: false,
                 replace: false,
                 properties: vec![],
+                defer_materialize: false,
                 is_external: true,
             },
         )
@@ -706,6 +711,7 @@ async fn test_iceberg_requires_location() {
                 if_not_exists: false,
                 replace: false,
                 properties: vec![],
+                defer_materialize: false,
                 is_external: true,
             },
         )

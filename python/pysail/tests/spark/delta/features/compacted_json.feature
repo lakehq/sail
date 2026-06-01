@@ -40,6 +40,8 @@ Feature: Delta Lake Compacted JSON (Log Compaction)
         📄 00000000000000000001.json
         📄 00000000000000000002.crc
         📄 00000000000000000002.json
+        📄 00000000000000000003.crc
+        📄 00000000000000000003.json
         """
 
     Scenario: Reads all data correctly with auto-compacted JSON on driver path
@@ -145,6 +147,8 @@ Feature: Delta Lake Compacted JSON (Log Compaction)
         📄 00000000000000000003.checkpoint.parquet
         📄 00000000000000000003.crc
         📄 00000000000000000003.json
+        📄 00000000000000000004.crc
+        📄 00000000000000000004.json
         📄 _last_checkpoint
         """
 

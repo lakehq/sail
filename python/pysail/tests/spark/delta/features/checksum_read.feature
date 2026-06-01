@@ -49,6 +49,8 @@ Feature: Delta Lake checksum read path
         📄 00000000000000000000.json
         📄 00000000000000000001.crc
         📄 00000000000000000001.json
+        📄 00000000000000000002.crc
+        📄 00000000000000000002.json
         """
 
   @sail-only
@@ -85,7 +87,7 @@ Feature: Delta Lake checksum read path
         """
 
     Scenario: Metadata-as-data read succeeds when newest checksum is missing
-      Given file 00000000000000000001.crc in delta_log is deleted
+      Given file 00000000000000000002.crc in delta_log is deleted
       When query
         """
         SELECT * FROM delta_checksum_read_hint_test ORDER BY id
@@ -99,7 +101,9 @@ Feature: Delta Lake checksum read path
         """
         📄 00000000000000000000.crc
         📄 00000000000000000000.json
+        📄 00000000000000000001.crc
         📄 00000000000000000001.json
+        📄 00000000000000000002.json
         """
 
   @sail-only
@@ -136,7 +140,7 @@ Feature: Delta Lake checksum read path
         """
 
     Scenario: Metadata-as-data read succeeds when newest checksum is malformed
-      Given file 00000000000000000001.crc in delta_log is replaced with
+      Given file 00000000000000000002.crc in delta_log is replaced with
         """
         {not-valid-json
         """
@@ -155,6 +159,8 @@ Feature: Delta Lake checksum read path
         📄 00000000000000000000.json
         📄 00000000000000000001.crc
         📄 00000000000000000001.json
+        📄 00000000000000000002.crc
+        📄 00000000000000000002.json
         """
 
   @sail-only
@@ -193,6 +199,7 @@ Feature: Delta Lake checksum read path
     Scenario: Metadata-as-data SELECT succeeds when all checksum files are deleted
       Given file 00000000000000000000.crc in delta_log is deleted
       Given file 00000000000000000001.crc in delta_log is deleted
+      Given file 00000000000000000002.crc in delta_log is deleted
       When query
         """
         SELECT * FROM delta_checksum_read_missing_test ORDER BY id
@@ -206,4 +213,5 @@ Feature: Delta Lake checksum read path
         """
         📄 00000000000000000000.json
         📄 00000000000000000001.json
+        📄 00000000000000000002.json
         """

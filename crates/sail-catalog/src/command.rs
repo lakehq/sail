@@ -1,12 +1,15 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use sail_common_datafusion::array::serde::ArrowSerializer;
-use sail_common_datafusion::datasource::{is_lakehouse_format, TableFormatRegistry};
+use sail_common_datafusion::datasource::{
+    is_lakehouse_format, CreateTableOperation, CreateTableStorageAction, TableFormatRegistry,
+};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CatalogError, CatalogResult};
+use crate::manager::table::CreateTableMaterialization;
 use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId};
 use crate::manager::CatalogManager;
 use crate::provider::{
@@ -299,7 +302,140 @@ impl CatalogCommand {
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::CreateTable { table, options } => {
-                manager.create_table(&table, options).await?;
+                // For lakehouse formats (Delta/Iceberg), materialize the physical
+                // table (write the initial transaction log) as part of catalog
+                // creation. Catalog creates register the catalog entry first and
+                // roll it back if storage initialization fails; catalog replaces
+                // materialize first so a storage failure does not overwrite catalog
+                // metadata.
+                //
+                // Known limitation: the REPLACE path is not fully atomic across the
+                // storage and catalog layers. If the catalog update fails AFTER
+                // storage was tombstoned, the previous table contents are gone but
+                // the catalog still references the (now-replaced) location. A full
+                // fix requires two-phase commit on the catalog side; today we accept
+                // this as the symmetric cost of writing a real v0 commit first.
+                //
+                // `defer_materialize=true` means a subsequent writer (CTAS, first
+                // INSERT through the write-to-create path) will atomically create
+                // the physical table in a single commit, so we skip the metadata-
+                // only pre-commit here.
+                //
+                // The catalog decides which formats may use generic
+                // materialization. Path-style catalogs can support Delta and
+                // Iceberg here, while provider-side catalogs such as Iceberg
+                // REST/Glue create Iceberg metadata through their own APIs.
+                let format = options.format.trim();
+                let materialization = if !options.defer_materialize
+                    && manager
+                        .table_supports_generic_create_table_materialization(&table, format)?
+                {
+                    let materialization_mode = if !format.is_empty() && is_lakehouse_format(format)
+                    {
+                        manager
+                            .create_table_materialization(
+                                &table,
+                                options.if_not_exists,
+                                options.replace,
+                            )
+                            .await?
+                    } else {
+                        CreateTableMaterialization::Skip
+                    };
+                    match (options.location.clone(), materialization_mode) {
+                        (_, CreateTableMaterialization::Skip) | (None, _) => None,
+                        (Some(location), materialization_mode) => {
+                            let operation = match (options.replace, options.if_not_exists) {
+                                (true, _) => CreateTableOperation::CreateOrReplace {
+                                    storage_action: if matches!(
+                                        materialization_mode,
+                                        CreateTableMaterialization::Replace
+                                    ) {
+                                        CreateTableStorageAction::Replace
+                                    } else {
+                                        CreateTableStorageAction::CreateOrAdopt
+                                    },
+                                },
+                                (false, true) => CreateTableOperation::CreateIfNotExists,
+                                (false, false) => CreateTableOperation::Create,
+                            };
+                            let registry = ctx.extension::<TableFormatRegistry>().map_err(|e| {
+                                CatalogError::External(format!(
+                                    "missing TableFormatRegistry for storage-backed CREATE TABLE on format '{format}': {e}"
+                                ))
+                            })?;
+                            let table_format = registry.get(format).map_err(|e| {
+                                CatalogError::External(format!(
+                                    "unknown table format '{format}' for storage-backed CREATE TABLE: {e}"
+                                ))
+                            })?;
+                            let schema = create_table_schema_from_columns(&options.columns);
+                            let partition_by = options.partition_by.clone();
+                            let properties = create_table_physical_properties(&options.properties);
+                            let generated_columns: std::collections::HashMap<String, String> =
+                                options
+                                    .columns
+                                    .iter()
+                                    .filter_map(|c| {
+                                        c.generated_always_as
+                                            .as_ref()
+                                            .map(|expr| (c.name.clone(), expr.clone()))
+                                    })
+                                    .collect();
+                            let info = sail_common_datafusion::datasource::CreateTableInfo {
+                                path: location,
+                                schema,
+                                partition_by,
+                                properties,
+                                operation,
+                                generated_columns,
+                            };
+                            Some((table_format, info))
+                        }
+                    }
+                } else {
+                    None
+                };
+                if let Some((table_format, info)) = materialization {
+                    if info.operation.replaces_existing_storage() {
+                        let physical_location = info.path.clone();
+                        table_format
+                            .create_table(ctx.runtime_env(), info)
+                            .await
+                            .map_err(|e| CatalogError::External(e.to_string()))?;
+                        if let Err(e) = manager.create_table(&table, options).await {
+                            return Err(CatalogError::External(format!(
+                                "failed to register catalog table after materializing storage-backed \
+                                 CREATE OR REPLACE TABLE at {physical_location}; physical table \
+                                 data or metadata may have been created or overwritten, leaving \
+                                 storage and catalog out of sync: {e}"
+                            )));
+                        }
+                    } else {
+                        manager.create_table(&table, options).await?;
+                        if let Err(e) = table_format.create_table(ctx.runtime_env(), info).await {
+                            let storage_error = e.to_string();
+                            if let Err(rollback_error) = manager
+                                .drop_table(
+                                    &table,
+                                    DropTableOptions {
+                                        if_exists: true,
+                                        purge: false,
+                                    },
+                                )
+                                .await
+                            {
+                                return Err(CatalogError::External(format!(
+                                    "failed to materialize storage-backed CREATE TABLE: {storage_error}; \
+                                     additionally failed to roll back catalog table: {rollback_error}"
+                                )));
+                            }
+                            return Err(CatalogError::External(storage_error));
+                        }
+                    }
+                } else {
+                    manager.create_table(&table, options).await?;
+                }
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::TableExists { table } => {
@@ -671,9 +807,47 @@ struct ShowTableExtendedRow {
     information: String,
 }
 
+/// Build an Arrow [`SchemaRef`] from the catalog column descriptors used by
+/// `CREATE TABLE`. The resulting schema is passed to
+/// [`sail_common_datafusion::datasource::TableFormat::create_table`] so that
+/// lakehouse formats can materialize the initial table metadata commit.
+fn create_table_schema_from_columns(
+    columns: &[crate::provider::CreateTableColumnOptions],
+) -> SchemaRef {
+    use datafusion::arrow::datatypes::{Field, Schema};
+
+    let fields: Vec<Field> = columns
+        .iter()
+        .map(|c| {
+            Field::new(&c.name, c.data_type.clone(), c.nullable).with_metadata(
+                c.metadata
+                    .iter()
+                    .cloned()
+                    .collect::<std::collections::HashMap<_, _>>(),
+            )
+        })
+        .collect();
+    std::sync::Arc::new(Schema::new(fields))
+}
+
+fn create_table_physical_properties(
+    properties: &[(String, String)],
+) -> std::collections::HashMap<String, String> {
+    properties
+        .iter()
+        .filter(|(key, _)| !is_catalog_encoded_option_property(key))
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+fn is_catalog_encoded_option_property(key: &str) -> bool {
+    key.starts_with("option.")
+}
+
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
     use datafusion::catalog::Session;
@@ -762,13 +936,22 @@ mod tests {
 
     struct TestProvider {
         table_status: TableStatus,
+        table_exists: bool,
+        create_error: Option<String>,
+        create_table_calls: Arc<AtomicUsize>,
+        drop_table_calls: Arc<AtomicUsize>,
         alter_error: Option<String>,
+        supports_materialization: bool,
     }
 
     #[async_trait]
     impl CatalogProvider for TestProvider {
         fn get_name(&self) -> &str {
             "test"
+        }
+
+        fn supports_generic_create_table_materialization(&self, _format: &str) -> bool {
+            self.supports_materialization
         }
 
         async fn create_database(
@@ -781,9 +964,15 @@ mod tests {
 
         async fn get_database(
             &self,
-            _database: &crate::provider::Namespace,
+            database: &crate::provider::Namespace,
         ) -> CatalogResult<sail_common_datafusion::catalog::DatabaseStatus> {
-            unreachable!()
+            Ok(DatabaseStatus {
+                catalog: "test".to_string(),
+                database: database.clone().into(),
+                comment: None,
+                location: None,
+                properties: vec![],
+            })
         }
 
         async fn list_databases(
@@ -807,15 +996,26 @@ mod tests {
             _table: &str,
             _options: CreateTableOptions,
         ) -> CatalogResult<TableStatus> {
-            unreachable!()
+            self.create_table_calls.fetch_add(1, Ordering::SeqCst);
+            match &self.create_error {
+                Some(message) => Err(CatalogError::External(message.clone())),
+                None => Ok(self.table_status.clone()),
+            }
         }
 
         async fn get_table(
             &self,
             _database: &crate::provider::Namespace,
-            _table: &str,
+            table: &str,
         ) -> CatalogResult<TableStatus> {
-            Ok(self.table_status.clone())
+            if self.table_exists {
+                Ok(self.table_status.clone())
+            } else {
+                Err(CatalogError::NotFound(
+                    crate::error::CatalogObject::Table,
+                    table.to_string(),
+                ))
+            }
         }
 
         async fn list_tables(
@@ -831,7 +1031,8 @@ mod tests {
             _table: &str,
             _options: DropTableOptions,
         ) -> CatalogResult<()> {
-            unreachable!()
+            self.drop_table_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
         }
 
         async fn alter_table(
@@ -880,7 +1081,17 @@ mod tests {
         }
     }
 
-    struct TestTableFormat;
+    struct TestTableFormat {
+        create_table_calls: Arc<AtomicUsize>,
+        create_error: Option<String>,
+        operations: Arc<Mutex<Vec<CreateTableOperation>>>,
+    }
+
+    type TestFormatRecorder = (
+        SessionContext,
+        Arc<AtomicUsize>,
+        Arc<Mutex<Vec<CreateTableOperation>>>,
+    );
 
     #[async_trait]
     impl TableFormat for TestTableFormat {
@@ -913,27 +1124,162 @@ mod tests {
         ) -> datafusion_common::Result<()> {
             Ok(())
         }
+
+        async fn create_table(
+            &self,
+            _runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+            info: sail_common_datafusion::datasource::CreateTableInfo,
+        ) -> datafusion_common::Result<()> {
+            self.create_table_calls.fetch_add(1, Ordering::SeqCst);
+            self.operations
+                .lock()
+                .map_err(|e| datafusion_common::DataFusionError::Execution(e.to_string()))?
+                .push(info.operation);
+            match &self.create_error {
+                Some(message) => Err(datafusion_common::DataFusionError::Plan(message.clone())),
+                None => Ok(()),
+            }
+        }
     }
 
     fn test_session_context() -> SessionContext {
+        test_session_context_with_registered_format().0
+    }
+
+    fn test_session_context_with_registered_format() -> (SessionContext, Arc<AtomicUsize>) {
+        test_session_context_with_format_error(None)
+    }
+
+    fn test_session_context_with_format_error(
+        create_error: Option<&str>,
+    ) -> (SessionContext, Arc<AtomicUsize>) {
+        let (ctx, create_table_calls, _) = test_session_context_with_format_recorder(create_error);
+        (ctx, create_table_calls)
+    }
+
+    fn test_session_context_with_format_recorder(create_error: Option<&str>) -> TestFormatRecorder {
+        let create_table_calls = Arc::new(AtomicUsize::new(0));
+        let operations = Arc::new(Mutex::new(Vec::new()));
         let registry = Arc::new(TableFormatRegistry::new());
-        let register_result = registry.register(Arc::new(TestTableFormat));
+        let register_result = registry.register(Arc::new(TestTableFormat {
+            create_table_calls: create_table_calls.clone(),
+            create_error: create_error.map(ToString::to_string),
+            operations: operations.clone(),
+        }));
         assert!(
             register_result.is_ok(),
             "failed to register test table format: {register_result:?}"
         );
+        (
+            test_session_context_with_registry(Some(registry)),
+            create_table_calls,
+            operations,
+        )
+    }
+
+    fn test_session_context_with_empty_registry() -> SessionContext {
+        test_session_context_with_registry(Some(Arc::new(TableFormatRegistry::new())))
+    }
+
+    fn test_session_context_without_registry() -> SessionContext {
+        test_session_context_with_registry(None)
+    }
+
+    fn test_session_context_with_registry(
+        registry: Option<Arc<TableFormatRegistry>>,
+    ) -> SessionContext {
         let plan_service = Arc::new(PlanService::new(
             Box::new(DefaultCatalogDisplay::<TestCatalogObjectDisplay>::default()),
             Box::new(TestPlanFormatter),
         ));
-        let config = SessionConfig::new()
-            .with_extension(registry)
-            .with_extension(plan_service);
+        let mut config = SessionConfig::new().with_extension(plan_service);
+        if let Some(registry) = registry {
+            config = config.with_extension(registry);
+        }
         SessionContext::new_with_config(config)
     }
 
     fn test_manager(alter_error: Option<&str>) -> CatalogManager {
-        let table_status = TableStatus {
+        test_manager_with_options(true, None, alter_error, Arc::new(AtomicUsize::new(0)))
+    }
+
+    fn test_manager_with_options(
+        table_exists: bool,
+        create_error: Option<&str>,
+        alter_error: Option<&str>,
+        create_table_calls: Arc<AtomicUsize>,
+    ) -> CatalogManager {
+        test_manager_with_materialization_policy(
+            table_exists,
+            create_error,
+            alter_error,
+            create_table_calls,
+            Arc::new(AtomicUsize::new(0)),
+            true,
+        )
+    }
+
+    fn test_manager_with_drop_calls(
+        table_exists: bool,
+        create_error: Option<&str>,
+        alter_error: Option<&str>,
+        create_table_calls: Arc<AtomicUsize>,
+        drop_table_calls: Arc<AtomicUsize>,
+    ) -> CatalogManager {
+        test_manager_with_materialization_policy(
+            table_exists,
+            create_error,
+            alter_error,
+            create_table_calls,
+            drop_table_calls,
+            true,
+        )
+    }
+
+    fn test_manager_with_materialization_policy(
+        table_exists: bool,
+        create_error: Option<&str>,
+        alter_error: Option<&str>,
+        create_table_calls: Arc<AtomicUsize>,
+        drop_table_calls: Arc<AtomicUsize>,
+        supports_materialization: bool,
+    ) -> CatalogManager {
+        let table_status = test_table_status();
+        let manager = CatalogManager::try_new(crate::manager::CatalogManagerOptions {
+            catalogs: std::iter::once((
+                "test".to_string(),
+                Arc::new(TestProvider {
+                    table_status,
+                    table_exists,
+                    create_error: create_error.map(ToString::to_string),
+                    create_table_calls,
+                    drop_table_calls,
+                    alter_error: alter_error.map(ToString::to_string),
+                    supports_materialization,
+                }) as Arc<dyn CatalogProvider>,
+            ))
+            .collect(),
+            default_catalog: "test".to_string(),
+            default_database: vec!["default".to_string()],
+            global_temporary_database: vec!["global_temp".to_string()],
+        });
+        assert!(
+            manager.is_ok(),
+            "failed to construct test catalog manager: {}",
+            manager
+                .as_ref()
+                .err()
+                .map(ToString::to_string)
+                .unwrap_or_default()
+        );
+        let Ok(manager) = manager else {
+            unreachable!();
+        };
+        manager
+    }
+
+    fn test_table_status() -> TableStatus {
+        TableStatus {
             catalog: Some("test".to_string()),
             database: vec!["default".to_string()],
             name: "items".to_string(),
@@ -959,33 +1305,386 @@ mod tests {
                 properties: vec![],
                 is_external: true,
             },
-        };
-        let manager = CatalogManager::try_new(crate::manager::CatalogManagerOptions {
-            catalogs: std::iter::once((
-                "test".to_string(),
-                Arc::new(TestProvider {
-                    table_status,
-                    alter_error: alter_error.map(ToString::to_string),
-                }) as Arc<dyn CatalogProvider>,
-            ))
-            .collect(),
-            default_catalog: "test".to_string(),
-            default_database: vec!["default".to_string()],
-            global_temporary_database: vec!["global_temp".to_string()],
-        });
+        }
+    }
+
+    fn test_create_table_options() -> CreateTableOptions {
+        CreateTableOptions {
+            columns: vec![crate::provider::CreateTableColumnOptions {
+                name: "id".to_string(),
+                data_type: datafusion::arrow::datatypes::DataType::Int32,
+                nullable: false,
+                comment: None,
+                default: None,
+                metadata: vec![],
+                generated_always_as: None,
+            }],
+            comment: None,
+            constraints: vec![],
+            location: Some("s3://bucket/items".to_string()),
+            format: "delta".to_string(),
+            partition_by: vec![],
+            sort_by: vec![],
+            bucket_by: None,
+            if_not_exists: false,
+            replace: false,
+            properties: vec![],
+            defer_materialize: false,
+            is_external: true,
+        }
+    }
+
+    fn recorded_operations(
+        operations: &Arc<Mutex<Vec<CreateTableOperation>>>,
+    ) -> Result<Vec<CreateTableOperation>, String> {
+        operations
+            .lock()
+            .map(|operations| operations.clone())
+            .map_err(|e| e.to_string())
+    }
+
+    fn variant_physical_shape() -> datafusion::arrow::datatypes::DataType {
+        use datafusion::arrow::datatypes::{DataType, Field, Fields};
+
+        DataType::Struct(Fields::from(vec![
+            Field::new("metadata", DataType::Binary, false),
+            Field::new("value", DataType::Binary, false),
+        ]))
+    }
+
+    #[test]
+    fn create_table_schema_uses_explicit_field_metadata_for_variant() {
+        let schema =
+            create_table_schema_from_columns(&[crate::provider::CreateTableColumnOptions {
+                name: "payload".to_string(),
+                data_type: variant_physical_shape(),
+                nullable: true,
+                comment: None,
+                default: None,
+                metadata: vec![],
+                generated_always_as: None,
+            }]);
         assert!(
-            manager.is_ok(),
-            "failed to construct test catalog manager: {}",
-            manager
-                .as_ref()
-                .err()
-                .map(ToString::to_string)
-                .unwrap_or_default()
+            !schema
+                .field(0)
+                .metadata()
+                .contains_key(sail_common::spec::EXTENSION_TYPE_NAME_KEY),
+            "plain structs with the same physical shape as Variant must not be marked as Variant"
         );
-        let Ok(manager) = manager else {
+
+        let schema =
+            create_table_schema_from_columns(&[crate::provider::CreateTableColumnOptions {
+                name: "payload".to_string(),
+                data_type: variant_physical_shape(),
+                nullable: true,
+                comment: None,
+                default: None,
+                metadata: vec![(
+                    sail_common::spec::EXTENSION_TYPE_NAME_KEY.to_string(),
+                    sail_common::spec::VARIANT_EXTENSION_NAME.to_string(),
+                )],
+                generated_always_as: None,
+            }]);
+        assert_eq!(
+            schema
+                .field(0)
+                .metadata()
+                .get(sail_common::spec::EXTENSION_TYPE_NAME_KEY),
+            Some(&sail_common::spec::VARIANT_EXTENSION_NAME.to_string())
+        );
+    }
+
+    #[test]
+    fn create_table_physical_properties_exclude_catalog_encoded_options() {
+        let properties = create_table_physical_properties(&[
+            ("option.metadataAsDataRead".to_string(), "true".to_string()),
+            ("custom.key".to_string(), "custom-value".to_string()),
+            ("delta.appendOnly".to_string(), "true".to_string()),
+        ]);
+
+        assert!(!properties.contains_key("option.metadataAsDataRead"));
+        assert_eq!(
+            properties.get("custom.key").map(String::as_str),
+            Some("custom-value")
+        );
+        assert_eq!(
+            properties.get("delta.appendOnly").map(String::as_str),
+            Some("true")
+        );
+    }
+
+    #[tokio::test]
+    async fn create_table_checks_catalog_before_materializing_existing_table() {
+        let (ctx, materialize_calls) = test_session_context_with_registered_format();
+        let create_table_calls = Arc::new(AtomicUsize::new(0));
+        let manager = test_manager_with_options(true, None, None, create_table_calls);
+        let command = CatalogCommand::CreateTable {
+            table: vec!["items".to_string()],
+            options: test_create_table_options(),
+        };
+
+        let result = command.execute(&ctx, &manager).await;
+        assert!(
+            result.is_err(),
+            "expected existing catalog table to fail before materialization, got success: {result:?}"
+        );
+        let Err(error) = result else {
             unreachable!();
         };
-        manager
+
+        assert!(matches!(error, CatalogError::AlreadyExists(_, _)));
+        assert_eq!(materialize_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn create_table_if_not_exists_skips_materialization_for_existing_table() {
+        let (ctx, materialize_calls) = test_session_context_with_registered_format();
+        let create_table_calls = Arc::new(AtomicUsize::new(0));
+        let manager = test_manager_with_options(true, None, None, create_table_calls.clone());
+        let mut options = test_create_table_options();
+        options.if_not_exists = true;
+        let command = CatalogCommand::CreateTable {
+            table: vec!["items".to_string()],
+            options,
+        };
+
+        let result = command.execute(&ctx, &manager).await;
+        assert!(
+            result.is_ok(),
+            "expected CREATE TABLE IF NOT EXISTS to succeed: {result:?}"
+        );
+        assert_eq!(materialize_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(create_table_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn create_table_materializes_new_lakehouse_table() {
+        let (ctx, materialize_calls) = test_session_context_with_registered_format();
+        let create_table_calls = Arc::new(AtomicUsize::new(0));
+        let manager = test_manager_with_options(false, None, None, create_table_calls.clone());
+        let command = CatalogCommand::CreateTable {
+            table: vec!["items".to_string()],
+            options: test_create_table_options(),
+        };
+
+        let result = command.execute(&ctx, &manager).await;
+        assert!(
+            result.is_ok(),
+            "expected new lakehouse table creation to succeed: {result:?}"
+        );
+        assert_eq!(create_table_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(materialize_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn create_table_does_not_materialize_when_catalog_create_fails() {
+        let (ctx, materialize_calls) = test_session_context_with_registered_format();
+        let create_table_calls = Arc::new(AtomicUsize::new(0));
+        let manager = test_manager_with_options(
+            false,
+            Some("catalog create failed"),
+            None,
+            create_table_calls.clone(),
+        );
+        let command = CatalogCommand::CreateTable {
+            table: vec!["items".to_string()],
+            options: test_create_table_options(),
+        };
+
+        let result = command.execute(&ctx, &manager).await;
+        assert!(
+            result.is_err(),
+            "expected catalog create failure: {result:?}"
+        );
+        let Err(error) = result else {
+            unreachable!();
+        };
+
+        assert!(
+            matches!(error, CatalogError::External(message) if message.contains("catalog create failed"))
+        );
+        assert_eq!(materialize_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(create_table_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn create_table_rolls_back_catalog_when_materialization_fails() {
+        let (ctx, materialize_calls) =
+            test_session_context_with_format_error(Some("storage create failed"));
+        let create_table_calls = Arc::new(AtomicUsize::new(0));
+        let drop_table_calls = Arc::new(AtomicUsize::new(0));
+        let manager = test_manager_with_drop_calls(
+            false,
+            None,
+            None,
+            create_table_calls.clone(),
+            drop_table_calls.clone(),
+        );
+        let command = CatalogCommand::CreateTable {
+            table: vec!["items".to_string()],
+            options: test_create_table_options(),
+        };
+
+        let result = command.execute(&ctx, &manager).await;
+        assert!(
+            result.is_err(),
+            "expected storage materialization failure: {result:?}"
+        );
+        let Err(error) = result else {
+            unreachable!();
+        };
+
+        assert!(
+            matches!(error, CatalogError::External(message) if message.contains("storage create failed"))
+        );
+        assert_eq!(create_table_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(materialize_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(drop_table_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn create_or_replace_without_catalog_entry_uses_physical_create() {
+        let (ctx, materialize_calls, operations) = test_session_context_with_format_recorder(None);
+        let create_table_calls = Arc::new(AtomicUsize::new(0));
+        let manager = test_manager_with_options(false, None, None, create_table_calls.clone());
+        let mut options = test_create_table_options();
+        options.replace = true;
+        let command = CatalogCommand::CreateTable {
+            table: vec!["items".to_string()],
+            options,
+        };
+
+        let result = command.execute(&ctx, &manager).await;
+        assert!(
+            result.is_ok(),
+            "expected CREATE OR REPLACE without catalog entry to create/adopt physical table: {result:?}"
+        );
+        assert_eq!(create_table_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(materialize_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            recorded_operations(&operations),
+            Ok(vec![CreateTableOperation::CreateOrReplace {
+                storage_action: CreateTableStorageAction::CreateOrAdopt
+            }])
+        );
+    }
+
+    #[tokio::test]
+    async fn create_or_replace_table_reports_catalog_failure_after_materialization() {
+        let (ctx, materialize_calls, operations) = test_session_context_with_format_recorder(None);
+        let create_table_calls = Arc::new(AtomicUsize::new(0));
+        let manager = test_manager_with_options(
+            true,
+            Some("catalog replace failed"),
+            None,
+            create_table_calls.clone(),
+        );
+        let mut options = test_create_table_options();
+        options.replace = true;
+        let command = CatalogCommand::CreateTable {
+            table: vec!["items".to_string()],
+            options,
+        };
+
+        let result = command.execute(&ctx, &manager).await;
+        assert!(
+            result.is_err(),
+            "expected catalog replace failure: {result:?}"
+        );
+        let Err(error) = result else {
+            unreachable!();
+        };
+
+        assert!(matches!(error, CatalogError::External(message)
+                if message.contains("catalog replace failed")
+                    && message.contains("physical table data or metadata may have been created or overwritten")
+                    && message.contains("storage and catalog out of sync")));
+        assert_eq!(create_table_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(materialize_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            recorded_operations(&operations),
+            Ok(vec![CreateTableOperation::CreateOrReplace {
+                storage_action: CreateTableStorageAction::Replace
+            }])
+        );
+    }
+
+    #[tokio::test]
+    async fn create_table_requires_registry_for_lakehouse_materialization() {
+        let ctx = test_session_context_without_registry();
+        let create_table_calls = Arc::new(AtomicUsize::new(0));
+        let manager = test_manager_with_options(false, None, None, create_table_calls.clone());
+        let command = CatalogCommand::CreateTable {
+            table: vec!["items".to_string()],
+            options: test_create_table_options(),
+        };
+
+        let result = command.execute(&ctx, &manager).await;
+        assert!(
+            result.is_err(),
+            "expected missing table format registry to fail: {result:?}"
+        );
+        let Err(error) = result else {
+            unreachable!();
+        };
+
+        assert!(
+            matches!(error, CatalogError::External(message) if message.contains("missing TableFormatRegistry"))
+        );
+        assert_eq!(create_table_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn create_table_requires_registered_lakehouse_format() {
+        let ctx = test_session_context_with_empty_registry();
+        let create_table_calls = Arc::new(AtomicUsize::new(0));
+        let manager = test_manager_with_options(false, None, None, create_table_calls.clone());
+        let command = CatalogCommand::CreateTable {
+            table: vec!["items".to_string()],
+            options: test_create_table_options(),
+        };
+
+        let result = command.execute(&ctx, &manager).await;
+        assert!(
+            result.is_err(),
+            "expected unknown lakehouse format to fail: {result:?}"
+        );
+        let Err(error) = result else {
+            unreachable!();
+        };
+
+        assert!(
+            matches!(error, CatalogError::External(message) if message.contains("unknown table format 'delta'"))
+        );
+        assert_eq!(create_table_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn create_table_skips_materialization_when_catalog_opts_out_for_format() {
+        // A catalog that creates a specific format through its own API (e.g.,
+        // Iceberg REST/Glue) must be able to opt out of generic materialization.
+        let (ctx, materialize_calls) = test_session_context_with_registered_format();
+        let create_table_calls = Arc::new(AtomicUsize::new(0));
+        let manager = test_manager_with_materialization_policy(
+            false,
+            None,
+            None,
+            create_table_calls.clone(),
+            Arc::new(AtomicUsize::new(0)),
+            false,
+        );
+        let command = CatalogCommand::CreateTable {
+            table: vec!["items".to_string()],
+            options: test_create_table_options(),
+        };
+
+        let result = command.execute(&ctx, &manager).await;
+        assert!(
+            result.is_ok(),
+            "expected catalog opt-out CREATE TABLE to succeed: {result:?}"
+        );
+        assert_eq!(create_table_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(materialize_calls.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]

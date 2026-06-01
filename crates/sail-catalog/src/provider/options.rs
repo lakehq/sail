@@ -36,6 +36,13 @@ pub struct CreateTableOptions {
     pub if_not_exists: bool,
     pub replace: bool,
     pub properties: Vec<(String, String)>,
+    /// When `true`, the `CREATE TABLE` command handler MUST NOT invoke the
+    /// format-specific materialization hook (e.g., writing the initial Delta
+    /// transaction log entry). Used by `CREATE TABLE AS SELECT` where the
+    /// subsequent write path atomically creates the table in a single commit
+    /// so that data and metadata land together at version 0.
+    #[serde(default)]
+    pub defer_materialize: bool,
     pub is_external: bool,
 }
 
@@ -46,6 +53,10 @@ pub struct CreateTableColumnOptions {
     pub nullable: bool,
     pub comment: Option<String>,
     pub default: Option<String>,
+    /// Arrow field metadata to preserve extension type markers (e.g. Variant)
+    /// when materializing storage-level table metadata.
+    #[serde(default)]
+    pub metadata: Vec<(String, String)>,
     pub generated_always_as: Option<String>,
 }
 

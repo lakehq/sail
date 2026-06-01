@@ -576,6 +576,13 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         &self.name
     }
 
+    fn supports_generic_create_table_materialization(&self, _format: &str) -> bool {
+        // Iceberg REST CREATE TABLE is a catalog-side operation: the REST
+        // service creates table metadata and returns the resulting metadata
+        // location/config. The generic path must not pre-write metadata files.
+        false
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,
@@ -800,6 +807,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             if_not_exists,
             replace,
             properties,
+            defer_materialize: _,
             is_external: _,
         } = options;
 
@@ -860,6 +868,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             props.insert(k, v);
         }
 
+        // TODO: Regenerate client from the latest Iceberg REST OpenAPI spec;
+        // plain CREATE is catalog-side metadata initialization (`stage-create` stays unset here).
         let request = crate::models::CreateTableRequest {
             name: table.to_string(),
             location,
@@ -1288,6 +1298,7 @@ fn columns_to_nested_fields(
             nullable,
             comment,
             default,
+            metadata: _,
             generated_always_as: _,
         } = col;
 

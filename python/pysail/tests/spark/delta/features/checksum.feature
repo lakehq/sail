@@ -53,8 +53,10 @@ Feature: Delta Lake Version Checksum
         📄 00000000000000000000.json
         📄 00000000000000000001.crc
         📄 00000000000000000001.json
+        📄 00000000000000000002.crc
+        📄 00000000000000000002.json
         """
-      Then delta log JSON file 00000000000000000001.crc in delta_log matches snapshot
+      Then delta log JSON file 00000000000000000002.crc in delta_log matches snapshot
 
   @sail-only
   Rule: Delta log checksum writing can be explicitly enabled by table property
@@ -109,8 +111,10 @@ Feature: Delta Lake Version Checksum
         📄 00000000000000000000.json
         📄 00000000000000000001.crc
         📄 00000000000000000001.json
+        📄 00000000000000000002.crc
+        📄 00000000000000000002.json
         """
-      Then delta log JSON file 00000000000000000001.crc in delta_log matches snapshot
+      Then delta log JSON file 00000000000000000002.crc in delta_log matches snapshot
 
   @sail-only
   Rule: Delta log checksum writing can be disabled by table property
@@ -163,6 +167,7 @@ Feature: Delta Lake Version Checksum
         """
         📄 00000000000000000000.json
         📄 00000000000000000001.json
+        📄 00000000000000000002.json
         """
 
   @sail-only
@@ -213,14 +218,19 @@ Feature: Delta Lake Version Checksum
         📄 00000000000000000001.json
         📄 00000000000000000002.crc
         📄 00000000000000000002.json
+        📄 00000000000000000003.crc
+        📄 00000000000000000003.json
         """
       Then delta log JSON file 00000000000000000000.crc in delta_log contains
         | path     | value |
-        | numFiles | 1     |
+        | numFiles | 0     |
       Then delta log JSON file 00000000000000000001.crc in delta_log contains
         | path     | value |
-        | numFiles | 2     |
+        | numFiles | 1     |
       Then delta log JSON file 00000000000000000002.crc in delta_log contains
+        | path     | value |
+        | numFiles | 2     |
+      Then delta log JSON file 00000000000000000003.crc in delta_log contains
         | path     | value |
         | numFiles | 3     |
 
@@ -266,11 +276,16 @@ Feature: Delta Lake Version Checksum
         📄 00000000000000000000.json
         📄 00000000000000000001.crc
         📄 00000000000000000001.json
+        📄 00000000000000000002.crc
+        📄 00000000000000000002.json
         """
       Then delta log JSON file 00000000000000000000.crc in delta_log contains
         | path     | value |
-        | numFiles | 1     |
+        | numFiles | 0     |
       Then delta log JSON file 00000000000000000001.crc in delta_log contains
+        | path     | value |
+        | numFiles | 1     |
+      Then delta log JSON file 00000000000000000002.crc in delta_log contains
         | path     | value |
         | numFiles | 1     |
 
@@ -316,7 +331,9 @@ Feature: Delta Lake Version Checksum
         📄 00000000000000000000.json
         📄 00000000000000000001.crc
         📄 00000000000000000001.json
+        📄 00000000000000000002.crc
+        📄 00000000000000000002.json
         """
-      Then delta log JSON file 00000000000000000001.crc in delta_log contains
+      Then delta log JSON file 00000000000000000002.crc in delta_log contains
         | path     | value |
         | numFiles | 2     |

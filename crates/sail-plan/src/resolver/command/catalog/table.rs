@@ -79,6 +79,7 @@ impl PlanResolver<'_> {
                 if_not_exists,
                 replace,
                 properties,
+                defer_materialize: false,
                 is_external,
             },
         };
@@ -328,12 +329,28 @@ impl PlanResolver<'_> {
                     comment,
                     generated_always_as,
                 } = x;
+                let field = self.resolve_field(
+                    &spec::Field {
+                        name: name.clone(),
+                        data_type,
+                        nullable,
+                        metadata: vec![],
+                    },
+                    state,
+                )?;
+                let mut metadata = field
+                    .metadata()
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect::<Vec<_>>();
+                metadata.sort_by(|(a, _), (b, _)| a.cmp(b));
                 Ok(CreateTableColumnOptions {
                     name,
-                    data_type: self.resolve_data_type(&data_type, state)?,
-                    nullable,
+                    data_type: field.data_type().clone(),
+                    nullable: field.is_nullable(),
                     comment,
                     default,
+                    metadata,
                     generated_always_as,
                 })
             })

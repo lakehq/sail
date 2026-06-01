@@ -200,6 +200,11 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         self.inner.get_name()
     }
 
+    fn supports_generic_create_table_materialization(&self, format: &str) -> bool {
+        self.inner
+            .supports_generic_create_table_materialization(format)
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,
@@ -640,6 +645,7 @@ mod tests {
             if_not_exists: false,
             replace: false,
             properties: vec![],
+            defer_materialize: false,
             is_external: false,
         };
         provider.create_table(&ns, "t2", options).await.unwrap();

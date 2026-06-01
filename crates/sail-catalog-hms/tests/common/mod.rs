@@ -95,6 +95,7 @@ pub fn col(name: &str, data_type: DataType) -> CreateTableColumnOptions {
         nullable: true,
         comment: None,
         default: None,
+        metadata: vec![],
         generated_always_as: None,
     }
 }
@@ -123,6 +124,7 @@ pub fn simple_table_options_with_format(
         if_not_exists: false,
         replace: false,
         properties: vec![],
+        defer_materialize: false,
         is_external: true,
     }
 }

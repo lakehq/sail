@@ -5,6 +5,13 @@ use crate::manager::CatalogManager;
 use crate::provider::{AlterTableOptions, CreateTableOptions, DropTableOptions};
 use crate::utils::match_pattern;
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum CreateTableMaterialization {
+    Skip,
+    Create,
+    Replace,
+}
+
 impl CatalogManager {
     pub async fn create_table<T: AsRef<str>>(
         &self,
@@ -13,6 +20,47 @@ impl CatalogManager {
     ) -> CatalogResult<TableStatus> {
         let (provider, database, table) = self.resolve_object(table)?;
         provider.create_table(&database, &table, options).await
+    }
+
+    /// Performs lightweight catalog checks before a caller initializes
+    /// storage-layer metadata for `CREATE TABLE`.
+    ///
+    /// Classifies the storage-layer materialization needed for `CREATE TABLE`.
+    ///
+    /// `CREATE OR REPLACE TABLE` only maps to physical replacement when the
+    /// catalog table already exists. If the catalog entry is absent, the
+    /// command is a create from the catalog's point of view; an existing
+    /// physical table at the target location should be adopted/validated by the
+    /// table format rather than blindly overwritten.
+    pub async fn create_table_materialization<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        if_not_exists: bool,
+        replace: bool,
+    ) -> CatalogResult<CreateTableMaterialization> {
+        let (provider, database, table) = self.resolve_object(table)?;
+        provider.get_database(&database).await?;
+        match provider.get_table(&database, &table).await {
+            Ok(_) if if_not_exists => Ok(CreateTableMaterialization::Skip),
+            Ok(_) if replace => Ok(CreateTableMaterialization::Replace),
+            Ok(_) => Err(CatalogError::AlreadyExists(
+                CatalogObject::Table,
+                table.to_string(),
+            )),
+            Err(CatalogError::NotFound(_, _)) => Ok(CreateTableMaterialization::Create),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Returns `true` when the owning catalog supports generic, format-level
+    /// storage materialization for this table and format.
+    pub fn table_supports_generic_create_table_materialization<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        format: &str,
+    ) -> CatalogResult<bool> {
+        let (provider, _, _) = self.resolve_object(table)?;
+        Ok(provider.supports_generic_create_table_materialization(format))
     }
 
     pub async fn get_table<T: AsRef<str>>(&self, table: &[T]) -> CatalogResult<TableStatus> {
