@@ -109,6 +109,19 @@ pub fn qualify_absolute_table_location(value: &str) -> String {
     }
 }
 
+/// Qualifies only absolute explicit database `LOCATION` values.
+///
+/// Catalog-owned namespace providers should receive relative database
+/// locations unchanged, but still benefit from normalization of absolute
+/// filesystem paths while preserving fully qualified URIs.
+pub fn qualify_absolute_database_location(value: &str) -> String {
+    if is_qualified_uri(value) || Path::new(value).is_absolute() {
+        normalize_path(value)
+    } else {
+        value.to_string()
+    }
+}
+
 /// Qualifies a database `LOCATION` for `CREATE DATABASE`.
 ///
 /// Matches Spark's `makeQualifiedDBObjectPath`:
@@ -286,6 +299,27 @@ mod tests {
         assert_eq!(
             qualify_absolute_table_location("s3://bucket/database/../table"),
             "s3://bucket/database/../table"
+        );
+    }
+
+    #[test]
+    fn test_qualify_absolute_database_location_preserves_relative_path() {
+        assert_eq!(
+            qualify_absolute_database_location("nested/database"),
+            "nested/database"
+        );
+        assert_eq!(qualify_absolute_database_location("~/db"), "~/db");
+    }
+
+    #[test]
+    fn test_qualify_absolute_database_location_normalizes_absolute_path() {
+        assert_eq!(
+            qualify_absolute_database_location("/tmp/root/../database"),
+            "/tmp/database"
+        );
+        assert_eq!(
+            qualify_absolute_database_location("s3://bucket/root/../database"),
+            "s3://bucket/root/../database"
         );
     }
 
