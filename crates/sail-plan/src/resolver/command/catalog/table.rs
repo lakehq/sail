@@ -58,6 +58,16 @@ impl PlanResolver<'_> {
         let format = self.resolve_catalog_table_format(file_format)?;
         let partition_by =
             self.resolve_catalog_table_partition_by(partition_by, &mut columns, state)?;
+        for partition in &partition_by {
+            if columns.iter().any(|column| {
+                column.identity.is_some() && column.name.eq_ignore_ascii_case(&partition.column)
+            }) {
+                return Err(PlanError::invalid(format!(
+                    "PARTITIONED BY IDENTITY column `{}` is not supported",
+                    partition.column
+                )));
+            }
+        }
         let sort_by = self.resolve_catalog_table_sort(sort_by)?;
         let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
         let properties = properties
@@ -327,14 +337,23 @@ impl PlanResolver<'_> {
                     default,
                     comment,
                     generated_always_as,
+                    identity,
                 } = x;
+                let data_type = self.resolve_data_type(&data_type, state)?;
+                if identity.is_some() && data_type != datafusion::arrow::datatypes::DataType::Int64
+                {
+                    return Err(PlanError::invalid(format!(
+                        "identity column `{name}` must be BIGINT"
+                    )));
+                }
                 Ok(CreateTableColumnOptions {
                     name,
-                    data_type: self.resolve_data_type(&data_type, state)?,
+                    data_type,
                     nullable,
                     comment,
                     default,
                     generated_always_as,
+                    identity,
                 })
             })
             .collect()

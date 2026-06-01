@@ -1245,6 +1245,7 @@ mod tests {
                         comment: None,
                         default: None,
                         generated_always_as: None,
+                        identity: None,
                     }],
                     comment: None,
                     constraints: vec![],
