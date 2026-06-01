@@ -17,6 +17,7 @@ use datafusion::arrow::temporal_conversions::as_datetime_with_timezone;
 use datafusion_common::{exec_datafusion_err, exec_err, internal_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
+use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 use crate::functions_nested_utils::make_scalar_function;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -85,11 +86,12 @@ impl ScalarUDFImpl for SparkSequence {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.is_empty() || arg_types.len() > 3 {
-            return exec_err!(
-                "Spark `sequence` function requires 1 to 3 arguments, got {}",
-                arg_types.len()
-            );
+        if arg_types.len() < 2 || arg_types.len() > 3 {
+            return Err(invalid_arg_count_exec_err(
+                "sequence",
+                (2, 3),
+                arg_types.len(),
+            ));
         }
         arg_types
             .iter()
@@ -113,9 +115,11 @@ impl ScalarUDFImpl for SparkSequence {
                         DataType::Interval(_) | DataType::Duration(_) => {
                             Ok(DataType::Interval(IntervalUnit::MonthDayNano))
                         }
-                        other => {
-                            exec_err!("Spark `sequence` function: unsupported type: {other}")
-                        }
+                        other => Err(unsupported_data_type_exec_err(
+                            "sequence",
+                            "INT, DATE, or TIMESTAMP",
+                            other,
+                        )),
                     }
                 }
             })
@@ -150,7 +154,7 @@ fn gen_sequence_timestamp(args: &[ArrayRef]) -> Result<ArrayRef> {
         }?;
     let step_array = args[2].as_primitive::<IntervalMonthDayNanoType>();
 
-    let values_builder = TimestampMicrosecondBuilder::new();
+    let values_builder = TimestampMicrosecondBuilder::with_capacity(start_array.len());
     let values_builder = if let Some(start_tz) = start_tz {
         values_builder.with_timezone(Arc::clone(start_tz))
     } else {
@@ -249,7 +253,7 @@ fn gen_sequence_date(args: &[ArrayRef]) -> Result<ArrayRef> {
         _ => unreachable!(),
     };
 
-    let values_builder = Date32Builder::new();
+    let values_builder = Date32Builder::with_capacity(stop_array.len());
     let mut list_builder = ListBuilder::new(values_builder);
 
     // Default step: 1 day if ascending, -1 day if descending
@@ -355,20 +359,19 @@ macro_rules! impl_sequence_for_type {
     ($name:ident, $native_type:ty, $array_type:ty, $array_builder:ty, $data_type:expr, $zero:expr, $one:expr, $max:expr) => {
         fn $name(args: &[ArrayRef]) -> Result<ArrayRef> {
             let (start_array, stop_array, step_array) = match args.len() {
-                1 => (None, args[0].as_primitive::<$array_type>(), None),
                 2 => (
-                    Some(args[0].as_primitive::<$array_type>()),
+                    args[0].as_primitive::<$array_type>(),
                     args[1].as_primitive::<$array_type>(),
                     None,
                 ),
                 3 => (
-                    Some(args[0].as_primitive::<$array_type>()),
+                    args[0].as_primitive::<$array_type>(),
                     args[1].as_primitive::<$array_type>(),
                     Some(args[2].as_primitive::<$array_type>()),
                 ),
                 other => {
                     return exec_err!(
-                        "Spark `sequence` function requires 1 to 3 arguments, got {other}"
+                        "Spark `sequence` function requires 2 to 3 arguments, got {other}"
                     )
                 }
             };
@@ -377,21 +380,30 @@ macro_rules! impl_sequence_for_type {
             let mut offsets = vec![0];
             let mut valid = NullBufferBuilder::new(stop_array.len());
 
+            let neg_one: $native_type = -$one;
+
             for (index, stop) in stop_array.iter().enumerate() {
-                let start = start_array.map_or(Some($zero), |array| {
-                    if !array.is_null(index) {
-                        Some(array.value(index))
-                    } else {
-                        None
-                    }
-                });
-                let step = step_array.map_or(Some($one), |array| {
-                    if !array.is_null(index) {
-                        Some(array.value(index))
-                    } else {
-                        None
-                    }
-                });
+                let start = if !start_array.is_null(index) {
+                    Some(start_array.value(index))
+                } else {
+                    None
+                };
+                let step = step_array.map_or_else(
+                    || {
+                        // Default step: +1 if ascending, -1 if descending
+                        match (start, stop) {
+                            (Some(s), Some(e)) if s > e => Some(neg_one),
+                            _ => Some($one),
+                        }
+                    },
+                    |array| {
+                        if !array.is_null(index) {
+                            Some(array.value(index))
+                        } else {
+                            None
+                        }
+                    },
+                );
 
                 match (start, stop, step) {
                     (None, _, _) | (_, None, _) | (_, _, None) => {
@@ -399,7 +411,32 @@ macro_rules! impl_sequence_for_type {
                         valid.append_null();
                     }
                     (Some(start), Some(stop), Some(step)) => {
-                        let step = if step == $zero { $one } else { step };
+                        // Validate step is not zero
+                        if step == $zero {
+                            return exec_err!(
+                                "requirement failed: Illegal sequence boundaries: {} to {} by 0",
+                                start,
+                                stop
+                            );
+                        }
+
+                        // Validate step direction matches sequence direction
+                        if start < stop && step < $zero {
+                            return exec_err!(
+                                "requirement failed: Illegal sequence boundaries: {} to {} by {}",
+                                start,
+                                stop,
+                                step
+                            );
+                        }
+                        if start > stop && step > $zero {
+                            return exec_err!(
+                                "requirement failed: Illegal sequence boundaries: {} to {} by {}",
+                                start,
+                                stop,
+                                step
+                            );
+                        }
 
                         let decreasing = step < $zero;
                         let step_abs = step.unsigned_abs().to_usize().ok_or_else(|| {
