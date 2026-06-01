@@ -1,7 +1,9 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use sail_common_datafusion::array::serde::ArrowSerializer;
-use sail_common_datafusion::datasource::{is_lakehouse_format, TableFormatRegistry};
+use sail_common_datafusion::datasource::{
+    is_lakehouse_format, TableFormatAlterTableOperation, TableFormatRegistry,
+};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use serde::{Deserialize, Serialize};
@@ -415,37 +417,10 @@ impl CatalogCommand {
                         ))
                     })?;
                     let runtime = ctx.runtime_env();
-                    match &options {
-                        AlterTableOptions::SetTableProperties { properties } => {
-                            let changes = properties
-                                .iter()
-                                .map(|(k, v)| (k.clone(), Some(v.clone())))
-                                .collect::<Vec<_>>();
-                            table_format
-                                .alter_table_properties(runtime, &location, changes, false)
-                                .await
-                                .map_err(|e| CatalogError::External(e.to_string()))?;
-                        }
-                        AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
-                            let changes =
-                                keys.iter().map(|k| (k.clone(), None)).collect::<Vec<_>>();
-                            table_format
-                                .alter_table_properties(runtime, &location, changes, *if_exists)
-                                .await
-                                .map_err(|e| CatalogError::External(e.to_string()))?;
-                        }
-                        AlterTableOptions::AlterColumnType { name, data_type } => {
-                            table_format
-                                .alter_table_column_type(
-                                    runtime,
-                                    &location,
-                                    name.clone(),
-                                    data_type.clone(),
-                                )
-                                .await
-                                .map_err(|e| CatalogError::External(e.to_string()))?;
-                        }
-                    };
+                    table_format
+                        .alter_table(runtime, &location, table_format_alter_operation(&options))
+                        .await
+                        .map_err(|e| CatalogError::External(e.to_string()))?;
 
                     // Storage is the source of truth for lakehouse ALTER TABLE
                     // operations, but metadata reads still flow through the
@@ -636,6 +611,38 @@ impl CatalogCommand {
             }
         };
         Ok(batch)
+    }
+}
+
+fn table_format_alter_operation(options: &AlterTableOptions) -> TableFormatAlterTableOperation {
+    match options {
+        AlterTableOptions::SetTableProperties { properties } => {
+            TableFormatAlterTableOperation::SetTableProperties {
+                changes: properties
+                    .iter()
+                    .map(|(key, value)| (key.clone(), Some(value.clone())))
+                    .collect(),
+                if_exists: false,
+            }
+        }
+        AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
+            TableFormatAlterTableOperation::SetTableProperties {
+                changes: keys.iter().map(|key| (key.clone(), None)).collect(),
+                if_exists: *if_exists,
+            }
+        }
+        AlterTableOptions::AlterColumnType { name, data_type } => {
+            TableFormatAlterTableOperation::AlterColumnType {
+                column_path: name.clone(),
+                data_type: data_type.clone(),
+            }
+        }
+        AlterTableOptions::AlterColumnDefault { name, default } => {
+            TableFormatAlterTableOperation::AlterColumnDefault {
+                column_path: name.clone(),
+                default: default.clone(),
+            }
+        }
     }
 }
 

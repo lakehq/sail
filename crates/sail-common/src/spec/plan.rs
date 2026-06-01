@@ -1326,6 +1326,10 @@ pub enum AlterTableOperation {
         name: ObjectName,
         data_type: DataType,
     },
+    AlterColumnDefault {
+        name: ObjectName,
+        default: Option<String>,
+    },
     // TODO: add all the alter table operations
 }
 

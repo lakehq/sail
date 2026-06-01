@@ -951,6 +951,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
         AtomExpr::NumberLiteral(value) => from_ast_number_literal(value),
         AtomExpr::BooleanLiteral(value) => from_ast_boolean_literal(value),
         AtomExpr::Null(_) => Ok(spec::Expr::Literal(spec::Literal::Null)),
+        AtomExpr::Default(_) => Ok(spec::Expr::DefaultColumnValue),
         AtomExpr::Interval(_, value) => Ok(spec::Expr::Literal(
             from_ast_signed_interval(Signed::Positive(*value))?.into(),
         )),

@@ -242,6 +242,10 @@ impl TableColumnStatus {
             let builder = ColumnFeaturesBuilder::new().with_generation_expression(expr.clone());
             metadata.extend(builder.build());
         }
+        if let Some(expr) = &self.default {
+            let builder = ColumnFeaturesBuilder::new().with_current_default(expr.clone());
+            metadata.extend(builder.build());
+        }
         if let Some(comment) = &self.comment {
             metadata.insert("comment".to_string(), comment.clone());
         }
@@ -270,6 +274,21 @@ pub fn alter_column_type(
     } else {
         column.data_type = alter_nested_data_type(&column.data_type, nested_path, data_type)?;
     }
+    Ok(())
+}
+
+pub fn alter_column_default(
+    columns: &mut [TableColumnStatus],
+    path: &[String],
+    default: Option<String>,
+) -> Result<()> {
+    let [name] = path else {
+        return plan_err!("ALTER COLUMN DEFAULT only supports top-level columns");
+    };
+    let Some(column) = columns.iter_mut().find(|column| column.name == *name) else {
+        return plan_err!("column '{}' does not exist", path.join("."));
+    };
+    column.default = default;
     Ok(())
 }
 

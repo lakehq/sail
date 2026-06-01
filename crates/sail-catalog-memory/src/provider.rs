@@ -9,7 +9,8 @@ use sail_catalog::provider::{
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
-    alter_column_type, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
+    alter_column_default, alter_column_type, DatabaseStatus, TableColumnStatus, TableKind,
+    TableStatus,
 };
 
 struct MemoryDatabase {
@@ -345,6 +346,14 @@ impl CatalogProvider for MemoryCatalogProvider {
                     alter_column_type(columns, &name, data_type).map_err(|e| {
                         CatalogError::InvalidArgument(format!(
                             "failed to alter column type for '{}': {e}",
+                            name.join(".")
+                        ))
+                    })
+                }
+                AlterTableOptions::AlterColumnDefault { name, default } => {
+                    alter_column_default(columns, &name, default).map_err(|e| {
+                        CatalogError::InvalidArgument(format!(
+                            "failed to alter column default for '{}': {e}",
                             name.join(".")
                         ))
                     })
