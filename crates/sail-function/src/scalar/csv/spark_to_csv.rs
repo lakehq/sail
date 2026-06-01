@@ -292,7 +292,7 @@ fn spark_to_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Array
         for (col_idx, field) in fields.iter().enumerate() {
             let col = &columns[col_idx];
             if col.is_null(row_idx) {
-                parts.push(options.null_value.clone());
+                parts.push(write_csv_null_field(&options));
             } else {
                 let value_str = format_field_to_csv(
                     col,
@@ -783,21 +783,41 @@ fn parse_bool_option(value: Option<&str>, option_name: &str, default: bool) -> R
 /// - leading/trailing whitespace is trimmed by default
 /// - empty strings use `emptyValue`, which defaults to `""`
 /// - fields are quoted for separator/newline, `quoteAll`, or quote characters when escaping is enabled
-/// - quote characters are escaped after quoting, even when quoting was forced by another reason
+/// - quote and escape characters are escaped after quoting, even when quoting was forced by another reason
 /// - NULL fields are handled upstream and never reach this function
 fn write_csv_field(value: &str, options: &SparkToCsvOptions) -> String {
-    let mut value = value;
+    let value = trim_csv_field(value, options);
+    if value.is_empty() {
+        write_csv_replacement(&options.empty_value, options)
+    } else {
+        quote_csv_field(value, options)
+    }
+}
+
+fn write_csv_null_field(options: &SparkToCsvOptions) -> String {
+    write_csv_replacement(&options.null_value, options)
+}
+
+fn write_csv_replacement(value: &str, options: &SparkToCsvOptions) -> String {
+    let value = trim_csv_field(value, options);
+    let quoted_empty = format!("{}{}", options.quote, options.quote);
+    if value == quoted_empty {
+        return value.to_string();
+    }
+    quote_csv_field(value, options)
+}
+
+fn trim_csv_field<'a>(mut value: &'a str, options: &SparkToCsvOptions) -> &'a str {
     if options.ignore_leading_whitespace {
         value = value.trim_start();
     }
     if options.ignore_trailing_whitespace {
         value = value.trim_end();
     }
+    value
+}
 
-    if value.is_empty() {
-        return options.empty_value.clone();
-    }
-
+fn quote_csv_field(value: &str, options: &SparkToCsvOptions) -> String {
     let contains_quote = value.contains(options.quote);
     let needs_quoting = options.quote_all
         || value.contains(&options.sep)
@@ -809,7 +829,7 @@ fn write_csv_field(value: &str, options: &SparkToCsvOptions) -> String {
         let mut output = String::with_capacity(value.len() + 2);
         output.push(options.quote);
         for ch in value.chars() {
-            if ch == options.quote {
+            if ch == options.quote || ch == options.escape {
                 output.push(options.escape);
             }
             output.push(ch);
@@ -1494,6 +1514,70 @@ mod tests {
             write_csv_field("say \"hello\"", &quote_all_options),
             "\"say \\\"hello\\\"\""
         );
+    }
+
+    #[test]
+    fn test_to_csv_null_value_uses_writer_quoting() {
+        let quote_all_options = SparkToCsvOptions {
+            quote_all: true,
+            ..SparkToCsvOptions::default()
+        };
+        assert_eq!(write_csv_null_field(&quote_all_options), "\"\"");
+
+        let comma_null_options = SparkToCsvOptions {
+            null_value: ",".to_string(),
+            null_value_set: true,
+            ..SparkToCsvOptions::default()
+        };
+        assert_eq!(write_csv_null_field(&comma_null_options), "\",\"");
+
+        let trimmed_null_options = SparkToCsvOptions {
+            null_value: " , ".to_string(),
+            null_value_set: true,
+            ..SparkToCsvOptions::default()
+        };
+        assert_eq!(write_csv_null_field(&trimmed_null_options), "\",\"");
+    }
+
+    #[test]
+    fn test_to_csv_empty_value_uses_writer_quoting() {
+        assert_eq!(write_csv_field("", &SparkToCsvOptions::default()), "\"\"");
+
+        let comma_empty_options = SparkToCsvOptions {
+            empty_value: ",".to_string(),
+            ..SparkToCsvOptions::default()
+        };
+        assert_eq!(write_csv_field("", &comma_empty_options), "\",\"");
+
+        let quote_all_empty_options = SparkToCsvOptions {
+            quote_all: true,
+            empty_value: "_".to_string(),
+            ..SparkToCsvOptions::default()
+        };
+        assert_eq!(write_csv_field("", &quote_all_empty_options), "\"_\"");
+
+        let trimmed_empty_options = SparkToCsvOptions {
+            empty_value: " _ ".to_string(),
+            ..SparkToCsvOptions::default()
+        };
+        assert_eq!(write_csv_field("", &trimmed_empty_options), "_");
+    }
+
+    #[test]
+    fn test_to_csv_escapes_literal_escape_character_when_quoted() {
+        let options = SparkToCsvOptions {
+            escape: '#',
+            ..SparkToCsvOptions::default()
+        };
+        assert_eq!(write_csv_field("a#b", &options), "a#b");
+        assert_eq!(write_csv_field("a#b,c", &options), "\"a##b,c\"");
+
+        let quote_all_options = SparkToCsvOptions {
+            escape: '#',
+            quote_all: true,
+            ..SparkToCsvOptions::default()
+        };
+        assert_eq!(write_csv_field("a#b", &quote_all_options), "\"a##b\"");
     }
 
     /// Empty string fields (not null) are always quoted, matches Spark behaviour

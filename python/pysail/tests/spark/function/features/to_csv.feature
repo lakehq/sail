@@ -127,6 +127,51 @@ Feature: to_csv converts a struct value to a CSV string
         | result |
         | -,_    |
 
+    Scenario: quoteAll quotes null replacement fields
+      When query
+        """
+        SELECT to_csv(named_struct('a', CAST(NULL AS STRING), 'b', 'x'), map('quoteAll', 'true')) AS result
+        """
+      Then query result
+        | result |
+        | "","x" |
+
+    Scenario: nullValue containing separator is quoted
+      When query
+        """
+        SELECT to_csv(named_struct('a', CAST(NULL AS STRING), 'b', 'x'), map('nullValue', ',')) AS result
+        """
+      Then query result
+        | result |
+        | ",",x  |
+
+    Scenario: quoteAll quotes custom emptyValue fields
+      When query
+        """
+        SELECT to_csv(named_struct('a', '', 'b', 'x'), map('emptyValue', '_', 'quoteAll', 'true')) AS result
+        """
+      Then query result
+        | result  |
+        | "_","x" |
+
+    Scenario: emptyValue containing separator is quoted
+      When query
+        """
+        SELECT to_csv(named_struct('a', '', 'b', 'x'), map('emptyValue', ',')) AS result
+        """
+      Then query result
+        | result |
+        | ",",x  |
+
+    Scenario: Literal escape characters are escaped in quoted fields
+      When query
+        """
+        SELECT to_csv(named_struct('a', 'a#b,c'), map('escape', '#')) AS result
+        """
+      Then query result
+        | result    |
+        | "a##b,c" |
+
   Rule: Timestamp formatting
 
     Scenario: Timestamp field uses default ISO 8601 UTC format
