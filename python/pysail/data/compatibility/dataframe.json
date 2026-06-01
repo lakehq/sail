@@ -23,7 +23,8 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "checkpoint",
-    "status": "planned",
+    "status": "supported",
+    "note": "Supports eager=True and eager=False with spark.checkpoint.dir configured.",
     "ref": "https://github.com/lakehq/sail/issues/476"
   },
   {
@@ -252,7 +253,8 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "localCheckpoint",
-    "status": "planned",
+    "status": "supported",
+    "note": "Supports eager=True and eager=False with cache-backed StorageLevel handling.",
     "ref": "https://github.com/lakehq/sail/issues/482"
   },
   {

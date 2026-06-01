@@ -7608,6 +7608,8 @@ dependencies = [
  "futures",
  "lazy_static",
  "lexical-core",
+ "object_store",
+ "parquet",
  "parquet-variant-compute",
  "parquet-variant-json",
  "pin-project-lite",
