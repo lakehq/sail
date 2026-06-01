@@ -125,6 +125,44 @@ Feature: Delta Lake Variant support
       | id | a | payload_json |
       | 1  | 1 | {"a":1}      |
 
+  Scenario: Create non-Variant table with VariantShredding table property
+    Given variable location for temporary directory delta_variant_shredding_no_variant
+    Given final statement
+      """
+      DROP TABLE IF EXISTS delta_variant_shredding_no_variant
+      """
+    Given statement template
+      """
+      CREATE TABLE delta_variant_shredding_no_variant (
+        id INT
+      )
+      USING DELTA
+      LOCATION {{ location.sql }}
+      TBLPROPERTIES ('delta.enableVariantShredding' = 'true')
+      """
+    Given statement
+      """
+      INSERT INTO delta_variant_shredding_no_variant
+      SELECT 1
+      """
+    Then delta log first commit protocol and metadata contains
+      | path                                  | value           |
+      | protocol.minReaderVersion             | 3               |
+      | protocol.minWriterVersion             | 7               |
+      | protocol.readerFeatures               | ["variantShredding-preview"] |
+      | protocol.writerFeatures               | ["variantShredding-preview", "appendOnly", "invariants"] |
+      | metaData.configuration['delta.enableVariantShredding'] | "true" |
+      | metaData.schemaString.fields[0].type  | "integer"       |
+    When query
+      """
+      SELECT id
+      FROM delta_variant_shredding_no_variant
+      ORDER BY id
+      """
+    Then query result ordered
+      | id |
+      | 1  |
+
   Scenario: Write and read a table with stable VariantShredding feature
     Given variable location for temporary directory delta_variant_shredding_stable
     Given final statement
@@ -168,3 +206,40 @@ Feature: Delta Lake Variant support
       | id | a | b       |
       | 1  | 1 | stable  |
       | 2  | 2 | feature |
+
+  Scenario: Create non-Variant table with stable VariantShredding feature
+    Given variable location for temporary directory delta_variant_shredding_stable_no_variant
+    Given final statement
+      """
+      DROP TABLE IF EXISTS delta_variant_shredding_stable_no_variant
+      """
+    Given statement template
+      """
+      CREATE TABLE delta_variant_shredding_stable_no_variant (
+        id INT
+      )
+      USING DELTA
+      LOCATION {{ location.sql }}
+      TBLPROPERTIES ('delta.feature.variantShredding' = 'supported')
+      """
+    Given statement
+      """
+      INSERT INTO delta_variant_shredding_stable_no_variant
+      SELECT 1
+      """
+    Then delta log first commit protocol and metadata contains
+      | path                                 | value           |
+      | protocol.minReaderVersion            | 3               |
+      | protocol.minWriterVersion            | 7               |
+      | protocol.readerFeatures              | ["variantShredding"] |
+      | protocol.writerFeatures              | ["variantShredding", "appendOnly", "invariants"] |
+      | metaData.schemaString.fields[0].type | "integer"       |
+    When query
+      """
+      SELECT id
+      FROM delta_variant_shredding_stable_no_variant
+      ORDER BY id
+      """
+    Then query result ordered
+      | id |
+      | 1  |

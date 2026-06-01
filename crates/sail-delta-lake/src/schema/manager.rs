@@ -99,6 +99,11 @@ fn push_feature(features: &mut Vec<TableFeature>, feature: TableFeature) {
     }
 }
 
+fn enable_legacy_writer_features(writer_features: &mut Vec<TableFeature>) {
+    push_feature(writer_features, TableFeature::AppendOnly);
+    push_feature(writer_features, TableFeature::Invariants);
+}
+
 fn enable_variant_type_feature(
     reader_features: &mut Vec<TableFeature>,
     writer_features: &mut Vec<TableFeature>,
@@ -106,15 +111,7 @@ fn enable_variant_type_feature(
 ) {
     push_feature(reader_features, feature.clone());
     push_feature(writer_features, feature);
-    push_feature(writer_features, TableFeature::AppendOnly);
-    push_feature(writer_features, TableFeature::Invariants);
-}
-
-fn enable_variant_type_features(
-    reader_features: &mut Vec<TableFeature>,
-    writer_features: &mut Vec<TableFeature>,
-) {
-    enable_variant_type_feature(reader_features, writer_features, TableFeature::VariantType);
+    enable_legacy_writer_features(writer_features);
 }
 
 fn enable_variant_type_features_for_schema(
@@ -145,6 +142,16 @@ fn has_variant_shredding_feature(
                 TableFeature::VariantShredding | TableFeature::VariantShreddingPreview
             )
         })
+}
+
+fn enable_variant_shredding_feature(
+    reader_features: &mut Vec<TableFeature>,
+    writer_features: &mut Vec<TableFeature>,
+    feature: TableFeature,
+) {
+    push_feature(reader_features, feature.clone());
+    push_feature(writer_features, feature);
+    enable_legacy_writer_features(writer_features);
 }
 
 fn explicit_table_features(
@@ -215,25 +222,34 @@ pub fn protocol_for_create(
     // Extract features from `delta.feature.<name> = "supported"|"enabled"` configuration entries.
     // Unknown feature names always produce an error regardless of value.
     for feature in explicit_features {
-        if matches!(
-            feature,
-            TableFeature::VariantShredding | TableFeature::VariantShreddingPreview
-        ) {
-            enable_variant_type_features(&mut reader_features, &mut writer_features);
+        match feature {
+            TableFeature::VariantShredding | TableFeature::VariantShreddingPreview => {
+                // Spark allows shredding features on tables with no Variant columns; `variantType`
+                // is added only by the schema-driven path above.
+                enable_variant_shredding_feature(
+                    &mut reader_features,
+                    &mut writer_features,
+                    feature,
+                );
+            }
+            feature => {
+                if feature.is_reader_feature() {
+                    push_feature(&mut reader_features, feature.clone());
+                }
+                push_feature(&mut writer_features, feature);
+            }
         }
-        if feature.is_reader_feature() {
-            push_feature(&mut reader_features, feature.clone());
-        }
-        push_feature(&mut writer_features, feature);
     }
 
     // `delta.enableVariantShredding = "true"` activates the preview feature unless the
     // table explicitly selected a variant-shredding feature.
     if table_properties.enable_variant_shredding() {
-        enable_variant_type_features(&mut reader_features, &mut writer_features);
         if !has_variant_shredding_feature(&reader_features, &writer_features) {
-            push_feature(&mut reader_features, TableFeature::VariantShreddingPreview);
-            push_feature(&mut writer_features, TableFeature::VariantShreddingPreview);
+            enable_variant_shredding_feature(
+                &mut reader_features,
+                &mut writer_features,
+                TableFeature::VariantShreddingPreview,
+            );
         }
     }
 
@@ -377,13 +393,34 @@ mod tests {
     }
 
     #[test]
-    fn protocol_for_create_activates_variant_shredding_from_table_property() -> DeltaResult<()> {
+    fn protocol_for_create_shredding_property_without_variant() -> DeltaResult<()> {
         let mut config = HashMap::new();
         config.insert(
             "delta.enableVariantShredding".to_string(),
             "true".to_string(),
         );
         let protocol = protocol_for_create(false, false, false, false, false, &config)?;
+        assert_eq!(protocol.min_reader_version(), 3);
+        assert_eq!(protocol.min_writer_version(), 7);
+        assert!(!protocol.has_reader_feature(&TableFeature::VariantType));
+        assert!(!protocol.has_writer_feature(&TableFeature::VariantType));
+        assert!(protocol.has_reader_feature(&TableFeature::VariantShreddingPreview));
+        assert!(protocol.has_writer_feature(&TableFeature::VariantShreddingPreview));
+        assert!(protocol.has_writer_feature(&TableFeature::AppendOnly));
+        assert!(protocol.has_writer_feature(&TableFeature::Invariants));
+        assert!(!protocol.has_reader_feature(&TableFeature::VariantShredding));
+        assert!(!protocol.has_writer_feature(&TableFeature::VariantShredding));
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_create_shredding_property_with_variant() -> DeltaResult<()> {
+        let mut config = HashMap::new();
+        config.insert(
+            "delta.enableVariantShredding".to_string(),
+            "true".to_string(),
+        );
+        let protocol = protocol_for_create(false, false, false, false, true, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::VariantType));
@@ -396,7 +433,28 @@ mod tests {
     }
 
     #[test]
-    fn protocol_for_create_respects_explicit_stable_variant_shredding() -> DeltaResult<()> {
+    fn protocol_for_create_stable_shredding_without_variant() -> DeltaResult<()> {
+        let mut config = HashMap::new();
+        config.insert(
+            "delta.feature.variantShredding".to_string(),
+            "supported".to_string(),
+        );
+        let protocol = protocol_for_create(false, false, false, false, false, &config)?;
+        assert_eq!(protocol.min_reader_version(), 3);
+        assert_eq!(protocol.min_writer_version(), 7);
+        assert!(!protocol.has_reader_feature(&TableFeature::VariantType));
+        assert!(!protocol.has_writer_feature(&TableFeature::VariantType));
+        assert!(protocol.has_reader_feature(&TableFeature::VariantShredding));
+        assert!(protocol.has_writer_feature(&TableFeature::VariantShredding));
+        assert!(protocol.has_writer_feature(&TableFeature::AppendOnly));
+        assert!(protocol.has_writer_feature(&TableFeature::Invariants));
+        assert!(!protocol.has_reader_feature(&TableFeature::VariantShreddingPreview));
+        assert!(!protocol.has_writer_feature(&TableFeature::VariantShreddingPreview));
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_create_stable_shredding_with_variant() -> DeltaResult<()> {
         let mut config = HashMap::new();
         config.insert(
             "delta.enableVariantShredding".to_string(),
@@ -406,7 +464,7 @@ mod tests {
             "delta.feature.variantShredding".to_string(),
             "supported".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, false, &config)?;
+        let protocol = protocol_for_create(false, false, false, false, true, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::VariantType));
@@ -419,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn protocol_for_create_keeps_preview_variant_shredding_preview_only() -> DeltaResult<()> {
+    fn protocol_for_create_preview_shredding_without_variant() -> DeltaResult<()> {
         let mut config = HashMap::new();
         config.insert(
             "delta.feature.variantShredding-preview".to_string(),
@@ -428,21 +486,23 @@ mod tests {
         let protocol = protocol_for_create(false, false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
-        assert!(protocol.has_reader_feature(&TableFeature::VariantType));
-        assert!(protocol.has_writer_feature(&TableFeature::VariantType));
+        assert!(!protocol.has_reader_feature(&TableFeature::VariantType));
+        assert!(!protocol.has_writer_feature(&TableFeature::VariantType));
         assert!(protocol.has_reader_feature(&TableFeature::VariantShreddingPreview));
         assert!(protocol.has_writer_feature(&TableFeature::VariantShreddingPreview));
+        assert!(protocol.has_writer_feature(&TableFeature::AppendOnly));
+        assert!(protocol.has_writer_feature(&TableFeature::Invariants));
         Ok(())
     }
 
     #[test]
-    fn protocol_for_create_adds_variant_type_for_stable_variant_shredding() -> DeltaResult<()> {
+    fn protocol_for_create_stable_shredding_with_variant_type() -> DeltaResult<()> {
         let mut config = HashMap::new();
         config.insert(
             "delta.feature.variantShredding".to_string(),
             "supported".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, false, &config)?;
+        let protocol = protocol_for_create(false, false, false, false, true, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::VariantType));

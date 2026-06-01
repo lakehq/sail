@@ -246,19 +246,11 @@ impl ProtocolChecker {
         protocol: &Protocol,
         variant_shredding_enabled: bool,
     ) -> Result<(), TransactionError> {
+        // `variantType` is validated against the effective schema separately; Spark can attach a
+        // shredding feature to a table that currently has no Variant columns.
         if variant_shredding_enabled
             && !(protocol.min_reader_version() >= 3
                 && protocol.min_writer_version() >= 7
-                && protocol
-                    .reader_features()
-                    .unwrap_or(&[])
-                    .iter()
-                    .any(TableFeature::is_variant_type_feature)
-                && protocol
-                    .writer_features()
-                    .unwrap_or(&[])
-                    .iter()
-                    .any(TableFeature::is_variant_type_feature)
                 && protocol
                     .reader_features()
                     .unwrap_or(&[])
@@ -421,5 +413,48 @@ mod tests {
         INSTANCE
             .check_can_write_variant_shredding_to_protocol(&protocol, true)
             .unwrap();
+    }
+
+    #[test]
+    fn global_checker_accepts_variant_shredding_without_variant_type() {
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::VariantShreddingPreview]),
+            Some(vec![
+                TableFeature::VariantShreddingPreview,
+                TableFeature::AppendOnly,
+                TableFeature::Invariants,
+            ]),
+        );
+
+        INSTANCE.can_read_from_protocol(&protocol).unwrap();
+        INSTANCE.can_write_to_protocol(&protocol).unwrap();
+        INSTANCE
+            .check_can_write_variant_shredding_to_protocol(&protocol, true)
+            .unwrap();
+    }
+
+    #[test]
+    fn global_checker_rejects_enabled_variant_shredding_without_shredding_feature() {
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::VariantType]),
+            Some(vec![
+                TableFeature::VariantType,
+                TableFeature::AppendOnly,
+                TableFeature::Invariants,
+            ]),
+        );
+
+        let err = INSTANCE
+            .check_can_write_variant_shredding_to_protocol(&protocol, true)
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            TransactionError::TableFeaturesRequired(TableFeature::VariantShredding)
+        ));
     }
 }
