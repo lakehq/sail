@@ -72,6 +72,7 @@ def pytest_configure(config):
     mod = importlib.import_module("ibis.backends.pyspark.tests.conftest")
     TestConf = getattr(mod, "TestConf")  # noqa: N806 B009
     TestConf.data_volume = data_volume
+    TestConf.force_sort = True
     TestConf.parquet_dir = property(lambda _: data_volume)
     # Skip the ``docker compose cp`` step in ``ServiceBackendTest.preload``.
     # Sail runs locally, so test data is already on the filesystem.
