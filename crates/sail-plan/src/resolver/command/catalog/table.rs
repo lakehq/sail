@@ -1,4 +1,5 @@
-use datafusion_expr::LogicalPlan;
+use datafusion_common::Column;
+use datafusion_expr::{Expr, LogicalPlan};
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{
@@ -166,6 +167,39 @@ impl PlanResolver<'_> {
         // Rename the input using names in the PlanResolverState, opaque field ID -> fieldInfo.name
         let input = self.resolve_query_plan(query, state).await?;
         let column_names = PlanResolver::get_field_names(input.schema(), state)?;
+
+        // Detect ORDER BY at the top of the query plan before rename_logical_plan wraps it
+        // in a Projection. Extract a safe prefix: stop at the first non-plain-column sort key
+        // so we never claim a derived expression (e.g. ceil(col)) is a plain column sort.
+        let write_sort_by: Vec<datafusion_expr::expr::Sort> =
+            if let LogicalPlan::Sort(sort_plan) = &input {
+                let schema = sort_plan.input.schema();
+                sort_plan
+                    .expr
+                    .iter()
+                    .take_while(|e| matches!(e.expr, Expr::Column(Column { relation: None, .. })))
+                    .filter_map(|e| {
+                        if let Expr::Column(Column { name, .. }) = &e.expr {
+                            let idx = schema.index_of_column_by_name(None, name)?;
+                            let user_name = column_names.get(idx)?.clone();
+                            Some(datafusion_expr::expr::Sort {
+                                expr: Expr::Column(Column {
+                                    relation: None,
+                                    name: user_name,
+                                    spans: Default::default(),
+                                }),
+                                asc: e.asc,
+                                nulls_first: e.nulls_first,
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            } else {
+                vec![]
+            };
+
         let input = rename_logical_plan(input, &column_names)?;
         let format = self.resolve_catalog_table_format(file_format)?;
         let mut write_options = options;
@@ -192,6 +226,7 @@ impl PlanResolver<'_> {
             .with_mode(write_mode)
             .with_format(format)
             .with_partition_by(partition_by)
+            .with_write_sort_by(write_sort_by)
             .with_table_properties(properties)
             .with_table_is_external(is_external)
             .with_options(write_options);
