@@ -6,6 +6,8 @@ All tests are skipped if ``vortex-data`` is not available.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 import pyarrow as pa
 import pytest
 
@@ -20,6 +22,12 @@ try:
     import vortex
 except ImportError:
     pytest.skip("vortex-data not installed", allow_module_level=True)
+
+
+def safe_sort_key(row):
+    if isinstance(row, Mapping):
+        return tuple((v is not None, v) for _, v in sorted(row.items()))
+    return tuple((v is not None, v) for v in row)
 
 
 @pytest.fixture
@@ -38,6 +46,23 @@ def vtx_file(tmp_path):
 
 
 @pytest.fixture
+def nested_vtx_file(tmp_path):
+    """Create a temporary Vortex file inside nested subdirectories."""
+    table = pa.table(
+        {
+            "id": pa.array([1, 2, 3, 4, 5], type=pa.int64()),
+            "name": pa.array(["alice", "bob", "carol", "dave", "eve"], type=pa.string()),
+            "score": pa.array([90.5, 85.0, 92.3, 78.1, 88.7], type=pa.float64()),
+        }
+    )
+    parent_dir = tmp_path / "sub_dir_1" / "sub_dir_2"
+    parent_dir.mkdir(parents=True, exist_ok=True)
+    path = str(parent_dir / "test.vortex")
+    vortex.io.write(table, path)
+    return tmp_path, path
+
+
+@pytest.fixture
 def vtx_file_with_nulls(tmp_path):
     """Create a Vortex file with null values."""
     table = pa.table(
@@ -51,6 +76,18 @@ def vtx_file_with_nulls(tmp_path):
     return path
 
 
+@pytest.fixture
+def other_df(spark):
+    """A different DataFrame from sample_df with the same schema."""
+    table = pa.table(
+        {
+            "col1": pa.array(["alice", "carol"], type=pa.string()),
+            "col2": pa.array([1, 2], type=pa.int64()),
+        }
+    )
+    return spark.createDataFrame(table)
+
+
 @pytest.fixture(autouse=True)
 def _register_vortex(spark):
     """Register VortexDataSource for all tests."""
@@ -62,6 +99,70 @@ def _register_vortex(spark):
 def test_vortex_read_all_rows(spark, vtx_file):
     df = spark.read.format("vortex").option("path", vtx_file).load()
     assert df.count() == 5  # noqa: PLR2004
+
+
+def test_vortex_read_all_rows_from_nested_directory(spark, nested_vtx_file):
+    vtx_directory = nested_vtx_file[0]
+    df = spark.read.format("vortex").option("path", vtx_directory).load()
+    assert df.count() == 5  # noqa: PLR2004
+
+
+def test_vortex_read_all_rows_using_glob_pattern(spark, nested_vtx_file):
+    vtx_pattern = f"{nested_vtx_file[0]}/**/*.vortex"
+    df = spark.read.format("vortex").option("path", vtx_pattern).load()
+    assert df.count() == 5  # noqa: PLR2004
+
+
+def test_vortex_write_basic(spark, sample_df, tmp_path):
+    path = str(tmp_path / "vortex_write_basic")
+    sample_df.write.format("vortex").option("path", path).save()
+    read_df = spark.read.format("vortex").option("path", path).load()
+    assert sample_df.count() == read_df.count()
+    assert sample_df.schema == read_df.schema
+    assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+
+
+def test_vortex_write_error_mode(spark, sample_df, other_df, tmp_path):
+    path = str(tmp_path / "vortex_write_error_mode")
+    sample_df.write.format("vortex").option("path", path).save()
+    with pytest.raises(
+        Exception, match=f"Path '{path}' already exists. Use mode='overwrite' to replace or mode='append' to add to it."
+    ):
+        other_df.write.format("vortex").option("path", path).save()
+    read_df = spark.read.format("vortex").option("path", path).load()
+    assert sample_df.count() == read_df.count()
+    assert sample_df.schema == read_df.schema
+    assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+
+
+def test_vortex_write_ignore_mode(spark, sample_df, other_df, tmp_path):
+    path = str(tmp_path / "vortex_write_ignore_mode")
+    sample_df.write.format("vortex").option("path", path).save()
+    other_df.write.mode("ignore").format("vortex").option("path", path).save()
+    read_df = spark.read.format("vortex").option("path", path).load()
+    assert sample_df.count() == read_df.count()
+    assert sample_df.schema == read_df.schema
+    assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+
+
+def test_vortex_write_overwrite_mode(spark, sample_df, other_df, tmp_path):
+    path = str(tmp_path / "vortex_write_overwrite_mode")
+    sample_df.write.format("vortex").option("path", path).save()
+    other_df.write.mode("overwrite").format("vortex").option("path", path).save()
+    read_df = spark.read.format("vortex").option("path", path).load()
+    assert other_df.count() == read_df.count()
+    assert other_df.schema == read_df.schema
+    assert sorted(other_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
+
+
+def test_vortex_write_append_mode(spark, sample_df, tmp_path):
+    path = str(tmp_path / "vortex_write_append_mode")
+    sample_df.write.format("vortex").option("path", path).save()
+    sample_df.write.mode("append").format("vortex").option("path", path).save()
+    read_df = spark.read.format("vortex").option("path", path).load()
+    assert sample_df.count() * 2 == read_df.count()
+    assert sample_df.schema == read_df.schema
+    assert sorted(sample_df.collect() * 2, key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
 
 
 def test_vortex_read_schema(spark, vtx_file):
@@ -166,7 +267,7 @@ def test_vortex_missing_path_option(spark):
 
 def test_vortex_nonexistent_file(spark, tmp_path):
     path = str(tmp_path / "nonexistent.vortex")
-    with pytest.raises(Exception, match="Failed to open Vortex file"):
+    with pytest.raises(Exception, match=f"No Vortex files found in the specified path: '{path}'"):
         spark.read.format("vortex").option("path", path).load().collect()
 
 
