@@ -1,14 +1,25 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::DataType;
+use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::{DFSchema, DFSchemaRef};
-use datafusion_expr::{cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection};
+use datafusion_expr::{
+    cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection, Values,
+};
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+
+/// Returns true if the expression is a literal with a non-null value.
+/// This is used to infer non-nullable columns in VALUES clauses, matching
+/// Spark's behavior where scalar literal values (e.g. integer `1`, boolean `true`)
+/// are non-nullable, while function call expressions (e.g. `TIMESTAMP('...')`)
+/// remain nullable.
+fn is_non_null_literal(expr: &Expr) -> bool {
+    matches!(expr, Expr::Literal(sv, _) if !sv.is_null())
+}
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_values(
@@ -29,6 +40,44 @@ impl PlanResolver<'_> {
         }
         .await?;
         let plan = LogicalPlanBuilder::values(values)?.build()?;
+
+        // Post-process: mark columns as non-nullable when all expressions are non-null
+        // literals. This matches Spark's behavior where integer/boolean/string literals
+        // in VALUES clauses produce non-nullable columns, while function call expressions
+        // (e.g. TIMESTAMP('...')) remain nullable.
+        let plan = if let LogicalPlan::Values(values_node) = plan {
+            if values_node.values.is_empty() {
+                LogicalPlan::Values(values_node)
+            } else {
+                let num_cols = values_node.values[0].len();
+                let qualified_fields = (0..num_cols)
+                    .map(|i| {
+                        let (qualifier, field) = values_node.schema.qualified_field(i);
+                        let all_non_null = values_node
+                            .values
+                            .iter()
+                            .all(|row| row.get(i).is_some_and(is_non_null_literal));
+                        let new_field = if all_non_null && field.is_nullable() {
+                            Arc::new(Field::new(field.name(), field.data_type().clone(), false))
+                        } else {
+                            Arc::clone(field)
+                        };
+                        (qualifier.cloned(), new_field)
+                    })
+                    .collect::<Vec<_>>();
+                let new_schema = Arc::new(DFSchema::new_with_metadata(
+                    qualified_fields,
+                    values_node.schema.metadata().clone(),
+                )?);
+                LogicalPlan::Values(Values {
+                    schema: new_schema,
+                    values: values_node.values,
+                })
+            }
+        } else {
+            plan
+        };
+
         let expr = plan
             .schema()
             .columns()

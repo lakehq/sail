@@ -84,6 +84,21 @@ index cc95bfface0..7625a7cce85 100644
          empty_df.write.saveAsTable(cls.tbl_name_empty)
  
      @classmethod
+@@ -474,12 +478,12 @@ class SparkConnectBasicTests(SparkConnectSQLTestCase):
+ 
+         cdf = cdf.select(
+             CF.log("id"), CF.log("id"), CF.struct("id", "name"), CF.struct("id", "name")
+-        ).limit(10)
++        )
+         sdf = sdf.select(
+             SF.log("id"), SF.log("id"), SF.struct("id", "name"), SF.struct("id", "name")
+-        ).limit(10)
++        )
+ 
+         self.assertEqual(
+             cdf.collect(),
+             sdf.collect(),
+         )
 diff --git a/python/pyspark/sql/tests/connect/test_connect_plan.py b/python/pyspark/sql/tests/connect/test_connect_plan.py
 index 88ef37511a6..448a027e9e9 100644
 --- a/python/pyspark/sql/tests/connect/test_connect_plan.py
