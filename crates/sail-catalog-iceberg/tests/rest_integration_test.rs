@@ -783,10 +783,12 @@ async fn test_create_table() {
                     CatalogTableSort {
                         column: "bar".to_string(),
                         ascending: false,
+                        nulls_first: false,
                     },
                     CatalogTableSort {
                         column: "foo".to_string(),
                         ascending: true,
+                        nulls_first: true,
                     },
                 ],
                 bucket_by: None,
@@ -844,10 +846,12 @@ async fn test_create_table() {
     assert!(sort_by.contains(&CatalogTableSort {
         column: "bar".to_string(),
         ascending: false,
+        nulls_first: false,
     }));
     assert!(sort_by.contains(&CatalogTableSort {
         column: "foo".to_string(),
         ascending: true,
+        nulls_first: true,
     }));
     assert_eq!(bucket_by, None);
     assert_eq!(properties.len(), 18);
@@ -973,10 +977,12 @@ async fn test_get_table() {
                     CatalogTableSort {
                         column: "bar".to_string(),
                         ascending: false,
+                        nulls_first: false,
                     },
                     CatalogTableSort {
                         column: "foo".to_string(),
                         ascending: true,
+                        nulls_first: true,
                     },
                 ],
                 bucket_by: None,
@@ -1088,10 +1094,12 @@ async fn test_get_table() {
     assert!(sort_by.contains(&CatalogTableSort {
         column: "bar".to_string(),
         ascending: false,
+        nulls_first: false,
     }));
     assert!(sort_by.contains(&CatalogTableSort {
         column: "foo".to_string(),
         ascending: true,
+        nulls_first: true,
     }));
     assert_eq!(bucket_by, None);
     assert_eq!(columns.len(), 3);

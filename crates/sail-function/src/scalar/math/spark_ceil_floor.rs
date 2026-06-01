@@ -279,6 +279,17 @@ impl ScalarUDFImpl for SparkCeil {
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         ceil_floor_coerce_types("ceil", arg_types)
     }
+
+    fn output_ordering(
+        &self,
+        input: &[datafusion_expr::sort_properties::ExprProperties],
+    ) -> Result<datafusion_expr::sort_properties::SortProperties> {
+        let [arg] = input else {
+            return Ok(datafusion_expr::sort_properties::SortProperties::Unordered);
+        };
+        // ceil is monotonically non-decreasing: if x <= y then ceil(x) <= ceil(y)
+        Ok(arg.sort_properties)
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
