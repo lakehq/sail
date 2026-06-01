@@ -143,10 +143,9 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let grouping = self.resolve_grouping_positions(grouping, &projections)?;
-        let has_grouping_set = grouping
-            .iter()
-            .any(|x| matches!(x.expr, Expr::GroupingSet(_)));
-        let grouping_exprs = Self::distinct_grouping_expressions(&grouping);
+        let group_exprs = grouping.iter().map(|x| x.expr.clone()).collect::<Vec<_>>();
+        let has_grouping_set = Self::has_grouping_set(&group_exprs);
+        let grouping_exprs = Self::distinct_grouping_expressions_from_exprs(&group_exprs);
         let projections = projections
             .into_iter()
             .map(|x| Self::rewrite_grouping_functions(x, &grouping_exprs, has_grouping_set))
@@ -162,7 +161,6 @@ impl PlanResolver<'_> {
             aggregate_candidates.push(having.clone());
         }
         let aggregate_exprs = find_aggregate_exprs(&aggregate_candidates);
-        let group_exprs = grouping.iter().map(|x| x.expr.clone()).collect::<Vec<_>>();
         let plan = LogicalPlanBuilder::from(input)
             .aggregate(group_exprs, aggregate_exprs.clone())?
             .build()?;
@@ -246,10 +244,14 @@ impl PlanResolver<'_> {
             .build()?)
     }
 
-    fn distinct_grouping_expressions(grouping: &[NamedExpr]) -> Vec<Expr> {
+    pub(super) fn has_grouping_set(grouping: &[Expr]) -> bool {
+        grouping.iter().any(|x| matches!(x, Expr::GroupingSet(_)))
+    }
+
+    pub(super) fn distinct_grouping_expressions_from_exprs(grouping: &[Expr]) -> Vec<Expr> {
         grouping
             .iter()
-            .flat_map(|x| match &x.expr {
+            .flat_map(|x| match x {
                 Expr::GroupingSet(g) => g.distinct_expr().into_iter().cloned().collect(),
                 expr => vec![expr.clone()],
             })
@@ -273,7 +275,7 @@ impl PlanResolver<'_> {
         })
     }
 
-    fn rewrite_grouping_expr(
+    pub(super) fn rewrite_grouping_expr(
         expr: Expr,
         grouping_exprs: &[Expr],
         has_grouping_set: bool,
