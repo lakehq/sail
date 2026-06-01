@@ -1,7 +1,7 @@
 use arrow::datatypes::DataType;
-use datafusion_common::{Column, DFSchemaRef, TableReference};
+use datafusion_common::{Column, DFSchemaRef, ScalarValue, TableReference};
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::{col, expr, lit};
+use datafusion_expr::{col, expr, lit, when};
 use datafusion_functions::core::get_field;
 use sail_common::spec;
 
@@ -229,9 +229,12 @@ impl PlanResolver<'_> {
                     .iter()
                     .find(|x| x.name().eq_ignore_ascii_case(name.as_ref()))
                     .and_then(|field| {
-                        let args = vec![expr, lit(field.name().to_string())];
-                        let expr =
+                        let args = vec![expr.clone(), lit(field.name().to_string())];
+                        let field_expr =
                             expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args));
+                        let expr = when(expr.is_null(), lit(ScalarValue::Null))
+                            .otherwise(field_expr)
+                            .ok()?;
                         Self::resolve_potentially_nested_field(expr, field.data_type(), remaining)
                     }),
                 _ => None,

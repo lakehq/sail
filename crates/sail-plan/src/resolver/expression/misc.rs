@@ -5,7 +5,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{plan_datafusion_err, Column, DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::FieldMetadata;
-use datafusion_expr::{expr, lit, BinaryExpr, ExprSchemable, ScalarUDF};
+use datafusion_expr::{expr, lit, when, BinaryExpr, ExprSchemable, ScalarUDF};
 use datafusion_expr_common::operator::Operator;
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_functions_nested::expr_fn::{array_element, map_extract};
@@ -313,7 +313,8 @@ impl PlanResolver<'_> {
                         "missing or ambiguous field: {name}"
                     )));
                 };
-                expr.field(name)
+                let field_expr = expr.clone().field(name);
+                when(expr.is_null(), lit(ScalarValue::Null)).otherwise(field_expr)?
             }
             _ => {
                 return Err(PlanError::AnalysisError(format!(
