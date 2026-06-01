@@ -253,6 +253,22 @@ mod tests {
     }
 
     #[test]
+    fn test_coalesce_exec_reads_contiguous_input_ranges() -> Result<()> {
+        let input = test_plan(vec![
+            vec![test_batch(&[0, 1])],
+            vec![test_batch(&[2, 3])],
+            vec![test_batch(&[4, 5])],
+            vec![test_batch(&[6, 7])],
+        ]);
+        let exec = CoalesceExec::new(input, 2);
+
+        assert_eq!(collect_values(&exec, 0)?, vec![0, 1, 2, 3]);
+        assert_eq!(collect_values(&exec, 1)?, vec![4, 5, 6, 7]);
+
+        Ok(())
+    }
+
+    #[test]
     fn test_coalesced_input_range_even_groups() {
         assert_eq!(coalesced_input_range(0, 4, 2), (0, 2));
         assert_eq!(coalesced_input_range(1, 4, 2), (2, 4));

@@ -1,10 +1,5 @@
 use std::time::{Duration, Instant};
 
-use hive_metastore::{
-    CheckLockRequest, DataOperationType, LockComponent, LockLevel, LockRequest, LockState,
-    LockType, Table, ThriftHiveMetastoreCheckLockException, ThriftHiveMetastoreClient,
-    ThriftHiveMetastoreLockException, ThriftHiveMetastoreUnlockException, UnlockRequest,
-};
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::provider::AlterTableOptions;
 use sail_common_datafusion::catalog::managed::{
@@ -12,6 +7,11 @@ use sail_common_datafusion::catalog::managed::{
 };
 use volo_thrift::MaybeException;
 
+use crate::hms::{
+    CheckLockRequest, DataOperationType, LockComponent, LockLevel, LockRequest, LockState,
+    LockType, Table, ThriftHiveMetastoreCheckLockException, ThriftHiveMetastoreClient,
+    ThriftHiveMetastoreLockException, ThriftHiveMetastoreUnlockException, UnlockRequest,
+};
 use crate::provider::{apply_alter_table_options, HmsCatalogProvider};
 
 const HMS_LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(30);

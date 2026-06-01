@@ -1,15 +1,6 @@
 use std::time::Duration;
 
 use futures::future::try_join_all;
-use hive_metastore::{
-    EnvironmentContext, GetTableRequest, Table, ThriftHiveMetastoreAlterTableException,
-    ThriftHiveMetastoreClient, ThriftHiveMetastoreClientBuilder,
-    ThriftHiveMetastoreCreateDatabaseException, ThriftHiveMetastoreCreateTableException,
-    ThriftHiveMetastoreDropDatabaseException, ThriftHiveMetastoreDropTableException,
-    ThriftHiveMetastoreDropTableWithEnvironmentContextException,
-    ThriftHiveMetastoreGetDatabaseException, ThriftHiveMetastoreGetTableException,
-    ThriftHiveMetastoreGetTableReqException,
-};
 use pilota::{AHashMap, FastStr};
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::hive_format::HiveCatalogFormat;
@@ -29,6 +20,15 @@ use crate::convert::{
     validate_namespace, view_to_status, GenericTableFormat,
 };
 use crate::data_type::arrow_to_hive_type;
+use crate::hms::{
+    EnvironmentContext, GetTableRequest, Table, ThriftHiveMetastoreAlterTableException,
+    ThriftHiveMetastoreClient, ThriftHiveMetastoreClientBuilder,
+    ThriftHiveMetastoreCreateDatabaseException, ThriftHiveMetastoreCreateTableException,
+    ThriftHiveMetastoreDropDatabaseException, ThriftHiveMetastoreDropTableException,
+    ThriftHiveMetastoreDropTableWithEnvironmentContextException,
+    ThriftHiveMetastoreGetDatabaseException, ThriftHiveMetastoreGetTableException,
+    ThriftHiveMetastoreGetTableReqException,
+};
 use crate::managed_table;
 use crate::security::{KerberosMakeTransport, SaslQop};
 
@@ -1230,7 +1230,6 @@ mod tests {
     use std::time::Duration;
 
     use arrow::datatypes::DataType;
-    use hive_metastore::Table;
     use pilota::{AHashMap, FastStr};
     use sail_catalog::error::{CatalogError, CatalogObject};
     use sail_catalog::provider::{
@@ -1239,6 +1238,7 @@ mod tests {
     use sail_common::runtime::RuntimeHandle;
 
     use super::{HmsCatalogConfig, HmsCatalogProvider};
+    use crate::hms::Table;
 
     #[tokio::test]
     async fn test_create_table_allows_iceberg_format() {
