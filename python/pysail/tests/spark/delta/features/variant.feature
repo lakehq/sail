@@ -125,6 +125,44 @@ Feature: Delta Lake Variant support
       | id | a | payload_json |
       | 1  | 1 | {"a":1}      |
 
+  Scenario: VariantShredding write round trips
+    Given variable location for temporary directory delta_variant_shredding_roundtrip
+    Given final statement
+      """
+      DROP TABLE IF EXISTS delta_variant_shredding_roundtrip
+      """
+    Given statement template
+      """
+      CREATE TABLE delta_variant_shredding_roundtrip (
+        id INT,
+        payload VARIANT
+      )
+      USING DELTA
+      LOCATION {{ location.sql }}
+      TBLPROPERTIES ('delta.enableVariantShredding' = 'true')
+      """
+    Given statement
+      """
+      INSERT INTO delta_variant_shredding_roundtrip
+      SELECT * FROM VALUES
+        (1, parse_json('{"a":1,"b":"delta"}')),
+        (2, parse_json('{"a":2,"b":"lake"}'))
+      """
+    Then delta log first commit protocol and metadata matches snapshot
+    When query
+      """
+      SELECT
+        id,
+        variant_get(payload, '$.a', 'int') AS a,
+        variant_get(payload, '$.b', 'string') AS b
+      FROM delta_variant_shredding_roundtrip
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | a | b     |
+      | 1  | 1 | delta |
+      | 2  | 2 | lake  |
+
   Scenario: Create non-Variant table with VariantShredding table property
     Given variable location for temporary directory delta_variant_shredding_no_variant
     Given final statement

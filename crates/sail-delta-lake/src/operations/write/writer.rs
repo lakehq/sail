@@ -19,6 +19,7 @@
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/writer.rs>
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/writer/record_batch.rs>
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -38,6 +39,10 @@ use uuid::Uuid;
 use super::async_utils::AsyncShareableBuffer;
 use super::partitioning::partition_ranges;
 use super::stats::create_add;
+use super::variant_shredding::{
+    apply_variant_shredding_plan, build_variant_shredding_plan, VariantShreddingConfig,
+    VariantShreddingPlan,
+};
 use crate::conversion::ScalarExt;
 use crate::spec::{Add, DeltaError as DeltaTableError};
 
@@ -85,9 +90,14 @@ pub struct WriterConfig {
     pub num_indexed_cols: i32,
     /// Specific columns to collect stats from
     pub stats_columns: Option<Vec<String>>,
+    /// Top-level data columns that must not appear in Delta stats.
+    pub stats_excluded_columns: HashSet<String>,
+    /// Variant shredding behavior for data files written by this writer.
+    pub variant_shredding: VariantShreddingConfig,
 }
 
 impl WriterConfig {
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         table_schema: ArrowSchemaRef,
         partition_columns: Vec<String>,
@@ -97,6 +107,8 @@ impl WriterConfig {
         write_batch_size: usize,
         num_indexed_cols: i32,
         stats_columns: Option<Vec<String>>,
+        stats_excluded_columns: HashSet<String>,
+        variant_shredding: VariantShreddingConfig,
     ) -> Self {
         let writer_properties = writer_properties.unwrap_or_else(|| {
             WriterProperties::builder()
@@ -113,6 +125,8 @@ impl WriterConfig {
             write_batch_size,
             num_indexed_cols,
             stats_columns,
+            stats_excluded_columns,
+            variant_shredding,
         }
     }
 
@@ -247,6 +261,7 @@ impl DeltaWriter {
             self.config.writer_properties.clone(),
             self.config.target_file_size,
             self.config.write_batch_size,
+            self.config.variant_shredding.clone(),
         );
 
         let writer = PartitionWriter::try_with_config(
@@ -254,6 +269,7 @@ impl DeltaWriter {
             config,
             self.config.num_indexed_cols,
             self.config.stats_columns.clone(),
+            self.config.stats_excluded_columns.clone(),
         )?;
 
         self.current_writer = Some(writer);
@@ -288,6 +304,8 @@ pub struct PartitionWriterConfig {
     pub target_file_size: u64,
     /// Row chunks passed to parquet writer
     pub write_batch_size: usize,
+    /// Variant shredding behavior for this partition writer.
+    pub variant_shredding: VariantShreddingConfig,
 }
 
 impl PartitionWriterConfig {
@@ -298,6 +316,7 @@ impl PartitionWriterConfig {
         writer_properties: WriterProperties,
         target_file_size: u64,
         write_batch_size: usize,
+        variant_shredding: VariantShreddingConfig,
     ) -> Self {
         let partition_segments = partition_values.hive_partition_segments();
 
@@ -309,6 +328,7 @@ impl PartitionWriterConfig {
             writer_properties,
             target_file_size,
             write_batch_size,
+            variant_shredding,
         }
     }
 }
@@ -319,10 +339,16 @@ pub struct PartitionWriter {
     config: PartitionWriterConfig,
     buffer: Option<AsyncShareableBuffer>,
     arrow_writer: Option<AsyncArrowWriter<AsyncShareableBuffer>>,
+    physical_file_schema: ArrowSchemaRef,
+    pending_batches: Vec<RecordBatch>,
+    pending_rows: usize,
+    variant_shredding_initialized: bool,
+    variant_shredding_plan: Option<VariantShreddingPlan>,
     part_counter: usize,
     files_written: Vec<Add>,
     num_indexed_cols: i32,
     stats_columns: Option<Vec<String>>,
+    stats_excluded_columns: HashSet<String>,
 }
 
 impl PartitionWriter {
@@ -331,25 +357,41 @@ impl PartitionWriter {
         config: PartitionWriterConfig,
         num_indexed_cols: i32,
         stats_columns: Option<Vec<String>>,
+        stats_excluded_columns: HashSet<String>,
     ) -> Result<Self, DeltaTableError> {
-        let buffer = AsyncShareableBuffer::default();
-        let arrow_writer = AsyncArrowWriter::try_new(
-            buffer.clone(),
-            config.file_schema.clone(),
-            Some(config.writer_properties.clone()),
-        )
-        .map_err(|e| DeltaTableError::generic(format!("Failed to create arrow writer: {e}")))?;
+        let physical_file_schema = config.file_schema.clone();
+        let (buffer, arrow_writer, variant_shredding_initialized) = if config
+            .variant_shredding
+            .enabled
+        {
+            (None, None, false)
+        } else {
+            let buffer = AsyncShareableBuffer::default();
+            let arrow_writer = AsyncArrowWriter::try_new(
+                buffer.clone(),
+                physical_file_schema.clone(),
+                Some(config.writer_properties.clone()),
+            )
+            .map_err(|e| DeltaTableError::generic(format!("Failed to create arrow writer: {e}")))?;
+            (Some(buffer), Some(arrow_writer), true)
+        };
 
         Ok(Self {
             object_store,
             writer_id: Uuid::new_v4(),
             config,
-            buffer: Some(buffer),
-            arrow_writer: Some(arrow_writer),
+            buffer,
+            arrow_writer,
+            physical_file_schema,
+            pending_batches: Vec::new(),
+            pending_rows: 0,
+            variant_shredding_initialized,
+            variant_shredding_plan: None,
             part_counter: 0,
             files_written: Vec::new(),
             num_indexed_cols,
             stats_columns,
+            stats_excluded_columns,
         })
     }
 
@@ -358,6 +400,28 @@ impl PartitionWriter {
             return Err(DeltaTableError::generic(format!(
                 "Schema mismatch: expected {:?}, got {:?}",
                 self.config.file_schema,
+                batch.schema()
+            )));
+        }
+
+        if self.config.variant_shredding.enabled && !self.variant_shredding_initialized {
+            self.pending_rows = self.pending_rows.saturating_add(batch.num_rows());
+            self.pending_batches.push(batch.clone());
+            if self.pending_rows >= self.config.variant_shredding.inference_buffer_size.max(1) {
+                self.open_and_write_pending_batches().await?;
+            }
+            return Ok(());
+        }
+
+        let batch = self.apply_variant_shredding_plan(batch)?;
+        self.write_physical_batch(&batch).await
+    }
+
+    async fn write_physical_batch(&mut self, batch: &RecordBatch) -> Result<(), DeltaTableError> {
+        if batch.schema() != self.physical_file_schema {
+            return Err(DeltaTableError::generic(format!(
+                "Schema mismatch: expected {:?}, got {:?}",
+                self.physical_file_schema,
                 batch.schema()
             )));
         }
@@ -386,8 +450,58 @@ impl PartitionWriter {
             let estimated_size: u64 = buffer_len as u64 + in_progress_size as u64;
 
             if estimated_size >= self.config.target_file_size {
-                self.flush_writer().await?;
+                self.flush_open_writer().await?;
             }
+        }
+
+        Ok(())
+    }
+
+    fn apply_variant_shredding_plan(
+        &self,
+        batch: &RecordBatch,
+    ) -> Result<RecordBatch, DeltaTableError> {
+        if let Some(plan) = self.variant_shredding_plan.as_ref() {
+            apply_variant_shredding_plan(batch, plan).map_err(DeltaTableError::generic)
+        } else {
+            Ok(batch.clone())
+        }
+    }
+
+    async fn open_and_write_pending_batches(&mut self) -> Result<(), DeltaTableError> {
+        if self.variant_shredding_initialized {
+            return Ok(());
+        }
+
+        let batches = std::mem::take(&mut self.pending_batches);
+        self.pending_rows = 0;
+
+        let plan = build_variant_shredding_plan(
+            &self.config.file_schema,
+            &batches,
+            self.config.variant_shredding.inference_buffer_size,
+        )
+        .map_err(DeltaTableError::generic)?;
+        let plan = (!plan.is_noop()).then_some(plan);
+        let physical_batches = batches
+            .iter()
+            .map(|batch| match plan.as_ref() {
+                Some(plan) => apply_variant_shredding_plan(batch, plan),
+                None => Ok(batch.clone()),
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(DeltaTableError::generic)?;
+
+        self.physical_file_schema = physical_batches
+            .first()
+            .map(|batch| batch.schema())
+            .unwrap_or_else(|| self.config.file_schema.clone());
+        self.variant_shredding_plan = plan;
+        self.variant_shredding_initialized = true;
+        self.reset_writer()?;
+
+        for batch in physical_batches {
+            self.write_physical_batch(&batch).await?;
         }
 
         Ok(())
@@ -395,6 +509,18 @@ impl PartitionWriter {
 
     /// Flush the current writer and create a new file
     async fn flush_writer(&mut self) -> Result<(), DeltaTableError> {
+        if self.config.variant_shredding.enabled && !self.variant_shredding_initialized {
+            self.open_and_write_pending_batches().await?;
+        }
+
+        self.flush_open_writer().await
+    }
+
+    async fn flush_open_writer(&mut self) -> Result<(), DeltaTableError> {
+        if self.arrow_writer.is_none() && self.buffer.is_none() {
+            return Ok(());
+        }
+
         let writer = self
             .arrow_writer
             .take()
@@ -494,6 +620,7 @@ impl PartitionWriter {
             metadata,
             self.num_indexed_cols,
             &self.stats_columns,
+            &self.stats_excluded_columns,
         )
     }
 
@@ -502,7 +629,7 @@ impl PartitionWriter {
         let buffer = AsyncShareableBuffer::default();
         let arrow_writer = AsyncArrowWriter::try_new(
             buffer.clone(),
-            self.config.file_schema.clone(),
+            self.physical_file_schema.clone(),
             Some(self.config.writer_properties.clone()),
         )
         .map_err(|e| DeltaTableError::generic(format!("Failed to create new arrow writer: {e}")))?;
@@ -557,6 +684,7 @@ mod tests {
     use object_store::path::Path;
     use object_store::ObjectStore;
 
+    use super::super::variant_shredding::VariantShreddingConfig;
     use super::{DeltaWriter, WriterConfig};
     use crate::spec::DeltaError as DeltaTableError;
 
@@ -587,6 +715,8 @@ mod tests {
             1024,
             32,
             None,
+            Default::default(),
+            VariantShreddingConfig::default(),
         );
         Ok(DeltaWriter::new(object_store, table_path, config))
     }
@@ -665,6 +795,8 @@ mod tests {
             1024,
             0,
             None,
+            Default::default(),
+            VariantShreddingConfig::default(),
         );
         let mut writer = DeltaWriter::new(Arc::clone(&object_store), table_path.clone(), config);
 

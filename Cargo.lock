@@ -7694,6 +7694,7 @@ dependencies = [
  "object_store",
  "once_cell",
  "parquet",
+ "parquet-variant",
  "parquet-variant-compute",
  "percent-encoding",
  "regex",
