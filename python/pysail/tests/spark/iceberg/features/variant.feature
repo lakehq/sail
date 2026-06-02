@@ -39,6 +39,49 @@ Feature: Iceberg Variant support
       | id | a | b       | payload_json          |
       | 1  | 2 | iceberg | {"a":2,"b":"iceberg"} |
 
+  Scenario: Write and read a Variant column with Parquet variant shredding
+    Given variable location for temporary directory iceberg_variant_shredding_roundtrip
+    Given final statement
+      """
+      DROP TABLE IF EXISTS iceberg_variant_shredding_roundtrip_table
+      """
+    Given statement template
+      """
+      CREATE TABLE iceberg_variant_shredding_roundtrip_table (
+        id INT,
+        payload VARIANT
+      )
+      USING iceberg
+      LOCATION {{ location.uri }}
+      TBLPROPERTIES (
+        'format-version' = '3',
+        'write.parquet.shred-variants' = 'true',
+        'write.parquet.variant-inference-buffer-size' = '2'
+      )
+      """
+    Given statement
+      """
+      INSERT INTO iceberg_variant_shredding_roundtrip_table
+      SELECT 1, parse_json('{"a":2,"b":"iceberg","nested":{"c":7}}')
+      UNION ALL
+      SELECT 2, parse_json('{"a":5,"b":"sail","nested":{"c":9}}')
+      """
+    When query
+      """
+      SELECT
+        id,
+        variant_get(payload, '$.a', 'int') AS a,
+        variant_get(payload, '$.b', 'string') AS b,
+        variant_get(payload, '$.nested.c', 'int') AS c,
+        to_json(payload) AS payload_json
+      FROM iceberg_variant_shredding_roundtrip_table
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | a | b       | c | payload_json                                |
+      | 1  | 2 | iceberg | 7 | {"a":2,"b":"iceberg","nested":{"c":7}} |
+      | 2  | 5 | sail    | 9 | {"a":5,"b":"sail","nested":{"c":9}}    |
+
   Scenario: Append a Variant column with mergeSchema upgrades the table format version
     Given variable location for temporary directory iceberg_variant_schema_evolution
     Given final statement

@@ -116,7 +116,7 @@ pub fn iceberg_field_to_arrow(field: &NestedField) -> Result<ArrowField> {
 /// Convert Arrow field to Iceberg field
 pub fn arrow_field_to_iceberg(field: &ArrowField) -> Result<NestedField> {
     let iceberg_type = if is_variant_arrow_field(field) {
-        if !is_unshredded_variant_arrow_type(field.data_type()) {
+        if !is_variant_arrow_storage_type(field.data_type()) {
             return plan_err!(
                 "Invalid Variant data type for Iceberg conversion: {}",
                 field.data_type()
@@ -186,22 +186,25 @@ fn is_variant_arrow_field(field: &ArrowField) -> bool {
     field.extension_type_name() == Some(VariantType::NAME)
 }
 
-fn is_unshredded_variant_arrow_type(arrow_type: &ArrowDataType) -> bool {
+fn is_variant_arrow_storage_type(arrow_type: &ArrowDataType) -> bool {
     let ArrowDataType::Struct(fields) = arrow_type else {
         return false;
     };
-    fields.len() == 2
-        && ["metadata", "value"].iter().all(|name| {
-            fields.iter().any(|field| {
-                field.name() == name
-                    && matches!(
-                        field.data_type(),
-                        ArrowDataType::Binary
-                            | ArrowDataType::LargeBinary
-                            | ArrowDataType::BinaryView
-                    )
-            })
-        })
+    let has_metadata = fields
+        .iter()
+        .any(|field| field.name() == "metadata" && is_binary_variant_field(field));
+    let has_value = fields
+        .iter()
+        .any(|field| field.name() == "value" && is_binary_variant_field(field));
+    let has_typed_value = fields.iter().any(|field| field.name() == "typed_value");
+    has_metadata && (has_value || has_typed_value)
+}
+
+fn is_binary_variant_field(field: &ArrowField) -> bool {
+    matches!(
+        field.data_type(),
+        ArrowDataType::Binary | ArrowDataType::LargeBinary | ArrowDataType::BinaryView
+    )
 }
 
 /// Convert Iceberg type to Arrow data type
@@ -697,6 +700,36 @@ mod tests {
         );
         assert!(price_field.required);
         assert_eq!(price_field.doc, Some("Price in USD".to_string()));
+    }
+
+    #[test]
+    fn test_arrow_shredded_variant_to_iceberg_conversion() {
+        let arrow_field = ArrowField::new(
+            "payload",
+            ArrowDataType::Struct(
+                vec![
+                    ArrowField::new("metadata", ArrowDataType::BinaryView, false),
+                    ArrowField::new("typed_value", ArrowDataType::Int64, true),
+                ]
+                .into(),
+            ),
+            true,
+        )
+        .with_metadata(HashMap::from([(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "4".to_string(),
+        )]))
+        .with_extension_type(VariantType);
+
+        let iceberg_field = arrow_field_to_iceberg(&arrow_field).expect("variant field conversion");
+
+        assert_eq!(iceberg_field.id, 4);
+        assert_eq!(iceberg_field.name, "payload");
+        assert_eq!(
+            *iceberg_field.field_type,
+            Type::Primitive(PrimitiveType::Variant)
+        );
+        assert!(!iceberg_field.required);
     }
 
     #[expect(clippy::panic)]

@@ -97,6 +97,8 @@ impl TableFormat for IcebergTableFormat {
 
         let table_url = Self::parse_table_url(vec![path]).await?;
         let (options, table_properties) = split_iceberg_write_options_and_table_properties(options);
+        let variant_shredding_option_presence =
+            IcebergWriterExecOptions::variant_shredding_option_presence(&options);
         let iceberg_options = IcebergWriteOptions::resolve(ctx, options)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
@@ -164,6 +166,7 @@ impl TableFormat for IcebergTableFormat {
         };
 
         let mut options = IcebergWriterExecOptions::from(iceberg_options);
+        options.apply_variant_shredding_option_presence(variant_shredding_option_presence);
         options.table_properties = table_properties;
         let table_config = IcebergTableConfig {
             table_url,

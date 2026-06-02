@@ -30,11 +30,25 @@ use crate::operations::write::file_writer::location_generator::{
     DefaultLocationGenerator, LocationGenerator,
 };
 use crate::operations::write::partition::split_record_batch_by_partition;
+use crate::operations::write::variant_shredding::{
+    apply_variant_shredding_plan, build_variant_shredding_plan, VariantShreddingPlan,
+};
 use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::types::values::Literal;
 use crate::spec::types::NestedField;
 use crate::spec::DataFile;
 use crate::utils::conversions::to_scalar;
+
+enum PartitionWriterState {
+    Pending {
+        batches: Vec<RecordBatch>,
+        num_rows: usize,
+    },
+    Open {
+        writer: ArrowParquetWriter,
+        variant_shredding_plan: Option<VariantShreddingPlan>,
+    },
+}
 
 pub struct IcebergTableWriter {
     pub store: Arc<dyn object_store::ObjectStore>,
@@ -42,7 +56,7 @@ pub struct IcebergTableWriter {
     pub generator: DefaultLocationGenerator,
     pub table_url: Url,
     // partition_dir -> writer
-    writers: HashMap<String, ArrowParquetWriter>,
+    writers: HashMap<String, PartitionWriterState>,
     // partition_dir -> partition values aligned with spec
     partition_values_map: HashMap<String, Vec<Option<Literal>>>,
     written: Vec<DataFile>,
@@ -81,24 +95,6 @@ impl IcebergTableWriter {
         if spec.fields.is_empty() {
             // Unpartitioned: write as-is once
             let partition_dir = String::new();
-            let writer = match self.writers.entry(partition_dir.clone()) {
-                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    for (i, f) in self.config.table_schema.fields().iter().enumerate() {
-                        log::trace!(
-                                    "iceberg.table_writer.writer_schema: field[{}]='{}' type={:?} field_id_meta={:?}",
-                                    i,
-                                    f.name(),
-                                    f.data_type(),
-                                    f.metadata().get(PARQUET_FIELD_ID_META_KEY)
-                                );
-                    }
-                    entry.insert(ArrowParquetWriter::try_new(
-                        self.config.table_schema.as_ref(),
-                        self.config.writer_properties.clone(),
-                    )?)
-                }
-            };
             self.partition_values_map
                 .entry(partition_dir.clone())
                 .or_default();
@@ -110,31 +106,13 @@ impl IcebergTableWriter {
             .map_err(|e| e.to_string())?;
             let aligned = cast_record_batch_relaxed_tz(&padded, &self.config.table_schema)
                 .map_err(|e| e.to_string())?;
-            writer.write_batch(&aligned).await?;
+            self.write_aligned_batch(partition_dir, aligned).await?;
             return Ok(());
         }
 
         let parts = split_record_batch_by_partition(batch, spec, iceberg_schema)?;
         for p in parts.into_iter() {
             let partition_dir = p.partition_dir;
-            let writer = match self.writers.entry(partition_dir.clone()) {
-                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    for (i, f) in self.config.table_schema.fields().iter().enumerate() {
-                        log::trace!(
-                            "iceberg.table_writer.writer_schema: field[{}]='{}' type={:?} field_id_meta={:?}",
-                            i,
-                            f.name(),
-                            f.data_type(),
-                            f.metadata().get(PARQUET_FIELD_ID_META_KEY)
-                        );
-                    }
-                    entry.insert(ArrowParquetWriter::try_new(
-                        self.config.table_schema.as_ref(),
-                        self.config.writer_properties.clone(),
-                    )?)
-                }
-            };
             self.partition_values_map
                 .entry(partition_dir.clone())
                 .or_insert(p.partition_values);
@@ -146,10 +124,140 @@ impl IcebergTableWriter {
             .map_err(|e| e.to_string())?;
             let aligned = cast_record_batch_relaxed_tz(&padded, &self.config.table_schema)
                 .map_err(|e| e.to_string())?;
-            writer.write_batch(&aligned).await?;
+            self.write_aligned_batch(partition_dir, aligned).await?;
         }
 
         Ok(())
+    }
+
+    async fn write_aligned_batch(
+        &mut self,
+        partition_dir: String,
+        batch: RecordBatch,
+    ) -> Result<(), String> {
+        let state = self
+            .writers
+            .remove(&partition_dir)
+            .map(Ok)
+            .unwrap_or_else(|| self.new_partition_writer_state())?;
+        let state = self.write_partition_state(state, batch).await?;
+        self.writers.insert(partition_dir, state);
+        Ok(())
+    }
+
+    fn new_partition_writer_state(&self) -> Result<PartitionWriterState, String> {
+        if self.config.variant_shredding.enabled {
+            Ok(PartitionWriterState::Pending {
+                batches: Vec::new(),
+                num_rows: 0,
+            })
+        } else {
+            Ok(PartitionWriterState::Open {
+                writer: self.new_arrow_writer(self.config.table_schema.clone())?,
+                variant_shredding_plan: None,
+            })
+        }
+    }
+
+    async fn write_partition_state(
+        &mut self,
+        state: PartitionWriterState,
+        batch: RecordBatch,
+    ) -> Result<PartitionWriterState, String> {
+        match state {
+            PartitionWriterState::Pending {
+                mut batches,
+                mut num_rows,
+            } => {
+                num_rows += batch.num_rows();
+                batches.push(batch);
+                if num_rows >= self.config.variant_shredding.inference_buffer_size.max(1) {
+                    self.open_and_write_pending_batches(batches).await
+                } else {
+                    Ok(PartitionWriterState::Pending { batches, num_rows })
+                }
+            }
+            PartitionWriterState::Open {
+                mut writer,
+                variant_shredding_plan,
+            } => {
+                let batch = if let Some(plan) = variant_shredding_plan.as_ref() {
+                    apply_variant_shredding_plan(&batch, plan)?
+                } else {
+                    batch
+                };
+                writer.write_batch(&batch).await?;
+                Ok(PartitionWriterState::Open {
+                    writer,
+                    variant_shredding_plan,
+                })
+            }
+        }
+    }
+
+    async fn open_and_write_pending_batches(
+        &mut self,
+        batches: Vec<RecordBatch>,
+    ) -> Result<PartitionWriterState, String> {
+        let plan = build_variant_shredding_plan(
+            &self.config.table_schema,
+            &batches,
+            self.config.variant_shredding.inference_buffer_size,
+        )?;
+        let plan = (!plan.is_noop()).then_some(plan);
+        let physical_batches = batches
+            .into_iter()
+            .map(|batch| {
+                if let Some(plan) = plan.as_ref() {
+                    apply_variant_shredding_plan(&batch, plan)
+                } else {
+                    Ok(batch)
+                }
+            })
+            .collect::<std::result::Result<Vec<_>, String>>()?;
+
+        let schema = physical_batches
+            .first()
+            .map(|batch| batch.schema())
+            .unwrap_or_else(|| self.config.table_schema.clone());
+        let mut writer = self.new_arrow_writer(schema)?;
+        for batch in physical_batches {
+            writer.write_batch(&batch).await?;
+        }
+        Ok(PartitionWriterState::Open {
+            writer,
+            variant_shredding_plan: plan,
+        })
+    }
+
+    fn new_arrow_writer(&self, schema: SchemaRef) -> Result<ArrowParquetWriter, String> {
+        for (i, f) in schema.fields().iter().enumerate() {
+            log::trace!(
+                "iceberg.table_writer.writer_schema: field[{}]='{}' type={:?} field_id_meta={:?}",
+                i,
+                f.name(),
+                f.data_type(),
+                f.metadata().get(PARQUET_FIELD_ID_META_KEY)
+            );
+        }
+        ArrowParquetWriter::try_new(schema.as_ref(), self.config.writer_properties.clone())
+    }
+
+    async fn finish_partition_state(
+        &mut self,
+        state: PartitionWriterState,
+    ) -> Result<ArrowParquetWriter, String> {
+        match state {
+            PartitionWriterState::Pending { batches, .. } => {
+                let PartitionWriterState::Open { writer, .. } =
+                    self.open_and_write_pending_batches(batches).await?
+                else {
+                    return Err("failed to open pending Iceberg partition writer".to_string());
+                };
+                Ok(writer)
+            }
+            PartitionWriterState::Open { writer, .. } => Ok(writer),
+        }
     }
 
     pub async fn flush_partition(
@@ -157,7 +265,8 @@ impl IcebergTableWriter {
         partition_dir: &str,
         partition_values: Vec<Option<Literal>>,
     ) -> Result<(), String> {
-        if let Some(writer) = self.writers.remove(partition_dir) {
+        if let Some(state) = self.writers.remove(partition_dir) {
+            let writer = self.finish_partition_state(state).await?;
             let (bytes, meta) = writer.close().await?;
             let (rel, full) = self.generator.with_partition_dir(Some(partition_dir));
             log::trace!("iceberg.table_writer.flush_partition.writing: {}", &full);

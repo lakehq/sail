@@ -343,6 +343,7 @@ impl ExecutionPlan for IcebergWriterExec {
                 spec_id_val,
                 commit_schema,
                 commit_requirements,
+                variant_shredding,
             ) = if table_exists {
                 let latest_meta =
                     crate::table::find_latest_metadata_file(&object_store, &table_url).await?;
@@ -354,6 +355,7 @@ impl ExecutionPlan for IcebergWriterExec {
                 let table_meta = TableMetadata::from_json(&bytes)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let data_dir = Self::resolve_data_dir(&table_meta, &table_url);
+                let variant_shredding = options.variant_shredding_config(&table_meta.properties)?;
                 // FIXME: Concurrency Issue with Schema Evolution.
                 // This requires a mechanism to reserve Field IDs or restart the Writer task upon conflict.
                 let schema_outcome =
@@ -426,12 +428,14 @@ impl ExecutionPlan for IcebergWriterExec {
                     spec_id_val,
                     commit_schema,
                     requirements,
+                    variant_shredding,
                 )
             } else {
                 let (_, metadata_properties) =
                     crate::properties::metadata_properties_from_table_properties(
                         &options.table_properties,
                     )?;
+                let variant_shredding = options.variant_shredding_config(&metadata_properties)?;
                 let input_arrow_schema = input_schema.as_ref().clone();
                 let mut iceberg_schema = arrow_schema_to_iceberg(&input_arrow_schema)?;
                 iceberg_schema = SchemaEvolver::assign_schema_field_ids(&iceberg_schema)?;
@@ -477,6 +481,7 @@ impl ExecutionPlan for IcebergWriterExec {
                     sid,
                     Some(iceberg_schema),
                     Vec::new(),
+                    variant_shredding,
                 )
             };
 
@@ -506,6 +511,7 @@ impl ExecutionPlan for IcebergWriterExec {
                 stats_columns: None,
                 iceberg_schema: Arc::new(iceberg_schema.clone()),
                 partition_spec: unbound_spec,
+                variant_shredding,
             };
 
             let writer_root = crate::utils::url_to_object_path(&table_url)
