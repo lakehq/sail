@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::compute::concat_batches;
+use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::{Distribution, EquivalenceProperties};
@@ -59,6 +60,7 @@ pub struct IcebergWriterExec {
     sink_mode: PhysicalSinkMode,
     table_exists: bool,
     options: IcebergWriterExecOptions,
+    logical_input_schema: Option<SchemaRef>,
     cache: Arc<PlanProperties>,
 }
 
@@ -94,6 +96,7 @@ impl IcebergWriterExec {
         sink_mode: PhysicalSinkMode,
         table_exists: bool,
         options: IcebergWriterExecOptions,
+        logical_input_schema: Option<SchemaRef>,
     ) -> Self {
         let schema = match iceberg_action_schema() {
             Ok(s) => s,
@@ -110,6 +113,7 @@ impl IcebergWriterExec {
             sink_mode,
             table_exists,
             options,
+            logical_input_schema,
             cache,
         }
     }
@@ -145,6 +149,40 @@ impl IcebergWriterExec {
 
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    pub fn logical_input_schema(&self) -> Option<&SchemaRef> {
+        self.logical_input_schema.as_ref()
+    }
+
+    fn input_schema_with_logical_metadata(&self) -> SchemaRef {
+        let physical_schema = self.input.schema();
+        let Some(logical_schema) = self.logical_input_schema.as_ref() else {
+            return physical_schema;
+        };
+
+        let fields = physical_schema
+            .fields()
+            .iter()
+            .map(|physical_field| {
+                let Ok(logical_field) = logical_schema.field_with_name(physical_field.name())
+                else {
+                    return Arc::clone(physical_field);
+                };
+                if logical_field.metadata().is_empty() {
+                    return Arc::clone(physical_field);
+                }
+
+                let mut metadata = physical_field.metadata().clone();
+                metadata.extend(logical_field.metadata().clone());
+                Arc::new(physical_field.as_ref().clone().with_metadata(metadata))
+            })
+            .collect::<Vec<_>>();
+
+        Arc::new(Schema::new_with_metadata(
+            fields,
+            physical_schema.metadata().clone(),
+        ))
     }
 
     fn get_schema_mode(
@@ -278,6 +316,7 @@ impl ExecutionPlan for IcebergWriterExec {
             self.sink_mode.clone(),
             self.table_exists,
             self.options.clone(),
+            self.logical_input_schema.clone(),
         )))
     }
 
@@ -303,7 +342,7 @@ impl ExecutionPlan for IcebergWriterExec {
         let partition_columns = self.partition_columns.clone();
         let sink_mode = self.sink_mode.clone();
         let table_exists = self.table_exists;
-        let input_schema = self.input.schema();
+        let input_schema = self.input_schema_with_logical_metadata();
         let options = self.options.clone();
         let schema_mode = Self::get_schema_mode(&options, &sink_mode)?;
 

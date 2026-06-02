@@ -1142,6 +1142,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sink_mode,
                 table_exists,
                 options,
+                logical_input_schema,
             }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let sink_mode = match sink_mode {
@@ -1163,6 +1164,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         plan_datafusion_err!("failed to decode Iceberg options: {e}")
                     })?
                 };
+                let logical_input_schema = if logical_input_schema.is_empty() {
+                    None
+                } else {
+                    Some(Arc::new(self.try_decode_schema(&logical_input_schema)?))
+                };
 
                 Ok(Arc::new(IcebergWriterExec::new(
                     input,
@@ -1171,6 +1177,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     sink_mode,
                     table_exists,
                     options,
+                    logical_input_schema,
                 )))
             }
             NodeKind::IcebergCommit(gen::IcebergCommitExecNode { input, table_url }) => {
@@ -1923,6 +1930,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let sink_mode = self.try_encode_physical_sink_mode(iceberg_writer_exec.sink_mode())?;
             let options = serde_json::to_string(iceberg_writer_exec.options())
                 .map_err(|e| plan_datafusion_err!("failed to encode Iceberg options: {e}"))?;
+            let logical_input_schema = iceberg_writer_exec
+                .logical_input_schema()
+                .map(|schema| self.try_encode_schema(schema.as_ref()))
+                .transpose()?
+                .unwrap_or_default();
             NodeKind::IcebergWriter(gen::IcebergWriterExecNode {
                 input,
                 table_url: iceberg_writer_exec.table_url().to_string(),
@@ -1934,6 +1946,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sink_mode: Some(sink_mode),
                 table_exists: iceberg_writer_exec.table_exists(),
                 options,
+                logical_input_schema,
             })
         } else if let Some(iceberg_commit_exec) = node.as_any().downcast_ref::<IcebergCommitExec>()
         {

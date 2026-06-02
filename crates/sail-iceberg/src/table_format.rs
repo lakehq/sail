@@ -88,7 +88,7 @@ impl TableFormat for IcebergTableFormat {
             bucket_by,
             sort_order,
             options,
-            logical_schema: _,
+            logical_schema,
         } = info;
 
         if bucket_by.is_some() {
@@ -184,7 +184,15 @@ impl TableFormat for IcebergTableFormat {
                 .collect::<Vec<_>>()
         });
 
-        let builder = IcebergPlanBuilder::new(input, table_config, mode, physical_sort, ctx);
+        let logical_input_schema = logical_schema.map(|schema| Arc::new(schema.as_arrow().clone()));
+        let builder = IcebergPlanBuilder::new(
+            input,
+            table_config,
+            mode,
+            physical_sort,
+            logical_input_schema,
+            ctx,
+        );
         let exec = builder.build().await?;
         Ok(exec)
     }
