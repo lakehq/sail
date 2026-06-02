@@ -82,6 +82,49 @@ Feature: Iceberg Variant support
       | 1  | 2 | iceberg | 7 | {"a":2,"b":"iceberg","nested":{"c":7}} |
       | 2  | 5 | sail    | 9 | {"a":5,"b":"sail","nested":{"c":9}}    |
 
+  Scenario: Read a shredded Variant column through metadata-as-data
+    Given variable location for temporary directory iceberg_variant_shredding_metadata_read
+    Given final statement
+      """
+      DROP TABLE IF EXISTS iceberg_variant_shredding_metadata_read_table
+      """
+    Given statement template
+      """
+      CREATE TABLE iceberg_variant_shredding_metadata_read_table (
+        id INT,
+        payload VARIANT
+      )
+      USING iceberg
+      LOCATION {{ location.uri }}
+      OPTIONS (metadataAsDataRead 'true')
+      TBLPROPERTIES (
+        'format-version' = '3',
+        'write.parquet.shred-variants' = 'true',
+        'write.parquet.variant-inference-buffer-size' = '2'
+      )
+      """
+    Given statement
+      """
+      INSERT INTO iceberg_variant_shredding_metadata_read_table
+      SELECT 1, parse_json('{"a":2,"b":"iceberg","nested":{"c":7}}')
+      UNION ALL
+      SELECT 2, parse_json('{"a":5,"b":"sail","nested":{"c":9}}')
+      """
+    When query
+      """
+      SELECT
+        id,
+        variant_get(payload, '$.a', 'int') AS a,
+        variant_get(payload, '$.nested.c', 'int') AS c,
+        to_json(payload) AS payload_json
+      FROM iceberg_variant_shredding_metadata_read_table
+      ORDER BY id
+      """
+    Then query result ordered
+      | id | a | c | payload_json                                |
+      | 1  | 2 | 7 | {"a":2,"b":"iceberg","nested":{"c":7}} |
+      | 2  | 5 | 9 | {"a":5,"b":"sail","nested":{"c":9}}    |
+
   Scenario: Append a Variant column with mergeSchema upgrades the table format version
     Given variable location for temporary directory iceberg_variant_schema_evolution
     Given final statement
