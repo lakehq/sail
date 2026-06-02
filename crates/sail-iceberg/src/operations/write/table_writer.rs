@@ -45,7 +45,7 @@ enum PartitionWriterState {
         num_rows: usize,
     },
     Open {
-        writer: ArrowParquetWriter,
+        writer: Box<ArrowParquetWriter>,
         variant_shredding_plan: Option<VariantShreddingPlan>,
     },
 }
@@ -153,7 +153,7 @@ impl IcebergTableWriter {
             })
         } else {
             Ok(PartitionWriterState::Open {
-                writer: self.new_arrow_writer(self.config.table_schema.clone())?,
+                writer: Box::new(self.new_arrow_writer(self.config.table_schema.clone())?),
                 variant_shredding_plan: None,
             })
         }
@@ -225,7 +225,7 @@ impl IcebergTableWriter {
             writer.write_batch(&batch).await?;
         }
         Ok(PartitionWriterState::Open {
-            writer,
+            writer: Box::new(writer),
             variant_shredding_plan: plan,
         })
     }
@@ -254,9 +254,9 @@ impl IcebergTableWriter {
                 else {
                     return Err("failed to open pending Iceberg partition writer".to_string());
                 };
-                Ok(writer)
+                Ok(*writer)
             }
-            PartitionWriterState::Open { writer, .. } => Ok(writer),
+            PartitionWriterState::Open { writer, .. } => Ok(*writer),
         }
     }
 

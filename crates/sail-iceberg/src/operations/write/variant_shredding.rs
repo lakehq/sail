@@ -373,7 +373,7 @@ fn build_shredding_type(node: &PathNode) -> Option<DataType> {
 mod tests {
     use datafusion::arrow::array::StringArray;
     use datafusion::arrow::datatypes::Field;
-    use datafusion_common::Result;
+    use datafusion_common::{DataFusionError, Result};
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
     use parquet_variant_compute::{json_to_variant, unshred_variant};
 
@@ -400,8 +400,9 @@ mod tests {
             Some(r#"{"a":5,"b":"sail","nested":{"c":9}}"#),
         ])?;
         let plan = build_variant_shredding_plan(&batch.schema(), std::slice::from_ref(&batch), 100)
-            .expect("variant shredding plan");
-        let shredded = apply_variant_shredding_plan(&batch, &plan).expect("shredded batch");
+            .map_err(DataFusionError::Plan)?;
+        let shredded =
+            apply_variant_shredding_plan(&batch, &plan).map_err(DataFusionError::Plan)?;
 
         let schema = shredded.schema();
         let payload_field = schema.field_with_name("payload")?;
@@ -411,7 +412,7 @@ mod tests {
         );
 
         let DataType::Struct(payload_fields) = payload_field.data_type() else {
-            panic!("expected variant struct");
+            return Err(DataFusionError::Plan("expected variant struct".to_string()));
         };
         assert!(payload_fields
             .iter()
@@ -419,9 +420,11 @@ mod tests {
         let typed_value = payload_fields
             .iter()
             .find(|field| field.name() == "typed_value")
-            .expect("typed_value field");
+            .ok_or_else(|| DataFusionError::Plan("typed_value field missing".to_string()))?;
         let DataType::Struct(fields) = typed_value.data_type() else {
-            panic!("expected typed_value struct");
+            return Err(DataFusionError::Plan(
+                "expected typed_value struct".to_string(),
+            ));
         };
         assert!(fields.iter().any(|field| field.name() == "a"));
         assert!(fields.iter().any(|field| field.name() == "b"));
@@ -444,9 +447,10 @@ mod tests {
             ]))],
         )?;
         let plan = build_variant_shredding_plan(&batch.schema(), std::slice::from_ref(&batch), 100)
-            .expect("variant shredding plan");
+            .map_err(DataFusionError::Plan)?;
         assert!(plan.is_noop());
-        let rewritten = apply_variant_shredding_plan(&batch, &plan).expect("rewritten batch");
+        let rewritten =
+            apply_variant_shredding_plan(&batch, &plan).map_err(DataFusionError::Plan)?;
         assert_eq!(rewritten.schema(), batch.schema());
         Ok(())
     }
