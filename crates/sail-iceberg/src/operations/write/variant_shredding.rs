@@ -14,10 +14,14 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use arrow_schema::extension::ExtensionType;
-use datafusion::arrow::array::{ArrayRef, RecordBatch};
-use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef, TimeUnit};
+use datafusion::arrow::array::{
+    Array, ArrayRef, LargeListArray, ListArray, MapArray, RecordBatch, StructArray,
+};
+use datafusion::arrow::datatypes::{
+    DataType, Field, FieldRef, Fields, Schema, SchemaRef, TimeUnit,
+};
 use parquet_variant::Variant;
-use parquet_variant_compute::{shred_variant, VariantArray, VariantType};
+use parquet_variant_compute::{shred_variant, unshred_variant, VariantArray, VariantType};
 
 const MIN_FIELD_FREQUENCY: f64 = 0.10;
 const MAX_SHREDDED_FIELDS: usize = 300;
@@ -85,6 +89,247 @@ pub fn apply_variant_shredding_plan(
 
     let physical_schema = Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
     RecordBatch::try_new(physical_schema, columns).map_err(|e| e.to_string())
+}
+
+pub fn unshred_shredded_variants_for_write(
+    batch: &RecordBatch,
+    target_schema: &SchemaRef,
+) -> Result<RecordBatch, String> {
+    let schema = batch.schema();
+    let mut columns: Vec<ArrayRef> = Vec::with_capacity(batch.num_columns());
+    let mut fields: Vec<FieldRef> = Vec::with_capacity(schema.fields().len());
+    let mut changed = false;
+
+    for (index, source_field) in schema.fields().iter().enumerate() {
+        let target_field = target_schema
+            .field_with_name(source_field.name())
+            .unwrap_or(source_field.as_ref());
+        let (field, column, field_changed) =
+            unshred_array_for_write(batch.column(index), source_field, target_field)?;
+        fields.push(field);
+        columns.push(column);
+        changed |= field_changed;
+    }
+
+    if !changed {
+        return Ok(batch.clone());
+    }
+
+    let normalized_schema = Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
+    RecordBatch::try_new(normalized_schema, columns).map_err(|e| e.to_string())
+}
+
+fn unshred_array_for_write(
+    source: &ArrayRef,
+    source_field: &FieldRef,
+    target_field: &Field,
+) -> Result<(FieldRef, ArrayRef, bool), String> {
+    if is_variant_arrow_field(target_field) && is_shredded_variant_storage_type(source.data_type())
+    {
+        let variant = VariantArray::try_new(source.as_ref()).map_err(|e| {
+            format!(
+                "variant write alignment input '{}': {e}",
+                source_field.name()
+            )
+        })?;
+        let unshredded = unshred_variant(&variant).map_err(|e| {
+            format!(
+                "variant write alignment column '{}': {e}",
+                source_field.name()
+            )
+        })?;
+        let unshredded = Arc::new(unshredded.into_inner()) as ArrayRef;
+        let field = Arc::new(
+            source_field
+                .as_ref()
+                .clone()
+                .with_data_type(unshredded.data_type().clone()),
+        );
+        return Ok((field, unshredded, true));
+    }
+
+    match (source.data_type(), target_field.data_type()) {
+        (DataType::Struct(source_fields), DataType::Struct(target_fields)) => {
+            let Some(source_struct) = source.as_any().downcast_ref::<StructArray>() else {
+                return Err(format!(
+                    "variant write alignment expected struct array for '{}'",
+                    source_field.name()
+                ));
+            };
+            let mut fields: Vec<FieldRef> = Vec::with_capacity(source_fields.len());
+            let mut columns: Vec<ArrayRef> = Vec::with_capacity(source_fields.len());
+            let mut changed = false;
+
+            for (index, child_field) in source_fields.iter().enumerate() {
+                if let Some(target_child) = target_fields
+                    .iter()
+                    .find(|field| field.name() == child_field.name())
+                {
+                    let (field, column, child_changed) = unshred_array_for_write(
+                        source_struct.column(index),
+                        child_field,
+                        target_child,
+                    )?;
+                    fields.push(field);
+                    columns.push(column);
+                    changed |= child_changed;
+                } else {
+                    fields.push(child_field.clone());
+                    columns.push(source_struct.column(index).clone());
+                }
+            }
+
+            if !changed {
+                return Ok((source_field.clone(), source.clone(), false));
+            }
+
+            let fields = Fields::from(fields);
+            let array = Arc::new(
+                StructArray::try_new(fields, columns, source_struct.nulls().cloned())
+                    .map_err(|e| e.to_string())?,
+            ) as ArrayRef;
+            let field = Arc::new(
+                source_field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(array.data_type().clone()),
+            );
+            Ok((field, array, true))
+        }
+        (DataType::List(_), DataType::List(target_element)) => {
+            let Some(source_list) = source.as_any().downcast_ref::<ListArray>() else {
+                return Err(format!(
+                    "variant write alignment expected list array for '{}'",
+                    source_field.name()
+                ));
+            };
+            let source_element = match source.data_type() {
+                DataType::List(source_element) => source_element,
+                _ => unreachable!(),
+            };
+            let (element_field, values, changed) =
+                unshred_array_for_write(source_list.values(), source_element, target_element)?;
+            if !changed {
+                return Ok((source_field.clone(), source.clone(), false));
+            }
+
+            let array = Arc::new(
+                ListArray::try_new(
+                    element_field,
+                    source_list.offsets().clone(),
+                    values,
+                    source_list.nulls().cloned(),
+                )
+                .map_err(|e| e.to_string())?,
+            ) as ArrayRef;
+            let field = Arc::new(
+                source_field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(array.data_type().clone()),
+            );
+            Ok((field, array, true))
+        }
+        (DataType::LargeList(_), DataType::LargeList(target_element)) => {
+            let Some(source_list) = source.as_any().downcast_ref::<LargeListArray>() else {
+                return Err(format!(
+                    "variant write alignment expected large list array for '{}'",
+                    source_field.name()
+                ));
+            };
+            let source_element = match source.data_type() {
+                DataType::LargeList(source_element) => source_element,
+                _ => unreachable!(),
+            };
+            let (element_field, values, changed) =
+                unshred_array_for_write(source_list.values(), source_element, target_element)?;
+            if !changed {
+                return Ok((source_field.clone(), source.clone(), false));
+            }
+
+            let array = Arc::new(
+                LargeListArray::try_new(
+                    element_field,
+                    source_list.offsets().clone(),
+                    values,
+                    source_list.nulls().cloned(),
+                )
+                .map_err(|e| e.to_string())?,
+            ) as ArrayRef;
+            let field = Arc::new(
+                source_field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(array.data_type().clone()),
+            );
+            Ok((field, array, true))
+        }
+        (DataType::Map(_, source_sorted), DataType::Map(target_entries, _)) => {
+            let Some(source_map) = source.as_any().downcast_ref::<MapArray>() else {
+                return Err(format!(
+                    "variant write alignment expected map array for '{}'",
+                    source_field.name()
+                ));
+            };
+            let source_entries = match source.data_type() {
+                DataType::Map(source_entries, _) => source_entries,
+                _ => unreachable!(),
+            };
+            let entries = Arc::new(source_map.entries().clone()) as ArrayRef;
+            let (entries_field, entries, changed) =
+                unshred_array_for_write(&entries, source_entries, target_entries)?;
+            if !changed {
+                return Ok((source_field.clone(), source.clone(), false));
+            }
+
+            let entries = entries
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .ok_or_else(|| {
+                    format!(
+                        "variant write alignment map entries for '{}' must be struct",
+                        source_field.name()
+                    )
+                })?
+                .clone();
+            let array = Arc::new(
+                MapArray::try_new(
+                    entries_field,
+                    source_map.offsets().clone(),
+                    entries,
+                    source_map.nulls().cloned(),
+                    *source_sorted,
+                )
+                .map_err(|e| e.to_string())?,
+            ) as ArrayRef;
+            let field = Arc::new(
+                source_field
+                    .as_ref()
+                    .clone()
+                    .with_data_type(array.data_type().clone()),
+            );
+            Ok((field, array, true))
+        }
+        _ => Ok((source_field.clone(), source.clone(), false)),
+    }
+}
+
+fn is_shredded_variant_storage_type(data_type: &DataType) -> bool {
+    let DataType::Struct(fields) = data_type else {
+        return false;
+    };
+    let has_metadata = fields
+        .iter()
+        .any(|field| field.name() == "metadata" && is_binary_variant_field(field));
+    let has_typed_value = fields.iter().any(|field| field.name() == "typed_value");
+    has_metadata && has_typed_value
+}
+
+fn is_binary_variant_field(field: &Field) -> bool {
+    matches!(
+        field.data_type(),
+        DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+    )
 }
 
 fn infer_variant_shredding_type(
@@ -375,9 +620,41 @@ mod tests {
     use datafusion::arrow::datatypes::Field;
     use datafusion_common::{DataFusionError, Result};
     use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
-    use parquet_variant_compute::{json_to_variant, unshred_variant};
+    use parquet_variant_compute::{json_to_variant, variant_to_json};
+    use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
 
     use super::*;
+
+    fn logical_variant_field(name: &str) -> Field {
+        Field::new(
+            name,
+            DataType::Struct(
+                vec![
+                    Field::new("metadata", DataType::Binary, false),
+                    Field::new("value", DataType::Binary, false),
+                ]
+                .into(),
+            ),
+            true,
+        )
+        .with_extension_type(VariantType)
+    }
+
+    fn shredded_variant_column(
+        name: &str,
+        value: &str,
+        shredding_type: &DataType,
+    ) -> Result<(FieldRef, ArrayRef)> {
+        let json = Arc::new(StringArray::from(vec![Some(value)])) as ArrayRef;
+        let variant = json_to_variant(&json)?;
+        let shredded = shred_variant(&variant, shredding_type)?;
+        let field = Arc::new(
+            variant
+                .field(name)
+                .with_data_type(shredded.data_type().clone()),
+        );
+        Ok((field, Arc::new(shredded.into_inner()) as ArrayRef))
+    }
 
     fn variant_batch(values: Vec<Option<&str>>) -> Result<RecordBatch> {
         let json = Arc::new(StringArray::from(values)) as ArrayRef;
@@ -391,6 +668,74 @@ mod tests {
             Arc::new(Schema::new(vec![field])),
             vec![Arc::new(variant.into_inner())],
         )?)
+    }
+
+    #[test]
+    fn write_alignment_unshreds_typed_value_only_variant() -> Result<()> {
+        let (field, column) = shredded_variant_column("payload", "42", &DataType::Int64)?;
+        let batch = RecordBatch::try_new(Arc::new(Schema::new(vec![field])), vec![column])?;
+        let target_schema = Arc::new(Schema::new(vec![logical_variant_field("payload")]));
+
+        let normalized = unshred_shredded_variants_for_write(&batch, &target_schema)
+            .map_err(DataFusionError::Plan)?;
+        let normalized_schema = normalized.schema();
+        let normalized_field = normalized_schema.field_with_name("payload")?;
+        let DataType::Struct(fields) = normalized_field.data_type() else {
+            return Err(DataFusionError::Plan(
+                "expected normalized variant struct".to_string(),
+            ));
+        };
+        assert!(fields.iter().any(|field| field.name() == "value"));
+        assert!(!fields.iter().any(|field| field.name() == "typed_value"));
+
+        let aligned = cast_record_batch_relaxed_tz(&normalized, &target_schema)?;
+        let json = variant_to_json(aligned.column(0))?;
+        assert_eq!(json.value(0), "42");
+        Ok(())
+    }
+
+    #[test]
+    fn write_alignment_unshreds_nested_variant() -> Result<()> {
+        let (payload_field, payload_column) = shredded_variant_column(
+            "payload",
+            r#"{"a":2}"#,
+            &DataType::Struct(vec![Field::new("a", DataType::Int64, true)].into()),
+        )?;
+        let wrapper_column = Arc::new(StructArray::try_new(
+            Fields::from(vec![payload_field.clone()]),
+            vec![payload_column],
+            None,
+        )?) as ArrayRef;
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new(
+                "wrapper",
+                DataType::Struct(Fields::from(vec![payload_field])),
+                true,
+            )])),
+            vec![wrapper_column],
+        )?;
+        let target_schema = Arc::new(Schema::new(vec![Field::new(
+            "wrapper",
+            DataType::Struct(Fields::from(vec![Arc::new(logical_variant_field(
+                "payload",
+            ))])),
+            true,
+        )]));
+
+        let normalized = unshred_shredded_variants_for_write(&batch, &target_schema)
+            .map_err(DataFusionError::Plan)?;
+        let aligned = cast_record_batch_relaxed_tz(&normalized, &target_schema)?;
+        let wrapper = aligned
+            .column(0)
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .ok_or_else(|| DataFusionError::Plan("expected wrapper struct".to_string()))?;
+        let payload = wrapper
+            .column_by_name("payload")
+            .ok_or_else(|| DataFusionError::Plan("expected payload field".to_string()))?;
+        let json = variant_to_json(payload)?;
+        assert_eq!(json.value(0), r#"{"a":2}"#);
+        Ok(())
     }
 
     #[test]

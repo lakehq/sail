@@ -31,7 +31,8 @@ use crate::operations::write::file_writer::location_generator::{
 };
 use crate::operations::write::partition::split_record_batch_by_partition;
 use crate::operations::write::variant_shredding::{
-    apply_variant_shredding_plan, build_variant_shredding_plan, VariantShreddingPlan,
+    apply_variant_shredding_plan, build_variant_shredding_plan,
+    unshred_shredded_variants_for_write, VariantShreddingPlan,
 };
 use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::types::values::Literal;
@@ -104,7 +105,9 @@ impl IcebergTableWriter {
                 self.config.iceberg_schema.as_ref(),
             )
             .map_err(|e| e.to_string())?;
-            let aligned = cast_record_batch_relaxed_tz(&padded, &self.config.table_schema)
+            let normalized =
+                unshred_shredded_variants_for_write(&padded, &self.config.table_schema)?;
+            let aligned = cast_record_batch_relaxed_tz(&normalized, &self.config.table_schema)
                 .map_err(|e| e.to_string())?;
             self.write_aligned_batch(partition_dir, aligned).await?;
             return Ok(());
@@ -122,7 +125,9 @@ impl IcebergTableWriter {
                 self.config.iceberg_schema.as_ref(),
             )
             .map_err(|e| e.to_string())?;
-            let aligned = cast_record_batch_relaxed_tz(&padded, &self.config.table_schema)
+            let normalized =
+                unshred_shredded_variants_for_write(&padded, &self.config.table_schema)?;
+            let aligned = cast_record_batch_relaxed_tz(&normalized, &self.config.table_schema)
                 .map_err(|e| e.to_string())?;
             self.write_aligned_batch(partition_dir, aligned).await?;
         }
