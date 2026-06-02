@@ -19,7 +19,7 @@
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/writer/stats.rs>
 
 use std::cmp::min;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::{AddAssign, Not};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -46,12 +46,14 @@ pub fn create_add(
     file_metadata: &ParquetMetaData,
     num_indexed_cols: i32,
     stats_columns: &Option<Vec<String>>,
+    stats_excluded_columns: &HashSet<String>,
 ) -> Result<Add, DeltaTableError> {
     let stats = stats_from_file_metadata(
         partition_values,
         file_metadata,
         num_indexed_cols,
         stats_columns,
+        stats_excluded_columns,
     )?;
     let stats_string = stats
         .to_json_string()
@@ -100,6 +102,7 @@ pub fn stats_from_parquet_metadata(
     parquet_metadata: &ParquetMetaData,
     num_indexed_cols: i32,
     stats_columns: &Option<Vec<String>>,
+    stats_excluded_columns: &HashSet<String>,
 ) -> Result<Stats, DeltaTableError> {
     let num_rows = parquet_metadata.file_metadata().num_rows();
     let schema_descriptor = parquet_metadata.file_metadata().schema_descr_ptr();
@@ -112,6 +115,7 @@ pub fn stats_from_parquet_metadata(
         num_rows,
         num_indexed_cols,
         stats_columns,
+        stats_excluded_columns,
     )
 }
 
@@ -120,6 +124,7 @@ fn stats_from_file_metadata(
     file_metadata: &ParquetMetaData,
     num_indexed_cols: i32,
     stats_columns: &Option<Vec<String>>,
+    stats_excluded_columns: &HashSet<String>,
 ) -> Result<Stats, DeltaTableError> {
     let schema_descriptor = file_metadata.file_metadata().schema_descr();
     let row_group_metadata: Vec<RowGroupMetaData> = file_metadata.row_groups().to_vec();
@@ -131,6 +136,7 @@ fn stats_from_file_metadata(
         file_metadata.file_metadata().num_rows(),
         num_indexed_cols,
         stats_columns,
+        stats_excluded_columns,
     )
 }
 
@@ -141,6 +147,7 @@ fn stats_from_metadata(
     num_rows: i64,
     num_indexed_cols: i32,
     stats_columns: &Option<Vec<String>>,
+    stats_excluded_columns: &HashSet<String>,
 ) -> Result<Stats, DeltaTableError> {
     let mut min_values: HashMap<String, ColumnValueStat> = HashMap::new();
     let mut max_values: HashMap<String, ColumnValueStat> = HashMap::new();
@@ -150,8 +157,13 @@ fn stats_from_metadata(
         let column_descr = schema_descriptor.column(idx);
         let column_path = column_descr.path();
         let column_path_parts = column_path.parts();
+        let Some(top_level_column) = column_path_parts.first() else {
+            return Ok(());
+        };
 
-        if partition_values.contains_key(&column_path_parts[0]) {
+        if partition_values.contains_key(top_level_column)
+            || stats_excluded_columns.contains(top_level_column)
+        {
             return Ok(());
         }
 
