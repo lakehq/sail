@@ -7861,6 +7861,7 @@ dependencies = [
  "once_cell",
  "ordered-float 5.3.0",
  "parquet",
+ "parquet-variant",
  "parquet-variant-compute",
  "rust_decimal",
  "sail-common",

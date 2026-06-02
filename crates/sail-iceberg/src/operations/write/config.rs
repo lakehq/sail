@@ -20,6 +20,21 @@ use crate::spec::partition::UnboundPartitionSpec;
 use crate::spec::Schema as IcebergSchema;
 
 #[derive(Debug, Clone)]
+pub struct VariantShreddingConfig {
+    pub enabled: bool,
+    pub inference_buffer_size: usize,
+}
+
+impl Default for VariantShreddingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            inference_buffer_size: 100,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct WriterConfig {
     pub table_schema: ArrowSchemaRef,
     pub partition_columns: Vec<CatalogPartitionField>,
@@ -30,4 +45,5 @@ pub struct WriterConfig {
     pub stats_columns: Option<Vec<String>>,
     pub iceberg_schema: Arc<IcebergSchema>,
     pub partition_spec: UnboundPartitionSpec,
+    pub variant_shredding: VariantShreddingConfig,
 }
