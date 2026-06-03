@@ -11,11 +11,13 @@ const MIN_FIELD_FREQUENCY: f64 = 0.10;
 const MAX_SHREDDED_FIELDS: usize = 300;
 const MAX_SHREDDING_DEPTH: usize = 50;
 const MAX_INTERMEDIATE_FIELDS: usize = 1000;
+const MAX_INFERENCE_NODES: usize = 100_000;
 
 #[derive(Debug, Clone)]
 pub struct VariantShreddingConfig {
     pub enabled: bool,
     pub inference_buffer_size: usize,
+    pub inference_node_budget: usize,
 }
 
 impl Default for VariantShreddingConfig {
@@ -23,6 +25,7 @@ impl Default for VariantShreddingConfig {
         Self {
             enabled: false,
             inference_buffer_size: 100,
+            inference_node_budget: MAX_INFERENCE_NODES,
         }
     }
 }
@@ -51,14 +54,20 @@ pub fn build_variant_shredding_plan(
     schema: &SchemaRef,
     batches: &[RecordBatch],
     inference_buffer_size: usize,
+    inference_node_budget: usize,
 ) -> Result<VariantShreddingPlan, String> {
     let mut column_types = vec![None; schema.fields().len()];
     let inference_buffer_size = inference_buffer_size.max(1);
+    let inference_node_budget = inference_node_budget.max(1);
 
     for (index, field) in schema.fields().iter().enumerate() {
         if is_variant_arrow_field(field) {
-            column_types[index] =
-                infer_variant_shredding_type(index, batches, inference_buffer_size)?;
+            column_types[index] = infer_variant_shredding_type(
+                index,
+                batches,
+                inference_buffer_size,
+                inference_node_budget,
+            )?;
         }
     }
 
@@ -103,15 +112,17 @@ fn infer_variant_shredding_type(
     column_index: usize,
     batches: &[RecordBatch],
     inference_buffer_size: usize,
+    inference_node_budget: usize,
 ) -> Result<Option<DataType>, String> {
     let mut root = PathNode::default();
+    let mut budget = InferenceBudget::new(inference_node_budget);
     let mut rows_seen = 0usize;
 
     for batch in batches {
         let array = VariantArray::try_new(batch.column(column_index).as_ref())
             .map_err(|e| format!("variant shredding inference: {e}"))?;
         for row in 0..array.len() {
-            if rows_seen >= inference_buffer_size {
+            if rows_seen >= inference_buffer_size || budget.is_exhausted() {
                 break;
             }
             rows_seen += 1;
@@ -121,9 +132,9 @@ fn infer_variant_shredding_type(
             let value = array
                 .try_value(row)
                 .map_err(|e| format!("variant shredding inference row {row}: {e}"))?;
-            observe_variant(&mut root, &value, 0)?;
+            observe_variant(&mut root, &value, 0, &mut budget)?;
         }
-        if rows_seen >= inference_buffer_size {
+        if rows_seen >= inference_buffer_size || budget.is_exhausted() {
             break;
         }
     }
@@ -152,6 +163,31 @@ struct FieldInfo {
     type_counts: HashMap<PhysicalKind, usize>,
     max_decimal_scale: u8,
     observation_count: usize,
+}
+
+#[derive(Debug)]
+struct InferenceBudget {
+    remaining_nodes: usize,
+}
+
+impl InferenceBudget {
+    fn new(nodes: usize) -> Self {
+        Self {
+            remaining_nodes: nodes,
+        }
+    }
+
+    fn consume_node(&mut self) -> bool {
+        if self.remaining_nodes == 0 {
+            return false;
+        }
+        self.remaining_nodes -= 1;
+        true
+    }
+
+    fn is_exhausted(&self) -> bool {
+        self.remaining_nodes == 0
+    }
 }
 
 impl FieldInfo {
@@ -256,7 +292,12 @@ fn observe_variant(
     node: &mut PathNode,
     value: &Variant<'_, '_>,
     depth: usize,
+    budget: &mut InferenceBudget,
 ) -> Result<(), String> {
+    if !budget.consume_node() {
+        return Ok(());
+    }
+
     node.info.observe(value);
 
     if depth >= MAX_SHREDDING_DEPTH {
@@ -266,6 +307,9 @@ fn observe_variant(
     match value {
         Variant::Object(object) => {
             for item in object.iter_try() {
+                if budget.is_exhausted() {
+                    break;
+                }
                 let (name, child_value) =
                     item.map_err(|e| format!("variant object traversal: {e}"))?;
                 if !node.object_children.contains_key(name)
@@ -277,14 +321,18 @@ fn observe_variant(
                     node.object_children.entry(name.to_string()).or_default(),
                     &child_value,
                     depth + 1,
+                    budget,
                 )?;
             }
         }
         Variant::List(list) => {
             let element = node.array_element.get_or_insert_with(Default::default);
             for item in list.iter_try() {
+                if budget.is_exhausted() {
+                    break;
+                }
                 let child_value = item.map_err(|e| format!("variant list traversal: {e}"))?;
-                observe_variant(element, &child_value, depth + 1)?;
+                observe_variant(element, &child_value, depth + 1, budget)?;
             }
         }
         _ => {}
@@ -408,8 +456,13 @@ mod tests {
             Some(r#"{"a":2,"b":"delta","nested":{"c":7}}"#),
             Some(r#"{"a":5,"b":"sail","nested":{"c":9}}"#),
         ])?;
-        let plan = build_variant_shredding_plan(&batch.schema(), std::slice::from_ref(&batch), 100)
-            .expect("variant shredding plan");
+        let plan = build_variant_shredding_plan(
+            &batch.schema(),
+            std::slice::from_ref(&batch),
+            100,
+            MAX_INFERENCE_NODES,
+        )
+        .expect("variant shredding plan");
         let shredded = apply_variant_shredding_plan(&batch, &plan).expect("shredded batch");
 
         let schema = shredded.schema();
@@ -447,11 +500,47 @@ mod tests {
                 1, 2,
             ]))],
         )?;
-        let plan = build_variant_shredding_plan(&batch.schema(), std::slice::from_ref(&batch), 100)
-            .expect("variant shredding plan");
+        let plan = build_variant_shredding_plan(
+            &batch.schema(),
+            std::slice::from_ref(&batch),
+            100,
+            MAX_INFERENCE_NODES,
+        )
+        .expect("variant shredding plan");
         assert!(plan.is_noop());
         let rewritten = apply_variant_shredding_plan(&batch, &plan).expect("rewritten batch");
         assert_eq!(rewritten.schema(), batch.schema());
+        Ok(())
+    }
+
+    #[test]
+    fn variant_shredding_inference_budget_limits_wide_objects() -> Result<()> {
+        let fields = (0..20)
+            .map(|index| format!(r#""field_{index}":{index}"#))
+            .collect::<Vec<_>>()
+            .join(",");
+        let value = format!("{{{fields}}}");
+        let batch = variant_batch(vec![Some(value.as_str())])?;
+        let plan =
+            build_variant_shredding_plan(&batch.schema(), std::slice::from_ref(&batch), 100, 5)
+                .expect("variant shredding plan");
+        let shredded = apply_variant_shredding_plan(&batch, &plan).expect("shredded batch");
+
+        let schema = shredded.schema();
+        let payload_field = schema.field_with_name("payload")?;
+        let DataType::Struct(payload_fields) = payload_field.data_type() else {
+            panic!("expected variant struct");
+        };
+        let typed_value = payload_fields
+            .iter()
+            .find(|field| field.name() == "typed_value")
+            .expect("typed_value field");
+        let DataType::Struct(fields) = typed_value.data_type() else {
+            panic!("expected typed_value struct");
+        };
+
+        assert!(fields.len() < 20);
+        assert!(fields.len() <= 4);
         Ok(())
     }
 }

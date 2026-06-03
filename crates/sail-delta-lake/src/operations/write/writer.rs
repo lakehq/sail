@@ -405,12 +405,24 @@ impl PartitionWriter {
         }
 
         if self.config.variant_shredding.enabled && !self.variant_shredding_initialized {
-            self.pending_rows = self.pending_rows.saturating_add(batch.num_rows());
-            self.pending_batches.push(batch.clone());
-            if self.pending_rows >= self.config.variant_shredding.inference_buffer_size.max(1) {
-                self.open_and_write_pending_batches().await?;
+            let inference_buffer_size = self.config.variant_shredding.inference_buffer_size.max(1);
+            let rows_needed = inference_buffer_size.saturating_sub(self.pending_rows);
+
+            if batch.num_rows() < rows_needed {
+                self.pending_rows = self.pending_rows.saturating_add(batch.num_rows());
+                self.pending_batches.push(batch.clone());
+                return Ok(());
             }
-            return Ok(());
+
+            let mut inference_batches = self.pending_batches.clone();
+            if rows_needed > 0 {
+                inference_batches.push(batch.slice(0, rows_needed));
+            }
+            self.initialize_variant_shredding(&inference_batches)?;
+            self.write_pending_batches().await?;
+
+            let batch = self.apply_variant_shredding_plan(batch)?;
+            return self.write_physical_batch(&batch).await;
         }
 
         let batch = self.apply_variant_shredding_plan(batch)?;
@@ -418,6 +430,11 @@ impl PartitionWriter {
     }
 
     async fn write_physical_batch(&mut self, batch: &RecordBatch) -> Result<(), DeltaTableError> {
+        if self.arrow_writer.is_none() && self.buffer.is_none() {
+            self.physical_file_schema = batch.schema();
+            self.reset_writer()?;
+        }
+
         if batch.schema() != self.physical_file_schema {
             return Err(DeltaTableError::generic(format!(
                 "Schema mismatch: expected {:?}, got {:?}",
@@ -468,43 +485,53 @@ impl PartitionWriter {
         }
     }
 
+    fn initialize_variant_shredding(
+        &mut self,
+        inference_batches: &[RecordBatch],
+    ) -> Result<(), DeltaTableError> {
+        if self.variant_shredding_initialized {
+            return Ok(());
+        }
+
+        let plan = build_variant_shredding_plan(
+            &self.config.file_schema,
+            inference_batches,
+            self.config.variant_shredding.inference_buffer_size,
+            self.config.variant_shredding.inference_node_budget,
+        )
+        .map_err(DeltaTableError::generic)?;
+        let plan = (!plan.is_noop()).then_some(plan);
+        self.variant_shredding_plan = plan;
+        self.variant_shredding_initialized = true;
+
+        if self.variant_shredding_plan.is_none() {
+            self.physical_file_schema = self.config.file_schema.clone();
+            self.reset_writer()?;
+        }
+
+        Ok(())
+    }
+
+    async fn write_pending_batches(&mut self) -> Result<(), DeltaTableError> {
+        let batches = std::mem::take(&mut self.pending_batches);
+        self.pending_rows = 0;
+
+        for batch in batches {
+            let batch = self.apply_variant_shredding_plan(&batch)?;
+            self.write_physical_batch(&batch).await?;
+        }
+
+        Ok(())
+    }
+
     async fn open_and_write_pending_batches(&mut self) -> Result<(), DeltaTableError> {
         if self.variant_shredding_initialized {
             return Ok(());
         }
 
-        let batches = std::mem::take(&mut self.pending_batches);
-        self.pending_rows = 0;
-
-        let plan = build_variant_shredding_plan(
-            &self.config.file_schema,
-            &batches,
-            self.config.variant_shredding.inference_buffer_size,
-        )
-        .map_err(DeltaTableError::generic)?;
-        let plan = (!plan.is_noop()).then_some(plan);
-        let physical_batches = batches
-            .iter()
-            .map(|batch| match plan.as_ref() {
-                Some(plan) => apply_variant_shredding_plan(batch, plan),
-                None => Ok(batch.clone()),
-            })
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(DeltaTableError::generic)?;
-
-        self.physical_file_schema = physical_batches
-            .first()
-            .map(|batch| batch.schema())
-            .unwrap_or_else(|| self.config.file_schema.clone());
-        self.variant_shredding_plan = plan;
-        self.variant_shredding_initialized = true;
-        self.reset_writer()?;
-
-        for batch in physical_batches {
-            self.write_physical_batch(&batch).await?;
-        }
-
-        Ok(())
+        let inference_batches = self.pending_batches.clone();
+        self.initialize_variant_shredding(&inference_batches)?;
+        self.write_pending_batches().await
     }
 
     /// Flush the current writer and create a new file
@@ -675,6 +702,7 @@ fn arrow_schema_without_partitions(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::sync::Arc;
 
     use datafusion::arrow::array::{ArrayRef, Int32Array, StringArray};
@@ -683,6 +711,7 @@ mod tests {
     use object_store::memory::InMemory;
     use object_store::path::Path;
     use object_store::ObjectStore;
+    use parquet_variant_compute::json_to_variant;
 
     use super::super::variant_shredding::VariantShreddingConfig;
     use super::{DeltaWriter, WriterConfig};
@@ -698,6 +727,25 @@ mod tests {
 
         RecordBatch::try_new(schema, vec![value_arr, part_arr]).map_err(|e| {
             DeltaTableError::generic(format!("Failed to build test record batch: {e}"))
+        })
+    }
+
+    fn make_variant_batch(values: Vec<Option<&str>>) -> Result<RecordBatch, DeltaTableError> {
+        let json = Arc::new(StringArray::from(values.clone())) as ArrayRef;
+        let variant = json_to_variant(&json).map_err(|e| {
+            DeltaTableError::generic(format!("Failed to build test variant array: {e}"))
+        })?;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            variant.field("payload"),
+        ]));
+        let ids = (0..values.len())
+            .map(|value| value as i32)
+            .collect::<Vec<_>>();
+        let id_arr: ArrayRef = Arc::new(Int32Array::from(ids));
+
+        RecordBatch::try_new(schema, vec![id_arr, Arc::new(variant.into_inner())]).map_err(|e| {
+            DeltaTableError::generic(format!("Failed to build test variant record batch: {e}"))
         })
     }
 
@@ -754,6 +802,46 @@ mod tests {
         let paths = adds.iter().map(|a| a.path.as_str()).collect::<Vec<_>>();
         assert!(paths.iter().any(|p| p.contains("part=a/")));
         assert!(paths.iter().any(|p| p.contains("part=b/")));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn variant_shredding_writer_drains_pending_batches_sequentially(
+    ) -> Result<(), DeltaTableError> {
+        let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let table_path = Path::from("delta_table");
+        let batch1 = make_variant_batch(vec![Some(r#"{"a":1,"b":"delta"}"#)])?;
+        let batch2 = make_variant_batch(vec![
+            Some(r#"{"a":2,"b":"lake"}"#),
+            Some(r#"{"a":3,"c":"fallback"}"#),
+        ])?;
+
+        let config = WriterConfig::new(
+            batch1.schema(),
+            vec![],
+            vec![],
+            None,
+            1024 * 1024,
+            1024,
+            32,
+            None,
+            HashSet::from(["payload".to_string()]),
+            VariantShreddingConfig {
+                enabled: true,
+                inference_buffer_size: 2,
+                ..Default::default()
+            },
+        );
+        let mut writer = DeltaWriter::new(object_store, table_path, config);
+
+        writer.write(&batch1).await?;
+        writer.write(&batch2).await?;
+        let adds = writer.close().await?;
+
+        assert_eq!(adds.len(), 1);
+        let stats = adds[0].stats.as_deref().unwrap_or_default();
+        assert!(stats.contains(r#""numRecords":3"#));
+        assert!(!stats.contains("payload"));
         Ok(())
     }
 
