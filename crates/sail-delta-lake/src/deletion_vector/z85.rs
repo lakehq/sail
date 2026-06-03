@@ -31,7 +31,7 @@ pub(crate) fn z85_encode(data: &[u8]) -> DeltaResult<String> {
 
 /// Encode arbitrary binary data to a Z85 string.
 ///
-/// Unaligned input is padded with trailing zero bytes. 
+/// Unaligned input is padded with trailing zero bytes.
 pub(crate) fn z85_encode_padded(data: &[u8]) -> DeltaResult<String> {
     if data.len().is_multiple_of(4) {
         return z85_encode(data);
