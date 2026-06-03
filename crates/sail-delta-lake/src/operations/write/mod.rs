@@ -13,4 +13,5 @@
 pub mod async_utils;
 mod partitioning;
 pub mod stats;
+pub(crate) mod variant_shredding;
 pub mod writer;
