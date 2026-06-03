@@ -831,6 +831,10 @@ fn validate_effective_commit_target(
     let schema = metadata.parse_schema()?;
     PROTOCOL.check_can_write_timestamp_ntz_to_protocol(&protocol, &schema)?;
     PROTOCOL.check_can_write_variant_to_protocol(&protocol, &schema)?;
+    PROTOCOL.check_can_write_variant_shredding_to_protocol(
+        &protocol,
+        table_property_enabled(&metadata, "delta.enableVariantShredding"),
+    )?;
 
     if actions_as_actions
         .iter()
