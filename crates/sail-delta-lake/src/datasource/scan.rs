@@ -35,10 +35,10 @@ use datafusion::datasource::physical_plan::{
 use datafusion::datasource::table_schema::TableSchema;
 use datafusion::physical_expr::{LexOrdering, PhysicalExpr};
 use object_store::path::Path;
+use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 
 use crate::conversion::ScalarConverter;
 use crate::datasource::{create_object_store_url, partitioned_file_from_action, DeltaScanConfig};
-use crate::physical_plan::DeltaPhysicalExprAdapterFactory;
 use crate::schema::arrow_field_physical_name;
 use crate::spec::{Add, MaxStat, MinStat};
 use crate::storage::LogStoreRef;
@@ -364,7 +364,7 @@ pub fn build_file_scan_config(
         .with_statistics(stats)
         .with_projection_indices(params.projection.cloned())?
         .with_limit(params.limit)
-        .with_expr_adapter(Some(Arc::new(DeltaPhysicalExprAdapterFactory {})))
+        .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})))
         .build();
 
     Ok(file_scan_config)

@@ -1,16 +1,3 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-use std::fmt::Debug;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -28,21 +15,23 @@ use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapterFactory};
 use datafusion::physical_plan::ColumnarValue;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
-use datafusion_common::nested_struct::validate_struct_compatibility;
+use parquet_variant_compute::{unshred_variant, VariantArray};
+
+use crate::variant::{is_binary_variant_field, is_variant_arrow_field, is_variant_storage_type};
 
 #[derive(Debug)]
-pub struct DeltaPhysicalExprAdapterFactory {}
+pub struct SchemaEvolutionPhysicalExprAdapterFactory {}
 
-impl PhysicalExprAdapterFactory for DeltaPhysicalExprAdapterFactory {
+impl PhysicalExprAdapterFactory for SchemaEvolutionPhysicalExprAdapterFactory {
     fn create(
         &self,
         logical_file_schema: SchemaRef,
         physical_file_schema: SchemaRef,
     ) -> Result<Arc<dyn PhysicalExprAdapter>> {
         let (column_mapping, default_values) =
-            Self::create_column_mapping(&logical_file_schema, &physical_file_schema);
+            create_column_mapping(&logical_file_schema, &physical_file_schema);
 
-        Ok(Arc::new(DeltaPhysicalExprAdapter {
+        Ok(Arc::new(SchemaEvolutionPhysicalExprAdapter {
             logical_file_schema,
             physical_file_schema,
             column_mapping,
@@ -51,48 +40,51 @@ impl PhysicalExprAdapterFactory for DeltaPhysicalExprAdapterFactory {
     }
 }
 
-impl DeltaPhysicalExprAdapterFactory {
-    fn create_column_mapping(
-        logical_schema: &Schema,
-        physical_schema: &Schema,
-    ) -> (Vec<Option<usize>>, Vec<Option<ScalarValue>>) {
-        logical_schema
-            .fields()
-            .iter()
-            .map(
-                |logical_field| match physical_schema.index_of(logical_field.name()) {
-                    Ok(physical_index) => (Some(physical_index), None),
-                    Err(_) => {
-                        let default_value = if logical_field.is_nullable() {
-                            Some(
-                                ScalarValue::try_from(logical_field.data_type())
-                                    .unwrap_or(ScalarValue::Null),
-                            )
-                        } else {
-                            Some(
-                                ScalarValue::new_zero(logical_field.data_type())
-                                    .unwrap_or(ScalarValue::Null),
-                            )
-                        };
-                        (None, default_value)
-                    }
-                },
-            )
-            .unzip()
+fn create_column_mapping(
+    logical_schema: &Schema,
+    physical_schema: &Schema,
+) -> (Vec<Option<usize>>, Vec<Option<ScalarValue>>) {
+    let mut column_mapping = Vec::with_capacity(logical_schema.fields().len());
+    let mut default_values = Vec::with_capacity(logical_schema.fields().len());
+
+    for logical_field in logical_schema.fields() {
+        match physical_schema.index_of(logical_field.name()) {
+            Ok(physical_index) => {
+                column_mapping.push(Some(physical_index));
+                default_values.push(None);
+            }
+            Err(_) => {
+                column_mapping.push(None);
+                let default_value = if logical_field.is_nullable() {
+                    Some(
+                        ScalarValue::try_from(logical_field.data_type())
+                            .unwrap_or(ScalarValue::Null),
+                    )
+                } else {
+                    Some(
+                        ScalarValue::new_zero(logical_field.data_type())
+                            .unwrap_or(ScalarValue::Null),
+                    )
+                };
+                default_values.push(default_value);
+            }
+        }
     }
+
+    (column_mapping, default_values)
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct DeltaPhysicalExprAdapter {
+struct SchemaEvolutionPhysicalExprAdapter {
     logical_file_schema: SchemaRef,
     physical_file_schema: SchemaRef,
     column_mapping: Vec<Option<usize>>,
     default_values: Vec<Option<ScalarValue>>,
 }
 
-impl PhysicalExprAdapter for DeltaPhysicalExprAdapter {
+impl PhysicalExprAdapter for SchemaEvolutionPhysicalExprAdapter {
     fn rewrite(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
-        let rewriter = DeltaPhysicalExprRewriter {
+        let rewriter = SchemaEvolutionPhysicalExprRewriter {
             logical_file_schema: &self.logical_file_schema,
             physical_file_schema: &self.physical_file_schema,
             column_mapping: &self.column_mapping,
@@ -103,14 +95,14 @@ impl PhysicalExprAdapter for DeltaPhysicalExprAdapter {
     }
 }
 
-struct DeltaPhysicalExprRewriter<'a> {
+struct SchemaEvolutionPhysicalExprRewriter<'a> {
     logical_file_schema: &'a Schema,
     physical_file_schema: &'a Schema,
     column_mapping: &'a [Option<usize>],
     default_values: &'a [Option<ScalarValue>],
 }
 
-impl<'a> DeltaPhysicalExprRewriter<'a> {
+impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
     fn rewrite_expr(
         &self,
         expr: Arc<dyn PhysicalExpr>,
@@ -121,7 +113,6 @@ impl<'a> DeltaPhysicalExprRewriter<'a> {
         if let Some(column) = expr.downcast_ref::<Column>() {
             return self.rewrite_column(Arc::clone(&expr), column);
         }
-
         Ok(Transformed::no(expr))
     }
 
@@ -200,8 +191,10 @@ impl<'a> DeltaPhysicalExprRewriter<'a> {
         let logical_field_index = match self.logical_file_schema.index_of(column.name()) {
             Ok(index) => index,
             Err(_) => {
-                if let Ok(_physical_field) =
-                    self.physical_file_schema.field_with_name(column.name())
+                if self
+                    .physical_file_schema
+                    .field_with_name(column.name())
+                    .is_ok()
                 {
                     return Ok(Transformed::no(expr));
                 } else {
@@ -238,12 +231,10 @@ impl<'a> DeltaPhysicalExprRewriter<'a> {
                     exec_err!("Non-nullable column '{}' is missing from physical schema and no default value provided", column.name())
                 }
             }
-            None => {
-                exec_err!(
-                    "Column mapping not found for logical field index {}",
-                    logical_field_index
-                )
-            }
+            None => exec_err!(
+                "Column mapping not found for logical field index {}",
+                logical_field_index
+            ),
         }
     }
 
@@ -280,10 +271,7 @@ impl<'a> DeltaPhysicalExprRewriter<'a> {
         logical_field: &Field,
         physical_field: &Field,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
-        if !can_cast_types_with_schema_evolution(
-            physical_field.data_type(),
-            logical_field.data_type(),
-        )? {
+        if !can_cast_field_with_schema_evolution(physical_field, logical_field)? {
             return exec_err!(
                 "Cannot cast column '{}' from '{}' (physical) to '{}' (logical)",
                 logical_field.name(),
@@ -292,30 +280,44 @@ impl<'a> DeltaPhysicalExprRewriter<'a> {
             );
         }
 
-        Ok(Transformed::yes(Arc::new(DeltaCastColumnExpr::new(
-            column_expr,
-            Arc::new(physical_field.clone()),
-            Arc::new(logical_field.clone()),
-            None,
-        ))))
+        Ok(Transformed::yes(Arc::new(
+            SchemaEvolutionCastColumnExpr::new(
+                column_expr,
+                Arc::new(physical_field.clone()),
+                Arc::new(logical_field.clone()),
+                None,
+            ),
+        )))
     }
 }
 
-fn can_cast_types_with_schema_evolution(from_type: &DataType, to_type: &DataType) -> Result<bool> {
-    if from_type == to_type {
+fn can_cast_field_with_schema_evolution(source: &Field, target: &Field) -> Result<bool> {
+    if source.data_type() == &DataType::Null {
+        return Ok(target.is_nullable());
+    }
+    if source.is_nullable() && !target.is_nullable() {
+        return Ok(false);
+    }
+    if source.data_type() == target.data_type() {
+        return Ok(true);
+    }
+    if is_binary_variant_field(source) && is_binary_variant_field(target) {
+        return Ok(true);
+    }
+    if is_variant_arrow_field(target) && is_variant_storage_type(source.data_type()) {
         return Ok(true);
     }
 
-    match (from_type, to_type) {
+    match (source.data_type(), target.data_type()) {
         (DataType::Struct(from_fields), DataType::Struct(to_fields)) => {
-            validate_struct_compatibility(from_fields, to_fields)?;
+            validate_struct_compatibility_with_variant(from_fields, to_fields)?;
             Ok(true)
         }
         (DataType::List(from_elem), DataType::List(to_elem)) => {
-            can_cast_types_with_schema_evolution(from_elem.data_type(), to_elem.data_type())
+            can_cast_field_with_schema_evolution(from_elem, to_elem)
         }
         (DataType::LargeList(from_elem), DataType::LargeList(to_elem)) => {
-            can_cast_types_with_schema_evolution(from_elem.data_type(), to_elem.data_type())
+            can_cast_field_with_schema_evolution(from_elem, to_elem)
         }
         (
             DataType::FixedSizeList(from_elem, from_len),
@@ -324,30 +326,69 @@ fn can_cast_types_with_schema_evolution(from_type: &DataType, to_type: &DataType
             if from_len != to_len {
                 return Ok(false);
             }
-            can_cast_types_with_schema_evolution(from_elem.data_type(), to_elem.data_type())
+            can_cast_field_with_schema_evolution(from_elem, to_elem)
         }
         (DataType::Map(from_entries, _), DataType::Map(to_entries, _)) => {
-            match (from_entries.data_type(), to_entries.data_type()) {
-                (DataType::Struct(from_fields), DataType::Struct(to_fields)) => {
-                    validate_struct_compatibility(from_fields, to_fields)?;
-                    Ok(true)
-                }
-                _ => Ok(false),
-            }
+            can_cast_field_with_schema_evolution(from_entries, to_entries)
         }
-        _ => Ok(can_cast_types(from_type, to_type)),
+        _ => Ok(can_cast_types(source.data_type(), target.data_type())),
     }
 }
 
+fn validate_struct_compatibility_with_variant(
+    source_fields: &[Arc<Field>],
+    target_fields: &[Arc<Field>],
+) -> Result<()> {
+    if !target_fields.iter().any(|target| {
+        source_fields
+            .iter()
+            .any(|source| source.name() == target.name())
+    }) {
+        return exec_err!(
+            "Cannot cast struct with {} fields to {} fields because there is no field name overlap",
+            source_fields.len(),
+            target_fields.len()
+        );
+    }
+
+    for target_field in target_fields {
+        match source_fields
+            .iter()
+            .find(|source| source.name() == target_field.name())
+        {
+            Some(source_field) => {
+                if !can_cast_field_with_schema_evolution(source_field, target_field)? {
+                    return exec_err!(
+                        "Cannot cast struct field '{}' from type {} to type {}",
+                        target_field.name(),
+                        source_field.data_type(),
+                        target_field.data_type()
+                    );
+                }
+            }
+            None if target_field.is_nullable() => {}
+            None => {
+                return exec_err!(
+                    "Cannot cast struct: target field '{}' is non-nullable but missing from source. \
+                     Cannot fill with NULL.",
+                    target_field.name()
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Clone, Eq)]
-pub struct DeltaCastColumnExpr {
+pub struct SchemaEvolutionCastColumnExpr {
     expr: Arc<dyn PhysicalExpr>,
     input_field: Arc<Field>,
     target_field: Arc<Field>,
     cast_options: CastOptions<'static>,
 }
 
-impl PartialEq for DeltaCastColumnExpr {
+impl PartialEq for SchemaEvolutionCastColumnExpr {
     fn eq(&self, other: &Self) -> bool {
         self.expr.eq(&other.expr)
             && self.input_field.eq(&other.input_field)
@@ -356,7 +397,7 @@ impl PartialEq for DeltaCastColumnExpr {
     }
 }
 
-impl std::hash::Hash for DeltaCastColumnExpr {
+impl std::hash::Hash for SchemaEvolutionCastColumnExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.expr.hash(state);
         self.input_field.hash(state);
@@ -365,18 +406,18 @@ impl std::hash::Hash for DeltaCastColumnExpr {
     }
 }
 
-impl std::fmt::Display for DeltaCastColumnExpr {
+impl std::fmt::Display for SchemaEvolutionCastColumnExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "DELTA_CAST_COLUMN({} AS {:?})",
+            "SCHEMA_EVOLUTION_CAST_COLUMN({} AS {:?})",
             self.expr,
             self.target_field.data_type()
         )
     }
 }
 
-impl DeltaCastColumnExpr {
+impl SchemaEvolutionCastColumnExpr {
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         input_field: Arc<Field>,
@@ -400,7 +441,7 @@ impl DeltaCastColumnExpr {
     }
 }
 
-impl PhysicalExpr for DeltaCastColumnExpr {
+impl PhysicalExpr for SchemaEvolutionCastColumnExpr {
     fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
         Ok(self.target_field.data_type().clone())
     }
@@ -448,7 +489,7 @@ impl PhysicalExpr for DeltaCastColumnExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         assert_eq!(children.len(), 1);
         let child = children.pop().ok_or_else(|| {
-            DataFusionError::Plan("DeltaCastColumnExpr requires a child".to_string())
+            DataFusionError::Plan("SchemaEvolutionCastColumnExpr requires a child".to_string())
         })?;
         Ok(Arc::new(Self::new(
             child,
@@ -468,39 +509,13 @@ fn cast_array_with_schema_evolution(
     target_field: &Field,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
+    if is_variant_arrow_field(target_field) && is_variant_storage_type(source.data_type()) {
+        return cast_variant_array_with_schema_evolution(source, target_field, cast_options);
+    }
+
     match target_field.data_type() {
         DataType::Struct(target_fields) => {
-            let Some(source_struct) = source.as_any().downcast_ref::<StructArray>() else {
-                return exec_err!(
-                    "Cannot cast column of type {} to struct type. Source must be a struct to cast to struct.",
-                    source.data_type()
-                );
-            };
-            validate_struct_compatibility(source_struct.fields(), target_fields)?;
-
-            let num_rows = source.len();
-            let mut fields: Vec<Arc<Field>> = Vec::with_capacity(target_fields.len());
-            let mut arrays: Vec<ArrayRef> = Vec::with_capacity(target_fields.len());
-
-            for target_child in target_fields {
-                fields.push(Arc::clone(target_child));
-                match source_struct.column_by_name(target_child.name()) {
-                    Some(source_child) => {
-                        arrays.push(cast_array_with_schema_evolution(
-                            source_child,
-                            target_child.as_ref(),
-                            cast_options,
-                        )?);
-                    }
-                    None => arrays.push(new_null_array(target_child.data_type(), num_rows)),
-                }
-            }
-
-            Ok(Arc::new(StructArray::new(
-                fields.into(),
-                arrays,
-                source_struct.nulls().cloned(),
-            )))
+            cast_struct_array_with_schema_evolution(source, target_fields, cast_options)
         }
         DataType::List(target_elem) => {
             let Some(source_list) = source.as_any().downcast_ref::<ListArray>() else {
@@ -612,5 +627,213 @@ fn cast_array_with_schema_evolution(
             target_field.data_type(),
             cast_options,
         )?),
+    }
+}
+
+fn cast_variant_array_with_schema_evolution(
+    source: &ArrayRef,
+    target_field: &Field,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef> {
+    let DataType::Struct(target_fields) = target_field.data_type() else {
+        return exec_err!(
+            "Cannot cast variant column to non-struct type {}",
+            target_field.data_type()
+        );
+    };
+    let variant = VariantArray::try_new(source.as_ref())?;
+    let unshredded = unshred_variant(&variant)?;
+    let unshredded = Arc::new(unshredded.into_inner()) as ArrayRef;
+    cast_struct_array_to_fields(&unshredded, target_fields, cast_options)
+}
+
+fn cast_struct_array_with_schema_evolution(
+    source: &ArrayRef,
+    target_fields: &[Arc<Field>],
+    cast_options: &CastOptions,
+) -> Result<ArrayRef> {
+    if source.data_type() == &DataType::Null
+        || (!source.is_empty() && source.null_count() == source.len())
+    {
+        return Ok(new_null_array(
+            &DataType::Struct(target_fields.to_vec().into()),
+            source.len(),
+        ));
+    }
+
+    let Some(source_struct) = source.as_any().downcast_ref::<StructArray>() else {
+        return exec_err!(
+            "Cannot cast column of type {} to struct type. Source must be a struct to cast to struct.",
+            source.data_type()
+        );
+    };
+    validate_struct_compatibility_with_variant(source_struct.fields(), target_fields)?;
+    cast_struct_array_to_fields(source, target_fields, cast_options)
+}
+
+fn cast_struct_array_to_fields(
+    source: &ArrayRef,
+    target_fields: &[Arc<Field>],
+    cast_options: &CastOptions,
+) -> Result<ArrayRef> {
+    let Some(source_struct) = source.as_any().downcast_ref::<StructArray>() else {
+        return exec_err!(
+            "Cannot cast column of type {} to struct type. Source must be a struct to cast to struct.",
+            source.data_type()
+        );
+    };
+    let num_rows = source.len();
+    let mut fields: Vec<Arc<Field>> = Vec::with_capacity(target_fields.len());
+    let mut arrays: Vec<ArrayRef> = Vec::with_capacity(target_fields.len());
+
+    for target_child in target_fields {
+        fields.push(Arc::clone(target_child));
+        match source_struct.column_by_name(target_child.name()) {
+            Some(source_child) => {
+                arrays.push(cast_array_with_schema_evolution(
+                    source_child,
+                    target_child.as_ref(),
+                    cast_options,
+                )?);
+            }
+            None => arrays.push(new_null_array(target_child.data_type(), num_rows)),
+        }
+    }
+
+    Ok(Arc::new(StructArray::new(
+        fields.into(),
+        arrays,
+        source_struct.nulls().cloned(),
+    )))
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used, clippy::unwrap_used)]
+mod tests {
+    use datafusion::arrow::array::{BinaryViewArray, Int64Array, StringArray};
+    use datafusion::arrow::buffer::OffsetBuffer;
+    use parquet_variant_compute::{json_to_variant, shred_variant, variant_to_json, VariantType};
+
+    use super::*;
+
+    fn variant_field(name: &str) -> Field {
+        Field::new(
+            name,
+            DataType::Struct(
+                vec![
+                    Field::new("metadata", DataType::Binary, false),
+                    Field::new("value", DataType::Binary, false),
+                ]
+                .into(),
+            ),
+            true,
+        )
+        .with_extension_type(VariantType)
+    }
+
+    #[test]
+    fn cast_array_unshreds_variant_without_value_field() -> Result<()> {
+        let metadata = BinaryViewArray::from_iter_values(vec![&[0x01, 0x00, 0x00][..]]);
+        let typed_value = Int64Array::from(vec![Some(42)]);
+        let source = Arc::new(StructArray::new(
+            vec![
+                Arc::new(Field::new("metadata", DataType::BinaryView, false)),
+                Arc::new(Field::new("typed_value", DataType::Int64, true)),
+            ]
+            .into(),
+            vec![Arc::new(metadata), Arc::new(typed_value)],
+            None,
+        )) as ArrayRef;
+        let source_field = Field::new("payload", source.data_type().clone(), true);
+        let target_field = variant_field("payload");
+
+        assert!(can_cast_field_with_schema_evolution(
+            &source_field,
+            &target_field
+        )?);
+        let casted =
+            cast_array_with_schema_evolution(&source, &target_field, &DEFAULT_CAST_OPTIONS)?;
+
+        assert_eq!(casted.data_type(), target_field.data_type());
+        let json = variant_to_json(&casted)?;
+        assert_eq!(json.value(0), "42");
+        Ok(())
+    }
+
+    #[test]
+    fn cast_array_unshreds_nested_variant() -> Result<()> {
+        let json =
+            Arc::new(StringArray::from(vec![Some(r#"{"id":1,"name":"alice"}"#)])) as ArrayRef;
+        let variant = json_to_variant(&json)?;
+        let shredding_type = DataType::Struct(
+            vec![
+                Field::new("id", DataType::Int64, true),
+                Field::new("name", DataType::Utf8, true),
+            ]
+            .into(),
+        );
+        let shredded = shred_variant(&variant, &shredding_type)?;
+        let source_payload = Arc::new(shredded.into_inner()) as ArrayRef;
+        let source = Arc::new(StructArray::new(
+            vec![Arc::new(Field::new(
+                "payload",
+                source_payload.data_type().clone(),
+                true,
+            ))]
+            .into(),
+            vec![source_payload],
+            None,
+        )) as ArrayRef;
+        let target_payload = Arc::new(variant_field("payload"));
+        let target_field = Field::new("root", DataType::Struct(vec![target_payload].into()), true);
+
+        let casted =
+            cast_array_with_schema_evolution(&source, &target_field, &DEFAULT_CAST_OPTIONS)?;
+        let casted_struct = casted
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .expect("struct array");
+        let payload = casted_struct
+            .column_by_name("payload")
+            .expect("payload column");
+        let json = variant_to_json(payload)?;
+        let value: serde_json::Value = serde_json::from_str(json.value(0)).unwrap();
+
+        assert_eq!(value, serde_json::json!({"id": 1, "name": "alice"}));
+        Ok(())
+    }
+
+    #[test]
+    fn cast_array_unshreds_list_element_variant() -> Result<()> {
+        let json = Arc::new(StringArray::from(vec![Some("42")])) as ArrayRef;
+        let variant = json_to_variant(&json)?;
+        let shredded = shred_variant(&variant, &DataType::Int64)?;
+        let source_values = Arc::new(shredded.into_inner()) as ArrayRef;
+        let source = Arc::new(ListArray::new(
+            Arc::new(Field::new(
+                "element",
+                source_values.data_type().clone(),
+                true,
+            )),
+            OffsetBuffer::new(vec![0_i32, 1].into()),
+            source_values,
+            None,
+        )) as ArrayRef;
+        let target_field = Field::new(
+            "items",
+            DataType::List(Arc::new(variant_field("element"))),
+            true,
+        );
+
+        let casted =
+            cast_array_with_schema_evolution(&source, &target_field, &DEFAULT_CAST_OPTIONS)?;
+        let casted_list = casted
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .expect("list array");
+        let json = variant_to_json(casted_list.values())?;
+
+        assert_eq!(json.value(0), "42");
+        Ok(())
     }
 }

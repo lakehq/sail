@@ -18,7 +18,9 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
+use sail_function::aggregate::count_min_sketch::CountMinSketchFunction;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
+use sail_function::aggregate::hll_sketch::{HllSketchAggFunction, HllUnionAggFunction};
 use sail_function::aggregate::kurtosis::KurtosisFunction;
 use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
@@ -27,12 +29,17 @@ use sail_function::aggregate::percentile_disc::percentile_disc_udaf;
 use sail_function::aggregate::product::ProductFunction;
 use sail_function::aggregate::schema_of_variant_agg::SchemaOfVariantAggFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
+use sail_function::aggregate::theta_sketch::{
+    ThetaIntersectionAggFunction, ThetaSketchAggFunction, ThetaUnionAggFunction,
+};
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::scalar::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
-    get_arguments_and_null_treatment, get_null_treatment, AggFunction, AggFunctionInput,
+    count_min_sketch_args, get_arguments_and_null_treatment, get_null_treatment,
+    hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
+    theta_args_with_default_lg, AggFunction, AggFunctionInput,
 };
 use crate::function::transform_count_star_wildcard_expr;
 
@@ -524,6 +531,76 @@ fn approx_count_distinct(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     ))
 }
 
+fn hll_sketch_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let args = hll_args_with_default_lg(input.arguments, "hll_sketch_agg")?;
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(HllSketchAggFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
+fn hll_union_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let args = hll_union_args_with_default_allow_different_lg(input.arguments)?;
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(HllUnionAggFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
+fn count_min_sketch(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let args = count_min_sketch_args(input.arguments)?;
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(CountMinSketchFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
+fn theta_sketch_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let args = theta_args_with_default_lg(input.arguments, "theta_sketch_agg")?;
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(ThetaSketchAggFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
+fn theta_union_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    let args = theta_args_with_default_lg(input.arguments, "theta_union_agg")?;
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(ThetaUnionAggFunction::new())),
+        params: AggregateFunctionParams {
+            args,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
 /// Creates a list of built-in aggregate functions.
 /// This is used to create a hashmap that the resolver uses to look up
 /// aggregate functions by name.
@@ -562,7 +639,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("corr", F::default(correlation::corr_udaf)),
         ("count", F::custom(count)),
         ("count_if", F::custom(count_if)),
-        ("count_min_sketch", F::unknown("count_min_sketch")),
+        ("count_min_sketch", F::custom(count_min_sketch)),
         ("covar_pop", F::default(covariance::covar_pop_udaf)),
         ("covar_samp", F::default(covariance::covar_samp_udaf)),
         ("every", F::default(bool_and_or::bool_and_udaf)),
@@ -571,8 +648,14 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("grouping", F::default(grouping::grouping_udaf)),
         ("grouping_id", F::unknown("grouping_id")),
         ("histogram_numeric", F::custom(histogram_numeric)),
-        ("hll_sketch_agg", F::unknown("hll_sketch_agg")),
-        ("hll_union_agg", F::unknown("hll_union_agg")),
+        ("hll_sketch_agg", F::custom(hll_sketch_agg)),
+        ("hll_union_agg", F::custom(hll_union_agg)),
+        (
+            "theta_intersection_agg",
+            F::default(|| Arc::new(AggregateUDF::from(ThetaIntersectionAggFunction::new()))),
+        ),
+        ("theta_sketch_agg", F::custom(theta_sketch_agg)),
+        ("theta_union_agg", F::custom(theta_union_agg)),
         ("kurtosis", F::custom(kurtosis)),
         ("last", F::custom(last_value)),
         ("last_value", F::custom(last_value)),

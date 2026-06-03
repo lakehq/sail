@@ -535,7 +535,7 @@ impl PlanFormatter for SparkPlanFormatter {
                 }
                 Ok(format!("{name}({arg})"))
             }
-            "from_csv" | "any_value" | "first_value" | "last_value" => {
+            "from_csv" | "to_csv" | "any_value" | "first_value" | "last_value" => {
                 let (arg, _) = arguments.at_least_one()?;
                 Ok(format!("{name}({arg})"))
             }
@@ -629,6 +629,7 @@ impl PlanFormatter for SparkPlanFormatter {
                 Ok(format!("{}({arguments})", name.to_lowercase()))
             }
             "position" | "locate" => Ok(append_start_pos_if_arglen_eq(2, 1, name, arguments)),
+            "regexp_extract_all" => Ok(append_start_pos_if_arglen_eq(2, 1, name, arguments)),
             "regexp_instr" => Ok(append_start_pos_if_arglen_eq(2, 0, name, arguments)),
             "regexp_replace" => Ok(append_start_pos_if_arglen_eq(3, 1, name, arguments)),
             // When the data type being exploded is `ExplodeDataType::List`, use "col" as the column name.
@@ -1011,6 +1012,22 @@ mod tests {
         assert_eq!(
             formatter.data_type_to_simple_string(&DataType::Time64(TimeUnit::Nanosecond))?,
             "time(9)"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_csv_function_to_string_omits_options() -> PlanResult<()> {
+        let formatter = SparkPlanFormatter;
+
+        assert_eq!(
+            formatter.function_to_string(
+                "to_csv",
+                vec!["named_struct(a, 1, b, 2)", "map(sep, |)"],
+                false,
+            )?,
+            "to_csv(named_struct(a, 1, b, 2))"
         );
 
         Ok(())
