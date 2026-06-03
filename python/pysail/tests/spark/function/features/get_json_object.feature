@@ -6,13 +6,6 @@ Feature: get_json_object extracts values via a Spark JSONPath
   # bracket notation (`$['a']`). A bare `$` returns the whole document. The
   # result is the matched value rendered as text; a path that does not match (or
   # cannot be parsed) returns NULL.
-  #
-  # NOTE: the single-quoted bracket scenarios below are tagged `@sail-bug`. The
-  # parser supports `$['a']`, but Sail's SQL parser treats `''` (the escaped
-  # single quote) as adjacent string-literal concatenation, so `'$[''a'']'`
-  # reaches the function as `$[a]` rather than `$['a']` and returns NULL. They
-  # pass on Spark JVM (and via the DataFrame API); the `''` escaping gap is a
-  # separate SQL-parser issue.
 
   Rule: Dot notation walks object keys
 
