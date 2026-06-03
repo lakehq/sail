@@ -1,15 +1,3 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -17,7 +5,7 @@ use datafusion::arrow::array::{
     StructArray,
 };
 use datafusion::arrow::compute::{can_cast_types, cast_with_options, CastOptions};
-use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{exec_err, DataFusionError, Result, ScalarValue};
@@ -28,14 +16,13 @@ use datafusion::physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapter
 use datafusion::physical_plan::ColumnarValue;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
 use parquet_variant_compute::{unshred_variant, VariantArray};
-use sail_common_datafusion::variant::{
-    is_binary_variant_field, is_variant_arrow_field, is_variant_storage_type,
-};
+
+use crate::variant::{is_binary_variant_field, is_variant_arrow_field, is_variant_storage_type};
 
 #[derive(Debug)]
-pub struct IcebergPhysicalExprAdapterFactory {}
+pub struct SchemaEvolutionPhysicalExprAdapterFactory {}
 
-impl PhysicalExprAdapterFactory for IcebergPhysicalExprAdapterFactory {
+impl PhysicalExprAdapterFactory for SchemaEvolutionPhysicalExprAdapterFactory {
     fn create(
         &self,
         logical_file_schema: SchemaRef,
@@ -44,7 +31,7 @@ impl PhysicalExprAdapterFactory for IcebergPhysicalExprAdapterFactory {
         let (column_mapping, default_values) =
             create_column_mapping(&logical_file_schema, &physical_file_schema);
 
-        Ok(Arc::new(IcebergPhysicalExprAdapter {
+        Ok(Arc::new(SchemaEvolutionPhysicalExprAdapter {
             logical_file_schema,
             physical_file_schema,
             column_mapping,
@@ -54,8 +41,8 @@ impl PhysicalExprAdapterFactory for IcebergPhysicalExprAdapterFactory {
 }
 
 fn create_column_mapping(
-    logical_schema: &ArrowSchema,
-    physical_schema: &ArrowSchema,
+    logical_schema: &Schema,
+    physical_schema: &Schema,
 ) -> (Vec<Option<usize>>, Vec<Option<ScalarValue>>) {
     let mut column_mapping = Vec::with_capacity(logical_schema.fields().len());
     let mut default_values = Vec::with_capacity(logical_schema.fields().len());
@@ -88,16 +75,16 @@ fn create_column_mapping(
 }
 
 #[derive(Debug, Clone)]
-struct IcebergPhysicalExprAdapter {
+struct SchemaEvolutionPhysicalExprAdapter {
     logical_file_schema: SchemaRef,
     physical_file_schema: SchemaRef,
     column_mapping: Vec<Option<usize>>,
     default_values: Vec<Option<ScalarValue>>,
 }
 
-impl PhysicalExprAdapter for IcebergPhysicalExprAdapter {
+impl PhysicalExprAdapter for SchemaEvolutionPhysicalExprAdapter {
     fn rewrite(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
-        let rewriter = IcebergPhysicalExprRewriter {
+        let rewriter = SchemaEvolutionPhysicalExprRewriter {
             logical_file_schema: &self.logical_file_schema,
             physical_file_schema: &self.physical_file_schema,
             column_mapping: &self.column_mapping,
@@ -108,14 +95,14 @@ impl PhysicalExprAdapter for IcebergPhysicalExprAdapter {
     }
 }
 
-struct IcebergPhysicalExprRewriter<'a> {
-    logical_file_schema: &'a ArrowSchema,
-    physical_file_schema: &'a ArrowSchema,
+struct SchemaEvolutionPhysicalExprRewriter<'a> {
+    logical_file_schema: &'a Schema,
+    physical_file_schema: &'a Schema,
     column_mapping: &'a [Option<usize>],
     default_values: &'a [Option<ScalarValue>],
 }
 
-impl<'a> IcebergPhysicalExprRewriter<'a> {
+impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
     fn rewrite_expr(
         &self,
         expr: Arc<dyn PhysicalExpr>,
@@ -207,8 +194,10 @@ impl<'a> IcebergPhysicalExprRewriter<'a> {
         let logical_field_index = match self.logical_file_schema.index_of(column.name()) {
             Ok(index) => index,
             Err(_) => {
-                if let Ok(_physical_field) =
-                    self.physical_file_schema.field_with_name(column.name())
+                if self
+                    .physical_file_schema
+                    .field_with_name(column.name())
+                    .is_ok()
                 {
                     return Ok(Transformed::no(expr));
                 } else {
@@ -294,12 +283,14 @@ impl<'a> IcebergPhysicalExprRewriter<'a> {
             );
         }
 
-        Ok(Transformed::yes(Arc::new(IcebergCastColumnExpr::new(
-            column_expr,
-            Arc::new(physical_field.clone()),
-            Arc::new(logical_field.clone()),
-            None,
-        ))))
+        Ok(Transformed::yes(Arc::new(
+            SchemaEvolutionCastColumnExpr::new(
+                column_expr,
+                Arc::new(physical_field.clone()),
+                Arc::new(logical_field.clone()),
+                None,
+            ),
+        )))
     }
 }
 
@@ -393,14 +384,14 @@ fn validate_struct_compatibility_with_variant(
 }
 
 #[derive(Debug, Clone, Eq)]
-pub struct IcebergCastColumnExpr {
+pub struct SchemaEvolutionCastColumnExpr {
     expr: Arc<dyn PhysicalExpr>,
     input_field: Arc<Field>,
     target_field: Arc<Field>,
     cast_options: CastOptions<'static>,
 }
 
-impl PartialEq for IcebergCastColumnExpr {
+impl PartialEq for SchemaEvolutionCastColumnExpr {
     fn eq(&self, other: &Self) -> bool {
         self.expr.eq(&other.expr)
             && self.input_field.eq(&other.input_field)
@@ -409,7 +400,7 @@ impl PartialEq for IcebergCastColumnExpr {
     }
 }
 
-impl std::hash::Hash for IcebergCastColumnExpr {
+impl std::hash::Hash for SchemaEvolutionCastColumnExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.expr.hash(state);
         self.input_field.hash(state);
@@ -418,18 +409,18 @@ impl std::hash::Hash for IcebergCastColumnExpr {
     }
 }
 
-impl std::fmt::Display for IcebergCastColumnExpr {
+impl std::fmt::Display for SchemaEvolutionCastColumnExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "ICEBERG_CAST_COLUMN({} AS {:?})",
+            "SCHEMA_EVOLUTION_CAST_COLUMN({} AS {:?})",
             self.expr,
             self.target_field.data_type()
         )
     }
 }
 
-impl IcebergCastColumnExpr {
+impl SchemaEvolutionCastColumnExpr {
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         input_field: Arc<Field>,
@@ -453,16 +444,16 @@ impl IcebergCastColumnExpr {
     }
 }
 
-impl PhysicalExpr for IcebergCastColumnExpr {
+impl PhysicalExpr for SchemaEvolutionCastColumnExpr {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
 
-    fn data_type(&self, _input_schema: &ArrowSchema) -> Result<DataType> {
+    fn data_type(&self, _input_schema: &Schema) -> Result<DataType> {
         Ok(self.target_field.data_type().clone())
     }
 
-    fn nullable(&self, _input_schema: &ArrowSchema) -> Result<bool> {
+    fn nullable(&self, _input_schema: &Schema) -> Result<bool> {
         Ok(self.target_field.is_nullable())
     }
 
@@ -491,7 +482,7 @@ impl PhysicalExpr for IcebergCastColumnExpr {
         }
     }
 
-    fn return_field(&self, _input_schema: &ArrowSchema) -> Result<Arc<Field>> {
+    fn return_field(&self, _input_schema: &Schema) -> Result<Arc<Field>> {
         Ok(Arc::clone(&self.target_field))
     }
 
@@ -505,7 +496,7 @@ impl PhysicalExpr for IcebergCastColumnExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         assert_eq!(children.len(), 1);
         let child = children.pop().ok_or_else(|| {
-            DataFusionError::Plan("IcebergCastColumnExpr requires a child".to_string())
+            DataFusionError::Plan("SchemaEvolutionCastColumnExpr requires a child".to_string())
         })?;
         Ok(Arc::new(Self::new(
             child,

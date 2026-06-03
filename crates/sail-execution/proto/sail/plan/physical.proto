@@ -68,11 +68,11 @@ message ExtendedPhysicalPlanNode {
 
 message ExtendedPhysicalExprNode {
   oneof ExprKind {
-    DeltaCastColumnExprNode delta_cast = 1;
+    CastColumnExprNode schema_evolution_cast = 1;
   }
 }
 
-message DeltaCastColumnExprNode {
+message CastColumnExprNode {
   bytes input_schema = 1;
   bytes target_schema = 2;
 }

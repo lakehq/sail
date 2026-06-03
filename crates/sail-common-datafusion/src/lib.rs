@@ -10,6 +10,7 @@ pub mod literal;
 pub mod logical_expr;
 pub mod logical_rewriter;
 pub mod rename;
+pub mod schema_evolution;
 pub mod session;
 pub mod streaming;
 pub mod system;

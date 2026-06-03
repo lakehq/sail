@@ -23,9 +23,9 @@ use datafusion::physical_plan::{
 use datafusion_common::{internal_err, DataFusionError, Result};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use object_store::ObjectMeta;
+use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 use url::Url;
 
-use crate::datasource::expr_adapter::IcebergPhysicalExprAdapterFactory;
 use crate::io::StoreContext;
 use crate::physical_plan::manifest_scan_exec::{COL_FILE_PATH, COL_FILE_SIZE_IN_BYTES};
 
@@ -168,7 +168,7 @@ impl ScanByDataFilesState {
 
         let file_scan_config = FileScanConfigBuilder::new(object_store_url, parquet_source)
             .with_file_groups(file_groups)
-            .with_expr_adapter(Some(Arc::new(IcebergPhysicalExprAdapterFactory {})
+            .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})
                 as Arc<dyn PhysicalExprAdapterFactory>))
             .build();
 
