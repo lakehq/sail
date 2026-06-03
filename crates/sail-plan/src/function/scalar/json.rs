@@ -1,5 +1,5 @@
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_common::ScalarValue;
 use datafusion_expr::{cast, expr, lit, when, Expr, ScalarUDF};
 use datafusion_functions::unicode::expr_fn as unicode_fn;
 use datafusion_spark::expr_fn::json_tuple as df_json_tuple;
@@ -14,21 +14,97 @@ use sail_function::scalar::json::{
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionBuilder as F, ScalarFunctionInput};
 
+/// Parse a Spark `get_json_object` JSONPath into the sequence of key/index
+/// arguments understood by `json_as_text` (`JsonPath::Key` for strings,
+/// `JsonPath::Index` for integers).
+///
+/// Supports the subset Spark accepts: a leading `$`, dot notation (`.key`),
+/// single-quoted bracket notation (`['key']`, which allows keys containing
+/// dots), and array indexing (`[0]`). A bare `$` selects the whole document
+/// (empty key list). Wildcards (`[*]`) and double-quoted brackets are not
+/// supported — Spark returns NULL for the latter — so they parse as `None`,
+/// letting the caller emit a NULL result like Spark.
+fn parse_json_path(path: &str) -> Option<Vec<expr::Expr>> {
+    let mut chars = path.chars().peekable();
+    if chars.next()? != '$' {
+        return None;
+    }
+    let mut keys = Vec::new();
+    while let Some(&c) = chars.peek() {
+        match c {
+            '.' => {
+                chars.next();
+                let mut key = String::new();
+                while let Some(&c) = chars.peek() {
+                    if c == '.' || c == '[' {
+                        break;
+                    }
+                    key.push(c);
+                    chars.next();
+                }
+                if key.is_empty() {
+                    return None;
+                }
+                keys.push(lit(key));
+            }
+            '[' => {
+                chars.next();
+                match chars.peek() {
+                    Some('\'') => {
+                        chars.next();
+                        let mut key = String::new();
+                        loop {
+                            match chars.next() {
+                                Some('\'') => break,
+                                Some(c) => key.push(c),
+                                None => return None,
+                            }
+                        }
+                        if chars.next()? != ']' {
+                            return None;
+                        }
+                        keys.push(lit(key));
+                    }
+                    Some(c) if c.is_ascii_digit() => {
+                        let mut index = String::new();
+                        while let Some(&c) = chars.peek() {
+                            if c == ']' {
+                                break;
+                            }
+                            index.push(c);
+                            chars.next();
+                        }
+                        if chars.next()? != ']' {
+                            return None;
+                        }
+                        keys.push(lit(index.parse::<i64>().ok()?));
+                    }
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        }
+    }
+    Some(keys)
+}
+
 fn get_json_object(expr: expr::Expr, path: expr::Expr) -> PlanResult<expr::Expr> {
     let paths: Vec<expr::Expr> = match path {
-        expr::Expr::Literal(ScalarValue::Utf8(Some(value)), _metadata)
-            if value.starts_with("$.") =>
-        {
-            Ok::<_, DataFusionError>(value.replacen("$.", "", 1).split(".").map(lit).collect())
+        expr::Expr::Literal(ScalarValue::Utf8(Some(value)), _metadata) => {
+            match parse_json_path(&value) {
+                // Spark returns NULL for paths it cannot parse (including the empty string and paths not anchored at `$`).
+                Some(keys) => keys,
+                None => return Ok(lit(ScalarValue::Utf8(None))),
+            }
         }
         // FIXME: json_as_text_udf for array of paths with subpaths is not implemented, so only top level keys supported
-        _ => Ok(vec![when(
+        _ => vec![when(
             path.clone().like(lit("$.%")),
             unicode_fn::substr(path, lit(3)),
         )
         .when(lit(true), lit(""))
-        .end()?]),
-    }?;
+        .end()?],
+    };
     let mut args = Vec::with_capacity(1 + paths.len());
     args.push(expr);
     args.extend(paths);
