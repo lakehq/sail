@@ -19,6 +19,12 @@
 +-----------------------------------------------+
 |2025-11-03                                     |
 +-----------------------------------------------+
+>>> spark.sql("SELECT to_date(TIMESTAMP '2025-11-03 23:30:45.123456', 'invalid_format')").show(truncate=False)
++---------------------------------------------------------------+
+|to_date(TIMESTAMP '2025-11-03 23:30:45.123456', invalid_format)|
++---------------------------------------------------------------+
+|2025-11-03                                                     |
++---------------------------------------------------------------+
 >>> df = spark.createDataFrame([("2025-11-02 23:30:45.123456",), ("2025-11-02 23:30:45.123456-08:00",), ("2025-11-02 23:30:45.123456+01:00",)], ["ts"])
 >>> df = df.select("ts", sf.expr("CAST(ts AS TIMESTAMP_NTZ)").alias("ts_ntz"), sf.expr("CAST(ts AS TIMESTAMP_LTZ)").alias("ts_ltz"))
 >>> df.select("ts", "ts_ntz", "ts_ltz", sf.to_date("ts_ntz").alias("date_ntz"), sf.to_date("ts_ltz").alias("date_ltz")).show(truncate=False)
