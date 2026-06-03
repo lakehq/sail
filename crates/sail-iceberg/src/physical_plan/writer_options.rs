@@ -14,6 +14,7 @@ use std::collections::HashMap;
 
 use datafusion_common::{DataFusionError, Result};
 use sail_common_datafusion::datasource::OptionLayer;
+use sail_common_datafusion::variant::DEFAULT_VARIANT_INFERENCE_NODE_BUDGET;
 use sail_data_source::options::gen::IcebergWriteOptions;
 use serde::{Deserialize, Serialize};
 
@@ -159,6 +160,7 @@ impl IcebergWriterExecOptions {
         Ok(VariantShreddingConfig {
             enabled,
             inference_buffer_size,
+            inference_node_budget: DEFAULT_VARIANT_INFERENCE_NODE_BUDGET,
         })
     }
 }

@@ -13,7 +13,6 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use arrow_schema::extension::ExtensionType;
 use datafusion::arrow::array::{
     new_null_array, Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, MapArray,
     StructArray,
@@ -29,7 +28,10 @@ use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapterFactory};
 use datafusion::physical_plan::ColumnarValue;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
-use parquet_variant_compute::{unshred_variant, VariantArray, VariantType};
+use parquet_variant_compute::{unshred_variant, VariantArray};
+use sail_common_datafusion::variant::{
+    is_binary_variant_field, is_variant_arrow_field, is_variant_storage_type,
+};
 
 #[derive(Debug)]
 pub struct DeltaPhysicalExprAdapterFactory {}
@@ -391,31 +393,6 @@ fn validate_struct_compatibility_with_variant(
     Ok(())
 }
 
-fn is_variant_arrow_field(field: &Field) -> bool {
-    field.extension_type_name() == Some(VariantType::NAME)
-}
-
-fn is_variant_storage_type(data_type: &DataType) -> bool {
-    let DataType::Struct(fields) = data_type else {
-        return false;
-    };
-    let has_metadata = fields
-        .iter()
-        .any(|field| field.name() == "metadata" && is_binary_variant_field(field));
-    let has_value = fields
-        .iter()
-        .any(|field| field.name() == "value" && is_binary_variant_field(field));
-    let has_typed_value = fields.iter().any(|field| field.name() == "typed_value");
-    has_metadata && (has_value || has_typed_value)
-}
-
-fn is_binary_variant_field(field: &Field) -> bool {
-    matches!(
-        field.data_type(),
-        DataType::Binary | DataType::LargeBinary | DataType::BinaryView
-    )
-}
-
 #[derive(Debug, Clone, Eq)]
 pub struct DeltaCastColumnExpr {
     expr: Arc<dyn PhysicalExpr>,
@@ -743,7 +720,7 @@ fn cast_struct_array_to_fields(
 mod tests {
     use datafusion::arrow::array::{BinaryViewArray, Int64Array, StringArray};
     use datafusion::arrow::buffer::OffsetBuffer;
-    use parquet_variant_compute::{json_to_variant, shred_variant, variant_to_json};
+    use parquet_variant_compute::{json_to_variant, shred_variant, variant_to_json, VariantType};
 
     use super::*;
 

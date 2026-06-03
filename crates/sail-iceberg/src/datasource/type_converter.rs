@@ -23,6 +23,9 @@ use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet_variant_compute::VariantType;
 use rust_decimal::prelude::ToPrimitive;
 use sail_common::spec::{SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME};
+use sail_common_datafusion::variant::{
+    is_variant_arrow_field, is_variant_storage_type as is_variant_arrow_storage_type,
+};
 use serde_json;
 
 use crate::spec::types::values::Literal;
@@ -180,31 +183,6 @@ pub fn arrow_field_to_iceberg(field: &ArrowField) -> Result<NestedField> {
 
 fn is_iceberg_variant_type(iceberg_type: &Type) -> bool {
     matches!(iceberg_type, Type::Primitive(PrimitiveType::Variant))
-}
-
-fn is_variant_arrow_field(field: &ArrowField) -> bool {
-    field.extension_type_name() == Some(VariantType::NAME)
-}
-
-fn is_variant_arrow_storage_type(arrow_type: &ArrowDataType) -> bool {
-    let ArrowDataType::Struct(fields) = arrow_type else {
-        return false;
-    };
-    let has_metadata = fields
-        .iter()
-        .any(|field| field.name() == "metadata" && is_binary_variant_field(field));
-    let has_value = fields
-        .iter()
-        .any(|field| field.name() == "value" && is_binary_variant_field(field));
-    let has_typed_value = fields.iter().any(|field| field.name() == "typed_value");
-    has_metadata && (has_value || has_typed_value)
-}
-
-fn is_binary_variant_field(field: &ArrowField) -> bool {
-    matches!(
-        field.data_type(),
-        ArrowDataType::Binary | ArrowDataType::LargeBinary | ArrowDataType::BinaryView
-    )
 }
 
 /// Convert Iceberg type to Arrow data type

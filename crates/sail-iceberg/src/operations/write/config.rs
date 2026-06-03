@@ -15,24 +15,10 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use parquet::file::properties::WriterProperties;
 use sail_common_datafusion::catalog::CatalogPartitionField;
+pub use sail_common_datafusion::variant::VariantShreddingConfig;
 
 use crate::spec::partition::UnboundPartitionSpec;
 use crate::spec::Schema as IcebergSchema;
-
-#[derive(Debug, Clone)]
-pub struct VariantShreddingConfig {
-    pub enabled: bool,
-    pub inference_buffer_size: usize,
-}
-
-impl Default for VariantShreddingConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            inference_buffer_size: 100,
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct WriterConfig {

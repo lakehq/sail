@@ -7605,6 +7605,7 @@ dependencies = [
 name = "sail-common-datafusion"
 version = "0.6.3"
 dependencies = [
+ "arrow-schema",
  "async-trait",
  "chrono",
  "datafusion",
@@ -7614,6 +7615,7 @@ dependencies = [
  "futures",
  "lazy_static",
  "lexical-core",
+ "parquet-variant",
  "parquet-variant-compute",
  "parquet-variant-json",
  "pin-project-lite",

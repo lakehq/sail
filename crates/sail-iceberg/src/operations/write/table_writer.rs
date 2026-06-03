@@ -208,6 +208,7 @@ impl IcebergTableWriter {
             &self.config.table_schema,
             &batches,
             self.config.variant_shredding.inference_buffer_size,
+            self.config.variant_shredding.inference_node_budget,
         )?;
         let plan = (!plan.is_noop()).then_some(plan);
         let physical_batches = batches
