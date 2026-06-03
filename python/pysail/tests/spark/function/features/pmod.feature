@@ -77,7 +77,7 @@ Feature: pmod (positive modulo) honors ANSI mode and Spark semantics
         """
         SELECT pmod(10, 0) AS result
         """
-      Then query error .*
+      Then query error (?i)by zero
 
     Scenario: pmod negative dividend by 0 errors under ANSI on
       Given config spark.sql.ansi.enabled = true
@@ -85,7 +85,7 @@ Feature: pmod (positive modulo) honors ANSI mode and Spark semantics
         """
         SELECT pmod(-7, 0) AS result
         """
-      Then query error .*
+      Then query error (?i)by zero
 
   Rule: Divide by zero under ANSI off returns NULL
 
@@ -114,3 +114,31 @@ Feature: pmod (positive modulo) honors ANSI mode and Spark semantics
         | 1      |
         | NULL   |
         | 3      |
+
+  Rule: FLOAT/DOUBLE mixed with DECIMAL coerces the result to DOUBLE
+
+    # Spark widens `float`/`double` + `decimal` to DOUBLE, so the result is a
+    # double (e.g. `1.5`), not a decimal. Sail instead widens to DECIMAL, which
+    # changes the result type and — when the double operand is Infinity/NaN —
+    # raises a spurious "cannot cast to Decimal128 ... overflow" error instead
+    # of returning the float result.
+
+    @sail-bug
+    Scenario: double pmod decimal returns a double
+      When query
+        """
+        SELECT pmod(CAST(5.5 AS DOUBLE), 2.0) AS result
+        """
+      Then query result
+        | result |
+        | 1.5    |
+
+    @sail-bug
+    Scenario: infinity double pmod decimal returns NaN not an error
+      When query
+        """
+        SELECT pmod(CAST('Infinity' AS DOUBLE), 2.0) AS result
+        """
+      Then query result
+        | result |
+        | NaN    |
