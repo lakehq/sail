@@ -2942,6 +2942,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
 }
 
 impl RemoteExecutionCodec {
+    #[expect(clippy::type_complexity)]
     fn try_decode_cast_column_expr(
         &self,
         node: CastColumnExprNode,
