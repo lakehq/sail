@@ -43,11 +43,11 @@ Feature: regexp_extract_all() extracts all regex capture group matches from stri
     Scenario: regexp_extract_all without idx renders the synthesized idx=1 in the column name
       When query
       """
-      SELECT regexp_extract_all('1a 2b 14m', r'(\d+)([a-z]+)')
+      SELECT regexp_extract_all('1a 2b 14m', r'([0-9]+)([a-z]+)')
       """
       Then query result
-      | regexp_extract_all(1a 2b 14m, (\d+)([a-z]+), 1) |
-      | [1, 2, 14]                                      |
+      | regexp_extract_all(1a 2b 14m, ([0-9]+)([a-z]+), 1) |
+      | [1, 2, 14]                                         |
 
   Rule: No match and edge cases
 
