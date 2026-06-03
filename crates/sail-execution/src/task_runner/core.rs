@@ -6,6 +6,7 @@ use datafusion::common::internal_err;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion_proto::physical_plan::AsExecutionPlan;
@@ -13,7 +14,7 @@ use datafusion_proto::protobuf::PhysicalPlanNode;
 use log::debug;
 use prost::Message;
 use sail_common_datafusion::error::CommonErrorCause;
-use sail_delta_lake::physical_plan::DeltaPhysicalExprAdapterFactory;
+use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::{Actor, ActorContext};
 use sail_telemetry::telemetry::global_metrics;
@@ -120,7 +121,8 @@ impl TaskRunner {
             if let Some(ds) = node.as_any().downcast_ref::<DataSourceExec>() {
                 if let Some((base_config, _parquet)) = ds.downcast_to_file_source::<ParquetSource>()
                 {
-                    let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
+                    let adapter_factory: Arc<dyn PhysicalExprAdapterFactory> =
+                        Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {});
                     let builder = FileScanConfigBuilder::from(base_config.clone())
                         .with_expr_adapter(Some(adapter_factory));
                     let new_exec = DataSourceExec::from_data_source(builder.build());

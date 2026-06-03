@@ -1,19 +1,5 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
-use std::fmt::Debug;
 use std::sync::Arc;
 
-use arrow_schema::extension::ExtensionType;
 use datafusion::arrow::array::{
     new_null_array, Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, MapArray,
     StructArray,
@@ -29,21 +15,23 @@ use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapterFactory};
 use datafusion::physical_plan::ColumnarValue;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
-use parquet_variant_compute::{unshred_variant, VariantArray, VariantType};
+use parquet_variant_compute::{unshred_variant, VariantArray};
+
+use crate::variant::{is_binary_variant_field, is_variant_arrow_field, is_variant_storage_type};
 
 #[derive(Debug)]
-pub struct DeltaPhysicalExprAdapterFactory {}
+pub struct SchemaEvolutionPhysicalExprAdapterFactory {}
 
-impl PhysicalExprAdapterFactory for DeltaPhysicalExprAdapterFactory {
+impl PhysicalExprAdapterFactory for SchemaEvolutionPhysicalExprAdapterFactory {
     fn create(
         &self,
         logical_file_schema: SchemaRef,
         physical_file_schema: SchemaRef,
     ) -> Result<Arc<dyn PhysicalExprAdapter>> {
         let (column_mapping, default_values) =
-            Self::create_column_mapping(&logical_file_schema, &physical_file_schema);
+            create_column_mapping(&logical_file_schema, &physical_file_schema);
 
-        Ok(Arc::new(DeltaPhysicalExprAdapter {
+        Ok(Arc::new(SchemaEvolutionPhysicalExprAdapter {
             logical_file_schema,
             physical_file_schema,
             column_mapping,
@@ -52,48 +40,51 @@ impl PhysicalExprAdapterFactory for DeltaPhysicalExprAdapterFactory {
     }
 }
 
-impl DeltaPhysicalExprAdapterFactory {
-    fn create_column_mapping(
-        logical_schema: &Schema,
-        physical_schema: &Schema,
-    ) -> (Vec<Option<usize>>, Vec<Option<ScalarValue>>) {
-        logical_schema
-            .fields()
-            .iter()
-            .map(
-                |logical_field| match physical_schema.index_of(logical_field.name()) {
-                    Ok(physical_index) => (Some(physical_index), None),
-                    Err(_) => {
-                        let default_value = if logical_field.is_nullable() {
-                            Some(
-                                ScalarValue::try_from(logical_field.data_type())
-                                    .unwrap_or(ScalarValue::Null),
-                            )
-                        } else {
-                            Some(
-                                ScalarValue::new_zero(logical_field.data_type())
-                                    .unwrap_or(ScalarValue::Null),
-                            )
-                        };
-                        (None, default_value)
-                    }
-                },
-            )
-            .unzip()
+fn create_column_mapping(
+    logical_schema: &Schema,
+    physical_schema: &Schema,
+) -> (Vec<Option<usize>>, Vec<Option<ScalarValue>>) {
+    let mut column_mapping = Vec::with_capacity(logical_schema.fields().len());
+    let mut default_values = Vec::with_capacity(logical_schema.fields().len());
+
+    for logical_field in logical_schema.fields() {
+        match physical_schema.index_of(logical_field.name()) {
+            Ok(physical_index) => {
+                column_mapping.push(Some(physical_index));
+                default_values.push(None);
+            }
+            Err(_) => {
+                column_mapping.push(None);
+                let default_value = if logical_field.is_nullable() {
+                    Some(
+                        ScalarValue::try_from(logical_field.data_type())
+                            .unwrap_or(ScalarValue::Null),
+                    )
+                } else {
+                    Some(
+                        ScalarValue::new_zero(logical_field.data_type())
+                            .unwrap_or(ScalarValue::Null),
+                    )
+                };
+                default_values.push(default_value);
+            }
+        }
     }
+
+    (column_mapping, default_values)
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct DeltaPhysicalExprAdapter {
+struct SchemaEvolutionPhysicalExprAdapter {
     logical_file_schema: SchemaRef,
     physical_file_schema: SchemaRef,
     column_mapping: Vec<Option<usize>>,
     default_values: Vec<Option<ScalarValue>>,
 }
 
-impl PhysicalExprAdapter for DeltaPhysicalExprAdapter {
+impl PhysicalExprAdapter for SchemaEvolutionPhysicalExprAdapter {
     fn rewrite(&self, expr: Arc<dyn PhysicalExpr>) -> Result<Arc<dyn PhysicalExpr>> {
-        let rewriter = DeltaPhysicalExprRewriter {
+        let rewriter = SchemaEvolutionPhysicalExprRewriter {
             logical_file_schema: &self.logical_file_schema,
             physical_file_schema: &self.physical_file_schema,
             column_mapping: &self.column_mapping,
@@ -104,14 +95,14 @@ impl PhysicalExprAdapter for DeltaPhysicalExprAdapter {
     }
 }
 
-struct DeltaPhysicalExprRewriter<'a> {
+struct SchemaEvolutionPhysicalExprRewriter<'a> {
     logical_file_schema: &'a Schema,
     physical_file_schema: &'a Schema,
     column_mapping: &'a [Option<usize>],
     default_values: &'a [Option<ScalarValue>],
 }
 
-impl<'a> DeltaPhysicalExprRewriter<'a> {
+impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
     fn rewrite_expr(
         &self,
         expr: Arc<dyn PhysicalExpr>,
@@ -122,7 +113,6 @@ impl<'a> DeltaPhysicalExprRewriter<'a> {
         if let Some(column) = expr.as_any().downcast_ref::<Column>() {
             return self.rewrite_column(Arc::clone(&expr), column);
         }
-
         Ok(Transformed::no(expr))
     }
 
@@ -204,8 +194,10 @@ impl<'a> DeltaPhysicalExprRewriter<'a> {
         let logical_field_index = match self.logical_file_schema.index_of(column.name()) {
             Ok(index) => index,
             Err(_) => {
-                if let Ok(_physical_field) =
-                    self.physical_file_schema.field_with_name(column.name())
+                if self
+                    .physical_file_schema
+                    .field_with_name(column.name())
+                    .is_ok()
                 {
                     return Ok(Transformed::no(expr));
                 } else {
@@ -242,12 +234,10 @@ impl<'a> DeltaPhysicalExprRewriter<'a> {
                     exec_err!("Non-nullable column '{}' is missing from physical schema and no default value provided", column.name())
                 }
             }
-            None => {
-                exec_err!(
-                    "Column mapping not found for logical field index {}",
-                    logical_field_index
-                )
-            }
+            None => exec_err!(
+                "Column mapping not found for logical field index {}",
+                logical_field_index
+            ),
         }
     }
 
@@ -293,12 +283,14 @@ impl<'a> DeltaPhysicalExprRewriter<'a> {
             );
         }
 
-        Ok(Transformed::yes(Arc::new(DeltaCastColumnExpr::new(
-            column_expr,
-            Arc::new(physical_field.clone()),
-            Arc::new(logical_field.clone()),
-            None,
-        ))))
+        Ok(Transformed::yes(Arc::new(
+            SchemaEvolutionCastColumnExpr::new(
+                column_expr,
+                Arc::new(physical_field.clone()),
+                Arc::new(logical_field.clone()),
+                None,
+            ),
+        )))
     }
 }
 
@@ -391,40 +383,15 @@ fn validate_struct_compatibility_with_variant(
     Ok(())
 }
 
-fn is_variant_arrow_field(field: &Field) -> bool {
-    field.extension_type_name() == Some(VariantType::NAME)
-}
-
-fn is_variant_storage_type(data_type: &DataType) -> bool {
-    let DataType::Struct(fields) = data_type else {
-        return false;
-    };
-    let has_metadata = fields
-        .iter()
-        .any(|field| field.name() == "metadata" && is_binary_variant_field(field));
-    let has_value = fields
-        .iter()
-        .any(|field| field.name() == "value" && is_binary_variant_field(field));
-    let has_typed_value = fields.iter().any(|field| field.name() == "typed_value");
-    has_metadata && (has_value || has_typed_value)
-}
-
-fn is_binary_variant_field(field: &Field) -> bool {
-    matches!(
-        field.data_type(),
-        DataType::Binary | DataType::LargeBinary | DataType::BinaryView
-    )
-}
-
 #[derive(Debug, Clone, Eq)]
-pub struct DeltaCastColumnExpr {
+pub struct SchemaEvolutionCastColumnExpr {
     expr: Arc<dyn PhysicalExpr>,
     input_field: Arc<Field>,
     target_field: Arc<Field>,
     cast_options: CastOptions<'static>,
 }
 
-impl PartialEq for DeltaCastColumnExpr {
+impl PartialEq for SchemaEvolutionCastColumnExpr {
     fn eq(&self, other: &Self) -> bool {
         self.expr.eq(&other.expr)
             && self.input_field.eq(&other.input_field)
@@ -433,7 +400,7 @@ impl PartialEq for DeltaCastColumnExpr {
     }
 }
 
-impl std::hash::Hash for DeltaCastColumnExpr {
+impl std::hash::Hash for SchemaEvolutionCastColumnExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.expr.hash(state);
         self.input_field.hash(state);
@@ -442,18 +409,18 @@ impl std::hash::Hash for DeltaCastColumnExpr {
     }
 }
 
-impl std::fmt::Display for DeltaCastColumnExpr {
+impl std::fmt::Display for SchemaEvolutionCastColumnExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "DELTA_CAST_COLUMN({} AS {:?})",
+            "SCHEMA_EVOLUTION_CAST_COLUMN({} AS {:?})",
             self.expr,
             self.target_field.data_type()
         )
     }
 }
 
-impl DeltaCastColumnExpr {
+impl SchemaEvolutionCastColumnExpr {
     pub fn new(
         expr: Arc<dyn PhysicalExpr>,
         input_field: Arc<Field>,
@@ -477,7 +444,7 @@ impl DeltaCastColumnExpr {
     }
 }
 
-impl PhysicalExpr for DeltaCastColumnExpr {
+impl PhysicalExpr for SchemaEvolutionCastColumnExpr {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -529,7 +496,7 @@ impl PhysicalExpr for DeltaCastColumnExpr {
     ) -> Result<Arc<dyn PhysicalExpr>> {
         assert_eq!(children.len(), 1);
         let child = children.pop().ok_or_else(|| {
-            DataFusionError::Plan("DeltaCastColumnExpr requires a child".to_string())
+            DataFusionError::Plan("SchemaEvolutionCastColumnExpr requires a child".to_string())
         })?;
         Ok(Arc::new(Self::new(
             child,
@@ -692,6 +659,15 @@ fn cast_struct_array_with_schema_evolution(
     target_fields: &[Arc<Field>],
     cast_options: &CastOptions,
 ) -> Result<ArrayRef> {
+    if source.data_type() == &DataType::Null
+        || (!source.is_empty() && source.null_count() == source.len())
+    {
+        return Ok(new_null_array(
+            &DataType::Struct(target_fields.to_vec().into()),
+            source.len(),
+        ));
+    }
+
     let Some(source_struct) = source.as_any().downcast_ref::<StructArray>() else {
         return exec_err!(
             "Cannot cast column of type {} to struct type. Source must be a struct to cast to struct.",
@@ -743,7 +719,7 @@ fn cast_struct_array_to_fields(
 mod tests {
     use datafusion::arrow::array::{BinaryViewArray, Int64Array, StringArray};
     use datafusion::arrow::buffer::OffsetBuffer;
-    use parquet_variant_compute::{json_to_variant, shred_variant, variant_to_json};
+    use parquet_variant_compute::{json_to_variant, shred_variant, variant_to_json, VariantType};
 
     use super::*;
 
