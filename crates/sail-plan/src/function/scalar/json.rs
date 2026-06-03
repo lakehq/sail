@@ -14,9 +14,10 @@ use sail_function::scalar::json::{
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionBuilder as F, ScalarFunctionInput};
 
-/// Parse a Spark `get_json_object` JSONPath into the sequence of key/index
-/// arguments understood by `json_as_text` (`JsonPath::Key` for strings,
-/// `JsonPath::Index` for integers).
+/// Parse a Spark `get_json_object` JSONPath into the literal arguments for
+/// `json_as_text`: a `Utf8` literal per object key and an `Int64` literal per
+/// array index (which `json_as_text` then reads as `JsonPath::Key` /
+/// `JsonPath::Index` respectively).
 ///
 /// Supports the subset Spark accepts: a leading `$`, dot notation (`.key`),
 /// single-quoted bracket notation (`['key']`, which allows keys containing

@@ -6,6 +6,13 @@ Feature: get_json_object extracts values via a Spark JSONPath
   # bracket notation (`$['a']`). A bare `$` returns the whole document. The
   # result is the matched value rendered as text; a path that does not match (or
   # cannot be parsed) returns NULL.
+  #
+  # NOTE: the single-quoted bracket scenarios below are tagged `@sail-bug`. The
+  # parser supports `$['a']`, but Sail's SQL parser treats `''` (the escaped
+  # single quote) as adjacent string-literal concatenation, so `'$[''a'']'`
+  # reaches the function as `$[a]` rather than `$['a']` and returns NULL. They
+  # pass on Spark JVM (and via the DataFrame API); the `''` escaping gap is a
+  # separate SQL-parser issue.
 
   Rule: Dot notation walks object keys
 
@@ -62,7 +69,7 @@ Feature: get_json_object extracts values via a Spark JSONPath
         SELECT get_json_object('{"a":1}', '$') AS result
         """
       Then query result
-        | result |
+        | result  |
         | {"a":1} |
 
     Scenario: whole array
@@ -123,6 +130,32 @@ Feature: get_json_object extracts values via a Spark JSONPath
         | result |
         | 9      |
 
+  Rule: Single-quoted bracket notation
+
+    # @sail-bug: the parser handles `['key']`, but Sail's SQL parser collapses
+    # the escaped `''`, so these reach the function as `$[a]` and return NULL.
+    # They pass on Spark JVM. Remove the tag once the SQL `''` escaping is fixed.
+
+    @sail-bug
+    Scenario: single-quoted bracket key
+      When query
+        """
+        SELECT get_json_object('{"a":1}', '$[''a'']') AS result
+        """
+      Then query result
+        | result |
+        | 1      |
+
+    @sail-bug
+    Scenario: single-quoted bracket key containing dots
+      When query
+        """
+        SELECT get_json_object('{"a.b":5}', '$[''a.b'']') AS result
+        """
+      Then query result
+        | result |
+        | 5      |
+
   Rule: Non-matching and invalid paths return NULL
 
     Scenario: missing key
@@ -156,6 +189,24 @@ Feature: get_json_object extracts values via a Spark JSONPath
       When query
         """
         SELECT get_json_object('{"a":1}', 'a') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: empty path returns NULL
+      When query
+        """
+        SELECT get_json_object('{"a":1}', '') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: dollar followed by empty key returns NULL
+      When query
+        """
+        SELECT get_json_object('{"a":1}', '$.') AS result
         """
       Then query result
         | result |
