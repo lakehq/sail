@@ -57,5 +57,8 @@ once_cell = { workspace = true }
 roaring = { workspace = true }
 crc32fast = { workspace = true }
 
+[dev-dependencies]
+parquet-variant-json = { workspace = true }
+
 [lints]
 workspace = true

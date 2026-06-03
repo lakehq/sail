@@ -7696,6 +7696,7 @@ dependencies = [
  "parquet",
  "parquet-variant",
  "parquet-variant-compute",
+ "parquet-variant-json",
  "percent-encoding",
  "regex",
  "roaring",

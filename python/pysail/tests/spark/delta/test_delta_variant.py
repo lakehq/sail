@@ -194,5 +194,7 @@ def test_delta_writer_shreds_variant_physical_data(spark, tmp_path: Path):
     assert [(row.id, row.a, row.b) for row in rows] == [(1, 1, "delta"), (2, 2, "lake")]
 
     stats = _first_add_stats(table_path)
-    assert "payload" not in stats.get("minValues", {})
-    assert "payload" not in stats.get("maxValues", {})
+    assert isinstance(stats.get("minValues", {}).get("payload"), str)
+    assert isinstance(stats.get("maxValues", {}).get("payload"), str)
+    assert stats.get("nullCount", {}).get("payload") == 0
+    assert "typed_value" not in json.dumps(stats, separators=(",", ":"))

@@ -711,10 +711,13 @@ mod tests {
     use object_store::memory::InMemory;
     use object_store::path::Path;
     use object_store::ObjectStore;
+    use parquet_variant::{Variant, VariantMetadata};
     use parquet_variant_compute::json_to_variant;
+    use parquet_variant_json::VariantToJson;
 
     use super::super::variant_shredding::VariantShreddingConfig;
     use super::{DeltaWriter, WriterConfig};
+    use crate::deletion_vector::z85::z85_decode;
     use crate::spec::DeltaError as DeltaTableError;
 
     fn make_batch(values: Vec<i32>, parts: Vec<&str>) -> Result<RecordBatch, DeltaTableError> {
@@ -747,6 +750,20 @@ mod tests {
         RecordBatch::try_new(schema, vec![id_arr, Arc::new(variant.into_inner())]).map_err(|e| {
             DeltaTableError::generic(format!("Failed to build test variant record batch: {e}"))
         })
+    }
+
+    fn decode_variant_stats_json(encoded: &str) -> Result<String, DeltaTableError> {
+        let decoded = z85_decode(encoded)?;
+        let metadata = VariantMetadata::try_new(&decoded).map_err(DeltaTableError::generic_err)?;
+        let metadata_size = metadata.size();
+        let value = decoded
+            .get(metadata_size..)
+            .ok_or_else(|| DeltaTableError::generic("invalid encoded Variant stats".to_string()))?;
+        let variant = Variant::try_new_with_metadata(metadata, value)
+            .map_err(DeltaTableError::generic_err)?;
+        variant
+            .to_json_string()
+            .map_err(DeltaTableError::generic_err)
     }
 
     fn make_writer() -> Result<DeltaWriter, DeltaTableError> {
@@ -810,10 +827,10 @@ mod tests {
     ) -> Result<(), DeltaTableError> {
         let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let table_path = Path::from("delta_table");
-        let batch1 = make_variant_batch(vec![Some(r#"{"a":1,"b":"delta"}"#)])?;
+        let batch1 = make_variant_batch(vec![Some(r#"{"a":1,"b":"delta","nested":{"c":7}}"#)])?;
         let batch2 = make_variant_batch(vec![
-            Some(r#"{"a":2,"b":"lake"}"#),
-            Some(r#"{"a":3,"c":"fallback"}"#),
+            Some(r#"{"a":2,"b":"lake","nested":{"c":9}}"#),
+            Some(r#"{"a":3,"c":"fallback","nested":{"c":11}}"#),
         ])?;
 
         let config = WriterConfig::new(
@@ -841,7 +858,25 @@ mod tests {
         assert_eq!(adds.len(), 1);
         let stats = adds[0].stats.as_deref().unwrap_or_default();
         assert!(stats.contains(r#""numRecords":3"#));
-        assert!(!stats.contains("payload"));
+        assert!(!stats.contains("typed_value"));
+        let stats: serde_json::Value =
+            serde_json::from_str(stats).map_err(DeltaTableError::generic_err)?;
+        assert_eq!(stats["nullCount"]["payload"], serde_json::json!(0));
+
+        let min_payload = stats["minValues"]["payload"]
+            .as_str()
+            .ok_or_else(|| DeltaTableError::generic("missing min payload stats".to_string()))?;
+        let max_payload = stats["maxValues"]["payload"]
+            .as_str()
+            .ok_or_else(|| DeltaTableError::generic("missing max payload stats".to_string()))?;
+        assert_eq!(
+            decode_variant_stats_json(min_payload)?,
+            r#"{"$['a']":1,"$['b']":"delta","$['nested']['c']":7}"#
+        );
+        assert_eq!(
+            decode_variant_stats_json(max_payload)?,
+            r#"{"$['a']":3,"$['b']":"lake","$['nested']['c']":11}"#
+        );
         Ok(())
     }
 
