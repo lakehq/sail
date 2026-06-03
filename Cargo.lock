@@ -7429,6 +7429,7 @@ dependencies = [
  "datafusion",
  "datafusion-common",
  "datafusion-expr",
+ "futures",
  "lazy_static",
  "log",
  "moka",
@@ -7638,6 +7639,7 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-prost-build",
+ "url",
 ]
 
 [[package]]

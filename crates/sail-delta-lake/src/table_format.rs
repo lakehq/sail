@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -8,10 +8,12 @@ use datafusion::common::{not_impl_err, plan_err, DFSchema, DataFusionError, Resu
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
+use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::column_features::ColumnFeatures;
 use sail_common_datafusion::datasource::{
-    find_path_in_options, MergeStrategy, OptionLayer, PhysicalSinkMode, RowLevelCommand,
-    RowLevelWriteInfo, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
+    arrow_schema_to_columns, find_path_in_options, location_to_url, MergeStrategy, OptionLayer,
+    PhysicalSinkMode, RowLevelCommand, RowLevelWriteInfo, SinkInfo, SourceInfo,
+    StorageTableMetadata, TableFormat, TableFormatRegistry,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_data_source::options::gen::{DeltaReadOptions, DeltaWriteOptions};
@@ -90,6 +92,57 @@ impl TableFormat for DeltaTableFormat {
         let options = DeltaReadOptions::resolve(ctx, options)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         infer_delta_logical_schema(ctx, table_url, schema, options).await
+    }
+
+    async fn load_storage_table_metadata(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+    ) -> Result<StorageTableMetadata> {
+        let table_url = location_to_url(path, self.name())?;
+        let object_store = runtime_env
+            .object_store_registry
+            .get_store(&table_url)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let table = open_table_with_object_store_and_table_config(
+            table_url.clone(),
+            object_store,
+            Default::default(),
+            DeltaSnapshotConfig {
+                require_files: false,
+                ..Default::default()
+            },
+        )
+        .await?;
+        let snapshot = table
+            .snapshot()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let metadata = snapshot.metadata();
+        let partition_columns: Vec<CatalogPartitionField> = metadata
+            .partition_columns()
+            .iter()
+            .cloned()
+            .map(|col| CatalogPartitionField {
+                column: col,
+                transform: None,
+            })
+            .collect();
+        let columns = arrow_schema_to_columns(snapshot.schema(), &partition_columns);
+
+        // Deduplicate and normalize ordering for Spark-compatible table properties.
+        let mut properties: BTreeMap<String, String> =
+            metadata.configuration().clone().into_iter().collect();
+        properties.insert("provider".to_string(), "delta".to_string());
+        properties.insert("location".to_string(), table_url.to_string());
+
+        Ok(StorageTableMetadata {
+            columns,
+            comment: metadata.description().map(ToString::to_string),
+            location: Some(table_url.to_string()),
+            provider: "delta".to_string(),
+            partition_columns,
+            properties: properties.into_iter().collect(),
+        })
     }
 
     async fn create_writer(
@@ -363,9 +416,7 @@ impl TableFormat for DeltaTableFormat {
         use crate::kernel::transaction::CommitBuilder;
         use crate::schema::protocol_for_metadata;
 
-        // Parse the location into a URL. Handles both absolute filesystem paths
-        // (e.g. `/tmp/table`) and fully-qualified URLs (`file://`, `s3://`, ...).
-        let url = parse_location_to_url(path)?;
+        let url = location_to_url(path, self.name())?;
 
         // The `DynamicObjectStoreRegistry` lazily registers schemes such as S3/GCS/ABFS,
         // so fetching the store from the registry doubles as the registration entry point.
@@ -484,7 +535,7 @@ impl TableFormat for DeltaTableFormat {
     ) -> Result<()> {
         use crate::kernel::transaction::CommitBuilder;
 
-        let url = parse_location_to_url(path)?;
+        let url = location_to_url(path, self.name())?;
         let object_store = runtime_env
             .object_store_registry
             .get_store(&url)
@@ -775,25 +826,6 @@ fn merge_protocol_for_upgrade(
 
     let upgraded = merged != *existing;
     (merged, upgraded)
-}
-
-/// Parse a location string into a [`Url`]. Accepts both fully-qualified URLs and
-/// local absolute file system paths.
-fn parse_location_to_url(path: &str) -> Result<Url> {
-    if let Ok(url) = Url::parse(path) {
-        // Reject "scheme-like" strings on Windows such as `c:/foo` that `Url::parse`
-        // accepts as opaque URLs.
-        if url.scheme().len() > 1 {
-            return Ok(url);
-        }
-    }
-    if std::path::Path::new(path).is_absolute() {
-        return Url::from_file_path(path)
-            .map_err(|_| DataFusionError::Plan(format!("invalid file path: {path}")));
-    }
-    Err(DataFusionError::Plan(format!(
-        "table location must be an absolute path or URL: {path}"
-    )))
 }
 
 impl DeltaTableFormat {

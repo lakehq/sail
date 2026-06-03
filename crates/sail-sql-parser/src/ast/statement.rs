@@ -140,6 +140,12 @@ pub enum Statement {
         from: Option<(Either<From, In>, ObjectName)>,
         like: (Like, StringLiteral),
     },
+    ShowTableProperties {
+        show: Show,
+        table_properties: Tblproperties,
+        name: ObjectName,
+        property_key: Option<(LeftParenthesis, PropertyKey, RightParenthesis)>,
+    },
     ShowCreateTable {
         show: Show,
         create: Create,

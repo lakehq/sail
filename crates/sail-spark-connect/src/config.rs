@@ -248,7 +248,8 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
         }
 
         if let Some(value) = config.get(SPARK_SQL_WAREHOUSE_DIR)? {
-            output.default_warehouse_directory = value.to_string();
+            output.default_warehouse_directory =
+                sail_plan::config::qualify_warehouse_directory(value);
         }
 
         if let Some(value) = config.get(SPARK_SQL_TIMESTAMP_TYPE)? {
