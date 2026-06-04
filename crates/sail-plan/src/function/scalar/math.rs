@@ -621,6 +621,11 @@ fn spark_unary_negate(arg: Expr, ansi_mode: bool, schema: &DFSchemaRef) -> Expr 
             };
             ScalarUDF::from(SparkNegative::new(ansi_mode)).call(vec![casted])
         }
+        // Floating-point negation never overflows and is identical in both ANSI
+        // modes, so use the native (vectorized, foldable) operator.
+        Ok(DataType::Float16 | DataType::Float32 | DataType::Float64) => {
+            Expr::Negative(Box::new(arg))
+        }
         // A negated numeric literal folds to a literal so constant-arg functions
         // (e.g. `ceil`/`floor` target scale) still see a constant; overflow
         // (`-INT_MIN`) can't fold and falls through to the runtime UDF.

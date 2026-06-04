@@ -160,6 +160,41 @@ Feature: unary minus (negative) honors ANSI overflow semantics
         | result    |
         | -Infinity |
 
+    Scenario: negate a float column negates each row
+      When query
+        """
+        SELECT id, -v AS result FROM VALUES
+          (0, CAST(1.5 AS DOUBLE)),
+          (1, CAST(-2.5 AS DOUBLE)),
+          (2, CAST(0.0 AS DOUBLE)),
+          (3, CAST(NULL AS DOUBLE))
+        AS t(id, v) ORDER BY id
+        """
+      Then query result
+        | id | result |
+        | 0  | -1.5   |
+        | 1  | 2.5    |
+        | 2  | -0.0   |
+        | 3  | NULL   |
+
+    Scenario: negate NaN is NaN by predicate
+      When query
+        """
+        SELECT isnan(-CAST('NaN' AS DOUBLE)) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: negate Infinity equals negative infinity by predicate
+      When query
+        """
+        SELECT -CAST('Infinity' AS DOUBLE) = CAST('-Infinity' AS DOUBLE) AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
   Rule: Day-time interval negation
 
     Scenario: negate a day-time interval
