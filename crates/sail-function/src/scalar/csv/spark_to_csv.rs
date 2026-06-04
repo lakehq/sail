@@ -6,7 +6,7 @@ use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
 use datafusion_common::{exec_err, plan_err, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
+use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::Volatility;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
@@ -32,6 +32,15 @@ pub struct SparkToCsv {
 #[derive(Debug)]
 struct SparkToCsvOptions {
     sep: String,
+    quote: char,
+    escape: char,
+    escape_quotes: bool,
+    quote_all: bool,
+    null_value: String,
+    null_value_set: bool,
+    empty_value: String,
+    ignore_leading_whitespace: bool,
+    ignore_trailing_whitespace: bool,
     timestamp_format: String,
     date_format: String,
 }
@@ -40,6 +49,17 @@ impl SparkToCsvOptions {
     pub const SEP_OPTION: &'static str = "sep";
     pub const DELIMITER_OPTION: &'static str = "delimiter";
     pub const SEP_DEFAULT: &'static str = ",";
+    pub const QUOTE_OPTION: &'static str = "quote";
+    pub const QUOTE_DEFAULT: char = '"';
+    pub const ESCAPE_OPTION: &'static str = "escape";
+    pub const ESCAPE_DEFAULT: char = '\\';
+    pub const ESCAPE_QUOTES_OPTION: &'static str = "escapeQuotes";
+    pub const QUOTE_ALL_OPTION: &'static str = "quoteAll";
+    pub const NULL_VALUE_OPTION: &'static str = "nullValue";
+    pub const EMPTY_VALUE_OPTION: &'static str = "emptyValue";
+    pub const EMPTY_VALUE_DEFAULT: &'static str = "\"\"";
+    pub const IGNORE_LEADING_WHITESPACE_OPTION: &'static str = "ignoreLeadingWhiteSpace";
+    pub const IGNORE_TRAILING_WHITESPACE_OPTION: &'static str = "ignoreTrailingWhiteSpace";
     pub const TIMESTAMP_FORMAT_OPTION: &'static str = "timestampFormat";
     pub const DATE_FORMAT_OPTION: &'static str = "dateFormat";
 
@@ -52,6 +72,42 @@ impl SparkToCsvOptions {
         let sep = find_key_value(map, Self::SEP_OPTION)
             .or_else(|| find_key_value(map, Self::DELIMITER_OPTION))
             .unwrap_or_else(|| Self::SEP_DEFAULT.to_string());
+
+        let quote = parse_char_option(
+            find_key_value(map, Self::QUOTE_OPTION).as_deref(),
+            Self::QUOTE_OPTION,
+            Self::QUOTE_DEFAULT,
+        )?;
+        let escape = parse_char_option(
+            find_key_value(map, Self::ESCAPE_OPTION).as_deref(),
+            Self::ESCAPE_OPTION,
+            Self::ESCAPE_DEFAULT,
+        )?;
+        let escape_quotes = parse_bool_option(
+            find_key_value(map, Self::ESCAPE_QUOTES_OPTION).as_deref(),
+            Self::ESCAPE_QUOTES_OPTION,
+            true,
+        )?;
+        let quote_all = parse_bool_option(
+            find_key_value(map, Self::QUOTE_ALL_OPTION).as_deref(),
+            Self::QUOTE_ALL_OPTION,
+            false,
+        )?;
+        let null_value = find_key_value(map, Self::NULL_VALUE_OPTION);
+        let null_value_set = null_value.is_some();
+        let null_value = null_value.unwrap_or_default();
+        let empty_value = find_key_value(map, Self::EMPTY_VALUE_OPTION)
+            .unwrap_or_else(|| Self::EMPTY_VALUE_DEFAULT.to_string());
+        let ignore_leading_whitespace = parse_bool_option(
+            find_key_value(map, Self::IGNORE_LEADING_WHITESPACE_OPTION).as_deref(),
+            Self::IGNORE_LEADING_WHITESPACE_OPTION,
+            true,
+        )?;
+        let ignore_trailing_whitespace = parse_bool_option(
+            find_key_value(map, Self::IGNORE_TRAILING_WHITESPACE_OPTION).as_deref(),
+            Self::IGNORE_TRAILING_WHITESPACE_OPTION,
+            true,
+        )?;
 
         let timestamp_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
@@ -67,6 +123,15 @@ impl SparkToCsvOptions {
 
         Ok(Self {
             sep,
+            quote,
+            escape,
+            escape_quotes,
+            quote_all,
+            null_value,
+            null_value_set,
+            empty_value,
+            ignore_leading_whitespace,
+            ignore_trailing_whitespace,
             timestamp_format,
             date_format,
         })
@@ -77,6 +142,15 @@ impl Default for SparkToCsvOptions {
     fn default() -> Self {
         Self {
             sep: Self::SEP_DEFAULT.to_string(),
+            quote: Self::QUOTE_DEFAULT,
+            escape: Self::ESCAPE_DEFAULT,
+            escape_quotes: true,
+            quote_all: false,
+            null_value: String::new(),
+            null_value_set: false,
+            empty_value: Self::EMPTY_VALUE_DEFAULT.to_string(),
+            ignore_leading_whitespace: true,
+            ignore_trailing_whitespace: true,
             timestamp_format: Self::TIMESTAMP_FORMAT_DEFAULT.to_string(),
             date_format: Self::DATE_FORMAT_DEFAULT.to_string(),
         }
@@ -101,6 +175,13 @@ impl SparkToCsv {
     pub fn session_timezone(&self) -> &str {
         &self.session_timezone
     }
+
+    fn column_name(args: &[Expr]) -> String {
+        let Some(input) = args.first() else {
+            return format!("{}()", Self::TO_CSV_NAME);
+        };
+        format!("{}({})", Self::TO_CSV_NAME, input.schema_name())
+    }
 }
 
 impl ScalarUDFImpl for SparkToCsv {
@@ -118,6 +199,10 @@ impl ScalarUDFImpl for SparkToCsv {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Utf8)
+    }
+
+    fn schema_name(&self, args: &[Expr]) -> Result<String> {
+        Ok(Self::column_name(args))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
@@ -207,8 +292,7 @@ fn spark_to_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Array
         for (col_idx, field) in fields.iter().enumerate() {
             let col = &columns[col_idx];
             if col.is_null(row_idx) {
-                // Null field: empty string, no quoting
-                parts.push(String::new());
+                parts.push(write_csv_null_field(&options));
             } else {
                 let value_str = format_field_to_csv(
                     col,
@@ -217,7 +301,7 @@ fn spark_to_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Array
                     &options,
                     session_timezone,
                 )?;
-                parts.push(quote_csv_field(&value_str, &options.sep));
+                parts.push(write_csv_field(&value_str, &options));
             }
         }
 
@@ -358,13 +442,70 @@ fn format_field_to_csv(
                 .downcast_ref::<Date64Array>()
                 .ok_or_else(|| DataFusionError::Execution("Expected Date64Array".to_string()))?;
             let millis = arr.value(row_idx);
-            let secs = millis / 1_000;
+            let secs = millis.div_euclid(1_000);
             let date = DateTime::<Utc>::from_timestamp(secs, 0)
                 .map(|dt| dt.date_naive())
                 .ok_or_else(|| {
                     DataFusionError::Execution(format!("Date64 value out of range: {millis}"))
                 })?;
             Ok(date.format(&options.date_format).to_string())
+        }
+
+        DataType::List(field) => {
+            let arr = array
+                .as_any()
+                .downcast_ref::<ListArray>()
+                .ok_or_else(|| DataFusionError::Execution("Expected ListArray".to_string()))?;
+            format_list_to_csv(
+                &arr.value(row_idx),
+                field.data_type(),
+                options,
+                session_timezone,
+            )
+        }
+
+        DataType::LargeList(field) => {
+            let arr = array
+                .as_any()
+                .downcast_ref::<LargeListArray>()
+                .ok_or_else(|| DataFusionError::Execution("Expected LargeListArray".to_string()))?;
+            format_list_to_csv(
+                &arr.value(row_idx),
+                field.data_type(),
+                options,
+                session_timezone,
+            )
+        }
+
+        DataType::FixedSizeList(field, _) => {
+            let arr = array
+                .as_any()
+                .downcast_ref::<FixedSizeListArray>()
+                .ok_or_else(|| {
+                    DataFusionError::Execution("Expected FixedSizeListArray".to_string())
+                })?;
+            format_list_to_csv(
+                &arr.value(row_idx),
+                field.data_type(),
+                options,
+                session_timezone,
+            )
+        }
+
+        DataType::Map(_, _) => {
+            let arr = array
+                .as_any()
+                .downcast_ref::<MapArray>()
+                .ok_or_else(|| DataFusionError::Execution("Expected MapArray".to_string()))?;
+            format_map_to_csv(arr, row_idx, options, session_timezone)
+        }
+
+        DataType::Struct(_) => {
+            let arr = array
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .ok_or_else(|| DataFusionError::Execution("Expected StructArray".to_string()))?;
+            format_struct_to_csv(arr, row_idx, options, session_timezone)
         }
 
         // --- All other types: use ScalarValue display ---
@@ -374,6 +515,126 @@ fn format_field_to_csv(
             // without type annotations (e.g. "42" not "Int32(42)")
             Ok(scalar_to_display_string(&scalar))
         }
+    }
+}
+
+fn format_list_to_csv(
+    values: &ArrayRef,
+    element_type: &DataType,
+    options: &SparkToCsvOptions,
+    session_timezone: &str,
+) -> Result<String> {
+    let mut output = String::from("[");
+    for i in 0..values.len() {
+        if i > 0 {
+            output.push(',');
+        }
+        if values.is_null(i) {
+            append_nested_null(&mut output, options);
+        } else {
+            if i > 0 {
+                output.push(' ');
+            }
+            output.push_str(&format_field_to_csv(
+                values,
+                i,
+                element_type,
+                options,
+                session_timezone,
+            )?);
+        }
+    }
+    output.push(']');
+    Ok(output)
+}
+
+fn format_map_to_csv(
+    map_array: &MapArray,
+    index: usize,
+    options: &SparkToCsvOptions,
+    session_timezone: &str,
+) -> Result<String> {
+    let entries = map_array.value(index);
+    let struct_array = entries
+        .as_any()
+        .downcast_ref::<StructArray>()
+        .ok_or_else(|| {
+            DataFusionError::Execution("Map entries should be StructArray".to_string())
+        })?;
+    let fields = struct_array.fields();
+    let keys = struct_array.column(0);
+    let values = struct_array.column(1);
+    let key_type = fields[0].data_type();
+    let value_type = fields[1].data_type();
+
+    let mut output = String::from("{");
+    for i in 0..keys.len() {
+        if i > 0 {
+            output.push_str(", ");
+        }
+        output.push_str(&format_field_to_csv(
+            keys,
+            i,
+            key_type,
+            options,
+            session_timezone,
+        )?);
+        output.push_str(" ->");
+        if values.is_null(i) {
+            append_nested_null(&mut output, options);
+        } else {
+            output.push(' ');
+            output.push_str(&format_field_to_csv(
+                values,
+                i,
+                value_type,
+                options,
+                session_timezone,
+            )?);
+        }
+    }
+    output.push('}');
+    Ok(output)
+}
+
+fn format_struct_to_csv(
+    struct_array: &StructArray,
+    index: usize,
+    options: &SparkToCsvOptions,
+    session_timezone: &str,
+) -> Result<String> {
+    let fields = struct_array.fields();
+    let columns = struct_array.columns();
+    let mut output = String::from("{");
+
+    for (i, (field, column)) in fields.iter().zip(columns.iter()).enumerate() {
+        if i > 0 {
+            output.push(',');
+        }
+        if column.is_null(index) {
+            append_nested_null(&mut output, options);
+        } else {
+            if i > 0 {
+                output.push(' ');
+            }
+            output.push_str(&format_field_to_csv(
+                column,
+                index,
+                field.data_type(),
+                options,
+                session_timezone,
+            )?);
+        }
+    }
+    output.push('}');
+    Ok(output)
+}
+
+fn append_nested_null(output: &mut String, options: &SparkToCsvOptions) {
+    if options.null_value_set {
+        // Spark prefixes nested nullValue with a space, including first list/struct elements.
+        output.push(' ');
+        output.push_str(&options.null_value);
     }
 }
 
@@ -395,8 +656,12 @@ fn scalar_to_display_string(scalar: &ScalarValue) -> String {
         ScalarValue::UInt16(Some(v)) => v.to_string(),
         ScalarValue::UInt32(Some(v)) => v.to_string(),
         ScalarValue::UInt64(Some(v)) => v.to_string(),
-        ScalarValue::Float32(Some(v)) => v.to_string(),
-        ScalarValue::Float64(Some(v)) => v.to_string(),
+        ScalarValue::Float32(Some(v)) => format_float32(*v),
+        ScalarValue::Float64(Some(v)) => format_float64(*v),
+        ScalarValue::Binary(Some(v))
+        | ScalarValue::LargeBinary(Some(v))
+        | ScalarValue::BinaryView(Some(v))
+        | ScalarValue::FixedSizeBinary(_, Some(v)) => format_binary(v),
         ScalarValue::Decimal128(Some(v), _, scale) => {
             // Format as fixed-point decimal, e.g. 999 with scale 2 → "9.99"
             if *scale == 0 {
@@ -419,6 +684,49 @@ fn scalar_to_display_string(scalar: &ScalarValue) -> String {
     }
 }
 
+fn format_binary(value: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+
+    let mut output = String::from("[");
+    for (i, byte) in value.iter().enumerate() {
+        if i > 0 {
+            output.push(' ');
+        }
+        output.push(HEX[(byte >> 4) as usize] as char);
+        output.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    output.push(']');
+    output
+}
+
+fn format_float32(value: f32) -> String {
+    if value.is_nan() {
+        "NaN".to_string()
+    } else if value.is_infinite() {
+        if value.is_sign_positive() {
+            "Infinity".to_string()
+        } else {
+            "-Infinity".to_string()
+        }
+    } else {
+        value.to_string()
+    }
+}
+
+fn format_float64(value: f64) -> String {
+    if value.is_nan() {
+        "NaN".to_string()
+    } else if value.is_infinite() {
+        if value.is_sign_positive() {
+            "Infinity".to_string()
+        } else {
+            "-Infinity".to_string()
+        }
+    } else {
+        value.to_string()
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers (same pattern as spark_from_csv.rs)
 // ---------------------------------------------------------------------------
@@ -434,7 +742,10 @@ fn find_key_value(options: &MapArray, search_key: &str) -> Option<String> {
 
     keys.iter()
         .enumerate()
-        .find(|(_, k)| k.as_deref() == Some(search_key))
+        .find(|(_, k)| {
+            k.as_deref()
+                .is_some_and(|k| k.eq_ignore_ascii_case(search_key))
+        })
         .and_then(|(i, _)| {
             // Return None if the value is null
             if values.is_null(i) {
@@ -445,21 +756,86 @@ fn find_key_value(options: &MapArray, search_key: &str) -> Option<String> {
         })
 }
 
-/// Applies RFC4180-style CSV quoting to a field value, matching Spark's behaviour:
-/// - Empty strings are always quoted → `""`
-/// - Fields containing the separator, quotes, or newlines are quoted
-/// - Inner double quotes are escaped with a backslash → `\"`
+fn parse_char_option(value: Option<&str>, option_name: &str, default: char) -> Result<char> {
+    match value {
+        None => Ok(default),
+        Some(value) => {
+            let mut chars = value.chars();
+            match (chars.next(), chars.next()) {
+                (None, _) => Ok('\0'),
+                (Some(ch), None) => Ok(ch),
+                _ => exec_err!("CSV option `{option_name}` must be a single character"),
+            }
+        }
+    }
+}
+
+fn parse_bool_option(value: Option<&str>, option_name: &str, default: bool) -> Result<bool> {
+    match value {
+        None => Ok(default),
+        Some(value) if value.eq_ignore_ascii_case("true") => Ok(true),
+        Some(value) if value.eq_ignore_ascii_case("false") => Ok(false),
+        Some(_) => exec_err!("CSV option `{option_name}` must be `true` or `false`"),
+    }
+}
+
+/// Applies Spark CSV writer-style field preparation and quoting:
+/// - leading/trailing whitespace is trimmed by default
+/// - empty strings use `emptyValue`, which defaults to `""`
+/// - fields are quoted for separator/newline, `quoteAll`, or quote characters when escaping is enabled
+/// - quote and escape characters are escaped after quoting, even when quoting was forced by another reason
 /// - NULL fields are handled upstream and never reach this function
-fn quote_csv_field(value: &str, sep: &str) -> String {
-    let needs_quoting = value.is_empty()
-        || value.contains(sep)
-        || value.contains('"')
+fn write_csv_field(value: &str, options: &SparkToCsvOptions) -> String {
+    let value = trim_csv_field(value, options);
+    if value.is_empty() {
+        write_csv_replacement(&options.empty_value, options)
+    } else {
+        quote_csv_field(value, options)
+    }
+}
+
+fn write_csv_null_field(options: &SparkToCsvOptions) -> String {
+    write_csv_replacement(&options.null_value, options)
+}
+
+fn write_csv_replacement(value: &str, options: &SparkToCsvOptions) -> String {
+    let value = trim_csv_field(value, options);
+    let quoted_empty = format!("{}{}", options.quote, options.quote);
+    if value == quoted_empty {
+        return value.to_string();
+    }
+    quote_csv_field(value, options)
+}
+
+fn trim_csv_field<'a>(mut value: &'a str, options: &SparkToCsvOptions) -> &'a str {
+    if options.ignore_leading_whitespace {
+        value = value.trim_start();
+    }
+    if options.ignore_trailing_whitespace {
+        value = value.trim_end();
+    }
+    value
+}
+
+fn quote_csv_field(value: &str, options: &SparkToCsvOptions) -> String {
+    let contains_quote = value.contains(options.quote);
+    let needs_quoting = options.quote_all
+        || value.contains(&options.sep)
         || value.contains('\n')
-        || value.contains('\r');
+        || value.contains('\r')
+        || (options.escape_quotes && contains_quote);
 
     if needs_quoting {
-        let escaped = value.replace('"', "\\\"");
-        format!("\"{}\"", escaped)
+        let mut output = String::with_capacity(value.len() + 2);
+        output.push(options.quote);
+        for ch in value.chars() {
+            if ch == options.quote || ch == options.escape {
+                output.push(options.escape);
+            }
+            output.push(ch);
+        }
+        output.push(options.quote);
+        output
     } else {
         value.to_string()
     }
@@ -473,8 +849,8 @@ fn quote_csv_field(value: &str, sep: &str) -> String {
 #[expect(clippy::unwrap_used)]
 mod tests {
     use datafusion::arrow::array::{
-        BooleanArray, Date32Array, Decimal128Array, Float64Array, Int32Array, Int64Array,
-        ListArray, StringArray, StructArray,
+        BooleanArray, Date32Array, Decimal128Array, FixedSizeListArray, Float32Array, Float64Array,
+        Int32Array, Int64Array, ListArray, StringArray, StructArray,
     };
     use datafusion::arrow::buffer::OffsetBuffer;
     use datafusion::arrow::datatypes::{DataType, Field, Fields};
@@ -593,6 +969,39 @@ mod tests {
         assert_eq!(output.value(1), "0,0");
         assert_eq!(output.value(2), ",-7"); // null float → empty string
         Ok(())
+    }
+
+    #[test]
+    fn test_to_csv_float32_uses_float_display() -> Result<()> {
+        let fields = Fields::from(vec![Arc::new(Field::new("value", DataType::Float32, true))]);
+        let col = Arc::new(Float32Array::from(vec![
+            Some(1.2_f32),
+            Some(f32::NAN),
+            Some(f32::INFINITY),
+            Some(f32::NEG_INFINITY),
+        ])) as ArrayRef;
+
+        let struct_array = make_struct_array(fields, vec![col], None);
+        let result = spark_to_csv_inner(&[struct_array], DEFAULT_SESSION_TIMEZONE)?;
+
+        let output = result.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(output.value(0), "1.2");
+        assert_eq!(output.value(1), "NaN");
+        assert_eq!(output.value(2), "Infinity");
+        assert_eq!(output.value(3), "-Infinity");
+        Ok(())
+    }
+
+    #[test]
+    fn test_to_csv_binary_display_string() {
+        assert_eq!(
+            scalar_to_display_string(&ScalarValue::Binary(Some(vec![0x61, 0x62, 0x63]))),
+            "[61 62 63]"
+        );
+        assert_eq!(
+            scalar_to_display_string(&ScalarValue::Binary(Some(vec![0x1a, 0xc0]))),
+            "[1A C0]"
+        );
     }
 
     /// DECIMAL(5,2) values are formatted as fixed-point strings (e.g. 999 → "9.99").
@@ -749,8 +1158,7 @@ mod tests {
         // Use the options struct directly with a pipe separator
         let options = SparkToCsvOptions {
             sep: "|".to_string(),
-            timestamp_format: SparkToCsvOptions::TIMESTAMP_FORMAT_DEFAULT.to_string(),
-            date_format: SparkToCsvOptions::DATE_FORMAT_DEFAULT.to_string(),
+            ..SparkToCsvOptions::default()
         };
 
         let struct_arr = struct_array.as_any().downcast_ref::<StructArray>().unwrap();
@@ -805,6 +1213,65 @@ mod tests {
         let output = result.as_any().downcast_ref::<StringArray>().unwrap();
         // id=1, tags=null → "1,"
         assert_eq!(output.value(0), "1,");
+        Ok(())
+    }
+
+    #[test]
+    fn test_to_csv_fixed_size_list_slice_uses_row_offset() -> Result<()> {
+        let item_field = Arc::new(Field::new("item", DataType::Int32, true));
+        let values =
+            Arc::new(Int32Array::from(vec![Some(1), Some(2), Some(3), Some(4)])) as ArrayRef;
+        let fixed_array = Arc::new(FixedSizeListArray::try_new(
+            item_field.clone(),
+            2,
+            values,
+            None,
+        )?);
+        let sliced = Arc::new(fixed_array.slice(1, 1)) as ArrayRef;
+
+        let fields = Fields::from(vec![Arc::new(Field::new(
+            "items",
+            DataType::FixedSizeList(item_field, 2),
+            true,
+        ))]);
+        let struct_array = make_struct_array(fields, vec![sliced], None);
+        let result = spark_to_csv_inner(&[struct_array], DEFAULT_SESSION_TIMEZONE)?;
+
+        let output = result.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(output.value(0), "\"[3, 4]\"");
+        Ok(())
+    }
+
+    #[test]
+    fn test_to_csv_nested_null_value_matches_spark_spacing() -> Result<()> {
+        let options = SparkToCsvOptions {
+            null_value: "-".to_string(),
+            null_value_set: true,
+            ..SparkToCsvOptions::default()
+        };
+
+        let values = Arc::new(Int32Array::from(vec![None, Some(1)])) as ArrayRef;
+        assert_eq!(
+            format_list_to_csv(
+                &values,
+                &DataType::Int32,
+                &options,
+                DEFAULT_SESSION_TIMEZONE,
+            )?,
+            "[ -, 1]"
+        );
+
+        let fields = Fields::from(vec![
+            Arc::new(Field::new("a", DataType::Int32, true)),
+            Arc::new(Field::new("b", DataType::Int32, true)),
+        ]);
+        let col_a = Arc::new(Int32Array::from(vec![None])) as ArrayRef;
+        let col_b = Arc::new(Int32Array::from(vec![Some(1)])) as ArrayRef;
+        let struct_array = StructArray::new(fields, vec![col_a, col_b], None);
+        assert_eq!(
+            format_struct_to_csv(&struct_array, 0, &options, DEFAULT_SESSION_TIMEZONE)?,
+            "{ -, 1}"
+        );
         Ok(())
     }
 
@@ -961,9 +1428,8 @@ mod tests {
 
         // Manually construct options with custom format
         let options = SparkToCsvOptions {
-            sep: ",".to_string(),
             timestamp_format: "%d/%m/%Y".to_string(), // dd/MM/yyyy format
-            date_format: SparkToCsvOptions::DATE_FORMAT_DEFAULT.to_string(),
+            ..SparkToCsvOptions::default()
         };
 
         let fields = Fields::from(vec![Arc::new(Field::new(
@@ -1025,6 +1491,93 @@ mod tests {
         let output = result.as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(output.value(0), "\"say \\\"hello\\\"\",2");
         Ok(())
+    }
+
+    #[test]
+    fn test_to_csv_escape_quotes_false_still_escapes_when_quoted() {
+        let options = SparkToCsvOptions {
+            escape_quotes: false,
+            ..SparkToCsvOptions::default()
+        };
+        assert_eq!(write_csv_field("say \"hello\"", &options), "say \"hello\"");
+        assert_eq!(
+            write_csv_field("hello, \"world\"", &options),
+            "\"hello, \\\"world\\\"\""
+        );
+
+        let quote_all_options = SparkToCsvOptions {
+            escape_quotes: false,
+            quote_all: true,
+            ..SparkToCsvOptions::default()
+        };
+        assert_eq!(
+            write_csv_field("say \"hello\"", &quote_all_options),
+            "\"say \\\"hello\\\"\""
+        );
+    }
+
+    #[test]
+    fn test_to_csv_null_value_uses_writer_quoting() {
+        let quote_all_options = SparkToCsvOptions {
+            quote_all: true,
+            ..SparkToCsvOptions::default()
+        };
+        assert_eq!(write_csv_null_field(&quote_all_options), "\"\"");
+
+        let comma_null_options = SparkToCsvOptions {
+            null_value: ",".to_string(),
+            null_value_set: true,
+            ..SparkToCsvOptions::default()
+        };
+        assert_eq!(write_csv_null_field(&comma_null_options), "\",\"");
+
+        let trimmed_null_options = SparkToCsvOptions {
+            null_value: " , ".to_string(),
+            null_value_set: true,
+            ..SparkToCsvOptions::default()
+        };
+        assert_eq!(write_csv_null_field(&trimmed_null_options), "\",\"");
+    }
+
+    #[test]
+    fn test_to_csv_empty_value_uses_writer_quoting() {
+        assert_eq!(write_csv_field("", &SparkToCsvOptions::default()), "\"\"");
+
+        let comma_empty_options = SparkToCsvOptions {
+            empty_value: ",".to_string(),
+            ..SparkToCsvOptions::default()
+        };
+        assert_eq!(write_csv_field("", &comma_empty_options), "\",\"");
+
+        let quote_all_empty_options = SparkToCsvOptions {
+            quote_all: true,
+            empty_value: "_".to_string(),
+            ..SparkToCsvOptions::default()
+        };
+        assert_eq!(write_csv_field("", &quote_all_empty_options), "\"_\"");
+
+        let trimmed_empty_options = SparkToCsvOptions {
+            empty_value: " _ ".to_string(),
+            ..SparkToCsvOptions::default()
+        };
+        assert_eq!(write_csv_field("", &trimmed_empty_options), "_");
+    }
+
+    #[test]
+    fn test_to_csv_escapes_literal_escape_character_when_quoted() {
+        let options = SparkToCsvOptions {
+            escape: '#',
+            ..SparkToCsvOptions::default()
+        };
+        assert_eq!(write_csv_field("a#b", &options), "a#b");
+        assert_eq!(write_csv_field("a#b,c", &options), "\"a##b,c\"");
+
+        let quote_all_options = SparkToCsvOptions {
+            escape: '#',
+            quote_all: true,
+            ..SparkToCsvOptions::default()
+        };
+        assert_eq!(write_csv_field("a#b", &quote_all_options), "\"a##b\"");
     }
 
     /// Empty string fields (not null) are always quoted, matches Spark behaviour

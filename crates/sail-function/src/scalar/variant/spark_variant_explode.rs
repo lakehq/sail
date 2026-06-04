@@ -11,6 +11,7 @@ use datafusion::logical_expr::{
 use datafusion::scalar::ScalarValue;
 use parquet_variant::Variant;
 use parquet_variant_compute::{VariantArray, VariantArrayBuilder, VariantType};
+use sail_common_datafusion::variant::variant_metadata_field;
 
 use crate::error::invalid_arg_count_exec_err;
 use crate::scalar::variant::spark_parse_json::convert_binaryview_to_binary;
@@ -20,7 +21,7 @@ fn variant_explode_value_field() -> Field {
     Field::new(
         "value",
         DataType::Struct(Fields::from(vec![
-            Field::new("metadata", DataType::Binary, false),
+            variant_metadata_field(DataType::Binary, false),
             Field::new("value", DataType::Binary, false),
         ])),
         true,
