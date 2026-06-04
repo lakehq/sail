@@ -13,6 +13,10 @@ use datafusion::scalar::ScalarValue;
 use datafusion_expr_common::signature::Volatility;
 use parquet_variant_compute::{VariantArrayBuilder, VariantType};
 use parquet_variant_json::JsonToVariant as JsonToVariantExt;
+use sail_common_datafusion::variant::{
+    variant_metadata_field, VARIANT_METADATA_FIELD_NAME, VARIANT_METADATA_MARKER_KEY,
+    VARIANT_METADATA_MARKER_VALUE,
+};
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 use crate::scalar::variant::utils::helper::{try_field_as_string, try_parse_string_scalar};
@@ -58,7 +62,7 @@ impl ScalarUDFImpl for SparkJsonToVariantUdf {
         // internally and convert to Binary only at the Spark Connect serialization
         // layer, but that requires a broader refactor of the serialization path.
         Ok(DataType::Struct(Fields::from(vec![
-            Field::new("metadata", DataType::Binary, false),
+            variant_metadata_field(DataType::Binary, false),
             Field::new("value", DataType::Binary, false),
         ])))
     }
@@ -191,7 +195,19 @@ pub(crate) fn convert_binaryview_to_binary(struct_array: StructArray) -> Result<
     let fields: Vec<Arc<Field>> = struct_array
         .fields()
         .iter()
-        .map(|f| Arc::new(Field::new(f.name(), DataType::Binary, f.is_nullable())))
+        .map(|f| {
+            let field = if f.name() == VARIANT_METADATA_FIELD_NAME {
+                let mut metadata = f.metadata().clone();
+                metadata.insert(
+                    VARIANT_METADATA_MARKER_KEY.to_string(),
+                    VARIANT_METADATA_MARKER_VALUE.to_string(),
+                );
+                variant_metadata_field(DataType::Binary, f.is_nullable()).with_metadata(metadata)
+            } else {
+                Field::new(f.name(), DataType::Binary, f.is_nullable())
+            };
+            Arc::new(field)
+        })
         .collect();
 
     let columns: Result<Vec<ArrayRef>> = struct_array
