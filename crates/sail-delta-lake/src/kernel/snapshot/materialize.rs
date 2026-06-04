@@ -190,7 +190,6 @@ pub(crate) fn parse_partition_values_array(
         partition_schema
             .fields()
             .map(|field| Field::try_from(&field.make_physical(column_mapping_mode)))
-            .map(|field| field.map(|field| field.with_nullable(true)))
             .collect::<Result<Vec<Field>, _>>()?,
     );
 
@@ -227,11 +226,7 @@ pub(crate) fn parse_partition_values_array(
         })
         .collect::<DeltaResult<Vec<_>>>()?;
 
-    Ok(StructArray::try_new(
-        arrow_fields,
-        columns,
-        partitions.nulls().cloned(),
-    )?)
+    Ok(StructArray::try_new(arrow_fields, columns, None)?)
 }
 
 fn map_array_from_path<'a>(batch: &'a RecordBatch, path: &str) -> DeltaResult<&'a MapArray> {
