@@ -48,7 +48,7 @@ Feature: bin converts integral values to binary strings
         """
         SELECT bin('ab') AS result
         """
-      Then query error .*
+      Then query error CAST_INVALID_INPUT
 
     Scenario: bin empty string errors under ANSI on
       Given config spark.sql.ansi.enabled = true
@@ -56,7 +56,7 @@ Feature: bin converts integral values to binary strings
         """
         SELECT bin('') AS result
         """
-      Then query error .*
+      Then query error CAST_INVALID_INPUT
 
     Scenario: bin empty string returns NULL under ANSI off
       Given config spark.sql.ansi.enabled = false
@@ -74,7 +74,7 @@ Feature: bin converts integral values to binary strings
         """
         SELECT bin('13.9') AS result
         """
-      Then query error .*
+      Then query error CAST_INVALID_INPUT
 
     Scenario: bin out-of-range string errors under ANSI on
       Given config spark.sql.ansi.enabled = true
@@ -82,7 +82,7 @@ Feature: bin converts integral values to binary strings
         """
         SELECT bin('99999999999999999999') AS result
         """
-      Then query error .*
+      Then query error CAST_INVALID_INPUT
 
     Scenario: bin out-of-range string returns NULL under ANSI off
       Given config spark.sql.ansi.enabled = false
@@ -116,7 +116,7 @@ Feature: bin converts integral values to binary strings
         """
         SELECT bin('1e3') AS result
         """
-      Then query error .*
+      Then query error CAST_INVALID_INPUT
 
   Rule: Integer boundaries
 
