@@ -38,6 +38,7 @@ fn array_repeat_with_nullable_element(
     schema: &datafusion_common::DFSchemaRef,
 ) -> PlanResult<expr::Expr> {
     let element_type = make_nullable_array_type(&element.get_type(schema.as_ref())?);
+    // A CASE without ELSE keeps the value but makes DataFusion plan it as nullable.
     let nullable_element = when(lit(true), cast(element, element_type)).end()?;
     Ok(cast(
         expr_fn::array_repeat(nullable_element, count),

@@ -5,7 +5,6 @@ pub mod error;
 pub mod geoarrow;
 pub mod object;
 pub mod runtime;
-pub mod spark;
 pub mod spec;
 pub mod string;
 pub mod tests;

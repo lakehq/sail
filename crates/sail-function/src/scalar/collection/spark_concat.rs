@@ -324,6 +324,7 @@ fn merge_list_types(left: &DataType, right: &DataType) -> Option<DataType> {
         (DataType::List(left), DataType::List(right)) => {
             let data_type =
                 merge_list_types(left.data_type(), right.data_type()).or_else(|| {
+                    // Leaf list item types may only differ by field/nullability metadata.
                     left.data_type()
                         .equals_datatype(right.data_type())
                         .then(|| left.data_type().clone())

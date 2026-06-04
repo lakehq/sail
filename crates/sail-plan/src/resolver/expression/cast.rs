@@ -110,10 +110,12 @@ impl PlanResolver<'_> {
                 ScalarUDF::new_from_impl(SparkVariantToJsonUdf::new()).call(vec![expr])
             }
             (from, to, is_try) if is_variant_storage_type(&from) => {
+                let service = self.ctx.extension::<PlanService>()?;
+                let data_type_string = service.plan_formatter().data_type_to_simple_string(&to)?;
                 ScalarUDF::new_from_impl(SparkVariantGet::new(is_try)).call(vec![
                     expr,
                     lit("$"),
-                    lit(to.to_string()),
+                    lit(data_type_string),
                 ])
             }
             (from, DataType::Timestamp(time_unit, _) | DataType::Duration(time_unit), _)

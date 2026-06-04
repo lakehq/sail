@@ -4,9 +4,6 @@ use std::str::FromStr;
 use chrono::{self, TimeDelta};
 use lazy_static::lazy_static;
 use regex::Regex;
-use sail_common::spark::extension::{
-    SparkDayTimeIntervalType, SparkIntervalMetadata, SparkYearMonthIntervalType,
-};
 use sail_common::spec;
 use sail_sql_parser::ast::data_type::{IntervalDayTimeUnit, IntervalYearMonthUnit};
 use sail_sql_parser::ast::expression::{
@@ -21,64 +18,6 @@ use crate::value::from_ast_string;
 fn create_regex(regex: Result<Regex, regex::Error>) -> Regex {
     #[expect(clippy::unwrap_used)]
     regex.unwrap()
-}
-
-pub fn from_ast_signed_interval_expression(value: Signed<IntervalExpr>) -> SqlResult<spec::Expr> {
-    let negated = value.is_negative();
-    let interval = value.into_inner();
-    match interval {
-        IntervalExpr::Standard { value, qualifier } => {
-            let kind = from_ast_interval_qualifier(qualifier)?;
-            let value = from_ast_standard_interval(value, kind, negated)?;
-            let metadata = interval_metadata(kind);
-            Ok(expr_with_interval_metadata(value.into(), metadata))
-        }
-        interval => {
-            let interval = if negated {
-                Signed::Negative(interval)
-            } else {
-                Signed::Positive(interval)
-            };
-            Ok(spec::Expr::Literal(
-                from_ast_signed_interval(interval)?.into(),
-            ))
-        }
-    }
-}
-
-fn expr_with_interval_metadata(
-    literal: spec::Literal,
-    metadata: Option<Vec<(String, String)>>,
-) -> spec::Expr {
-    let expr = spec::Expr::Literal(literal);
-    if let Some(metadata) = metadata {
-        spec::Expr::Alias {
-            expr: Box::new(expr),
-            name: vec![],
-            metadata: Some(metadata),
-        }
-    } else {
-        expr
-    }
-}
-
-fn interval_metadata(kind: StandardIntervalKind) -> Option<Vec<(String, String)>> {
-    let (extension_type_name, start, end) = match kind {
-        StandardIntervalKind::Year => (SparkYearMonthIntervalType::NAME, 0, 0),
-        StandardIntervalKind::YearToMonth => (SparkYearMonthIntervalType::NAME, 0, 1),
-        StandardIntervalKind::Month => (SparkYearMonthIntervalType::NAME, 1, 1),
-        StandardIntervalKind::Day => (SparkDayTimeIntervalType::NAME, 0, 0),
-        StandardIntervalKind::DayToHour => (SparkDayTimeIntervalType::NAME, 0, 1),
-        StandardIntervalKind::DayToMinute => (SparkDayTimeIntervalType::NAME, 0, 2),
-        StandardIntervalKind::DayToSecond => (SparkDayTimeIntervalType::NAME, 0, 3),
-        StandardIntervalKind::Hour => (SparkDayTimeIntervalType::NAME, 1, 1),
-        StandardIntervalKind::HourToMinute => (SparkDayTimeIntervalType::NAME, 1, 2),
-        StandardIntervalKind::HourToSecond => (SparkDayTimeIntervalType::NAME, 1, 3),
-        StandardIntervalKind::Minute => (SparkDayTimeIntervalType::NAME, 2, 2),
-        StandardIntervalKind::MinuteToSecond => (SparkDayTimeIntervalType::NAME, 2, 3),
-        StandardIntervalKind::Second => (SparkDayTimeIntervalType::NAME, 3, 3),
-    };
-    Some(SparkIntervalMetadata::new(Some(start), Some(end)).arrow_metadata(extension_type_name))
 }
 
 lazy_static! {
@@ -290,7 +229,6 @@ fn parse_interval_day_time_string(
     Ok(IntervalValue::Microsecond { microseconds: n })
 }
 
-#[derive(Copy, Clone)]
 enum StandardIntervalKind {
     Year,
     YearToMonth,

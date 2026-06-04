@@ -10,25 +10,10 @@
             ],
             "arguments": [
               {
-                "alias": {
-                  "expr": {
-                    "literal": {
-                      "intervalYearMonth": {
-                        "months": -14
-                      }
-                    }
-                  },
-                  "name": [],
-                  "metadata": [
-                    [
-                      "ARROW:extension:name",
-                      "sail.spark.yearMonth.interval"
-                    ],
-                    [
-                      "ARROW:extension:metadata",
-                      "{\"startField\":0,\"endField\":1}"
-                    ]
-                  ]
+                "literal": {
+                  "intervalYearMonth": {
+                    "months": -14
+                  }
                 }
               }
             ],
@@ -53,25 +38,10 @@
             ],
             "arguments": [
               {
-                "alias": {
-                  "expr": {
-                    "literal": {
-                      "durationMicrosecond": {
-                        "microseconds": 86401000000
-                      }
-                    }
-                  },
-                  "name": [],
-                  "metadata": [
-                    [
-                      "ARROW:extension:name",
-                      "sail.spark.dayTime.interval"
-                    ],
-                    [
-                      "ARROW:extension:metadata",
-                      "{\"startField\":0,\"endField\":3}"
-                    ]
-                  ]
+                "literal": {
+                  "durationMicrosecond": {
+                    "microseconds": 86401000000
+                  }
                 }
               }
             ],
@@ -96,25 +66,10 @@
             ],
             "arguments": [
               {
-                "alias": {
-                  "expr": {
-                    "literal": {
-                      "durationMicrosecond": {
-                        "microseconds": -86400000000
-                      }
-                    }
-                  },
-                  "name": [],
-                  "metadata": [
-                    [
-                      "ARROW:extension:name",
-                      "sail.spark.dayTime.interval"
-                    ],
-                    [
-                      "ARROW:extension:metadata",
-                      "{\"startField\":0,\"endField\":3}"
-                    ]
-                  ]
+                "literal": {
+                  "durationMicrosecond": {
+                    "microseconds": -86400000000
+                  }
                 }
               }
             ],
@@ -139,25 +94,10 @@
             ],
             "arguments": [
               {
-                "alias": {
-                  "expr": {
-                    "literal": {
-                      "intervalYearMonth": {
-                        "months": -1476
-                      }
-                    }
-                  },
-                  "name": [],
-                  "metadata": [
-                    [
-                      "ARROW:extension:name",
-                      "sail.spark.yearMonth.interval"
-                    ],
-                    [
-                      "ARROW:extension:metadata",
-                      "{\"startField\":0,\"endField\":1}"
-                    ]
-                  ]
+                "literal": {
+                  "intervalYearMonth": {
+                    "months": -1476
+                  }
                 }
               }
             ],
@@ -182,25 +122,10 @@
             ],
             "arguments": [
               {
-                "alias": {
-                  "expr": {
-                    "literal": {
-                      "durationMicrosecond": {
-                        "microseconds": -69497123456
-                      }
-                    }
-                  },
-                  "name": [],
-                  "metadata": [
-                    [
-                      "ARROW:extension:name",
-                      "sail.spark.dayTime.interval"
-                    ],
-                    [
-                      "ARROW:extension:metadata",
-                      "{\"startField\":1,\"endField\":3}"
-                    ]
-                  ]
+                "literal": {
+                  "durationMicrosecond": {
+                    "microseconds": -69497123456
+                  }
                 }
               }
             ],
@@ -225,25 +150,10 @@
             ],
             "arguments": [
               {
-                "alias": {
-                  "expr": {
-                    "literal": {
-                      "intervalYearMonth": {
-                        "months": -27
-                      }
-                    }
-                  },
-                  "name": [],
-                  "metadata": [
-                    [
-                      "ARROW:extension:name",
-                      "sail.spark.yearMonth.interval"
-                    ],
-                    [
-                      "ARROW:extension:metadata",
-                      "{\"startField\":0,\"endField\":1}"
-                    ]
-                  ]
+                "literal": {
+                  "intervalYearMonth": {
+                    "months": -27
+                  }
                 }
               }
             ],
@@ -772,25 +682,10 @@
             ],
             "arguments": [
               {
-                "alias": {
-                  "expr": {
-                    "literal": {
-                      "durationMicrosecond": {
-                        "microseconds": -8594553123456
-                      }
-                    }
-                  },
-                  "name": [],
-                  "metadata": [
-                    [
-                      "ARROW:extension:name",
-                      "sail.spark.dayTime.interval"
-                    ],
-                    [
-                      "ARROW:extension:metadata",
-                      "{\"startField\":0,\"endField\":3}"
-                    ]
-                  ]
+                "literal": {
+                  "durationMicrosecond": {
+                    "microseconds": -8594553123456
+                  }
                 }
               }
             ],
@@ -1319,25 +1214,10 @@
             ],
             "arguments": [
               {
-                "alias": {
-                  "expr": {
-                    "literal": {
-                      "durationMicrosecond": {
-                        "microseconds": 0
-                      }
-                    }
-                  },
-                  "name": [],
-                  "metadata": [
-                    [
-                      "ARROW:extension:name",
-                      "sail.spark.dayTime.interval"
-                    ],
-                    [
-                      "ARROW:extension:metadata",
-                      "{\"startField\":1,\"endField\":3}"
-                    ]
-                  ]
+                "literal": {
+                  "durationMicrosecond": {
+                    "microseconds": 0
+                  }
                 }
               }
             ],
@@ -1362,25 +1242,10 @@
             ],
             "arguments": [
               {
-                "alias": {
-                  "expr": {
-                    "literal": {
-                      "durationMicrosecond": {
-                        "microseconds": 1000000
-                      }
-                    }
-                  },
-                  "name": [],
-                  "metadata": [
-                    [
-                      "ARROW:extension:name",
-                      "sail.spark.dayTime.interval"
-                    ],
-                    [
-                      "ARROW:extension:metadata",
-                      "{\"startField\":1,\"endField\":3}"
-                    ]
-                  ]
+                "literal": {
+                  "durationMicrosecond": {
+                    "microseconds": 1000000
+                  }
                 }
               }
             ],
@@ -1405,25 +1270,10 @@
             ],
             "arguments": [
               {
-                "alias": {
-                  "expr": {
-                    "literal": {
-                      "durationMicrosecond": {
-                        "microseconds": 86400000000
-                      }
-                    }
-                  },
-                  "name": [],
-                  "metadata": [
-                    [
-                      "ARROW:extension:name",
-                      "sail.spark.dayTime.interval"
-                    ],
-                    [
-                      "ARROW:extension:metadata",
-                      "{\"startField\":0,\"endField\":3}"
-                    ]
-                  ]
+                "literal": {
+                  "durationMicrosecond": {
+                    "microseconds": 86400000000
+                  }
                 }
               }
             ],
@@ -1448,25 +1298,10 @@
             ],
             "arguments": [
               {
-                "alias": {
-                  "expr": {
-                    "literal": {
-                      "durationMicrosecond": {
-                        "microseconds": 86401000000
-                      }
-                    }
-                  },
-                  "name": [],
-                  "metadata": [
-                    [
-                      "ARROW:extension:name",
-                      "sail.spark.dayTime.interval"
-                    ],
-                    [
-                      "ARROW:extension:metadata",
-                      "{\"startField\":0,\"endField\":3}"
-                    ]
-                  ]
+                "literal": {
+                  "durationMicrosecond": {
+                    "microseconds": 86401000000
+                  }
                 }
               }
             ],
@@ -1547,25 +1382,10 @@
             ],
             "arguments": [
               {
-                "alias": {
-                  "expr": {
-                    "literal": {
-                      "durationMicrosecond": {
-                        "microseconds": 896887123456
-                      }
-                    }
-                  },
-                  "name": [],
-                  "metadata": [
-                    [
-                      "ARROW:extension:name",
-                      "sail.spark.dayTime.interval"
-                    ],
-                    [
-                      "ARROW:extension:metadata",
-                      "{\"startField\":0,\"endField\":3}"
-                    ]
-                  ]
+                "literal": {
+                  "durationMicrosecond": {
+                    "microseconds": 896887123456
+                  }
                 }
               }
             ],
@@ -2094,25 +1914,10 @@
             ],
             "arguments": [
               {
-                "alias": {
-                  "expr": {
-                    "literal": {
-                      "durationMicrosecond": {
-                        "microseconds": 40953123456
-                      }
-                    }
-                  },
-                  "name": [],
-                  "metadata": [
-                    [
-                      "ARROW:extension:name",
-                      "sail.spark.dayTime.interval"
-                    ],
-                    [
-                      "ARROW:extension:metadata",
-                      "{\"startField\":1,\"endField\":3}"
-                    ]
-                  ]
+                "literal": {
+                  "durationMicrosecond": {
+                    "microseconds": 40953123456
+                  }
                 }
               }
             ],
@@ -2137,25 +1942,10 @@
             ],
             "arguments": [
               {
-                "alias": {
-                  "expr": {
-                    "literal": {
-                      "intervalYearMonth": {
-                        "months": 1486
-                      }
-                    }
-                  },
-                  "name": [],
-                  "metadata": [
-                    [
-                      "ARROW:extension:name",
-                      "sail.spark.yearMonth.interval"
-                    ],
-                    [
-                      "ARROW:extension:metadata",
-                      "{\"startField\":0,\"endField\":1}"
-                    ]
-                  ]
+                "literal": {
+                  "intervalYearMonth": {
+                    "months": 1486
+                  }
                 }
               }
             ],
@@ -2716,25 +2506,10 @@
             ],
             "arguments": [
               {
-                "alias": {
-                  "expr": {
-                    "literal": {
-                      "intervalYearMonth": {
-                        "months": 5952
-                      }
-                    }
-                  },
-                  "name": [],
-                  "metadata": [
-                    [
-                      "ARROW:extension:name",
-                      "sail.spark.yearMonth.interval"
-                    ],
-                    [
-                      "ARROW:extension:metadata",
-                      "{\"startField\":0,\"endField\":1}"
-                    ]
-                  ]
+                "literal": {
+                  "intervalYearMonth": {
+                    "months": 5952
+                  }
                 }
               }
             ],
@@ -2759,25 +2534,10 @@
             ],
             "arguments": [
               {
-                "alias": {
-                  "expr": {
-                    "literal": {
-                      "durationMicrosecond": {
-                        "microseconds": 8594553123456
-                      }
-                    }
-                  },
-                  "name": [],
-                  "metadata": [
-                    [
-                      "ARROW:extension:name",
-                      "sail.spark.dayTime.interval"
-                    ],
-                    [
-                      "ARROW:extension:metadata",
-                      "{\"startField\":0,\"endField\":3}"
-                    ]
-                  ]
+                "literal": {
+                  "durationMicrosecond": {
+                    "microseconds": 8594553123456
+                  }
                 }
               }
             ],
@@ -2802,25 +2562,10 @@
             ],
             "arguments": [
               {
-                "alias": {
-                  "expr": {
-                    "literal": {
-                      "durationMicrosecond": {
-                        "microseconds": 32887123456
-                      }
-                    }
-                  },
-                  "name": [],
-                  "metadata": [
-                    [
-                      "ARROW:extension:name",
-                      "sail.spark.dayTime.interval"
-                    ],
-                    [
-                      "ARROW:extension:metadata",
-                      "{\"startField\":1,\"endField\":3}"
-                    ]
-                  ]
+                "literal": {
+                  "durationMicrosecond": {
+                    "microseconds": 32887123456
+                  }
                 }
               }
             ],
@@ -5173,25 +4918,10 @@
       "input": "interval '\t -1-2\t' year to month",
       "output": {
         "success": {
-          "alias": {
-            "expr": {
-              "literal": {
-                "intervalYearMonth": {
-                  "months": -14
-                }
-              }
-            },
-            "name": [],
-            "metadata": [
-              [
-                "ARROW:extension:name",
-                "sail.spark.yearMonth.interval"
-              ],
-              [
-                "ARROW:extension:metadata",
-                "{\"startField\":0,\"endField\":1}"
-              ]
-            ]
+          "literal": {
+            "intervalYearMonth": {
+              "months": -14
+            }
           }
         }
       }
@@ -5200,25 +4930,10 @@
       "input": "interval '\t 1 0:0:1 ' day to second",
       "output": {
         "success": {
-          "alias": {
-            "expr": {
-              "literal": {
-                "durationMicrosecond": {
-                  "microseconds": 86401000000
-                }
-              }
-            },
-            "name": [],
-            "metadata": [
-              [
-                "ARROW:extension:name",
-                "sail.spark.dayTime.interval"
-              ],
-              [
-                "ARROW:extension:metadata",
-                "{\"startField\":0,\"endField\":3}"
-              ]
-            ]
+          "literal": {
+            "durationMicrosecond": {
+              "microseconds": 86401000000
+            }
           }
         }
       }
@@ -5227,25 +4942,10 @@
       "input": "interval '-1 0:0:0' day to second",
       "output": {
         "success": {
-          "alias": {
-            "expr": {
-              "literal": {
-                "durationMicrosecond": {
-                  "microseconds": -86400000000
-                }
-              }
-            },
-            "name": [],
-            "metadata": [
-              [
-                "ARROW:extension:name",
-                "sail.spark.dayTime.interval"
-              ],
-              [
-                "ARROW:extension:metadata",
-                "{\"startField\":0,\"endField\":3}"
-              ]
-            ]
+          "literal": {
+            "durationMicrosecond": {
+              "microseconds": -86400000000
+            }
           }
         }
       }
@@ -5254,25 +4954,10 @@
       "input": "interval '-123-0' year to month",
       "output": {
         "success": {
-          "alias": {
-            "expr": {
-              "literal": {
-                "intervalYearMonth": {
-                  "months": -1476
-                }
-              }
-            },
-            "name": [],
-            "metadata": [
-              [
-                "ARROW:extension:name",
-                "sail.spark.yearMonth.interval"
-              ],
-              [
-                "ARROW:extension:metadata",
-                "{\"startField\":0,\"endField\":1}"
-              ]
-            ]
+          "literal": {
+            "intervalYearMonth": {
+              "months": -1476
+            }
           }
         }
       }
@@ -5281,25 +4966,10 @@
       "input": "interval '-19:18:17.123456789' hour to second",
       "output": {
         "success": {
-          "alias": {
-            "expr": {
-              "literal": {
-                "durationMicrosecond": {
-                  "microseconds": -69497123456
-                }
-              }
-            },
-            "name": [],
-            "metadata": [
-              [
-                "ARROW:extension:name",
-                "sail.spark.dayTime.interval"
-              ],
-              [
-                "ARROW:extension:metadata",
-                "{\"startField\":1,\"endField\":3}"
-              ]
-            ]
+          "literal": {
+            "durationMicrosecond": {
+              "microseconds": -69497123456
+            }
           }
         }
       }
@@ -5308,25 +4978,10 @@
       "input": "interval '-2-3' year to month",
       "output": {
         "success": {
-          "alias": {
-            "expr": {
-              "literal": {
-                "intervalYearMonth": {
-                  "months": -27
-                }
-              }
-            },
-            "name": [],
-            "metadata": [
-              [
-                "ARROW:extension:name",
-                "sail.spark.yearMonth.interval"
-              ],
-              [
-                "ARROW:extension:metadata",
-                "{\"startField\":0,\"endField\":1}"
-              ]
-            ]
+          "literal": {
+            "intervalYearMonth": {
+              "months": -27
+            }
           }
         }
       }
@@ -5551,25 +5206,10 @@
       "input": "interval '-99 11:22:33.123456789' day to second",
       "output": {
         "success": {
-          "alias": {
-            "expr": {
-              "literal": {
-                "durationMicrosecond": {
-                  "microseconds": -8594553123456
-                }
-              }
-            },
-            "name": [],
-            "metadata": [
-              [
-                "ARROW:extension:name",
-                "sail.spark.dayTime.interval"
-              ],
-              [
-                "ARROW:extension:metadata",
-                "{\"startField\":0,\"endField\":3}"
-              ]
-            ]
+          "literal": {
+            "durationMicrosecond": {
+              "microseconds": -8594553123456
+            }
           }
         }
       }
@@ -5794,25 +5434,10 @@
       "input": "interval '0:0:0' hour to second",
       "output": {
         "success": {
-          "alias": {
-            "expr": {
-              "literal": {
-                "durationMicrosecond": {
-                  "microseconds": 0
-                }
-              }
-            },
-            "name": [],
-            "metadata": [
-              [
-                "ARROW:extension:name",
-                "sail.spark.dayTime.interval"
-              ],
-              [
-                "ARROW:extension:metadata",
-                "{\"startField\":1,\"endField\":3}"
-              ]
-            ]
+          "literal": {
+            "durationMicrosecond": {
+              "microseconds": 0
+            }
           }
         }
       }
@@ -5821,25 +5446,10 @@
       "input": "interval '0:0:1' hour to second",
       "output": {
         "success": {
-          "alias": {
-            "expr": {
-              "literal": {
-                "durationMicrosecond": {
-                  "microseconds": 1000000
-                }
-              }
-            },
-            "name": [],
-            "metadata": [
-              [
-                "ARROW:extension:name",
-                "sail.spark.dayTime.interval"
-              ],
-              [
-                "ARROW:extension:metadata",
-                "{\"startField\":1,\"endField\":3}"
-              ]
-            ]
+          "literal": {
+            "durationMicrosecond": {
+              "microseconds": 1000000
+            }
           }
         }
       }
@@ -5848,25 +5458,10 @@
       "input": "interval '1 0:0:0' day to second",
       "output": {
         "success": {
-          "alias": {
-            "expr": {
-              "literal": {
-                "durationMicrosecond": {
-                  "microseconds": 86400000000
-                }
-              }
-            },
-            "name": [],
-            "metadata": [
-              [
-                "ARROW:extension:name",
-                "sail.spark.dayTime.interval"
-              ],
-              [
-                "ARROW:extension:metadata",
-                "{\"startField\":0,\"endField\":3}"
-              ]
-            ]
+          "literal": {
+            "durationMicrosecond": {
+              "microseconds": 86400000000
+            }
           }
         }
       }
@@ -5875,25 +5470,10 @@
       "input": "interval '1 0:0:1' day to second",
       "output": {
         "success": {
-          "alias": {
-            "expr": {
-              "literal": {
-                "durationMicrosecond": {
-                  "microseconds": 86401000000
-                }
-              }
-            },
-            "name": [],
-            "metadata": [
-              [
-                "ARROW:extension:name",
-                "sail.spark.dayTime.interval"
-              ],
-              [
-                "ARROW:extension:metadata",
-                "{\"startField\":0,\"endField\":3}"
-              ]
-            ]
+          "literal": {
+            "durationMicrosecond": {
+              "microseconds": 86401000000
+            }
           }
         }
       }
@@ -5918,25 +5498,10 @@
       "input": "interval '10 9:8:7.123456789' day to second",
       "output": {
         "success": {
-          "alias": {
-            "expr": {
-              "literal": {
-                "durationMicrosecond": {
-                  "microseconds": 896887123456
-                }
-              }
-            },
-            "name": [],
-            "metadata": [
-              [
-                "ARROW:extension:name",
-                "sail.spark.dayTime.interval"
-              ],
-              [
-                "ARROW:extension:metadata",
-                "{\"startField\":0,\"endField\":3}"
-              ]
-            ]
+          "literal": {
+            "durationMicrosecond": {
+              "microseconds": 896887123456
+            }
           }
         }
       }
@@ -6168,25 +5733,10 @@
       "input": "interval '11:22:33.123456789' hour to second",
       "output": {
         "success": {
-          "alias": {
-            "expr": {
-              "literal": {
-                "durationMicrosecond": {
-                  "microseconds": 40953123456
-                }
-              }
-            },
-            "name": [],
-            "metadata": [
-              [
-                "ARROW:extension:name",
-                "sail.spark.dayTime.interval"
-              ],
-              [
-                "ARROW:extension:metadata",
-                "{\"startField\":1,\"endField\":3}"
-              ]
-            ]
+          "literal": {
+            "durationMicrosecond": {
+              "microseconds": 40953123456
+            }
           }
         }
       }
@@ -6195,25 +5745,10 @@
       "input": "interval '123-10' year to month",
       "output": {
         "success": {
-          "alias": {
-            "expr": {
-              "literal": {
-                "intervalYearMonth": {
-                  "months": 1486
-                }
-              }
-            },
-            "name": [],
-            "metadata": [
-              [
-                "ARROW:extension:name",
-                "sail.spark.yearMonth.interval"
-              ],
-              [
-                "ARROW:extension:metadata",
-                "{\"startField\":0,\"endField\":1}"
-              ]
-            ]
+          "literal": {
+            "intervalYearMonth": {
+              "months": 1486
+            }
           }
         }
       }
@@ -6438,25 +5973,10 @@
       "input": "interval '496-0' year to month",
       "output": {
         "success": {
-          "alias": {
-            "expr": {
-              "literal": {
-                "intervalYearMonth": {
-                  "months": 5952
-                }
-              }
-            },
-            "name": [],
-            "metadata": [
-              [
-                "ARROW:extension:name",
-                "sail.spark.yearMonth.interval"
-              ],
-              [
-                "ARROW:extension:metadata",
-                "{\"startField\":0,\"endField\":1}"
-              ]
-            ]
+          "literal": {
+            "intervalYearMonth": {
+              "months": 5952
+            }
           }
         }
       }
@@ -6465,25 +5985,10 @@
       "input": "interval '99 11:22:33.123456789' day to second",
       "output": {
         "success": {
-          "alias": {
-            "expr": {
-              "literal": {
-                "durationMicrosecond": {
-                  "microseconds": 8594553123456
-                }
-              }
-            },
-            "name": [],
-            "metadata": [
-              [
-                "ARROW:extension:name",
-                "sail.spark.dayTime.interval"
-              ],
-              [
-                "ARROW:extension:metadata",
-                "{\"startField\":0,\"endField\":3}"
-              ]
-            ]
+          "literal": {
+            "durationMicrosecond": {
+              "microseconds": 8594553123456
+            }
           }
         }
       }
@@ -6492,25 +5997,10 @@
       "input": "interval '9:8:7.123456789' hour to second",
       "output": {
         "success": {
-          "alias": {
-            "expr": {
-              "literal": {
-                "durationMicrosecond": {
-                  "microseconds": 32887123456
-                }
-              }
-            },
-            "name": [],
-            "metadata": [
-              [
-                "ARROW:extension:name",
-                "sail.spark.dayTime.interval"
-              ],
-              [
-                "ARROW:extension:metadata",
-                "{\"startField\":1,\"endField\":3}"
-              ]
-            ]
+          "literal": {
+            "durationMicrosecond": {
+              "microseconds": 32887123456
+            }
           }
         }
       }

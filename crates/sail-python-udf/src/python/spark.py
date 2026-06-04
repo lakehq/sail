@@ -11,7 +11,6 @@ if TYPE_CHECKING:
 import pandas as pd
 import pyarrow as pa
 import pyspark
-from pyspark.sql import types as spark_types
 from pyspark.sql.pandas.serializers import ArrowStreamPandasUDFSerializer, ArrowStreamPandasUDTFSerializer
 from pyspark.sql.pandas.types import from_arrow_type
 from pyspark.sql.types import Row
@@ -248,7 +247,7 @@ def _to_string(data: Any) -> str | None:
         return data
     if isinstance(data, bool):
         return "true" if data else "false"
-    if isinstance(data, list | tuple):
+    if isinstance(data, (list, tuple)):
         items = ", ".join(_to_string(x) for x in data)
         return f"[{items}]"
     if isinstance(data, dict):
@@ -312,7 +311,7 @@ class ArrayConverter(Converter):
         end = 0
         for x in data:
             _raise_for_row(x)
-            if x is None or not isinstance(x, list | tuple):
+            if x is None or not isinstance(x, (list, tuple)):
                 offsets.append(None)
             else:
                 offsets.append(end)
@@ -402,7 +401,6 @@ class VariantConverter(Converter):
         values = []
         metadata = []
         mask = []
-        variant_val_type = getattr(spark_types, "VariantVal", None)
         for x in data:
             if x is None:
                 values.append(None)
@@ -410,9 +408,7 @@ class VariantConverter(Converter):
                 mask.append(True)
                 continue
             mask.append(False)
-            if variant_val_type is not None and isinstance(x, variant_val_type):
-                internal = self._spark_data_type.toInternal(x)
-            elif isinstance(x, dict) and all(key in x for key in ["value", "metadata"]):
+            if isinstance(x, dict) and all(key in x for key in ["value", "metadata"]):
                 internal = x
             else:
                 internal = self._spark_data_type.toInternal(x)

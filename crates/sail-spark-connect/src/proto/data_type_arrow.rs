@@ -2,7 +2,6 @@ use arrow_schema::extension::ExtensionType;
 use datafusion::arrow::datatypes as adt;
 use parquet_variant_compute::VariantType;
 use sail_common::geoarrow::extension::{GeoArrowMetadata, GeoArrowWkbType};
-use sail_common::spark::extension::{SparkDayTimeIntervalType, SparkYearMonthIntervalType};
 use sail_common::spec;
 
 use crate::error::{SparkError, SparkResult};
@@ -111,24 +110,6 @@ impl TryFrom<adt::Field> for sdt::StructField {
             field.try_extension_type::<VariantType>()?;
             DataType {
                 kind: Some(sdt::Kind::Variant(sdt::Variant {
-                    type_variation_reference: 0,
-                })),
-            }
-        } else if extension_type_name == Some(SparkDayTimeIntervalType::NAME) {
-            let ext = field.try_extension_type::<SparkDayTimeIntervalType>()?;
-            DataType {
-                kind: Some(sdt::Kind::DayTimeInterval(sdt::DayTimeInterval {
-                    start_field: ext.metadata.start_field,
-                    end_field: ext.metadata.end_field,
-                    type_variation_reference: 0,
-                })),
-            }
-        } else if extension_type_name == Some(SparkYearMonthIntervalType::NAME) {
-            let ext = field.try_extension_type::<SparkYearMonthIntervalType>()?;
-            DataType {
-                kind: Some(sdt::Kind::YearMonthInterval(sdt::YearMonthInterval {
-                    start_field: ext.metadata.start_field,
-                    end_field: ext.metadata.end_field,
                     type_variation_reference: 0,
                 })),
             }
@@ -285,8 +266,6 @@ impl TryFrom<adt::DataType> for DataType {
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
-
-    use sail_common::spark::extension::SparkIntervalMetadata;
 
     use super::*;
     use crate::error::SparkResult;
@@ -461,59 +440,6 @@ mod tests {
             Some(DataType {
                 kind: Some(sdt::Kind::Geometry(sdt::Geometry {
                     srid: -1,
-                    type_variation_reference: 0,
-                })),
-            })
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_interval_extension_field_to_proto() -> SparkResult<()> {
-        let metadata = SparkIntervalMetadata::new(Some(0), Some(3))
-            .arrow_metadata(SparkDayTimeIntervalType::NAME)
-            .into_iter()
-            .collect();
-        let field = adt::Field::new(
-            "day_time",
-            adt::DataType::Duration(adt::TimeUnit::Microsecond),
-            true,
-        )
-        .with_metadata(metadata);
-
-        let proto_field: sdt::StructField = field.try_into()?;
-
-        assert_eq!(
-            proto_field.data_type,
-            Some(DataType {
-                kind: Some(sdt::Kind::DayTimeInterval(sdt::DayTimeInterval {
-                    start_field: Some(0),
-                    end_field: Some(3),
-                    type_variation_reference: 0,
-                })),
-            })
-        );
-
-        let metadata = SparkIntervalMetadata::new(Some(0), Some(1))
-            .arrow_metadata(SparkYearMonthIntervalType::NAME)
-            .into_iter()
-            .collect();
-        let field = adt::Field::new(
-            "year_month",
-            adt::DataType::Interval(adt::IntervalUnit::YearMonth),
-            true,
-        )
-        .with_metadata(metadata);
-
-        let proto_field: sdt::StructField = field.try_into()?;
-
-        assert_eq!(
-            proto_field.data_type,
-            Some(DataType {
-                kind: Some(sdt::Kind::YearMonthInterval(sdt::YearMonthInterval {
-                    start_field: Some(0),
-                    end_field: Some(1),
                     type_variation_reference: 0,
                 })),
             })
