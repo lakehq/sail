@@ -31,7 +31,7 @@ fn r#struct(input: ScalarFunctionInput) -> PlanResult<Expr> {
 }
 
 fn named_struct(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    if input.arguments.is_empty() || input.arguments.len() % 2 != 0 {
+    if input.arguments.is_empty() || !input.arguments.len().is_multiple_of(2) {
         return Err(PlanError::invalid(
             "named_struct requires an even number of arguments",
         ));
