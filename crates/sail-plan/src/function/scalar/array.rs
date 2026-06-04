@@ -124,9 +124,10 @@ fn sort_array(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 fn array_append(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let schema = input.function_context.schema;
     let (array, element) = input.arguments.two()?;
-    let output_type = array_append_type(&array, &element, schema)?;
     let array_input = cast_list_value_nullability(array.clone(), schema, true)?;
-    let appended = cast(expr_fn::array_append(array_input, element), output_type);
+    let appended = expr_fn::array_append(array_input, element);
+    let output_type = with_list_value_nullability(&appended.get_type(schema.as_ref())?, true);
+    let appended = cast(appended, output_type);
     Ok(when(array.clone().is_not_null(), appended).end()?)
 }
 
@@ -176,8 +177,9 @@ fn array_position(array: expr::Expr, element: expr::Expr) -> PlanResult<expr::Ex
 fn array_insert(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let schema = input.function_context.schema;
     let (array, position, value) = input.arguments.three()?;
-    let output_type = with_list_value_nullability(&array.get_type(schema.as_ref())?, true);
     let array_input = cast_list_value_nullability(array.clone(), schema, true)?;
+    let output_type = array_update_output_type(&array_input, &value, schema)?;
+    let array_input = cast(array_input, output_type.clone());
     let array_len = cast(expr_fn::array_length(array.clone()), DataType::Int64);
 
     let pos_from_zero = when(position.clone().gt(lit(0)), position.clone() - lit(1))
@@ -314,15 +316,16 @@ fn flatten(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
-fn array_append_type(
+fn array_update_output_type(
     array: &expr::Expr,
     element: &expr::Expr,
     schema: &datafusion_common::DFSchemaRef,
 ) -> PlanResult<DataType> {
-    let array_type = array.get_type(schema.as_ref())?;
-    let contains_null = list_value_contains_null(&array_type).unwrap_or(true)
-        || element.nullable(schema.as_ref())?;
-    Ok(with_list_value_nullability(&array_type, contains_null))
+    let updated = expr_fn::array_append(array.clone(), element.clone());
+    Ok(with_list_value_nullability(
+        &updated.get_type(schema.as_ref())?,
+        true,
+    ))
 }
 
 fn cast_list_value_nullability(
@@ -336,14 +339,6 @@ fn cast_list_value_nullability(
         Ok(expr)
     } else {
         Ok(cast(expr, target_type))
-    }
-}
-
-fn list_value_contains_null(data_type: &DataType) -> Option<bool> {
-    match data_type {
-        DataType::List(field) | DataType::LargeList(field) => Some(field.is_nullable()),
-        DataType::FixedSizeList(field, _) => Some(field.is_nullable()),
-        _ => None,
     }
 }
 

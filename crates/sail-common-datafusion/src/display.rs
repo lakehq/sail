@@ -33,6 +33,7 @@ use crate::formatter::{
     Time64NanosecondFormatter, TimestampMicrosecondFormatter, TimestampMillisecondFormatter,
     TimestampNanosecondFormatter, TimestampSecondFormatter,
 };
+use crate::variant::is_marked_variant_storage_type;
 
 /// Format for displaying datetime values
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -318,23 +319,11 @@ fn make_formatter<'a>(
         DataType::Struct(_) => {
             let struct_array = as_struct_array(array);
 
-            // Check if this is a Variant using structural heuristics.
+            // Check if this is a Variant using Spark's Arrow child-field marker.
             // TODO: Ideally we would check ARROW:extension:name metadata on the parent Field,
             // but make_formatter only receives an &dyn Array (no parent field metadata).
             // Plumbing field metadata through the formatter API is a larger refactor.
-            // The structural check + VariantArray::try_new is specific enough for now.
-            let metadata = struct_array
-                .fields()
-                .iter()
-                .find(|field| field.name() == "metadata");
-            let value = struct_array.fields().iter().find(|field| field.name() == "value");
-            let is_variant = struct_array.fields().len() == 2
-                && metadata.is_some_and(|field| {
-                    matches!(field.data_type(), DataType::Binary | DataType::BinaryView)
-                })
-                && value.is_some_and(|field| {
-                    matches!(field.data_type(), DataType::Binary | DataType::BinaryView)
-                })
+            let is_variant = is_marked_variant_storage_type(struct_array.data_type())
                 && VariantArray::try_new(struct_array).is_ok();
 
             if is_variant {
@@ -1025,7 +1014,7 @@ pub fn lexical_to_string<N: lexical_core::ToLexical>(n: N) -> String {
 #[cfg(test)]
 mod tests {
     use datafusion::arrow::array::builder::StringRunBuilder;
-    use datafusion::arrow::datatypes::Int32Type;
+    use datafusion::arrow::datatypes::{Fields, Int32Type};
 
     use super::*;
 
@@ -1205,6 +1194,25 @@ mod tests {
 
         let variant_array = builder.build();
         let struct_array: StructArray = variant_array.into();
+        let fields = struct_array
+            .fields()
+            .iter()
+            .map(|field| {
+                if field.name() == "metadata" {
+                    crate::variant::variant_metadata_field(
+                        field.data_type().clone(),
+                        field.is_nullable(),
+                    )
+                } else {
+                    field.as_ref().clone()
+                }
+            })
+            .collect::<Vec<_>>();
+        let struct_array = StructArray::new(
+            Fields::from(fields),
+            struct_array.columns().to_vec(),
+            struct_array.nulls().cloned(),
+        );
 
         // Test object - parse JSON to compare since key order is not guaranteed
         let result = array_value_to_string(&struct_array, 0).unwrap();
