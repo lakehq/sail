@@ -621,6 +621,7 @@ impl PlanFormatter for SparkPlanFormatter {
                 Ok(format!("{}({arguments})", name.to_lowercase()))
             }
             "position" | "locate" => Ok(append_start_pos_if_arglen_eq(2, 1, name, arguments)),
+            "regexp_extract_all" => Ok(append_start_pos_if_arglen_eq(2, 1, name, arguments)),
             "regexp_instr" => Ok(append_start_pos_if_arglen_eq(2, 0, name, arguments)),
             "regexp_replace" => Ok(append_start_pos_if_arglen_eq(3, 1, name, arguments)),
             // When the data type being exploded is `ExplodeDataType::List`, use "col" as the column name.

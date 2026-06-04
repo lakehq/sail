@@ -68,11 +68,11 @@ message ExtendedPhysicalPlanNode {
 
 message ExtendedPhysicalExprNode {
   oneof ExprKind {
-    DeltaCastColumnExprNode delta_cast = 1;
+    CastColumnExprNode schema_evolution_cast = 1;
   }
 }
 
-message DeltaCastColumnExprNode {
+message CastColumnExprNode {
   bytes input_schema = 1;
   bytes target_schema = 2;
 }
@@ -102,6 +102,7 @@ message ExtendedScalarUdf {
     SparkMakeTimestampNtzUdf spark_make_timestamp_ntz = 21;
     ConvertTzUdf convert_tz = 22;
     SparkToCsvUdf spark_to_csv = 23;
+    SparkPmodUdf spark_pmod = 24;
   }
 }
 
@@ -197,6 +198,10 @@ message SparkNextDayUdf {
 }
 
 message SparkAbsUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkPmodUdf {
   bool ansi_mode = 1;
 }
 
@@ -746,6 +751,7 @@ message IcebergWriterExecNode {
   PhysicalSinkMode sink_mode = 4;
   bool table_exists = 5;
   string options = 6;
+  bytes logical_input_schema = 7;
 }
 
 message IcebergCommitExecNode {

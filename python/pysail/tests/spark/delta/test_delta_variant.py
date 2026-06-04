@@ -125,3 +125,76 @@ def test_delta_dataframe_read_shredded_variant_physical_data(spark, tmp_path: Pa
         (1, 42, "42"),
         (2, 99, "99"),
     ]
+
+
+def _data_parquet_files(table_location: Path) -> list[Path]:
+    return sorted(path for path in table_location.rglob("*.parquet") if "_delta_log" not in path.parts)
+
+
+def _first_add_stats(table_location: Path) -> dict:
+    log_file = table_location / "_delta_log" / "00000000000000000000.json"
+    with log_file.open("r", encoding="utf-8") as f:
+        for line in f:
+            action = json.loads(line)
+            if "add" in action:
+                return json.loads(action["add"]["stats"])
+    msg = f"add action not found in {log_file}"
+    raise AssertionError(msg)
+
+
+def test_delta_writer_shreds_variant_physical_data(spark, tmp_path: Path):
+    table_path = tmp_path / "delta_variant_shredded_write"
+    spark.sql("DROP TABLE IF EXISTS delta_variant_shredded_write_table")
+    spark.sql(
+        f"""
+        CREATE TABLE delta_variant_shredded_write_table (
+          id INT,
+          payload VARIANT
+        )
+        USING DELTA
+        LOCATION '{table_path.as_posix()}'
+        TBLPROPERTIES ('delta.enableVariantShredding' = 'true')
+        """
+    )
+    spark.sql(
+        """
+        INSERT INTO delta_variant_shredded_write_table
+        SELECT * FROM VALUES
+          (1, parse_json('{"a":1,"b":"delta"}')),
+          (2, parse_json('{"a":2,"b":"lake"}'))
+        """
+    )
+
+    data_files = _data_parquet_files(table_path)
+    assert len(data_files) == 1
+
+    payload_field = pq.read_schema(data_files[0]).field("payload")
+    payload_type = payload_field.type
+    assert pa.types.is_struct(payload_type)
+    payload_fields = {payload_type.field(i).name for i in range(payload_type.num_fields)}
+    assert "metadata" in payload_fields
+    assert "typed_value" in payload_fields
+    typed_value = payload_type.field("typed_value").type
+    assert pa.types.is_struct(typed_value)
+    typed_value_fields = {typed_value.field(i).name for i in range(typed_value.num_fields)}
+    assert "a" in typed_value_fields
+    assert "b" in typed_value_fields
+
+    rows = (
+        spark.read.format("delta")
+        .load(str(table_path))
+        .select(
+            "id",
+            F.expr("variant_get(payload, '$.a', 'int')").alias("a"),
+            F.expr("variant_get(payload, '$.b', 'string')").alias("b"),
+        )
+        .orderBy("id")
+        .collect()
+    )
+    assert [(row.id, row.a, row.b) for row in rows] == [(1, 1, "delta"), (2, 2, "lake")]
+
+    stats = _first_add_stats(table_path)
+    assert isinstance(stats.get("minValues", {}).get("payload"), str)
+    assert isinstance(stats.get("maxValues", {}).get("payload"), str)
+    assert stats.get("nullCount", {}).get("payload") == 0
+    assert "typed_value" not in json.dumps(stats, separators=(",", ":"))

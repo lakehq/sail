@@ -259,8 +259,12 @@ fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
         crate::function::scalar::conversion::cast_to_date(input)
     } else if input.arguments.len() == 2 {
         let (expr, format) = input.arguments.two()?;
-        let expr = match expr.get_type(input.function_context.schema) {
-            Ok(DataType::Timestamp(_time_unit, _tz)) => cast(expr, DataType::Utf8),
+        let expr_type = expr.get_type(input.function_context.schema);
+        if let Ok(DataType::Timestamp(_, _)) = expr_type {
+            let expr = expr_fn::to_local_time(vec![expr]);
+            return Ok(cast(expr, DataType::Date32)); // In case of data type timestamp, ignore format
+        }
+        let expr = match expr_type {
             Ok(_other) => expr,
             Err(_) => cast(expr, DataType::Utf8), // In case of error, cast to string
         };

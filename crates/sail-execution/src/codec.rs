@@ -3,7 +3,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
-use datafusion::arrow::datatypes::{DataType, Schema, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::common::{
     plan_datafusion_err, plan_err, Constraint, Constraints, JoinSide, Result, ScalarValue,
@@ -65,7 +65,6 @@ use datafusion_spark::function::map::map_from_arrays::MapFromArrays;
 use datafusion_spark::function::map::map_from_entries::MapFromEntries;
 use datafusion_spark::function::math::expm1::SparkExpm1;
 use datafusion_spark::function::math::hex::SparkHex;
-use datafusion_spark::function::math::modulus::SparkPmod;
 use datafusion_spark::function::math::width_bucket::SparkWidthBucket;
 use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::format_string::FormatStringFunc;
@@ -78,6 +77,7 @@ use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
 use sail_common_datafusion::catalog::{CatalogPartitionField, PartitionTransform};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
+use sail_common_datafusion::schema_evolution::SchemaEvolutionCastColumnExpr;
 use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_data_source::formats::binary::source::BinarySource;
@@ -92,10 +92,10 @@ use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
 use sail_data_source::options::gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
-    DeletionVectorRowsWriterExec, DeletionVectorWriterExec, DeltaCastColumnExpr,
-    DeltaCommitContext, DeltaCommitExec, DeltaDiscoveryExec, DeltaLogReplayExec,
-    DeltaMetadataStatsExec, DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaSnapshotContext,
-    DeltaWriteContext, DeltaWriterExec, RelaxedTzCastExec,
+    DeletionVectorRowsWriterExec, DeletionVectorWriterExec, DeltaCommitContext, DeltaCommitExec,
+    DeltaDiscoveryExec, DeltaLogReplayExec, DeltaMetadataStatsExec, DeltaRemoveActionsExec,
+    DeltaScanByAddsExec, DeltaSnapshotContext, DeltaWriteContext, DeltaWriterExec,
+    RelaxedTzCastExec,
 };
 use sail_delta_lake::spec::{Action, ColumnMappingMode, DeltaOperation, StructType};
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
@@ -124,6 +124,7 @@ use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
 use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_function::scalar::array::spark_sequence::SparkSequence;
+use sail_function::scalar::array_struct_field::ArrayStructField;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
 use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
@@ -167,6 +168,7 @@ use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
 use sail_function::scalar::math::spark_div::SparkIntervalDiv;
+use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
 use sail_function::scalar::math::spark_try_add::SparkTryAdd;
 use sail_function::scalar::math::spark_try_div::SparkTryDiv;
@@ -258,8 +260,8 @@ use crate::plan::gen::extended_scalar_udf::UdfKind;
 use crate::plan::gen::extended_stream_udf::StreamUdfKind;
 use crate::plan::gen::extended_window_udf::UdwfKind;
 use crate::plan::gen::{
-    DeltaCastColumnExprNode, ExtendedAggregateUdf, ExtendedPhysicalExprNode,
-    ExtendedPhysicalPlanNode, ExtendedScalarUdf, ExtendedStreamUdf, ExtendedWindowUdf,
+    CastColumnExprNode, ExtendedAggregateUdf, ExtendedPhysicalExprNode, ExtendedPhysicalPlanNode,
+    ExtendedScalarUdf, ExtendedStreamUdf, ExtendedWindowUdf,
 };
 use crate::plan::{gen, StageInputExec};
 
@@ -1143,6 +1145,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sink_mode,
                 table_exists,
                 options,
+                logical_input_schema,
             }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let sink_mode = match sink_mode {
@@ -1164,6 +1167,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         plan_datafusion_err!("failed to decode Iceberg options: {e}")
                     })?
                 };
+                let logical_input_schema = if logical_input_schema.is_empty() {
+                    None
+                } else {
+                    Some(Arc::new(self.try_decode_schema(&logical_input_schema)?))
+                };
 
                 Ok(Arc::new(IcebergWriterExec::new(
                     input,
@@ -1172,6 +1180,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     sink_mode,
                     table_exists,
                     options,
+                    logical_input_schema,
                 )))
             }
             NodeKind::IcebergCommit(gen::IcebergCommitExecNode { input, table_url }) => {
@@ -1924,6 +1933,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let sink_mode = self.try_encode_physical_sink_mode(iceberg_writer_exec.sink_mode())?;
             let options = serde_json::to_string(iceberg_writer_exec.options())
                 .map_err(|e| plan_datafusion_err!("failed to encode Iceberg options: {e}"))?;
+            let logical_input_schema = iceberg_writer_exec
+                .logical_input_schema()
+                .map(|schema| self.try_encode_schema(schema.as_ref()))
+                .transpose()?
+                .unwrap_or_default();
             NodeKind::IcebergWriter(gen::IcebergWriterExecNode {
                 input,
                 table_url: iceberg_writer_exec.table_url().to_string(),
@@ -1935,6 +1949,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sink_mode: Some(sink_mode),
                 table_exists: iceberg_writer_exec.table_exists(),
                 options,
+                logical_input_schema,
             })
         } else if let Some(iceberg_commit_exec) = node.as_any().downcast_ref::<IcebergCommitExec>()
         {
@@ -2205,6 +2220,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkAbs(gen::SparkAbsUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkAbs::new(ansi_mode))));
             }
+            UdfKind::SparkPmod(gen::SparkPmodUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkPmod::new(ansi_mode))));
+            }
             UdfKind::SparkMakeTimestampNtz(gen::SparkMakeTimestampNtzUdf { is_try }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new(
                     is_try,
@@ -2218,6 +2236,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "array_item_with_position" => {
                 Ok(Arc::new(ScalarUDF::from(ArrayItemWithPosition::new())))
             }
+            "array_struct_field" => Ok(Arc::new(ScalarUDF::from(ArrayStructField::new()))),
             "array_min" => Ok(Arc::new(ScalarUDF::from(ArrayMin::new()))),
             "array_max" => Ok(Arc::new(ScalarUDF::from(ArrayMax::new()))),
             "array_intersect" | "list_intersect" => {
@@ -2360,7 +2379,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToTimestamp::new())))
             }
             "spark_expm1" | "expm1" => Ok(Arc::new(ScalarUDF::from(SparkExpm1::new()))),
-            "spark_pmod" | "pmod" => Ok(Arc::new(ScalarUDF::from(SparkPmod::new()))),
             "spark_ceil" | "ceil" => Ok(Arc::new(ScalarUDF::from(SparkCeil::new()))),
             "spark_floor" | "floor" => Ok(Arc::new(ScalarUDF::from(SparkFloor::new()))),
             "spark_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8::new()))),
@@ -2397,6 +2415,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         // TODO: Implement custom registry to avoid codec for built-in functions
         let node_inner = node.inner().as_any();
         let udf_kind: UdfKind = if node_inner.is::<ArrayItemWithPosition>()
+            || node_inner.is::<ArrayStructField>()
             || node_inner.is::<ArrayMax>()
             || node_inner.is::<ArrayMin>()
             || node_inner.is::<ArrayIntersect>()
@@ -2465,7 +2484,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkMask>()
             || node_inner.is::<SparkConcatWs>()
             || node_inner.is::<SparkMurmur3Hash>()
-            || node_inner.is::<SparkPmod>()
             || node_inner.is::<SparkRegexpExtractAll>()
             || node_inner.is::<SparkReverse>()
             || node_inner.is::<SparkSequence>()
@@ -2619,6 +2637,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkAbs>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkAbs(gen::SparkAbsUdf { ansi_mode })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkPmod>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkPmod(gen::SparkPmodUdf { ansi_mode })
         } else if let Some(func) = node
             .inner()
             .as_any()
@@ -2891,13 +2912,60 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         let expr_kind = node
             .expr_kind
             .ok_or_else(|| plan_datafusion_err!("missing physical expr node"))?;
-        let ExprKind::DeltaCast(DeltaCastColumnExprNode {
+        match expr_kind {
+            ExprKind::SchemaEvolutionCast(node) => {
+                let (input, input_field, target_field) = self.try_decode_cast_column_expr(
+                    node,
+                    inputs,
+                    "SchemaEvolutionCastColumnExpr",
+                )?;
+                Ok(Arc::new(SchemaEvolutionCastColumnExpr::new(
+                    input,
+                    input_field,
+                    target_field,
+                    None,
+                )))
+            }
+        }
+    }
+
+    fn try_encode_expr(&self, node: &Arc<dyn PhysicalExpr>, buf: &mut Vec<u8>) -> Result<()> {
+        let expr_kind = if let Some(cast) = node
+            .as_any()
+            .downcast_ref::<SchemaEvolutionCastColumnExpr>()
+        {
+            let node = self.try_encode_cast_column_expr(
+                cast.input_field().as_ref(),
+                cast.target_field().as_ref(),
+            )?;
+            ExprKind::SchemaEvolutionCast(node)
+        } else {
+            return plan_err!("unsupported physical expr extension");
+        };
+
+        let node = ExtendedPhysicalExprNode {
+            expr_kind: Some(expr_kind),
+        };
+        node.encode(buf)
+            .map_err(|e| plan_datafusion_err!("failed to encode physical expr: {e}"))
+    }
+}
+
+impl RemoteExecutionCodec {
+    #[expect(clippy::type_complexity)]
+    fn try_decode_cast_column_expr(
+        &self,
+        node: CastColumnExprNode,
+        inputs: &[Arc<dyn PhysicalExpr>],
+        expr_name: &str,
+    ) -> Result<(Arc<dyn PhysicalExpr>, Arc<Field>, Arc<Field>)> {
+        let CastColumnExprNode {
             input_schema,
             target_schema,
-        }) = expr_kind;
+        } = node;
         if inputs.len() != 1 {
             return plan_err!(
-                "DeltaCastColumnExpr expects exactly one input, got {}",
+                "{expr_name} expects exactly one input, got {}",
                 inputs.len()
             );
         }
@@ -2908,45 +2976,38 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         let input_field = input_schema
             .fields()
             .first()
-            .ok_or_else(|| plan_datafusion_err!("DeltaCastColumnExpr missing input field"))?
+            .ok_or_else(|| plan_datafusion_err!("{expr_name} missing input field"))?
             .as_ref()
             .clone();
         let target_field = target_schema
             .fields()
             .first()
-            .ok_or_else(|| plan_datafusion_err!("DeltaCastColumnExpr missing target field"))?
+            .ok_or_else(|| plan_datafusion_err!("{expr_name} missing target field"))?
             .as_ref()
             .clone();
 
-        Ok(Arc::new(DeltaCastColumnExpr::new(
+        Ok((
             inputs[0].clone(),
             Arc::new(input_field),
             Arc::new(target_field),
-            None,
-        )))
+        ))
     }
 
-    fn try_encode_expr(&self, node: &Arc<dyn PhysicalExpr>, buf: &mut Vec<u8>) -> Result<()> {
-        let Some(delta_cast) = node.as_any().downcast_ref::<DeltaCastColumnExpr>() else {
-            return plan_err!("unsupported physical expr extension");
-        };
-
-        let input_schema = Schema::new(vec![delta_cast.input_field().as_ref().clone()]);
-        let input_schema_buf = self.try_encode_schema(&input_schema)?;
-        let target_schema = Schema::new(vec![delta_cast.target_field().as_ref().clone()]);
-        let target_schema_buf = self.try_encode_schema(&target_schema)?;
-        let node = ExtendedPhysicalExprNode {
-            expr_kind: Some(ExprKind::DeltaCast(DeltaCastColumnExprNode {
-                input_schema: input_schema_buf,
-                target_schema: target_schema_buf,
-            })),
-        };
-        node.encode(buf)
-            .map_err(|e| plan_datafusion_err!("failed to encode physical expr: {e}"))
+    fn try_encode_cast_column_expr(
+        &self,
+        input_field: &Field,
+        target_field: &Field,
+    ) -> Result<CastColumnExprNode> {
+        let input_schema = Schema::new(vec![input_field.clone()]);
+        let input_schema = self.try_encode_schema(&input_schema)?;
+        let target_schema = Schema::new(vec![target_field.clone()]);
+        let target_schema = self.try_encode_schema(&target_schema)?;
+        Ok(CastColumnExprNode {
+            input_schema,
+            target_schema,
+        })
     }
-}
 
-impl RemoteExecutionCodec {
     fn try_decode_physical_sink_mode(
         &self,
         proto_mode: gen::PhysicalSinkMode,
