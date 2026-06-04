@@ -103,6 +103,7 @@ message ExtendedScalarUdf {
     ConvertTzUdf convert_tz = 22;
     SparkToCsvUdf spark_to_csv = 23;
     SparkPmodUdf spark_pmod = 24;
+    SparkNegativeUdf spark_negative = 25;
   }
 }
 
@@ -202,6 +203,10 @@ message SparkAbsUdf {
 }
 
 message SparkPmodUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkNegativeUdf {
   bool ansi_mode = 1;
 }
 
