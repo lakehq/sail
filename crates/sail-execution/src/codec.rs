@@ -65,7 +65,6 @@ use datafusion_spark::function::map::map_from_arrays::MapFromArrays;
 use datafusion_spark::function::map::map_from_entries::MapFromEntries;
 use datafusion_spark::function::math::expm1::SparkExpm1;
 use datafusion_spark::function::math::hex::SparkHex;
-use datafusion_spark::function::math::modulus::SparkPmod;
 use datafusion_spark::function::math::width_bucket::SparkWidthBucket;
 use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::format_string::FormatStringFunc;
@@ -103,6 +102,7 @@ use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
 use sail_function::aggregate::count_min_sketch::CountMinSketchFunction;
+use sail_function::aggregate::grouping_id::GroupingIdFunction;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
 use sail_function::aggregate::hll_sketch::{HllSketchAggFunction, HllUnionAggFunction};
 use sail_function::aggregate::kurtosis::KurtosisFunction;
@@ -124,6 +124,7 @@ use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
 use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_function::scalar::array::spark_sequence::SparkSequence;
+use sail_function::scalar::array_struct_field::ArrayStructField;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
 use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
@@ -132,6 +133,7 @@ use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::spark_date::SparkDate;
+use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
 };
@@ -167,6 +169,7 @@ use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
 use sail_function::scalar::math::spark_div::SparkIntervalDiv;
+use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
 use sail_function::scalar::math::spark_try_add::SparkTryAdd;
 use sail_function::scalar::math::spark_try_div::SparkTryDiv;
@@ -2218,6 +2221,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkAbs(gen::SparkAbsUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkAbs::new(ansi_mode))));
             }
+            UdfKind::SparkPmod(gen::SparkPmodUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkPmod::new(ansi_mode))));
+            }
             UdfKind::SparkMakeTimestampNtz(gen::SparkMakeTimestampNtzUdf { is_try }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new(
                     is_try,
@@ -2231,6 +2237,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "array_item_with_position" => {
                 Ok(Arc::new(ScalarUDF::from(ArrayItemWithPosition::new())))
             }
+            "array_struct_field" => Ok(Arc::new(ScalarUDF::from(ArrayStructField::new()))),
             "array_min" => Ok(Arc::new(ScalarUDF::from(ArrayMin::new()))),
             "array_max" => Ok(Arc::new(ScalarUDF::from(ArrayMax::new()))),
             "array_intersect" | "list_intersect" => {
@@ -2349,6 +2356,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeYmInterval::new())))
             }
             "spark_make_time" | "make_time" => Ok(Arc::new(ScalarUDF::from(SparkMakeTime::new()))),
+            "date_trunc" => Ok(Arc::new(ScalarUDF::from(SparkDateTrunc::new()))),
             "spark_time_diff" | "time_diff" => Ok(Arc::new(ScalarUDF::from(SparkTimeDiff::new()))),
             "spark_time_trunc" | "time_trunc" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTimeTrunc::new())))
@@ -2373,7 +2381,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToTimestamp::new())))
             }
             "spark_expm1" | "expm1" => Ok(Arc::new(ScalarUDF::from(SparkExpm1::new()))),
-            "spark_pmod" | "pmod" => Ok(Arc::new(ScalarUDF::from(SparkPmod::new()))),
             "spark_ceil" | "ceil" => Ok(Arc::new(ScalarUDF::from(SparkCeil::new()))),
             "spark_floor" | "floor" => Ok(Arc::new(ScalarUDF::from(SparkFloor::new()))),
             "spark_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8::new()))),
@@ -2410,6 +2417,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         // TODO: Implement custom registry to avoid codec for built-in functions
         let node_inner = node.inner().as_any();
         let udf_kind: UdfKind = if node_inner.is::<ArrayItemWithPosition>()
+            || node_inner.is::<ArrayStructField>()
             || node_inner.is::<ArrayMax>()
             || node_inner.is::<ArrayMin>()
             || node_inner.is::<ArrayIntersect>()
@@ -2452,6 +2460,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkConcat>()
             || node_inner.is::<SparkConv>()
             || node_inner.is::<SparkCrc32>()
+            || node_inner.is::<SparkDateTrunc>()
             || node_inner.is::<SparkDayTimeInterval>()
             || node_inner.is::<SparkDecode>()
             || node_inner.is::<SparkElt>()
@@ -2478,7 +2487,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkMask>()
             || node_inner.is::<SparkConcatWs>()
             || node_inner.is::<SparkMurmur3Hash>()
-            || node_inner.is::<SparkPmod>()
             || node_inner.is::<SparkRegexpExtractAll>()
             || node_inner.is::<SparkReverse>()
             || node_inner.is::<SparkSequence>()
@@ -2632,6 +2640,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkAbs>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkAbs(gen::SparkAbsUdf { ansi_mode })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkPmod>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkPmod(gen::SparkPmodUdf { ansi_mode })
         } else if let Some(func) = node
             .inner()
             .as_any()
@@ -2666,6 +2677,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "count_min_sketch" => {
                     Ok(Arc::new(AggregateUDF::from(CountMinSketchFunction::new())))
                 }
+                "grouping_id" => Ok(Arc::new(AggregateUDF::from(GroupingIdFunction::new()))),
                 "histogram_numeric" => Ok(Arc::new(AggregateUDF::from(
                     HistogramNumericFunction::new(),
                 ))),
@@ -2782,6 +2794,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<BitmapConstructAggFunction>()
             || node.inner().as_any().is::<BitmapOrAggFunction>()
             || node.inner().as_any().is::<CountMinSketchFunction>()
+            || node.inner().as_any().is::<GroupingIdFunction>()
             || node.inner().as_any().is::<HistogramNumericFunction>()
             || node.inner().as_any().is::<HllSketchAggFunction>()
             || node.inner().as_any().is::<HllUnionAggFunction>()

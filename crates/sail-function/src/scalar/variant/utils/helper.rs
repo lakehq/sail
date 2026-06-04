@@ -3,13 +3,11 @@ use arrow_schema::extension::ExtensionType;
 use arrow_schema::{DataType, Field};
 use datafusion_common::{exec_err, ScalarValue};
 use parquet_variant_compute::{VariantArray, VariantType};
+use sail_common_datafusion::variant::{is_variant_arrow_field, is_variant_storage_field};
 
 /// Returns `true` if the field has Variant extension metadata.
 pub fn is_variant_field(field: &Field) -> bool {
-    if field.extension_type_name() != Some(VariantType::NAME) {
-        return false;
-    }
-    field.try_extension_type::<VariantType>().is_ok()
+    is_variant_arrow_field(field) && field.try_extension_type::<VariantType>().is_ok()
 }
 
 pub fn try_field_as_variant_array(field: &Field) -> datafusion_common::Result<()> {
@@ -18,26 +16,13 @@ pub fn try_field_as_variant_array(field: &Field) -> datafusion_common::Result<()
         return Ok(());
     }
 
-    if !is_variant_field(field) && !is_variant_storage_type(field.data_type()) {
+    if !is_variant_storage_field(field) {
         return exec_err!("field does not have extension type VariantType");
     }
 
     VariantType.supports_data_type(field.data_type())?;
 
     Ok(())
-}
-
-fn is_variant_storage_type(data_type: &DataType) -> bool {
-    let DataType::Struct(fields) = data_type else {
-        return false;
-    };
-    fields.iter().any(|field| {
-        field.name() == "metadata"
-            && matches!(
-                field.data_type(),
-                DataType::Binary | DataType::LargeBinary | DataType::BinaryView
-            )
-    })
 }
 pub fn try_parse_variant_scalar(scalar: &ScalarValue) -> datafusion_common::Result<VariantArray> {
     let v = match scalar {
