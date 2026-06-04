@@ -58,6 +58,16 @@ Feature: bin converts integral values to binary strings
         """
       Then query error .*
 
+    Scenario: bin empty string returns NULL under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT bin('') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
     Scenario: bin decimal string errors under ANSI on
       Given config spark.sql.ansi.enabled = true
       When query
@@ -73,6 +83,16 @@ Feature: bin converts integral values to binary strings
         SELECT bin('99999999999999999999') AS result
         """
       Then query error .*
+
+    Scenario: bin out-of-range string returns NULL under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT bin('99999999999999999999') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
 
     Scenario: bin scientific notation strings return NULL under ANSI off
       Given config spark.sql.ansi.enabled = false
