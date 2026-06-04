@@ -2,10 +2,10 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    as_largestring_array, as_string_array, new_null_array, Array, ArrayRef, AsArray, StringArray,
-    StringBuilder,
+    as_largestring_array, as_string_array, new_null_array, Array, ArrayRef, AsArray,
+    PrimitiveArray, StringArray, StringBuilder,
 };
-use datafusion::arrow::datatypes::{DataType, Int64Type};
+use datafusion::arrow::datatypes::{DataType, Float64Type, Int64Type};
 use datafusion_common::cast::as_string_view_array;
 use datafusion_common::{exec_datafusion_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
@@ -63,6 +63,13 @@ impl ScalarUDFImpl for SparkBin {
             ColumnarValue::Scalar(ScalarValue::Int64(value)) => {
                 Ok(ColumnarValue::Scalar(ScalarValue::Utf8(value.map(bin))))
             }
+            ColumnarValue::Scalar(ScalarValue::Float64(value)) => {
+                let out = match value {
+                    Some(v) => Some(bin(double_to_i64(*v, ansi)?)),
+                    None => None,
+                };
+                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(out)))
+            }
             ColumnarValue::Scalar(ScalarValue::Utf8(value))
             | ColumnarValue::Scalar(ScalarValue::LargeUtf8(value))
             | ColumnarValue::Scalar(ScalarValue::Utf8View(value)) => {
@@ -91,6 +98,11 @@ impl ScalarUDFImpl for SparkBin {
                     DataType::Int64 => {
                         let array = array.as_primitive::<Int64Type>();
                         Ok(ColumnarValue::Array(bin_int_array_to_string(array)))
+                    }
+                    DataType::Float64 => {
+                        let array = array.as_primitive::<Float64Type>();
+                        let result = bin_float_array(array, ansi)?;
+                        Ok(ColumnarValue::Array(Arc::new(result) as ArrayRef))
                     }
                     DataType::Utf8 => {
                         let array = as_string_array(array);
@@ -141,12 +153,14 @@ impl ScalarUDFImpl for SparkBin {
             | DataType::UInt16
             | DataType::UInt32
             | DataType::UInt64
-            | DataType::Float16
-            | DataType::Float32
-            | DataType::Float64
             | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _)
             | DataType::Null => Ok(vec![DataType::Int64]),
+            // Keep floats as DOUBLE: DataFusion's Float->Int64 cast errors on
+            // NaN/Infinity, so `bin` applies Spark's saturating cast itself.
+            DataType::Float16 | DataType::Float32 | DataType::Float64 => {
+                Ok(vec![DataType::Float64])
+            }
             other => Err(unsupported_data_type_exec_err(
                 "bin",
                 BIN_SUPPORTED_TYPES,
@@ -246,6 +260,38 @@ fn cast_invalid_input_err(value: &str) -> datafusion_common::DataFusionError {
     exec_datafusion_err!(
         "[CAST_INVALID_INPUT] The value '{value}' of the type \"STRING\" cannot be cast to \"BIGINT\" because it is malformed."
     )
+}
+
+fn cast_overflow_err(value: f64) -> datafusion_common::DataFusionError {
+    exec_datafusion_err!(
+        "[CAST_OVERFLOW] The value {value}D of the type \"DOUBLE\" cannot be cast to \"BIGINT\" due to an overflow."
+    )
+}
+
+/// Spark's DOUBLE -> BIGINT cast: Rust's `as` matches the JVM's `(long) double`
+/// (NaN -> 0, +/-Infinity -> i64::MAX/MIN, truncate toward zero). ANSI mode
+/// raises CAST_OVERFLOW on NaN/Infinity instead of saturating.
+fn double_to_i64(value: f64, ansi: bool) -> Result<i64> {
+    if ansi && (value.is_nan() || value.is_infinite()) {
+        return Err(cast_overflow_err(value));
+    }
+    Ok(value as i64)
+}
+
+fn bin_float_array(array: &PrimitiveArray<Float64Type>, ansi: bool) -> Result<StringArray> {
+    let mut builder = StringBuilder::with_capacity(array.len(), array.len() * 8);
+    let mut scratch = String::with_capacity(64);
+    for v in array.iter() {
+        match v {
+            None => builder.append_null(),
+            Some(value) => {
+                scratch.clear();
+                bin_into(double_to_i64(value, ansi)?, &mut scratch);
+                builder.append_value(&scratch);
+            }
+        }
+    }
+    Ok(builder.finish())
 }
 
 /// Parse a Spark-style string to i64. When `ansi` is true, only strict

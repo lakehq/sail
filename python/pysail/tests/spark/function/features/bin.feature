@@ -3,44 +3,17 @@ Feature: bin converts integral values to binary strings
 
   Rule: String arguments follow Spark cast semantics
 
-    Scenario: bin returns null for strings that cannot be cast to integers (ANSI off)
-      Given config spark.sql.ansi.enabled = false
-      When query
-      """
-      SELECT bin(value) AS result
-      FROM VALUES ('ab'), (CAST(NULL AS STRING)) AS data(value)
-      ORDER BY value IS NULL, value
-      """
-      Then query result
-      | result |
-      | NULL   |
-      | NULL   |
-
     Scenario: bin trims strings before casting to integers
       When query
-      """
-      SELECT bin(value) AS result
-      FROM VALUES (' 13 '), (' -13 ') AS data(value)
-      ORDER BY value
-      """
+        """
+        SELECT bin(value) AS result
+        FROM VALUES (' 13 '), (' -13 ') AS data(value)
+        ORDER BY value
+        """
       Then query result
-      | result                                                           |
-      | 1111111111111111111111111111111111111111111111111111111111110011 |
-      | 1101                                                             |
-
-    Scenario: bin truncates decimal strings before converting to binary (ANSI off)
-      Given config spark.sql.ansi.enabled = false
-      When query
-      """
-      SELECT bin(value) AS result
-      FROM VALUES (0, '13.9'), (1, '-13.9'), (2, '.3') AS data(id, value)
-      ORDER BY id
-      """
-      Then query result
-      | result                                                           |
-      | 1101                                                             |
-      | 1111111111111111111111111111111111111111111111111111111111110011 |
-      | 0                                                                |
+        | result                                                           |
+        | 1111111111111111111111111111111111111111111111111111111111110011 |
+        | 1101                                                             |
 
     Scenario: bin malformed string errors under ANSI on
       Given config spark.sql.ansi.enabled = true
@@ -49,6 +22,19 @@ Feature: bin converts integral values to binary strings
         SELECT bin('ab') AS result
         """
       Then query error CAST_INVALID_INPUT
+
+    Scenario: bin malformed string returns NULL under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT bin(value) AS result
+        FROM VALUES ('ab'), (CAST(NULL AS STRING)) AS data(value)
+        ORDER BY value IS NULL, value
+        """
+      Then query result
+        | result |
+        | NULL   |
+        | NULL   |
 
     Scenario: bin empty string errors under ANSI on
       Given config spark.sql.ansi.enabled = true
@@ -76,6 +62,20 @@ Feature: bin converts integral values to binary strings
         """
       Then query error CAST_INVALID_INPUT
 
+    Scenario: bin decimal string truncates toward zero under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT bin(value) AS result
+        FROM VALUES (0, '13.9'), (1, '-13.9'), (2, '.3') AS data(id, value)
+        ORDER BY id
+        """
+      Then query result
+        | result                                                           |
+        | 1101                                                             |
+        | 1111111111111111111111111111111111111111111111111111111111110011 |
+        | 0                                                                |
+
     Scenario: bin out-of-range string errors under ANSI on
       Given config spark.sql.ansi.enabled = true
       When query
@@ -94,6 +94,14 @@ Feature: bin converts integral values to binary strings
         | result |
         | NULL   |
 
+    Scenario: bin scientific notation string errors under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT bin('1e3') AS result
+        """
+      Then query error CAST_INVALID_INPUT
+
     Scenario: bin scientific notation strings return NULL under ANSI off
       Given config spark.sql.ansi.enabled = false
       When query
@@ -109,14 +117,6 @@ Feature: bin converts integral values to binary strings
         | NULL   |
         | NULL   |
         | NULL   |
-
-    Scenario: bin scientific notation string errors under ANSI on
-      Given config spark.sql.ansi.enabled = true
-      When query
-        """
-        SELECT bin('1e3') AS result
-        """
-      Then query error CAST_INVALID_INPUT
 
   Rule: Integer boundaries
 
@@ -301,18 +301,40 @@ Feature: bin converts integral values to binary strings
         """
       Then query error .*
 
-  Rule: Float NaN and Infinity error on cast
+  Rule: Float NaN and Infinity follow cast semantics
 
-    Scenario: bin NaN errors via CAST_OVERFLOW
+    Scenario: bin NaN errors under ANSI on
+      Given config spark.sql.ansi.enabled = true
       When query
         """
         SELECT bin(CAST('NaN' AS DOUBLE)) AS result
         """
       Then query error .*
 
-    Scenario: bin Infinity errors via CAST_OVERFLOW
+    Scenario: bin NaN truncates to zero under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT bin(CAST('NaN' AS DOUBLE)) AS result
+        """
+      Then query result
+        | result |
+        | 0      |
+
+    Scenario: bin Infinity errors under ANSI on
+      Given config spark.sql.ansi.enabled = true
       When query
         """
         SELECT bin(CAST('Infinity' AS DOUBLE)) AS result
         """
       Then query error .*
+
+    Scenario: bin Infinity saturates to LONG_MAX under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT bin(CAST('Infinity' AS DOUBLE)) AS result
+        """
+      Then query result
+        | result                                                          |
+        | 111111111111111111111111111111111111111111111111111111111111111 |
