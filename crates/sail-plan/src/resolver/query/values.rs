@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, TimeUnit};
+use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DFSchemaRef};
 use datafusion_expr::{cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection};
 use sail_common::spec;
@@ -28,21 +28,7 @@ impl PlanResolver<'_> {
             Ok::<_, PlanError>(results)
         }
         .await?;
-        let nullable = Self::resolve_values_nullability(&values, &schema)?;
-        let inferred_plan = LogicalPlanBuilder::values(values.clone())?.build()?;
-        let fields = inferred_plan
-            .schema()
-            .fields()
-            .iter()
-            .zip(nullable)
-            .map(|(field, nullable)| Arc::new(field.as_ref().clone().with_nullable(nullable)))
-            .collect::<Vec<_>>()
-            .into();
-        let schema = DFSchemaRef::new(DFSchema::from_unqualified_fields(
-            fields,
-            inferred_plan.schema().metadata().clone(),
-        )?);
-        let plan = LogicalPlanBuilder::values_with_schema(values, &schema)?.build()?;
+        let plan = LogicalPlanBuilder::values(values)?.build()?;
         let expr = plan
             .schema()
             .columns()
@@ -56,48 +42,6 @@ impl PlanResolver<'_> {
             expr,
             Arc::new(plan),
         )?))
-    }
-
-    fn resolve_values_nullability(
-        values: &[Vec<Expr>],
-        schema: &DFSchemaRef,
-    ) -> PlanResult<Vec<bool>> {
-        let n_cols = values.first().map(|x| x.len()).unwrap_or_default();
-        (0..n_cols)
-            .map(|idx| {
-                values.iter().try_fold(false, |nullable, row| {
-                    Ok(nullable || Self::is_spark_nullable_values_expr(&row[idx], schema)?)
-                })
-            })
-            .collect()
-    }
-
-    fn is_spark_nullable_values_expr(expr: &Expr, schema: &DFSchemaRef) -> PlanResult<bool> {
-        if expr.nullable(schema.as_ref())? {
-            return Ok(true);
-        }
-        Ok(Self::is_spark_nullable_cast(expr))
-    }
-
-    fn is_spark_nullable_cast(expr: &Expr) -> bool {
-        match expr {
-            Expr::Alias(alias) => Self::is_spark_nullable_cast(alias.expr.as_ref()),
-            Expr::Cast(cast) => {
-                matches!(
-                    &cast.data_type,
-                    DataType::Date32
-                        | DataType::Timestamp(
-                            TimeUnit::Second
-                                | TimeUnit::Millisecond
-                                | TimeUnit::Microsecond
-                                | TimeUnit::Nanosecond,
-                            _
-                        )
-                )
-            }
-            Expr::TryCast(_) => true,
-            _ => false,
-        }
     }
 
     fn resolve_values_nan_types(

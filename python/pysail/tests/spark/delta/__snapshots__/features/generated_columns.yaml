@@ -16,16 +16,16 @@ data:
       fields:
       - metadata: {}
         name: id
-        nullable: false
+        nullable: true
         type: integer
       - metadata: {}
         name: event_time
-        nullable: false
+        nullable: true
         type: timestamp
       - metadata:
           delta.generationExpression: CAST ( event_time AS DATE )
         name: event_date
-        nullable: false
+        nullable: true
         type: date
       type: struct
   protocol:

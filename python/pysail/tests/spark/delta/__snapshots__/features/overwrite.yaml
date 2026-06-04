@@ -8,13 +8,13 @@ data:
   operation: WRITE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 1020
+    numAddedBytes: 1067
     numAddedFiles: 1
     numFiles: 1
-    numOutputBytes: 1020
+    numOutputBytes: 1067
     numOutputFiles: 1
     numOutputRows: 2
-    numRemovedBytes: 1047
+    numRemovedBytes: 1093
     numRemovedFiles: 1
     numTouchedRows: 4
     scanTimeMs: <time_ms>
@@ -32,13 +32,13 @@ data:
   operation: WRITE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 2028
+    numAddedBytes: 2122
     numAddedFiles: 2
     numFiles: 2
-    numOutputBytes: 2028
+    numOutputBytes: 2122
     numOutputFiles: 2
     numOutputRows: 4
-    numRemovedBytes: 1047
+    numRemovedBytes: 1093
     numRemovedFiles: 1
     numTouchedRows: 4
     scanTimeMs: <time_ms>

@@ -8,17 +8,17 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 3046
+    numAddedBytes: 3180
     numAddedFiles: 3
     numFiles: 3
-    numOutputBytes: 3046
+    numOutputBytes: 3180
     numOutputFiles: 3
     numOutputRows: 4
-    numRemovedBytes: 1025
+    numRemovedBytes: 1070
     numRemovedFiles: 1
     numSourceRows: 2
-    numTargetBytesAdded: 3046
-    numTargetBytesRemoved: 1025
+    numTargetBytesAdded: 3180
+    numTargetBytesRemoved: 1070
     numTargetChangeFilesAdded: 0
     numTargetDeletionVectorsAdded: 0
     numTargetDeletionVectorsRemoved: 0
@@ -57,7 +57,7 @@ data:
   
     == Plan Steps ==
     initial_logical_plan:
-    MergeInto: options=MergeIntoOptions { target_alias: Some("t"), source_alias: Some("s"), target: MergeTargetInfo { table_name: ["delta_merge_explain_codegen"], format: "DELTA", location: "<tmp>/merge_explain_codegen", partition_by: [], options: [TablePropertyList { items: [] }] }, with_schema_evolution: false, resolved_target_schema: DFSchema { inner: Schema { fields: [Field { name: "#0", data_type: Int32, nullable: true }, Field { name: "#1", data_type: Utf8, nullable: true }, Field { name: "#2", data_type: Int32, nullable: true }, Field { name: "#3", data_type: Utf8, nullable: true }], metadata: {} }, field_qualifiers: [Some(Bare { table: "t" }), Some(Bare { table: "t" }), Some(Bare { table: "t" }), Some(Bare { table: "t" })], functional_dependencies: FunctionalDependencies { deps: [] } }, resolved_source_schema: DFSchema { inner: Schema { fields: [Field { name: "#8", data_type: Int32 }, Field { name: "#9", data_type: Utf8 }, Field { name: "#10", data_type: Int32 }, Field { name: "#11", data_type: Utf8 }], metadata: {} }, field_qualifiers: [Some(Bare { table: "s" }), Some(Bare { table: "s" }), Some(Bare { table: "s" }), Some(Bare { table: "s" })], functional_dependencies: FunctionalDependencies { deps: [] } }, resolved_target_field_names: ["id", "category", "amount", "note"], resolved_source_field_names: ["id", "category", "amount", "note"], on_condition: ExprWithSource { expr: BinaryExpr(BinaryExpr { left: BinaryExpr(BinaryExpr { left: Column(Column { relation: Some(Bare { table: "t" }), name: "#0" }), op: Eq, right: Column(Column { relation: Some(Bare { table: "s" }), name: "#8" }) }), op: And, right: IsNotNull(Column(Column { relation: Some(Bare { table: "t" }), name: "#1" })) }), source: Some("t . id = s . id AND t . category IS NOT NULL ") }, matched_clauses: [MergeMatchedClause { condition: Some(ExprWithSource { expr: BinaryExpr(BinaryExpr { left: Column(Column { relation: Some(Bare { table: "t" }), name: "#1" }), op: Eq, right: Literal(Utf8("vip"), None) }), source: Some("t . category = 'vip' ") }), action: UpdateSet([MergeAssignment { column: "#2", value: BinaryExpr(BinaryExpr { left: Column(Column { relation: Some(Bare { table: "s" }), name: "#10" }), op: Plus, right: Literal(Int32(1), None) }) }, MergeAssignment { column: "#3", value: ScalarFunction(ScalarFunction { func: ScalarUDF { inner: SparkConcat { signature: Signature { type_signature: OneOf([Exact([]), VariadicAny]), volatility: Immutable, parameter_names: None } } }, args: [Column(Column { relation: Some(Bare { table: "s" }), name: "#11" }), Literal(Utf8("_"), None), Column(Column { relation: Some(Bare { table: "t" }), name: "#0" })] }) }]) }, MergeMatchedClause { condition: Some(ExprWithSource { expr: BinaryExpr(BinaryExpr { left: Column(Column { relation: Some(Bare { table: "t" }), name: "#1" }), op: Eq, right: Literal(Utf8("stale"), None) }), source: Some("t . category = 'stale' ") }), action: Delete }], not_matched_by_source_clauses: [MergeNotMatchedBySourceClause { condition: Some(ExprWithSource { expr: BinaryExpr(BinaryExpr { left: Column(Column { relation: Some(Bare { table: "t" }), name: "#1" }), op: Eq, right: Literal(Utf8("stale"), None) }), source: Some("t . category = 'stale' ") }), action: UpdateSet([MergeAssignment { column: "#3", value: ScalarFunction(ScalarFunction { func: ScalarUDF { inner: SparkConcat { signature: Signature { type_signature: OneOf([Exact([]), VariadicAny]), volatility: Immutable, parameter_names: None } } }, args: [Column(Column { relation: Some(Bare { table: "t" }), name: "#3" }), Literal(Utf8("_orphan"), None)] }) }]) }], not_matched_by_target_clauses: [MergeNotMatchedByTargetClause { condition: None, action: InsertColumns { columns: ["#0", "#1", "#2", "#3"], values: [Column(Column { relation: Some(Bare { table: "s" }), name: "#8" }), Column(Column { relation: Some(Bare { table: "s" }), name: "#9" }), Column(Column { relation: Some(Bare { table: "s" }), name: "#10" }), ScalarFunction(ScalarFunction { func: ScalarUDF { inner: SparkConcat { signature: Signature { type_signature: OneOf([Exact([]), VariadicAny]), volatility: Immutable, parameter_names: None } } }, args: [Literal(Utf8("insert_"), None), Column(Column { relation: Some(Bare { table: "s" }), name: "#11" })] })] } }], join_key_pairs: [(Column(Column { relation: Some(Bare { table: "t" }), name: "#0" }), Column(Column { relation: Some(Bare { table: "s" }), name: "#8" }))], residual_predicates: [IsNotNull(Column(Column { relation: Some(Bare { table: "t" }), name: "#1" }))], target_only_predicates: [IsNotNull(Column(Column { relation: Some(Bare { table: "t" }), name: "#1" }))], generated_column_exprs: [] }
+    MergeInto: options=MergeIntoOptions { target_alias: Some("t"), source_alias: Some("s"), target: MergeTargetInfo { table_name: ["delta_merge_explain_codegen"], format: "DELTA", location: "<tmp>/merge_explain_codegen", partition_by: [], options: [TablePropertyList { items: [] }] }, with_schema_evolution: false, resolved_target_schema: DFSchema { inner: Schema { fields: [Field { name: "#0", data_type: Int32, nullable: true }, Field { name: "#1", data_type: Utf8, nullable: true }, Field { name: "#2", data_type: Int32, nullable: true }, Field { name: "#3", data_type: Utf8, nullable: true }], metadata: {} }, field_qualifiers: [Some(Bare { table: "t" }), Some(Bare { table: "t" }), Some(Bare { table: "t" }), Some(Bare { table: "t" })], functional_dependencies: FunctionalDependencies { deps: [] } }, resolved_source_schema: DFSchema { inner: Schema { fields: [Field { name: "#8", data_type: Int32, nullable: true }, Field { name: "#9", data_type: Utf8, nullable: true }, Field { name: "#10", data_type: Int32, nullable: true }, Field { name: "#11", data_type: Utf8, nullable: true }], metadata: {} }, field_qualifiers: [Some(Bare { table: "s" }), Some(Bare { table: "s" }), Some(Bare { table: "s" }), Some(Bare { table: "s" })], functional_dependencies: FunctionalDependencies { deps: [] } }, resolved_target_field_names: ["id", "category", "amount", "note"], resolved_source_field_names: ["id", "category", "amount", "note"], on_condition: ExprWithSource { expr: BinaryExpr(BinaryExpr { left: BinaryExpr(BinaryExpr { left: Column(Column { relation: Some(Bare { table: "t" }), name: "#0" }), op: Eq, right: Column(Column { relation: Some(Bare { table: "s" }), name: "#8" }) }), op: And, right: IsNotNull(Column(Column { relation: Some(Bare { table: "t" }), name: "#1" })) }), source: Some("t . id = s . id AND t . category IS NOT NULL ") }, matched_clauses: [MergeMatchedClause { condition: Some(ExprWithSource { expr: BinaryExpr(BinaryExpr { left: Column(Column { relation: Some(Bare { table: "t" }), name: "#1" }), op: Eq, right: Literal(Utf8("vip"), None) }), source: Some("t . category = 'vip' ") }), action: UpdateSet([MergeAssignment { column: "#2", value: BinaryExpr(BinaryExpr { left: Column(Column { relation: Some(Bare { table: "s" }), name: "#10" }), op: Plus, right: Literal(Int32(1), None) }) }, MergeAssignment { column: "#3", value: ScalarFunction(ScalarFunction { func: ScalarUDF { inner: SparkConcat { signature: Signature { type_signature: OneOf([Exact([]), VariadicAny]), volatility: Immutable, parameter_names: None } } }, args: [Column(Column { relation: Some(Bare { table: "s" }), name: "#11" }), Literal(Utf8("_"), None), Column(Column { relation: Some(Bare { table: "t" }), name: "#0" })] }) }]) }, MergeMatchedClause { condition: Some(ExprWithSource { expr: BinaryExpr(BinaryExpr { left: Column(Column { relation: Some(Bare { table: "t" }), name: "#1" }), op: Eq, right: Literal(Utf8("stale"), None) }), source: Some("t . category = 'stale' ") }), action: Delete }], not_matched_by_source_clauses: [MergeNotMatchedBySourceClause { condition: Some(ExprWithSource { expr: BinaryExpr(BinaryExpr { left: Column(Column { relation: Some(Bare { table: "t" }), name: "#1" }), op: Eq, right: Literal(Utf8("stale"), None) }), source: Some("t . category = 'stale' ") }), action: UpdateSet([MergeAssignment { column: "#3", value: ScalarFunction(ScalarFunction { func: ScalarUDF { inner: SparkConcat { signature: Signature { type_signature: OneOf([Exact([]), VariadicAny]), volatility: Immutable, parameter_names: None } } }, args: [Column(Column { relation: Some(Bare { table: "t" }), name: "#3" }), Literal(Utf8("_orphan"), None)] }) }]) }], not_matched_by_target_clauses: [MergeNotMatchedByTargetClause { condition: None, action: InsertColumns { columns: ["#0", "#1", "#2", "#3"], values: [Column(Column { relation: Some(Bare { table: "s" }), name: "#8" }), Column(Column { relation: Some(Bare { table: "s" }), name: "#9" }), Column(Column { relation: Some(Bare { table: "s" }), name: "#10" }), ScalarFunction(ScalarFunction { func: ScalarUDF { inner: SparkConcat { signature: Signature { type_signature: OneOf([Exact([]), VariadicAny]), volatility: Immutable, parameter_names: None } } }, args: [Literal(Utf8("insert_"), None), Column(Column { relation: Some(Bare { table: "s" }), name: "#11" })] })] } }], join_key_pairs: [(Column(Column { relation: Some(Bare { table: "t" }), name: "#0" }), Column(Column { relation: Some(Bare { table: "s" }), name: "#8" }))], residual_predicates: [IsNotNull(Column(Column { relation: Some(Bare { table: "t" }), name: "#1" }))], target_only_predicates: [IsNotNull(Column(Column { relation: Some(Bare { table: "t" }), name: "#1" }))], generated_column_exprs: [] }
       SubqueryAlias: t
         Projection: delta_merge_explain_codegen.id AS #0, delta_merge_explain_codegen.category AS #1, delta_merge_explain_codegen.amount AS #2, delta_merge_explain_codegen.note AS #3
           TableScan: delta_merge_explain_codegen
@@ -907,32 +907,32 @@ data:
                                 HashJoinExec: mode=Auto, join_type=Full, on=[(id@0, __sail_src_id@0)], filter=category@0 IS NOT NULL, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_merge_target_row_id:Int64;N, __sail_merge_target_row_present:Boolean;N, __sail_src_id:Int32;N, __sail_src_category:Utf8;N, __sail_src_amount:Int32;N, __sail_src_note:Utf8;N, __sail_merge_source_row_present:Boolean;N]
                                   ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_merge_target_row_id:Int64, __sail_merge_target_row_present:Boolean]
                                     MonotonicIdExec: col=__sail_merge_target_row_id, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_merge_target_row_id:Int64]
-                                      ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path], schema=[id:Int32, category:Utf8, amount:Int32, note:Utf8, __sail_file_path:Utf8;N]
-                                        ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path], schema=[#0:Int32, #1:Utf8, #2:Int32, #3:Utf8, __sail_file_path:Utf8;N]
-                                          ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path], schema=[id:Int32, category:Utf8, amount:Int32, note:Utf8, __sail_file_path:Utf8;N]
-                                            DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet, schema=[id:Int32, category:Utf8, amount:Int32, note:Utf8, __sail_file_path:Utf8;N]
-                                  ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present], schema=[__sail_src_id:Int32, __sail_src_category:Utf8, __sail_src_amount:Int32, __sail_src_note:Utf8, __sail_merge_source_row_present:Boolean]
-                                    ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note], schema=[__sail_src_id:Int32, __sail_src_category:Utf8, __sail_src_amount:Int32, __sail_src_note:Utf8]
-                                      ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11], schema=[#8:Int32, #9:Utf8, #10:Int32, #11:Utf8]
-                                        ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7], schema=[#4:Int32, #5:Utf8, #6:Int32, #7:Utf8]
-                                          ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note], schema=[id:Int32, category:Utf8, amount:Int32, note:Utf8]
-                                            ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11], schema=[#8:Int32, #9:Utf8, #10:Int32, #11:Utf8]
-                                              ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7], schema=[#4:Int32, #5:Utf8, #6:Int32, #7:Utf8]
-                                                ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3], schema=[#0:Int32, #1:Utf8, #2:Int32, #3:Utf8]
-                                                  FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), schema=[column1:Int32, column2:Utf8, column3:Int32, column4:Utf8]
-                                                    DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32, column2:Utf8, column3:Int32, column4:Utf8]
+                                      ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
+                                        ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path], schema=[#0:Int32;N, #1:Utf8;N, #2:Int32;N, #3:Utf8;N, __sail_file_path:Utf8;N]
+                                          ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
+                                            DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
+                                  ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present], schema=[__sail_src_id:Int32;N, __sail_src_category:Utf8;N, __sail_src_amount:Int32;N, __sail_src_note:Utf8;N, __sail_merge_source_row_present:Boolean]
+                                    ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note], schema=[__sail_src_id:Int32;N, __sail_src_category:Utf8;N, __sail_src_amount:Int32;N, __sail_src_note:Utf8;N]
+                                      ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11], schema=[#8:Int32;N, #9:Utf8;N, #10:Int32;N, #11:Utf8;N]
+                                        ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7], schema=[#4:Int32;N, #5:Utf8;N, #6:Int32;N, #7:Utf8;N]
+                                          ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N]
+                                            ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11], schema=[#8:Int32;N, #9:Utf8;N, #10:Int32;N, #11:Utf8;N]
+                                              ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7], schema=[#4:Int32;N, #5:Utf8;N, #6:Int32;N, #7:Utf8;N]
+                                                ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3], schema=[#0:Int32;N, #1:Utf8;N, #2:Int32;N, #3:Utf8;N]
+                                                  FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), schema=[column1:Int32;N, column2:Utf8;N, column3:Int32;N, column4:Utf8;N]
+                                                    DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32;N, column2:Utf8;N, column3:Int32;N, column4:Utf8;N]
                     ProjectionExec: expr=[NULL as id, NULL as category, NULL as amount, NULL as note, NULL as __sail_file_path, 9 as __sail_operation_type, CAST(__sail_merge_source_metric@0 AS UInt64) as __sail_merge_source_metric], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_operation_type:Int32, __sail_merge_source_metric:UInt64]
                       AggregateExec: mode=Final, gby=[], aggr=[__sail_merge_source_metric], schema=[__sail_merge_source_metric:Int64]
                         AggregateExec: mode=Partial, gby=[], aggr=[__sail_merge_source_metric], schema=[__sail_merge_source_metric[count]:Int64]
-                          ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note], schema=[__sail_src_id:Int32, __sail_src_category:Utf8, __sail_src_amount:Int32, __sail_src_note:Utf8]
-                            ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11], schema=[#8:Int32, #9:Utf8, #10:Int32, #11:Utf8]
-                              ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7], schema=[#4:Int32, #5:Utf8, #6:Int32, #7:Utf8]
-                                ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note], schema=[id:Int32, category:Utf8, amount:Int32, note:Utf8]
-                                  ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11], schema=[#8:Int32, #9:Utf8, #10:Int32, #11:Utf8]
-                                    ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7], schema=[#4:Int32, #5:Utf8, #6:Int32, #7:Utf8]
-                                      ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3], schema=[#0:Int32, #1:Utf8, #2:Int32, #3:Utf8]
-                                        FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), schema=[column1:Int32, column2:Utf8, column3:Int32, column4:Utf8]
-                                          DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32, column2:Utf8, column3:Int32, column4:Utf8]
+                          ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note], schema=[__sail_src_id:Int32;N, __sail_src_category:Utf8;N, __sail_src_amount:Int32;N, __sail_src_note:Utf8;N]
+                            ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11], schema=[#8:Int32;N, #9:Utf8;N, #10:Int32;N, #11:Utf8;N]
+                              ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7], schema=[#4:Int32;N, #5:Utf8;N, #6:Int32;N, #7:Utf8;N]
+                                ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N]
+                                  ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11], schema=[#8:Int32;N, #9:Utf8;N, #10:Int32;N, #11:Utf8;N]
+                                    ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7], schema=[#4:Int32;N, #5:Utf8;N, #6:Int32;N, #7:Utf8;N]
+                                      ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3], schema=[#0:Int32;N, #1:Utf8;N, #2:Int32;N, #3:Utf8;N]
+                                        FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), schema=[column1:Int32;N, column2:Utf8;N, column3:Int32;N, column4:Utf8;N]
+                                          DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32;N, column2:Utf8;N, column3:Int32;N, column4:Utf8;N]
                 ProjectionExec: expr=[id@1 as id, category@2 as category, amount@3 as amount, note@4 as note, __sail_file_path@5 as __sail_file_path, __sail_operation_type@6 as __sail_operation_type, __sail_merge_source_metric@7 as __sail_merge_source_metric], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_operation_type:Int32, __sail_merge_source_metric:UInt64;N]
                   HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@4)], schema=[__sail_file_path:Utf8;N, id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_operation_type:Int32, __sail_merge_source_metric:UInt64;N]
                     ProjectionExec: expr=[__sail_file_path@0 as __sail_file_path], schema=[__sail_file_path:Utf8;N]
@@ -943,20 +943,20 @@ data:
                               HashJoinExec: mode=Auto, join_type=Full, on=[(id@0, __sail_src_id@0)], filter=category@0 IS NOT NULL, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_merge_target_row_id:Int64;N, __sail_merge_target_row_present:Boolean;N, __sail_src_id:Int32;N, __sail_src_category:Utf8;N, __sail_src_amount:Int32;N, __sail_src_note:Utf8;N, __sail_merge_source_row_present:Boolean;N]
                                 ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_merge_target_row_id:Int64, __sail_merge_target_row_present:Boolean]
                                   MonotonicIdExec: col=__sail_merge_target_row_id, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_merge_target_row_id:Int64]
-                                    ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path], schema=[id:Int32, category:Utf8, amount:Int32, note:Utf8, __sail_file_path:Utf8;N]
-                                      ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path], schema=[#0:Int32, #1:Utf8, #2:Int32, #3:Utf8, __sail_file_path:Utf8;N]
-                                        ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path], schema=[id:Int32, category:Utf8, amount:Int32, note:Utf8, __sail_file_path:Utf8;N]
-                                          DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet, schema=[id:Int32, category:Utf8, amount:Int32, note:Utf8, __sail_file_path:Utf8;N]
-                                ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present], schema=[__sail_src_id:Int32, __sail_src_category:Utf8, __sail_src_amount:Int32, __sail_src_note:Utf8, __sail_merge_source_row_present:Boolean]
-                                  ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note], schema=[__sail_src_id:Int32, __sail_src_category:Utf8, __sail_src_amount:Int32, __sail_src_note:Utf8]
-                                    ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11], schema=[#8:Int32, #9:Utf8, #10:Int32, #11:Utf8]
-                                      ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7], schema=[#4:Int32, #5:Utf8, #6:Int32, #7:Utf8]
-                                        ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note], schema=[id:Int32, category:Utf8, amount:Int32, note:Utf8]
-                                          ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11], schema=[#8:Int32, #9:Utf8, #10:Int32, #11:Utf8]
-                                            ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7], schema=[#4:Int32, #5:Utf8, #6:Int32, #7:Utf8]
-                                              ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3], schema=[#0:Int32, #1:Utf8, #2:Int32, #3:Utf8]
-                                                FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), schema=[column1:Int32, column2:Utf8, column3:Int32, column4:Utf8]
-                                                  DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32, column2:Utf8, column3:Int32, column4:Utf8]
+                                    ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
+                                      ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path], schema=[#0:Int32;N, #1:Utf8;N, #2:Int32;N, #3:Utf8;N, __sail_file_path:Utf8;N]
+                                        ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
+                                          DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
+                                ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present], schema=[__sail_src_id:Int32;N, __sail_src_category:Utf8;N, __sail_src_amount:Int32;N, __sail_src_note:Utf8;N, __sail_merge_source_row_present:Boolean]
+                                  ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note], schema=[__sail_src_id:Int32;N, __sail_src_category:Utf8;N, __sail_src_amount:Int32;N, __sail_src_note:Utf8;N]
+                                    ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11], schema=[#8:Int32;N, #9:Utf8;N, #10:Int32;N, #11:Utf8;N]
+                                      ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7], schema=[#4:Int32;N, #5:Utf8;N, #6:Int32;N, #7:Utf8;N]
+                                        ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N]
+                                          ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11], schema=[#8:Int32;N, #9:Utf8;N, #10:Int32;N, #11:Utf8;N]
+                                            ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7], schema=[#4:Int32;N, #5:Utf8;N, #6:Int32;N, #7:Utf8;N]
+                                              ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3], schema=[#0:Int32;N, #1:Utf8;N, #2:Int32;N, #3:Utf8;N]
+                                                FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), schema=[column1:Int32;N, column2:Utf8;N, column3:Int32;N, column4:Utf8;N]
+                                                  DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32;N, column2:Utf8;N, column3:Int32;N, column4:Utf8;N]
                     UnionExec, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_operation_type:Int32, __sail_merge_source_metric:UInt64;N]
                       ProjectionExec: expr=[CASE WHEN __common_expr_1@0 THEN __sail_src_id@12 ELSE id@5 END as id, CASE WHEN __common_expr_1@0 THEN __sail_src_category@13 ELSE category@6 END as category, CASE WHEN __common_expr_2@1 THEN __sail_src_amount@14 + 1 WHEN __common_expr_1@0 THEN __sail_src_amount@14 ELSE amount@7 END as amount, CASE WHEN __common_expr_2@1 THEN spark_concat(__sail_src_note@15, _, id@5) WHEN __common_expr_3@2 AND __sail_merge_source_row_present@16 IS NULL AND category@6 = stale THEN spark_concat(note@8, _orphan) WHEN __common_expr_1@0 THEN spark_concat(insert_, __sail_src_note@15) ELSE note@8 END as note, __sail_file_path@9 as __sail_file_path, CASE WHEN __common_expr_4@3 THEN 3 WHEN __common_expr_2@1 THEN 6 WHEN __common_expr_3@2 AND __sail_merge_source_row_present@16 IS NULL AND category@6 = stale THEN 8 WHEN __common_expr_5@4 AND category@6 = stale THEN 5 ELSE 0 END as __sail_operation_type, NULL as __sail_merge_source_metric], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_operation_type:Int32, __sail_merge_source_metric:UInt64;N]
                         ProjectionExec: expr=[__common_expr_6@0 AND __sail_merge_source_row_present@14 IS NOT NULL as __common_expr_1, __common_expr_7@1 AND category@4 = vip as __common_expr_2, __common_expr_8@2 as __common_expr_3, __common_expr_6@0 as __common_expr_4, __common_expr_7@1 as __common_expr_5, id@3 as id, category@4 as category, amount@5 as amount, note@6 as note, __sail_file_path@7 as __sail_file_path, __sail_merge_target_row_id@8 as __sail_merge_target_row_id, __sail_merge_target_row_present@9 as __sail_merge_target_row_present, __sail_src_id@10 as __sail_src_id, __sail_src_category@11 as __sail_src_category, __sail_src_amount@12 as __sail_src_amount, __sail_src_note@13 as __sail_src_note, __sail_merge_source_row_present@14 as __sail_merge_source_row_present], schema=[__common_expr_1:Boolean, __common_expr_2:Boolean;N, __common_expr_3:Boolean, __common_expr_4:Boolean, __common_expr_5:Boolean, id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_merge_target_row_id:Int64;N, __sail_merge_target_row_present:Boolean;N, __sail_src_id:Int32;N, __sail_src_category:Utf8;N, __sail_src_amount:Int32;N, __sail_src_note:Utf8;N, __sail_merge_source_row_present:Boolean;N]
@@ -967,32 +967,32 @@ data:
                                   HashJoinExec: mode=Auto, join_type=Full, on=[(id@0, __sail_src_id@0)], filter=category@0 IS NOT NULL, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_merge_target_row_id:Int64;N, __sail_merge_target_row_present:Boolean;N, __sail_src_id:Int32;N, __sail_src_category:Utf8;N, __sail_src_amount:Int32;N, __sail_src_note:Utf8;N, __sail_merge_source_row_present:Boolean;N]
                                     ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_merge_target_row_id:Int64, __sail_merge_target_row_present:Boolean]
                                       MonotonicIdExec: col=__sail_merge_target_row_id, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_merge_target_row_id:Int64]
-                                        ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path], schema=[id:Int32, category:Utf8, amount:Int32, note:Utf8, __sail_file_path:Utf8;N]
-                                          ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path], schema=[#0:Int32, #1:Utf8, #2:Int32, #3:Utf8, __sail_file_path:Utf8;N]
-                                            ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path], schema=[id:Int32, category:Utf8, amount:Int32, note:Utf8, __sail_file_path:Utf8;N]
-                                              DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet, schema=[id:Int32, category:Utf8, amount:Int32, note:Utf8, __sail_file_path:Utf8;N]
-                                    ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present], schema=[__sail_src_id:Int32, __sail_src_category:Utf8, __sail_src_amount:Int32, __sail_src_note:Utf8, __sail_merge_source_row_present:Boolean]
-                                      ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note], schema=[__sail_src_id:Int32, __sail_src_category:Utf8, __sail_src_amount:Int32, __sail_src_note:Utf8]
-                                        ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11], schema=[#8:Int32, #9:Utf8, #10:Int32, #11:Utf8]
-                                          ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7], schema=[#4:Int32, #5:Utf8, #6:Int32, #7:Utf8]
-                                            ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note], schema=[id:Int32, category:Utf8, amount:Int32, note:Utf8]
-                                              ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11], schema=[#8:Int32, #9:Utf8, #10:Int32, #11:Utf8]
-                                                ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7], schema=[#4:Int32, #5:Utf8, #6:Int32, #7:Utf8]
-                                                  ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3], schema=[#0:Int32, #1:Utf8, #2:Int32, #3:Utf8]
-                                                    FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), schema=[column1:Int32, column2:Utf8, column3:Int32, column4:Utf8]
-                                                      DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32, column2:Utf8, column3:Int32, column4:Utf8]
+                                        ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
+                                          ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path], schema=[#0:Int32;N, #1:Utf8;N, #2:Int32;N, #3:Utf8;N, __sail_file_path:Utf8;N]
+                                            ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
+                                              DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
+                                    ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present], schema=[__sail_src_id:Int32;N, __sail_src_category:Utf8;N, __sail_src_amount:Int32;N, __sail_src_note:Utf8;N, __sail_merge_source_row_present:Boolean]
+                                      ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note], schema=[__sail_src_id:Int32;N, __sail_src_category:Utf8;N, __sail_src_amount:Int32;N, __sail_src_note:Utf8;N]
+                                        ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11], schema=[#8:Int32;N, #9:Utf8;N, #10:Int32;N, #11:Utf8;N]
+                                          ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7], schema=[#4:Int32;N, #5:Utf8;N, #6:Int32;N, #7:Utf8;N]
+                                            ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N]
+                                              ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11], schema=[#8:Int32;N, #9:Utf8;N, #10:Int32;N, #11:Utf8;N]
+                                                ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7], schema=[#4:Int32;N, #5:Utf8;N, #6:Int32;N, #7:Utf8;N]
+                                                  ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3], schema=[#0:Int32;N, #1:Utf8;N, #2:Int32;N, #3:Utf8;N]
+                                                    FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), schema=[column1:Int32;N, column2:Utf8;N, column3:Int32;N, column4:Utf8;N]
+                                                      DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32;N, column2:Utf8;N, column3:Int32;N, column4:Utf8;N]
                       ProjectionExec: expr=[NULL as id, NULL as category, NULL as amount, NULL as note, NULL as __sail_file_path, 9 as __sail_operation_type, CAST(__sail_merge_source_metric@0 AS UInt64) as __sail_merge_source_metric], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_operation_type:Int32, __sail_merge_source_metric:UInt64]
                         AggregateExec: mode=Final, gby=[], aggr=[__sail_merge_source_metric], schema=[__sail_merge_source_metric:Int64]
                           AggregateExec: mode=Partial, gby=[], aggr=[__sail_merge_source_metric], schema=[__sail_merge_source_metric[count]:Int64]
-                            ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note], schema=[__sail_src_id:Int32, __sail_src_category:Utf8, __sail_src_amount:Int32, __sail_src_note:Utf8]
-                              ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11], schema=[#8:Int32, #9:Utf8, #10:Int32, #11:Utf8]
-                                ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7], schema=[#4:Int32, #5:Utf8, #6:Int32, #7:Utf8]
-                                  ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note], schema=[id:Int32, category:Utf8, amount:Int32, note:Utf8]
-                                    ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11], schema=[#8:Int32, #9:Utf8, #10:Int32, #11:Utf8]
-                                      ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7], schema=[#4:Int32, #5:Utf8, #6:Int32, #7:Utf8]
-                                        ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3], schema=[#0:Int32, #1:Utf8, #2:Int32, #3:Utf8]
-                                          FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), schema=[column1:Int32, column2:Utf8, column3:Int32, column4:Utf8]
-                                            DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32, column2:Utf8, column3:Int32, column4:Utf8]
+                            ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note], schema=[__sail_src_id:Int32;N, __sail_src_category:Utf8;N, __sail_src_amount:Int32;N, __sail_src_note:Utf8;N]
+                              ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11], schema=[#8:Int32;N, #9:Utf8;N, #10:Int32;N, #11:Utf8;N]
+                                ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7], schema=[#4:Int32;N, #5:Utf8;N, #6:Int32;N, #7:Utf8;N]
+                                  ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N]
+                                    ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11], schema=[#8:Int32;N, #9:Utf8;N, #10:Int32;N, #11:Utf8;N]
+                                      ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7], schema=[#4:Int32;N, #5:Utf8;N, #6:Int32;N, #7:Utf8;N]
+                                        ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3], schema=[#0:Int32;N, #1:Utf8;N, #2:Int32;N, #3:Utf8;N]
+                                          FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), schema=[column1:Int32;N, column2:Utf8;N, column3:Int32;N, column4:Utf8;N]
+                                            DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32;N, column2:Utf8;N, column3:Int32;N, column4:Utf8;N]
           DeltaRemoveActionsExec, schema=[action:Union(Dense, 0: ("add": non-null Struct("path": non-null Utf8, "partitionValues": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": non-null Int64, "modificationTime": non-null Int64, "dataChange": non-null Boolean, "stats": Utf8, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "deletionVector": Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64), "baseRowId": Int64, "defaultRowCommitVersion": Int64, "clusteringProvider": Utf8)), 1: ("remove": non-null Struct("path": non-null Utf8, "dataChange": non-null Boolean, "deletionTimestamp": Int64, "extendedFileMetadata": Boolean, "partitionValues": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "size": Int64, "stats": Utf8, "tags": Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted), "deletionVector": Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64), "baseRowId": Int64, "defaultRowCommitVersion": Int64)), 2: ("protocol": non-null Struct("minReaderVersion": non-null Int32, "minWriterVersion": non-null Int32, "readerFeatures": List(Utf8, field: 'element'), "writerFeatures": List(Utf8, field: 'element'))), 3: ("metadata": non-null Struct("id": non-null Utf8, "name": Utf8, "description": Utf8, "format": non-null Struct("provider": non-null Utf8, "options": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted)), "schemaString": non-null Utf8, "partitionColumns": non-null List(Utf8, field: 'element'), "createdTime": Int64, "configuration": non-null Map("key_value": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted))), 4: ("commit_meta": non-null Struct("commit_row_count": non-null UInt64, "operation_json": Utf8, "operation_metrics_json": Utf8)))]
             DeltaDiscoveryExec(table_path=file://<tmp>/merge_explain_codegen/), schema=[__sail_file_path:Utf8;N, size_bytes:Int64, modification_time:Int64, _commit_version:Int64, _commit_timestamp:Int64, stats_json:Utf8;N, deletionVector:Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64);N, partition_scan:Boolean]
               ProjectionExec: expr=[__sail_file_path@1 as __sail_file_path, size_bytes@2 as size_bytes, modification_time@3 as modification_time, _commit_version@4 as _commit_version, _commit_timestamp@5 as _commit_timestamp, stats_json@6 as stats_json, deletionVector@7 as deletionVector], schema=[__sail_file_path:Utf8;N, size_bytes:Int64, modification_time:Int64, _commit_version:Int64, _commit_timestamp:Int64, stats_json:Utf8;N, deletionVector:Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64);N]
@@ -1005,20 +1005,20 @@ data:
                             HashJoinExec: mode=Auto, join_type=Full, on=[(id@0, __sail_src_id@0)], filter=category@0 IS NOT NULL, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_merge_target_row_id:Int64;N, __sail_merge_target_row_present:Boolean;N, __sail_src_id:Int32;N, __sail_src_category:Utf8;N, __sail_src_amount:Int32;N, __sail_src_note:Utf8;N, __sail_merge_source_row_present:Boolean;N]
                               ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path, __sail_merge_target_row_id@5 as __sail_merge_target_row_id, true as __sail_merge_target_row_present], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_merge_target_row_id:Int64, __sail_merge_target_row_present:Boolean]
                                 MonotonicIdExec: col=__sail_merge_target_row_id, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N, __sail_merge_target_row_id:Int64]
-                                  ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path], schema=[id:Int32, category:Utf8, amount:Int32, note:Utf8, __sail_file_path:Utf8;N]
-                                    ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path], schema=[#0:Int32, #1:Utf8, #2:Int32, #3:Utf8, __sail_file_path:Utf8;N]
-                                      ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path], schema=[id:Int32, category:Utf8, amount:Int32, note:Utf8, __sail_file_path:Utf8;N]
-                                        DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet, schema=[id:Int32, category:Utf8, amount:Int32, note:Utf8, __sail_file_path:Utf8;N]
-                              ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present], schema=[__sail_src_id:Int32, __sail_src_category:Utf8, __sail_src_amount:Int32, __sail_src_note:Utf8, __sail_merge_source_row_present:Boolean]
-                                ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note], schema=[__sail_src_id:Int32, __sail_src_category:Utf8, __sail_src_amount:Int32, __sail_src_note:Utf8]
-                                  ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11], schema=[#8:Int32, #9:Utf8, #10:Int32, #11:Utf8]
-                                    ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7], schema=[#4:Int32, #5:Utf8, #6:Int32, #7:Utf8]
-                                      ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note], schema=[id:Int32, category:Utf8, amount:Int32, note:Utf8]
-                                        ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11], schema=[#8:Int32, #9:Utf8, #10:Int32, #11:Utf8]
-                                          ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7], schema=[#4:Int32, #5:Utf8, #6:Int32, #7:Utf8]
-                                            ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3], schema=[#0:Int32, #1:Utf8, #2:Int32, #3:Utf8]
-                                              FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), schema=[column1:Int32, column2:Utf8, column3:Int32, column4:Utf8]
-                                                DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32, column2:Utf8, column3:Int32, column4:Utf8]
+                                  ProjectionExec: expr=[#0@0 as id, #1@1 as category, #2@2 as amount, #3@3 as note, __sail_file_path@4 as __sail_file_path], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
+                                    ProjectionExec: expr=[id@0 as #0, category@1 as #1, amount@2 as #2, note@3 as #3, __sail_file_path@4 as __sail_file_path], schema=[#0:Int32;N, #1:Utf8;N, #2:Int32;N, #3:Utf8;N, __sail_file_path:Utf8;N]
+                                      ProjectionExec: expr=[id@0 as id, category@1 as category, amount@2 as amount, note@3 as note, __sail_file_path@4 as __sail_file_path], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
+                                        DataSourceExec: file_groups={1 group: [[<tmp>/merge_explain_codegen/part-<id>.snappy.parquet]]}, projection=[id, category, amount, note, __sail_file_path], file_type=parquet, schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N, __sail_file_path:Utf8;N]
+                              ProjectionExec: expr=[__sail_src_id@0 as __sail_src_id, __sail_src_category@1 as __sail_src_category, __sail_src_amount@2 as __sail_src_amount, __sail_src_note@3 as __sail_src_note, true as __sail_merge_source_row_present], schema=[__sail_src_id:Int32;N, __sail_src_category:Utf8;N, __sail_src_amount:Int32;N, __sail_src_note:Utf8;N, __sail_merge_source_row_present:Boolean]
+                                ProjectionExec: expr=[#8@0 as __sail_src_id, #9@1 as __sail_src_category, #10@2 as __sail_src_amount, #11@3 as __sail_src_note], schema=[__sail_src_id:Int32;N, __sail_src_category:Utf8;N, __sail_src_amount:Int32;N, __sail_src_note:Utf8;N]
+                                  ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11], schema=[#8:Int32;N, #9:Utf8;N, #10:Int32;N, #11:Utf8;N]
+                                    ProjectionExec: expr=[id@0 as #4, category@1 as #5, amount@2 as #6, note@3 as #7], schema=[#4:Int32;N, #5:Utf8;N, #6:Int32;N, #7:Utf8;N]
+                                      ProjectionExec: expr=[#8@0 as id, #9@1 as category, #10@2 as amount, #11@3 as note], schema=[id:Int32;N, category:Utf8;N, amount:Int32;N, note:Utf8;N]
+                                        ProjectionExec: expr=[#4@0 as #8, #5@1 as #9, #6@2 as #10, #7@3 as #11], schema=[#8:Int32;N, #9:Utf8;N, #10:Int32;N, #11:Utf8;N]
+                                          ProjectionExec: expr=[#0@0 as #4, #1@1 as #5, #2@2 as #6, #3@3 as #7], schema=[#4:Int32;N, #5:Utf8;N, #6:Int32;N, #7:Utf8;N]
+                                            ProjectionExec: expr=[column1@0 as #0, column2@1 as #1, column3@2 as #2, column4@3 as #3], schema=[#0:Int32;N, #1:Utf8;N, #2:Int32;N, #3:Utf8;N]
+                                              FilterExec: column3@2 + 1 > 10 AND (column1@0 = 1 OR column1@0 = 2 OR column1@0 = 4), schema=[column1:Int32;N, column2:Utf8;N, column3:Int32;N, column4:Utf8;N]
+                                                DataSourceExec: partitions=1, partition_sizes=[1], schema=[column1:Int32;N, column2:Utf8;N, column3:Int32;N, column4:Utf8;N]
                   DeltaLogReplayExec(table_path=file://<tmp>/merge_explain_codegen/, version=0), schema=[__sail_file_path:Utf8;N, size_bytes:Int64, modification_time:Int64, _commit_version:Int64, _commit_timestamp:Int64, stats_json:Utf8;N, deletionVector:Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64);N]
                     SortExec: expr=[__sail_delta_replay_path@7 ASC NULLS LAST, __sail_delta_log_version@9 DESC NULLS LAST, __sail_delta_is_remove@8 ASC NULLS LAST], preserve_partitioning=[true], schema=[__sail_file_path:Utf8;N, size_bytes:Int64, modification_time:Int64, _commit_version:Int64, _commit_timestamp:Int64, stats_json:Utf8;N, deletionVector:Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64);N, __sail_delta_replay_path:Utf8;N, __sail_delta_is_remove:Boolean, __sail_delta_log_version:Int64]
                       RepartitionExec: partitioning=Hash([__sail_delta_replay_path@7], 4), input_partitions=4, schema=[__sail_file_path:Utf8;N, size_bytes:Int64, modification_time:Int64, _commit_version:Int64, _commit_timestamp:Int64, stats_json:Utf8;N, deletionVector:Struct("storageType": non-null Utf8, "pathOrInlineDv": non-null Utf8, "offset": Int32, "sizeInBytes": non-null Int32, "cardinality": non-null Int64);N, __sail_delta_replay_path:Utf8;N, __sail_delta_is_remove:Boolean, __sail_delta_log_version:Int64]
@@ -2301,7 +2301,7 @@ name: "test_explain_extended_does_not_include_mergecardinalitycheck_when_source_
 data:
   |-
     == Parsed Logical Plan ==
-    MergeInto: options=MergeIntoOptions { target_alias: Some("t"), source_alias: Some("s"), target: MergeTargetInfo { table_name: ["delta_merge_cardinality_skip"], format: "DELTA", location: "<tmp>/merge_cardinality_skip", partition_by: [], options: [TablePropertyList { items: [] }] }, with_schema_evolution: false, resolved_target_schema: DFSchema { inner: Schema { fields: [Field { name: "#0", data_type: Int32, nullable: true }, Field { name: "#1", data_type: Utf8, nullable: true }], metadata: {} }, field_qualifiers: [Some(Bare { table: "t" }), Some(Bare { table: "t" })], functional_dependencies: FunctionalDependencies { deps: [] } }, resolved_source_schema: DFSchema { inner: Schema { fields: [Field { name: "#2", data_type: Int32 }, Field { name: "#3", data_type: Utf8, nullable: true }], metadata: {} }, field_qualifiers: [Some(Bare { table: "s" }), Some(Bare { table: "s" })], functional_dependencies: FunctionalDependencies { deps: [FunctionalDependence { source_indices: [0], target_indices: [0, 1], nullable: false, mode: Single }] } }, resolved_target_field_names: ["id", "value"], resolved_source_field_names: ["id", "value"], on_condition: ExprWithSource { expr: BinaryExpr(BinaryExpr { left: Column(Column { relation: Some(Bare { table: "t" }), name: "#0" }), op: Eq, right: Column(Column { relation: Some(Bare { table: "s" }), name: "#2" }) }), source: Some("t . id = s . id ") }, matched_clauses: [MergeMatchedClause { condition: None, action: UpdateSet([MergeAssignment { column: "#1", value: Column(Column { relation: Some(Bare { table: "s" }), name: "#3" }) }]) }], not_matched_by_source_clauses: [], not_matched_by_target_clauses: [MergeNotMatchedByTargetClause { condition: None, action: InsertAll }], join_key_pairs: [(Column(Column { relation: Some(Bare { table: "t" }), name: "#0" }), Column(Column { relation: Some(Bare { table: "s" }), name: "#2" }))], residual_predicates: [], target_only_predicates: [], generated_column_exprs: [] }
+    MergeInto: options=MergeIntoOptions { target_alias: Some("t"), source_alias: Some("s"), target: MergeTargetInfo { table_name: ["delta_merge_cardinality_skip"], format: "DELTA", location: "<tmp>/merge_cardinality_skip", partition_by: [], options: [TablePropertyList { items: [] }] }, with_schema_evolution: false, resolved_target_schema: DFSchema { inner: Schema { fields: [Field { name: "#0", data_type: Int32, nullable: true }, Field { name: "#1", data_type: Utf8, nullable: true }], metadata: {} }, field_qualifiers: [Some(Bare { table: "t" }), Some(Bare { table: "t" })], functional_dependencies: FunctionalDependencies { deps: [] } }, resolved_source_schema: DFSchema { inner: Schema { fields: [Field { name: "#2", data_type: Int32, nullable: true }, Field { name: "#3", data_type: Utf8, nullable: true }], metadata: {} }, field_qualifiers: [Some(Bare { table: "s" }), Some(Bare { table: "s" })], functional_dependencies: FunctionalDependencies { deps: [FunctionalDependence { source_indices: [0], target_indices: [0, 1], nullable: true, mode: Single }] } }, resolved_target_field_names: ["id", "value"], resolved_source_field_names: ["id", "value"], on_condition: ExprWithSource { expr: BinaryExpr(BinaryExpr { left: Column(Column { relation: Some(Bare { table: "t" }), name: "#0" }), op: Eq, right: Column(Column { relation: Some(Bare { table: "s" }), name: "#2" }) }), source: Some("t . id = s . id ") }, matched_clauses: [MergeMatchedClause { condition: None, action: UpdateSet([MergeAssignment { column: "#1", value: Column(Column { relation: Some(Bare { table: "s" }), name: "#3" }) }]) }], not_matched_by_source_clauses: [], not_matched_by_target_clauses: [MergeNotMatchedByTargetClause { condition: None, action: InsertAll }], join_key_pairs: [(Column(Column { relation: Some(Bare { table: "t" }), name: "#0" }), Column(Column { relation: Some(Bare { table: "s" }), name: "#2" }))], residual_predicates: [], target_only_predicates: [], generated_column_exprs: [] }
       SubqueryAlias: t
         Projection: delta_merge_cardinality_skip.id AS #0, delta_merge_cardinality_skip.value AS #1
           TableScan: delta_merge_cardinality_skip
@@ -2469,7 +2469,7 @@ name: "test_explain_extended_shows_fastappend_plan_shape_for_insertonly_merge"
 data:
   |-
     == Parsed Logical Plan ==
-    MergeInto: options=MergeIntoOptions { target_alias: Some("t"), source_alias: Some("s"), target: MergeTargetInfo { table_name: ["delta_merge_insert_only"], format: "DELTA", location: "<tmp>/merge_insert_only", partition_by: [], options: [TablePropertyList { items: [] }] }, with_schema_evolution: false, resolved_target_schema: DFSchema { inner: Schema { fields: [Field { name: "#0", data_type: Int32, nullable: true }, Field { name: "#1", data_type: Utf8, nullable: true }], metadata: {} }, field_qualifiers: [Some(Bare { table: "t" }), Some(Bare { table: "t" })], functional_dependencies: FunctionalDependencies { deps: [] } }, resolved_source_schema: DFSchema { inner: Schema { fields: [Field { name: "#2", data_type: Int32 }, Field { name: "#3", data_type: Utf8 }], metadata: {} }, field_qualifiers: [Some(Bare { table: "s" }), Some(Bare { table: "s" })], functional_dependencies: FunctionalDependencies { deps: [] } }, resolved_target_field_names: ["id", "value"], resolved_source_field_names: ["id", "value"], on_condition: ExprWithSource { expr: BinaryExpr(BinaryExpr { left: Column(Column { relation: Some(Bare { table: "t" }), name: "#0" }), op: Eq, right: Column(Column { relation: Some(Bare { table: "s" }), name: "#2" }) }), source: Some("t . id = s . id ") }, matched_clauses: [], not_matched_by_source_clauses: [], not_matched_by_target_clauses: [MergeNotMatchedByTargetClause { condition: None, action: InsertAll }], join_key_pairs: [(Column(Column { relation: Some(Bare { table: "t" }), name: "#0" }), Column(Column { relation: Some(Bare { table: "s" }), name: "#2" }))], residual_predicates: [], target_only_predicates: [], generated_column_exprs: [] }
+    MergeInto: options=MergeIntoOptions { target_alias: Some("t"), source_alias: Some("s"), target: MergeTargetInfo { table_name: ["delta_merge_insert_only"], format: "DELTA", location: "<tmp>/merge_insert_only", partition_by: [], options: [TablePropertyList { items: [] }] }, with_schema_evolution: false, resolved_target_schema: DFSchema { inner: Schema { fields: [Field { name: "#0", data_type: Int32, nullable: true }, Field { name: "#1", data_type: Utf8, nullable: true }], metadata: {} }, field_qualifiers: [Some(Bare { table: "t" }), Some(Bare { table: "t" })], functional_dependencies: FunctionalDependencies { deps: [] } }, resolved_source_schema: DFSchema { inner: Schema { fields: [Field { name: "#2", data_type: Int32, nullable: true }, Field { name: "#3", data_type: Utf8, nullable: true }], metadata: {} }, field_qualifiers: [Some(Bare { table: "s" }), Some(Bare { table: "s" })], functional_dependencies: FunctionalDependencies { deps: [] } }, resolved_target_field_names: ["id", "value"], resolved_source_field_names: ["id", "value"], on_condition: ExprWithSource { expr: BinaryExpr(BinaryExpr { left: Column(Column { relation: Some(Bare { table: "t" }), name: "#0" }), op: Eq, right: Column(Column { relation: Some(Bare { table: "s" }), name: "#2" }) }), source: Some("t . id = s . id ") }, matched_clauses: [], not_matched_by_source_clauses: [], not_matched_by_target_clauses: [MergeNotMatchedByTargetClause { condition: None, action: InsertAll }], join_key_pairs: [(Column(Column { relation: Some(Bare { table: "t" }), name: "#0" }), Column(Column { relation: Some(Bare { table: "s" }), name: "#2" }))], residual_predicates: [], target_only_predicates: [], generated_column_exprs: [] }
       SubqueryAlias: t
         Projection: delta_merge_insert_only.id AS #0, delta_merge_insert_only.value AS #1
           TableScan: delta_merge_insert_only
@@ -2748,14 +2748,14 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 713
+    numAddedBytes: 743
     numAddedFiles: 1
     numFiles: 1
-    numOutputBytes: 713
+    numOutputBytes: 743
     numOutputFiles: 1
     numOutputRows: 1
     numSourceRows: 2
-    numTargetBytesAdded: 713
+    numTargetBytesAdded: 743
     numTargetChangeFilesAdded: 0
     numTargetDeletionVectorsAdded: 0
     numTargetDeletionVectorsRemoved: 0
@@ -2787,15 +2787,15 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 966
+    numAddedBytes: 1010
     numAddedFiles: 2
     numFiles: 1
-    numOutputBytes: 966
+    numOutputBytes: 1010
     numOutputFiles: 1
     numOutputRows: 1
     numRemovedFiles: 1
     numSourceRows: 2
-    numTargetBytesAdded: 966
+    numTargetBytesAdded: 1010
     numTargetChangeFilesAdded: 0
     numTargetDeletionVectorsAdded: 1
     numTargetDeletionVectorsRemoved: 0
@@ -2830,17 +2830,17 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 2958
+    numAddedBytes: 3091
     numAddedFiles: 3
     numFiles: 3
-    numOutputBytes: 2958
+    numOutputBytes: 3091
     numOutputFiles: 3
     numOutputRows: 3
-    numRemovedBytes: 1014
+    numRemovedBytes: 1059
     numRemovedFiles: 1
     numSourceRows: 2
-    numTargetBytesAdded: 2958
-    numTargetBytesRemoved: 1014
+    numTargetBytesAdded: 3091
+    numTargetBytesRemoved: 1059
     numTargetChangeFilesAdded: 0
     numTargetDeletionVectorsAdded: 0
     numTargetDeletionVectorsRemoved: 0
@@ -2879,17 +2879,17 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 3764
+    numAddedBytes: 3944
     numAddedFiles: 3
     numFiles: 3
-    numOutputBytes: 3764
+    numOutputBytes: 3944
     numOutputFiles: 3
     numOutputRows: 4
-    numRemovedBytes: 1233
+    numRemovedBytes: 1293
     numRemovedFiles: 1
     numSourceRows: 3
-    numTargetBytesAdded: 3764
-    numTargetBytesRemoved: 1233
+    numTargetBytesAdded: 3944
+    numTargetBytesRemoved: 1293
     numTargetChangeFilesAdded: 0
     numTargetDeletionVectorsAdded: 0
     numTargetDeletionVectorsRemoved: 0
@@ -2927,17 +2927,17 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 2813
+    numAddedBytes: 2945
     numAddedFiles: 3
     numFiles: 3
-    numOutputBytes: 2813
+    numOutputBytes: 2945
     numOutputFiles: 3
     numOutputRows: 3
-    numRemovedBytes: 972
+    numRemovedBytes: 1017
     numRemovedFiles: 1
     numSourceRows: 3
-    numTargetBytesAdded: 2813
-    numTargetBytesRemoved: 972
+    numTargetBytesAdded: 2945
+    numTargetBytesRemoved: 1017
     numTargetChangeFilesAdded: 0
     numTargetDeletionVectorsAdded: 0
     numTargetDeletionVectorsRemoved: 0

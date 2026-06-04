@@ -5,10 +5,10 @@ data:
   operation: WRITE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 734
+    numAddedBytes: 766
     numAddedFiles: 1
     numFiles: 1
-    numOutputBytes: 734
+    numOutputBytes: 766
     numOutputFiles: 1
     numOutputRows: 3
     writeTimeMs: <time_ms>
@@ -18,17 +18,17 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 3896
+    numAddedBytes: 4072
     numAddedFiles: 4
     numFiles: 4
-    numOutputBytes: 3896
+    numOutputBytes: 4072
     numOutputFiles: 4
     numOutputRows: 6
-    numRemovedBytes: 1024
+    numRemovedBytes: 1069
     numRemovedFiles: 1
     numSourceRows: 4
-    numTargetBytesAdded: 3896
-    numTargetBytesRemoved: 1024
+    numTargetBytesAdded: 4072
+    numTargetBytesRemoved: 1069
     numTargetChangeFilesAdded: 0
     numTargetDeletionVectorsAdded: 0
     numTargetDeletionVectorsRemoved: 0
@@ -53,7 +53,7 @@ data:
   operation: DELETE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 704
+    numAddedBytes: 734
     numAddedChangeFiles: 0
     numAddedFiles: 1
     numCopiedRows: 3
@@ -62,10 +62,10 @@ data:
     numDeletionVectorsRemoved: 0
     numDeletionVectorsUpdated: 0
     numFiles: 1
-    numOutputBytes: 704
+    numOutputBytes: 734
     numOutputFiles: 1
     numOutputRows: 3
-    numRemovedBytes: 720
+    numRemovedBytes: 751
     numRemovedFiles: 1
     numTouchedRows: 5
     rewriteTimeMs: <time_ms>
@@ -92,17 +92,17 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 3859
+    numAddedBytes: 4035
     numAddedFiles: 4
     numFiles: 4
-    numOutputBytes: 3859
+    numOutputBytes: 4035
     numOutputFiles: 4
     numOutputRows: 4
-    numRemovedBytes: 1024
+    numRemovedBytes: 1069
     numRemovedFiles: 1
     numSourceRows: 3
-    numTargetBytesAdded: 3859
-    numTargetBytesRemoved: 1024
+    numTargetBytesAdded: 4035
+    numTargetBytesRemoved: 1069
     numTargetChangeFilesAdded: 0
     numTargetDeletionVectorsAdded: 0
     numTargetDeletionVectorsRemoved: 0
@@ -127,14 +127,14 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 941
+    numAddedBytes: 985
     numAddedFiles: 1
     numFiles: 1
-    numOutputBytes: 941
+    numOutputBytes: 985
     numOutputFiles: 1
     numOutputRows: 1
     numSourceRows: 3
-    numTargetBytesAdded: 941
+    numTargetBytesAdded: 985
     numTargetChangeFilesAdded: 0
     numTargetDeletionVectorsAdded: 0
     numTargetDeletionVectorsRemoved: 0
@@ -156,14 +156,14 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 941
+    numAddedBytes: 985
     numAddedFiles: 1
     numFiles: 1
-    numOutputBytes: 941
+    numOutputBytes: 985
     numOutputFiles: 1
     numOutputRows: 1
     numSourceRows: 3
-    numTargetBytesAdded: 941
+    numTargetBytesAdded: 985
     numTargetChangeFilesAdded: 0
     numTargetDeletionVectorsAdded: 0
     numTargetDeletionVectorsRemoved: 0
@@ -228,7 +228,7 @@ data:
     numOutputBytes: 0
     numOutputFiles: 0
     numOutputRows: 0
-    numRemovedBytes: 447
+    numRemovedBytes: 463
     numRemovedFiles: 1
     numTouchedRows: 2
     rewriteTimeMs: <time_ms>
@@ -240,13 +240,13 @@ data:
   operation: WRITE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 1427
+    numAddedBytes: 1488
     numAddedFiles: 2
     numFiles: 2
-    numOutputBytes: 1427
+    numOutputBytes: 1488
     numOutputFiles: 2
     numOutputRows: 3
-    numRemovedBytes: 734
+    numRemovedBytes: 766
     numRemovedFiles: 1
     numTouchedRows: 3
     scanTimeMs: <time_ms>
@@ -257,17 +257,17 @@ data:
   operation: MERGE
   operationMetrics:
     executionTimeMs: <time_ms>
-    numAddedBytes: 1038
+    numAddedBytes: 1084
     numAddedFiles: 1
     numFiles: 1
-    numOutputBytes: 1038
+    numOutputBytes: 1084
     numOutputFiles: 1
     numOutputRows: 4
-    numRemovedBytes: 1024
+    numRemovedBytes: 1069
     numRemovedFiles: 1
     numSourceRows: 0
-    numTargetBytesAdded: 1038
-    numTargetBytesRemoved: 1024
+    numTargetBytesAdded: 1084
+    numTargetBytesRemoved: 1069
     numTargetChangeFilesAdded: 0
     numTargetDeletionVectorsAdded: 0
     numTargetDeletionVectorsRemoved: 0
