@@ -7,7 +7,9 @@ use datafusion::arrow::array::{
 use datafusion::arrow::buffer::NullBuffer;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
-use datafusion_common::{exec_err, internal_err, plan_datafusion_err, Result, ScalarValue};
+use datafusion_common::{
+    exec_datafusion_err, exec_err, internal_err, plan_datafusion_err, Result, ScalarValue,
+};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -48,17 +50,6 @@ impl ArrayStructField {
         }
     }
 
-    fn child_field<'a>(fields: &'a [FieldRef], name: &str) -> Result<&'a FieldRef> {
-        let matches = fields
-            .iter()
-            .filter(|field| field.name().eq_ignore_ascii_case(name))
-            .collect::<Vec<_>>();
-        let [field] = matches.as_slice() else {
-            return exec_err!("missing or ambiguous field: {name}");
-        };
-        Ok(field)
-    }
-
     fn return_type_for_list(&self, data_type: &DataType, field_name: &str) -> Result<DataType> {
         let list_field = Self::list_field(data_type)?;
         let DataType::Struct(fields) = list_field.data_type() else {
@@ -67,7 +58,9 @@ impl ArrayStructField {
                 list_field.data_type()
             );
         };
-        let child = Self::child_field(fields, field_name)?;
+        let (_, child) = fields
+            .find(field_name)
+            .ok_or_else(|| exec_datafusion_err!("missing field: {field_name}"))?;
         let nullable = list_field.is_nullable() || child.is_nullable();
         let field = Arc::new(Field::new_list_field(child.data_type().clone(), nullable));
         match data_type {
@@ -78,36 +71,34 @@ impl ArrayStructField {
         }
     }
 
-    fn struct_values(values: &ArrayRef, field_name: &str) -> Result<ArrayRef> {
+    fn struct_values(values: &ArrayRef, field_name: &str) -> Result<(ArrayRef, bool)> {
         let Some(struct_array) = values.as_any().downcast_ref::<StructArray>() else {
             return exec_err!(
                 "array_struct_field requires list values to be structs, got {}",
                 values.data_type()
             );
         };
-        let matches = struct_array
+        let (index, field) = struct_array
             .fields()
-            .iter()
-            .enumerate()
-            .filter(|(_, field)| field.name().eq_ignore_ascii_case(field_name))
-            .map(|(index, _)| index)
-            .collect::<Vec<_>>();
-        let [index] = matches.as_slice() else {
-            return exec_err!("missing or ambiguous field: {field_name}");
-        };
-        let values = struct_array.column(*index);
+            .find(field_name)
+            .ok_or_else(|| exec_datafusion_err!("missing field: {field_name}"))?;
+        let values = struct_array.column(index);
         let nulls = NullBuffer::union(struct_array.nulls(), values.nulls());
         let data = values.to_data().into_builder().nulls(nulls).build()?;
-        Ok(make_array(data))
+        Ok((make_array(data), field.is_nullable()))
     }
 
     fn project_list<O>(array: &GenericListArray<O>, field_name: &str) -> Result<ArrayRef>
     where
         O: OffsetSizeTrait,
     {
-        let values = Self::struct_values(array.values(), field_name)?;
+        let list_field = Self::list_field(array.data_type())?;
+        let (values, child_nullable) = Self::struct_values(array.values(), field_name)?;
         Ok(Arc::new(GenericListArray::<O>::try_new(
-            Arc::new(Field::new_list_field(values.data_type().clone(), true)),
+            Arc::new(Field::new_list_field(
+                values.data_type().clone(),
+                list_field.is_nullable() || child_nullable,
+            )),
             array.offsets().clone(),
             values,
             array.nulls().cloned(),
@@ -119,9 +110,13 @@ impl ArrayStructField {
         size: i32,
         field_name: &str,
     ) -> Result<ArrayRef> {
-        let values = Self::struct_values(array.values(), field_name)?;
+        let list_field = Self::list_field(array.data_type())?;
+        let (values, child_nullable) = Self::struct_values(array.values(), field_name)?;
         Ok(Arc::new(FixedSizeListArray::try_new(
-            Arc::new(Field::new_list_field(values.data_type().clone(), true)),
+            Arc::new(Field::new_list_field(
+                values.data_type().clone(),
+                list_field.is_nullable() || child_nullable,
+            )),
             size,
             values,
             array.nulls().cloned(),
