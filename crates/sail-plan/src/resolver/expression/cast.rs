@@ -9,6 +9,7 @@ use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_common_datafusion::variant::is_variant_storage_field;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
@@ -16,6 +17,8 @@ use sail_function::scalar::datetime::spark_interval::{
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
+use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
+use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
@@ -63,7 +66,9 @@ impl PlanResolver<'_> {
         let cast_to_type = self.resolve_data_type(&cast_to_type, state)?;
         let NamedExpr { expr, name, .. } =
             self.resolve_named_expression(expr, schema, state).await?;
-        let expr_type = expr.get_type(schema)?;
+        let expr_field = expr.to_field(schema)?.1;
+        let expr_type = expr_field.data_type().clone();
+        let expr_is_variant = is_variant_storage_field(expr_field.as_ref());
         let name = if need_rename_cast(&expr) {
             let service = self.ctx.extension::<PlanService>()?;
             let data_type_string = service
@@ -96,6 +101,26 @@ impl PlanResolver<'_> {
                 | DataType::Map(_, _)
         );
         let expr = match (expr_type, cast_to_type.clone(), is_try) {
+            (_, DataType::Utf8, _) if expr_is_variant => cast(
+                ScalarUDF::new_from_impl(SparkVariantToJsonUdf::new()).call(vec![expr]),
+                DataType::Utf8,
+            ),
+            (_, DataType::LargeUtf8, _) if expr_is_variant => cast(
+                ScalarUDF::new_from_impl(SparkVariantToJsonUdf::new()).call(vec![expr]),
+                DataType::LargeUtf8,
+            ),
+            (_, DataType::Utf8View, _) if expr_is_variant => {
+                ScalarUDF::new_from_impl(SparkVariantToJsonUdf::new()).call(vec![expr])
+            }
+            (_, to, is_try) if expr_is_variant => {
+                let service = self.ctx.extension::<PlanService>()?;
+                let data_type_string = service.plan_formatter().data_type_to_simple_string(&to)?;
+                ScalarUDF::new_from_impl(SparkVariantGet::new(is_try)).call(vec![
+                    expr,
+                    lit("$"),
+                    lit(data_type_string),
+                ])
+            }
             (from, DataType::Timestamp(time_unit, _) | DataType::Duration(time_unit), _)
                 if from.is_numeric() =>
             {

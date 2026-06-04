@@ -132,6 +132,7 @@ use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::spark_date::SparkDate;
+use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
 };
@@ -2354,6 +2355,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeYmInterval::new())))
             }
             "spark_make_time" | "make_time" => Ok(Arc::new(ScalarUDF::from(SparkMakeTime::new()))),
+            "date_trunc" => Ok(Arc::new(ScalarUDF::from(SparkDateTrunc::new()))),
             "spark_time_diff" | "time_diff" => Ok(Arc::new(ScalarUDF::from(SparkTimeDiff::new()))),
             "spark_time_trunc" | "time_trunc" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTimeTrunc::new())))
@@ -2457,6 +2459,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkConcat>()
             || node_inner.is::<SparkConv>()
             || node_inner.is::<SparkCrc32>()
+            || node_inner.is::<SparkDateTrunc>()
             || node_inner.is::<SparkDayTimeInterval>()
             || node_inner.is::<SparkDecode>()
             || node_inner.is::<SparkElt>()
