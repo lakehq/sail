@@ -1,14 +1,13 @@
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
-use datafusion::datasource::file_format::FileFormat;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::Result;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 
-use crate::formats::binary::file_format::BinaryFileFormat;
 use crate::formats::binary::source::BinarySource;
-use crate::listing::source::{ListingScanInput, ReadFormat, SchemaInfer};
+use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
 use crate::options::gen::BinaryReadOptions;
 
 #[derive(Debug, Clone)]
@@ -18,16 +17,29 @@ pub struct BinaryReadFormat {
 
 #[async_trait::async_trait]
 impl ReadFormat for BinaryReadFormat {
-    fn create_read_format(
+    async fn infer_compression(
         &self,
-        _compression: Option<CompressionTypeVariant>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        let options = self.options.clone().into_table_options();
-        Ok(Arc::new(BinaryFileFormat::new(options)))
+        _ctx: &dyn Session,
+        _files: &[ListingFileSample<'_>],
+    ) -> Result<CompressionTypeVariant> {
+        Ok(CompressionTypeVariant::UNCOMPRESSED)
     }
 
-    fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
-        Arc::new(crate::listing::source::DefaultSchemaInfer)
+    async fn infer_schema(
+        &self,
+        ctx: &dyn Session,
+        _files: &[ListingFileSample<'_>],
+        _compression: CompressionTypeVariant,
+    ) -> Result<SchemaRef> {
+        let tz = Arc::from(
+            ctx.config()
+                .options()
+                .execution
+                .time_zone
+                .clone()
+                .unwrap_or_else(|| "UTC".to_string()),
+        );
+        Ok(super::read_schema(tz))
     }
 
     async fn scan(&self, _ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {

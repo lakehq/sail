@@ -57,9 +57,9 @@ impl TryFrom<&StructField> for ArrowField {
 impl TryFrom<&ArrayType> for ArrowField {
     type Error = ArrowError;
     fn try_from(a: &ArrayType) -> Result<Self, ArrowError> {
-        Ok(ArrowField::new(
+        ArrowField::try_from(&StructField::new(
             "element",
-            ArrowDataType::try_from(a.element_type())?,
+            a.element_type().clone(),
             a.contains_null(),
         ))
     }
@@ -68,19 +68,15 @@ impl TryFrom<&ArrayType> for ArrowField {
 impl TryFrom<&MapType> for ArrowField {
     type Error = ArrowError;
     fn try_from(m: &MapType) -> Result<Self, ArrowError> {
+        let key_field = ArrowField::try_from(&StructField::not_null("key", m.key_type().clone()))?;
+        let value_field = ArrowField::try_from(&StructField::new(
+            "value",
+            m.value_type().clone(),
+            m.value_contains_null(),
+        ))?;
         Ok(ArrowField::new(
             "key_value",
-            ArrowDataType::Struct(
-                vec![
-                    ArrowField::new("key", ArrowDataType::try_from(m.key_type())?, false),
-                    ArrowField::new(
-                        "value",
-                        ArrowDataType::try_from(m.value_type())?,
-                        m.value_contains_null(),
-                    ),
-                ]
-                .into(),
-            ),
+            ArrowDataType::Struct(vec![key_field, value_field].into()),
             false,
         ))
     }
@@ -303,5 +299,47 @@ impl TryFrom<ArrowSchemaRef> for DataType {
     fn try_from(schema: ArrowSchemaRef) -> Result<Self, Self::Error> {
         let struct_type = StructType::try_from(schema)?;
         Ok(DataType::Struct(Box::new(struct_type)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn array_variant_element_preserves_extension_metadata() -> Result<(), ArrowError> {
+        let field = ArrowField::try_from(&ArrayType::new(DataType::unshredded_variant(), true))?;
+
+        let ArrowDataType::Struct(fields) = field.data_type() else {
+            return Err(ArrowError::SchemaError(
+                "variant element should use struct storage".to_string(),
+            ));
+        };
+        assert_eq!(field.extension_type_name(), Some(VariantType::NAME));
+        assert!(fields.iter().any(|field| field.name() == "metadata"));
+        assert!(fields.iter().any(|field| field.name() == "value"));
+        Ok(())
+    }
+
+    #[test]
+    fn map_variant_value_preserves_extension_metadata() -> Result<(), ArrowError> {
+        let field = ArrowField::try_from(&MapType::new(
+            DataType::STRING,
+            DataType::unshredded_variant(),
+            true,
+        ))?;
+
+        let ArrowDataType::Struct(entries) = field.data_type() else {
+            return Err(ArrowError::SchemaError(
+                "map entries should use struct storage".to_string(),
+            ));
+        };
+        let Some(value) = entries.iter().find(|entry| entry.name() == "value") else {
+            return Err(ArrowError::SchemaError(
+                "map value field should exist".to_string(),
+            ));
+        };
+        assert_eq!(value.extension_type_name(), Some(VariantType::NAME));
+        Ok(())
     }
 }
