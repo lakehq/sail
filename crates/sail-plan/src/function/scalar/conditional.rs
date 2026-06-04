@@ -10,22 +10,53 @@ use sail_function::scalar::spark_to_string::SparkToUtf8;
 use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
-fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+/// Searched CASE: `CASE WHEN cond THEN result ... [ELSE else_result] END`
+/// Arguments: [cond1, result1, cond2, result2, ..., optional_else]
+fn searched_case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput { arguments, .. } = input;
     let mut when_then_expr = Vec::new();
+    let mut else_expr = None;
     let mut iter = arguments.into_iter();
     while let Some(condition) = iter.next() {
         if let Some(result) = iter.next() {
             when_then_expr.push((Box::new(condition), Box::new(result)));
         } else {
-            when_then_expr.push((Box::new(lit(true)), Box::new(condition)));
+            // Unpaired final argument is the ELSE clause
+            else_expr = Some(Box::new(condition));
             break;
         }
     }
     Ok(expr::Expr::Case(expr::Case {
-        expr: None, // Expr::Case in from_ast_expression incorporates into when_then_expr
+        expr: None,
         when_then_expr,
-        else_expr: None,
+        else_expr,
+    }))
+}
+
+/// Simple CASE: `CASE operand WHEN val THEN result ... [ELSE else_result] END`
+/// Arguments: [operand, val1, result1, val2, result2, ..., optional_else]
+/// The operand is set in `expr: Some(...)` to enable DataFusion's LiteralLookupTable optimization.
+fn simple_case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
+    let mut iter = arguments.into_iter();
+    let operand = iter
+        .next()
+        .ok_or_else(|| crate::error::PlanError::invalid("CASE expression requires an operand"))?;
+    let mut when_then_expr = Vec::new();
+    let mut else_expr = None;
+    while let Some(value) = iter.next() {
+        if let Some(result) = iter.next() {
+            when_then_expr.push((Box::new(value), Box::new(result)));
+        } else {
+            // Unpaired final argument is the ELSE clause
+            else_expr = Some(Box::new(value));
+            break;
+        }
+    }
+    Ok(expr::Expr::Case(expr::Case {
+        expr: Some(Box::new(operand)),
+        when_then_expr,
+        else_expr,
     }))
 }
 
@@ -150,8 +181,8 @@ pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, Scalar
         ("nvl", F::binary(expr_fn::nvl)),
         ("nvl2", F::ternary(expr_fn::nvl2)),
         ("zeroifnull", F::custom(zeroifnull)),
-        ("when", F::custom(case)),
-        ("case", F::custom(case)),
+        ("when", F::custom(searched_case)),
+        ("case", F::custom(simple_case)),
     ]
 }
 
