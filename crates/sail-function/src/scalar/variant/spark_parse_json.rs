@@ -11,7 +11,7 @@ use datafusion::logical_expr::{
 };
 use datafusion_expr_common::signature::Volatility;
 use parquet_variant_compute::{VariantArrayBuilder, VariantType};
-use parquet_variant_json::JsonToVariant as JsonToVariantExt;
+use parquet_variant_json::append_json;
 use sail_common_datafusion::variant::{
     variant_metadata_field, VARIANT_METADATA_FIELD_NAME, VARIANT_METADATA_MARKER_KEY,
     VARIANT_METADATA_MARKER_VALUE,
@@ -142,7 +142,7 @@ fn try_append_json(builder: &mut VariantArrayBuilder, json_str: &str) -> bool {
     // Must go through try_parse_json_lenient (StrictValue) to reject duplicate keys,
     // matching Spark's try_parse_json semantics (returns NULL on duplicate keys).
     match try_parse_json_lenient(json_str) {
-        Some(value) => builder.append_json(value.to_string().as_str()).is_ok(),
+        Some(value) => append_json(&value, builder).is_ok(),
         None => false,
     }
 }
@@ -159,9 +159,7 @@ fn malformed_record_err(record: &str) -> datafusion_common::DataFusionError {
 /// with `MALFORMED_RECORD_IN_PARSING` on unparseable input.
 fn append_json_strict(builder: &mut VariantArrayBuilder, json_str: &str) -> Result<()> {
     match try_parse_json_lenient(json_str) {
-        Some(value) => builder
-            .append_json(value.to_string().as_str())
-            .map_err(|_| malformed_record_err(json_str)),
+        Some(value) => append_json(&value, builder).map_err(|_| malformed_record_err(json_str)),
         None => Err(malformed_record_err(json_str)),
     }
 }
