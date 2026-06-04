@@ -11,6 +11,7 @@ use datafusion_expr::{
 };
 use parquet_variant::{VariantPath, VariantPathElement};
 use parquet_variant_compute::{variant_get, GetOptions, VariantType};
+use sail_common_datafusion::variant::variant_metadata_field;
 
 use crate::error::{generic_exec_err, invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 use crate::scalar::variant::utils::helper::{try_field_as_variant_array, try_parse_string_scalar};
@@ -75,7 +76,7 @@ fn return_field_for_variant_get(name: &str, args: &ReturnFieldArgs) -> Result<Fi
     // Use Binary (not BinaryView) for PySpark compatibility.
     let variant_struct = DataType::Struct(
         vec![
-            Field::new("metadata", DataType::Binary, false),
+            variant_metadata_field(DataType::Binary, false),
             Field::new("value", DataType::Binary, true),
         ]
         .into(),
@@ -220,7 +221,7 @@ fn invoke_variant_get(args: ScalarFunctionArgs, name: &str, safe: bool) -> Resul
             &result,
             &DataType::Struct(
                 vec![
-                    Field::new("metadata", DataType::Binary, false),
+                    variant_metadata_field(DataType::Binary, false),
                     Field::new("value", DataType::Binary, true),
                 ]
                 .into(),

@@ -102,7 +102,8 @@ message ExtendedScalarUdf {
     SparkMakeTimestampNtzUdf spark_make_timestamp_ntz = 21;
     ConvertTzUdf convert_tz = 22;
     SparkToCsvUdf spark_to_csv = 23;
-    SparkBinUdf spark_bin = 24;
+    SparkPmodUdf spark_pmod = 24;
+    SparkBinUdf spark_bin = 25;
   }
 }
 
@@ -202,6 +203,10 @@ message SparkAbsUdf {
 }
 
 message SparkBinUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkPmodUdf {
   bool ansi_mode = 1;
 }
 

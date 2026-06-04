@@ -139,8 +139,7 @@
   {
     "module": "pyspark.sql.functions",
     "function": "grouping_id",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/309"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",

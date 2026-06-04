@@ -2,8 +2,8 @@ import pandas as pd
 import pyspark
 import pytest
 from pandas.testing import assert_frame_equal
-from pyspark.sql.functions import col, lit, udf, udtf
-from pyspark.sql.types import IntegerType, Row, StringType
+from pyspark.sql.functions import array, col, lit, udf, udtf
+from pyspark.sql.types import ArrayType, DataType, IntegerType, LongType, Row, StringType, StructType
 
 pytestmark = pytest.mark.skipif(
     int(pyspark.__version__.split(".")[0]) < 4,  # noqa: PLR2004
@@ -105,3 +105,80 @@ def test_udtf_kwargs_reversed_order(udtf_concat):
         udtf_concat(b=lit("world"), a=lit("hello")).toPandas(),
         pd.DataFrame({"result": ["helloworld"]}),
     )
+
+
+def test_udtf_row_output_invalid_scalar_raises_pickle_exception():
+    from pyspark.errors.exceptions.connect import PickleException
+
+    @udtf(returnType="x: boolean")
+    class RowOutputUDTF:
+        def eval(self):
+            yield (Row(a=0, b=1.1, c=2),)
+
+    with pytest.raises(PickleException, match="PickleException"):
+        RowOutputUDTF().collect()
+
+
+@pytest.mark.skipif(
+    tuple(int(x) for x in pyspark.__version__.split(".")[:2]) < (4, 1),
+    reason="Arrow UDTF tests require PySpark 4.1+",
+)
+def test_arrow_udtf_type_conversion_error_class_is_preserved():
+    from pyspark.errors.exceptions.connect import PythonException
+
+    @udtf(returnType="x: boolean", useArrow=True)
+    class ArrowOutputUDTF:
+        def eval(self):
+            yield (1,)
+
+    with pytest.raises(PythonException, match="UDTF_ARROW_TYPE_CONVERSION_ERROR"):
+        ArrowOutputUDTF().collect()
+
+
+@pytest.mark.skipif(
+    tuple(int(x) for x in pyspark.__version__.split(".")[:2]) < (4, 1),
+    reason="UDTF analyze tests require PySpark 4.1+",
+)
+def test_udtf_analyze_preserves_array_type():
+    from pyspark.sql.udtf import AnalyzeArgument, AnalyzeResult
+
+    @udtf
+    class AnalyzeArrayUDTF:
+        @staticmethod
+        def analyze(a: AnalyzeArgument) -> AnalyzeResult:
+            assert isinstance(a, AnalyzeArgument)
+            assert isinstance(a.dataType, DataType)
+            assert a.isTable is False
+            return AnalyzeResult(StructType().add("a", a.dataType))
+
+        def eval(self, a):
+            yield (a,)
+
+    df = AnalyzeArrayUDTF(array(lit(1), lit(2), lit(3)))
+    assert df.schema == StructType().add("a", ArrayType(IntegerType(), containsNull=False))
+    assert df.collect() == [Row(a=[1, 2, 3])]
+
+
+@pytest.mark.skipif(
+    tuple(int(x) for x in pyspark.__version__.split(".")[:2]) < (4, 1),
+    reason="UDTF table arguments require PySpark 4.1+",
+)
+def test_udtf_analyze_marks_table_argument(spark):
+    from pyspark.sql.udtf import AnalyzeArgument, AnalyzeResult
+
+    @udtf
+    class AnalyzeTableUDTF:
+        @staticmethod
+        def analyze(a: AnalyzeArgument) -> AnalyzeResult:
+            assert isinstance(a, AnalyzeArgument)
+            assert isinstance(a.dataType, StructType)
+            assert a.isTable is True
+            return AnalyzeResult(StructType().add("a", a.dataType[0].dataType))
+
+        def eval(self, a: Row):
+            yield (a["id"],)
+
+    spark.udtf.register("analyze_table_udtf", AnalyzeTableUDTF)
+    df = spark.sql("SELECT * FROM analyze_table_udtf(TABLE (SELECT id FROM range(0, 3)))")
+    assert df.schema["a"].dataType == LongType()
+    assert df.collect() == [Row(a=0), Row(a=1), Row(a=2)]
