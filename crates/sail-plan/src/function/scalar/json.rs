@@ -1,3 +1,4 @@
+use chumsky::prelude::*;
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{cast, expr, lit, when, Expr, ScalarUDF};
@@ -26,67 +27,51 @@ use crate::function::common::{ScalarFunction, ScalarFunctionBuilder as F, Scalar
 /// supported — Spark returns NULL for the latter — so they parse as `None`,
 /// letting the caller emit a NULL result like Spark.
 fn parse_json_path(path: &str) -> Option<Vec<expr::Expr>> {
-    let mut chars = path.chars().peekable();
-    if chars.next()? != '$' {
-        return None;
-    }
-    let mut keys = Vec::new();
-    while let Some(&c) = chars.peek() {
-        match c {
-            '.' => {
-                chars.next();
-                let mut key = String::new();
-                while let Some(&c) = chars.peek() {
-                    if c == '.' || c == '[' {
-                        break;
-                    }
-                    key.push(c);
-                    chars.next();
-                }
-                if key.is_empty() {
-                    return None;
-                }
-                keys.push(lit(key));
-            }
-            '[' => {
-                chars.next();
-                match chars.peek() {
-                    Some('\'') => {
-                        chars.next();
-                        let mut key = String::new();
-                        loop {
-                            match chars.next() {
-                                Some('\'') => break,
-                                Some(c) => key.push(c),
-                                None => return None,
-                            }
-                        }
-                        if chars.next()? != ']' {
-                            return None;
-                        }
-                        keys.push(lit(key));
-                    }
-                    Some(c) if c.is_ascii_digit() => {
-                        let mut index = String::new();
-                        while let Some(&c) = chars.peek() {
-                            if c == ']' {
-                                break;
-                            }
-                            index.push(c);
-                            chars.next();
-                        }
-                        if chars.next()? != ']' {
-                            return None;
-                        }
-                        keys.push(lit(index.parse::<i64>().ok()?));
-                    }
-                    _ => return None,
-                }
-            }
-            _ => return None,
-        }
-    }
-    Some(keys)
+    json_path_parser().parse(path).into_result().ok()
+}
+
+/// Chumsky grammar for the `get_json_object` JSONPath subset, mirroring
+/// `spark_variant_path_parser` used by `variant_get`. Each path segment maps to
+/// one literal `Expr`: a `Utf8` literal for an object key, an `Int64` literal
+/// for an array index. Any path Spark rejects fails the parse (→ `None`).
+fn json_path_parser<'src>(
+) -> impl Parser<'src, &'src str, Vec<expr::Expr>, extra::Err<Rich<'src, char>>> {
+    // `.key` — a run of characters other than `.` or `[`.
+    let dot_key = just('.')
+        .ignore_then(
+            none_of(['.', '['])
+                .repeated()
+                .at_least(1)
+                .collect::<String>(),
+        )
+        .map(lit);
+
+    // `['key']` — single-quoted (may contain dots). Double-quoted brackets are
+    // not accepted, matching Spark (which returns NULL for them).
+    let bracket_key = just('[')
+        .ignore_then(just('\''))
+        .ignore_then(none_of('\'').repeated().collect::<String>())
+        .then_ignore(just('\''))
+        .then_ignore(just(']'))
+        .map(lit);
+
+    // `[0]` — array index.
+    let index = just('[')
+        .ignore_then(text::int(10).try_map(|digits: &str, span| {
+            digits
+                .parse::<i64>()
+                .map(lit)
+                .map_err(|e| Rich::custom(span, e.to_string()))
+        }))
+        .then_ignore(just(']'));
+
+    just('$')
+        .ignore_then(
+            choice((dot_key, bracket_key, index))
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .then_ignore(end())
 }
 
 fn get_json_object(expr: expr::Expr, path: expr::Expr) -> PlanResult<expr::Expr> {
