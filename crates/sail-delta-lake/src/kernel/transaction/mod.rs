@@ -2329,7 +2329,12 @@ mod tests {
                 },
             )
             .await?;
-        let second_actions = read_commit_actions(&log_store, appended.version).await;
+        let appended_version = appended
+            .snapshot
+            .as_ref()
+            .ok_or_else(|| DeltaError::generic("append commit should return a snapshot"))?
+            .version();
+        let second_actions = read_commit_actions(&log_store, appended_version).await;
         let second_commit_info = commit_info(&second_actions)?;
         let second_ict = second_commit_info.in_commit_timestamp.ok_or_else(|| {
             DeltaError::generic("ICT-enabled append commit should write inCommitTimestamp")
@@ -2341,7 +2346,7 @@ mod tests {
         ));
         assert!(second_ict > first_ict);
         assert_eq!(
-            read_version_checksum(&log_store, appended.version)
+            read_version_checksum(&log_store, appended_version)
                 .await
                 .in_commit_timestamp_opt,
             Some(second_ict)
