@@ -161,7 +161,21 @@ Feature: parse_json (strict version; errors on invalid JSON)
         """
       Then query result
         | result |
-        | -0     |
+        | 0      |
+
+    @sail-bug
+    # Spark keeps scientific negative zero as -0.0 (the exponent makes it a DOUBLE);
+    # only the non-exponent forms `-0`/`-0.0` normalize to 0. Sail can't match this:
+    # serde_json discards the exponent, and Sail renders -0.0 as `-0` anyway
+    # (Sail-wide double->string formatting gap, same root cause as `1e10` -> `1.0E10`).
+    Scenario: parse_json scientific negative zero keeps sign
+      When query
+        """
+        SELECT to_json(parse_json('-0e0')) AS result
+        """
+      Then query result
+        | result |
+        | -0.0   |
 
     @sail-bug
     Scenario: parse_json preserves large number beyond i64
