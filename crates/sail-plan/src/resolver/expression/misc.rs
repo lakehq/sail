@@ -9,7 +9,7 @@ use datafusion_expr::{expr, lit, BinaryExpr, ExprSchemable, ScalarUDF};
 use datafusion_expr_common::operator::Operator;
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_functions_nested::expr_fn::{array_element, map_extract};
-use sail_common::spec;
+use sail_common::spec::{self, DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::session::plan::PlanService;
@@ -66,6 +66,14 @@ impl PlanResolver<'_> {
         let name = placeholder.clone();
         let expr = expr::Expr::Placeholder(expr::Placeholder::new_with_field(placeholder, None));
         Ok(NamedExpr::new(vec![name], expr))
+    }
+
+    pub(super) fn resolve_expression_default_column_value(&self) -> PlanResult<NamedExpr> {
+        let expr = expr::Expr::Placeholder(expr::Placeholder::new_with_field(
+            DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID.to_string(),
+            None,
+        ));
+        Ok(NamedExpr::new(vec!["DEFAULT".to_string()], expr))
     }
 
     pub(super) async fn resolve_expression_identifier_clause(
