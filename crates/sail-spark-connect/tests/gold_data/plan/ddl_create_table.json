@@ -2739,10 +2739,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
-                    "step": 1,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -2797,10 +2796,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
+                    "start": null,
                     "step": -2,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -2855,10 +2853,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
+                    "start": null,
                     "step": 2,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -2915,8 +2912,7 @@
                   "identity": {
                     "start": -2,
                     "step": -2,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -2972,9 +2968,8 @@
                   "generatedAlwaysAs": null,
                   "identity": {
                     "start": -2,
-                    "step": 1,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "step": null,
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -3031,8 +3026,7 @@
                   "identity": {
                     "start": 2,
                     "step": 2,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -3088,9 +3082,8 @@
                   "generatedAlwaysAs": null,
                   "identity": {
                     "start": 2,
-                    "step": 1,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "step": null,
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -3145,10 +3138,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
-                    "step": 1,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -3203,10 +3195,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
-                    "step": 1,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -3261,10 +3252,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
+                    "start": null,
                     "step": -2,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -3319,10 +3309,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
+                    "start": null,
                     "step": 2,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -3379,8 +3368,7 @@
                   "identity": {
                     "start": -2,
                     "step": -2,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -3436,9 +3424,8 @@
                   "generatedAlwaysAs": null,
                   "identity": {
                     "start": -2,
-                    "step": 1,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "step": null,
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -3495,8 +3482,7 @@
                   "identity": {
                     "start": 2,
                     "step": 2,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -3552,9 +3538,8 @@
                   "generatedAlwaysAs": null,
                   "identity": {
                     "start": 2,
-                    "step": 1,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "step": null,
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -3609,10 +3594,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
-                    "step": 1,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -3667,10 +3651,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
-                    "step": 1,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -3725,10 +3708,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
+                    "start": null,
                     "step": -2,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -3783,10 +3765,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
+                    "start": null,
                     "step": 2,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -3843,8 +3824,7 @@
                   "identity": {
                     "start": -2,
                     "step": -2,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -3900,9 +3880,8 @@
                   "generatedAlwaysAs": null,
                   "identity": {
                     "start": -2,
-                    "step": 1,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "step": null,
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -3959,8 +3938,7 @@
                   "identity": {
                     "start": 2,
                     "step": 2,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -4016,9 +3994,8 @@
                   "generatedAlwaysAs": null,
                   "identity": {
                     "start": 2,
-                    "step": 1,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "step": null,
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -4073,10 +4050,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
-                    "step": 1,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -4131,10 +4107,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
-                    "step": 1,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -4189,10 +4164,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
+                    "start": null,
                     "step": -2,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -4247,10 +4221,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
+                    "start": null,
                     "step": 2,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -4307,8 +4280,7 @@
                   "identity": {
                     "start": -2,
                     "step": -2,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -4364,9 +4336,8 @@
                   "generatedAlwaysAs": null,
                   "identity": {
                     "start": -2,
-                    "step": 1,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "step": null,
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -4423,8 +4394,7 @@
                   "identity": {
                     "start": 2,
                     "step": 2,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -4480,9 +4450,8 @@
                   "generatedAlwaysAs": null,
                   "identity": {
                     "start": 2,
-                    "step": 1,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "step": null,
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -4537,10 +4506,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
-                    "step": 1,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -4664,7 +4632,59 @@
       "input": "CREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY(INCREMENT BY 0), val INT) USING foo",
       "exception": "\n[IDENTITY_COLUMNS_ILLEGAL_STEP] IDENTITY column step cannot be 0. SQLSTATE: 42611\n== SQL (line 1, position 29) ==\nCREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY(INCREMENT BY 0), val INT) USING foo\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: INCREMENT BY value for identity column cannot be 0"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "testcat",
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": null,
+                    "step": 0,
+                    "allowExplicitInsert": false
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "foo"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
@@ -4688,10 +4708,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
-                    "step": 1,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": false
                   }
                 },
                 {

@@ -230,7 +230,7 @@ pub struct TableColumnStatus {
     pub comment: Option<String>,
     pub default: Option<String>,
     pub generated_always_as: Option<String>,
-    pub identity: Option<sail_common::spec::TableColumnIdentity>,
+    pub identity: Option<super::CatalogTableColumnIdentity>,
     pub is_partition: bool,
     pub is_bucket: bool,
     pub is_cluster: bool,

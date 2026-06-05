@@ -6,7 +6,7 @@ use sail_catalog::provider::{
 };
 use sail_common::spec;
 use sail_common_datafusion::catalog::{
-    CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
+    CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableConstraint, CatalogTableSort,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
@@ -340,6 +340,7 @@ impl PlanResolver<'_> {
                     identity,
                 } = x;
                 let data_type = self.resolve_data_type(&data_type, state)?;
+                let identity = Self::resolve_table_column_identity(&name, identity)?;
                 if identity.is_some() && data_type != datafusion::arrow::datatypes::DataType::Int64
                 {
                     return Err(PlanError::invalid(format!(
@@ -357,6 +358,28 @@ impl PlanResolver<'_> {
                 })
             })
             .collect()
+    }
+
+    fn resolve_table_column_identity(
+        _name: &str,
+        identity: Option<spec::TableColumnIdentity>,
+    ) -> PlanResult<Option<CatalogTableColumnIdentity>> {
+        identity
+            .map(|identity| {
+                let step = identity.step.unwrap_or(1);
+                if step == 0 {
+                    return Err(PlanError::invalid(
+                        "INCREMENT BY value for identity column cannot be 0",
+                    ));
+                }
+                Ok(CatalogTableColumnIdentity {
+                    start: identity.start.unwrap_or(1),
+                    step,
+                    allow_explicit_insert: identity.allow_explicit_insert,
+                    high_water_mark: None,
+                })
+            })
+            .transpose()
     }
 
     fn resolve_table_constraints(

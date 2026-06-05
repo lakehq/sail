@@ -2399,10 +2399,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
-                    "step": 1,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -2457,10 +2456,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
+                    "start": null,
                     "step": -2,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -2515,10 +2513,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
+                    "start": null,
                     "step": 2,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -2575,8 +2572,7 @@
                   "identity": {
                     "start": -2,
                     "step": -2,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -2632,9 +2628,8 @@
                   "generatedAlwaysAs": null,
                   "identity": {
                     "start": -2,
-                    "step": 1,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "step": null,
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -2691,8 +2686,7 @@
                   "identity": {
                     "start": 2,
                     "step": 2,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -2748,9 +2742,8 @@
                   "generatedAlwaysAs": null,
                   "identity": {
                     "start": 2,
-                    "step": 1,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "step": null,
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -2805,10 +2798,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
-                    "step": 1,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -2863,10 +2855,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
-                    "step": 1,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -2921,10 +2912,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
+                    "start": null,
                     "step": -2,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -2979,10 +2969,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
+                    "start": null,
                     "step": 2,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -3039,8 +3028,7 @@
                   "identity": {
                     "start": -2,
                     "step": -2,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -3096,9 +3084,8 @@
                   "generatedAlwaysAs": null,
                   "identity": {
                     "start": -2,
-                    "step": 1,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "step": null,
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -3155,8 +3142,7 @@
                   "identity": {
                     "start": 2,
                     "step": 2,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -3212,9 +3198,8 @@
                   "generatedAlwaysAs": null,
                   "identity": {
                     "start": 2,
-                    "step": 1,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "step": null,
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -3269,10 +3254,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
-                    "step": 1,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -3327,10 +3311,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
-                    "step": 1,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -3385,10 +3368,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
+                    "start": null,
                     "step": -2,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -3443,10 +3425,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
+                    "start": null,
                     "step": 2,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -3503,8 +3484,7 @@
                   "identity": {
                     "start": -2,
                     "step": -2,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -3560,9 +3540,8 @@
                   "generatedAlwaysAs": null,
                   "identity": {
                     "start": -2,
-                    "step": 1,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "step": null,
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -3619,8 +3598,7 @@
                   "identity": {
                     "start": 2,
                     "step": 2,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -3676,9 +3654,8 @@
                   "generatedAlwaysAs": null,
                   "identity": {
                     "start": 2,
-                    "step": 1,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "step": null,
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -3733,10 +3710,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
-                    "step": 1,
-                    "allowExplicitInsert": false,
-                    "highWaterMark": null
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": false
                   }
                 },
                 {
@@ -3791,10 +3767,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
-                    "step": 1,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -3849,10 +3824,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
+                    "start": null,
                     "step": -2,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -3907,10 +3881,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
+                    "start": null,
                     "step": 2,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -3967,8 +3940,7 @@
                   "identity": {
                     "start": -2,
                     "step": -2,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -4024,9 +3996,8 @@
                   "generatedAlwaysAs": null,
                   "identity": {
                     "start": -2,
-                    "step": 1,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "step": null,
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -4083,8 +4054,7 @@
                   "identity": {
                     "start": 2,
                     "step": 2,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -4140,9 +4110,8 @@
                   "generatedAlwaysAs": null,
                   "identity": {
                     "start": 2,
-                    "step": 1,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "step": null,
+                    "allowExplicitInsert": true
                   }
                 },
                 {
@@ -4197,10 +4166,9 @@
                   "default": null,
                   "generatedAlwaysAs": null,
                   "identity": {
-                    "start": 1,
-                    "step": 1,
-                    "allowExplicitInsert": true,
-                    "highWaterMark": null
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": true
                   }
                 },
                 {

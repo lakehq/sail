@@ -1312,6 +1312,11 @@ fn from_ast_table_columns(
         } = options.try_into()?;
         let comment = comment.map(from_ast_string).transpose()?;
         let generated_always_as = generated_always_as.map(|expr| expr.text().trim().to_string());
+        let identity = identity
+            .map(|(options, allow_explicit_insert)| {
+                from_ast_identity_column(options, allow_explicit_insert)
+            })
+            .transpose()?;
         let column = spec::TableColumnDefinition {
             name: name.value,
             data_type: from_ast_data_type(data_type)?,
@@ -1449,7 +1454,7 @@ struct ColumnDefinitionOptions {
     not_null: bool,
     default: Option<Expr>,
     generated_always_as: Option<Expr>,
-    identity: Option<spec::TableColumnIdentity>,
+    identity: Option<(Option<TableColumnIdentityOptions>, bool)>,
     comment: Option<StringLiteral>,
 }
 
@@ -1477,20 +1482,12 @@ impl TryFrom<Vec<ColumnDefinitionOption>> for ColumnDefinitionOptions {
                     }
                 }
                 ColumnDefinitionOption::GeneratedAlwaysIdentity(_, _, _, _, options) => {
-                    if output
-                        .identity
-                        .replace(from_ast_identity_column(options, false)?)
-                        .is_some()
-                    {
+                    if output.identity.replace((options, false)).is_some() {
                         return Err(SqlError::invalid("duplicate GENERATED clause"));
                     }
                 }
                 ColumnDefinitionOption::GeneratedByDefaultIdentity(_, _, _, _, _, options) => {
-                    if output
-                        .identity
-                        .replace(from_ast_identity_column(options, true)?)
-                        .is_some()
-                    {
+                    if output.identity.replace((options, true)).is_some() {
                         return Err(SqlError::invalid("duplicate GENERATED clause"));
                     }
                 }
@@ -1547,17 +1544,10 @@ fn from_ast_identity_column(
             }
         }
     }
-    let step = step.unwrap_or(1);
-    if step == 0 {
-        return Err(SqlError::invalid(
-            "INCREMENT BY value for identity column cannot be 0",
-        ));
-    }
     Ok(spec::TableColumnIdentity {
-        start: start.unwrap_or(1),
+        start,
         step,
         allow_explicit_insert,
-        high_water_mark: None,
     })
 }
 

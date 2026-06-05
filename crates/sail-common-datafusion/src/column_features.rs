@@ -21,7 +21,8 @@
 use std::collections::HashMap;
 
 use datafusion::arrow::datatypes::Field;
-use sail_common::spec::TableColumnIdentity;
+
+use crate::catalog::CatalogTableColumnIdentity;
 
 /// Keys identifying column features carried on arrow field metadata.
 ///
@@ -93,13 +94,13 @@ impl<'a> ColumnFeatures<'a> {
     }
 
     /// Returns identity column metadata if the column is an identity column.
-    pub fn identity(&self) -> Option<TableColumnIdentity> {
+    pub fn identity(&self) -> Option<CatalogTableColumnIdentity> {
         let start = self.parse_i64(ColumnFeatureKey::IdentityStart)?;
         let step = self.parse_i64(ColumnFeatureKey::IdentityStep)?;
         let allow_explicit_insert =
             self.parse_bool(ColumnFeatureKey::IdentityAllowExplicitInsert)?;
         let high_water_mark = self.parse_i64(ColumnFeatureKey::IdentityHighWaterMark);
-        Some(TableColumnIdentity {
+        Some(CatalogTableColumnIdentity {
             start,
             step,
             allow_explicit_insert,
@@ -151,7 +152,7 @@ impl ColumnFeaturesBuilder {
         self
     }
 
-    pub fn with_identity(mut self, identity: &TableColumnIdentity) -> Self {
+    pub fn with_identity(mut self, identity: &CatalogTableColumnIdentity) -> Self {
         self.entries.insert(
             ColumnFeatureKey::IdentityStart.as_str().to_string(),
             identity.start.to_string(),

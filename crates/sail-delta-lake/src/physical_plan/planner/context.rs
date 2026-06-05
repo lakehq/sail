@@ -17,7 +17,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result};
 use object_store::ObjectStore;
-use sail_common::spec::TableColumnIdentity;
+use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_data_source::options::gen::DeltaWriteOptions;
 use url::Url;
@@ -48,7 +48,7 @@ pub struct DeltaPlannerConfig {
     /// Delta commit (new tables) even when the physical planner strips the arrow
     /// field metadata set at logical-plan construction time.
     pub generation_expressions: HashMap<String, String>,
-    pub identity_columns: HashMap<String, TableColumnIdentity>,
+    pub identity_columns: HashMap<String, CatalogTableColumnIdentity>,
     pub table_snapshot: Option<Arc<DeltaSnapshot>>,
 }
 
@@ -84,7 +84,7 @@ impl DeltaPlannerConfig {
 
     pub fn with_identity_columns(
         mut self,
-        identity_columns: HashMap<String, TableColumnIdentity>,
+        identity_columns: HashMap<String, CatalogTableColumnIdentity>,
     ) -> Self {
         self.identity_columns = identity_columns;
         self
@@ -150,7 +150,7 @@ impl<'a> PlannerContext<'a> {
         &self.config.generation_expressions
     }
 
-    pub fn identity_columns(&self) -> &HashMap<String, TableColumnIdentity> {
+    pub fn identity_columns(&self) -> &HashMap<String, CatalogTableColumnIdentity> {
         &self.config.identity_columns
     }
 

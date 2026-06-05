@@ -933,10 +933,9 @@ pub struct TableColumnDefinition {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TableColumnIdentity {
-    pub start: i64,
-    pub step: i64,
+    pub start: Option<i64>,
+    pub step: Option<i64>,
     pub allow_explicit_insert: bool,
-    pub high_water_mark: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

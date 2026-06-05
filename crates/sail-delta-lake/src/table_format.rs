@@ -824,7 +824,7 @@ fn extract_generation_expressions(logical_schema: Option<&DFSchema>) -> HashMap<
 
 fn extract_identity_columns(
     logical_schema: Option<&DFSchema>,
-) -> HashMap<String, sail_common::spec::TableColumnIdentity> {
+) -> HashMap<String, sail_common_datafusion::catalog::CatalogTableColumnIdentity> {
     let Some(schema) = logical_schema else {
         return HashMap::new();
     };

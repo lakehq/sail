@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 
-use sail_common::spec::TableColumnIdentity;
+use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
 use sail_data_source::options::gen::DeltaWriteOptions;
 use serde::{Deserialize, Serialize};
 
@@ -30,7 +30,7 @@ pub struct DeltaWriterExecOptions {
     #[serde(default)]
     pub generation_expressions: HashMap<String, String>,
     #[serde(default)]
-    pub identity_columns: HashMap<String, TableColumnIdentity>,
+    pub identity_columns: HashMap<String, CatalogTableColumnIdentity>,
 }
 
 impl From<DeltaWriteOptions> for DeltaWriterExecOptions {
@@ -60,7 +60,7 @@ impl DeltaWriterExecOptions {
 
     pub fn with_identity_columns(
         mut self,
-        identity_columns: HashMap<String, TableColumnIdentity>,
+        identity_columns: HashMap<String, CatalogTableColumnIdentity>,
     ) -> Self {
         self.identity_columns = identity_columns;
         self

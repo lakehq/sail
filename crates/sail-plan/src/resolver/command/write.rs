@@ -18,7 +18,8 @@ use sail_catalog::provider::{
 };
 use sail_common::spec;
 use sail_common_datafusion::catalog::{
-    CatalogTableBucketBy, CatalogTableSort, TableColumnStatus, TableKind,
+    CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableSort, TableColumnStatus,
+    TableKind,
 };
 use sail_common_datafusion::column_features::{ColumnFeatures, ColumnFeaturesBuilder};
 use sail_common_datafusion::datasource::{
@@ -1274,13 +1275,13 @@ impl PlanResolver<'_> {
         )
     }
 
-    fn make_identity_field_metadata(identity: &spec::TableColumnIdentity) -> FieldMetadata {
+    fn make_identity_field_metadata(identity: &CatalogTableColumnIdentity) -> FieldMetadata {
         FieldMetadata::from(ColumnFeaturesBuilder::new().with_identity(identity).build())
     }
 
     fn make_identity_value_expr(
         column_name: &str,
-        identity: &spec::TableColumnIdentity,
+        identity: &CatalogTableColumnIdentity,
         row_number_alias: &str,
         schema: &DFSchema,
     ) -> PlanResult<Expr> {

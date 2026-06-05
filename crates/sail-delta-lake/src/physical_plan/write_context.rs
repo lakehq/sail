@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion_common::{DataFusionError, Result};
-use sail_common::spec::TableColumnIdentity;
+use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
 use sail_common_datafusion::datasource::{
     PhysicalSinkMode, MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN,
 };
@@ -579,7 +579,7 @@ fn inject_generation_expressions(
 
 fn inject_identity_columns(
     schema: StructType,
-    identity_columns: &HashMap<String, TableColumnIdentity>,
+    identity_columns: &HashMap<String, CatalogTableColumnIdentity>,
 ) -> StructType {
     let fields = schema.into_fields().map(|field| {
         if let Some(identity) = identity_columns.get(&field.name) {
