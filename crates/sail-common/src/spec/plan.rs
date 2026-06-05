@@ -1340,6 +1340,10 @@ pub enum AlterTableOperation {
         name: ObjectName,
         default: Option<String>,
     },
+    AddCheckConstraint {
+        name: Identifier,
+        expression: ExprWithSource,
+    },
     // TODO: add all the alter table operations
 }
 

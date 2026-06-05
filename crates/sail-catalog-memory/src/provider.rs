@@ -360,6 +360,9 @@ impl CatalogProvider for MemoryCatalogProvider {
                         ))
                     })
                 }
+                AlterTableOptions::AddCheckConstraint { .. } => Err(CatalogError::NotSupported(
+                    "CHECK constraints are handled by lakehouse table formats".to_string(),
+                )),
             },
             _ => Err(CatalogError::NotSupported(
                 "ALTER TABLE is not supported for views".to_string(),

@@ -53,6 +53,10 @@ pub struct DeltaPlannerConfig {
     pub default_expressions: HashMap<String, String>,
     /// Target catalog field nullability keyed by column name.
     pub target_nullability: HashMap<String, bool>,
+    /// Logical schema override used for Delta metadata planning. It can carry
+    /// nullability/metadata that the physical plan schema cannot represent after
+    /// projection rewrites.
+    pub metadata_schema: Option<SchemaRef>,
     pub identity_columns: HashMap<String, CatalogTableColumnIdentity>,
     pub table_snapshot: Option<Arc<DeltaSnapshot>>,
 }
@@ -76,6 +80,7 @@ impl DeltaPlannerConfig {
             generation_expressions: HashMap::new(),
             default_expressions: HashMap::new(),
             target_nullability: HashMap::new(),
+            metadata_schema: None,
             identity_columns: HashMap::new(),
             table_snapshot: None,
         }
@@ -99,6 +104,11 @@ impl DeltaPlannerConfig {
 
     pub fn with_target_nullability(mut self, target_nullability: HashMap<String, bool>) -> Self {
         self.target_nullability = target_nullability;
+        self
+    }
+
+    pub fn with_metadata_schema(mut self, metadata_schema: Option<SchemaRef>) -> Self {
+        self.metadata_schema = metadata_schema;
         self
     }
 
@@ -178,6 +188,10 @@ impl<'a> PlannerContext<'a> {
         &self.config.target_nullability
     }
 
+    pub fn metadata_schema(&self) -> Option<&SchemaRef> {
+        self.config.metadata_schema.as_ref()
+    }
+
     pub fn identity_columns(&self) -> &HashMap<String, CatalogTableColumnIdentity> {
         &self.config.identity_columns
     }
@@ -203,6 +217,7 @@ impl<'a> PlannerContext<'a> {
             .with_default_expressions(self.default_expressions().clone())
             .with_target_nullability(self.target_nullability().clone())
             .with_identity_columns(self.identity_columns().clone());
+        let input_schema = self.metadata_schema().unwrap_or(input_schema);
         prepare_delta_write_context(
             self.table_url(),
             self.table_snapshot().map(|snapshot| snapshot.as_ref()),

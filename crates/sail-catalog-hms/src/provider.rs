@@ -149,6 +149,11 @@ fn apply_alter_table_options(
         AlterTableOptions::AlterColumnDefault { name, default } => {
             alter_spark_column_default(hms_table, &name, default)?;
         }
+        AlterTableOptions::AddCheckConstraint { .. } => {
+            return Err(CatalogError::NotSupported(
+                "CHECK constraints are handled by lakehouse table formats".to_string(),
+            ));
+        }
     }
     Ok(())
 }

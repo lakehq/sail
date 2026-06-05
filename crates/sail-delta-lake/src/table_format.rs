@@ -2,18 +2,19 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::{DataType as ArrowDataType, SchemaRef};
+use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
 use sail_common_datafusion::column_features::{
-    ColumnFeatures, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
+    ColumnFeatureKey, ColumnFeatures, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
 use sail_common_datafusion::datasource::{
     find_path_in_options, MergeStrategy, OptionLayer, PhysicalSinkMode, RowLevelCommand,
-    RowLevelWriteInfo, SinkInfo, SourceInfo, TableFormat, TableFormatMetadata, TableFormatRegistry,
+    RowLevelWriteInfo, SinkInfo, SourceInfo, TableFormat, TableFormatAlterTableOperation,
+    TableFormatMetadata, TableFormatRegistry,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_data_source::options::gen::{DeltaReadOptions, DeltaWriteOptions};
@@ -275,6 +276,7 @@ impl TableFormat for DeltaTableFormat {
         .with_generation_expressions(extract_generation_expressions(logical_schema.as_deref()))
         .with_default_expressions(extract_default_expressions(logical_schema.as_deref()))
         .with_target_nullability(extract_target_nullability(logical_schema.as_deref()))
+        .with_metadata_schema(extract_metadata_schema(logical_schema.as_deref()))
         .with_identity_columns(extract_identity_columns(logical_schema.as_deref()))
         .with_table_snapshot(table_snapshot);
         let planner_ctx = PlannerContext::new(ctx, table_config);
@@ -381,6 +383,40 @@ impl TableFormat for DeltaTableFormat {
         }
     }
 
+    async fn alter_table(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+        operation: TableFormatAlterTableOperation,
+    ) -> Result<()> {
+        match operation {
+            TableFormatAlterTableOperation::SetTableProperties { changes, if_exists } => {
+                self.alter_table_properties(runtime_env, path, changes, if_exists)
+                    .await
+            }
+            TableFormatAlterTableOperation::AlterColumnType {
+                column_path,
+                data_type,
+            } => {
+                self.alter_table_column_type(runtime_env, path, column_path, data_type)
+                    .await
+            }
+            TableFormatAlterTableOperation::AlterColumnDefault {
+                column_path,
+                default,
+            } => {
+                self.alter_table_column_default(runtime_env, path, column_path, default)
+                    .await
+            }
+            TableFormatAlterTableOperation::AddCheckConstraint { name, expression } => {
+                self.add_check_constraint(runtime_env, path, &name, &expression)
+                    .await
+            }
+        }
+    }
+}
+
+impl DeltaTableFormat {
     async fn alter_table_properties(
         &self,
         runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
@@ -390,6 +426,15 @@ impl TableFormat for DeltaTableFormat {
     ) -> Result<()> {
         use crate::kernel::transaction::CommitBuilder;
         use crate::schema::protocol_for_metadata;
+
+        if let Some((key, _)) = changes
+            .iter()
+            .find(|(key, _)| is_delta_constraint_property(key))
+        {
+            return plan_err!(
+                "[DELTA_ADD_CONSTRAINTS] Please use ALTER TABLE ADD CONSTRAINT to add CHECK constraints. Invalid property: {key}"
+            );
+        }
 
         // Parse the location into a URL. Handles both absolute filesystem paths
         // (e.g. `/tmp/table`) and fully-qualified URLs (`file://`, `s3://`, ...).
@@ -509,6 +554,82 @@ impl TableFormat for DeltaTableFormat {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         Ok(())
+    }
+
+    async fn add_check_constraint(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+        name: &str,
+        expression: &str,
+    ) -> Result<()> {
+        use crate::kernel::transaction::CommitBuilder;
+        use crate::schema::protocol_for_metadata;
+
+        let url = parse_location_to_url(path)?;
+        let object_store = runtime_env
+            .object_store_registry
+            .get_store(&url)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let table = open_table_with_object_store_and_table_config(
+            url,
+            object_store,
+            Default::default(),
+            DeltaSnapshotConfig {
+                require_files: false,
+                ..Default::default()
+            },
+        )
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let snapshot = table
+            .snapshot()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .clone();
+        let key = format!("delta.constraints.{name}");
+        if snapshot
+            .metadata()
+            .configuration()
+            .keys()
+            .any(|existing| existing.eq_ignore_ascii_case(&key))
+        {
+            return plan_err!("Delta constraint '{name}' already exists");
+        }
+
+        let new_metadata = snapshot
+            .metadata()
+            .clone()
+            .add_config_key(key, expression.to_string());
+        let desired_protocol = protocol_for_metadata(&new_metadata)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let desired_protocol = avoid_stable_type_widening_auto_upgrade_for_preview_tables(
+            snapshot.protocol(),
+            &desired_protocol,
+            new_metadata.configuration(),
+        );
+        let (merged_protocol, protocol_upgraded) =
+            merge_protocol_for_upgrade(snapshot.protocol(), &desired_protocol);
+
+        let mut actions = Vec::new();
+        if protocol_upgraded {
+            actions.push(CommitAction::Protocol(merged_protocol));
+        }
+        actions.push(CommitAction::Metadata(new_metadata));
+
+        CommitBuilder::default()
+            .with_actions(actions)
+            .build(
+                Some(snapshot),
+                table.log_store(),
+                DeltaOperation::AddConstraint {
+                    name: name.to_string(),
+                    expr: expression.to_string(),
+                },
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| DataFusionError::External(Box::new(e)))
     }
 
     async fn alter_table_column_type(
@@ -1060,6 +1181,31 @@ fn extract_target_nullability(logical_schema: Option<&DFSchema>) -> HashMap<Stri
         .collect()
 }
 
+fn extract_metadata_schema(logical_schema: Option<&DFSchema>) -> Option<SchemaRef> {
+    let schema = logical_schema?;
+    let mut changed = false;
+    let fields = schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let features = ColumnFeatures::from_map(field.metadata());
+            let mut metadata = field.metadata().clone();
+            if features.is_not_null_constraint() {
+                changed = true;
+                metadata.remove(ColumnFeatureKey::NotNullConstraint.as_str());
+                let mut output = Field::new(field.name().clone(), field.data_type().clone(), false);
+                if !metadata.is_empty() {
+                    output = output.with_metadata(metadata);
+                }
+                output
+            } else {
+                field.as_ref().clone()
+            }
+        })
+        .collect::<Vec<_>>();
+    changed.then(|| Arc::new(Schema::new(fields)))
+}
+
 fn extract_identity_columns(
     logical_schema: Option<&DFSchema>,
 ) -> HashMap<String, sail_common_datafusion::catalog::CatalogTableColumnIdentity> {
@@ -1119,6 +1265,13 @@ fn resolve_delta_metadata_configuration(
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str())),
     )
+}
+
+fn is_delta_constraint_property(key: &str) -> bool {
+    key.len() > "delta.constraints.".len()
+        && key
+            .get(.."delta.constraints.".len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("delta.constraints."))
 }
 
 fn split_delta_write_options_and_table_properties(

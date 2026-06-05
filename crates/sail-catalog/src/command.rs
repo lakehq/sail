@@ -417,8 +417,9 @@ impl CatalogCommand {
                         ))
                     })?;
                     let runtime = ctx.runtime_env();
+                    let storage_operation = table_format_alter_operation(&options);
                     table_format
-                        .alter_table(runtime, &location, table_format_alter_operation(&options))
+                        .alter_table(runtime, &location, storage_operation)
                         .await
                         .map_err(|e| CatalogError::External(e.to_string()))?;
 
@@ -427,7 +428,8 @@ impl CatalogCommand {
                     // catalog. Surface catalog sync failures so callers do not
                     // observe successful storage mutation followed by stale
                     // DESCRIBE/SHOW metadata.
-                    manager.alter_table(&table, options).await?;
+                    let catalog_options = catalog_sync_alter_options(&format, &options)?;
+                    manager.alter_table(&table, catalog_options).await?;
                     return Ok(display.bools().to_record_batch(vec![true])?);
                 }
 
@@ -643,6 +645,31 @@ fn table_format_alter_operation(options: &AlterTableOptions) -> TableFormatAlter
                 default: default.clone(),
             }
         }
+        AlterTableOptions::AddCheckConstraint { name, expression } => {
+            TableFormatAlterTableOperation::AddCheckConstraint {
+                name: name.clone(),
+                expression: expression.clone(),
+            }
+        }
+    }
+}
+
+fn catalog_sync_alter_options(
+    format: &str,
+    options: &AlterTableOptions,
+) -> CatalogResult<AlterTableOptions> {
+    match options {
+        AlterTableOptions::AddCheckConstraint { name, expression } => {
+            if !format.eq_ignore_ascii_case("delta") {
+                return Err(CatalogError::NotSupported(format!(
+                    "CHECK constraints are not supported for {format} tables"
+                )));
+            }
+            Ok(AlterTableOptions::SetTableProperties {
+                properties: vec![(format!("delta.constraints.{name}"), expression.clone())],
+            })
+        }
+        _ => Ok(options.clone()),
     }
 }
 
@@ -911,12 +938,11 @@ mod tests {
             not_impl_err!("unused in test")
         }
 
-        async fn alter_table_properties(
+        async fn alter_table(
             &self,
             _runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
             _path: &str,
-            _changes: Vec<(String, Option<String>)>,
-            _if_exists: bool,
+            _operation: TableFormatAlterTableOperation,
         ) -> datafusion_common::Result<()> {
             Ok(())
         }

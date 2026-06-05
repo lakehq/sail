@@ -22,7 +22,7 @@ use object_store::ObjectStoreExt;
 use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::{
     find_path_in_options, OptionLayer, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat,
-    TableFormatRegistry,
+    TableFormatAlterTableOperation, TableFormatRegistry,
 };
 use sail_data_source::options::gen::{IcebergReadOptions, IcebergWriteOptions};
 use sail_data_source::options::ResolveOptions;
@@ -197,6 +197,31 @@ impl TableFormat for IcebergTableFormat {
         Ok(exec)
     }
 
+    async fn alter_table(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+        operation: TableFormatAlterTableOperation,
+    ) -> Result<()> {
+        match operation {
+            TableFormatAlterTableOperation::SetTableProperties { changes, if_exists } => {
+                self.alter_table_properties(runtime_env, path, changes, if_exists)
+                    .await
+            }
+            TableFormatAlterTableOperation::AlterColumnType { .. } => {
+                not_impl_err!("Column type alteration not supported for Iceberg format")
+            }
+            TableFormatAlterTableOperation::AlterColumnDefault { .. } => {
+                not_impl_err!("Column default alteration not supported for Iceberg format")
+            }
+            TableFormatAlterTableOperation::AddCheckConstraint { .. } => {
+                not_impl_err!("CHECK constraints not supported for Iceberg format")
+            }
+        }
+    }
+}
+
+impl IcebergTableFormat {
     async fn alter_table_properties(
         &self,
         runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,

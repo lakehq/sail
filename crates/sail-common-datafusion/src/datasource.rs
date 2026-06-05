@@ -187,7 +187,7 @@ pub struct SourceInfo {
     pub options: Vec<OptionLayer>,
 }
 
-/// Metadata about an existing table-format instance needed during logical planning.
+/// Metadata about an existing table format instance needed during logical planning.
 #[derive(Debug, Clone)]
 pub struct TableFormatMetadata {
     pub schema: SchemaRef,

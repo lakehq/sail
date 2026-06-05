@@ -35,6 +35,17 @@ pub fn schema_has_column_defaults(schema: &StructType) -> bool {
     })
 }
 
+/// Check if a Delta metadata configuration contains table CHECK constraints.
+pub fn configuration_has_check_constraints(configuration: &HashMap<String, String>) -> bool {
+    const PREFIX: &str = "delta.constraints.";
+    configuration.keys().any(|key| {
+        key.len() > PREFIX.len()
+            && key
+                .get(..PREFIX.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(PREFIX))
+    })
+}
+
 pub fn schema_has_identity_columns(schema: &StructType) -> bool {
     schema.fields().any(|f| {
         f.get_config_value(&ColumnMetadataKey::IdentityStart)
@@ -217,6 +228,7 @@ pub fn protocol_for_create(
 ) -> DeltaResult<Protocol> {
     let mut reader_features = Vec::new();
     let mut writer_features = Vec::new();
+    let has_check_constraints = configuration_has_check_constraints(configuration);
     let table_properties = TableProperties::from(configuration.iter());
     let explicit_features = explicit_table_features(configuration)?;
 
@@ -322,8 +334,16 @@ pub fn protocol_for_create(
         }
     }
 
+    if has_check_constraints
+        && !writer_features.is_empty()
+        && !writer_features.contains(&TableFeature::CheckConstraints)
+    {
+        writer_features.push(TableFeature::CheckConstraints);
+    }
+
     if reader_features.is_empty() && writer_features.is_empty() {
-        return Ok(Protocol::new(1, 2, None, None));
+        let min_writer_version = if has_check_constraints { 3 } else { 2 };
+        return Ok(Protocol::new(1, min_writer_version, None, None));
     }
 
     let min_reader_version = if reader_features.is_empty() { 1 } else { 3 };
@@ -417,6 +437,38 @@ mod tests {
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::VariantType));
         assert!(protocol.has_writer_feature(&TableFeature::VariantType));
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_create_activates_check_constraints_from_configuration() -> DeltaResult<()> {
+        let mut config = HashMap::new();
+        config.insert(
+            "delta.constraints.positive_id".to_string(),
+            "id > 0".to_string(),
+        );
+        let protocol = protocol_for_create(false, false, false, false, false, false, &config)?;
+        assert_eq!(protocol.min_reader_version(), 1);
+        assert_eq!(protocol.min_writer_version(), 3);
+        assert_eq!(protocol.reader_features(), None);
+        assert_eq!(protocol.writer_features(), None);
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_create_adds_check_constraints_to_writer_features() -> DeltaResult<()> {
+        let mut config = HashMap::new();
+        config.insert(
+            "delta.constraints.positive_id".to_string(),
+            "id > 0".to_string(),
+        );
+        config.insert("delta.checkpointPolicy".to_string(), "v2".to_string());
+        let protocol = protocol_for_create(false, false, false, false, false, false, &config)?;
+        assert_eq!(protocol.min_reader_version(), 3);
+        assert_eq!(protocol.min_writer_version(), 7);
+        assert!(protocol.has_reader_feature(&TableFeature::V2Checkpoint));
+        assert!(protocol.has_writer_feature(&TableFeature::V2Checkpoint));
+        assert!(protocol.has_writer_feature(&TableFeature::CheckConstraints));
         Ok(())
     }
 
@@ -581,6 +633,10 @@ mod tests {
             "delta.enableInCommitTimestamps".to_string(),
             "true".to_string(),
         );
+        configuration.insert(
+            "delta.constraints.positive_id".to_string(),
+            "id > 0".to_string(),
+        );
         let metadata = Metadata::try_new(None, None, schema, vec![], 0, configuration)?;
 
         let protocol = protocol_for_metadata(&metadata)?;
@@ -593,6 +649,7 @@ mod tests {
         assert!(protocol.has_writer_feature(&TableFeature::TimestampWithoutTimezone));
         assert!(protocol.has_writer_feature(&TableFeature::InCommitTimestamp));
         assert!(protocol.has_writer_feature(&TableFeature::GeneratedColumns));
+        assert!(protocol.has_writer_feature(&TableFeature::CheckConstraints));
         assert!(protocol.has_reader_feature(&TableFeature::VariantType));
         assert!(protocol.has_writer_feature(&TableFeature::VariantType));
         Ok(())
