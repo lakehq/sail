@@ -103,6 +103,7 @@ message ExtendedScalarUdf {
     ConvertTzUdf convert_tz = 22;
     SparkToCsvUdf spark_to_csv = 23;
     SparkPmodUdf spark_pmod = 24;
+    SparkParseJsonUdf spark_parse_json = 25;
   }
 }
 
@@ -199,6 +200,10 @@ message SparkNextDayUdf {
 
 message SparkAbsUdf {
   bool ansi_mode = 1;
+}
+
+message SparkParseJsonUdf {
+  bool safe = 1;
 }
 
 message SparkPmodUdf {
