@@ -29,12 +29,20 @@ use crate::spec::types::{NestedField, StructType};
 pub(crate) const UNPARTITIONED_LAST_ASSIGNED_ID: i32 = 999;
 pub(crate) const DEFAULT_PARTITION_SPEC_ID: i32 = 0;
 
+fn is_zero_i32(value: &i32) -> bool {
+    *value == 0
+}
+
 /// Partition fields capture the transform from table data to partition values.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone)]
 #[serde(rename_all = "kebab-case")]
 pub struct PartitionField {
     /// A source column id from the table's schema
+    #[serde(default, skip_serializing_if = "is_zero_i32")]
     pub source_id: i32,
+    /// Source column ids for Iceberg v3 multi-argument transforms.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_ids: Vec<i32>,
     /// A partition field id that is used to identify a partition field and is unique within a partition spec.
     /// In v2 table metadata, it is unique across all partition specs.
     pub field_id: i32,
@@ -49,9 +57,26 @@ impl PartitionField {
     pub fn new(source_id: i32, field_id: i32, name: impl ToString, transform: Transform) -> Self {
         Self {
             source_id,
+            source_ids: vec![],
             field_id,
             name: name.to_string(),
             transform,
+        }
+    }
+
+    pub fn source_id(&self) -> Result<i32, String> {
+        self.compatibility_source_id().ok_or_else(|| {
+            "Iceberg v3 multi-argument partition transforms are not yet supported".to_string()
+        })
+    }
+
+    fn compatibility_source_id(&self) -> Option<i32> {
+        if self.source_id != 0 {
+            Some(self.source_id)
+        } else if self.source_ids.len() == 1 {
+            Some(self.source_ids[0])
+        } else {
+            None
         }
     }
 }
@@ -105,14 +130,10 @@ impl PartitionSpec {
         let mut partition_fields = Vec::new();
 
         for partition_field in self.fields.iter() {
+            let source_id = partition_field.source_id()?;
             let source_field = schema
-                .field_by_id(partition_field.source_id)
-                .ok_or_else(|| {
-                    format!(
-                        "Cannot find source field with id {}",
-                        partition_field.source_id
-                    )
-                })?;
+                .field_by_id(source_id)
+                .ok_or_else(|| format!("Cannot find source field with id {source_id}"))?;
 
             // Prefer logical date type for Day transform to align with Iceberg writers
             let result_type = if matches!(partition_field.transform, Transform::Day) {
@@ -149,12 +170,10 @@ impl PartitionSpec {
     /// Check if the partition spec has sequential field ids starting from 1000.
     /// Required for spec version 1 in the reference implementation.
     pub fn has_sequential_ids(&self) -> bool {
-        let mut expected = 1000;
-        for field in &self.fields {
+        for (expected, field) in (1000..).zip(self.fields.iter()) {
             if field.field_id != expected {
                 return false;
             }
-            expected += 1;
         }
         true
     }
@@ -174,7 +193,14 @@ impl PartitionSpec {
         }
 
         for (this_field, other_field) in self.fields.iter().zip(other.fields.iter()) {
-            if this_field.source_id != other_field.source_id
+            let Some(this_source_id) = this_field.compatibility_source_id() else {
+                return false;
+            };
+            let Some(other_source_id) = other_field.compatibility_source_id() else {
+                return false;
+            };
+
+            if this_source_id != other_source_id
                 || this_field.name != other_field.name
                 || this_field.transform != other_field.transform
             {

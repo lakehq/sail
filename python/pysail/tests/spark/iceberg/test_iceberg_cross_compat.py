@@ -8,7 +8,7 @@ from pyiceberg.schema import Schema
 from pyiceberg.table import StaticTable
 from pyiceberg.types import DoubleType, LongType, NestedField, StringType
 
-from .utils import create_sql_catalog, pyiceberg_to_pandas  # noqa: TID252
+from pysail.tests.spark.iceberg.utils import create_sql_catalog, pyiceberg_to_pandas
 
 
 @pytest.mark.skipif(platform.system() == "Windows", reason="not working on Windows")

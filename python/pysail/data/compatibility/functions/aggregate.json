@@ -47,15 +47,18 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "bitmap_and_agg",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "bitmap_construct_agg",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/309"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "bitmap_or_agg",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/309"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
@@ -101,8 +104,7 @@
   {
     "module": "pyspark.sql.functions",
     "function": "count_min_sketch",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/309"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
@@ -137,26 +139,22 @@
   {
     "module": "pyspark.sql.functions",
     "function": "grouping_id",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/309"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "histogram_numeric",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/309"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "hll_sketch_agg",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/309"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "hll_union_agg",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/309"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
@@ -243,7 +241,7 @@
   {
     "module": "pyspark.sql.functions",
     "function": "product",
-    "status": "planned"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
@@ -338,6 +336,21 @@
   {
     "module": "pyspark.sql.functions",
     "function": "sum_distinct",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "theta_intersection_agg",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "theta_sketch_agg",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "theta_union_agg",
     "status": "supported"
   },
   {

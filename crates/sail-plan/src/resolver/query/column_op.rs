@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion_common::Column;
-use datafusion_expr::{cast, col, lit, Expr, ExprSchemable, LogicalPlan, Projection};
+use datafusion_expr::{
+    cast, col, lit, Expr, ExprSchemable, LogicalPlan, Projection, SubqueryAlias,
+};
 use indexmap::IndexMap;
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -12,6 +14,7 @@ use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
+use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 use crate::resolver::PlanResolver;
 
@@ -34,7 +37,7 @@ impl PlanResolver<'_> {
         let expr = schema
             .columns()
             .into_iter()
-            .zip(columns.into_iter())
+            .zip(columns)
             .map(|(col, name)| NamedExpr::new(vec![name.into()], Expr::Column(col)))
             .collect();
         let expr = self.rewrite_named_expressions(expr, state)?;
@@ -178,10 +181,22 @@ impl PlanResolver<'_> {
         aliases: Vec<spec::Expr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        // `AliasEntry` is `(resolved_expr, seen, explicit_metadata)` where `explicit_metadata` is
+        // `Some(meta)` when the user explicitly provided metadata via `withMetadata` (even empty),
+        // and `None` when no metadata was specified on the alias.
+        type AliasEntry = (Expr, bool, Option<Vec<(String, String)>>);
+
         let input = self.resolve_query_plan(input, state).await?;
+        // If the input is a SubqueryAlias, save the alias and re-apply it after building the
+        // projection. A Projection node strips qualifiers from its output schema, so without
+        // re-wrapping, subsequent operations could no longer reference columns by the qualified name.
+        let input_alias = match &input {
+            LogicalPlan::SubqueryAlias(sa) => Some(sa.alias.clone()),
+            _ => None,
+        };
         let schema = input.schema();
         // We use `IndexMap` to ensure the result schema has a deterministic column order.
-        let mut aliases: IndexMap<String, (Expr, bool, Vec<_>)> = async {
+        let mut aliases: IndexMap<String, AliasEntry> = async {
             let mut results = IndexMap::new();
             for alias in aliases {
                 let (name, expr, metadata) = match alias {
@@ -193,7 +208,7 @@ impl PlanResolver<'_> {
                         let name = name
                             .one()
                             .map_err(|_| PlanError::invalid("multi-alias for column"))?;
-                        (name, *expr, metadata.unwrap_or(Vec::new()))
+                        (name, *expr, metadata)
                     }
                     _ => return Err(PlanError::invalid("alias expression expected for column")),
                 };
@@ -211,11 +226,12 @@ impl PlanResolver<'_> {
                 match aliases.get_mut(name) {
                     Some((e, exists, metadata)) => {
                         *exists = true;
-                        if !metadata.is_empty() {
-                            Ok(NamedExpr::new(vec![name.to_string()], e.clone())
-                                .with_metadata(metadata.clone()))
-                        } else {
-                            Ok(NamedExpr::new(vec![name.to_string()], e.clone()))
+                        match metadata {
+                            Some(m) if !m.is_empty() => {
+                                Ok(NamedExpr::new(vec![name.to_string()], e.clone())
+                                    .with_metadata(m.clone()))
+                            }
+                            _ => Ok(NamedExpr::new(vec![name.to_string()], e.clone())),
                         }
                     }
                     None => Ok(NamedExpr::new(vec![name.to_string()], Expr::Column(column))),
@@ -224,25 +240,34 @@ impl PlanResolver<'_> {
             .collect::<PlanResult<Vec<_>>>()?;
         for (name, (e, exists, metadata)) in &aliases {
             if !exists {
-                if !metadata.is_empty() {
-                    expr.push(
-                        NamedExpr::new(vec![name.clone()], e.clone())
-                            .with_metadata(metadata.clone()),
-                    );
-                } else {
-                    expr.push(NamedExpr::new(vec![name.clone()], e.clone()));
+                match metadata {
+                    Some(m) if !m.is_empty() => {
+                        expr.push(
+                            NamedExpr::new(vec![name.clone()], e.clone()).with_metadata(m.clone()),
+                        );
+                    }
+                    _ => {
+                        expr.push(NamedExpr::new(vec![name.clone()], e.clone()));
+                    }
                 }
             }
         }
         let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
+        let (input, expr) =
+            self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
         let expr = self.rewrite_named_expressions(expr, state)?;
-        Ok(LogicalPlan::Projection(Projection::try_new(
-            expr,
-            Arc::new(input),
-        )?))
+        let result = LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?);
+        if let Some(alias) = input_alias {
+            Ok(LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
+                Arc::new(result),
+                alias,
+            )?))
+        } else {
+            Ok(result)
+        }
     }
 
     pub(super) async fn resolve_query_replace(

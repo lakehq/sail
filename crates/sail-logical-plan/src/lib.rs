@@ -1,12 +1,14 @@
+pub mod barrier;
+pub mod check_constraints;
 pub mod file_delete;
 pub mod file_write;
 pub mod map_partitions;
 pub mod merge;
 pub mod monotonic_id;
-pub mod precondition;
 pub mod range;
 pub mod repartition;
 pub mod schema_pivot;
 pub mod show_string;
 pub mod sort;
+pub mod spark_partition_id;
 pub mod streaming;

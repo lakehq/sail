@@ -11,7 +11,7 @@
   "python.testing.pytestEnabled": true,
   "[python]": {
     "editor.formatOnSave": true,
-    "editor.defaultFormatter": "charliermarsh.ruff",
+    "editor.defaultFormatter": "charliermarsh.ruff"
   },
-  "flake8.enabled": false,
+  "flake8.enabled": false
 }

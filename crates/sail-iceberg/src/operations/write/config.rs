@@ -14,6 +14,8 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use parquet::file::properties::WriterProperties;
+use sail_common_datafusion::catalog::CatalogPartitionField;
+pub use sail_common_datafusion::variant::VariantShreddingConfig;
 
 use crate::spec::partition::UnboundPartitionSpec;
 use crate::spec::Schema as IcebergSchema;
@@ -21,7 +23,7 @@ use crate::spec::Schema as IcebergSchema;
 #[derive(Debug, Clone)]
 pub struct WriterConfig {
     pub table_schema: ArrowSchemaRef,
-    pub partition_columns: Vec<String>,
+    pub partition_columns: Vec<CatalogPartitionField>,
     pub writer_properties: WriterProperties,
     pub target_file_size: u64,
     pub write_batch_size: usize,
@@ -29,4 +31,5 @@ pub struct WriterConfig {
     pub stats_columns: Option<Vec<String>>,
     pub iceberg_schema: Arc<IcebergSchema>,
     pub partition_spec: UnboundPartitionSpec,
+    pub variant_shredding: VariantShreddingConfig,
 }

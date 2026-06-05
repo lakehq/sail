@@ -7,7 +7,10 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{Array, ArrayRef, AsArray, OffsetSizeTrait, StringArray};
+use datafusion::arrow::array::{
+    Array, ArrayRef, AsArray, FixedSizeListArray, GenericListArray, GenericListViewArray,
+    OffsetSizeTrait, StringArray,
+};
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::cast::as_generic_string_array;
 use datafusion_common::{exec_err, Result, ScalarValue};
@@ -29,7 +32,7 @@ impl Default for SparkConcatWs {
 impl SparkConcatWs {
     pub fn new() -> Self {
         Self {
-            signature: Signature::variadic_any(Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -61,6 +64,31 @@ impl ScalarUDFImpl for SparkConcatWs {
 
         // Use make_scalar_function to handle scalar/array conversion uniformly
         make_scalar_function(concat_ws_inner, vec![])(&args)
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        arg_types
+            .iter()
+            .map(|arg_type| match arg_type {
+                DataType::Null => Ok(DataType::Null),
+                DataType::Utf8 | DataType::Utf8View => Ok(DataType::Utf8),
+                DataType::LargeUtf8 => Ok(DataType::LargeUtf8),
+                DataType::List(field)
+                | DataType::ListView(field)
+                | DataType::FixedSizeList(field, _) => Ok(DataType::List(field.clone())),
+                DataType::LargeList(field) | DataType::LargeListView(field) => {
+                    Ok(DataType::LargeList(field.clone()))
+                }
+                //Attempt to coerce other types to Utf8.
+                other => {
+                    if other.is_nested() {
+                        Ok(other.clone())
+                    } else {
+                        Ok(DataType::Utf8)
+                    }
+                }
+            })
+            .collect()
     }
 }
 
@@ -132,6 +160,18 @@ fn get_string_values(arr: &ArrayRef) -> Result<Vec<Option<String>>> {
                 })
                 .collect())
         }
+        DataType::Utf8View => {
+            let str_arr = arr.as_string_view();
+            Ok((0..arr.len())
+                .map(|i| {
+                    if str_arr.is_null(i) {
+                        None
+                    } else {
+                        Some(str_arr.value(i).to_string())
+                    }
+                })
+                .collect())
+        }
         other => exec_err!("concat_ws separator must be a string, got {:?}", other),
     }
 }
@@ -154,11 +194,24 @@ fn collect_parts_from_array(arr: &ArrayRef, row_idx: usize, parts: &mut Vec<Stri
             let str_arr = arr.as_string::<i64>();
             parts.push(str_arr.value(row_idx).to_string());
         }
+        DataType::Utf8View => {
+            let str_arr = arr.as_string_view();
+            parts.push(str_arr.value(row_idx).to_string());
+        }
         DataType::List(_) => {
             collect_parts_from_list::<i32>(arr.as_list(), row_idx, parts)?;
         }
+        DataType::ListView(_) => {
+            collect_parts_from_list_view::<i32>(arr.as_list_view(), row_idx, parts)?;
+        }
+        DataType::FixedSizeList(_, _) => {
+            collect_parts_from_fixed_size_list(arr.as_fixed_size_list(), row_idx, parts)?;
+        }
         DataType::LargeList(_) => {
             collect_parts_from_list::<i64>(arr.as_list(), row_idx, parts)?;
+        }
+        DataType::LargeListView(_) => {
+            collect_parts_from_list_view::<i64>(arr.as_list_view(), row_idx, parts)?;
         }
         other => {
             return exec_err!("concat_ws does not support data type {:?}", other);
@@ -169,18 +222,45 @@ fn collect_parts_from_array(arr: &ArrayRef, row_idx: usize, parts: &mut Vec<Stri
 
 /// Collect string parts from a list array at a given row index.
 fn collect_parts_from_list<O: OffsetSizeTrait>(
-    arr: &datafusion::arrow::array::GenericListArray<O>,
+    arr: &GenericListArray<O>,
     row_idx: usize,
     parts: &mut Vec<String>,
 ) -> Result<()> {
     if arr.is_null(row_idx) {
         return Ok(());
     }
+    push_string_elements(&arr.value(row_idx), parts)
+}
 
-    let values = arr.value(row_idx);
+/// Collect string parts from a list-view array at a given row index.
+fn collect_parts_from_list_view<O: OffsetSizeTrait>(
+    arr: &GenericListViewArray<O>,
+    row_idx: usize,
+    parts: &mut Vec<String>,
+) -> Result<()> {
+    if arr.is_null(row_idx) {
+        return Ok(());
+    }
+    push_string_elements(&arr.value(row_idx), parts)
+}
+
+/// Collect string parts from a fixed-size list array at a given row index.
+fn collect_parts_from_fixed_size_list(
+    arr: &FixedSizeListArray,
+    row_idx: usize,
+    parts: &mut Vec<String>,
+) -> Result<()> {
+    if arr.is_null(row_idx) {
+        return Ok(());
+    }
+    push_string_elements(&arr.value(row_idx), parts)
+}
+
+/// Push every non-null string element from `values` into `parts`.
+fn push_string_elements(values: &ArrayRef, parts: &mut Vec<String>) -> Result<()> {
     match values.data_type() {
         DataType::Utf8 => {
-            let str_arr = as_generic_string_array::<i32>(&values)?;
+            let str_arr = as_generic_string_array::<i32>(values)?;
             for i in 0..str_arr.len() {
                 if !str_arr.is_null(i) {
                     parts.push(str_arr.value(i).to_string());
@@ -188,7 +268,15 @@ fn collect_parts_from_list<O: OffsetSizeTrait>(
             }
         }
         DataType::LargeUtf8 => {
-            let str_arr = as_generic_string_array::<i64>(&values)?;
+            let str_arr = as_generic_string_array::<i64>(values)?;
+            for i in 0..str_arr.len() {
+                if !str_arr.is_null(i) {
+                    parts.push(str_arr.value(i).to_string());
+                }
+            }
+        }
+        DataType::Utf8View => {
+            let str_arr = values.as_string_view();
             for i in 0..str_arr.len() {
                 if !str_arr.is_null(i) {
                     parts.push(str_arr.value(i).to_string());

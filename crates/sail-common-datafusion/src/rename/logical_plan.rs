@@ -3,6 +3,7 @@ use std::sync::Arc;
 use datafusion_common::exec_err;
 use datafusion_expr::{Expr, LogicalPlan, Projection};
 
+/// Wraps a logical plan in a projection that aliases each column to a new name.
 pub fn rename_logical_plan(
     plan: LogicalPlan,
     names: &[String],

@@ -90,6 +90,7 @@ where
     }
 }
 
+/// Uniquely identifies a task attempt within a job by stage, partition, and attempt number.
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub struct TaskKey {
     pub job_id: JobId,

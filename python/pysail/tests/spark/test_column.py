@@ -32,7 +32,7 @@ def test_struct_wildcard_after_join(spark):
                         StructField("some_payload", StringType(), True),
                     ]
                 ),
-                True,
+                False,
             )
         ]
     )
@@ -61,7 +61,7 @@ def test_struct_wildcard_on_struct_column(spark):
                         StructField("some_payload", StringType(), True),
                     ]
                 ),
-                True,
+                False,
             )
         ]
     )
@@ -101,3 +101,30 @@ def test_try_cast_invalid_date(spark):
     ).collect()
 
     assert result == [Row(id=None, date_col=None, ts_col=None, ts_ntz_col=None)]
+
+
+def test_array_struct_field(spark):
+    df = spark.createDataFrame(
+        data=[
+            ("0", [{"b": 42, "c": {"d": 100.0}}]),
+            ("1", [{"b": 1, "c": None}, {"b": -1}]),
+            ("2", [None, {"b": 3, "c": {"d": None}}, {"b": None}]),
+            ("3", None),
+        ],
+        schema="id: string, a: array<struct<b: int, c: struct<d: double>>>",
+    )
+    actual = df.select("id", F.col("a.b")).collect()
+    assert sorted(actual, key=lambda row: row.id) == [
+        Row(id="0", b=[42]),
+        Row(id="1", b=[1, -1]),
+        Row(id="2", b=[None, 3, None]),
+        Row(id="3", b=None),
+    ]
+
+    actual = df.select("id", F.col("a.c.d")).collect()
+    assert sorted(actual, key=lambda row: row.id) == [
+        Row(id="0", d=[100.0]),
+        Row(id="1", d=[None, None]),
+        Row(id="2", d=[None, None, None]),
+        Row(id="3", d=None),
+    ]

@@ -1,24 +1,17 @@
 use std::fmt;
 use std::fmt::Formatter;
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 
 use clap::ValueEnum;
-use log::info;
 use pyo3::prelude::PyAnyMethods;
 use pyo3::{PyResult, Python};
 use sail_common::config::AppConfig;
-use sail_common::runtime::{RuntimeHandle, RuntimeManager};
-use sail_spark_connect::entrypoint::serve;
-use sail_telemetry::telemetry::{init_telemetry, ResourceOptions};
-use tokio::net::TcpListener;
+use sail_common::runtime::RuntimeManager;
+use tokio::sync::oneshot;
 
 use crate::python::Modules;
-
-async fn shutdown() {
-    let _ = tokio::signal::ctrl_c().await;
-    info!("Shutting down the Spark Connect server...");
-}
+use crate::spark::server::{telemetry, with_spark_connect_server};
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 #[clap(rename_all = "kebab-case")]
@@ -41,43 +34,44 @@ pub struct McpSettings {
     pub transport: McpTransport,
     pub host: String,
     pub port: u16,
-    pub spark_remote: Option<String>,
 }
 
-fn run_spark_connect_server(
-    config: Arc<AppConfig>,
-    runtime: RuntimeHandle,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let handle = runtime.clone();
-    let (server_port, server_task) = runtime.primary().block_on(async move {
-        // Listen on only the loopback interface for security.
-        let listener = TcpListener::bind((Ipv4Addr::new(127, 0, 0, 1), 0)).await?;
-        let port = listener.local_addr()?.port();
-        let task = async move {
-            info!("Starting the Spark Connect server on port {port}...");
-            let _ = serve(listener, shutdown(), config, handle).await;
-            info!("The Spark Connect server has stopped.");
-        };
-        <Result<_, Box<dyn std::error::Error>>>::Ok((port, task))
-    })?;
-    runtime.primary().spawn(server_task);
-    Ok(format!("sc://127.0.0.1:{server_port}"))
+pub fn run_spark_mcp_server(
+    settings: McpSettings,
+    spark_remote: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match spark_remote {
+        None => {
+            // We follow the same setup as `run_pyspark_shell`.
+            // Please refer to the comments in that function for details.
+            let (tx, rx) = oneshot::channel::<()>();
+            let address = (IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 0);
+            let shutdown = async {
+                let _ = rx.await;
+            };
+            with_spark_connect_server(address, shutdown, |addr| async move {
+                let _tx = tx;
+                _run_mcp_server(settings, format!("sc://127.0.0.1:{}", addr.port()))
+            })
+        }
+        Some(x) => {
+            let config = Arc::new(AppConfig::load()?);
+            let runtime = RuntimeManager::try_new(&config.runtime)?;
+
+            let _telemetry = runtime
+                .handle()
+                .primary()
+                .block_on(async { telemetry::TelemetryGuard::try_new(&config) })?;
+
+            _run_mcp_server(settings, x.clone())
+        }
+    }
 }
 
-pub fn run_spark_mcp_server(settings: McpSettings) -> Result<(), Box<dyn std::error::Error>> {
-    let config = Arc::new(AppConfig::load()?);
-    let runtime = RuntimeManager::try_new(&config.runtime)?;
-
-    runtime.handle().primary().block_on(async {
-        let resource = ResourceOptions { kind: "server" };
-        init_telemetry(&config.telemetry, resource)
-    })?;
-
-    let spark_remote = match settings.spark_remote {
-        None => run_spark_connect_server(Arc::clone(&config), runtime.handle())?,
-        Some(x) => x,
-    };
-
+fn _run_mcp_server(
+    settings: McpSettings,
+    spark_remote: String,
+) -> Result<(), Box<dyn std::error::Error>> {
     Python::attach(|py| -> PyResult<_> {
         let _ = Modules::NATIVE_LOGGING.load(py)?;
         let server = Modules::SPARK_MCP_SERVER.load(py)?;

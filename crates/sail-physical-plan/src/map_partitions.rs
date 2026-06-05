@@ -18,19 +18,19 @@ use tokio_stream::StreamExt;
 pub struct MapPartitionsExec {
     input: Arc<dyn ExecutionPlan>,
     udf: Arc<dyn StreamUDF>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl MapPartitionsExec {
     pub fn new(input: Arc<dyn ExecutionPlan>, udf: Arc<dyn StreamUDF>, schema: SchemaRef) -> Self {
         // The plan output schema can be different from the output schema of the UDF
         // due to field renaming.
-        let properties = PlanProperties::new(
+        let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             input.output_partitioning().clone(),
             input.pipeline_behavior(),
             input.boundedness(),
-        );
+        ));
         Self {
             input,
             udf,
@@ -66,7 +66,7 @@ impl ExecutionPlan for MapPartitionsExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

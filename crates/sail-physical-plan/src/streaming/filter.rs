@@ -20,7 +20,7 @@ use futures::StreamExt;
 pub struct StreamFilterExec {
     input: Arc<dyn ExecutionPlan>,
     predicate: Arc<dyn PhysicalExpr>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl StreamFilterExec {
@@ -28,13 +28,13 @@ impl StreamFilterExec {
         input: Arc<dyn ExecutionPlan>,
         predicate: Arc<dyn PhysicalExpr>,
     ) -> Result<Self> {
-        let properties = PlanProperties::new(
+        let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(input.schema()),
             input.output_partitioning().clone(),
             // Filtering preserves pipeline behavior of input
             input.pipeline_behavior(),
             input.boundedness(),
-        );
+        ));
         Ok(Self {
             input,
             predicate,
@@ -70,7 +70,7 @@ impl ExecutionPlan for StreamFilterExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
@@ -119,10 +119,6 @@ impl ExecutionPlan for StreamFilterExec {
             self.schema(),
             stream,
         )))
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {

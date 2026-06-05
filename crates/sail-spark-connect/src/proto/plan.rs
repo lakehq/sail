@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use sail_common::spec;
 use sail_sql_analyzer::expression::{from_ast_expression, from_ast_object_name};
 use sail_sql_analyzer::parser::{parse_expression, parse_object_name, parse_one_statement};
@@ -17,6 +19,50 @@ use crate::spark::connect::{
 
 struct RelationMetadata {
     plan_id: Option<i64>,
+}
+
+/// Extract a [`spec::TableColumnDefinition`] from a field, preserving metadata
+/// like generation expressions and comments.
+fn table_column_definition_from_field(field: &Arc<spec::Field>) -> spec::TableColumnDefinition {
+    use sail_common_datafusion::catalog::SPARK_GENERATION_EXPRESSION_METADATA_KEY;
+    use sail_common_datafusion::column_features::ColumnFeatureKey;
+
+    let gen_expr_key = ColumnFeatureKey::GenerationExpression.as_str();
+
+    let mut comment = None;
+    let mut generated_always_as = None;
+    for (key, value) in &field.metadata {
+        match key.as_str() {
+            "comment" => {
+                comment = Some(value.clone());
+            }
+            k if k == gen_expr_key || k == SPARK_GENERATION_EXPRESSION_METADATA_KEY => {
+                generated_always_as = Some(value.clone());
+            }
+            _ => {}
+        }
+    }
+    let metadata = field
+        .metadata
+        .iter()
+        .cloned()
+        .collect::<std::collections::HashMap<_, _>>();
+    let identity = sail_common_datafusion::column_features::ColumnFeatures::from_map(&metadata)
+        .identity()
+        .map(|identity| spec::TableColumnIdentity {
+            start: Some(identity.start),
+            step: Some(identity.step),
+            allow_explicit_insert: identity.allow_explicit_insert,
+        });
+    spec::TableColumnDefinition {
+        name: field.name.clone(),
+        data_type: field.data_type.clone(),
+        nullable: field.nullable,
+        default: None,
+        comment,
+        generated_always_as,
+        identity,
+    }
 }
 
 impl From<Option<RelationCommon>> for RelationMetadata {
@@ -101,6 +147,7 @@ impl TryFrom<Relation> for spec::CommandPlan {
     }
 }
 
+#[derive(Debug)]
 enum RelationNode {
     Query(spec::QueryNode),
     Command(spec::CommandNode),
@@ -1047,7 +1094,39 @@ impl TryFrom<RelType> for RelationNode {
             RelType::UnresolvedTableValuedFunction(_) => {
                 Err(SparkError::todo("unresolved table valued function"))
             }
-            RelType::LateralJoin(_) => Err(SparkError::todo("lateral join")),
+            RelType::LateralJoin(lateral_join) => {
+                use sc::join::JoinType;
+
+                let sc::LateralJoin {
+                    left,
+                    right,
+                    join_condition,
+                    join_type,
+                } = *lateral_join;
+
+                let left = left.required("lateral join left")?;
+                let right = right.required("lateral join right")?;
+                let join_type = match JoinType::try_from(join_type)? {
+                    JoinType::Unspecified => {
+                        return Err(SparkError::invalid("unspecified join type"))
+                    }
+                    JoinType::Inner => spec::JoinType::Inner,
+                    JoinType::FullOuter => spec::JoinType::FullOuter,
+                    JoinType::LeftOuter => spec::JoinType::LeftOuter,
+                    JoinType::RightOuter => spec::JoinType::RightOuter,
+                    JoinType::LeftAnti => spec::JoinType::LeftAnti,
+                    JoinType::LeftSemi => spec::JoinType::LeftSemi,
+                    JoinType::Cross => spec::JoinType::Cross,
+                };
+                let join_condition = join_condition.map(|x| x.try_into()).transpose()?;
+
+                Ok(RelationNode::Query(spec::QueryNode::LateralJoin {
+                    left: Box::new((*left).try_into()?),
+                    right: Box::new((*right).try_into()?),
+                    join_condition,
+                    join_type,
+                }))
+            }
             RelType::ChunkedCachedLocalRelation(_) => {
                 Err(SparkError::todo("chunked cached local relation"))
             }
@@ -1364,18 +1443,12 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 let columns = schema
                     .fields
                     .into_iter()
-                    .map(|field| spec::TableColumnDefinition {
-                        name: field.name.clone(),
-                        data_type: field.data_type.clone(),
-                        nullable: field.nullable,
-                        default: None,
-                        comment: None,
-                        generated_always_as: None,
-                    })
+                    .map(table_column_definition_from_field)
                     .collect();
                 Ok(spec::CommandNode::CreateTable {
                     table: from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                     definition: spec::TableDefinition {
+                        external: true,
                         columns,
                         comment: None,
                         constraints: vec![],
@@ -1402,24 +1475,19 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     schema,
                     options,
                 } = x;
+                let options: Vec<(String, String)> = options.into_iter().collect();
                 let schema = schema.required("create external table schema")?;
                 let schema: spec::DataType = schema.try_into()?;
                 let schema = schema.into_schema(DEFAULT_FIELD_NAME, true);
                 let columns = schema
                     .fields
                     .into_iter()
-                    .map(|field| spec::TableColumnDefinition {
-                        name: field.name.clone(),
-                        data_type: field.data_type.clone(),
-                        nullable: field.nullable,
-                        default: None,
-                        comment: None,
-                        generated_always_as: None,
-                    })
+                    .map(table_column_definition_from_field)
                     .collect();
                 Ok(spec::CommandNode::CreateTable {
                     table: from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                     definition: spec::TableDefinition {
+                        external: false,
                         columns,
                         comment: description,
                         constraints: vec![],
@@ -1432,7 +1500,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         cluster_by: vec![],
                         if_not_exists: false,
                         replace: false,
-                        options: options.into_iter().collect(),
+                        options,
                         properties: vec![],
                     },
                 })
@@ -1578,7 +1646,14 @@ impl TryFrom<WriteOperation> for spec::Write {
                 null_ordering: spec::NullOrdering::Unspecified,
             })
             .collect();
-        let partitioning_columns = partitioning_columns.into_iter().map(|x| x.into()).collect();
+        let partitioning_columns = partitioning_columns
+            .into_iter()
+            .map(|name| spec::Expr::UnresolvedAttribute {
+                name: spec::ObjectName::bare(name),
+                plan_id: None,
+                is_metadata_column: false,
+            })
+            .collect();
         let clustering_columns = clustering_columns.into_iter().map(|x| x.into()).collect();
         let bucket_by = match bucket_by {
             Some(x) => {

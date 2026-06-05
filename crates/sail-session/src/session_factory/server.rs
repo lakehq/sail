@@ -6,21 +6,23 @@ use datafusion::common::parquet_config::DFParquetWriterVersion;
 use datafusion::common::{internal_datafusion_err, Result};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::{SessionState, SessionStateBuilder};
+use datafusion::functions_aggregate::first_last::first_value_udaf;
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_expr::registry::FunctionRegistry;
+use sail_catalog::provider::CatalogCacheManager;
 use sail_catalog_system::service::SystemTableService;
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::{JobRunner, JobService};
+use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
+use sail_delta_lake::session_extension::DeltaTableCache;
 use sail_execution::driver::DriverOptions;
 use sail_execution::job_runner::{ClusterJobRunner, LocalJobRunner};
 use sail_execution::worker_manager::{
     KubernetesWorkerManager, KubernetesWorkerManagerOptions, LocalWorkerManager,
 };
 use sail_physical_optimizer::{get_physical_optimizers, PhysicalOptimizerOptions};
-use sail_plan::function::{
-    BUILT_IN_GENERATOR_FUNCTIONS, BUILT_IN_SCALAR_FUNCTIONS, BUILT_IN_TABLE_FUNCTIONS,
-};
 use sail_server::actor::{ActorHandle, ActorSystem};
 
 use crate::catalog::create_catalog_manager;
@@ -62,6 +64,7 @@ pub struct ServerSessionFactory {
     system: Arc<Mutex<ActorSystem>>,
     mutator: Box<dyn ServerSessionMutator>,
     runtime_env: RuntimeEnvFactory,
+    catalog_cache_manager: Arc<CatalogCacheManager>,
 }
 
 impl ServerSessionFactory {
@@ -78,6 +81,7 @@ impl ServerSessionFactory {
             system,
             mutator,
             runtime_env,
+            catalog_cache_manager: Arc::new(CatalogCacheManager::new()),
         }
     }
 }
@@ -87,18 +91,17 @@ impl SessionFactory<ServerSessionInfo> for ServerSessionFactory {
         let state = self.create_session_state(&info)?;
         let context = SessionContext::new_with_state(state);
 
-        // TODO: This is a temp workaround to deregister all built-in functions that we define.
-        //   We should deregister all context.udfs() once we have better coverage of functions.
-        //   handler.rs needs to do this
-        for (&name, _function) in BUILT_IN_SCALAR_FUNCTIONS.iter() {
-            context.deregister_udf(name);
-        }
-        for (&name, _function) in BUILT_IN_GENERATOR_FUNCTIONS.iter() {
-            context.deregister_udf(name);
-        }
-        for (&name, _function) in BUILT_IN_TABLE_FUNCTIONS.iter() {
-            context.deregister_udtf(name);
-        }
+        // Register the `first_value` UDAF since the `replace_distinct_aggregate` optimizer rule
+        // assumes that this UDAF is available in the function registry.
+        // This is a hidden assumption made by the optimizer rule.
+        // We have to do so because we do not add default features (including built-in functions)
+        // to the session state.
+        //
+        // See also: https://github.com/apache/datafusion/issues/10703
+        context
+            .state_ref()
+            .write()
+            .register_udaf(first_value_udaf())?;
 
         Ok(context)
     }
@@ -115,12 +118,18 @@ impl ServerSessionFactory {
             .with_extension(Arc::new(create_catalog_manager(
                 &self.config,
                 self.runtime.clone(),
+                self.catalog_cache_manager.clone(),
             )?))
             .with_extension(Arc::new(ActivityTracker::new()))
             .with_extension(Arc::new(JobService::new(job_runner)))
-            .with_extension(Arc::new(self.create_system_table_service(info)?));
+            .with_extension(Arc::new(RepartitionBufferConfig::new(
+                self.config.cluster.task_stream_buffer,
+            )))
+            .with_extension(Arc::new(self.create_system_table_service(info)?))
+            .with_extension(Arc::new(DeltaTableCache::default()));
         self.apply_execution_config(&mut config);
         self.apply_execution_parquet_config(&mut config);
+        self.apply_optimizer_config(&mut config);
         let config = self.mutator.mutate_config(config, info)?;
         Ok(config)
     }
@@ -130,14 +139,16 @@ impl ServerSessionFactory {
         let runtime = self
             .runtime_env
             .create(|builder| self.mutator.mutate_runtime_env(builder, info))?;
+        // We do not add default features to the session state,
+        // since we manage table formats and functions ourselves.
         let builder = SessionStateBuilder::new()
             .with_config(config)
             .with_runtime_env(runtime)
-            .with_default_features()
             .with_analyzer_rules(default_analyzer_rules())
             .with_optimizer_rules(default_optimizer_rules())
             .with_physical_optimizer_rules(get_physical_optimizers(PhysicalOptimizerOptions {
                 enable_join_reorder: self.config.optimizer.enable_join_reorder,
+                ..Default::default()
             }))
             .with_query_planner(new_query_planner());
         let builder = self.mutator.mutate_state(builder, info)?;
@@ -207,6 +218,11 @@ impl ServerSessionFactory {
             .execution
             .use_row_number_estimates_to_optimize_partitioning;
         execution.listing_table_ignore_subdirectory = false;
+    }
+
+    fn apply_optimizer_config(&mut self, config: &mut SessionConfig) {
+        let optimizer = &mut config.options_mut().optimizer;
+        optimizer.expand_views_at_output = self.config.optimizer.expand_views_at_output;
     }
 
     fn apply_execution_parquet_config(&mut self, config: &mut SessionConfig) {

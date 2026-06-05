@@ -2,28 +2,33 @@
 
 set -euo 'pipefail'
 
-# Find and kill sail server processes
-SAIL_PIDS=$(pgrep -f "sail spark server" || echo "")
-if [ -n "$SAIL_PIDS" ]; then
-  echo "Found sail server processes: $SAIL_PIDS"
-  # Send SIGINT for graceful shutdown
-  kill -INT $SAIL_PIDS 2>/dev/null || true
-  # Wait up to 30 seconds for graceful shutdown
-  for i in {1..30}; do
-    if ! pgrep -f "sail spark server" > /dev/null; then
-      echo "Sail server stopped gracefully"
+if ! command -v pgrep > /dev/null; then
+  echo "Error: the 'pgrep' command is required but not found."
+  exit 1
+fi
+
+# Find and stop Sail server processes.
+pids=$(pgrep -d ' ' -f "sail spark server" || true)
+if [ -n "$pids" ]; then
+  echo "Found Sail server processes: $pids"
+  # Send SIGINT for graceful shutdown.
+  # shellcheck disable=SC2086
+  kill -INT $pids 2>/dev/null || true
+  # Wait up to 30 seconds for graceful shutdown.
+  for _ in {1..30}; do
+    if ! pgrep -d ' ' -f "sail spark server" > /dev/null; then
+      echo "Sail servers stopped gracefully"
       break
     fi
     sleep 1
   done
-  # Force kill if still running
-  REMAINING_PIDS=$(pgrep -f "sail spark server" || echo "")
-  if [ -n "$REMAINING_PIDS" ]; then
-    echo "Force killing remaining processes: $REMAINING_PIDS"
-    kill -KILL $REMAINING_PIDS 2>/dev/null || true
+  # Force kill if the server is still running.
+  remaining_pids=$(pgrep -d ' ' -f "sail spark server" || true)
+  if [ -n "$remaining_pids" ]; then
+    echo "Force killing remaining Sail server processes: $remaining_pids"
+    # shellcheck disable=SC2086
+    kill -KILL $remaining_pids 2>/dev/null || true
   fi
 else
-  echo "No sail server processes found"
+  echo "No Sail server processes found"
 fi
-
-sleep 10

@@ -112,3 +112,40 @@ Feature: Delta Lake Column Mapping (DDL TBLPROPERTIES)
         INSERT INTO delta_cm_partitioned_snapshot VALUES (1, 'test', 'us')
         """
       Then delta log first commit protocol and metadata matches snapshot
+
+  Rule: Column mapping preserves special characters in column names
+    Background:
+      Given variable location for temporary directory cm_special_chars
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_cm_special_chars
+        """
+
+    Scenario: Create and query a table whose column names contain supported special characters
+      Given statement template
+        """
+        CREATE TABLE delta_cm_special_chars (
+          `first.name` STRING,
+          `name with space` INT,
+          `a,b` STRING
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        TBLPROPERTIES (
+          'delta.columnMapping.mode' = 'name'
+        )
+        """
+      Given statement
+        """
+        INSERT INTO delta_cm_special_chars VALUES ('alice', 1, 'x=y'), ('bob', 2, 'p=q')
+        """
+      When query
+        """
+        SELECT `first.name`, `name with space`, `a,b`
+        FROM delta_cm_special_chars
+        ORDER BY `name with space`
+        """
+      Then query result ordered
+        | first.name | name with space | a,b |
+        | alice      | 1               | x=y |
+        | bob        | 2               | p=q |

@@ -1,0 +1,62 @@
+- key: rows_per_second
+  description: |
+    The maximum number of rows that are generated per second.
+  default:
+    value: "1"
+    parser: crate::options::parsers::parse_usize
+  supported: true
+  rust_type: usize
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - rows_per_second
+        - rowsPerSecond
+      parser: crate::options::parsers::parse_usize
+    - type: table_property
+      keys:
+        - option.rows_per_second
+        - option.rowsPerSecond
+      parser: crate::options::parsers::parse_usize
+
+- key: ramp_up_time
+  description: |
+    The time in seconds to ramp up to the number of rows per second.
+  supported: false
+  rust_type: usize
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - ramp_up_time
+        - rampUpTime
+      parser: crate::options::parsers::parse_usize
+    - type: table_property
+      keys:
+        - option.ramp_up_time
+        - option.rampUpTime
+      parser: crate::options::parsers::parse_usize
+
+- key: num_partitions
+  description: |
+    The number of partitions for data generation.
+  default:
+    value: "1"
+    parser: crate::options::parsers::parse_usize
+  supported: true
+  rust_type: usize
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - num_partitions
+        - numPartitions
+      parser: crate::options::parsers::parse_usize
+    - type: table_property
+      keys:
+        - option.num_partitions
+        - option.numPartitions
+      parser: crate::options::parsers::parse_usize

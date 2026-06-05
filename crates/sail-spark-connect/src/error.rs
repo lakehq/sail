@@ -90,6 +90,7 @@ impl From<SqlError> for SparkError {
             SqlError::InternalError(message) => SparkError::InternalError(message),
             SqlError::SqlParserError(e) => SparkError::InvalidArgument(e.to_string()),
             SqlError::NotImplemented(message) => SparkError::NotImplemented(message),
+            SqlError::AnalysisError(message) => SparkError::AnalysisError(message),
         }
     }
 }
@@ -223,11 +224,11 @@ pub(crate) enum SparkThrowable {
     UnsupportedOperationException(String),
     #[expect(dead_code)]
     ArrayIndexOutOfBoundsException(String),
-    #[expect(dead_code)]
     DateTimeException(String),
     SparkRuntimeException(String),
     #[expect(dead_code)]
     SparkUpgradeException(String),
+    SparkException(String),
     PythonException(String),
 }
 
@@ -246,6 +247,7 @@ impl SparkThrowable {
             | SparkThrowable::DateTimeException(message)
             | SparkThrowable::SparkRuntimeException(message)
             | SparkThrowable::SparkUpgradeException(message)
+            | SparkThrowable::SparkException(message)
             | SparkThrowable::PythonException(message) => message,
         }
     }
@@ -274,9 +276,55 @@ impl SparkThrowable {
             SparkThrowable::DateTimeException(_) => "java.time.DateTimeException",
             SparkThrowable::SparkRuntimeException(_) => "org.apache.spark.SparkRuntimeException",
             SparkThrowable::SparkUpgradeException(_) => "org.apache.spark.SparkUpgradeException",
+            SparkThrowable::SparkException(_) => "org.apache.spark.SparkException",
             SparkThrowable::PythonException(_) => "org.apache.spark.api.python.PythonException",
         }
     }
+}
+
+/// The maximum length of a gRPC status message in bytes.
+///
+/// gRPC has a hard limit of 16384 bytes for the total metadata size.
+/// When error details are present, the message is encoded in two headers:
+/// - `grpc-message`: percent-encoded (worst case 3x expansion for non-ASCII bytes)
+/// - `grpc-status-details-bin`: base64-encoded protobuf (~4/3x expansion)
+///
+/// Combined worst-case encoding overhead is approximately 4.33x the raw message length
+/// (3x + 4/3x). A cap of 2500 bytes leaves room for `ErrorInfo` details and other
+/// gRPC headers in addition to the duplicated status message.
+const MAX_GRPC_STATUS_MESSAGE_LEN: usize = 2500;
+
+const TRUNCATED_MARKER: &str = "\n[truncated]\n";
+
+/// Truncate a gRPC status message to at most [`MAX_GRPC_STATUS_MESSAGE_LEN`] bytes.
+///
+/// Truncation respects UTF-8 character boundaries and keeps both the start and the end
+/// of the message. Python tracebacks often include the Spark error class in the final
+/// exception line, so prefix-only truncation can hide the user-facing error.
+fn truncate_grpc_message(message: &str) -> String {
+    if message.len() <= MAX_GRPC_STATUS_MESSAGE_LEN {
+        return message.to_string();
+    }
+
+    let keep = MAX_GRPC_STATUS_MESSAGE_LEN.saturating_sub(TRUNCATED_MARKER.len());
+    let head_take = keep / 3;
+    let tail_take = keep - head_take;
+
+    let mut head_end = head_take;
+    while head_end > 0 && !message.is_char_boundary(head_end) {
+        head_end -= 1;
+    }
+
+    let mut tail_start = message.len().saturating_sub(tail_take);
+    while tail_start < message.len() && !message.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+
+    format!(
+        "{}{TRUNCATED_MARKER}{}",
+        &message[..head_end],
+        &message[tail_start..]
+    )
 }
 
 impl From<SparkThrowable> for Status {
@@ -290,10 +338,16 @@ impl From<SparkThrowable> for Status {
         let mut details = ErrorDetails::new();
         details.set_error_info(class, "org.apache.spark", metadata);
 
+        // Truncate the message if it exceeds the maximum length.
+        // gRPC has a hard limit of 16384 bytes for total metadata size.
+        // Both `grpc-message` and `grpc-status-details-bin` encode the message,
+        // so long messages (e.g., Python tracebacks) can easily exceed the limit.
+        let message = truncate_grpc_message(throwable.message());
+
         // The original Spark Connect server implementation uses the "INTERNAL" status code
         // for all Spark exceptions, so we do the same here.
         // Reference: org.apache.spark.sql.connect.utils.ErrorUtils#buildStatusFromThrowable
-        Status::with_error_details(Code::Internal, throwable.message(), details)
+        Status::with_error_details(Code::Internal, message, details)
     }
 }
 
@@ -333,19 +387,31 @@ impl From<CommonErrorCause> for SparkThrowable {
                 } else {
                     format!("{summary}\n")
                 };
-                SparkThrowable::PythonException(message)
+                if message.contains("net.razorvine.pickle.PickleException") {
+                    SparkThrowable::SparkException(message)
+                } else {
+                    SparkThrowable::PythonException(message)
+                }
             }
             CommonErrorCause::ArrowCast(x)
             | CommonErrorCause::Schema(x)
             | CommonErrorCause::Plan(x)
             | CommonErrorCause::Configuration(x) => SparkThrowable::AnalysisException(x),
             CommonErrorCause::Execution(x) => {
-                // TODO: handle situations where a different exception type is more appropriate.
-                SparkThrowable::AnalysisException(x)
+                if is_timestamp_parse_error(&x) {
+                    SparkThrowable::DateTimeException(x)
+                } else {
+                    // TODO: handle situations where a different exception type is more appropriate.
+                    SparkThrowable::AnalysisException(x)
+                }
             }
             CommonErrorCause::DeltaTable(x) => SparkThrowable::QueryExecutionException(x),
         }
     }
+}
+
+fn is_timestamp_parse_error(message: &str) -> bool {
+    message.starts_with("Error parsing timestamp")
 }
 
 impl From<SparkError> for Status {
@@ -368,8 +434,42 @@ impl From<SparkError> for Status {
                 SparkThrowable::UnsupportedOperationException(s).into()
             }
             SparkError::AnalysisError(s) => SparkThrowable::AnalysisException(s).into(),
-            e @ SparkError::SendError(_) => Status::cancelled(e.to_string()),
-            e @ SparkError::InternalError(_) => Status::internal(e.to_string()),
+            e @ SparkError::SendError(_) => {
+                Status::cancelled(truncate_grpc_message(&e.to_string()))
+            }
+            e @ SparkError::InternalError(_) => {
+                Status::internal(truncate_grpc_message(&e.to_string()))
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_grpc_message_preserves_tail() {
+        let message = format!(
+            "python traceback start\n{}\npyspark.errors.PythonException: [UDTF_ARROW_TYPE_CONVERSION_ERROR]\n",
+            "x".repeat(MAX_GRPC_STATUS_MESSAGE_LEN * 2)
+        );
+
+        let truncated = truncate_grpc_message(&message);
+
+        assert!(truncated.len() <= MAX_GRPC_STATUS_MESSAGE_LEN);
+        assert!(truncated.starts_with("python traceback start\n"));
+        assert!(truncated.contains(TRUNCATED_MARKER));
+        assert!(truncated.ends_with("[UDTF_ARROW_TYPE_CONVERSION_ERROR]\n"));
+    }
+
+    #[test]
+    fn execution_timestamp_parse_error_maps_to_datetime_exception() {
+        let throwable = SparkThrowable::from(CommonErrorCause::Execution(
+            "Error parsing timestamp from '2023-01-01' using format '%d-%m-%Y': input contains invalid characters".to_string(),
+        ));
+
+        assert!(matches!(&throwable, SparkThrowable::DateTimeException(_)));
+        assert_eq!(throwable.class_name(), "java.time.DateTimeException");
     }
 }

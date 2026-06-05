@@ -271,6 +271,12 @@ pub enum QueryNode {
         column_aliases: Option<Vec<Identifier>>,
         outer: bool,
     },
+    LateralJoin {
+        left: Box<QueryPlan>,
+        right: Box<QueryPlan>,
+        join_condition: Option<Expr>,
+        join_type: JoinType,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -291,6 +297,14 @@ pub enum CommandNode {
     },
     ListCatalogs {
         pattern: Option<String>,
+    },
+    ShowTables {
+        database: Option<ObjectName>,
+        pattern: Option<String>,
+    },
+    ShowTableExtended {
+        database: Option<ObjectName>,
+        pattern: String,
     },
     ListTables {
         database: Option<ObjectName>,
@@ -858,13 +872,17 @@ pub struct HtmlString {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TableDefinition {
+    /// Whether the table is explicitly marked as external.
+    /// Note that the table may still be considered external semantically
+    /// when the location or path is specified, even when this field is `false`.
+    pub external: bool,
     pub columns: Vec<TableColumnDefinition>,
     pub comment: Option<String>,
     pub constraints: Vec<TableConstraint>,
     pub location: Option<String>,
     pub file_format: Option<TableFileFormat>,
     pub row_format: Option<TableRowFormat>,
-    pub partition_by: Vec<Identifier>,
+    pub partition_by: Vec<PartitionColumn>,
     pub sort_by: Vec<SortOrder>,
     pub bucket_by: Option<SaveBucketBy>,
     pub cluster_by: Vec<ObjectName>,
@@ -872,6 +890,29 @@ pub struct TableDefinition {
     pub replace: bool,
     pub options: Vec<(String, String)>,
     pub properties: Vec<(String, String)>,
+}
+
+/// Returns whether a non-empty path or location is specified,
+/// either via the `location` argument or via `"path"` / `"location"` keys in options.
+/// Key comparison is case-insensitive and empty-string values are ignored.
+pub fn has_path_or_location(location: Option<&str>, options: &[(String, String)]) -> bool {
+    let has_location = location.is_some_and(|s| !s.trim().is_empty());
+    let has_path_in_options = options.iter().any(|(k, v)| {
+        !v.trim().is_empty()
+            && (k.eq_ignore_ascii_case("path") || k.eq_ignore_ascii_case("location"))
+    });
+    has_location || has_path_in_options
+}
+
+/// A column reference or typed column definition used in a `PARTITIONED BY` clause.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "variant")]
+pub enum PartitionColumn {
+    /// A partition expression, such as a column reference or transform function.
+    Expression(Expr),
+    /// A typed partition column definition, e.g. `col_name data_type` in Hive-style
+    /// `PARTITIONED BY (col_name data_type)` syntax.
+    Definition(TableColumnDefinition),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -885,6 +926,16 @@ pub struct TableColumnDefinition {
     pub default: Option<String>,
     /// An optional SQL expression string to calculate the generated value.
     pub generated_always_as: Option<String>,
+    /// Delta identity column metadata.
+    pub identity: Option<TableColumnIdentity>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableColumnIdentity {
+    pub start: Option<i64>,
+    pub step: Option<i64>,
+    pub allow_explicit_insert: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -907,6 +958,7 @@ pub struct CatalogDefinition {
 pub struct ViewDefinition {
     /// The corresponding SQL query that defines the view.
     pub definition: String,
+    pub input: Box<QueryPlan>,
     pub columns: Option<Vec<ViewColumnDefinition>>,
     pub if_not_exists: bool,
     pub replace: bool,
@@ -940,7 +992,7 @@ pub struct Write {
     pub save_type: SaveType,
     pub mode: Option<SaveMode>,
     pub sort_columns: Vec<SortOrder>,
-    pub partitioning_columns: Vec<Identifier>,
+    pub partitioning_columns: Vec<Expr>,
     pub clustering_columns: Vec<Identifier>,
     pub bucket_by: Option<SaveBucketBy>,
     pub options: Vec<(String, String)>,
@@ -1273,6 +1325,25 @@ pub enum ExplainMode {
 #[serde(rename_all = "camelCase")]
 pub enum AlterTableOperation {
     Unknown,
+    SetTableProperties {
+        properties: Vec<(String, String)>,
+    },
+    UnsetTableProperties {
+        keys: Vec<String>,
+        if_exists: bool,
+    },
+    AlterColumnType {
+        name: ObjectName,
+        data_type: DataType,
+    },
+    AlterColumnDefault {
+        name: ObjectName,
+        default: Option<String>,
+    },
+    AddCheckConstraint {
+        name: Identifier,
+        expression: ExprWithSource,
+    },
     // TODO: add all the alter table operations
 }
 

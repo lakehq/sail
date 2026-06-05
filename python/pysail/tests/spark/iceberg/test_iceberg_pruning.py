@@ -3,7 +3,7 @@ import pandas as pd
 import pyarrow as pa
 from pyiceberg.schema import Schema
 from pyiceberg.types import BooleanType, DoubleType, IntegerType, LongType, NestedField, StringType
-from .utils import create_sql_catalog
+from pysail.tests.spark.iceberg.utils import create_sql_catalog
 
 
 def _make_eq_in_table(catalog, ident):
@@ -98,14 +98,25 @@ def test_null_and_boolean(spark, tmp_path):
         ),
     )
     try:
+        arrow_schema = pa.schema(
+            [
+                pa.field("id", pa.int64()),
+                pa.field("region", pa.string()),
+                pa.field("active", pa.bool_()),
+            ]
+        )
         table.append(
             pa.Table.from_pandas(
-                pd.DataFrame([{"id": 1, "region": None, "active": True}, {"id": 2, "region": None, "active": True}])
+                pd.DataFrame([{"id": 1, "region": None, "active": True}, {"id": 2, "region": None, "active": True}]),
+                schema=arrow_schema,
+                preserve_index=False,
             )
         )
         table.append(
             pa.Table.from_pandas(
-                pd.DataFrame([{"id": 3, "region": "US", "active": False}, {"id": 4, "region": "EU", "active": False}])
+                pd.DataFrame([{"id": 3, "region": "US", "active": False}, {"id": 4, "region": "EU", "active": False}]),
+                schema=arrow_schema,
+                preserve_index=False,
             )
         )
 

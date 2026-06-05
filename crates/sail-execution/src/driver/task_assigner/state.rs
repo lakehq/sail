@@ -18,6 +18,7 @@ pub struct DriverResource {
 }
 
 impl DriverResource {
+    /// Assigns a task set to the first available driver slot.
     pub fn add_task_set(&mut self, set: TaskSet) {
         for slot in &mut self.task_slots {
             if slot.is_vacant() {
@@ -71,6 +72,7 @@ impl DriverResource {
 }
 
 #[derive(Debug)]
+/// Represents the current state of a worker's resources as seen by the task assigner.
 pub enum WorkerResource {
     Active {
         /// The task slots on the worker.
@@ -94,6 +96,7 @@ pub enum WorkerResource {
 }
 
 impl WorkerResource {
+    /// Assigns a task set to the specified slot on this worker.
     pub fn add_task_set(&mut self, slot: usize, set: TaskSet) {
         match self {
             WorkerResource::Active { task_slots, .. } => {

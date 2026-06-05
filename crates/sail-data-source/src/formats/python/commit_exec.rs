@@ -32,7 +32,7 @@ pub struct PythonDataSourceWriteCommitExec {
     /// Number of partition results expected from the write stage.
     expected_partitions: usize,
     /// Execution plan properties.
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl PythonDataSourceWriteCommitExec {
@@ -42,12 +42,12 @@ impl PythonDataSourceWriteCommitExec {
         pickled_writer: Vec<u8>,
         expected_partitions: usize,
     ) -> Self {
-        let properties = PlanProperties::new(
+        let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(Arc::new(Schema::empty())),
             Partitioning::UnknownPartitioning(1),
             EmissionType::Final,
             Boundedness::Bounded,
-        );
+        ));
 
         Self {
             input,
@@ -92,7 +92,7 @@ impl ExecutionPlan for PythonDataSourceWriteCommitExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

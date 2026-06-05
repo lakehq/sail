@@ -35,6 +35,10 @@ rank: 1
 
 <FunctionSupportTable :data="data['scalar/datetime']" />
 
+## Geo
+
+<FunctionSupportTable :data="data['scalar/geo']" />
+
 ## Hash
 
 <FunctionSupportTable :data="data['scalar/hash']" />

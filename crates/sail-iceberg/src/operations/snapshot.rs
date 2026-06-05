@@ -11,11 +11,12 @@
 // limitations under the License.
 
 use bytes::Bytes;
+use object_store::ObjectStoreExt;
 
 use super::{ActionCommit, Transaction};
 use crate::io::StoreContext;
 use crate::spec::manifest::ManifestWriterBuilder;
-use crate::spec::manifest_list::{ManifestListWriter, UNASSIGNED_SEQUENCE_NUMBER};
+use crate::spec::manifest_list::ManifestListWriter;
 use crate::spec::{
     DataFile, FormatVersion, ManifestContentType, Operation, PartitionSpec, Schema,
     SnapshotBuilder, SnapshotReference, SnapshotRetention, TableRequirement, TableUpdate,
@@ -35,6 +36,7 @@ pub struct SnapshotProducer<'a> {
     pub write_path_mode: crate::utils::WritePathMode,
     /// If true, create a snapshot with no parent (for bootstrap scenarios)
     pub is_bootstrap: bool,
+    pub row_lineage_start_row_id: Option<i64>,
 }
 
 impl<'a> SnapshotProducer<'a> {
@@ -51,6 +53,7 @@ impl<'a> SnapshotProducer<'a> {
             manifest_metadata,
             write_path_mode: crate::utils::WritePathMode::Absolute,
             is_bootstrap: false,
+            row_lineage_start_row_id: None,
         }
     }
 
@@ -63,6 +66,11 @@ impl<'a> SnapshotProducer<'a> {
     /// This is used when creating the first snapshot for a table.
     pub fn with_bootstrap(mut self, is_bootstrap: bool) -> Self {
         self.is_bootstrap = is_bootstrap;
+        self
+    }
+
+    pub fn with_row_lineage_start_row_id(mut self, start_row_id: Option<i64>) -> Self {
+        self.row_lineage_start_row_id = start_row_id;
         self
     }
 
@@ -100,12 +108,12 @@ impl<'a> SnapshotProducer<'a> {
                 ManifestContentType::Data,
             )
         };
-        let mut writer = ManifestWriterBuilder::new(None, None, metadata.clone()).build();
-        for df in &self.added_data_files {
-            writer.add(df.clone());
-        }
-        let manifest = writer.finish();
-        let manifest_bytes = manifest.to_avro_bytes_v2()?;
+        let format_version = metadata.format_version;
+
+        let store_ctx = self
+            .store_ctx
+            .as_ref()
+            .ok_or_else(|| "store context not available".to_string())?;
 
         // Generate new snapshot ID using UUID (not timestamp) and sequence number
         let new_snapshot_id = crate::utils::snapshot_id::generate_snapshot_id();
@@ -115,52 +123,9 @@ impl<'a> SnapshotProducer<'a> {
             self.tx.snapshot().sequence_number() + 1
         };
 
-        let store_ctx = self
-            .store_ctx
-            .as_ref()
-            .ok_or_else(|| "store context not available".to_string())?;
-
-        let manifest_len = manifest_bytes.len() as i64;
-        let manifest_rel = format!("metadata/manifest-{}.avro", uuid::Uuid::new_v4());
-        let manifest_path = object_store::path::Path::from(manifest_rel.as_str());
-        store_ctx
-            .prefixed
-            .put(
-                &manifest_path,
-                object_store::PutPayload::from(Bytes::from(manifest_bytes)),
-            )
-            .await
-            .map_err(|e| format!("{}", e))?;
-
-        // Build a manifest file entry for manifest list
-        let added_rows: i64 = self
-            .added_data_files
-            .iter()
-            .map(|df| df.record_count as i64)
-            .sum();
-        let manifest_file = crate::spec::manifest_list::ManifestFile::builder()
-            .with_manifest_path(join_table_uri(
-                self.tx.table_uri(),
-                &manifest_rel,
-                &self.write_path_mode,
-            ))
-            .with_manifest_length(manifest_len)
-            .with_partition_spec_id(metadata.partition_spec.spec_id())
-            .with_content(ManifestContentType::Data)
-            .with_sequence_number(UNASSIGNED_SEQUENCE_NUMBER)
-            .with_min_sequence_number(UNASSIGNED_SEQUENCE_NUMBER)
-            .with_added_snapshot_id(new_snapshot_id)
-            .with_file_counts(self.added_data_files.len() as i32, 0, 0)
-            .with_row_counts(added_rows, 0, 0)
-            .build()?;
-
-        let mut list_writer = ManifestListWriter::new();
-        let mut total_manifest_count = 0;
-
-        // Load the parent manifest list and append its entries for append only.
-        // Skip this for bootstrap mode (no parent snapshot exists)
         let parent_snapshot = self.tx.snapshot();
         let parent_manifest_list_path_str = parent_snapshot.manifest_list();
+        let mut parent_manifest_entries = Vec::new();
 
         if !self.is_bootstrap && !is_overwrite && !parent_manifest_list_path_str.is_empty() {
             let (store_ref, manifest_list_path) = store_ctx
@@ -178,18 +143,87 @@ impl<'a> SnapshotProducer<'a> {
                 .bytes()
                 .await
                 .map_err(|e| format!("Failed to read parent manifest list bytes: {}", e))?;
-            let parent_manifest_list = crate::spec::ManifestList::parse_with_version(
-                &manifest_list_data,
-                FormatVersion::V2,
-            )?;
+            let parent_manifest_list =
+                crate::spec::ManifestList::parse_with_version(&manifest_list_data, format_version)?;
             log::trace!(
                 "snapshot producer: found parent manifest files: {}",
                 parent_manifest_list.entries().len()
             );
-            for entry in parent_manifest_list.entries() {
-                list_writer.append(entry.clone());
-                total_manifest_count += 1;
+            parent_manifest_entries.extend(parent_manifest_list.entries().iter().cloned());
+        }
+
+        let new_added_rows: i64 = self
+            .added_data_files
+            .iter()
+            .map(|df| df.record_count as i64)
+            .sum();
+        let mut row_lineage_next_row_id = self.row_lineage_start_row_id;
+        let mut snapshot_added_rows = 0;
+
+        if let Some(next_row_id) = &mut row_lineage_next_row_id {
+            for entry in &mut parent_manifest_entries {
+                if matches!(entry.content, ManifestContentType::Data)
+                    && entry.first_row_id.is_none()
+                {
+                    entry.first_row_id = Some(*next_row_id);
+                    let assigned_rows = entry.added_rows_count.unwrap_or(0)
+                        + entry.existing_rows_count.unwrap_or(0);
+                    *next_row_id += assigned_rows;
+                    snapshot_added_rows += assigned_rows;
+                }
             }
+        }
+
+        let new_manifest_first_row_id = row_lineage_next_row_id;
+        if self.row_lineage_start_row_id.is_some() {
+            snapshot_added_rows += new_added_rows;
+        }
+
+        let mut writer = ManifestWriterBuilder::new(None, None, metadata.clone()).build();
+        let added_data_files = self.added_data_files.clone();
+        for df in &added_data_files {
+            writer.add(df.clone());
+        }
+        let manifest = writer.finish();
+        let manifest_bytes = manifest.to_avro_bytes_v2()?;
+
+        let manifest_len = manifest_bytes.len() as i64;
+        let manifest_rel = format!("metadata/manifest-{}.avro", uuid::Uuid::new_v4());
+        let manifest_path = object_store::path::Path::from(manifest_rel.as_str());
+        store_ctx
+            .prefixed
+            .put(
+                &manifest_path,
+                object_store::PutPayload::from(Bytes::from(manifest_bytes)),
+            )
+            .await
+            .map_err(|e| format!("{}", e))?;
+
+        let mut manifest_file_builder = crate::spec::manifest_list::ManifestFile::builder()
+            .with_manifest_path(join_table_uri(
+                self.tx.table_uri(),
+                &manifest_rel,
+                &self.write_path_mode,
+            ))
+            .with_manifest_length(manifest_len)
+            .with_partition_spec_id(metadata.partition_spec.spec_id())
+            .with_content(ManifestContentType::Data)
+            .with_sequence_number(new_sequence_number)
+            .with_min_sequence_number(new_sequence_number)
+            .with_added_snapshot_id(new_snapshot_id)
+            .with_file_counts(added_data_files.len() as i32, 0, 0)
+            .with_row_counts(new_added_rows, 0, 0);
+        if let Some(first_row_id) = new_manifest_first_row_id {
+            manifest_file_builder = manifest_file_builder.with_first_row_id(first_row_id);
+        }
+        let manifest_file = manifest_file_builder.build()?;
+
+        let mut list_writer = ManifestListWriter::new();
+        let mut total_manifest_count = 0;
+
+        for entry in parent_manifest_entries {
+            list_writer.append(entry);
+            total_manifest_count += 1;
         }
 
         log::trace!(
@@ -205,7 +239,7 @@ impl<'a> SnapshotProducer<'a> {
             "snapshot producer: new manifest list will have files: {}",
             total_manifest_count
         );
-        let list_bytes = list_writer.to_bytes(FormatVersion::V2)?;
+        let list_bytes = list_writer.to_bytes(format_version)?;
         let list_rel = format!("metadata/snap-{}.avro", new_snapshot_id);
         let list_path = object_store::path::Path::from(list_rel.as_str());
         store_ctx
@@ -238,6 +272,12 @@ impl<'a> SnapshotProducer<'a> {
         if !self.is_bootstrap {
             snapshot_builder =
                 snapshot_builder.with_parent_snapshot_id(self.tx.snapshot().snapshot_id());
+        }
+
+        if let Some(start_row_id) = self.row_lineage_start_row_id {
+            snapshot_builder = snapshot_builder
+                .with_first_row_id(start_row_id)
+                .with_added_rows(snapshot_added_rows);
         }
 
         let new_snapshot = snapshot_builder.build()?;

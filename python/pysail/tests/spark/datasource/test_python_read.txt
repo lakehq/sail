@@ -1,0 +1,32 @@
+>>> from typing import Iterator, Tuple
+>>>
+>>> from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
+>>> from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+>>>
+>>> class SimpleDataSource(DataSource):
+...     @classmethod
+...     def name(cls) -> str:
+...         return "simple"
+...
+...     def schema(self) -> StructType:
+...         return StructType([
+...             StructField("name", StringType()),
+...             StructField("age", IntegerType())
+...         ])
+...
+...     def reader(self, schema: StructType) -> DataSourceReader:
+...         return SimpleDataSourceReader()
+>>>
+>>> class SimpleDataSourceReader(DataSourceReader):
+...     def read(self, partition: InputPartition) -> Iterator[Tuple]:
+...         yield ("Alice", 20)
+...         yield ("Bob", 30)
+>>>
+>>> spark.dataSource.register(SimpleDataSource)
+>>> spark.read.format("simple").load().show()
++-----+---+
+| name|age|
++-----+---+
+|Alice| 20|
+|  Bob| 30|
++-----+---+

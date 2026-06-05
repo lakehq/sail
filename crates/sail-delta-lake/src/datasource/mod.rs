@@ -25,19 +25,19 @@ use datafusion::arrow::compute::filter_record_batch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::stats::Statistics;
 use datafusion::datasource::object_store::ObjectStoreUrl;
+pub use sail_common_datafusion::datasource::MERGE_FILE_COLUMN as PATH_COLUMN;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::kernel::snapshot::LogDataHandler;
-use crate::kernel::{DeltaResult, DeltaTableError};
-use crate::table::DeltaTableState;
-pub const PATH_COLUMN: &str = "__sail_file_path";
+use crate::kernel::snapshot::SnapshotPruningStats;
+use crate::options::{default_delta_log_replay_hash_threshold, DeltaLogReplayStrategy};
+use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
+use crate::table::DeltaSnapshot;
 pub const COMMIT_VERSION_COLUMN: &str = "_commit_version";
 pub const COMMIT_TIMESTAMP_COLUMN: &str = "_commit_timestamp";
 
 pub mod actions;
 pub mod expressions;
-pub mod provider;
 pub mod pruning;
 pub mod scan;
 pub mod schema;
@@ -47,10 +47,9 @@ pub use actions::{adds_to_remove_actions, partitioned_file_from_action};
 pub use expressions::{
     collect_physical_columns, get_pushdown_filters, simplify_expr, PredicateProperties,
 };
-pub use provider::DeltaTableProvider;
 pub use pruning::{prune_files, PruningResult};
 pub use scan::build_file_scan_config;
-pub use schema::{df_logical_schema, DataFusionMixins};
+pub use schema::df_logical_schema;
 
 pub(crate) fn create_object_store_url(location: &Url) -> DeltaResult<ObjectStoreUrl> {
     Ok(ObjectStoreUrl::parse(
@@ -58,20 +57,20 @@ pub(crate) fn create_object_store_url(location: &Url) -> DeltaResult<ObjectStore
     )?)
 }
 
-// Extension trait to add datafusion_table_statistics method to DeltaTableState
-pub(crate) trait DeltaTableStateExt {
-    fn datafusion_table_statistics(&self, mask: Option<&[bool]>) -> Option<Statistics>;
-}
-
-impl DeltaTableStateExt for DeltaTableState {
-    fn datafusion_table_statistics(&self, mask: Option<&[bool]>) -> Option<Statistics> {
+impl DeltaSnapshot {
+    pub(crate) fn datafusion_table_statistics(&self, mask: Option<&[bool]>) -> Option<Statistics> {
+        if !self.load_config().require_files {
+            return None;
+        }
         if let Some(mask) = mask {
-            let es = self.snapshot();
+            let files = self.files_batch().ok()?;
             let boolean_array = BooleanArray::from(mask.to_vec());
-            let pruned_files = filter_record_batch(&es.files, &boolean_array).ok()?;
-            LogDataHandler::new(&pruned_files, es.table_configuration()).statistics()
+            let pruned_files = filter_record_batch(files, &boolean_array).ok()?;
+            SnapshotPruningStats::try_new(&pruned_files, self)
+                .ok()?
+                .statistics()
         } else {
-            self.snapshot().log_data().statistics()
+            self.pruning_stats().ok()?.statistics()
         }
     }
 }
@@ -98,6 +97,10 @@ pub struct DeltaScanConfigBuilder {
     commit_version_column_name: Option<String>,
     /// Column name that contains the commit timestamp.
     commit_timestamp_column_name: Option<String>,
+    /// Strategy for log replay planning.
+    delta_log_replay_strategy: DeltaLogReplayStrategy,
+    /// Threshold for auto replay strategy.
+    delta_log_replay_hash_threshold: usize,
 }
 
 impl Default for DeltaScanConfigBuilder {
@@ -111,6 +114,8 @@ impl Default for DeltaScanConfigBuilder {
             include_commit_metadata: false,
             commit_version_column_name: None,
             commit_timestamp_column_name: None,
+            delta_log_replay_strategy: DeltaLogReplayStrategy::Auto,
+            delta_log_replay_hash_threshold: 100,
         }
     }
 }
@@ -141,8 +146,20 @@ impl DeltaScanConfigBuilder {
         self
     }
 
+    /// Configure replay strategy for log replay planning.
+    pub fn with_delta_log_replay_strategy(mut self, strategy: DeltaLogReplayStrategy) -> Self {
+        self.delta_log_replay_strategy = strategy;
+        self
+    }
+
+    /// Configure threshold for `Auto` replay strategy.
+    pub fn with_delta_log_replay_hash_threshold(mut self, threshold: usize) -> Self {
+        self.delta_log_replay_hash_threshold = threshold;
+        self
+    }
+
     /// Build a DeltaScanConfig and ensure no column name conflicts occur during downstream processing
-    pub fn build(&self, snapshot: &DeltaTableState) -> DeltaResult<DeltaScanConfig> {
+    pub fn build(&self, snapshot: &DeltaSnapshot) -> DeltaResult<DeltaScanConfig> {
         let file_column_name = if self.include_file_column {
             let input_schema = snapshot.input_schema()?;
             let mut column_names: HashSet<&String> = HashSet::new();
@@ -223,11 +240,14 @@ impl DeltaScanConfigBuilder {
 
         Ok(DeltaScanConfig {
             file_column_name,
+            row_index_column_name: None,
             wrap_partition_values: self.wrap_partition_values,
             enable_parquet_pushdown: self.enable_parquet_pushdown,
             schema: self.schema.clone(),
             commit_version_column_name,
             commit_timestamp_column_name,
+            delta_log_replay_strategy: self.delta_log_replay_strategy,
+            delta_log_replay_hash_threshold: self.delta_log_replay_hash_threshold,
         })
     }
 }
@@ -237,6 +257,8 @@ impl DeltaScanConfigBuilder {
 pub struct DeltaScanConfig {
     /// Include the source path for each record
     pub file_column_name: Option<String>,
+    /// Include the file-local row index for each record.
+    pub row_index_column_name: Option<String>,
     /// Wrap partition values in a dictionary encoding
     pub wrap_partition_values: bool,
     /// Allow pushdown of the scan filter
@@ -247,4 +269,10 @@ pub struct DeltaScanConfig {
     pub commit_version_column_name: Option<String>,
     /// Commit timestamp virtual column name.
     pub commit_timestamp_column_name: Option<String>,
+    /// Strategy for log replay planning.
+    #[serde(default)]
+    pub delta_log_replay_strategy: DeltaLogReplayStrategy,
+    /// Threshold for `Auto` replay strategy.
+    #[serde(default = "default_delta_log_replay_hash_threshold")]
+    pub delta_log_replay_hash_threshold: usize,
 }

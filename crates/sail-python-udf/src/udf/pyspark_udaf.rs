@@ -19,9 +19,17 @@ use crate::error::PyUdfResult;
 use crate::lazy::LazyPyObject;
 use crate::python::spark::PySpark;
 
+// Distinguishes Pandas (202) vs Arrow-native (252) grouped aggregate UDFs
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PySparkGroupAggKind {
+    Pandas,
+    Arrow,
+}
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct PySparkGroupAggregateUDF {
     signature: Signature,
+    kind: PySparkGroupAggKind,
     name: String,
     payload: Vec<u8>,
     deterministic: bool,
@@ -29,11 +37,17 @@ pub struct PySparkGroupAggregateUDF {
     input_types: Vec<DataType>,
     output_type: DataType,
     config: Arc<PySparkUdfConfig>,
+    /// Number of arguments the Python function actually accepts. When a dummy
+    /// argument has been injected (0-arg UDF), this is 0 while `input_types`
+    /// contains the dummy Int64 type.
+    actual_arg_count: usize,
     udf: LazyPyObject,
 }
 
 impl PySparkGroupAggregateUDF {
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
+        kind: PySparkGroupAggKind,
         name: String,
         payload: Vec<u8>,
         deterministic: bool,
@@ -41,6 +55,7 @@ impl PySparkGroupAggregateUDF {
         input_types: Vec<DataType>,
         output_type: DataType,
         config: Arc<PySparkUdfConfig>,
+        actual_arg_count: usize,
     ) -> Self {
         let signature = Signature::exact(
             input_types.clone(),
@@ -51,6 +66,7 @@ impl PySparkGroupAggregateUDF {
         );
         Self {
             signature,
+            kind,
             name,
             payload,
             deterministic,
@@ -58,8 +74,17 @@ impl PySparkGroupAggregateUDF {
             input_types,
             output_type,
             config,
+            actual_arg_count,
             udf: LazyPyObject::new(),
         }
+    }
+
+    pub fn kind(&self) -> PySparkGroupAggKind {
+        self.kind
+    }
+
+    pub fn actual_arg_count(&self) -> usize {
+        self.actual_arg_count
     }
 
     pub fn payload(&self) -> &[u8] {
@@ -88,13 +113,18 @@ impl PySparkGroupAggregateUDF {
 
     fn udf(&self, py: Python) -> Result<Py<PyAny>> {
         let udf = self.udf.get_or_try_init(py, || {
-            Ok(PySpark::group_agg_udf(
-                py,
-                PySparkUdfPayload::load(py, &self.payload)?,
-                self.input_names.clone(),
-                &self.config,
-            )?
-            .unbind())
+            let loaded = PySparkUdfPayload::load(py, &self.payload)?;
+            let wrapped = match self.kind {
+                // Pandas path: wraps Arrow → named Pandas Series → user func → Arrow
+                PySparkGroupAggKind::Pandas => {
+                    PySpark::group_agg_udf(py, loaded, self.input_names.clone(), &self.config)?
+                }
+                // Arrow path: passes Arrow arrays directly to user func
+                PySparkGroupAggKind::Arrow => {
+                    PySpark::group_agg_arrow_udf(py, loaded, &self.config)?
+                }
+            };
+            Ok(wrapped.unbind())
         })?;
         Ok(udf.clone_ref(py))
     }
@@ -127,6 +157,7 @@ impl AggregateUDFImpl for PySparkGroupAggregateUDF {
             self.input_types.clone(),
             self.output_type.clone(),
             aggregator,
+            self.actual_arg_count,
         )))
     }
 

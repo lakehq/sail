@@ -20,7 +20,7 @@ pub struct SchemaPivotExec {
     input: Arc<dyn ExecutionPlan>,
     names: Vec<String>,
     schema: SchemaRef,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl SchemaPivotExec {
@@ -30,12 +30,12 @@ impl SchemaPivotExec {
             Partitioning::Hash(_phy_exprs, size) => Partitioning::UnknownPartitioning(*size),
             Partitioning::UnknownPartitioning(size) => Partitioning::UnknownPartitioning(*size),
         };
-        let properties = PlanProperties::new(
+        let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema.clone()),
             partitioning,
             input.pipeline_behavior(),
             input.boundedness(),
-        );
+        ));
         Self {
             input,
             names,
@@ -80,7 +80,7 @@ impl ExecutionPlan for SchemaPivotExec {
         Arc::clone(&self.schema)
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

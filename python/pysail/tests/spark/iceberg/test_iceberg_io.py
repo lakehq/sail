@@ -5,7 +5,7 @@ from pandas.testing import assert_frame_equal
 from pyiceberg.schema import Schema
 from pyiceberg.types import DoubleType, LongType, NestedField, StringType
 
-from pysail.tests.spark.utils import escape_sql_string_literal
+from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 
 @pytest.fixture

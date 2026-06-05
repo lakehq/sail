@@ -3,12 +3,14 @@ FROM mcr.microsoft.com/devcontainers/python:3.11
 
 ARG ZIG_VERSION=0.14.0
 
-RUN apt-get update && \
+RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
     apt-get install -y --no-install-recommends \
     curl \
     gcc \
     git \
+    krb5-user \
     libc6-dev \
+    libgssapi-krb5-2 \
     libprotobuf-dev \
     pkg-config \
     protobuf-compiler && \

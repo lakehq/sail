@@ -23,6 +23,10 @@ use serde::{Deserialize, Serialize};
 
 use super::transform::Transform;
 
+fn is_zero_i32(value: &i32) -> bool {
+    *value == 0
+}
+
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Copy, Clone)]
 /// Sort direction in a partition, either ascending or descending
 pub enum SortDirection {
@@ -66,7 +70,12 @@ impl Display for NullOrder {
 #[serde(rename_all = "kebab-case")]
 pub struct SortField {
     /// A source column id from the table’s schema
+    #[serde(default, skip_serializing_if = "is_zero_i32")]
     pub source_id: i32,
+    /// Source column ids for Iceberg v3 multi-argument transforms.
+    /// TODO(V3): Planning still evaluates sort transforms as single-source expressions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub source_ids: Vec<i32>,
     /// A transform that is used to produce values to be sorted on from the source column.
     pub transform: Transform,
     /// A sort direction, that can only be either asc or desc

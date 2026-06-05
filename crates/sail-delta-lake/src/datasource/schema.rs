@@ -21,103 +21,30 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{
-    DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef, SchemaRef as ArrowSchemaRef,
+    DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
 };
-use delta_kernel::engine::arrow_conversion::TryIntoArrow;
 
-use crate::kernel::snapshot::{EagerSnapshot, LogDataHandler, Snapshot};
-use crate::kernel::{DeltaResult, DeltaTableError};
-use crate::schema::arrow_schema_from_struct_type;
-use crate::table::DeltaTableState;
+use crate::kernel::snapshot::DeltaSnapshot;
+use crate::spec::DeltaResult;
 
-/// Convenience trait for calling common methods on snapshot hierarchies
-pub trait DataFusionMixins {
-    /// The physical datafusion schema of a table
-    fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef>;
-
-    /// Get the table schema as an [`ArrowSchemaRef`]
-    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef>;
-}
-
-impl DataFusionMixins for Snapshot {
-    fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        arrow_schema_impl(self, true)
-    }
-
-    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        arrow_schema_impl(self, false)
-    }
-}
-
-impl DataFusionMixins for EagerSnapshot {
-    fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        arrow_schema_from_struct_type(self.schema(), self.metadata().partition_columns(), true)
-    }
-
-    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        arrow_schema_from_struct_type(self.schema(), self.metadata().partition_columns(), false)
-    }
-}
-
-impl DataFusionMixins for DeltaTableState {
-    fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        Ok(Arc::new(self.schema().try_into_arrow()?))
-    }
-
-    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        self.arrow_schema()
-    }
-}
-
-impl DataFusionMixins for LogDataHandler<'_> {
-    fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        unimplemented!("arrow_schema for LogDataHandler");
-    }
-
-    fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        unimplemented!("input_schema for LogDataHandler");
-    }
-}
-
-fn arrow_schema_impl(snapshot: &Snapshot, wrap_partitions: bool) -> DeltaResult<ArrowSchemaRef> {
-    arrow_schema_from_struct_type(
-        snapshot.schema(),
-        snapshot.metadata().partition_columns(),
-        wrap_partitions,
-    )
-}
-
-/// The logical schema for a Deltatable is different from the protocol level schema since partition
-/// columns must appear at the end of the schema. This is to align with how partition are handled
-/// at the physical level
+/// Build the logical schema for a Delta table.
+///
+/// The base table fields preserve the Delta metadata schema order. DataFusion's file scan still
+/// uses an internal partition-last table schema; scan planning owns the conversion at that boundary.
 pub fn df_logical_schema(
-    snapshot: &DeltaTableState,
+    snapshot: &DeltaSnapshot,
     file_column_name: &Option<String>,
+    row_index_column_name: &Option<String>,
     commit_version_column_name: &Option<String>,
     commit_timestamp_column_name: &Option<String>,
-    schema: Option<ArrowSchemaRef>,
+    schema: Option<SchemaRef>,
 ) -> DeltaResult<SchemaRef> {
     let input_schema = match schema {
         Some(schema) => schema,
-        None => snapshot.input_schema()?,
+        None => Arc::new(snapshot.schema().clone()),
     };
-    let table_partition_cols = &snapshot.metadata().partition_columns();
 
-    let mut fields: Vec<Arc<Field>> = input_schema
-        .fields()
-        .iter()
-        .filter(|f| !table_partition_cols.contains(f.name()))
-        .cloned()
-        .collect();
-
-    for partition_col in table_partition_cols.iter() {
-        fields.push(Arc::new(
-            input_schema
-                .field_with_name(partition_col)
-                .map_err(|_| DeltaTableError::missing_column(partition_col))?
-                .to_owned(),
-        ));
-    }
+    let mut fields: Vec<Arc<Field>> = input_schema.fields().iter().cloned().collect();
 
     if let Some(file_column_name) = file_column_name {
         fields.push(Arc::new(Field::new(
@@ -139,6 +66,14 @@ pub fn df_logical_schema(
             commit_timestamp_column_name,
             ArrowDataType::Int64,
             true,
+        )));
+    }
+
+    if let Some(row_index_column_name) = row_index_column_name {
+        fields.push(Arc::new(Field::new(
+            row_index_column_name,
+            ArrowDataType::Int64,
+            false,
         )));
     }
 

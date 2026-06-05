@@ -12,6 +12,7 @@ use crate::resolver::PlanResolver;
 
 mod catalog;
 mod delete;
+mod delta;
 mod explain;
 mod function;
 mod insert;
@@ -24,6 +25,7 @@ mod write_v1;
 mod write_v2;
 
 impl PlanResolver<'_> {
+    /// Resolves a command plan into a logical plan.
     pub(super) async fn resolve_command_plan(
         &self,
         plan: spec::CommandPlan,
@@ -45,6 +47,18 @@ impl PlanResolver<'_> {
             CommandNode::ListDatabases { qualifier, pattern } => {
                 self.resolve_catalog_command(CatalogCommand::ListDatabases {
                     qualifier: qualifier.map(|x| x.into()).unwrap_or_default(),
+                    pattern,
+                })
+            }
+            CommandNode::ShowTables { database, pattern } => {
+                self.resolve_catalog_command(CatalogCommand::ShowTables {
+                    database: database.map(|x| x.into()).unwrap_or_default(),
+                    pattern,
+                })
+            }
+            CommandNode::ShowTableExtended { database, pattern } => {
+                self.resolve_catalog_command(CatalogCommand::ShowTableExtended {
+                    database: database.map(|x| x.into()).unwrap_or_default(),
                     pattern,
                 })
             }
@@ -256,7 +270,14 @@ impl PlanResolver<'_> {
                 };
                 self.resolve_command_delete(delete, state).await
             }
-            CommandNode::AlterTable { .. } => Err(PlanError::todo("CommandNode::AlterTable")),
+            CommandNode::AlterTable {
+                table,
+                if_exists,
+                operation,
+            } => {
+                self.resolve_delta_alter_table_or_catalog(table, if_exists, operation, state)
+                    .await
+            }
             CommandNode::AlterView { .. } => Err(PlanError::todo("CommandNode::AlterView")),
             CommandNode::LoadData { .. } => Err(PlanError::todo("CommandNode::LoadData")),
             CommandNode::AnalyzeTable { .. } => Err(PlanError::todo("CommandNode::AnalyzeTable")),
@@ -268,8 +289,11 @@ impl PlanResolver<'_> {
             CommandNode::DescribeCatalog { .. } => {
                 Err(PlanError::todo("CommandNode::DescribeCatalog"))
             }
-            CommandNode::DescribeDatabase { .. } => {
-                Err(PlanError::todo("CommandNode::DescribeDatabase"))
+            CommandNode::DescribeDatabase { database, extended } => {
+                self.resolve_catalog_command(CatalogCommand::DescribeDatabase {
+                    database: database.into(),
+                    extended,
+                })
             }
             CommandNode::DescribeTable {
                 table,

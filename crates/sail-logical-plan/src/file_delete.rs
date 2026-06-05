@@ -4,6 +4,7 @@ use std::sync::Arc;
 use datafusion_common::{DFSchema, DFSchemaRef};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use educe::Educe;
+use sail_common_datafusion::datasource::OptionLayer;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::utils::items::ItemTaker;
 
@@ -13,7 +14,7 @@ pub struct FileDeleteOptions {
     pub path: String,
     pub format: String,
     pub condition: Option<ExprWithSource>,
-    pub options: Vec<Vec<(String, String)>>,
+    pub options: Vec<OptionLayer>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]

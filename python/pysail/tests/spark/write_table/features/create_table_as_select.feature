@@ -78,7 +78,7 @@ Feature: CREATE TABLE AS SELECT
       CREATE TABLE ctas_csv_table
       USING CSV
       LOCATION {{ location.sql }}
-      OPTIONS (header 'false', delimiter '|')
+      TBLPROPERTIES ('option.header' = 'false', 'option.delimiter' = '|')
       AS SELECT * FROM VALUES
         (1, 'Alice', 10.5),
         (2, 'Bob', 20.75),
@@ -197,3 +197,43 @@ Feature: CREATE TABLE AS SELECT
       | id | name |
       | 1  | Alice |
       | 2  | Bob   |
+
+
+  Scenario: CREATE OR REPLACE TABLE AS SELECT replaces existing data
+    Given variable location for temporary directory ctas_replace_table
+    Given final statement
+      """
+      DROP TABLE IF EXISTS ctas_replace_table
+      """
+    Given statement template
+      """
+      CREATE TABLE ctas_replace_table
+      USING DELTA
+      LOCATION {{ location.sql }}
+      AS SELECT * FROM VALUES
+        (1, 'Alice')
+      AS t(id, name)
+      """
+    When query
+      """
+      SELECT * FROM ctas_replace_table ORDER BY id
+      """
+    Then query result ordered
+      | id | name |
+      | 1  | Alice |
+    Given statement template
+      """
+      CREATE OR REPLACE TABLE ctas_replace_table
+      USING DELTA
+      LOCATION {{ location.sql }}
+      AS SELECT * FROM VALUES
+        (2, 'Bob')
+      AS t(id, name)
+      """
+    When query
+      """
+      SELECT * FROM ctas_replace_table ORDER BY id
+      """
+    Then query result ordered
+      | id | name |
+      | 2  | Bob  |

@@ -1,0 +1,7 @@
+>>> df = spark.createDataFrame([(2, "Alice"), (5, "Bob")], ["age", "name"])
+>>> df._ipython_key_completions_()
+['age', 'name']
+
+>>> df = spark.createDataFrame([(2, "Alice"), (5, "Bob")], ["age 1", "name?1"])
+>>> df._ipython_key_completions_()
+['age 1', 'name?1']

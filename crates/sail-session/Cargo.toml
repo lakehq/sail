@@ -16,6 +16,7 @@ sail-catalog-iceberg = { path = "../sail-catalog-iceberg" }
 sail-catalog-unity = { path = "../sail-catalog-unity" }
 sail-catalog-onelake = { path = "../sail-catalog-onelake" }
 sail-catalog-glue = { path = "../sail-catalog-glue" }
+sail-catalog-hms = { path = "../sail-catalog-hms" }
 sail-data-source = { path = "../sail-data-source" }
 sail-delta-lake = { path = "../sail-delta-lake" }
 sail-iceberg = { path = "../sail-iceberg" }
@@ -47,4 +48,3 @@ tokio = { workspace = true }
 chrono = { workspace = true }
 indexmap = { workspace = true }
 futures = { workspace = true }
-

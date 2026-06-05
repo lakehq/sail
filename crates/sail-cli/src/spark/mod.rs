@@ -1,4 +1,5 @@
 mod mcp_server;
+pub(crate) mod run;
 mod server;
 mod shell;
 

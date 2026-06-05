@@ -1,0 +1,103 @@
+# References:
+#   - https://spark.apache.org/docs/latest/sql-data-sources-text.html
+
+- key: whole_text
+  description: |
+    If true, read each file from input path(s) as a single row.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
+  supported: true
+  rust_type: bool
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - whole_text
+        - wholeText
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - option.whole_text
+        - option.wholeText
+      parser: crate::options::parsers::parse_bool
+
+- key: line_sep
+  description: |
+    Sets the single character line separator that should be used for parsing.
+    Supports \\r, \\r\\n and \\n.
+    For reading, defaults to None (CRLF: \\r, \\r\\n and \\n).
+  default:
+    value: ""
+    parser: crate::options::parsers::parse_optional_char
+  supported: true
+  rust_type: "Option<char>"
+  scopes:
+    - read
+  origins:
+    - type: option
+      keys:
+        - line_sep
+        - lineSep
+        - terminator
+      parser: crate::options::parsers::parse_optional_char
+    - type: table_property
+      keys:
+        - option.line_sep
+        - option.lineSep
+        - option.terminator
+      parser: crate::options::parsers::parse_optional_char
+
+- key: line_sep
+  description: |
+    Sets the single character line separator that should be used for writing.
+    Supports \\r, \\r\\n and \\n.
+    For writing, defaults to \\n.
+  default:
+    value: "\n"
+    parser: crate::options::parsers::parse_char
+  supported: true
+  rust_type: char
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - line_sep
+        - lineSep
+        - terminator
+      parser: crate::options::parsers::parse_char
+    - type: table_property
+      keys:
+        - option.line_sep
+        - option.lineSep
+        - option.terminator
+      parser: crate::options::parsers::parse_char
+
+- key: compression
+  description: |
+    Specifies the file compression type. The following case-insensitive compression types are supported:
+      - `"NONE"`, `"UNCOMPRESSED"`, or `""`
+      - `"BZIP2"` or `"BZ2"`
+      - `"GZIP"` or `"GZ"`
+      - `"ZSTD"` or `"ZST"`
+      - `"XZ"`
+  default:
+    value: "UNCOMPRESSED"
+    parser: crate::options::parsers::parse_string
+  supported: true
+  rust_type: String
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - compression
+        - codec
+      parser: crate::options::parsers::parse_string
+    - type: table_property
+      keys:
+        - option.compression
+        - option.codec
+      parser: crate::options::parsers::parse_string

@@ -59,7 +59,7 @@ jobs:
 
       - name: Install grpc_health_probe
         run: |
-          wget -q -O /usr/local/bin/grpc_health_probe "https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.4.26/grpc_health_probe-linux-amd64"
+          wget -q -O /usr/local/bin/grpc_health_probe "https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/v0.4.48/grpc_health_probe-linux-amd64"
           chmod +x /usr/local/bin/grpc_health_probe
           grpc_health_probe -version
 
@@ -80,12 +80,14 @@ jobs:
           TEST_RUN_GIT_COMMIT: ${{ github.sha }}
           TEST_RUN_GIT_REF: ${{ github.ref }}
         run: |
-          hatch run test-ibis:env SPARK_REMOTE="sc://localhost:50051" scripts/spark-tests/run-tests.sh || true
+          hatch run test-ibis:env scripts/spark-tests/run-tests.sh || true
 
       - name: Shutdown Spark Connect Server
         if: ${{ !cancelled() }}
+        # TODO: investigate if the sleep is still needed for grcov
         run: |
           scripts/spark-tests/stop-server.sh
+          sleep 10
 
       # Generate coverage report after Ibis tests
       - name: Generate coverage report

@@ -21,3 +21,13 @@
 
 - name: execution.expression.name
   description: The name of the expression.
+
+- name: flight.statement.type
+  description: |
+    The type of Flight SQL statement.
+    Valid values are "query" and "command".
+
+- name: flight.statement.status
+  description: |
+    The status of Flight SQL statement execution.
+    Valid values are "success", "error", and "incomplete".

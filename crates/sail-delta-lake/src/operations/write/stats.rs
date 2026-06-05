@@ -19,37 +19,43 @@
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/writer/stats.rs>
 
 use std::cmp::min;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ops::{AddAssign, Not};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use delta_kernel::expressions::Scalar;
+use datafusion::common::scalar::ScalarValue;
 use indexmap::IndexMap;
 use log::warn;
 use parquet::basic::{LogicalType, TimeUnit, Type};
 use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use parquet::file::statistics::Statistics;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
+use parquet_variant::{ObjectBuilder, VariantBuilder};
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 
-use crate::kernel::models::{Add, ColumnCountStat, ColumnValueStat, ScalarExt, Stats};
-use crate::kernel::DeltaTableError;
+use crate::conversion::ScalarExt;
+use crate::deletion_vector::z85;
+use crate::spec::{
+    Add, ColumnCountStat, ColumnValueStat, DeltaError as DeltaTableError, StatValue, Stats,
+};
 
 /// Creates an [`Add`] log action struct with statistics.
 pub fn create_add(
-    partition_values: &IndexMap<String, Scalar>,
+    partition_values: &IndexMap<String, ScalarValue>,
     path: String,
     size: i64,
     file_metadata: &ParquetMetaData,
     num_indexed_cols: i32,
     stats_columns: &Option<Vec<String>>,
+    stats_excluded_columns: &HashSet<String>,
 ) -> Result<Add, DeltaTableError> {
     let stats = stats_from_file_metadata(
         partition_values,
         file_metadata,
         num_indexed_cols,
         stats_columns,
+        stats_excluded_columns,
     )?;
     let stats_string = stats
         .to_json_string()
@@ -82,6 +88,9 @@ pub fn create_add(
         stats: Some(stats_string),
         tags: None,
         deletion_vector: None,
+        // TODO(row-tracking): Keep row IDs unset until writer-side high-water-mark allocation is
+        // implemented. Now row-tracking tables are still rejected by commit-time protocol
+        // checks.
         base_row_id: None,
         default_row_commit_version: None,
         clustering_provider: None,
@@ -91,10 +100,11 @@ pub fn create_add(
 }
 /// Creates stats from parquet metadata already in memory
 pub fn stats_from_parquet_metadata(
-    partition_values: &IndexMap<String, Scalar>,
+    partition_values: &IndexMap<String, ScalarValue>,
     parquet_metadata: &ParquetMetaData,
     num_indexed_cols: i32,
     stats_columns: &Option<Vec<String>>,
+    stats_excluded_columns: &HashSet<String>,
 ) -> Result<Stats, DeltaTableError> {
     let num_rows = parquet_metadata.file_metadata().num_rows();
     let schema_descriptor = parquet_metadata.file_metadata().schema_descr_ptr();
@@ -107,14 +117,16 @@ pub fn stats_from_parquet_metadata(
         num_rows,
         num_indexed_cols,
         stats_columns,
+        stats_excluded_columns,
     )
 }
 
 fn stats_from_file_metadata(
-    partition_values: &IndexMap<String, Scalar>,
+    partition_values: &IndexMap<String, ScalarValue>,
     file_metadata: &ParquetMetaData,
     num_indexed_cols: i32,
     stats_columns: &Option<Vec<String>>,
+    stats_excluded_columns: &HashSet<String>,
 ) -> Result<Stats, DeltaTableError> {
     let schema_descriptor = file_metadata.file_metadata().schema_descr();
     let row_group_metadata: Vec<RowGroupMetaData> = file_metadata.row_groups().to_vec();
@@ -126,16 +138,18 @@ fn stats_from_file_metadata(
         file_metadata.file_metadata().num_rows(),
         num_indexed_cols,
         stats_columns,
+        stats_excluded_columns,
     )
 }
 
 fn stats_from_metadata(
-    partition_values: &IndexMap<String, Scalar>,
+    partition_values: &IndexMap<String, ScalarValue>,
     schema_descriptor: Arc<SchemaDescriptor>,
     row_group_metadata: Vec<RowGroupMetaData>,
     num_rows: i64,
     num_indexed_cols: i32,
     stats_columns: &Option<Vec<String>>,
+    stats_excluded_columns: &HashSet<String>,
 ) -> Result<Stats, DeltaTableError> {
     let mut min_values: HashMap<String, ColumnValueStat> = HashMap::new();
     let mut max_values: HashMap<String, ColumnValueStat> = HashMap::new();
@@ -145,8 +159,13 @@ fn stats_from_metadata(
         let column_descr = schema_descriptor.column(idx);
         let column_path = column_descr.path();
         let column_path_parts = column_path.parts();
+        let Some(top_level_column) = column_path_parts.first() else {
+            return Ok(());
+        };
 
-        if partition_values.contains_key(&column_path_parts[0]) {
+        if partition_values.contains_key(top_level_column)
+            || stats_excluded_columns.contains(top_level_column)
+        {
             return Ok(());
         }
 
@@ -218,12 +237,247 @@ fn stats_from_metadata(
         }
     }
 
+    apply_variant_stats_from_footer(
+        partition_values,
+        schema_descriptor.as_ref(),
+        &row_group_metadata,
+        stats_excluded_columns,
+        &mut min_values,
+        &mut max_values,
+        &mut null_count,
+    )?;
+
     Ok(Stats {
         min_values,
         max_values,
         num_records: num_rows,
         null_count,
+        tight_bounds: true,
     })
+}
+
+fn apply_variant_stats_from_footer(
+    partition_values: &IndexMap<String, ScalarValue>,
+    schema_descriptor: &SchemaDescriptor,
+    row_group_metadata: &[RowGroupMetaData],
+    stats_excluded_columns: &HashSet<String>,
+    min_values: &mut HashMap<String, ColumnValueStat>,
+    max_values: &mut HashMap<String, ColumnValueStat>,
+    null_counts: &mut HashMap<String, ColumnCountStat>,
+) -> Result<(), DeltaTableError> {
+    if stats_excluded_columns.is_empty() {
+        return Ok(());
+    }
+
+    let column_indices = schema_descriptor
+        .columns()
+        .iter()
+        .enumerate()
+        .map(|(index, column)| (column.path().parts().to_vec(), index))
+        .collect::<HashMap<_, _>>();
+
+    for top_level_column in stats_excluded_columns {
+        if partition_values.contains_key(top_level_column) {
+            continue;
+        }
+        let metadata_path = vec![top_level_column.clone(), "metadata".to_string()];
+        if let Some(index) = column_indices.get(&metadata_path) {
+            let null_count = row_group_metadata
+                .iter()
+                .filter_map(|group| group.column(*index).statistics())
+                .filter_map(|stats| stats.null_count_opt())
+                .sum::<u64>();
+            null_counts.insert(
+                top_level_column.clone(),
+                ColumnCountStat::Value(null_count as i64),
+            );
+        }
+    }
+
+    let mut variant_min_values: HashMap<String, BTreeMap<String, StatsScalar>> = HashMap::new();
+    let mut variant_max_values: HashMap<String, BTreeMap<String, StatsScalar>> = HashMap::new();
+
+    for (typed_value_index, column_descr) in schema_descriptor.columns().iter().enumerate() {
+        let typed_value_path = column_descr.path().parts();
+        if typed_value_path.last().map(String::as_str) != Some("typed_value") {
+            continue;
+        }
+
+        let Some(top_level_column) = typed_value_path.first() else {
+            continue;
+        };
+        if !stats_excluded_columns.contains(top_level_column)
+            || partition_values.contains_key(top_level_column)
+        {
+            continue;
+        }
+
+        let leaf_path = typed_value_path
+            .iter()
+            .take(typed_value_path.len() - 1)
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut value_path = leaf_path.clone();
+        value_path.push("value".to_string());
+        let Some(value_index) = column_indices.get(&value_path) else {
+            continue;
+        };
+
+        let remaining_path = leaf_path.iter().skip(1).cloned().collect::<Vec<_>>();
+        if contains_variant_array_path(&remaining_path) {
+            continue;
+        }
+
+        let mut aggregated: Option<AggregatedStats> = None;
+        let mut valid = true;
+        for group in row_group_metadata {
+            let value_null_count = group
+                .column(*value_index)
+                .statistics()
+                .and_then(|stats| stats.null_count_opt())
+                .unwrap_or_default();
+            if value_null_count != group.num_rows() as u64 {
+                valid = false;
+                break;
+            }
+
+            if let Some(stats) = group.column(typed_value_index).statistics() {
+                let next = AggregatedStats::from((stats, column_descr.logical_type_ref()));
+                if let Some(current) = aggregated.as_mut() {
+                    *current += next;
+                } else {
+                    aggregated = Some(next);
+                }
+            }
+        }
+        if !valid {
+            continue;
+        }
+
+        let Some(aggregated) = aggregated else {
+            continue;
+        };
+        let path = normalized_variant_stats_path(&remaining_path)?;
+        if let Some(min) = aggregated.min.and_then(variant_stats_scalar) {
+            variant_min_values
+                .entry(top_level_column.clone())
+                .or_default()
+                .insert(path.clone(), min);
+        }
+        if let Some(max) = aggregated.max.and_then(variant_stats_scalar) {
+            variant_max_values
+                .entry(top_level_column.clone())
+                .or_default()
+                .insert(path, max);
+        }
+    }
+
+    for (column, values) in variant_min_values {
+        if let Some(encoded) = encode_variant_stats_object(values)? {
+            min_values.insert(column, ColumnValueStat::Value(StatValue::String(encoded)));
+        }
+    }
+    for (column, values) in variant_max_values {
+        if let Some(encoded) = encode_variant_stats_object(values)? {
+            max_values.insert(column, ColumnValueStat::Value(StatValue::String(encoded)));
+        }
+    }
+
+    Ok(())
+}
+
+fn contains_variant_array_path(path: &[String]) -> bool {
+    path.windows(2)
+        .any(|parts| parts[0] == "list" && parts[1] == "element")
+}
+
+fn normalized_variant_stats_path(path: &[String]) -> Result<String, DeltaTableError> {
+    if path.is_empty() {
+        return Ok("$".to_string());
+    }
+
+    let mut result = String::from("$");
+    for (index, part) in path.iter().enumerate() {
+        if index % 2 == 0 {
+            if part != "typed_value" {
+                return Err(DeltaTableError::generic(format!(
+                    "invalid shredded variant stats path: expected typed_value, got {part}"
+                )));
+            }
+        } else {
+            result.push_str("['");
+            result.push_str(&escape_variant_stats_path_field(part));
+            result.push_str("']");
+        }
+    }
+    Ok(result)
+}
+
+fn escape_variant_stats_path_field(field: &str) -> String {
+    let mut escaped = String::with_capacity(field.len());
+    for c in field.chars() {
+        match c {
+            '\\' => escaped.push_str("\\\\"),
+            '\'' => escaped.push_str("\\'"),
+            '\u{08}' => escaped.push_str("\\b"),
+            '\u{0c}' => escaped.push_str("\\f"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            c if (c as u32) < 0x20 => escaped.push_str(&format!("\\u{:04x}", c as u32)),
+            c => escaped.push(c),
+        }
+    }
+    escaped
+}
+
+fn variant_stats_scalar(scalar: StatsScalar) -> Option<StatsScalar> {
+    match scalar {
+        StatsScalar::Boolean(_)
+        | StatsScalar::Bytes(_)
+        | StatsScalar::Decimal(_)
+        | StatsScalar::Uuid(_) => None,
+        scalar => Some(scalar),
+    }
+}
+
+fn encode_variant_stats_object(
+    values: BTreeMap<String, StatsScalar>,
+) -> Result<Option<String>, DeltaTableError> {
+    if values.is_empty() {
+        return Ok(None);
+    }
+
+    let mut builder = VariantBuilder::new();
+    {
+        let mut object = builder.new_object();
+        for (path, value) in values {
+            insert_variant_stats_field(&mut object, &path, value);
+        }
+        object.finish();
+    }
+    let (metadata, value) = builder.finish();
+    let mut combined = Vec::with_capacity(metadata.len() + value.len());
+    combined.extend_from_slice(&metadata);
+    combined.extend_from_slice(&value);
+    z85::z85_encode_padded(&combined).map(Some)
+}
+
+fn insert_variant_stats_field(object: &mut ObjectBuilder<'_, ()>, path: &str, value: StatsScalar) {
+    match value {
+        StatsScalar::Int32(value) => object.insert(path, value),
+        StatsScalar::Int64(value) => object.insert(path, value),
+        StatsScalar::Float32(value) => object.insert(path, value),
+        StatsScalar::Float64(value) => object.insert(path, value),
+        StatsScalar::Date(value) => object.insert(path, value),
+        StatsScalar::Timestamp(value) => object.insert(path, value.and_utc()),
+        StatsScalar::TimestampNtz(value) => object.insert(path, value),
+        StatsScalar::String(value) => object.insert(path, value.as_str()),
+        StatsScalar::Boolean(_)
+        | StatsScalar::Decimal(_)
+        | StatsScalar::Bytes(_)
+        | StatsScalar::Uuid(_) => {}
+    }
 }
 
 /// Logical scalars extracted from statistics for ordering purposes
@@ -393,23 +647,29 @@ pub fn sign_extend_be<const N: usize>(b: &[u8]) -> [u8; N] {
     result
 }
 
-impl From<StatsScalar> for serde_json::Value {
+impl From<StatsScalar> for StatValue {
     fn from(scalar: StatsScalar) -> Self {
         match scalar {
-            StatsScalar::Boolean(v) => serde_json::Value::Bool(v),
-            StatsScalar::Int32(v) => serde_json::Value::from(v),
-            StatsScalar::Int64(v) => serde_json::Value::from(v),
-            StatsScalar::Float32(v) => serde_json::Value::from(v),
-            StatsScalar::Float64(v) => serde_json::Value::from(v),
-            StatsScalar::Date(v) => serde_json::Value::from(v.format("%Y-%m-%d").to_string()),
+            StatsScalar::Boolean(v) => StatValue::Boolean(v),
+            StatsScalar::Int32(v) => StatValue::Number(v.into()),
+            StatsScalar::Int64(v) => StatValue::Number(v.into()),
+            StatsScalar::Float32(v) => serde_json::Number::from_f64(v as f64)
+                .map(StatValue::Number)
+                .unwrap_or_else(|| StatValue::String(v.to_string())),
+            StatsScalar::Float64(v) => serde_json::Number::from_f64(v)
+                .map(StatValue::Number)
+                .unwrap_or_else(|| StatValue::String(v.to_string())),
+            StatsScalar::Date(v) => StatValue::String(v.format("%Y-%m-%d").to_string()),
             StatsScalar::Timestamp(v) => {
-                serde_json::Value::from(v.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
+                StatValue::String(v.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
             }
             StatsScalar::TimestampNtz(v) => {
-                serde_json::Value::from(v.format("%Y-%m-%dT%H:%M:%S%.f").to_string())
+                StatValue::String(v.format("%Y-%m-%dT%H:%M:%S%.f").to_string())
             }
-            StatsScalar::Decimal(v) => serde_json::Value::from(v),
-            StatsScalar::String(v) => serde_json::Value::from(v),
+            StatsScalar::Decimal(v) => serde_json::Number::from_f64(v)
+                .map(StatValue::Number)
+                .unwrap_or_else(|| StatValue::String(v.to_string())),
+            StatsScalar::String(v) => StatValue::String(v),
             StatsScalar::Bytes(v) => {
                 let escaped_bytes = v
                     .into_iter()
@@ -417,10 +677,16 @@ impl From<StatsScalar> for serde_json::Value {
                     .collect::<Vec<u8>>();
                 // escape_default always produces valid ASCII so we can use from_utf8_lossy here
                 let escaped_string = String::from_utf8_lossy(escaped_bytes.as_slice()).into_owned();
-                serde_json::Value::from(escaped_string)
+                StatValue::String(escaped_string)
             }
-            StatsScalar::Uuid(v) => serde_json::Value::from(v.hyphenated().to_string()),
+            StatsScalar::Uuid(v) => StatValue::String(v.hyphenated().to_string()),
         }
+    }
+}
+
+impl From<StatsScalar> for serde_json::Value {
+    fn from(scalar: StatsScalar) -> Self {
+        StatValue::from(scalar).into()
     }
 }
 

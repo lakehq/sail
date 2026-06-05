@@ -197,6 +197,7 @@ impl StreamUDF for PySparkUDTF {
                     py,
                     udtf,
                     &self.input_names,
+                    &self.input_types,
                     self.passthrough_columns,
                     &self.output_schema,
                     &self.config,

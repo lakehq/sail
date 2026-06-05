@@ -6,6 +6,8 @@ use crate::spec::data_type::DataType;
 use crate::spec::literal::Literal;
 use crate::spec::{QueryPlan, TimestampType};
 
+pub const DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID: &str = "__sail_default_column_value__";
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Expr {
@@ -63,7 +65,13 @@ pub enum Expr {
         function_name: ObjectName,
         arguments: Vec<Expr>,
     },
+    /// A named argument expression (e.g., `func(key=value)` in Python UDF kwargs)
+    NamedArgument {
+        key: String,
+        value: Box<Expr>,
+    },
     // extensions
+    DefaultColumnValue,
     Placeholder(String),
     Rollup(Vec<Expr>),
     Cube(Vec<Expr>),
@@ -338,7 +346,9 @@ pub struct CommonInlineUserDefinedTableFunction {
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum TableFunctionDefinition {
     PythonUdtf {
-        return_type: DataType,
+        /// The return type of the UDTF. When `None`, the UDTF uses an `analyze` static method
+        /// to determine the return type dynamically at query analysis time.
+        return_type: Option<DataType>,
         eval_type: PySparkUdfType,
         command: Vec<u8>,
         python_version: String,
@@ -376,8 +386,22 @@ pub enum PySparkUdfType {
     GroupedMapPandasWithState = 208,
     GroupedMapArrow = 209,
     CogroupedMapArrow = 210,
+    TransformWithStatePandas = 211,
+    TransformWithStatePandasInitState = 212,
+    TransformWithStatePythonRow = 213,
+    TransformWithStatePythonRowInitState = 214,
+    GroupedMapArrowIter = 215,
+    GroupedMapPandasIter = 216,
+    GroupedAggPandasIter = 217,
+    // Spark 4.0 Arrow-native UDF types (Arrow-in, Arrow-out — no Pandas conversion)
+    ScalarArrow = 250,
+    ScalarArrowIter = 251,
+    GroupedAggArrow = 252,
+    WindowAggArrow = 253,
+    GroupedAggArrowIter = 254,
     Table = 300,
     ArrowTable = 301,
+    ArrowUdtf = 302,
 }
 
 impl PySparkUdfType {
@@ -386,7 +410,10 @@ impl PySparkUdfType {
     }
 
     pub fn is_table_function(&self) -> bool {
-        matches!(self, PySparkUdfType::Table | PySparkUdfType::ArrowTable)
+        matches!(
+            self,
+            PySparkUdfType::Table | PySparkUdfType::ArrowTable | PySparkUdfType::ArrowUdtf
+        )
     }
 }
 

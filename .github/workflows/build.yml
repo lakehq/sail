@@ -141,6 +141,16 @@ jobs:
       - setup
       - rust-build
 
+  catalog-tests:
+    name: Catalog Integration Tests
+    if: ${{ needs.setup.outputs.build_package == 'true' && needs.setup.outputs.run_catalog_tests == 'true' }}
+    uses: ./.github/workflows/catalog-tests.yml
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    needs:
+      - setup
+      - rust-build
+
   codecov-notify:
     name: Codecov Notify
     if: ${{ !cancelled() && github.actor != 'dependabot[bot]' }}
@@ -150,6 +160,7 @@ jobs:
       - python-tests
       - spark-tests
       - ibis-tests
+      - catalog-tests
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:

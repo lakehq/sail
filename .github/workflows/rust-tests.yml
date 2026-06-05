@@ -40,7 +40,7 @@ jobs:
           mkdir -p target/llvm-profiles/rust-slow
 
       - name: Run Cargo Test
-        run: cargo nextest run
+        run: cargo nextest run --no-fail-fast
 
       # Generate coverage report after unit tests (runs in PRs and pushes)
       - name: Generate Rust unit coverage report
@@ -66,6 +66,14 @@ jobs:
           name: rust-unit-tests
           fail_ci_if_error: true
           env_vars: OS
+
+      - name: Install Kerberos client tools
+        if: ${{ inputs.run_catalog_tests == 'true' }}
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            krb5-user \
+            libgssapi-krb5-2
 
       - name: Run Cargo Test (Ignored)
         if: ${{ inputs.run_catalog_tests == 'true' }}

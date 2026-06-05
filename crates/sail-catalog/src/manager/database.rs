@@ -53,6 +53,17 @@ impl CatalogManager {
         provider.get_database(&database).await
     }
 
+    /// Gets the database status for a given qualifier.
+    /// The qualifier is the table name parts except the last part (the table name itself).
+    /// If the qualifier is empty, the default database is used.
+    pub async fn get_database_by_qualifier<T: AsRef<str>>(
+        &self,
+        qualifier: &[T],
+    ) -> CatalogResult<DatabaseStatus> {
+        let (provider, database) = self.resolve_database_by_qualifier(qualifier)?;
+        provider.get_database(&database).await
+    }
+
     pub async fn list_databases<T: AsRef<str>>(
         &self,
         qualifier: &[T],

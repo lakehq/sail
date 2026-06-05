@@ -19,6 +19,7 @@
 
 pub mod avro_utils;
 pub mod catalog;
+pub mod delete_index;
 pub mod encrypted_key;
 pub mod manifest;
 pub mod manifest_list;
@@ -33,6 +34,7 @@ pub mod types;
 pub mod views;
 
 pub use catalog::*;
+pub use delete_index::*;
 pub use encrypted_key::*;
 pub use manifest::*;
 pub use manifest_list::*;

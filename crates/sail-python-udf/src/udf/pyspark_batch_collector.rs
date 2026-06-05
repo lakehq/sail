@@ -64,6 +64,7 @@ impl AggregateUDFImpl for PySparkBatchCollectorUDF {
             self.input_types.clone(),
             get_struct_array_type(&self.input_types, &self.input_names)?,
             aggregator,
+            self.input_types.len(), // all inputs are real (no dummy)
         )))
     }
 

@@ -6,6 +6,8 @@ use datafusion_expr::{build_join_schema, Expr, Extension, LogicalPlan, SubqueryA
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::TableKind;
+use sail_common_datafusion::column_features::ColumnFeatures;
+use sail_common_datafusion::datasource::OptionLayer;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_logical_plan::merge::{
@@ -61,6 +63,19 @@ impl PlanResolver<'_> {
 
         let target_schema = target_plan.schema();
         let source_schema = source_plan.schema();
+        if target_schema.fields().iter().any(|field| {
+            ColumnFeatures::from_map(field.metadata())
+                .identity()
+                .is_some()
+        }) {
+            return Err(PlanError::unsupported(
+                "MERGE INTO tables with Delta identity columns is not yet supported",
+            ));
+        }
+
+        // Capture the user-facing field names before further resolution pollutes the state.
+        let resolved_target_field_names = Self::get_field_names(target_schema, state)?;
+        let resolved_source_field_names = Self::get_field_names(source_schema, state)?;
 
         // Register synthetic plan ids for both sides. These are only used to disambiguate
         // unqualified attributes when the Connect proto omits `plan_id`.
@@ -100,6 +115,23 @@ impl PlanResolver<'_> {
             )
             .await?;
 
+        let generated_column_exprs = self
+            .resolve_delta_merge_generated_column_exprs(
+                target_schema,
+                source_schema,
+                &merge_schema,
+                state,
+            )
+            .await?;
+        let check_constraint_exprs = self
+            .resolve_delta_merge_check_constraints(
+                &target_metadata.format,
+                &target_metadata.options,
+                target_schema,
+                state,
+            )
+            .await?;
+
         let options = MergeIntoOptions {
             target_alias: target_alias_string,
             source_alias: source_alias_string,
@@ -107,6 +139,8 @@ impl PlanResolver<'_> {
             with_schema_evolution,
             resolved_target_schema: target_schema.clone(),
             resolved_source_schema: source_schema.clone(),
+            resolved_target_field_names,
+            resolved_source_field_names,
             on_condition: ExprWithSource::new(on_condition, on_condition_source),
             matched_clauses,
             not_matched_by_source_clauses: not_matched_by_source,
@@ -114,6 +148,8 @@ impl PlanResolver<'_> {
             join_key_pairs,
             residual_predicates,
             target_only_predicates,
+            generated_column_exprs,
+            check_constraint_exprs,
         };
 
         Ok(LogicalPlan::Extension(Extension {
@@ -468,7 +504,7 @@ impl PlanResolver<'_> {
                 location,
                 format,
                 partition_by,
-                options,
+                properties,
                 ..
             } => {
                 let location = location.ok_or_else(|| {
@@ -478,8 +514,8 @@ impl PlanResolver<'_> {
                     table_name: table.clone().into(),
                     format,
                     location,
-                    partition_by,
-                    options: vec![options],
+                    partition_by: partition_by.into_iter().map(|field| field.column).collect(),
+                    options: vec![OptionLayer::TablePropertyList { items: properties }],
                 })
             }
             _ => Err(PlanError::unsupported(
@@ -501,7 +537,8 @@ fn merge_schema_has_column_name(
     })
 }
 
-fn merge_disambiguate_unqualified_plan_ids(
+/// Disambiguate column references in a generation expression for MERGE INSERT/UPDATE context.
+pub(super) fn merge_disambiguate_unqualified_plan_ids(
     expr: spec::Expr,
     state: &PlanResolverState,
     target_schema: &datafusion_common::DFSchemaRef,
@@ -683,7 +720,7 @@ fn merge_disambiguate_unqualified_plan_ids(
                 })
                 .collect(),
         },
-        Expr::Placeholder(_) => expr,
+        Expr::DefaultColumnValue | Expr::Placeholder(_) => expr,
         Expr::Rollup(exprs) => Expr::Rollup(
             exprs
                 .into_iter()
@@ -911,6 +948,16 @@ fn merge_disambiguate_unqualified_plan_ids(
                 })
                 .collect(),
             negated,
+        },
+        // NamedArgument is not expected in MERGE statements; pass through unchanged
+        Expr::NamedArgument { key, value } => Expr::NamedArgument {
+            key,
+            value: Box::new(merge_disambiguate_unqualified_plan_ids(
+                *value,
+                state,
+                target_schema,
+                source_schema,
+            )),
         },
     }
 }

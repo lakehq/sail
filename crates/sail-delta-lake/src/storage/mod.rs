@@ -26,24 +26,17 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::execution::context::TaskContext;
 use datafusion_common::{DataFusionError, Result as DataFusionResult};
-use delta_kernel::engine::default::executor::tokio::{
-    TokioBackgroundExecutor, TokioMultiThreadExecutor,
-};
-use delta_kernel::engine::default::DefaultEngine;
-use delta_kernel::path::ParsedLogPath;
-use delta_kernel::{Engine, Error as KernelError, FileMeta, LogPath};
-use futures::TryStreamExt;
 use log::{debug, error};
 use object_store::path::Path;
-use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore, PutMode, PutOptions};
+use object_store::{Error as ObjectStoreError, ObjectStore, ObjectStoreExt, PutMode, PutOptions};
 use serde_json::Deserializer as JsonDeserializer;
-use tokio::runtime::{Handle, RuntimeFlavor};
 use url::Url;
 use uuid::Uuid;
 
-use crate::kernel::models::Action;
-use crate::kernel::transaction::TransactionError;
-use crate::kernel::{DeltaResult, DeltaTableError};
+use crate::delta_log::latest_version_from_listing;
+use crate::spec::{
+    commit_path, Action, DeltaError as DeltaTableError, DeltaError, DeltaResult, TransactionError,
+};
 
 mod config;
 
@@ -63,12 +56,6 @@ pub fn get_object_store_from_context(
         .get_store(table_url)
         .map_err(|e| DataFusionError::External(Box::new(e)))
 }
-
-const DELTA_LOG_FOLDER: &str = "_delta_log";
-static DELTA_LOG_PATH: LazyLock<Path> = LazyLock::new(|| Path::from(DELTA_LOG_FOLDER));
-#[expect(clippy::expect_used)]
-static DUMMY_TABLE_ROOT: LazyLock<Url> =
-    LazyLock::new(|| Url::parse("memory:///").expect("memory URI must be valid"));
 
 /// Holder for temporary commit paths or prepared bytes.
 #[derive(Clone)]
@@ -112,24 +99,6 @@ pub fn default_logstore(
             options: options.clone(),
         },
     ))
-}
-
-/// Extract version from an object store entry in the delta log.
-fn extract_version_from_meta(meta: &ObjectMeta) -> Option<i64> {
-    let location = DUMMY_TABLE_ROOT.join(meta.location.as_ref()).ok()?;
-    let file_meta = FileMeta {
-        location,
-        last_modified: meta.last_modified.timestamp_millis(),
-        size: meta.size,
-    };
-    let log_path = LogPath::try_new(file_meta).ok()?;
-    let parsed_path: ParsedLogPath = log_path.into();
-    i64::try_from(parsed_path.version).ok()
-}
-
-/// Return the `_delta_log` commit URI for the given version.
-pub fn commit_uri_from_version(version: i64) -> Path {
-    Path::from_iter([DELTA_LOG_FOLDER, &format!("{version:020}.json")])
 }
 
 /// Reads a commit and gets list of actions.
@@ -186,12 +155,6 @@ pub trait LogStore: Send + Sync {
     /// Get the root object store (without table prefix).
     fn root_object_store(&self, operation_id: Option<Uuid>) -> Arc<dyn ObjectStore>;
 
-    /// Obtain the kernel engine for this log store.
-    fn engine(&self, operation_id: Option<Uuid>) -> Arc<dyn Engine> {
-        let store = self.root_object_store(operation_id);
-        get_engine(store)
-    }
-
     /// Get configuration representing configured log store.
     fn config(&self) -> &LogStoreConfig;
 
@@ -242,7 +205,7 @@ impl LogStore for DefaultLogStore {
             CommitOrBytes::LogBytes(log_bytes) => self
                 .object_store(None)
                 .put_opts(
-                    &commit_uri_from_version(version),
+                    &commit_path(version),
                     log_bytes.into(),
                     put_options().clone(),
                 )
@@ -279,7 +242,7 @@ impl LogStore for DefaultLogStore {
         let latest = latest_version_from_listing(self.object_store(None)).await?;
         match latest {
             Some(version) if version >= start => Ok(version),
-            Some(_) | None => Err(KernelError::MissingVersion.into()),
+            Some(_) | None => Err(DeltaError::MissingVersion),
         }
     }
 
@@ -305,7 +268,7 @@ fn put_options() -> &'static PutOptions {
 }
 
 async fn read_commit_entry(storage: &dyn ObjectStore, version: i64) -> DeltaResult<Option<Bytes>> {
-    let commit_uri = commit_uri_from_version(version);
+    let commit_uri = commit_path(version);
     match storage.get(&commit_uri).await {
         Ok(res) => {
             let bytes = res.bytes().await?;
@@ -325,38 +288,6 @@ async fn read_commit_entry(storage: &dyn ObjectStore, version: i64) -> DeltaResu
                 "failed to read commit entry (version={version}): {err}"
             );
             Err(err.into())
-        }
-    }
-}
-
-async fn latest_version_from_listing(store: Arc<dyn ObjectStore>) -> DeltaResult<Option<i64>> {
-    let mut stream = store.list(Some(&DELTA_LOG_PATH));
-    let mut max_version: Option<i64> = None;
-    while let Some(meta) = stream.try_next().await? {
-        if let Some(version) = extract_version_from_meta(&meta) {
-            max_version = Some(max_version.map_or(version, |curr| curr.max(version)));
-        }
-    }
-    Ok(max_version)
-}
-
-fn get_engine(store: Arc<dyn ObjectStore>) -> Arc<dyn Engine> {
-    let handle = Handle::current();
-    match handle.runtime_flavor() {
-        RuntimeFlavor::MultiThread => Arc::new(DefaultEngine::new_with_executor(
-            store,
-            Arc::new(TokioMultiThreadExecutor::new(handle)),
-        )),
-        RuntimeFlavor::CurrentThread => Arc::new(DefaultEngine::new_with_executor(
-            store,
-            Arc::new(TokioBackgroundExecutor::new()),
-        )),
-        _ => {
-            error!("unsupported runtime flavor, using background executor");
-            Arc::new(DefaultEngine::new_with_executor(
-                store,
-                Arc::new(TokioBackgroundExecutor::new()),
-            ))
         }
     }
 }

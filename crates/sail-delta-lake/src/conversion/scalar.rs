@@ -24,21 +24,18 @@ use std::sync::Arc;
 
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::arrow::array::{
-    self, Array, BinaryArray, BooleanArray, Date32Array, Decimal128Array, Float32Array,
-    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, StringArray,
-    TimestampMicrosecondArray,
+    Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
+    Int8Array, LargeStringArray, RecordBatch, StringArray, UInt16Array, UInt32Array, UInt64Array,
+    UInt8Array,
 };
-use datafusion::arrow::compute::{cast_with_options, CastOptions};
+use datafusion::arrow::compute::{cast, cast_with_options, CastOptions};
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::Result as DataFusionResult;
-use delta_kernel::engine::arrow_conversion::TryIntoKernel as _;
-use delta_kernel::expressions::{Scalar, StructData};
-use delta_kernel::schema::{DataType, PrimitiveType, StructField};
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use serde_json::Value;
 
-use crate::kernel::{DeltaResult as DeltaResultLocal, DeltaTableError};
+use crate::spec::{DeltaError as DeltaTableError, DeltaResult as DeltaResultLocal, StatValue};
 
 pub const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
 
@@ -52,20 +49,220 @@ const RFC3986_PART: &AsciiSet = &NON_ALPHANUMERIC
 pub struct ScalarConverter;
 
 impl ScalarConverter {
+    pub fn stat_values_to_array(
+        values: &[Option<&StatValue>],
+        field_dt: &ArrowDataType,
+    ) -> DataFusionResult<Option<ArrayRef>> {
+        macro_rules! typed_array {
+            ($array_ty:ty, $extract:expr) => {{
+                let mut out = Vec::with_capacity(values.len());
+                for value in values {
+                    match value {
+                        None => out.push(None),
+                        Some(StatValue::Null) => out.push(None),
+                        Some(value) => {
+                            let Some(converted) = $extract(value) else {
+                                return Ok(None);
+                            };
+                            out.push(Some(converted));
+                        }
+                    }
+                }
+                Ok(Some(Arc::new(<$array_ty>::from(out)) as ArrayRef))
+            }};
+        }
+
+        match field_dt {
+            ArrowDataType::Boolean => typed_array!(BooleanArray, |value: &StatValue| match value {
+                StatValue::Boolean(value) => Some(*value),
+                _ => None,
+            }),
+            ArrowDataType::Int8 => {
+                typed_array!(Int8Array, |value: &StatValue| match value {
+                    StatValue::Number(value) => value.as_i64().and_then(|v| i8::try_from(v).ok()),
+                    _ => None,
+                })
+            }
+            ArrowDataType::Int16 => {
+                typed_array!(Int16Array, |value: &StatValue| match value {
+                    StatValue::Number(value) => value.as_i64().and_then(|v| i16::try_from(v).ok()),
+                    _ => None,
+                })
+            }
+            ArrowDataType::Int32 => {
+                typed_array!(Int32Array, |value: &StatValue| match value {
+                    StatValue::Number(value) => value.as_i64().and_then(|v| i32::try_from(v).ok()),
+                    _ => None,
+                })
+            }
+            ArrowDataType::Int64 => typed_array!(Int64Array, |value: &StatValue| match value {
+                StatValue::Number(value) => value.as_i64(),
+                _ => None,
+            }),
+            ArrowDataType::UInt8 => {
+                typed_array!(UInt8Array, |value: &StatValue| match value {
+                    StatValue::Number(value) => value.as_u64().and_then(|v| u8::try_from(v).ok()),
+                    _ => None,
+                })
+            }
+            ArrowDataType::UInt16 => {
+                typed_array!(UInt16Array, |value: &StatValue| match value {
+                    StatValue::Number(value) => value.as_u64().and_then(|v| u16::try_from(v).ok()),
+                    _ => None,
+                })
+            }
+            ArrowDataType::UInt32 => {
+                typed_array!(UInt32Array, |value: &StatValue| match value {
+                    StatValue::Number(value) => value.as_u64().and_then(|v| u32::try_from(v).ok()),
+                    _ => None,
+                })
+            }
+            ArrowDataType::UInt64 => typed_array!(UInt64Array, |value: &StatValue| match value {
+                StatValue::Number(value) => value.as_u64(),
+                _ => None,
+            }),
+            ArrowDataType::Float32 => {
+                typed_array!(Float32Array, |value: &StatValue| match value {
+                    StatValue::Number(value) => value.as_f64().map(|v| v as f32),
+                    _ => None,
+                })
+            }
+            ArrowDataType::Float64 => typed_array!(Float64Array, |value: &StatValue| match value {
+                StatValue::Number(value) => value.as_f64(),
+                _ => None,
+            }),
+            ArrowDataType::Utf8 => typed_array!(StringArray, |value: &StatValue| match value {
+                StatValue::String(value) => Some(value.clone()),
+                _ => None,
+            }),
+            ArrowDataType::LargeUtf8 => {
+                typed_array!(LargeStringArray, |value: &StatValue| match value {
+                    StatValue::String(value) => Some(value.clone()),
+                    _ => None,
+                })
+            }
+            _ => Ok(None),
+        }
+    }
+
+    pub fn stat_value_to_arrow_scalar_value(
+        stat_val: &StatValue,
+        field_dt: &ArrowDataType,
+    ) -> DataFusionResult<Option<ScalarValue>> {
+        match stat_val {
+            StatValue::Null => Ok(Some(ScalarValue::try_new_null(field_dt)?)),
+            StatValue::Boolean(value) => Self::bool_to_arrow_scalar_value(*value, field_dt),
+            StatValue::Number(value) => Self::number_to_arrow_scalar_value(value, field_dt),
+            StatValue::String(value) => Self::string_json_to_arrow_scalar_value(value, field_dt),
+        }
+    }
+
+    pub fn string_values_to_array(
+        values: &[Option<&str>],
+        field_dt: &ArrowDataType,
+    ) -> DataFusionResult<ArrayRef> {
+        let utf8_array: ArrayRef = Arc::new(StringArray::from(
+            values
+                .iter()
+                .map(|value| value.map(ToOwned::to_owned))
+                .collect::<Vec<_>>(),
+        ));
+
+        match field_dt {
+            ArrowDataType::Utf8 => Ok(utf8_array),
+            ArrowDataType::LargeUtf8 => Ok(Arc::new(LargeStringArray::from(
+                values
+                    .iter()
+                    .map(|value| value.map(ToOwned::to_owned))
+                    .collect::<Vec<_>>(),
+            ))),
+            _ => Ok(cast(&utf8_array, field_dt)?),
+        }
+    }
+
     pub fn json_to_arrow_scalar_value(
         stat_val: &serde_json::Value,
         field_dt: &ArrowDataType,
     ) -> DataFusionResult<Option<ScalarValue>> {
-        match stat_val {
-            serde_json::Value::Array(_) | serde_json::Value::Object(_) => Ok(None),
-            serde_json::Value::Null => Ok(Some(ScalarValue::try_new_null(field_dt)?)),
-            serde_json::Value::String(value) => {
-                Ok(Some(Self::string_to_arrow_scalar_value(value, field_dt)?))
-            }
-            other => {
-                let owned = other.to_string();
-                Ok(Some(Self::string_to_arrow_scalar_value(&owned, field_dt)?))
-            }
+        let Some(stat_val) = (match stat_val {
+            serde_json::Value::Array(_) | serde_json::Value::Object(_) => None,
+            serde_json::Value::Null => Some(StatValue::Null),
+            serde_json::Value::Bool(value) => Some(StatValue::Boolean(*value)),
+            serde_json::Value::Number(value) => Some(StatValue::Number(value.clone())),
+            serde_json::Value::String(value) => Some(StatValue::String(value.clone())),
+        }) else {
+            return Ok(None);
+        };
+        Self::stat_value_to_arrow_scalar_value(&stat_val, field_dt)
+    }
+
+    fn string_json_to_arrow_scalar_value(
+        value: &str,
+        field_dt: &ArrowDataType,
+    ) -> DataFusionResult<Option<ScalarValue>> {
+        match field_dt {
+            ArrowDataType::Utf8 => Ok(Some(ScalarValue::Utf8(Some(value.to_string())))),
+            ArrowDataType::LargeUtf8 => Ok(Some(ScalarValue::LargeUtf8(Some(value.to_string())))),
+            ArrowDataType::Utf8View => Ok(Some(ScalarValue::Utf8View(Some(value.to_string())))),
+            _ => Ok(Some(Self::string_to_arrow_scalar_value(value, field_dt)?)),
+        }
+    }
+
+    fn bool_to_arrow_scalar_value(
+        value: bool,
+        field_dt: &ArrowDataType,
+    ) -> DataFusionResult<Option<ScalarValue>> {
+        match field_dt {
+            ArrowDataType::Boolean => Ok(Some(ScalarValue::Boolean(Some(value)))),
+            _ => Ok(Some(Self::string_to_arrow_scalar_value(
+                if value { "true" } else { "false" },
+                field_dt,
+            )?)),
+        }
+    }
+
+    fn number_to_arrow_scalar_value(
+        value: &serde_json::Number,
+        field_dt: &ArrowDataType,
+    ) -> DataFusionResult<Option<ScalarValue>> {
+        let scalar = match field_dt {
+            ArrowDataType::Int8 => value
+                .as_i64()
+                .and_then(|v| i8::try_from(v).ok())
+                .map(|v| ScalarValue::Int8(Some(v))),
+            ArrowDataType::Int16 => value
+                .as_i64()
+                .and_then(|v| i16::try_from(v).ok())
+                .map(|v| ScalarValue::Int16(Some(v))),
+            ArrowDataType::Int32 => value
+                .as_i64()
+                .and_then(|v| i32::try_from(v).ok())
+                .map(|v| ScalarValue::Int32(Some(v))),
+            ArrowDataType::Int64 => value.as_i64().map(|v| ScalarValue::Int64(Some(v))),
+            ArrowDataType::UInt8 => value
+                .as_u64()
+                .and_then(|v| u8::try_from(v).ok())
+                .map(|v| ScalarValue::UInt8(Some(v))),
+            ArrowDataType::UInt16 => value
+                .as_u64()
+                .and_then(|v| u16::try_from(v).ok())
+                .map(|v| ScalarValue::UInt16(Some(v))),
+            ArrowDataType::UInt32 => value
+                .as_u64()
+                .and_then(|v| u32::try_from(v).ok())
+                .map(|v| ScalarValue::UInt32(Some(v))),
+            ArrowDataType::UInt64 => value.as_u64().map(|v| ScalarValue::UInt64(Some(v))),
+            ArrowDataType::Float32 => value.as_f64().map(|v| ScalarValue::Float32(Some(v as f32))),
+            ArrowDataType::Float64 => value.as_f64().map(|v| ScalarValue::Float64(Some(v))),
+            _ => None,
+        };
+
+        match scalar {
+            Some(scalar) => Ok(Some(scalar)),
+            None => Ok(Some(Self::string_to_arrow_scalar_value(
+                &value.to_string(),
+                field_dt,
+            )?)),
         }
     }
 
@@ -80,117 +277,18 @@ impl ScalarConverter {
         }
     }
 
-    pub fn scalars_to_arrow_array(
-        field: &StructField,
-        values: &[Scalar],
-    ) -> DeltaResultLocal<Arc<dyn Array>> {
-        let array: Arc<dyn Array> = match field.data_type() {
-            DataType::Primitive(PrimitiveType::String) => {
-                Arc::new(StringArray::from_iter(values.iter().map(|v| match v {
-                    Scalar::String(s) => Some(s.clone()),
-                    Scalar::Null(_) => None,
-                    _ => None,
-                })))
-            }
-            DataType::Primitive(PrimitiveType::Long) => {
-                Arc::new(Int64Array::from_iter(values.iter().map(|v| match v {
-                    Scalar::Long(i) => Some(*i),
-                    Scalar::Null(_) => None,
-                    _ => None,
-                })))
-            }
-            DataType::Primitive(PrimitiveType::Integer) => {
-                Arc::new(Int32Array::from_iter(values.iter().map(|v| match v {
-                    Scalar::Integer(i) => Some(*i),
-                    Scalar::Null(_) => None,
-                    _ => None,
-                })))
-            }
-            DataType::Primitive(PrimitiveType::Short) => {
-                Arc::new(Int16Array::from_iter(values.iter().map(|v| match v {
-                    Scalar::Short(i) => Some(*i),
-                    Scalar::Null(_) => None,
-                    _ => None,
-                })))
-            }
-            DataType::Primitive(PrimitiveType::Byte) => {
-                Arc::new(Int8Array::from_iter(values.iter().map(|v| match v {
-                    Scalar::Byte(i) => Some(*i),
-                    Scalar::Null(_) => None,
-                    _ => None,
-                })))
-            }
-            DataType::Primitive(PrimitiveType::Float) => {
-                Arc::new(Float32Array::from_iter(values.iter().map(|v| match v {
-                    Scalar::Float(f) => Some(*f),
-                    Scalar::Null(_) => None,
-                    _ => None,
-                })))
-            }
-            DataType::Primitive(PrimitiveType::Double) => {
-                Arc::new(Float64Array::from_iter(values.iter().map(|v| match v {
-                    Scalar::Double(f) => Some(*f),
-                    Scalar::Null(_) => None,
-                    _ => None,
-                })))
-            }
-            DataType::Primitive(PrimitiveType::Boolean) => {
-                Arc::new(BooleanArray::from_iter(values.iter().map(|v| match v {
-                    Scalar::Boolean(b) => Some(*b),
-                    Scalar::Null(_) => None,
-                    _ => None,
-                })))
-            }
-            DataType::Primitive(PrimitiveType::Binary) => {
-                Arc::new(BinaryArray::from_iter(values.iter().map(|v| match v {
-                    Scalar::Binary(b) => Some(b.clone()),
-                    Scalar::Null(_) => None,
-                    _ => None,
-                })))
-            }
-            DataType::Primitive(PrimitiveType::Date) => {
-                Arc::new(Date32Array::from_iter(values.iter().map(|v| match v {
-                    Scalar::Date(d) => Some(*d),
-                    Scalar::Null(_) => None,
-                    _ => None,
-                })))
-            }
-            DataType::Primitive(PrimitiveType::Timestamp) => Arc::new(
-                TimestampMicrosecondArray::from_iter(values.iter().map(|v| match v {
-                    Scalar::Timestamp(ts) => Some(*ts),
-                    Scalar::Null(_) => None,
-                    _ => None,
-                }))
-                .with_timezone("UTC"),
-            ),
-            DataType::Primitive(PrimitiveType::TimestampNtz) => Arc::new(
-                TimestampMicrosecondArray::from_iter(values.iter().map(|v| match v {
-                    Scalar::TimestampNtz(ts) => Some(*ts),
-                    Scalar::Null(_) => None,
-                    _ => None,
-                })),
-            ),
-            DataType::Primitive(PrimitiveType::Decimal(decimal)) => {
-                let array = Decimal128Array::from_iter(values.iter().map(|v| match v {
-                    Scalar::Decimal(d) => Some(d.bits()),
-                    Scalar::Null(_) => None,
-                    _ => None,
-                }));
-                let array = array
-                    .with_precision_and_scale(decimal.precision(), decimal.scale() as i8)
-                    .map_err(|e| {
-                        DeltaTableError::generic(format!("Decimal precision error: {e}"))
-                    })?;
-                Arc::new(array)
-            }
-            _ => {
-                return Err(DeltaTableError::generic(
-                    "complex partition values are not supported",
-                ))
-            }
-        };
-
-        Ok(array)
+    /// Convert a column from a `RecordBatch` into a `Vec<ScalarValue>` for partition value use.
+    pub fn column_to_scalar_values(
+        batch: &RecordBatch,
+        col_idx: usize,
+    ) -> DeltaResultLocal<Vec<ScalarValue>> {
+        let col = batch.column(col_idx);
+        (0..col.len())
+            .map(|i| {
+                ScalarValue::try_from_array(col.as_ref(), i)
+                    .map_err(|e| DeltaTableError::generic(format!("Failed to read scalar: {e}")))
+            })
+            .collect()
     }
 
     fn parse_date_str(date_str: &str, field_dt: &ArrowDataType) -> DataFusionResult<ScalarValue> {
@@ -231,32 +329,50 @@ fn encode_partition_value(value: &str) -> String {
     utf8_percent_encode(value, RFC3986_PART).to_string()
 }
 
+/// Extension trait providing Delta-specific serialization and extraction for `ScalarValue`.
 pub trait ScalarExt: Sized {
+    /// Serialize to a partition value string (Delta log format).
     fn serialize(&self) -> Cow<'_, str>;
+    /// Serialize with percent-encoding for use in Hive partition paths.
     fn serialize_encoded(&self) -> String;
+    /// Extract a scalar from an Arrow array at the given index.
     fn from_array(arr: &dyn Array, index: usize) -> Option<Self>;
+    /// Convert to a `serde_json::Value`.
     fn to_json(&self) -> Value;
 }
 
-impl ScalarExt for Scalar {
+impl ScalarExt for ScalarValue {
     fn serialize(&self) -> Cow<'_, str> {
         match self {
-            Self::String(value) => Cow::Borrowed(value),
-            Self::Byte(value) => Cow::Owned(value.to_string()),
-            Self::Short(value) => Cow::Owned(value.to_string()),
-            Self::Integer(value) => Cow::Owned(value.to_string()),
-            Self::Long(value) => Cow::Owned(value.to_string()),
-            Self::Float(value) => Cow::Owned(value.to_string()),
-            Self::Double(value) => Cow::Owned(value.to_string()),
-            Self::Boolean(value) => Cow::Owned(value.to_string()),
-            Self::TimestampNtz(ts) | Self::Timestamp(ts) => Cow::Owned(format_timestamp(*ts)),
-            Self::Date(days) => Cow::Owned(format_date(*days)),
-            Self::Decimal(decimal) => {
-                Cow::Owned(serialize_decimal(decimal.bits(), decimal.scale() as i8))
+            ScalarValue::Utf8(Some(v))
+            | ScalarValue::LargeUtf8(Some(v))
+            | ScalarValue::Utf8View(Some(v)) => Cow::Borrowed(v.as_str()),
+            ScalarValue::Int8(Some(v)) => Cow::Owned(v.to_string()),
+            ScalarValue::Int16(Some(v)) => Cow::Owned(v.to_string()),
+            ScalarValue::Int32(Some(v)) => Cow::Owned(v.to_string()),
+            ScalarValue::Int64(Some(v)) => Cow::Owned(v.to_string()),
+            ScalarValue::UInt8(Some(v)) => Cow::Owned(v.to_string()),
+            ScalarValue::UInt16(Some(v)) => Cow::Owned(v.to_string()),
+            ScalarValue::UInt32(Some(v)) => Cow::Owned(v.to_string()),
+            ScalarValue::UInt64(Some(v)) => Cow::Owned(v.to_string()),
+            ScalarValue::Float32(Some(v)) => Cow::Owned(v.to_string()),
+            ScalarValue::Float64(Some(v)) => Cow::Owned(v.to_string()),
+            ScalarValue::Boolean(Some(v)) => Cow::Owned(v.to_string()),
+            ScalarValue::TimestampMicrosecond(Some(ts), _) => Cow::Owned(format_timestamp(*ts)),
+            ScalarValue::Date32(Some(days)) => Cow::Owned(format_date(*days)),
+            ScalarValue::Decimal128(Some(bits), _, scale) => {
+                Cow::Owned(serialize_decimal(*bits, *scale))
             }
-            Self::Binary(bytes) => Cow::Owned(create_escaped_binary_string(bytes.as_slice())),
-            Self::Null(_) => Cow::Borrowed("null"),
-            Self::Struct(_) | Self::Array(_) | Self::Map(_) => Cow::Owned(self.to_string()),
+            ScalarValue::Binary(Some(bytes))
+            | ScalarValue::LargeBinary(Some(bytes))
+            | ScalarValue::BinaryView(Some(bytes)) => {
+                Cow::Owned(create_escaped_binary_string(bytes.as_slice()))
+            }
+            ScalarValue::FixedSizeBinary(_, Some(bytes)) => {
+                Cow::Owned(create_escaped_binary_string(bytes.as_slice()))
+            }
+            _ if self.is_null() => Cow::Borrowed("null"),
+            other => Cow::Owned(other.to_string()),
         }
     }
 
@@ -271,57 +387,64 @@ impl ScalarExt for Scalar {
         if arr.len() <= index {
             return None;
         }
-        if arr.is_null(index) {
-            return Some(Self::Null(arr.data_type().try_into_kernel().ok()?));
-        }
-
-        ScalarValue::try_from_array(arr, index)
-            .ok()
-            .and_then(kernel_scalar_from_datafusion)
+        ScalarValue::try_from_array(arr, index).ok()
     }
 
     fn to_json(&self) -> Value {
         match self {
-            Self::String(value) => Value::String(value.to_owned()),
-            Self::Byte(value) => Value::Number((*value).into()),
-            Self::Short(value) => Value::Number((*value).into()),
-            Self::Integer(value) => Value::Number((*value).into()),
-            Self::Long(value) => Value::Number((*value).into()),
-            Self::Float(value) => number_from_f64(*value as f64),
-            Self::Double(value) => number_from_f64(*value),
-            Self::Boolean(value) => Value::Bool(*value),
-            Self::TimestampNtz(ts) | Self::Timestamp(ts) => Value::String(format_timestamp(*ts)),
-            Self::Date(days) => Value::String(format_date(*days)),
-            Self::Decimal(decimal) => {
-                Value::String(serialize_decimal(decimal.bits(), decimal.scale() as i8))
+            ScalarValue::Utf8(Some(v))
+            | ScalarValue::LargeUtf8(Some(v))
+            | ScalarValue::Utf8View(Some(v)) => Value::String(v.clone()),
+            ScalarValue::Int8(Some(v)) => Value::Number((*v).into()),
+            ScalarValue::Int16(Some(v)) => Value::Number((*v).into()),
+            ScalarValue::Int32(Some(v)) => Value::Number((*v).into()),
+            ScalarValue::Int64(Some(v)) => Value::Number((*v).into()),
+            ScalarValue::UInt8(Some(v)) => Value::Number((*v).into()),
+            ScalarValue::UInt16(Some(v)) => Value::Number((*v).into()),
+            ScalarValue::UInt32(Some(v)) => Value::Number((*v).into()),
+            ScalarValue::UInt64(Some(v)) => Value::Number((*v).into()),
+            ScalarValue::Float32(Some(v)) => number_from_f64(*v as f64),
+            ScalarValue::Float64(Some(v)) => number_from_f64(*v),
+            ScalarValue::Boolean(Some(v)) => Value::Bool(*v),
+            ScalarValue::TimestampMicrosecond(Some(ts), _) => Value::String(format_timestamp(*ts)),
+            ScalarValue::Date32(Some(days)) => Value::String(format_date(*days)),
+            ScalarValue::Decimal128(Some(bits), _, scale) => {
+                Value::String(serialize_decimal(*bits, *scale))
             }
-            Self::Binary(bytes) => Value::String(create_escaped_binary_string(bytes.as_slice())),
-            Self::Null(_) => Value::Null,
-            Self::Struct(data) => {
-                let map: serde_json::Map<String, Value> = data
-                    .fields()
+            ScalarValue::Binary(Some(bytes))
+            | ScalarValue::LargeBinary(Some(bytes))
+            | ScalarValue::BinaryView(Some(bytes)) => {
+                Value::String(create_escaped_binary_string(bytes.as_slice()))
+            }
+            ScalarValue::FixedSizeBinary(_, Some(bytes)) => {
+                Value::String(create_escaped_binary_string(bytes.as_slice()))
+            }
+            ScalarValue::Struct(struct_array) => {
+                let fields = struct_array.fields();
+                let map: serde_json::Map<String, Value> = fields
                     .iter()
-                    .zip(data.values().iter())
-                    .map(|(field, value)| (field.name.clone(), value.to_json()))
+                    .enumerate()
+                    .map(|(i, field)| {
+                        let col = struct_array.column(i);
+                        let sv = ScalarValue::try_from_array(col.as_ref(), 0)
+                            .unwrap_or(ScalarValue::Null);
+                        (field.name().clone(), sv.to_json())
+                    })
                     .collect();
                 Value::Object(map)
             }
-            Self::Array(array_data) => {
-                let values: Vec<Value> = array_data
-                    .array_elements()
-                    .iter()
-                    .map(|value| value.to_json())
+            ScalarValue::List(list_array) => {
+                let values: Vec<Value> = (0..list_array.len())
+                    .map(|i| {
+                        ScalarValue::try_from_array(list_array.as_ref(), i)
+                            .map(|sv| sv.to_json())
+                            .unwrap_or(Value::Null)
+                    })
                     .collect();
                 Value::Array(values)
             }
-            Self::Map(map_data) => {
-                let map: serde_json::Map<String, Value> = map_data
-                    .pairs()
-                    .iter()
-                    .map(|(key, value)| (key.to_string(), value.to_json()))
-                    .collect();
-                Value::Object(map)
-            }
+            _ if self.is_null() => Value::Null,
+            other => Value::String(other.to_string()),
         }
     }
 }
@@ -383,61 +506,73 @@ fn number_from_f64(value: f64) -> Value {
         .unwrap_or_else(|| Value::String(value.to_string()))
 }
 
-fn kernel_scalar_from_datafusion(value: ScalarValue) -> Option<Scalar> {
-    match value {
-        ScalarValue::Utf8(Some(v))
-        | ScalarValue::LargeUtf8(Some(v))
-        | ScalarValue::Utf8View(Some(v)) => Some(Scalar::String(v)),
-        ScalarValue::Boolean(Some(v)) => Some(Scalar::Boolean(v)),
-        ScalarValue::Binary(Some(bytes))
-        | ScalarValue::LargeBinary(Some(bytes))
-        | ScalarValue::BinaryView(Some(bytes))
-        | ScalarValue::FixedSizeBinary(_, Some(bytes)) => Some(Scalar::Binary(bytes)),
-        ScalarValue::Int8(Some(v)) => Some(Scalar::Byte(v)),
-        ScalarValue::Int16(Some(v)) => Some(Scalar::Short(v)),
-        ScalarValue::Int32(Some(v)) => Some(Scalar::Integer(v)),
-        ScalarValue::Int64(Some(v)) => Some(Scalar::Long(v)),
-        ScalarValue::UInt8(Some(v)) => Some(Scalar::Byte(v as i8)),
-        ScalarValue::UInt16(Some(v)) => Some(Scalar::Short(v as i16)),
-        ScalarValue::UInt32(Some(v)) => Some(Scalar::Integer(v as i32)),
-        ScalarValue::UInt64(Some(v)) => Some(Scalar::Long(v as i64)),
-        ScalarValue::Float32(Some(v)) => Some(Scalar::Float(v)),
-        ScalarValue::Float64(Some(v)) => Some(Scalar::Double(v)),
-        ScalarValue::Decimal128(Some(bits), precision, scale) => {
-            let scale = u8::try_from(scale).ok()?;
-            Scalar::decimal(bits, precision, scale).ok()
-        }
-        ScalarValue::Date32(Some(days)) => Some(Scalar::Date(days)),
-        ScalarValue::TimestampMicrosecond(Some(value), None) => Some(Scalar::TimestampNtz(value)),
-        ScalarValue::TimestampMicrosecond(Some(value), Some(tz))
-            if tz.eq_ignore_ascii_case("utc") =>
-        {
-            Some(Scalar::Timestamp(value))
-        }
-        ScalarValue::Struct(struct_array) => {
-            struct_data_from_array(struct_array.as_ref()).map(Scalar::Struct)
-        }
-        _ => None,
+/// Parse a partition value string into a `ScalarValue` for the given Arrow data type.
+///
+/// This implements Delta-specific parsing rules for partition values stored in the log.
+pub fn parse_partition_value(raw: &str, field_dt: &ArrowDataType) -> DeltaResultLocal<ScalarValue> {
+    if raw.is_empty() || raw == NULL_PARTITION_VALUE_DATA_PATH {
+        return ScalarValue::try_new_null(field_dt)
+            .map_err(|e| DeltaTableError::generic(format!("Failed to create null scalar: {e}")));
+    }
+    ScalarConverter::string_to_arrow_scalar_value(raw, field_dt)
+        .map_err(|e| DeltaTableError::generic(format!("Failed to parse partition value: {e}")))
+}
+
+pub fn parse_optional_partition_value(
+    raw: Option<&str>,
+    field_dt: &ArrowDataType,
+) -> DeltaResultLocal<ScalarValue> {
+    match raw {
+        Some(raw) => parse_partition_value(raw, field_dt),
+        None => ScalarValue::try_new_null(field_dt)
+            .map_err(|e| DeltaTableError::generic(format!("Failed to create null scalar: {e}"))),
     }
 }
 
-fn struct_data_from_array(struct_array: &array::StructArray) -> Option<StructData> {
-    let fields = struct_array.fields();
-    let columns = struct_array.columns();
-
-    if fields.len() != columns.len() {
+/// Build a `ScalarValue` from an Arrow array at the given index, returning `None` for nulls.
+///
+/// Returns `None` if the value is null or if extraction fails.
+pub fn scalar_from_array_opt(arr: &dyn Array, index: usize) -> Option<ScalarValue> {
+    if arr.len() <= index || arr.is_null(index) {
         return None;
     }
+    ScalarValue::try_from_array(arr, index).ok()
+}
 
-    let mut struct_fields = Vec::with_capacity(fields.len());
-    let mut values = Vec::with_capacity(columns.len());
+/// Convert a `ScalarValue` to an `Arc<dyn Array>` suitable for use as a partition column.
+pub fn scalar_value_to_array(
+    value: &ScalarValue,
+    len: usize,
+) -> DeltaResultLocal<Arc<dyn datafusion::arrow::array::Array>> {
+    value
+        .to_array_of_size(len)
+        .map_err(|e| DeltaTableError::generic(format!("Failed to convert scalar to array: {e}")))
+}
 
-    for (field, column) in fields.iter().zip(columns.iter()) {
-        let kernel_field = field.as_ref().try_into_kernel().ok()?;
-        let value = Scalar::from_array(column.as_ref(), 0)?;
-        struct_fields.push(kernel_field);
-        values.push(value);
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::DataType as ArrowDataType;
+    use datafusion::common::ScalarValue;
+
+    use super::{
+        parse_optional_partition_value, parse_partition_value, NULL_PARTITION_VALUE_DATA_PATH,
+    };
+
+    #[test]
+    fn test_parse_partition_value_treats_hive_default_partition_as_null_for_strings() {
+        #[expect(clippy::expect_used)]
+        let value = parse_partition_value(NULL_PARTITION_VALUE_DATA_PATH, &ArrowDataType::Utf8)
+            .expect("partition value should parse");
+
+        assert_eq!(value, ScalarValue::Utf8(None));
     }
 
-    StructData::try_new(struct_fields, values).ok()
+    #[test]
+    fn test_parse_optional_partition_value_none_returns_typed_null() {
+        #[expect(clippy::expect_used)]
+        let value = parse_optional_partition_value(None, &ArrowDataType::Utf8)
+            .expect("partition value should parse");
+
+        assert_eq!(value, ScalarValue::Utf8(None));
+    }
 }

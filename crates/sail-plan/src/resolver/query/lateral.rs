@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
-use datafusion_expr::registry::FunctionRegistry;
 use datafusion_expr::{Expr, LogicalPlan, Projection};
+use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
@@ -12,6 +13,7 @@ use crate::resolver::function::PythonUdtf;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
+use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
@@ -33,9 +35,10 @@ impl PlanResolver<'_> {
             ));
         };
         let canonical_function_name = function_name.to_ascii_lowercase();
+        let catalog_manager = self.ctx.extension::<CatalogManager>()?;
         let mut scope = state.enter_config_scope();
         let state = scope.state();
-        if let Ok(f) = self.ctx.udf(&canonical_function_name) {
+        if let Some(f) = catalog_manager.get_function(&canonical_function_name)? {
             if f.inner().as_any().is::<PySparkUnresolvedUDF>() {
                 state.config_mut().arrow_allow_large_var_types = true;
             }
@@ -46,7 +49,7 @@ impl PlanResolver<'_> {
         };
         let schema = input.schema().clone();
 
-        if let Ok(f) = self.ctx.udf(&canonical_function_name) {
+        if let Some(f) = catalog_manager.get_function(&canonical_function_name)? {
             if let Some(f) = f.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>() {
                 if !f.eval_type().is_table_function() {
                     return Err(PlanError::invalid(format!(
@@ -57,10 +60,22 @@ impl PlanResolver<'_> {
                     python_version: f.python_version().to_string(),
                     eval_type: f.eval_type(),
                     command: f.command().to_vec(),
-                    return_type: f.output_type().clone(),
+                    return_type: f.output_type().cloned(),
                 };
+                // Merge named_arguments (SQL kwargs like `col => expr`) into the argument list
+                // as NamedArgument expressions so extract_kwargs can process them uniformly.
+                let all_arguments: Vec<spec::Expr> = arguments
+                    .into_iter()
+                    .chain(named_arguments.into_iter().map(|(key, value)| {
+                        spec::Expr::NamedArgument {
+                            key: key.into(),
+                            value: Box::new(value),
+                        }
+                    }))
+                    .collect();
+                let (positional_args, kwarg_names) = Self::extract_kwargs(all_arguments);
                 let arguments = self
-                    .resolve_named_expressions(arguments, input.schema(), state)
+                    .resolve_named_expressions(positional_args, input.schema(), state)
                     .await?;
                 let output_names =
                     column_aliases.map(|aliases| aliases.into_iter().map(|x| x.into()).collect());
@@ -72,6 +87,7 @@ impl PlanResolver<'_> {
                     &function_name,
                     input,
                     arguments,
+                    &kwarg_names,
                     output_names,
                     output_qualifier,
                     f.deterministic(),
@@ -110,6 +126,8 @@ impl PlanResolver<'_> {
             .await?;
         let (input, expr) = self.rewrite_wildcard(input, vec![expr], state)?;
         let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
+        let (input, expr) =
+            self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
         let expr = self.rewrite_named_expressions(expr, state)?;
@@ -128,7 +146,7 @@ impl PlanResolver<'_> {
             .columns()
             .into_iter()
             .map(Expr::Column)
-            .chain(expr.into_iter())
+            .chain(expr)
             .collect::<Vec<_>>();
         Ok(LogicalPlan::Projection(Projection::try_new(
             projections,

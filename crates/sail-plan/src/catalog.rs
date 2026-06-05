@@ -1,20 +1,14 @@
 use std::fmt::Formatter;
-use std::sync::Arc;
 
-use datafusion::catalog::MemTable;
 use datafusion::common::{DFSchemaRef, Result};
-use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use datafusion::prelude::SessionContext;
-use datafusion_common::{exec_datafusion_err, internal_datafusion_err, DFSchema};
-use datafusion_expr::{TableScan, UNNAMED_TABLE};
+use datafusion_common::{internal_datafusion_err, DFSchema};
 use educe::Educe;
 use sail_catalog::command::CatalogCommand;
-use sail_catalog::manager::CatalogManager;
 use sail_catalog::utils::quote_names_if_needed;
 use sail_common_datafusion::catalog::display::CatalogObjectDisplay;
-use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
-use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableStatus};
 use sail_common_datafusion::session::plan::PlanFormatter;
 use sail_common_datafusion::utils::items::ItemTaker;
 
@@ -22,7 +16,7 @@ use crate::formatter::SparkPlanFormatter;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
 #[educe(PartialOrd)]
-pub(crate) struct CatalogCommandNode {
+pub struct CatalogCommandNode {
     name: String,
     #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
@@ -40,25 +34,9 @@ impl CatalogCommandNode {
             command,
         })
     }
-}
 
-impl CatalogCommandNode {
-    pub(crate) async fn execute(&self, ctx: &SessionContext) -> Result<LogicalPlan> {
-        let manager = ctx.extension::<CatalogManager>()?;
-        let batch = self
-            .command
-            .clone()
-            .execute(ctx, manager.as_ref())
-            .await
-            .map_err(|e| exec_datafusion_err!("{e}"))?;
-        let provider = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
-        Ok(LogicalPlan::TableScan(TableScan::try_new(
-            UNNAMED_TABLE,
-            provider_as_source(Arc::new(provider)),
-            None,
-            vec![],
-            None,
-        )?))
+    pub fn command(&self) -> &CatalogCommand {
+        &self.command
     }
 }
 
@@ -172,22 +150,14 @@ impl CatalogObjectDisplay for SparkCatalogObjectDisplay {
     }
 
     fn table(status: TableStatus) -> Self::Table {
-        let table_type = match status.kind {
-            TableKind::Table { .. } => "MANAGED",
-            TableKind::View { .. } => "VIEW",
-            TableKind::TemporaryView { .. } => "TEMPORARY",
-            TableKind::GlobalTemporaryView { .. } => "TEMPORARY",
-        };
-        let is_temporary = match status.kind {
-            TableKind::Table { .. } | TableKind::View { .. } => false,
-            TableKind::TemporaryView { .. } | TableKind::GlobalTemporaryView { .. } => true,
-        };
+        let table_type = status.kind.type_name().to_string();
+        let is_temporary = status.kind.is_temporary();
         Self::Table {
             name: status.name,
             catalog: status.catalog,
             namespace: status.database,
             description: status.kind.comment(),
-            table_type: table_type.to_string(),
+            table_type,
             is_temporary,
         }
     }

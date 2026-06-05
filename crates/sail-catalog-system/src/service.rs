@@ -91,6 +91,21 @@ impl SystemTableService {
                 )
                 .await?
             }
+            SystemTable::Options => {
+                let key = filters
+                    .extract("key")?
+                    .unwrap_or_else(Predicates::always_true);
+                filters.finalize()?;
+                self.observe_system_manager(
+                    |tx| SessionManagerObserver::Options {
+                        key,
+                        fetch,
+                        result: tx,
+                    },
+                    schema,
+                )
+                .await?
+            }
             SystemTable::Sessions => {
                 let session_id = filters
                     .extract("session_id")?

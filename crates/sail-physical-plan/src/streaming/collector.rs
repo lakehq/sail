@@ -21,7 +21,7 @@ use sail_common_datafusion::streaming::event::FlowEvent;
 #[derive(Debug)]
 pub struct StreamCollectorExec {
     input: Arc<dyn ExecutionPlan>,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl StreamCollectorExec {
@@ -30,13 +30,13 @@ impl StreamCollectorExec {
             return plan_err!("stream collector requires bounded input");
         }
         let schema = Arc::new(try_from_flow_event_schema(&input.schema())?);
-        let properties = PlanProperties::new(
+        let properties = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(schema),
             Partitioning::UnknownPartitioning(1),
             // We emit data at the end since we need to handle retractions.
             EmissionType::Final,
             Boundedness::Bounded,
-        );
+        ));
         Ok(Self { input, properties })
     }
 
@@ -64,7 +64,7 @@ impl ExecutionPlan for StreamCollectorExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

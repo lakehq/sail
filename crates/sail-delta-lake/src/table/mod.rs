@@ -21,22 +21,28 @@
 use std::fmt;
 use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
-use datafusion::arrow::datatypes::Schema;
+use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::Result;
-use delta_kernel::Error as KernelError;
 use object_store::ObjectStore;
-pub use state::DeltaTableState;
 use url::Url;
 
-use crate::datasource::{DeltaScanConfig, DeltaTableProvider};
-use crate::kernel::{DeltaResult, DeltaTableConfig, DeltaTableError};
+use crate::datasource::{df_logical_schema, DeltaScanConfig};
+pub mod features;
+pub use features::{
+    ChangeDataFeedSupport, ChangeDataFeedToken, ColumnMappingToken, DeletionVectorToken,
+    EnabledRowTrackingToken, RowTrackingToken, SupportedRowTrackingToken,
+};
+use sail_data_source::options::gen::DeltaReadOptions;
+
+use crate::delta_log::resolve_version_timestamp;
+pub use crate::kernel::snapshot::DeltaSnapshot;
+use crate::kernel::DeltaSnapshotConfig;
 use crate::logical::table_source::DeltaTableSource;
-use crate::options::TableDeltaOptions;
-use crate::storage::{commit_uri_from_version, default_logstore, LogStoreRef, StorageConfig};
-mod state;
+use crate::spec::{DeltaError, DeltaError as DeltaTableError, DeltaResult};
+use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
 
 /// In memory representation of a Delta Table
 ///
@@ -47,9 +53,9 @@ mod state;
 #[derive(Clone)]
 pub struct DeltaTable {
     /// The state of the table as of the most recent loaded Delta log entry.
-    pub state: Option<DeltaTableState>,
+    pub state: Option<Arc<DeltaSnapshot>>,
     /// the load options used during load
-    pub config: DeltaTableConfig,
+    pub config: DeltaSnapshotConfig,
     /// log store
     pub(crate) log_store: LogStoreRef,
 }
@@ -59,7 +65,7 @@ impl DeltaTable {
     ///
     /// NOTE: This is for advanced users. If you don't know why you need to use this method, please
     /// call one of the `open_table` helper methods instead.
-    pub fn new(log_store: LogStoreRef, config: DeltaTableConfig) -> Self {
+    pub fn new(log_store: LogStoreRef, config: DeltaSnapshotConfig) -> Self {
         Self {
             state: None,
             log_store,
@@ -84,17 +90,15 @@ impl DeltaTable {
 
     /// Get the timestamp of a given version commit.
     pub(crate) async fn get_version_timestamp(&self, version: i64) -> Result<i64, DeltaTableError> {
-        if let Some(ts) = self
-            .state
-            .as_ref()
-            .and_then(|s| s.version_timestamp(version))
-        {
-            return Ok(ts);
-        }
-
-        let commit_uri = commit_uri_from_version(version);
-        let meta = self.log_store.object_store(None).head(&commit_uri).await?;
-        Ok(meta.last_modified.timestamp_millis())
+        let snapshot = self.snapshot()?;
+        resolve_version_timestamp(
+            self.log_store.as_ref(),
+            version,
+            snapshot.version_timestamp(version),
+            snapshot.protocol(),
+            snapshot.metadata(),
+        )
+        .await
     }
 
     /// Updates the DeltaTable to the latest version by incrementally applying newer versions.
@@ -104,22 +108,28 @@ impl DeltaTable {
         max_version: Option<i64>,
     ) -> Result<(), DeltaTableError> {
         match self.state.as_mut() {
-            Some(state) => state.update(self.log_store.as_ref(), max_version).await,
+            Some(state) => {
+                Arc::make_mut(state)
+                    .update(self.log_store.as_ref(), max_version.map(|v| v as u64))
+                    .await?;
+                Ok(())
+            }
             _ => {
-                let state = DeltaTableState::try_new(
+                let state = DeltaSnapshot::try_new(
                     self.log_store.as_ref(),
                     self.config.clone(),
                     max_version,
+                    None,
                 )
                 .await?;
-                self.state = Some(state);
+                self.state = Some(Arc::new(state));
                 Ok(())
             }
         }
     }
 
     /// Returns the currently loaded state snapshot.
-    pub fn snapshot(&self) -> DeltaResult<&DeltaTableState> {
+    pub fn snapshot(&self) -> DeltaResult<&Arc<DeltaSnapshot>> {
         self.state
             .as_ref()
             .ok_or_else(|| DeltaTableError::generic("Table has not yet been initialized"))
@@ -176,13 +186,30 @@ pub async fn open_table_with_object_store_and_table_config(
     location: Url,
     object_store: Arc<dyn ObjectStore>,
     storage_options: StorageConfig,
-    table_config: DeltaTableConfig,
+    table_config: DeltaSnapshotConfig,
 ) -> DeltaResult<DeltaTable> {
     let log_store =
         create_logstore_with_object_store(object_store.clone(), location, storage_options)?;
 
     let mut table = DeltaTable::new(log_store, table_config);
     table.load().await?;
+
+    Ok(table)
+}
+
+/// Open and load a Delta table with an explicit kernel load config at a fixed version.
+pub async fn open_table_with_object_store_and_table_config_at_version(
+    location: Url,
+    object_store: Arc<dyn ObjectStore>,
+    storage_options: StorageConfig,
+    table_config: DeltaSnapshotConfig,
+    version: i64,
+) -> DeltaResult<DeltaTable> {
+    let log_store =
+        create_logstore_with_object_store(object_store.clone(), location, storage_options)?;
+
+    let mut table = DeltaTable::new(log_store, table_config);
+    table.load_version(version).await?;
 
     Ok(table)
 }
@@ -215,78 +242,15 @@ fn create_logstore_with_object_store(
     Ok(log_store)
 }
 
-/// Creates a Delta Lake table provider
-pub async fn create_delta_provider(
-    ctx: &dyn Session,
-    table_url: Url,
-    schema: Option<Schema>,
-    options: TableDeltaOptions,
-) -> Result<Arc<dyn datafusion::catalog::TableProvider>> {
-    let url = ListingTableUrl::try_new(table_url.clone(), None)?;
-    let object_store = ctx.runtime_env().object_store(&url)?;
-    let storage_config = StorageConfig;
-    let log_store =
-        create_logstore_with_object_store(object_store, table_url.clone(), storage_config)?;
-
-    // Create a new DeltaTable instance but do not load it yet.
-    let mut deltalake_table = DeltaTable::new(log_store.clone(), Default::default());
-
-    // Load the table state according to the provided time travel options.
-    load_table_by_options(&mut deltalake_table, &options).await?;
-
-    let snapshot = deltalake_table.snapshot()?.clone();
-
-    let scan_config = DeltaScanConfig {
-        file_column_name: None,
-        wrap_partition_values: false,
-        enable_parquet_pushdown: true,
-        schema: match schema {
-            Some(ref s) if s.fields().is_empty() => None,
-            Some(s) => Some(Arc::new(s)),
-            None => None,
-        },
-        commit_version_column_name: None,
-        commit_timestamp_column_name: None,
-    };
-
-    let table_provider = DeltaTableProvider::try_new(snapshot, log_store, scan_config)?;
-
-    Ok(Arc::new(table_provider))
-}
-
 /// Creates a Delta Lake table source for logical planning.
 pub async fn create_delta_source(
     ctx: &dyn Session,
     table_url: Url,
     schema: Option<Schema>,
-    options: TableDeltaOptions,
+    options: DeltaReadOptions,
 ) -> Result<Arc<dyn datafusion::logical_expr::TableSource>> {
-    let url = ListingTableUrl::try_new(table_url.clone(), None)?;
-    let object_store = ctx.runtime_env().object_store(&url)?;
-    let storage_config = StorageConfig;
-    let log_store =
-        create_logstore_with_object_store(object_store, table_url.clone(), storage_config)?;
-
-    // Create a new DeltaTable instance but do not load it yet.
-    let mut deltalake_table = DeltaTable::new(log_store.clone(), Default::default());
-
-    // Load the table state according to the provided time travel options.
-    load_table_by_options(&mut deltalake_table, &options).await?;
-
-    let snapshot = deltalake_table.snapshot()?.clone();
-
-    let scan_config = DeltaScanConfig {
-        file_column_name: None,
-        wrap_partition_values: false,
-        enable_parquet_pushdown: true,
-        schema: match schema {
-            Some(ref s) if s.fields().is_empty() => None,
-            Some(s) => Some(Arc::new(s)),
-            None => None,
-        },
-        commit_version_column_name: None,
-        commit_timestamp_column_name: None,
-    };
+    let (snapshot, log_store, scan_config) =
+        load_delta_read_state(ctx, table_url, schema, options, false).await?;
 
     Ok(Arc::new(DeltaTableSource::try_new(
         snapshot,
@@ -295,21 +259,105 @@ pub async fn create_delta_source(
     )?))
 }
 
+/// Infers the Delta logical schema for planning without constructing a logical read source.
+pub async fn infer_delta_logical_schema(
+    ctx: &dyn Session,
+    table_url: Url,
+    schema: Option<Schema>,
+    options: DeltaReadOptions,
+) -> Result<SchemaRef> {
+    let (schema, _) = infer_delta_logical_metadata(ctx, table_url, schema, options).await?;
+    Ok(schema)
+}
+
+/// Infers the Delta logical schema and table configuration for planning.
+pub async fn infer_delta_logical_metadata(
+    ctx: &dyn Session,
+    table_url: Url,
+    schema: Option<Schema>,
+    options: DeltaReadOptions,
+) -> Result<(SchemaRef, Vec<(String, String)>)> {
+    let (snapshot, _log_store, scan_config) =
+        load_delta_read_state(ctx, table_url, schema, options, true).await?;
+
+    let schema = df_logical_schema(
+        snapshot.as_ref(),
+        &scan_config.file_column_name,
+        &scan_config.row_index_column_name,
+        &scan_config.commit_version_column_name,
+        &scan_config.commit_timestamp_column_name,
+        scan_config.schema,
+    )?;
+    let properties = snapshot
+        .metadata()
+        .configuration()
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    Ok((schema, properties))
+}
+
+async fn load_delta_read_state(
+    ctx: &dyn Session,
+    table_url: Url,
+    schema: Option<Schema>,
+    options: DeltaReadOptions,
+    metadata_only: bool,
+) -> Result<(Arc<DeltaSnapshot>, LogStoreRef, DeltaScanConfig)> {
+    let url = ListingTableUrl::try_new(table_url.clone(), None)?;
+    let object_store = ctx.runtime_env().object_store(&url)?;
+    let storage_config = StorageConfig;
+    let log_store =
+        create_logstore_with_object_store(object_store, table_url.clone(), storage_config)?;
+
+    // Create a new DeltaTable instance but do not load it yet.
+    // For metadata-as-data reads, avoid eagerly loading active file metadata on the driver.
+    let table_config = if metadata_only || options.metadata_as_data_read {
+        DeltaSnapshotConfig {
+            require_files: false,
+            ..Default::default()
+        }
+    } else {
+        Default::default()
+    };
+    let mut deltalake_table = DeltaTable::new(log_store.clone(), table_config);
+
+    // Load the table state according to the provided time travel options.
+    load_table_by_options(&mut deltalake_table, &options).await?;
+
+    let snapshot = deltalake_table.snapshot()?.clone();
+
+    let scan_config = DeltaScanConfig {
+        file_column_name: None,
+        row_index_column_name: None,
+        wrap_partition_values: false,
+        enable_parquet_pushdown: true,
+        schema: match schema {
+            Some(ref s) if s.fields().is_empty() => None,
+            Some(s) => Some(Arc::new(s)),
+            None => None,
+        },
+        commit_version_column_name: None,
+        commit_timestamp_column_name: None,
+        delta_log_replay_strategy: options.delta_log_replay_strategy,
+        delta_log_replay_hash_threshold: options.delta_log_replay_hash_threshold.get(),
+    };
+
+    Ok((snapshot, log_store, scan_config))
+}
+
 /// Helper function to load a DeltaTable based on version or timestamp options.
-async fn load_table_by_options(table: &mut DeltaTable, options: &TableDeltaOptions) -> Result<()> {
+async fn load_table_by_options(table: &mut DeltaTable, options: &DeltaReadOptions) -> Result<()> {
     // Precedence: version > timestamp > latest.
     if let Some(version) = options.version_as_of {
         table.load_version(version).await?;
     } else if let Some(timestamp_str) = &options.timestamp_as_of {
-        // This logic is adapted from delta-rs `DeltaTable::load_with_datetime`
-        let datetime = DateTime::parse_from_rfc3339(timestamp_str)
-            .map_err(|e| DeltaTableError::generic(format!("Invalid timestamp string: {}", e)))?
-            .with_timezone(&Utc);
+        let datetime = parse_timestamp_as_of(timestamp_str)?;
 
         let target_version = find_version_for_timestamp(table, datetime)
             .await
             .map_err(|e| {
-                if matches!(e, DeltaTableError::Kernel(KernelError::MissingVersion)) {
+                if matches!(e, DeltaTableError::MissingVersion) {
                     DeltaTableError::generic(format!(
                         "No version of the Delta table exists at or before timestamp {}",
                         timestamp_str
@@ -333,14 +381,25 @@ async fn find_version_for_timestamp(
     datetime: DateTime<Utc>,
 ) -> DeltaResult<i64> {
     let log_store = table.log_store();
-    let mut max_version = log_store.get_latest_version(0).await?;
-    let mut min_version = 0;
-
-    // In case the table is not initialized yet (e.g. state is None),
-    // get_version_timestamp needs some state to work with. Let's load version 0.
-    if table.version().is_none() {
-        table.load_version(0).await?;
+    let latest_version = log_store.get_latest_version(0).await?;
+    if table.version() != Some(latest_version) {
+        table.load_version(latest_version).await?;
     }
+    let snapshot = table.snapshot()?;
+    let (mut min_version, mut max_version) =
+        if let Some((enablement_version, enablement_timestamp)) =
+            snapshot.in_commit_timestamp_enablement()
+        {
+            if datetime.timestamp_millis() >= enablement_timestamp {
+                (enablement_version, latest_version)
+            } else if enablement_version == 0 {
+                return Err(DeltaError::MissingVersion);
+            } else {
+                (0, enablement_version - 1)
+            }
+        } else {
+            (0, latest_version)
+        };
 
     let target_ts = datetime.timestamp_millis();
     let mut target_version = -1;
@@ -362,8 +421,41 @@ async fn find_version_for_timestamp(
 
     if target_version == -1 {
         // If no version was found, it means the provided timestamp is before the first commit.
-        Err(KernelError::MissingVersion.into())
+        Err(DeltaError::MissingVersion)
     } else {
         Ok(target_version)
     }
+}
+
+fn parse_timestamp_as_of(timestamp: &str) -> DeltaResult<DateTime<Utc>> {
+    let rfc3339_result = DateTime::parse_from_rfc3339(timestamp);
+    if let Ok(datetime) = rfc3339_result {
+        return Ok(datetime.with_timezone(&Utc));
+    }
+
+    let mut last_error = rfc3339_result
+        .err()
+        .map(|e| format!("RFC3339 parsing error: {e}"));
+
+    for format in [
+        "%Y-%m-%d %H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M:%S",
+    ] {
+        match NaiveDateTime::parse_from_str(timestamp, format) {
+            Ok(naive) => return Ok(Utc.from_utc_datetime(&naive)),
+            Err(e) => {
+                last_error = Some(format!("Failed to parse with format '{format}': {e}"));
+            }
+        }
+    }
+
+    let detail = last_error
+        .map(|e| format!(" Details: {e}"))
+        .unwrap_or_default();
+
+    Err(DeltaTableError::generic(format!(
+        "Invalid timestamp string: {timestamp}. Supported formats are: RFC3339 (e.g. '2024-01-02T03:04:05Z'), '%Y-%m-%d %H:%M:%S%.f', '%Y-%m-%dT%H:%M:%S%.f', '%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S'.{detail}",
+    )))
 }

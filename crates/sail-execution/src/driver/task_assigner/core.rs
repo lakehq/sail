@@ -163,6 +163,7 @@ impl TaskAssigner {
         Some(assignment.clone())
     }
 
+    /// Records local and remote stream ownership for each resource based on the given task assignments.
     pub fn track_streams(&mut self, assignments: &[TaskSetAssignment]) {
         for assignment in assignments {
             self.driver.track_remote_streams(&assignment.set);
@@ -236,6 +237,7 @@ impl TaskAssigner {
         }
     }
 
+    /// Builds a snapshot of available task slots across the driver and active workers for assignment.
     fn build_worker_task_slot_assigner(&self) -> TaskSlotAssigner {
         let slots = self
             .workers
@@ -268,6 +270,7 @@ impl TaskAssignmentGetter for TaskAssigner {
     }
 }
 
+/// Assigns task regions to driver or worker slots, consuming available slots as tasks are placed.
 struct TaskSlotAssigner {
     /// The available task slots on workers.
     slots: Vec<(WorkerId, Vec<usize>)>,

@@ -10,6 +10,8 @@ pub(super) fn list_built_in_geo_functions() -> Vec<(&'static str, ScalarFunction
         ("st_asbinary", F::custom(st_asbinary)),
         ("st_geomfromwkb", F::custom(st_geomfromwkb)),
         ("st_geogfromwkb", F::custom(st_geogfromwkb)),
+        ("st_setsrid", F::unknown("st_setsrid")),
+        ("st_srid", F::unknown("st_srid")),
     ]
 }
 

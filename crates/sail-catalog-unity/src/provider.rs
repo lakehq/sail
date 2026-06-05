@@ -15,13 +15,15 @@ use std::str::FromStr;
 
 use arrow::datatypes::DataType;
 use reqwest::header::HeaderValue;
-use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions,
-    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
+    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
 };
-use sail_catalog::utils::{get_property, quote_name_if_needed};
-use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
+use sail_catalog::utils::{get_property, quote_namespace_if_needed};
+use sail_common_datafusion::catalog::{
+    identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
+};
 use secrecy::SecretString;
 use tokio::sync::OnceCell;
 
@@ -113,35 +115,32 @@ impl UnityCatalogProvider {
         Ok(client)
     }
 
-    fn get_catalog_and_schema_name(&self, namespace: &Namespace) -> (String, String) {
-        match namespace.tail.len() {
-            0 => (
+    fn get_catalog_and_schema_name(
+        &self,
+        namespace: &Namespace,
+    ) -> CatalogResult<(String, String)> {
+        match namespace.tail.as_slice() {
+            [] => Ok((
                 self.catalog_config.default_catalog.to_string(),
-                namespace.head_to_string(),
-            ),
-            _ => (namespace.head_to_string(), namespace.tail_to_string()),
+                namespace.head.to_string(),
+            )),
+            [x] => Ok((namespace.head.to_string(), x.to_string())),
+            _ => Err(CatalogError::InvalidArgument(format!(
+                "Unity Catalog does not support multi-level schema name: {}",
+                quote_namespace_if_needed(namespace)
+            ))),
         }
     }
 
-    fn get_full_schema_name(&self, namespace: &Namespace) -> String {
-        match namespace.tail.len() {
-            0 => {
-                format!(
-                    "{}.{}",
-                    self.catalog_config.default_catalog,
-                    namespace.head_to_string()
-                )
-            }
-            _ => namespace.to_string(),
-        }
+    // Unity Catalog does not quote names in full names even if they contain special characters,
+    // so we only concatenate the names with dot ('.').
+
+    fn get_full_schema_name(catalog_name: &str, schema_name: &str) -> String {
+        format!("{catalog_name}.{schema_name}")
     }
 
-    fn get_full_table_name(&self, database: &Namespace, table: &str) -> String {
-        format!(
-            "{}.{}",
-            self.get_full_schema_name(database),
-            quote_name_if_needed(table)
-        )
+    fn get_full_table_name(catalog_name: &str, schema_name: &str, table_name: &str) -> String {
+        format!("{catalog_name}.{schema_name}.{table_name}")
     }
 
     fn schema_info_to_database_status(
@@ -192,7 +191,7 @@ impl UnityCatalogProvider {
         }
 
         DatabaseStatus {
-            catalog: catalog_name,
+            catalog: self.name.clone(),
             database,
             comment: schema_info.comment,
             location: get_property(&properties, "location"),
@@ -265,6 +264,7 @@ impl UnityCatalogProvider {
                     comment,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                     is_partition: partition_index.is_some(),
                     is_bucket: false,
                     is_cluster: false,
@@ -279,20 +279,6 @@ impl UnityCatalogProvider {
         let mut properties: HashMap<String, String> = properties.map(|p| p.0).unwrap_or_default();
 
         let comment = comment.or(get_property(&properties, "comment"));
-
-        let options: Vec<_> = properties
-            .extract_if(|k, _| k.trim().to_lowercase().starts_with("options."))
-            .map(|(k, v)| {
-                let trimmed = k.trim().to_string();
-                let stripped =
-                    if trimmed.len() >= 8 && trimmed[..8].eq_ignore_ascii_case("options.") {
-                        trimmed[8..].to_string()
-                    } else {
-                        trimmed
-                    };
-                (stripped, v)
-            })
-            .collect();
 
         if let Some(created_at) = created_at {
             properties.insert("created_at".to_string(), created_at.to_string());
@@ -319,7 +305,7 @@ impl UnityCatalogProvider {
         let properties: Vec<_> = properties.into_iter().collect();
 
         Ok(TableStatus {
-            catalog: Some(catalog),
+            catalog: Some(self.name.clone()),
             database,
             name,
             kind: TableKind::Table {
@@ -328,11 +314,11 @@ impl UnityCatalogProvider {
                 constraints: vec![],
                 location: storage_location,
                 format,
-                partition_by,
+                partition_by: identity_partition_fields(&partition_by),
                 sort_by: vec![],
                 bucket_by: None,
-                options,
                 properties,
+                is_external: true,
             },
         })
     }
@@ -369,7 +355,7 @@ impl CatalogProvider for UnityCatalogProvider {
             props.insert("location".to_string(), l);
         }
 
-        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database);
+        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
 
         let request = types::CreateSchema::builder()
             .catalog_name(&catalog_name)
@@ -409,8 +395,9 @@ impl CatalogProvider for UnityCatalogProvider {
             .await
             .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
 
-        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database);
-        let full_name = self.get_full_schema_name(database);
+        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
+        let full_name = Self::get_full_schema_name(&catalog_name, &schema_name);
+
         let result = client.get_schema().full_name(&full_name).send().await;
 
         match result {
@@ -425,7 +412,7 @@ impl CatalogProvider for UnityCatalogProvider {
             Err(progenitor_client::Error::UnexpectedResponse(response))
                 if response.status().as_u16() == 404 =>
             {
-                Err(CatalogError::NotFound("schema", full_name))
+                Err(CatalogError::NotFound(CatalogObject::Schema, full_name))
             }
             Err(e) => Err(CatalogError::External(format!("Failed to get schema: {e}"))),
         }
@@ -440,9 +427,16 @@ impl CatalogProvider for UnityCatalogProvider {
             .await
             .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
 
-        let catalog_name = prefix
-            .map(|namespace| namespace.to_string())
-            .unwrap_or(self.catalog_config.default_catalog.to_string());
+        let catalog_name = match prefix {
+            None => self.catalog_config.default_catalog.to_string(),
+            Some(Namespace { head, tail }) if tail.is_empty() => head.to_string(),
+            Some(x) => {
+                return Err(CatalogError::InvalidArgument(format!(
+                    "invalid prefix: {}",
+                    quote_namespace_if_needed(x)
+                )))
+            }
+        };
         let result = client
             .list_schemas()
             .catalog_name(&catalog_name)
@@ -478,11 +472,12 @@ impl CatalogProvider for UnityCatalogProvider {
             .await
             .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
 
-        let full_name = self.get_full_schema_name(database);
+        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
+        let full_name = Self::get_full_schema_name(&catalog_name, &schema_name);
 
         let result = client
             .delete_schema()
-            .full_name(&full_name)
+            .full_name(full_name)
             .force(cascade)
             .send()
             .await;
@@ -523,8 +518,8 @@ impl CatalogProvider for UnityCatalogProvider {
             bucket_by,
             if_not_exists,
             replace,
-            options,
             properties,
+            is_external: _,
         } = options;
 
         if replace {
@@ -562,7 +557,7 @@ impl CatalogProvider for UnityCatalogProvider {
             .await
             .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
 
-        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database);
+        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
 
         let data_source_format = types::DataSourceFormat::from_str(&format.trim().to_uppercase())
             .map_err(|e| {
@@ -618,10 +613,6 @@ impl CatalogProvider for UnityCatalogProvider {
             .collect::<CatalogResult<Vec<_>>>()?;
 
         let mut props = HashMap::new();
-        // TODO: Is this correct for options?
-        for (k, v) in options {
-            props.insert(format!("options.{k}"), v);
-        }
         if let Some(c) = &comment {
             props.insert("comment".to_string(), c.to_string());
         }
@@ -672,8 +663,8 @@ impl CatalogProvider for UnityCatalogProvider {
             .await
             .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
 
-        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database);
-        let full_name = format!("{catalog_name}.{schema_name}.{table}");
+        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
+        let full_name = Self::get_full_table_name(&catalog_name, &schema_name, table);
 
         let result = client.get_table().full_name(&full_name).send().await;
 
@@ -685,7 +676,7 @@ impl CatalogProvider for UnityCatalogProvider {
             Err(progenitor_client::Error::UnexpectedResponse(response))
                 if response.status().as_u16() == 404 =>
             {
-                Err(CatalogError::NotFound("table", full_name))
+                Err(CatalogError::NotFound(CatalogObject::Table, full_name))
             }
             Err(e) => Err(CatalogError::External(format!("Failed to get table: {e}"))),
         }
@@ -697,7 +688,7 @@ impl CatalogProvider for UnityCatalogProvider {
             .await
             .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
 
-        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database);
+        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
 
         let result = client
             .list_tables()
@@ -742,7 +733,8 @@ impl CatalogProvider for UnityCatalogProvider {
             .await
             .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
 
-        let full_name = self.get_full_table_name(database, table);
+        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
+        let full_name = Self::get_full_table_name(&catalog_name, &schema_name, table);
 
         let result = client.delete_table().full_name(&full_name).send().await;
 
@@ -760,6 +752,20 @@ impl CatalogProvider for UnityCatalogProvider {
             }
             Err(e) => Err(CatalogError::External(format!("Failed to drop table: {e}"))),
         }
+    }
+
+    async fn alter_table(
+        &self,
+        _database: &Namespace,
+        _table: &str,
+        _options: AlterTableOptions,
+    ) -> CatalogResult<()> {
+        // The Unity catalog does not currently propagate ALTER TABLE property changes to
+        // the Unity REST API. However, returning `NotSupported` here would abort a Delta
+        // storage-side commit that has already succeeded. Treat this as a no-op so the
+        // on-disk Delta table remains the source of truth until the REST integration
+        // is wired up.
+        Ok(())
     }
 
     async fn create_view(

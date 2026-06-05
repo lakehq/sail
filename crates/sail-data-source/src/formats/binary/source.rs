@@ -10,7 +10,7 @@ use datafusion_datasource::file_stream::{FileOpenFuture, FileOpener};
 use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_datasource::{PartitionedFile, TableSchema};
 use futures::StreamExt;
-use object_store::ObjectStore;
+use object_store::{GetResult, ObjectStore, ObjectStoreExt};
 
 use crate::formats::binary::reader::{BinaryFileMetadata, BinaryFileReader};
 
@@ -146,7 +146,7 @@ impl FileOpener for BinaryOpener {
         );
 
         Ok(Box::pin(async move {
-            let get_result = store.get(&location).await?;
+            let get_result: GetResult = store.get(&location).await?;
             let content = get_result.bytes().await?;
             let modification_time = last_modified.timestamp_micros();
             let metadata = BinaryFileMetadata {

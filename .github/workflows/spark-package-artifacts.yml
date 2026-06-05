@@ -1,0 +1,38 @@
+name: Spark Package Artifacts
+
+on:
+  # This workflow is triggered manually to upload the patched PySpark package
+  # used by Spark tests as downloadable artifacts.
+  workflow_dispatch:
+
+jobs:
+  upload:
+    name: Upload
+    runs-on: ubuntu-slim
+    strategy:
+      fail-fast: false
+      matrix:
+        spark-version: ["3.5.7", "4.1.1"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache/restore@v4
+        name: Restore Cache
+        id: cache
+        with:
+          path: opt/spark/python/dist/pyspark-*.tar.gz
+          key: ${{ format('spark-tests-pyspark-{0}-{1}-{2}-{3}', matrix.spark-version, runner.os, runner.arch, hashFiles(format('scripts/spark-tests/spark-{0}.patch', matrix.spark-version), 'scripts/spark-tests/build-pyspark.sh')) }}
+
+      - name: Verify Cache
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          echo "Missing cached PySpark package for Spark ${{ matrix.spark-version }}."
+          echo "Populate the cache via the Spark test workflow before running this workflow."
+          exit 1
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pyspark-${{ matrix.spark-version }}
+          path: opt/spark/python/dist/pyspark-*.tar.gz
+          retention-days: 30

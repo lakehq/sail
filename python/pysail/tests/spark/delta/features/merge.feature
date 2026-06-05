@@ -280,6 +280,115 @@ Feature: Delta Lake Merge
         | 2  | keep     |
         | 3  | inserted |
 
+  Rule: Merge-on-Read MERGE on deletion-vector tables
+    Background:
+      Given variable location for temporary directory merge_dv
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_dv
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_dv
+        USING DELTA LOCATION {{ location.sql }}
+        TBLPROPERTIES (
+          'delta.enableDeletionVectors' = 'true'
+        )
+        AS SELECT * FROM VALUES
+          (1, 'keep',   'target'),
+          (2, 'remove', 'target'),
+          (3, 'stay',   'target')
+        AS t(id, value, flag)
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_merge_dv AS
+        SELECT * FROM VALUES
+          (2, 'remove',   'delete'),
+          (4, 'inserted', 'insert')
+        AS src(id, value, flag)
+        """
+
+    @sail-only
+    Scenario: EXPLAIN for insert-only MERGE on a DV table does not request row indices
+      When query
+        """
+        EXPLAIN
+        MERGE INTO delta_merge_dv AS t
+        USING src_merge_dv AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED THEN
+          INSERT (id, value, flag)
+          VALUES (s.id, s.value, s.flag)
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: EXPLAIN for MERGE delete on a DV table uses sorted partitioned DV rows
+      When query
+        """
+        EXPLAIN
+        MERGE INTO delta_merge_dv AS t
+        USING src_merge_dv AS s
+        ON t.id = s.id
+        WHEN MATCHED AND s.flag = 'delete' THEN
+          DELETE
+        WHEN NOT MATCHED THEN
+          INSERT (id, value, flag)
+          VALUES (s.id, s.value, s.flag)
+        """
+      Then query plan matches snapshot
+
+    @sail-only
+    Scenario: Matched deletes use deletion vectors while unmatched rows are inserted
+      Given statement
+        """
+        MERGE INTO delta_merge_dv AS t
+        USING src_merge_dv AS s
+        ON t.id = s.id
+        WHEN MATCHED AND s.flag = 'delete' THEN
+          DELETE
+        WHEN NOT MATCHED THEN
+          INSERT (id, value, flag)
+          VALUES (s.id, s.value, s.flag)
+        """
+      Then delta log latest commit info matches snapshot
+      Then delta log latest commit info contains
+        | path                                               | value                  |
+        | operation                                          | "MERGE"                |
+        | operationParameters.mergePredicate                 | "t . id = s . id " |
+        | operationParameters.matchedPredicates[0].actionType | "delete"               |
+        | operationParameters.matchedPredicates[0].predicate  | "s . flag = 'delete' " |
+        | operationParameters.notMatchedPredicates[0].actionType | "insert"            |
+      Then file tree in location matches
+        """
+        📂 <hex-prefix>
+          📄 deletion_vector_<uuid>.bin
+        📄 part-<id>.<codec>.parquet
+        📄 part-<id>.<codec>.parquet
+        """
+      When query
+        """
+        SELECT id, value, flag FROM delta_merge_dv ORDER BY id
+        """
+      Then query result ordered
+        | id | value    | flag   |
+        | 1  | keep     | target |
+        | 3  | stay     | target |
+        | 4  | inserted | insert |
+
+    @sail-only
+    Scenario: Matched updates are rejected for Merge-on-Read MERGE
+      When query
+        """
+        MERGE INTO delta_merge_dv AS t
+        USING src_merge_dv AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN
+          UPDATE SET value = s.value
+        """
+      Then query error Merge-on-Read strategy for MERGE UPDATE clauses
+
 
   Rule: Updates for rows not matched by source and explicit insert columns
     Background:
@@ -644,4 +753,3 @@ Feature: Delta Lake Merge
         | 2  | 2024 | 250   |
         | 3  | 2024 | 700   |
         | 4  | 2024 | 900   |
-

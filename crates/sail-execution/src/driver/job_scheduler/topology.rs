@@ -36,6 +36,7 @@ pub struct StageTopology {
 }
 
 impl JobTopology {
+    /// Groups pipelined stages into components and builds the topology of task regions and stages.
     pub fn try_new(graph: &JobGraph) -> ExecutionResult<Self> {
         let mut stages = (0..graph.stages().len())
             .map(|_| StageTopology { consumers: vec![] })
@@ -88,7 +89,6 @@ impl JobTopology {
             }
         }
 
-        // generate task region topology
         let mut regions = vec![];
 
         for component in components {

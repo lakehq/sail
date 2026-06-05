@@ -7,7 +7,7 @@ use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
-use datafusion_common::{exec_err, internal_err, plan_err, ScalarValue};
+use datafusion_common::{exec_err, plan_err, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
@@ -22,6 +22,7 @@ use sail_sql_analyzer::parser as sail_parser;
 
 use crate::functions_nested_utils::*;
 use crate::functions_utils::make_scalar_function;
+use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
 
 const DEFAULT_SESSION_TIMEZONE: &str = "UTC";
 
@@ -59,31 +60,21 @@ impl SparkFromCSVOptions {
     pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "%Y-%m-%d %H:%M:%S";
 
     /// Build `SparkFromCSVOptions` from a DataFusion `MapArray` of key-value pairs.
-    fn from_map(map: &MapArray) -> Self {
+    fn from_map(map: &MapArray) -> Result<Self> {
         let sep = find_key_value(map, Self::SEP_OPTION)
             .or(find_key_value(map, Self::DELIMITER_OPTION))
             .unwrap_or(Self::SEP_DEFAULT.to_string());
 
         let timestamp_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
-            .map(Self::convert_format)
+            .map(spark_datetime_format_to_chrono_strftime)
+            .transpose()?
             .unwrap_or(Self::TIMESTAMP_FORMAT_DEFAULT.to_string());
 
-        Self {
+        Ok(Self {
             sep,
             timestamp_format,
-        }
-    }
-
-    /// Converts a Spark/Java-style timestamp format string (e.g., "yyyy-MM-dd")
-    /// into a format compatible with the `chrono` crate (e.g., "%Y-%m-%d").
-    fn convert_format(fmt: &str) -> String {
-        fmt.replace("yyyy", "%Y")
-            .replace("MM", "%m")
-            .replace("dd", "%d")
-            .replace("HH", "%H")
-            .replace("mm", "%M")
-            .replace("ss", "%S")
+        })
     }
 }
 
@@ -143,13 +134,18 @@ impl ScalarUDFImpl for SparkFromCSV {
         let ReturnFieldArgs {
             scalar_arguments, ..
         } = args;
-        let schema: &String = if let Some(schema) = scalar_arguments.get(1) {
+        let schema_str = if let Some(schema) = scalar_arguments.get(1) {
             match schema {
-                Some(ScalarValue::Utf8(Some(schema)))
-                | Some(ScalarValue::LargeUtf8(Some(schema)))
-                | Some(ScalarValue::Utf8View(Some(schema))) => Ok(schema),
-                _ => internal_err!("Expected UTF-8 schema string"),
-            }?
+                Some(ScalarValue::Utf8(Some(s)))
+                | Some(ScalarValue::LargeUtf8(Some(s)))
+                | Some(ScalarValue::Utf8View(Some(s))) => s.as_str(),
+                None | Some(_) => {
+                    return plan_err!(
+                        "`{}` function requires the schema argument to be a string literal",
+                        Self::FROM_CSV_NAME
+                    );
+                }
+            }
         } else {
             return plan_err!(
                 "`{}` function requires 2 or 3 arguments, got {}",
@@ -158,7 +154,7 @@ impl ScalarUDFImpl for SparkFromCSV {
             );
         };
 
-        let dt: DataType = DataType::Struct(parse_fields(schema, &self.session_timezone)?);
+        let dt = DataType::Struct(parse_fields(schema_str, &self.session_timezone)?);
         Ok(Arc::new(Field::new(self.name(), dt, true)))
     }
 
@@ -235,7 +231,7 @@ fn spark_from_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Arr
     };
 
     let options: SparkFromCSVOptions = if let Some(options) = args.get(2) {
-        SparkFromCSVOptions::from_map(downcast_arg!(options, MapArray))
+        SparkFromCSVOptions::from_map(downcast_arg!(options, MapArray))?
     } else {
         SparkFromCSVOptions::default()
     };
@@ -646,6 +642,8 @@ fn find_key_value(options: &MapArray, search_key: &str) -> Option<String> {
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
+    use datafusion_common::internal_err;
+
     use super::*;
 
     /// Unit test for `spark_from_csv_inner` that verifies CSV parsing into a `StructArray`.

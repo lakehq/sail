@@ -1,13 +1,17 @@
 use std::collections::HashMap;
 
 use dashmap::{DashMap, Entry};
-use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions,
-    CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions,
-    DropViewOptions, Namespace,
+    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions,
+    CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
+    DropTableOptions, DropViewOptions, Namespace,
 };
-use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
+use sail_catalog::utils::quote_namespace_if_needed;
+use sail_common_datafusion::catalog::{
+    alter_column_default, alter_column_type, DatabaseStatus, TableColumnStatus, TableKind,
+    TableStatus,
+};
 
 struct MemoryDatabase {
     status: DatabaseStatus,
@@ -70,8 +74,8 @@ impl CatalogProvider for MemoryCatalogProvider {
                     Ok(entry.get().status.clone())
                 } else {
                     Err(CatalogError::AlreadyExists(
-                        "database",
-                        database.to_string(),
+                        CatalogObject::Database,
+                        quote_namespace_if_needed(database),
                     ))
                 }
             }
@@ -98,7 +102,10 @@ impl CatalogProvider for MemoryCatalogProvider {
         if let Some(db) = self.databases.get(database) {
             Ok(db.status.clone())
         } else {
-            Err(CatalogError::NotFound("database", database.to_string()))
+            Err(CatalogError::NotFound(
+                CatalogObject::Database,
+                quote_namespace_if_needed(database),
+            ))
         }
     }
 
@@ -133,7 +140,10 @@ impl CatalogProvider for MemoryCatalogProvider {
             if if_exists {
                 Ok(())
             } else {
-                Err(CatalogError::NotFound("database", database.to_string()))
+                Err(CatalogError::NotFound(
+                    CatalogObject::Database,
+                    quote_namespace_if_needed(database),
+                ))
             }
         } else {
             Ok(())
@@ -157,25 +167,29 @@ impl CatalogProvider for MemoryCatalogProvider {
             bucket_by,
             if_not_exists,
             replace,
-            options,
             properties,
+            is_external,
         } = options;
-        if partition_by.iter().any(|f| f.transform.is_some()) {
+        if !format.eq_ignore_ascii_case("iceberg")
+            && partition_by.iter().any(|f| f.transform.is_some())
+        {
             return Err(CatalogError::NotSupported(
                 "partition transforms are not supported by memory catalog".to_string(),
             ));
         }
-        let mut db = self
-            .databases
-            .get_mut(database)
-            .ok_or_else(|| CatalogError::NotFound("database", database.to_string()))?;
+        let mut db = self.databases.get_mut(database).ok_or_else(|| {
+            CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
+        })?;
         if let Some(status) = db.tables.get(table) {
             if if_not_exists {
                 return Ok(status.clone());
             } else if replace {
                 db.tables.remove(table);
             } else {
-                return Err(CatalogError::AlreadyExists("table", table.to_string()));
+                return Err(CatalogError::AlreadyExists(
+                    CatalogObject::Table,
+                    table.to_string(),
+                ));
             }
         }
         let columns = columns
@@ -188,6 +202,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                     comment,
                     default,
                     generated_always_as,
+                    identity,
                 } = x;
                 let is_partition = partition_by
                     .iter()
@@ -202,6 +217,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                     comment,
                     default,
                     generated_always_as,
+                    identity,
                     is_partition,
                     is_bucket,
                     is_cluster: false,
@@ -218,11 +234,11 @@ impl CatalogProvider for MemoryCatalogProvider {
                 constraints,
                 location,
                 format,
-                partition_by: partition_by.into_iter().map(|f| f.column).collect(),
+                partition_by,
                 sort_by,
                 bucket_by,
-                options,
                 properties,
+                is_external,
             },
         };
         db.tables.insert(table.to_string(), status.clone());
@@ -235,14 +251,20 @@ impl CatalogProvider for MemoryCatalogProvider {
                 return Ok(status.clone());
             }
         }
-        Err(CatalogError::NotFound("table", table.to_string()))
+        Err(CatalogError::NotFound(
+            CatalogObject::Table,
+            table.to_string(),
+        ))
     }
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
         if let Some(db) = self.databases.get(database) {
             Ok(db.tables.values().cloned().collect())
         } else {
-            Err(CatalogError::NotFound("database", database.to_string()))
+            Err(CatalogError::NotFound(
+                CatalogObject::Database,
+                quote_namespace_if_needed(database),
+            ))
         }
     }
 
@@ -263,12 +285,88 @@ impl CatalogProvider for MemoryCatalogProvider {
             if db.tables.remove(table).is_some() || if_exists {
                 Ok(())
             } else {
-                Err(CatalogError::NotFound("table", table.to_string()))
+                Err(CatalogError::NotFound(
+                    CatalogObject::Table,
+                    table.to_string(),
+                ))
             }
         } else if if_exists {
             Ok(())
         } else {
-            Err(CatalogError::NotFound("database", database.to_string()))
+            Err(CatalogError::NotFound(
+                CatalogObject::Database,
+                quote_namespace_if_needed(database),
+            ))
+        }
+    }
+
+    async fn alter_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: AlterTableOptions,
+    ) -> CatalogResult<()> {
+        let mut db = self.databases.get_mut(database).ok_or_else(|| {
+            CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
+        })?;
+        let status = db
+            .tables
+            .get_mut(table)
+            .ok_or_else(|| CatalogError::NotFound(CatalogObject::Table, table.to_string()))?;
+        match &mut status.kind {
+            TableKind::Table {
+                columns,
+                properties,
+                ..
+            } => match options {
+                AlterTableOptions::SetTableProperties {
+                    properties: new_props,
+                } => {
+                    for (key, value) in new_props {
+                        if let Some(existing) = properties.iter_mut().find(|(k, _)| k == &key) {
+                            existing.1 = value;
+                        } else {
+                            properties.push((key, value));
+                        }
+                    }
+                    Ok(())
+                }
+                AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
+                    for key in &keys {
+                        let found = properties.iter().any(|(k, _)| k == key);
+                        if !found && !if_exists {
+                            return Err(CatalogError::NotFound(
+                                CatalogObject::Table,
+                                format!("property '{key}' not found on table '{table}'"),
+                            ));
+                        }
+                        properties.retain(|(k, _)| k != key);
+                    }
+                    Ok(())
+                }
+                AlterTableOptions::AlterColumnType { name, data_type } => {
+                    alter_column_type(columns, &name, data_type).map_err(|e| {
+                        CatalogError::InvalidArgument(format!(
+                            "failed to alter column type for '{}': {e}",
+                            name.join(".")
+                        ))
+                    })
+                }
+                AlterTableOptions::AlterColumnDefault { name, default } => {
+                    alter_column_default(columns, &name, default).map_err(|e| {
+                        CatalogError::InvalidArgument(format!(
+                            "failed to alter column default for '{}': {e}",
+                            name.join(".")
+                        ))
+                    })
+                }
+                AlterTableOptions::AddCheckConstraint { .. } => Err(CatalogError::NotSupported(
+                    "CHECK constraints are handled by lakehouse table formats".to_string(),
+                )),
+            },
+            _ => Err(CatalogError::NotSupported(
+                "ALTER TABLE is not supported for views".to_string(),
+            )),
         }
     }
 
@@ -286,17 +384,19 @@ impl CatalogProvider for MemoryCatalogProvider {
             comment,
             properties,
         } = options;
-        let mut db = self
-            .databases
-            .get_mut(database)
-            .ok_or_else(|| CatalogError::NotFound("database", database.to_string()))?;
+        let mut db = self.databases.get_mut(database).ok_or_else(|| {
+            CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
+        })?;
         if let Some(status) = db.views.get(view) {
             if if_not_exists {
                 return Ok(status.clone());
             } else if replace {
                 db.views.remove(view);
             } else {
-                return Err(CatalogError::AlreadyExists("view", view.to_string()));
+                return Err(CatalogError::AlreadyExists(
+                    CatalogObject::View,
+                    view.to_string(),
+                ));
             }
         }
         let columns = columns
@@ -315,6 +415,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                     comment,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                     is_partition: false,
                     is_bucket: false,
                     is_cluster: false,
@@ -342,14 +443,20 @@ impl CatalogProvider for MemoryCatalogProvider {
                 return Ok(status.clone());
             }
         }
-        Err(CatalogError::NotFound("view", view.to_string()))
+        Err(CatalogError::NotFound(
+            CatalogObject::View,
+            view.to_string(),
+        ))
     }
 
     async fn list_views(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
         if let Some(db) = self.databases.get(database) {
             Ok(db.views.values().cloned().collect())
         } else {
-            Err(CatalogError::NotFound("database", database.to_string()))
+            Err(CatalogError::NotFound(
+                CatalogObject::Database,
+                quote_namespace_if_needed(database),
+            ))
         }
     }
 
@@ -364,12 +471,18 @@ impl CatalogProvider for MemoryCatalogProvider {
             if db.views.remove(view).is_some() || if_exists {
                 Ok(())
             } else {
-                Err(CatalogError::NotFound("view", view.to_string()))
+                Err(CatalogError::NotFound(
+                    CatalogObject::View,
+                    view.to_string(),
+                ))
             }
         } else if if_exists {
             Ok(())
         } else {
-            Err(CatalogError::NotFound("database", database.to_string()))
+            Err(CatalogError::NotFound(
+                CatalogObject::Database,
+                quote_namespace_if_needed(database),
+            ))
         }
     }
 }

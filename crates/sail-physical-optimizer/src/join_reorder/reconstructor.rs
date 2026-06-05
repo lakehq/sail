@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion::common::{JoinSide, NullEquality};
@@ -12,7 +12,9 @@ use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode,
 };
+use datafusion::physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion::physical_plan::ExecutionPlan;
+use log::warn;
 
 use crate::join_reorder::builder::{ColumnMap, ColumnMapEntry};
 use crate::join_reorder::dp_plan::{DPPlan, PlanType};
@@ -33,6 +35,11 @@ pub struct PlanReconstructor<'a> {
     plan_cache: HashMap<JoinSet, (Arc<dyn ExecutionPlan>, ColumnMap)>,
     /// Pending filters that couldn't be applied yet due to missing dependencies
     pending_filters: Vec<PendingFilter>,
+    /// Required stable columns for each JoinSet in the chosen join tree.
+    ///
+    /// When present, the reconstructor will add projections to keep join inputs/outputs narrow
+    /// before `JoinSelection` runs, which can significantly impact physical operator choices.
+    required_output_cols: HashMap<JoinSet, HashSet<(usize, usize)>>,
 }
 
 /// Represents a filter that couldn't be applied yet due to missing table dependencies
@@ -51,23 +58,376 @@ impl<'a> PlanReconstructor<'a> {
             query_graph,
             plan_cache: HashMap::new(),
             pending_filters: Vec::new(),
+            required_output_cols: HashMap::new(),
         }
     }
 
-    /// Parse stable column name like "R{rel}.C{col}" -> (rel, col)
-    fn parse_stable_name(name: &str) -> Option<(usize, usize)> {
-        if !name.starts_with('R') {
+    /// Prepare a per-JoinSet "required output columns" map for the selected join tree rooted at
+    /// `root_dp_plan`. The root requirements are derived from `target_map` (i.e. the original
+    /// region-root output columns), and then pushed down through the join tree while adding any
+    /// columns needed to evaluate each join's predicates.
+    pub fn prepare_required_output_columns(
+        &mut self,
+        root_dp_plan: &DPPlan,
+        target_map: &ColumnMap,
+    ) -> Result<()> {
+        let root_required = self.collect_required_stable_cols_from_column_map(target_map)?;
+        self.populate_required_for_plan(root_dp_plan, &root_required)?;
+        Ok(())
+    }
+
+    fn collect_required_stable_cols_from_column_map(
+        &self,
+        map: &ColumnMap,
+    ) -> Result<HashSet<(usize, usize)>> {
+        let mut out: HashSet<(usize, usize)> = HashSet::new();
+        for entry in map {
+            self.collect_required_from_entry(entry, &mut out)?;
+        }
+        Ok(out)
+    }
+
+    fn collect_required_from_entry(
+        &self,
+        entry: &ColumnMapEntry,
+        out: &mut HashSet<(usize, usize)>,
+    ) -> Result<()> {
+        match entry {
+            ColumnMapEntry::Stable {
+                relation_id,
+                column_index,
+            } => {
+                out.insert((*relation_id, *column_index));
+            }
+            ColumnMapEntry::Expression { expr, input_map } => {
+                self.collect_required_from_expr(expr, input_map, out)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn collect_required_from_expr(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        input_map: &ColumnMap,
+        out: &mut HashSet<(usize, usize)>,
+    ) -> Result<()> {
+        let cols = collect_columns(expr);
+        for c in &cols {
+            // Prefer stable names if they are already present.
+            if let Some((rel, col_idx)) = StableColumn::parse_stable_name(c.name()) {
+                out.insert((rel, col_idx));
+                continue;
+            }
+
+            let entry = input_map.get(c.index()).ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "Expression column index {} out of bounds (len {}) while collecting required columns",
+                    c.index(),
+                    input_map.len()
+                ))
+            })?;
+            self.collect_required_from_entry(entry, out)?;
+        }
+        Ok(())
+    }
+
+    fn populate_required_for_plan(
+        &mut self,
+        dp_plan: &DPPlan,
+        required: &HashSet<(usize, usize)>,
+    ) -> Result<()> {
+        self.required_output_cols
+            .insert(dp_plan.join_set, required.clone());
+
+        match &dp_plan.plan_type {
+            PlanType::Leaf { .. } => Ok(()),
+            PlanType::Join {
+                left_set,
+                right_set,
+                edge_indices,
+            } => {
+                let left_dp_plan = self.dp_table.get(left_set).ok_or_else(|| {
+                    DataFusionError::Internal("Left subplan not found in DP table".to_string())
+                })?;
+                let right_dp_plan = self.dp_table.get(right_set).ok_or_else(|| {
+                    DataFusionError::Internal("Right subplan not found in DP table".to_string())
+                })?;
+
+                let mut req_left = self.filter_required_by_join_set(required, left_set);
+                let mut req_right = self.filter_required_by_join_set(required, right_set);
+
+                // Add columns needed to evaluate the join predicates at this join node.
+                for &edge_index in edge_indices {
+                    let edge = self.query_graph.edges.get(edge_index).ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "Edge with index {} not found",
+                            edge_index
+                        ))
+                    })?;
+
+                    for (a, b) in &edge.equi_pairs {
+                        if Self::join_set_contains_relation(left_set, a.relation_id) {
+                            req_left.insert((a.relation_id, a.column_index));
+                        } else if Self::join_set_contains_relation(right_set, a.relation_id) {
+                            req_right.insert((a.relation_id, a.column_index));
+                        }
+                        if Self::join_set_contains_relation(left_set, b.relation_id) {
+                            req_left.insert((b.relation_id, b.column_index));
+                        } else if Self::join_set_contains_relation(right_set, b.relation_id) {
+                            req_right.insert((b.relation_id, b.column_index));
+                        }
+                    }
+
+                    // Best-effort: add stable columns referenced in the filter expression.
+                    for c in collect_columns(&edge.filter) {
+                        if let Some((rel, col_idx)) = StableColumn::parse_stable_name(c.name()) {
+                            if Self::join_set_contains_relation(left_set, rel) {
+                                req_left.insert((rel, col_idx));
+                            } else if Self::join_set_contains_relation(right_set, rel) {
+                                req_right.insert((rel, col_idx));
+                            }
+                        }
+                    }
+                }
+
+                self.populate_required_for_plan(left_dp_plan, &req_left)?;
+                self.populate_required_for_plan(right_dp_plan, &req_right)?;
+                Ok(())
+            }
+        }
+    }
+
+    fn filter_required_by_join_set(
+        &self,
+        required: &HashSet<(usize, usize)>,
+        join_set: &JoinSet,
+    ) -> HashSet<(usize, usize)> {
+        required
+            .iter()
+            .filter(|(rel, _)| Self::join_set_contains_relation(join_set, *rel))
+            .cloned()
+            .collect()
+    }
+
+    #[inline]
+    fn relation_bit(relation_id: usize) -> u64 {
+        debug_assert!(
+            relation_id < u64::BITS as usize,
+            "relation_id {} must be < {} to fit in JoinSet bitmap",
+            relation_id,
+            u64::BITS
+        );
+        1u64 << relation_id
+    }
+
+    #[inline]
+    fn join_set_contains_relation(join_set: &JoinSet, relation_id: usize) -> bool {
+        (join_set.bits() & Self::relation_bit(relation_id)) != 0
+    }
+
+    fn join_output_map_for_type(
+        left_map: &ColumnMap,
+        right_map: &ColumnMap,
+        join_type: JoinType,
+    ) -> Result<ColumnMap> {
+        let mut output = Vec::new();
+        match join_type {
+            JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+                output.extend(left_map.iter().cloned());
+                output.extend(right_map.iter().cloned());
+            }
+            JoinType::LeftSemi | JoinType::LeftAnti => {
+                output.extend(left_map.iter().cloned());
+            }
+            JoinType::RightSemi | JoinType::RightAnti => {
+                output.extend(right_map.iter().cloned());
+            }
+            JoinType::LeftMark | JoinType::RightMark => {
+                return Err(DataFusionError::Internal(format!(
+                    "JoinReorder: {:?} is not supported in non-inner join reorder",
+                    join_type
+                )));
+            }
+        }
+        Ok(output)
+    }
+
+    fn compute_required_projection(
+        &self,
+        join_set: JoinSet,
+        column_map: &ColumnMap,
+    ) -> Option<Vec<usize>> {
+        let required = self.required_output_cols.get(&join_set)?;
+        let keep: Vec<usize> = column_map
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| match e {
+                ColumnMapEntry::Stable {
+                    relation_id,
+                    column_index,
+                } => required
+                    .contains(&(*relation_id, *column_index))
+                    .then_some(i),
+                ColumnMapEntry::Expression { .. } => None,
+            })
+            .collect();
+
+        if keep.is_empty() {
+            if !required.is_empty() && !column_map.is_empty() {
+                warn!(
+                    "JoinReorder: required columns resolved to empty projection for join_set bits={:#x} (required={}, columns={})",
+                    join_set.bits(),
+                    required.len(),
+                    column_map.len()
+                );
+                debug_assert!(
+                    required.is_empty() || column_map.is_empty(),
+                    "non-empty required columns should not produce empty projection indices"
+                );
+            }
             return None;
         }
-        let dot = name.find('.')?;
-        let rel_str = &name[1..dot];
-        if !name[dot + 1..].starts_with('C') {
-            return None;
+
+        (keep.len() < column_map.len()).then_some(keep)
+    }
+
+    /// Validate the selected DP tree before rebuilding physical operators.
+    ///
+    /// The central correctness contract is that every original query-graph predicate edge is
+    /// attached exactly once at the lowest join node whose two children together contain all
+    /// referenced relations. This catches missed complex hyperedges and accidental duplicate
+    /// predicate placement before a malformed physical plan is produced.
+    pub fn validate_reconstruction_plan(&self, dp_plan: &DPPlan) -> Result<()> {
+        let expected_root = JoinSet::from_iter(0..self.query_graph.relation_count())?;
+        if dp_plan.join_set != expected_root {
+            return Err(DataFusionError::Internal(format!(
+                "JoinReorder: reconstruction root {:?} does not cover all relations {:?}",
+                dp_plan.join_set, expected_root
+            )));
         }
-        let col_str = &name[dot + 2..];
-        let rel = rel_str.parse::<usize>().ok()?;
-        let col = col_str.parse::<usize>().ok()?;
-        Some((rel, col))
+
+        let mut edge_use_counts = vec![0usize; self.query_graph.edges.len()];
+        let mut visited_join_sets = HashSet::new();
+        self.validate_reconstruction_subplan(
+            dp_plan,
+            &mut edge_use_counts,
+            &mut visited_join_sets,
+        )?;
+
+        for (edge_index, count) in edge_use_counts.into_iter().enumerate() {
+            if count != 1 {
+                return Err(DataFusionError::Internal(format!(
+                    "JoinReorder: query graph edge {} was used {} times during reconstruction; expected exactly once",
+                    edge_index, count
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_reconstruction_subplan(
+        &self,
+        dp_plan: &DPPlan,
+        edge_use_counts: &mut [usize],
+        visited_join_sets: &mut HashSet<JoinSet>,
+    ) -> Result<()> {
+        if !visited_join_sets.insert(dp_plan.join_set) {
+            return Err(DataFusionError::Internal(format!(
+                "JoinReorder: DP tree contains duplicate join set {:?}",
+                dp_plan.join_set
+            )));
+        }
+
+        match &dp_plan.plan_type {
+            PlanType::Leaf { relation_id } => {
+                let expected = JoinSet::new_singleton(*relation_id)?;
+                if dp_plan.join_set != expected {
+                    return Err(DataFusionError::Internal(format!(
+                        "JoinReorder: leaf relation {} has inconsistent join set {:?}",
+                        relation_id, dp_plan.join_set
+                    )));
+                }
+                if self.query_graph.get_relation(*relation_id).is_none() {
+                    return Err(DataFusionError::Internal(format!(
+                        "JoinReorder: leaf relation {} not found in query graph",
+                        relation_id
+                    )));
+                }
+            }
+            PlanType::Join {
+                left_set,
+                right_set,
+                edge_indices,
+            } => {
+                if !left_set.is_disjoint(right_set) {
+                    return Err(DataFusionError::Internal(format!(
+                        "JoinReorder: join children overlap: left={:?}, right={:?}",
+                        left_set, right_set
+                    )));
+                }
+                if (*left_set | *right_set) != dp_plan.join_set {
+                    return Err(DataFusionError::Internal(format!(
+                        "JoinReorder: join children {:?} and {:?} do not form parent {:?}",
+                        left_set, right_set, dp_plan.join_set
+                    )));
+                }
+                if !self
+                    .query_graph
+                    .is_join_pair_legal(*left_set, *right_set, edge_indices)
+                {
+                    return Err(DataFusionError::Internal(format!(
+                        "JoinReorder: illegal join pair in selected DP plan: left={:?}, right={:?}, edges={:?}",
+                        left_set, right_set, edge_indices
+                    )));
+                }
+
+                for &edge_index in edge_indices {
+                    let edge = self.query_graph.edges.get(edge_index).ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "JoinReorder: selected DP plan references missing edge {}",
+                            edge_index
+                        ))
+                    })?;
+                    if !edge.join_set.is_subset(&dp_plan.join_set)
+                        || edge.join_set.is_subset(left_set)
+                        || edge.join_set.is_subset(right_set)
+                    {
+                        return Err(DataFusionError::Internal(format!(
+                            "JoinReorder: edge {} with relations {:?} is not a valid connector for left={:?}, right={:?}",
+                            edge_index, edge.join_set, left_set, right_set
+                        )));
+                    }
+                    edge_use_counts[edge_index] += 1;
+                }
+
+                let left_dp_plan = self.dp_table.get(left_set).ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "JoinReorder: left subplan {:?} missing from DP table",
+                        left_set
+                    ))
+                })?;
+                let right_dp_plan = self.dp_table.get(right_set).ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "JoinReorder: right subplan {:?} missing from DP table",
+                        right_set
+                    ))
+                })?;
+                self.validate_reconstruction_subplan(
+                    left_dp_plan,
+                    edge_use_counts,
+                    visited_join_sets,
+                )?;
+                self.validate_reconstruction_subplan(
+                    right_dp_plan,
+                    edge_use_counts,
+                    visited_join_sets,
+                )?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Main entry point: recursively reconstruct ExecutionPlan from DPPlan
@@ -79,7 +439,9 @@ impl<'a> PlanReconstructor<'a> {
         }
 
         let mut result = match &dp_plan.plan_type {
-            PlanType::Leaf { relation_id } => self.reconstruct_leaf(*relation_id)?,
+            PlanType::Leaf { relation_id } => {
+                self.reconstruct_leaf(*relation_id, dp_plan.join_set)?
+            }
             PlanType::Join {
                 left_set,
                 right_set,
@@ -92,16 +454,9 @@ impl<'a> PlanReconstructor<'a> {
         if dp_plan.join_set.cardinality() as usize == self.query_graph.relation_count() {
             if !self.pending_filters.is_empty() {
                 let (plan, col_map) = &result;
-                match self.apply_remaining_pending_filters(plan.clone(), col_map)? {
-                    Some(new_plan) => {
-                        result = (new_plan, col_map.clone());
-                        // All remaining were applied; clear them
-                        self.pending_filters.clear();
-                    }
-                    None => {
-                        // Could not apply any; warn below
-                    }
-                }
+                let new_plan = self.apply_remaining_pending_filters(plan.clone(), col_map)?;
+                result = (new_plan, col_map.clone());
+                self.pending_filters.clear();
             }
 
             // Final sanity check if there are still pending filters after reconstruction
@@ -114,26 +469,58 @@ impl<'a> PlanReconstructor<'a> {
         }
 
         // Store in cache and return
+        Self::validate_column_map_shape(result.0.as_ref(), &result.1)?;
         self.plan_cache.insert(dp_plan.join_set, result.clone());
 
         Ok(result)
     }
 
+    fn validate_column_map_shape(plan: &dyn ExecutionPlan, column_map: &ColumnMap) -> Result<()> {
+        let schema_len = plan.schema().fields().len();
+        if schema_len != column_map.len() {
+            return Err(DataFusionError::Internal(format!(
+                "JoinReorder: reconstructed column map length {} does not match plan schema length {} for {}",
+                column_map.len(),
+                schema_len,
+                plan.name()
+            )));
+        }
+        Ok(())
+    }
+
     /// Reconstruct leaf node (single relation).
-    fn reconstruct_leaf(&self, relation_id: usize) -> Result<(Arc<dyn ExecutionPlan>, ColumnMap)> {
+    fn reconstruct_leaf(
+        &self,
+        relation_id: usize,
+        join_set: JoinSet,
+    ) -> Result<(Arc<dyn ExecutionPlan>, ColumnMap)> {
         let relation_node = self.query_graph.get_relation(relation_id).ok_or_else(|| {
             DataFusionError::Internal(format!("Relation {} not found in query graph", relation_id))
         })?;
 
-        let plan = relation_node.plan.clone();
+        let mut plan = relation_node.plan.clone();
 
         // Create a fresh ColumnMap for this base relation
-        let column_map = (0..plan.schema().fields().len())
+        let mut column_map: ColumnMap = (0..plan.schema().fields().len())
             .map(|i| ColumnMapEntry::Stable {
                 relation_id,
                 column_index: i,
             })
             .collect();
+
+        // Apply leaf projection if required columns were precomputed.
+        if let Some(keep) = self.compute_required_projection(join_set, &column_map) {
+            let exprs: Vec<ProjectionExpr> = keep
+                .iter()
+                .map(|&i| ProjectionExpr {
+                    expr: Arc::new(Column::new(plan.schema().field(i).name(), i)),
+                    alias: plan.schema().field(i).name().to_string(),
+                })
+                .collect();
+            let proj = ProjectionExec::try_new(exprs, plan)?;
+            plan = Arc::new(proj);
+            column_map = keep.into_iter().map(|i| column_map[i].clone()).collect();
+        }
 
         Ok((plan, column_map))
     }
@@ -145,6 +532,7 @@ impl<'a> PlanReconstructor<'a> {
         right_set: JoinSet,
         edge_indices: &[usize],
     ) -> Result<(Arc<dyn ExecutionPlan>, ColumnMap)> {
+        let current_join_set = left_set | right_set;
         // Find left and right subplans from DP table
         let left_dp_plan = self.dp_table.get(&left_set).ok_or_else(|| {
             DataFusionError::Internal("Left subplan not found in DP table".to_string())
@@ -153,7 +541,13 @@ impl<'a> PlanReconstructor<'a> {
             DataFusionError::Internal("Right subplan not found in DP table".to_string())
         })?;
 
-        // Recursively reconstruct left and right subplans
+        // DPPlan stores the selected physical child order. For inner joins, PlanEnumerator may
+        // choose either side as the left/build input based on asymmetric cost. Non-inner joins keep
+        // their original semantic orientation via QueryGraph legality checks.
+        let join_type = self.determine_join_type(edge_indices)?;
+        let null_equality = self.determine_null_equality(edge_indices)?;
+
+        // Recursively reconstruct left(build) and right(probe) subplans.
         let (left_plan, left_map) = self.reconstruct(left_dp_plan)?;
         let (right_plan, right_map) = self.reconstruct(right_dp_plan)?;
 
@@ -165,9 +559,6 @@ impl<'a> PlanReconstructor<'a> {
             &left_plan,
             &right_plan,
         )?;
-
-        // Determine join type from edge information
-        let join_type = self.determine_join_type(edge_indices)?;
 
         // Build join filter for non-equi conditions
         let join_filter = self.build_join_filter(
@@ -181,8 +572,8 @@ impl<'a> PlanReconstructor<'a> {
         )?;
 
         // Merge left and right ColumnMap to create output ColumnMap for new Join plan
-        let mut join_output_map = left_map;
-        join_output_map.extend(right_map);
+        let mut join_output_map = Self::join_output_map_for_type(&left_map, &right_map, join_type)?;
+        let projection = self.compute_required_projection(current_join_set, &join_output_map);
 
         // If there are no connecting edges, this is a cartesian product. HashJoinExec does not
         // support empty join keys; use CrossJoinExec instead to avoid optimizer-stage crashes.
@@ -195,11 +586,34 @@ impl<'a> PlanReconstructor<'a> {
                     right_plan,
                     Some(join_filter),
                     &join_type,
-                    None, // projection
+                    projection.clone(), // projection
                 )?);
+
+                if let Some(projection) = projection {
+                    join_output_map = projection
+                        .into_iter()
+                        .map(|i| join_output_map[i].clone())
+                        .collect();
+                }
                 return Ok((join_plan, join_output_map));
             }
             let join_plan = Arc::new(CrossJoinExec::new(left_plan, right_plan));
+            // CrossJoinExec does not support a built-in projection; wrap with ProjectionExec if needed.
+            if let Some(keep) = projection.clone() {
+                let exprs: Vec<ProjectionExpr> = keep
+                    .iter()
+                    .map(|&i| ProjectionExpr {
+                        expr: Arc::new(Column::new(join_plan.schema().field(i).name(), i)),
+                        alias: join_plan.schema().field(i).name().to_string(),
+                    })
+                    .collect();
+                let proj = Arc::new(ProjectionExec::try_new(exprs, join_plan)?);
+                join_output_map = keep
+                    .into_iter()
+                    .map(|i| join_output_map[i].clone())
+                    .collect();
+                return Ok((proj, join_output_map));
+            }
             return Ok((join_plan, join_output_map));
         }
 
@@ -210,11 +624,18 @@ impl<'a> PlanReconstructor<'a> {
             on_conditions,
             join_filter,         // Use JoinEdge.filter for non-equi conditions
             &join_type,          // Use determined join type
-            None,                // projection
+            projection.clone(),  // projection
             PartitionMode::Auto, // partition_mode
-            NullEquality::NullEqualsNothing, // TODO: Skip the optimizer completely
-                                 // if NullEquality is something else in the input region.
+            null_equality,
+            false, // null_aware
         )?);
+
+        if let Some(projection) = projection {
+            join_output_map = projection
+                .into_iter()
+                .map(|i| join_output_map[i].clone())
+                .collect();
+        }
 
         Ok((join_plan, join_output_map))
     }
@@ -291,17 +712,35 @@ impl<'a> PlanReconstructor<'a> {
 
     /// Determines join type from edge information.
     fn determine_join_type(&self, edge_indices: &[usize]) -> Result<JoinType> {
-        // Use the join type from the first edge, or default to Inner
-        if let Some(&edge_index) = edge_indices.iter().next() {
+        self.query_graph.join_type_for_edges(edge_indices)
+    }
+
+    /// Determines null-equality semantics from edge information.
+    ///
+    /// If multiple edges participate in one reconstructed join, they must agree on
+    /// null-equality behavior. Mixed semantics are rejected because a single
+    /// HashJoinExec has one null-equality mode.
+    fn determine_null_equality(&self, edge_indices: &[usize]) -> Result<NullEquality> {
+        let mut selected: Option<NullEquality> = None;
+
+        for &edge_index in edge_indices {
             let edge = self.query_graph.edges.get(edge_index).ok_or_else(|| {
                 DataFusionError::Internal(format!("Edge with index {} not found", edge_index))
             })?;
 
-            return Ok(edge.join_type);
+            if let Some(existing) = selected {
+                if existing != edge.null_equality {
+                    return Err(DataFusionError::Internal(format!(
+                        "Inconsistent null_equality across join edges: {:?} vs {:?}",
+                        existing, edge.null_equality
+                    )));
+                }
+            } else {
+                selected = Some(edge.null_equality);
+            }
         }
 
-        // Default to Inner join if no edges found
-        Ok(JoinType::Inner)
+        Ok(selected.unwrap_or(NullEquality::NullEqualsNothing))
     }
 
     /// Builds join filter for non-equi conditions from edge information.
@@ -366,17 +805,21 @@ impl<'a> PlanReconstructor<'a> {
                     "JoinReorder: Applying previously deferred filter - required relations: {:?}",
                     pending.required_relations.iter().collect::<Vec<_>>()
                 );
-                if let Ok(rewritten_pred) = self.rewrite_pending_filter_for_current_join(
-                    &pending.expr,
-                    left_map,
-                    right_map,
-                    left_plan,
-                    right_plan,
-                ) {
-                    applicable_pending.push(rewritten_pred);
-                } else {
-                    log::warn!("JoinReorder: Failed to rewrite pending filter, skipping");
-                }
+                let rewritten_pred = self
+                    .rewrite_pending_filter_for_current_join(
+                        &pending.expr,
+                        left_map,
+                        right_map,
+                        left_plan,
+                        right_plan,
+                    )
+                    .map_err(|e| {
+                        DataFusionError::Internal(format!(
+                            "JoinReorder: failed to rewrite pending filter for required relations {:?}: {e}",
+                            pending.required_relations.iter().collect::<Vec<_>>()
+                        ))
+                    })?;
+                applicable_pending.push(rewritten_pred);
             } else {
                 // Keep in pending list
                 remaining_pending.push(pending);
@@ -407,38 +850,67 @@ impl<'a> PlanReconstructor<'a> {
         use datafusion::common::tree_node::{Transformed, TreeNode};
         use datafusion::physical_expr::expressions::Column;
 
-        // Find side and base index for a column, supporting stable names and schema field names
-        let find_side_and_index = |col: &Column| -> Result<Option<(JoinSide, usize)>> {
-            if let Some((rel, cidx)) = Self::parse_stable_name(col.name()) {
-                // Look up in left_map by stable, else right_map
+        // Find side and base index for a column, supporting stable names and schema field names.
+        //
+        // This is a hard contract: by the time we reach `build_join_filter`, every column the
+        // predicate references must resolve to either the left or right side of this join. The
+        // earlier `analyze_predicate_dependencies` + `required.is_subset(current_join_set)` check
+        // already guarantees this; returning a silent `None` here would let a malformed
+        // `JoinFilter` referencing a non-existent column slip into the physical plan, so we fail
+        // fast with an internal error instead.
+        let find_side_and_index = |col: &Column| -> Result<(JoinSide, usize)> {
+            if let Some((rel, cidx)) = StableColumn::parse_stable_name(col.name()) {
                 if let Some(pos) = left_map.iter().position(|e| matches!(e, ColumnMapEntry::Stable{ relation_id, column_index } if *relation_id==rel && *column_index==cidx)) {
-                    return Ok(Some((JoinSide::Left, pos)));
+                    return Ok((JoinSide::Left, pos));
                 }
                 if let Some(pos) = right_map.iter().position(|e| matches!(e, ColumnMapEntry::Stable{ relation_id, column_index } if *relation_id==rel && *column_index==cidx)) {
-                    return Ok(Some((JoinSide::Right, pos)));
+                    return Ok((JoinSide::Right, pos));
                 }
             }
             // Fallback by matching current plan schema names.
-            // If the name exists on both sides, it's ambiguous and unsafe to guess.
-            let left_match = left_plan
+            // If there are duplicate matches on one side or matches on both sides,
+            // fallback-by-name is unsafe and we fail fast.
+            let left_matches: Vec<usize> = left_plan
                 .schema()
                 .fields()
                 .iter()
-                .position(|f| f.name() == col.name());
-            let right_match = right_plan
+                .enumerate()
+                .filter_map(|(idx, field)| (field.name() == col.name()).then_some(idx))
+                .collect();
+            let right_matches: Vec<usize> = right_plan
                 .schema()
                 .fields()
                 .iter()
-                .position(|f| f.name() == col.name());
+                .enumerate()
+                .filter_map(|(idx, field)| (field.name() == col.name()).then_some(idx))
+                .collect();
 
-            match (left_match, right_match) {
+            if left_matches.len() > 1 {
+                return Err(DataFusionError::Internal(format!(
+                    "Ambiguous column reference '{}' found {} times in left join input during reconstruction",
+                    col.name(),
+                    left_matches.len()
+                )));
+            }
+            if right_matches.len() > 1 {
+                return Err(DataFusionError::Internal(format!(
+                    "Ambiguous column reference '{}' found {} times in right join input during reconstruction",
+                    col.name(),
+                    right_matches.len()
+                )));
+            }
+
+            match (left_matches.first().copied(), right_matches.first().copied()) {
                 (Some(_), Some(_)) => Err(DataFusionError::Internal(format!(
                     "Ambiguous column reference '{}' found in both left and right join inputs during reconstruction",
                     col.name()
                 ))),
-                (Some(idx), None) => Ok(Some((JoinSide::Left, idx))),
-                (None, Some(idx)) => Ok(Some((JoinSide::Right, idx))),
-                (None, None) => Ok(None),
+                (Some(idx), None) => Ok((JoinSide::Left, idx)),
+                (None, Some(idx)) => Ok((JoinSide::Right, idx)),
+                (None, None) => Err(DataFusionError::Internal(format!(
+                    "JoinReorder: column '{}' referenced by join filter does not resolve to either left or right join input during reconstruction",
+                    col.name()
+                ))),
             }
         };
 
@@ -447,28 +919,31 @@ impl<'a> PlanReconstructor<'a> {
         let mut seen: Vec<(JoinSide, usize)> = Vec::new();
         let cols_in_expr = collect_columns(&combined_filter);
         for c in &cols_in_expr {
-            if let Some((side, idx)) = find_side_and_index(c)? {
-                if !seen.iter().any(|(s, i)| *s == side && *i == idx) {
-                    seen.push((side, idx));
-                    compact_indices.push(ColumnIndex { side, index: idx });
-                }
+            let (side, idx) = find_side_and_index(c)?;
+            if !seen.iter().any(|(s, i)| *s == side && *i == idx) {
+                seen.push((side, idx));
+                compact_indices.push(ColumnIndex { side, index: idx });
             }
         }
 
-        let index_of = |side: JoinSide, base_idx: usize| -> Option<usize> {
+        let index_of = |side: JoinSide, base_idx: usize| -> Result<usize> {
             compact_indices
                 .iter()
                 .position(|ci| ci.side == side && ci.index == base_idx)
+                .ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "JoinReorder: compact index lookup failed for side={:?} base_idx={} during join-filter rewriting",
+                        side, base_idx
+                    ))
+                })
         };
 
         let retargeted = combined_filter.transform(|expr| {
             if let Some(col) = expr.as_any().downcast_ref::<Column>() {
-                if let Some((side, base_idx)) = find_side_and_index(col)? {
-                    if let Some(new_pos) = index_of(side, base_idx) {
-                        let new_col = Column::new(col.name(), new_pos);
-                        return Ok(Transformed::yes(Arc::new(new_col)));
-                    }
-                }
+                let (side, base_idx) = find_side_and_index(col)?;
+                let new_pos = index_of(side, base_idx)?;
+                let new_col = Column::new(col.name(), new_pos);
+                return Ok(Transformed::yes(Arc::new(new_col)));
             }
             Ok(Transformed::no(expr))
         })?;
@@ -492,28 +967,34 @@ impl<'a> PlanReconstructor<'a> {
         )))
     }
 
-    /// Attempt to apply any remaining pending filters as a top-level FilterExec
-    /// on the provided plan. Returns Some(new_plan) if at least one filter has
-    /// been applied, or None if none could be rewritten.
+    /// Apply all remaining pending filters as a top-level FilterExec on the provided plan.
     fn apply_remaining_pending_filters(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         output_map: &ColumnMap,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         if self.pending_filters.is_empty() {
-            return Ok(None);
+            return Ok(plan);
         }
 
-        // Try rewriting each pending filter to reference the final plan's schema
+        // Rewrite each pending filter to reference the final plan's schema.
         let mut rewritten: Vec<Arc<dyn PhysicalExpr>> = Vec::new();
         for pending in &self.pending_filters {
-            if let Ok(expr) = self.rewrite_expr_to_output_schema(&pending.expr, &plan, output_map) {
-                rewritten.push(expr);
-            }
+            let expr = self
+                .rewrite_expr_to_output_schema(&pending.expr, &plan, output_map)
+                .map_err(|e| {
+                    DataFusionError::Internal(format!(
+                        "JoinReorder: failed to apply pending filter for required relations {:?}: {e}",
+                        pending.required_relations.iter().collect::<Vec<_>>()
+                    ))
+                })?;
+            rewritten.push(expr);
         }
 
         if rewritten.is_empty() {
-            return Ok(None);
+            return Err(DataFusionError::Internal(
+                "JoinReorder: no pending filters were rewritten".to_string(),
+            ));
         }
 
         // Combine with AND and attach FilterExec
@@ -524,7 +1005,7 @@ impl<'a> PlanReconstructor<'a> {
         };
 
         let new_plan = Arc::new(FilterExec::try_new(combined, plan)?);
-        Ok(Some(new_plan))
+        Ok(new_plan)
     }
 
     /// Rewrite an expression that uses stable column names (e.g. "R{rel}.C{col}")
@@ -542,7 +1023,7 @@ impl<'a> PlanReconstructor<'a> {
         let transformed = expr_arc.transform(|node| {
             if let Some(col) = node.as_any().downcast_ref::<Column>() {
                 // Prefer stable name mapping first
-                if let Some((rel, cidx)) = self.parse_stable_column_name(col.name()) {
+                if let Some((rel, cidx)) = StableColumn::parse_stable_name(col.name()) {
                     if let Some(pos) = output_map.iter().position(|e| {
                         matches!(
                             e,
@@ -559,13 +1040,23 @@ impl<'a> PlanReconstructor<'a> {
                     }
                 }
 
-                // Fallback: try to match by current schema field name
-                if let Some(pos) = plan
+                // Fallback: try to match by current schema field name.
+                // A non-unique match is unsafe to rewrite.
+                let matches: Vec<usize> = plan
                     .schema()
                     .fields()
                     .iter()
-                    .position(|f| f.name() == col.name())
-                {
+                    .enumerate()
+                    .filter_map(|(idx, field)| (field.name() == col.name()).then_some(idx))
+                    .collect();
+                if matches.len() > 1 {
+                    return Err(DataFusionError::Internal(format!(
+                        "Ambiguous output column '{}' found {} times while rewriting expression",
+                        col.name(),
+                        matches.len()
+                    )));
+                }
+                if let Some(pos) = matches.first().copied() {
                     let new_col = Column::new(col.name(), pos);
                     return Ok(Transformed::yes(Arc::new(new_col)));
                 }
@@ -593,7 +1084,6 @@ impl<'a> PlanReconstructor<'a> {
     }
 
     fn add_relation_bits_from_expr(
-        &self,
         expr: &Arc<dyn PhysicalExpr>,
         input_map: &ColumnMap,
         bits: &mut u64,
@@ -601,8 +1091,8 @@ impl<'a> PlanReconstructor<'a> {
         let cols = collect_columns(expr);
         for c in &cols {
             // If the expression already uses stable names, prefer that.
-            if let Some((rel, _)) = Self::parse_stable_name(c.name()) {
-                *bits |= 1u64 << rel;
+            if let Some((rel, _)) = StableColumn::parse_stable_name(c.name()) {
+                *bits |= Self::relation_bit(rel);
                 continue;
             }
 
@@ -616,10 +1106,10 @@ impl<'a> PlanReconstructor<'a> {
 
             match entry {
                 ColumnMapEntry::Stable { relation_id, .. } => {
-                    *bits |= 1u64 << *relation_id;
+                    *bits |= Self::relation_bit(*relation_id);
                 }
                 ColumnMapEntry::Expression { expr, input_map } => {
-                    self.add_relation_bits_from_expr(expr, input_map, bits)?;
+                    Self::add_relation_bits_from_expr(expr, input_map, bits)?;
                 }
             }
         }
@@ -634,52 +1124,64 @@ impl<'a> PlanReconstructor<'a> {
         left_plan: &Arc<dyn ExecutionPlan>,
         right_plan: &Arc<dyn ExecutionPlan>,
     ) -> Result<JoinSet> {
+        let unique_field_index = |plan: &Arc<dyn ExecutionPlan>, name: &str, side_name: &str| {
+            let matches: Vec<usize> = plan
+                .schema()
+                .fields()
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, field)| (field.name() == name).then_some(idx))
+                .collect();
+
+            match matches.as_slice() {
+                [] => Ok(None),
+                [idx] => Ok(Some(*idx)),
+                _ => Err(DataFusionError::Internal(format!(
+                    "Ambiguous column '{}' matched {} fields on {} side while analyzing predicate dependencies",
+                    name,
+                    matches.len(),
+                    side_name
+                ))),
+            }
+        };
+
         let mut bits: u64 = 0;
         let cols = collect_columns(predicate);
         for c in &cols {
-            if let Some((rel, _)) = Self::parse_stable_name(c.name()) {
-                bits |= 1u64 << rel;
+            if let Some((rel, _)) = StableColumn::parse_stable_name(c.name()) {
+                bits |= Self::relation_bit(rel);
                 continue;
             }
-            let mut matched = false;
-            for (i, f) in left_plan.schema().fields().iter().enumerate() {
-                if f.name() == c.name() {
-                    match left_map.get(i) {
-                        Some(ColumnMapEntry::Stable { relation_id, .. }) => {
-                            bits |= 1u64 << *relation_id;
-                            matched = true;
-                            break;
-                        }
-                        Some(ColumnMapEntry::Expression { expr, input_map }) => {
-                            self.add_relation_bits_from_expr(expr, input_map, &mut bits)?;
-                            matched = true;
-                            break;
-                        }
-                        None => {}
-                    }
+            let left_match = unique_field_index(left_plan, c.name(), "left")?;
+            let right_match = unique_field_index(right_plan, c.name(), "right")?;
+
+            match (left_match, right_match) {
+                (Some(_), Some(_)) => {
+                    return Err(DataFusionError::Internal(format!(
+                        "Ambiguous column '{}' found in both left and right join inputs while analyzing predicate dependencies",
+                        c.name()
+                    )));
                 }
-            }
-            if matched {
-                continue;
-            }
-            for (i, f) in right_plan.schema().fields().iter().enumerate() {
-                if f.name() == c.name() {
-                    match right_map.get(i) {
-                        Some(ColumnMapEntry::Stable { relation_id, .. }) => {
-                            bits |= 1u64 << *relation_id;
-                            matched = true;
-                            break;
-                        }
-                        Some(ColumnMapEntry::Expression { expr, input_map }) => {
-                            self.add_relation_bits_from_expr(expr, input_map, &mut bits)?;
-                            matched = true;
-                            break;
-                        }
-                        None => {}
+                (Some(i), None) => match left_map.get(i) {
+                    Some(ColumnMapEntry::Stable { relation_id, .. }) => {
+                        bits |= Self::relation_bit(*relation_id);
                     }
-                }
+                    Some(ColumnMapEntry::Expression { expr, input_map }) => {
+                        Self::add_relation_bits_from_expr(expr, input_map, &mut bits)?;
+                    }
+                    None => {}
+                },
+                (None, Some(i)) => match right_map.get(i) {
+                    Some(ColumnMapEntry::Stable { relation_id, .. }) => {
+                        bits |= Self::relation_bit(*relation_id);
+                    }
+                    Some(ColumnMapEntry::Expression { expr, input_map }) => {
+                        Self::add_relation_bits_from_expr(expr, input_map, &mut bits)?;
+                    }
+                    None => {}
+                },
+                (None, None) => {}
             }
-            let _ = matched;
         }
 
         Ok(JoinSet::from_bits(bits))
@@ -809,7 +1311,7 @@ impl<'a> PlanReconstructor<'a> {
         column_map: &ColumnMap,
     ) -> bool {
         // Check by stable column name format (R{rel}.C{col})
-        if let Some((rel, cidx)) = self.parse_stable_column_name(col.name()) {
+        if let Some((rel, cidx)) = StableColumn::parse_stable_name(col.name()) {
             return column_map.iter().any(|entry| {
                 matches!(entry, ColumnMapEntry::Stable { relation_id, column_index }
                     if *relation_id == rel && *column_index == cidx)
@@ -821,22 +1323,6 @@ impl<'a> PlanReconstructor<'a> {
             .fields()
             .iter()
             .any(|f| f.name() == col.name())
-    }
-
-    /// Parse stable column name format "R{rel}.C{col}" -> (rel, col)
-    fn parse_stable_column_name(&self, name: &str) -> Option<(usize, usize)> {
-        if !name.starts_with('R') {
-            return None;
-        }
-        let dot = name.find('.')?;
-        let rel_str = &name[1..dot];
-        if !name[dot + 1..].starts_with('C') {
-            return None;
-        }
-        let col_str = &name[dot + 2..];
-        let rel = rel_str.parse::<usize>().ok()?;
-        let col = col_str.parse::<usize>().ok()?;
-        Some((rel, col))
     }
 
     /// Combine multiple filter expressions with AND logic.
@@ -866,11 +1352,13 @@ impl<'a> PlanReconstructor<'a> {
 #[expect(clippy::unwrap_used)]
 mod tests {
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::common::Statistics;
+    use datafusion::common::{NullEquality, Statistics};
+    use datafusion::logical_expr::{JoinType, Operator};
+    use datafusion::physical_expr::expressions::{BinaryExpr, Column};
     use datafusion::physical_plan::empty::EmptyExec;
 
     use super::*;
-    use crate::join_reorder::graph::{QueryGraph, RelationNode};
+    use crate::join_reorder::graph::{JoinEdge, QueryGraph, RelationNode};
     use crate::join_reorder::join_set::JoinSet;
 
     fn create_test_graph() -> QueryGraph {
@@ -882,10 +1370,52 @@ mod tests {
         )]));
 
         let plan = Arc::new(EmptyExec::new(schema.clone()));
-        let relation = RelationNode::new(plan, 0, 1000.0, Statistics::new_unknown(&schema));
+        let relation = RelationNode::new(plan, 0, 1000.0, 1000.0, Statistics::new_unknown(&schema));
         graph.add_relation(relation);
 
         graph
+    }
+
+    fn create_test_graph_with_relations(count: usize) -> QueryGraph {
+        let mut graph = QueryGraph::new();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "col1",
+            DataType::Int32,
+            false,
+        )]));
+
+        for relation_id in 0..count {
+            let plan = Arc::new(EmptyExec::new(schema.clone()));
+            let relation = RelationNode::new(
+                plan,
+                relation_id,
+                1000.0,
+                1000.0,
+                Statistics::new_unknown(&schema),
+            );
+            graph.add_relation(relation);
+        }
+
+        graph
+    }
+
+    fn add_test_edge(graph: &mut QueryGraph, left: usize, right: usize) -> Result<usize> {
+        let left_name = StableColumn::format_stable_name(left, 0);
+        let right_name = StableColumn::format_stable_name(right, 0);
+        let filter = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new(&left_name, 0)) as Arc<dyn PhysicalExpr>,
+            Operator::Eq,
+            Arc::new(Column::new(&right_name, 0)) as Arc<dyn PhysicalExpr>,
+        )) as Arc<dyn PhysicalExpr>;
+        let edge_index = graph.edges.len();
+        graph.add_edge(JoinEdge::new(
+            JoinSet::new_singleton(left)?,
+            JoinSet::new_singleton(right)?,
+            filter,
+            JoinType::Inner,
+            vec![],
+        ))?;
+        Ok(edge_index)
     }
 
     #[test]
@@ -907,6 +1437,280 @@ mod tests {
         let result = reconstructor.reconstruct(&leaf_plan);
 
         assert!(result.is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn test_validate_reconstruction_plan_rejects_missing_edge() -> Result<()> {
+        let mut graph = create_test_graph_with_relations(3);
+        let edge_01 = add_test_edge(&mut graph, 0, 1)?;
+        let _edge_12 = add_test_edge(&mut graph, 1, 2)?;
+
+        let leaf0 = Arc::new(DPPlan::new_leaf(0, 1000.0)?);
+        let leaf1 = Arc::new(DPPlan::new_leaf(1, 1000.0)?);
+        let leaf2 = Arc::new(DPPlan::new_leaf(2, 1000.0)?);
+        let set0 = JoinSet::new_singleton(0)?;
+        let set1 = JoinSet::new_singleton(1)?;
+        let set2 = JoinSet::new_singleton(2)?;
+        let join01 = Arc::new(DPPlan::new_join(set0, set1, vec![edge_01], 100.0, 1000.0));
+        let root = Arc::new(DPPlan::new_join(set0 | set1, set2, vec![], 200.0, 1000.0));
+
+        let mut dp_table = HashMap::new();
+        dp_table.insert(set0, leaf0);
+        dp_table.insert(set1, leaf1);
+        dp_table.insert(set2, leaf2);
+        dp_table.insert(set0 | set1, join01);
+        dp_table.insert(root.join_set, root.clone());
+
+        let reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let err = match reconstructor.validate_reconstruction_plan(&root) {
+            Ok(()) => {
+                return Err(DataFusionError::Internal(
+                    "missing edge should be rejected".to_string(),
+                ));
+            }
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string().contains("expected exactly once"),
+            "unexpected error: {err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_hash_join_respects_dp_physical_order() -> Result<()> {
+        // DP, not reconstruction, is responsible for choosing the HashJoinExec left/build side.
+
+        let schema_a = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let schema_b = Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, false)]));
+
+        let plan_a: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema_a.clone()));
+        let plan_b: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema_b.clone()));
+
+        let mut graph = QueryGraph::new();
+        graph.add_relation(RelationNode::new(
+            plan_a,
+            0,
+            1_000_000.0,
+            1_000_000.0,
+            Statistics::new_unknown(&schema_a),
+        ));
+        graph.add_relation(RelationNode::new(
+            plan_b,
+            1,
+            10.0,
+            10.0,
+            Statistics::new_unknown(&schema_b),
+        ));
+
+        let filter: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("R0.C0", 0)),
+            Operator::Eq,
+            Arc::new(Column::new("R1.C0", 0)),
+        ));
+        graph.add_edge(JoinEdge::new(
+            JoinSet::new_singleton(0)?,
+            JoinSet::new_singleton(1)?,
+            filter,
+            JoinType::Inner,
+            vec![(
+                StableColumn {
+                    relation_id: 0,
+                    column_index: 0,
+                    name: "R0.C0".to_string(),
+                },
+                StableColumn {
+                    relation_id: 1,
+                    column_index: 0,
+                    name: "R1.C0".to_string(),
+                },
+            )],
+        ))?;
+
+        // Build a DP table where the solver chose left={0}, right={1}.
+        // Reconstructor must respect that physical order.
+        let mut dp_table: HashMap<JoinSet, Arc<DPPlan>> = HashMap::new();
+        let leaf0 = Arc::new(DPPlan::new_leaf(0, 1_000_000.0)?);
+        let leaf1 = Arc::new(DPPlan::new_leaf(1, 10.0)?);
+        dp_table.insert(leaf0.join_set, leaf0);
+        dp_table.insert(leaf1.join_set, leaf1);
+
+        let root = Arc::new(DPPlan::new_join(
+            JoinSet::new_singleton(0)?,
+            JoinSet::new_singleton(1)?,
+            vec![0],
+            0.0,
+            10.0,
+        ));
+        dp_table.insert(root.join_set, root.clone());
+
+        let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let (plan, _map) = reconstructor.reconstruct(&root)?;
+        #[expect(clippy::expect_used)]
+        let hj = plan
+            .as_any()
+            .downcast_ref::<HashJoinExec>()
+            .expect("expected HashJoinExec");
+
+        assert_eq!(hj.left.schema().fields()[0].name(), "a");
+        assert_eq!(hj.right.schema().fields()[0].name(), "b");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_hash_join_build_side_keeps_order_when_cardinality_equal() -> Result<()> {
+        // When cardinalities are equal, keep the DP plan's original left/right assignment.
+        let schema_a = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let schema_b = Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, false)]));
+
+        let plan_a: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema_a.clone()));
+        let plan_b: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema_b.clone()));
+
+        let mut graph = QueryGraph::new();
+        graph.add_relation(RelationNode::new(
+            plan_a,
+            0,
+            100.0,
+            100.0,
+            Statistics::new_unknown(&schema_a),
+        ));
+        graph.add_relation(RelationNode::new(
+            plan_b,
+            1,
+            100.0,
+            100.0,
+            Statistics::new_unknown(&schema_b),
+        ));
+
+        let filter: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("R0.C0", 0)),
+            Operator::Eq,
+            Arc::new(Column::new("R1.C0", 0)),
+        ));
+        graph.add_edge(JoinEdge::new(
+            JoinSet::new_singleton(0)?,
+            JoinSet::new_singleton(1)?,
+            filter,
+            JoinType::Inner,
+            vec![(
+                StableColumn {
+                    relation_id: 0,
+                    column_index: 0,
+                    name: "R0.C0".to_string(),
+                },
+                StableColumn {
+                    relation_id: 1,
+                    column_index: 0,
+                    name: "R1.C0".to_string(),
+                },
+            )],
+        ))?;
+
+        let mut dp_table: HashMap<JoinSet, Arc<DPPlan>> = HashMap::new();
+        let leaf0 = Arc::new(DPPlan::new_leaf(0, 100.0)?);
+        let leaf1 = Arc::new(DPPlan::new_leaf(1, 100.0)?);
+        dp_table.insert(leaf0.join_set, leaf0);
+        dp_table.insert(leaf1.join_set, leaf1);
+
+        let root = Arc::new(DPPlan::new_join(
+            JoinSet::new_singleton(0)?,
+            JoinSet::new_singleton(1)?,
+            vec![0],
+            0.0,
+            100.0,
+        ));
+        dp_table.insert(root.join_set, root.clone());
+
+        let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let (plan, _map) = reconstructor.reconstruct(&root)?;
+        #[expect(clippy::expect_used)]
+        let hj = plan
+            .as_any()
+            .downcast_ref::<HashJoinExec>()
+            .expect("expected HashJoinExec");
+
+        assert_eq!(hj.left.schema().fields()[0].name(), "a");
+        assert_eq!(hj.right.schema().fields()[0].name(), "b");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_hash_join_preserves_null_equality() -> Result<()> {
+        let schema_a = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let schema_b = Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
+
+        let plan_a: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema_a.clone()));
+        let plan_b: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema_b.clone()));
+
+        let mut graph = QueryGraph::new();
+        graph.add_relation(RelationNode::new(
+            plan_a,
+            0,
+            100.0,
+            100.0,
+            Statistics::new_unknown(&schema_a),
+        ));
+        graph.add_relation(RelationNode::new(
+            plan_b,
+            1,
+            100.0,
+            100.0,
+            Statistics::new_unknown(&schema_b),
+        ));
+
+        let filter: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("R0.C0", 0)),
+            Operator::Eq,
+            Arc::new(Column::new("R1.C0", 0)),
+        ));
+        let mut edge = JoinEdge::new(
+            JoinSet::new_singleton(0)?,
+            JoinSet::new_singleton(1)?,
+            filter,
+            JoinType::Inner,
+            vec![(
+                StableColumn {
+                    relation_id: 0,
+                    column_index: 0,
+                    name: "R0.C0".to_string(),
+                },
+                StableColumn {
+                    relation_id: 1,
+                    column_index: 0,
+                    name: "R1.C0".to_string(),
+                },
+            )],
+        );
+        edge.null_equality = NullEquality::NullEqualsNull;
+        graph.add_edge(edge)?;
+
+        let mut dp_table: HashMap<JoinSet, Arc<DPPlan>> = HashMap::new();
+        let leaf0 = Arc::new(DPPlan::new_leaf(0, 100.0)?);
+        let leaf1 = Arc::new(DPPlan::new_leaf(1, 100.0)?);
+        dp_table.insert(leaf0.join_set, leaf0);
+        dp_table.insert(leaf1.join_set, leaf1);
+
+        let root = Arc::new(DPPlan::new_join(
+            JoinSet::new_singleton(0)?,
+            JoinSet::new_singleton(1)?,
+            vec![0],
+            0.0,
+            100.0,
+        ));
+        dp_table.insert(root.join_set, root.clone());
+
+        let mut reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let (plan, _) = reconstructor.reconstruct(&root)?;
+        #[expect(clippy::expect_used)]
+        let hj = plan
+            .as_any()
+            .downcast_ref::<HashJoinExec>()
+            .expect("expected HashJoinExec");
+
+        assert_eq!(hj.null_equality(), NullEquality::NullEqualsNull);
         Ok(())
     }
 
@@ -1027,6 +1831,54 @@ mod tests {
     }
 
     #[test]
+    fn test_analyze_predicate_dependencies_ambiguous_left_name_fails() -> Result<()> {
+        let left_schema = Arc::new(Schema::new(vec![
+            Field::new("dup", DataType::Int32, false),
+            Field::new("dup", DataType::Int32, false),
+        ]));
+        let right_schema = Arc::new(Schema::new(vec![Field::new("r", DataType::Int32, false)]));
+        let left_plan: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(left_schema.clone()));
+        let right_plan: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(right_schema.clone()));
+
+        let left_map: ColumnMap = vec![
+            ColumnMapEntry::Stable {
+                relation_id: 0,
+                column_index: 0,
+            },
+            ColumnMapEntry::Stable {
+                relation_id: 0,
+                column_index: 1,
+            },
+        ];
+        let right_map: ColumnMap = vec![ColumnMapEntry::Stable {
+            relation_id: 1,
+            column_index: 0,
+        }];
+
+        let pred: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("dup", 0)),
+            Operator::Gt,
+            Arc::new(Column::new("R1.C0", 0)),
+        ));
+
+        let dp_table = HashMap::new();
+        let graph = QueryGraph::new();
+        let reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let res = reconstructor.analyze_predicate_dependencies(
+            &pred,
+            &left_map,
+            &right_map,
+            &left_plan,
+            &right_plan,
+        );
+        assert!(
+            res.is_err(),
+            "expected duplicate left-name dependency to error"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_build_join_filter_ambiguous_name_fails() -> Result<()> {
         // Regression test: name-based fallback in join filter reconstruction must not silently
         // bind to the wrong side when a column name exists in both left and right inputs.
@@ -1060,16 +1912,17 @@ mod tests {
             dummy_plan.clone(),
             0,
             1000.0,
+            1000.0,
             Statistics::new_unknown(&dummy_schema),
         ));
         graph.add_relation(RelationNode::new(
             dummy_plan,
             1,
             1000.0,
+            1000.0,
             Statistics::new_unknown(&dummy_schema),
         ));
 
-        let join_set_01 = JoinSet::from_iter([0usize, 1usize])?;
         let equi_pairs = vec![(
             StableColumn {
                 relation_id: 0,
@@ -1099,7 +1952,8 @@ mod tests {
             non_equi,
         ));
         graph.add_edge(JoinEdge::new(
-            join_set_01,
+            JoinSet::new_singleton(0)?,
+            JoinSet::new_singleton(1)?,
             filter,
             JoinType::Inner,
             equi_pairs,
@@ -1118,6 +1972,36 @@ mod tests {
         );
 
         assert!(res.is_err(), "expected ambiguous-name join filter to error");
+        Ok(())
+    }
+
+    #[test]
+    fn test_rewrite_expr_to_output_schema_ambiguous_output_name_fails() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("dup", DataType::Int32, false),
+            Field::new("dup", DataType::Int32, false),
+        ]));
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema.clone()));
+        let output_map: ColumnMap = vec![
+            ColumnMapEntry::Stable {
+                relation_id: 0,
+                column_index: 0,
+            },
+            ColumnMapEntry::Stable {
+                relation_id: 1,
+                column_index: 0,
+            },
+        ];
+
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(Column::new("dup", 0));
+        let dp_table = HashMap::new();
+        let graph = QueryGraph::new();
+        let reconstructor = PlanReconstructor::new(&dp_table, &graph);
+        let res = reconstructor.rewrite_expr_to_output_schema(&expr, &plan, &output_map);
+        assert!(
+            res.is_err(),
+            "expected ambiguous output-name rewrite to error"
+        );
         Ok(())
     }
 
@@ -1141,15 +2025,16 @@ mod tests {
         let mut graph = QueryGraph::new();
         for i in 0..3 {
             let plan = Arc::new(EmptyExec::new(schema.clone()));
-            let relation = RelationNode::new(plan, i, 1000.0, Statistics::new_unknown(&schema));
+            let relation =
+                RelationNode::new(plan, i, 1000.0, 1000.0, Statistics::new_unknown(&schema));
             graph.add_relation(relation);
         }
 
         // One edge connecting relations 0 and 1.
-        let join_set_01 = JoinSet::from_iter([0usize, 1usize])?;
         let filter = Arc::new(Column::new("R0.C0", 0)) as Arc<dyn PhysicalExpr>;
         graph.add_edge(JoinEdge::new(
-            join_set_01,
+            JoinSet::new_singleton(0)?,
+            JoinSet::new_singleton(1)?,
             filter,
             JoinType::Inner,
             vec![(
@@ -1227,19 +2112,25 @@ mod tests {
         let mut graph = QueryGraph::new();
         for i in 0..2 {
             let plan = Arc::new(EmptyExec::new(schema.clone()));
-            let relation = RelationNode::new(plan, i, 1000.0, Statistics::new_unknown(&schema));
+            let relation =
+                RelationNode::new(plan, i, 1000.0, 1000.0, Statistics::new_unknown(&schema));
             graph.add_relation(relation);
         }
 
         // Join predicate: R0.C0 < R1.C0 (no equi_pairs recorded).
-        let join_set_01 = JoinSet::from_iter([0usize, 1usize])?;
         let filter = Arc::new(BinaryExpr::new(
             Arc::new(Column::new("R0.C0", 0)),
             Operator::Lt,
             Arc::new(Column::new("R1.C0", 0)),
         )) as Arc<dyn PhysicalExpr>;
         // Use a non-inner join type to ensure we support theta join beyond inner joins.
-        graph.add_edge(JoinEdge::new(join_set_01, filter, JoinType::Left, vec![]))?;
+        graph.add_edge(JoinEdge::new(
+            JoinSet::new_singleton(0)?,
+            JoinSet::new_singleton(1)?,
+            filter,
+            JoinType::Left,
+            vec![],
+        ))?;
 
         // DP table with leaves and the join using the single edge at index 0.
         let mut dp_table: HashMap<JoinSet, Arc<DPPlan>> = HashMap::new();

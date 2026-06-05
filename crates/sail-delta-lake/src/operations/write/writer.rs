@@ -19,15 +19,16 @@
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/writer.rs>
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/writer/record_batch.rs>
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use bytes::Bytes;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
-use delta_kernel::expressions::Scalar;
+use datafusion::common::scalar::ScalarValue;
 use indexmap::IndexMap;
 use object_store::path::Path;
-use object_store::ObjectStore;
+use object_store::{ObjectStore, ObjectStoreExt};
 use parquet::arrow::AsyncArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::metadata::ParquetMetaData;
@@ -38,8 +39,12 @@ use uuid::Uuid;
 use super::async_utils::AsyncShareableBuffer;
 use super::partitioning::partition_ranges;
 use super::stats::create_add;
-use crate::kernel::models::{Add, ScalarExt};
-use crate::kernel::DeltaTableError;
+use super::variant_shredding::{
+    apply_variant_shredding_plan, build_variant_shredding_plan, VariantShreddingConfig,
+    VariantShreddingPlan,
+};
+use crate::conversion::ScalarExt;
+use crate::spec::{Add, DeltaError as DeltaTableError};
 
 /// Trait for creating hive partition paths from partition values
 pub trait PartitionsExt {
@@ -47,7 +52,7 @@ pub trait PartitionsExt {
     fn hive_partition_segments(&self) -> Vec<String>;
 }
 
-impl PartitionsExt for IndexMap<String, Scalar> {
+impl PartitionsExt for IndexMap<String, ScalarValue> {
     fn hive_partition_path(&self) -> String {
         self.hive_partition_segments().join("/")
     }
@@ -85,9 +90,14 @@ pub struct WriterConfig {
     pub num_indexed_cols: i32,
     /// Specific columns to collect stats from
     pub stats_columns: Option<Vec<String>>,
+    /// Top-level data columns that must not appear in Delta stats.
+    pub stats_excluded_columns: HashSet<String>,
+    /// Variant shredding behavior for data files written by this writer.
+    pub variant_shredding: VariantShreddingConfig,
 }
 
 impl WriterConfig {
+    #[expect(clippy::too_many_arguments)]
     pub fn new(
         table_schema: ArrowSchemaRef,
         partition_columns: Vec<String>,
@@ -97,6 +107,8 @@ impl WriterConfig {
         write_batch_size: usize,
         num_indexed_cols: i32,
         stats_columns: Option<Vec<String>>,
+        stats_excluded_columns: HashSet<String>,
+        variant_shredding: VariantShreddingConfig,
     ) -> Self {
         let writer_properties = writer_properties.unwrap_or_else(|| {
             WriterProperties::builder()
@@ -113,6 +125,8 @@ impl WriterConfig {
             write_batch_size,
             num_indexed_cols,
             stats_columns,
+            stats_excluded_columns,
+            variant_shredding,
         }
     }
 
@@ -210,7 +224,7 @@ impl DeltaWriter {
     async fn switch_partition_if_needed(
         &mut self,
         partition_key: String,
-        partition_values: IndexMap<String, Scalar>,
+        partition_values: IndexMap<String, ScalarValue>,
     ) -> Result<(), DeltaTableError> {
         if self.current_partition_key.as_deref() == Some(partition_key.as_str())
             && self.current_writer.is_some()
@@ -247,6 +261,7 @@ impl DeltaWriter {
             self.config.writer_properties.clone(),
             self.config.target_file_size,
             self.config.write_batch_size,
+            self.config.variant_shredding.clone(),
         );
 
         let writer = PartitionWriter::try_with_config(
@@ -254,6 +269,7 @@ impl DeltaWriter {
             config,
             self.config.num_indexed_cols,
             self.config.stats_columns.clone(),
+            self.config.stats_excluded_columns.clone(),
         )?;
 
         self.current_writer = Some(writer);
@@ -281,23 +297,26 @@ pub struct PartitionWriterConfig {
     /// Partition path segments
     pub partition_segments: Vec<String>,
     /// Values for all partition columns
-    pub partition_values: IndexMap<String, Scalar>,
+    pub partition_values: IndexMap<String, ScalarValue>,
     /// Properties passed to underlying parquet writer
     pub writer_properties: WriterProperties,
     /// Size above which we will write a buffered parquet file to disk
     pub target_file_size: u64,
     /// Row chunks passed to parquet writer
     pub write_batch_size: usize,
+    /// Variant shredding behavior for this partition writer.
+    pub variant_shredding: VariantShreddingConfig,
 }
 
 impl PartitionWriterConfig {
     pub fn new(
         table_path: Path,
         file_schema: ArrowSchemaRef,
-        partition_values: IndexMap<String, Scalar>,
+        partition_values: IndexMap<String, ScalarValue>,
         writer_properties: WriterProperties,
         target_file_size: u64,
         write_batch_size: usize,
+        variant_shredding: VariantShreddingConfig,
     ) -> Self {
         let partition_segments = partition_values.hive_partition_segments();
 
@@ -309,6 +328,7 @@ impl PartitionWriterConfig {
             writer_properties,
             target_file_size,
             write_batch_size,
+            variant_shredding,
         }
     }
 }
@@ -319,10 +339,16 @@ pub struct PartitionWriter {
     config: PartitionWriterConfig,
     buffer: Option<AsyncShareableBuffer>,
     arrow_writer: Option<AsyncArrowWriter<AsyncShareableBuffer>>,
+    physical_file_schema: ArrowSchemaRef,
+    pending_batches: Vec<RecordBatch>,
+    pending_rows: usize,
+    variant_shredding_initialized: bool,
+    variant_shredding_plan: Option<VariantShreddingPlan>,
     part_counter: usize,
     files_written: Vec<Add>,
     num_indexed_cols: i32,
     stats_columns: Option<Vec<String>>,
+    stats_excluded_columns: HashSet<String>,
 }
 
 impl PartitionWriter {
@@ -331,25 +357,41 @@ impl PartitionWriter {
         config: PartitionWriterConfig,
         num_indexed_cols: i32,
         stats_columns: Option<Vec<String>>,
+        stats_excluded_columns: HashSet<String>,
     ) -> Result<Self, DeltaTableError> {
-        let buffer = AsyncShareableBuffer::default();
-        let arrow_writer = AsyncArrowWriter::try_new(
-            buffer.clone(),
-            config.file_schema.clone(),
-            Some(config.writer_properties.clone()),
-        )
-        .map_err(|e| DeltaTableError::generic(format!("Failed to create arrow writer: {e}")))?;
+        let physical_file_schema = config.file_schema.clone();
+        let (buffer, arrow_writer, variant_shredding_initialized) = if config
+            .variant_shredding
+            .enabled
+        {
+            (None, None, false)
+        } else {
+            let buffer = AsyncShareableBuffer::default();
+            let arrow_writer = AsyncArrowWriter::try_new(
+                buffer.clone(),
+                physical_file_schema.clone(),
+                Some(config.writer_properties.clone()),
+            )
+            .map_err(|e| DeltaTableError::generic(format!("Failed to create arrow writer: {e}")))?;
+            (Some(buffer), Some(arrow_writer), true)
+        };
 
         Ok(Self {
             object_store,
             writer_id: Uuid::new_v4(),
             config,
-            buffer: Some(buffer),
-            arrow_writer: Some(arrow_writer),
+            buffer,
+            arrow_writer,
+            physical_file_schema,
+            pending_batches: Vec::new(),
+            pending_rows: 0,
+            variant_shredding_initialized,
+            variant_shredding_plan: None,
             part_counter: 0,
             files_written: Vec::new(),
             num_indexed_cols,
             stats_columns,
+            stats_excluded_columns,
         })
     }
 
@@ -358,6 +400,45 @@ impl PartitionWriter {
             return Err(DeltaTableError::generic(format!(
                 "Schema mismatch: expected {:?}, got {:?}",
                 self.config.file_schema,
+                batch.schema()
+            )));
+        }
+
+        if self.config.variant_shredding.enabled && !self.variant_shredding_initialized {
+            let inference_buffer_size = self.config.variant_shredding.inference_buffer_size.max(1);
+            let rows_needed = inference_buffer_size.saturating_sub(self.pending_rows);
+
+            if batch.num_rows() < rows_needed {
+                self.pending_rows = self.pending_rows.saturating_add(batch.num_rows());
+                self.pending_batches.push(batch.clone());
+                return Ok(());
+            }
+
+            let mut inference_batches = self.pending_batches.clone();
+            if rows_needed > 0 {
+                inference_batches.push(batch.slice(0, rows_needed));
+            }
+            self.initialize_variant_shredding(&inference_batches)?;
+            self.write_pending_batches().await?;
+
+            let batch = self.apply_variant_shredding_plan(batch)?;
+            return self.write_physical_batch(&batch).await;
+        }
+
+        let batch = self.apply_variant_shredding_plan(batch)?;
+        self.write_physical_batch(&batch).await
+    }
+
+    async fn write_physical_batch(&mut self, batch: &RecordBatch) -> Result<(), DeltaTableError> {
+        if self.arrow_writer.is_none() && self.buffer.is_none() {
+            self.physical_file_schema = batch.schema();
+            self.reset_writer()?;
+        }
+
+        if batch.schema() != self.physical_file_schema {
+            return Err(DeltaTableError::generic(format!(
+                "Schema mismatch: expected {:?}, got {:?}",
+                self.physical_file_schema,
                 batch.schema()
             )));
         }
@@ -386,15 +467,87 @@ impl PartitionWriter {
             let estimated_size: u64 = buffer_len as u64 + in_progress_size as u64;
 
             if estimated_size >= self.config.target_file_size {
-                self.flush_writer().await?;
+                self.flush_open_writer().await?;
             }
         }
 
         Ok(())
     }
 
+    fn apply_variant_shredding_plan(
+        &self,
+        batch: &RecordBatch,
+    ) -> Result<RecordBatch, DeltaTableError> {
+        if let Some(plan) = self.variant_shredding_plan.as_ref() {
+            apply_variant_shredding_plan(batch, plan).map_err(DeltaTableError::generic)
+        } else {
+            Ok(batch.clone())
+        }
+    }
+
+    fn initialize_variant_shredding(
+        &mut self,
+        inference_batches: &[RecordBatch],
+    ) -> Result<(), DeltaTableError> {
+        if self.variant_shredding_initialized {
+            return Ok(());
+        }
+
+        let plan = build_variant_shredding_plan(
+            &self.config.file_schema,
+            inference_batches,
+            self.config.variant_shredding.inference_buffer_size,
+            self.config.variant_shredding.inference_node_budget,
+        )
+        .map_err(DeltaTableError::generic)?;
+        let plan = (!plan.is_noop()).then_some(plan);
+        self.variant_shredding_plan = plan;
+        self.variant_shredding_initialized = true;
+
+        if self.variant_shredding_plan.is_none() {
+            self.physical_file_schema = self.config.file_schema.clone();
+            self.reset_writer()?;
+        }
+
+        Ok(())
+    }
+
+    async fn write_pending_batches(&mut self) -> Result<(), DeltaTableError> {
+        let batches = std::mem::take(&mut self.pending_batches);
+        self.pending_rows = 0;
+
+        for batch in batches {
+            let batch = self.apply_variant_shredding_plan(&batch)?;
+            self.write_physical_batch(&batch).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn open_and_write_pending_batches(&mut self) -> Result<(), DeltaTableError> {
+        if self.variant_shredding_initialized {
+            return Ok(());
+        }
+
+        let inference_batches = self.pending_batches.clone();
+        self.initialize_variant_shredding(&inference_batches)?;
+        self.write_pending_batches().await
+    }
+
     /// Flush the current writer and create a new file
     async fn flush_writer(&mut self) -> Result<(), DeltaTableError> {
+        if self.config.variant_shredding.enabled && !self.variant_shredding_initialized {
+            self.open_and_write_pending_batches().await?;
+        }
+
+        self.flush_open_writer().await
+    }
+
+    async fn flush_open_writer(&mut self) -> Result<(), DeltaTableError> {
+        if self.arrow_writer.is_none() && self.buffer.is_none() {
+            return Ok(());
+        }
+
         let writer = self
             .arrow_writer
             .take()
@@ -460,16 +613,21 @@ impl PartitionWriter {
             self.part_counter, self.writer_id, compression_suffix
         );
 
-        let mut full_path = self.config.table_path.clone();
-        for segment in &self.config.partition_segments {
-            full_path = full_path.child(segment.as_str());
-        }
-        full_path = full_path.child(file_name.as_str());
-
         let relative_path = if self.config.partition_segments.is_empty() {
-            file_name
+            file_name.clone()
         } else {
             format!("{}/{}", self.config.partition_segments.join("/"), file_name)
+        };
+
+        #[expect(clippy::expect_used)]
+        let full_path = {
+            let table_root = self.config.table_path.as_ref();
+            let full_str = if table_root.is_empty() {
+                relative_path.clone()
+            } else {
+                format!("{}/{}", table_root, relative_path)
+            };
+            Path::parse(full_str).expect("partition segments and file name form a valid path")
         };
 
         (relative_path, full_path)
@@ -489,6 +647,7 @@ impl PartitionWriter {
             metadata,
             self.num_indexed_cols,
             &self.stats_columns,
+            &self.stats_excluded_columns,
         )
     }
 
@@ -497,7 +656,7 @@ impl PartitionWriter {
         let buffer = AsyncShareableBuffer::default();
         let arrow_writer = AsyncArrowWriter::try_new(
             buffer.clone(),
-            self.config.file_schema.clone(),
+            self.physical_file_schema.clone(),
             Some(self.config.writer_properties.clone()),
         )
         .map_err(|e| DeltaTableError::generic(format!("Failed to create new arrow writer: {e}")))?;
@@ -543,6 +702,7 @@ fn arrow_schema_without_partitions(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::sync::Arc;
 
     use datafusion::arrow::array::{ArrayRef, Int32Array, StringArray};
@@ -551,9 +711,14 @@ mod tests {
     use object_store::memory::InMemory;
     use object_store::path::Path;
     use object_store::ObjectStore;
+    use parquet_variant::{Variant, VariantMetadata};
+    use parquet_variant_compute::json_to_variant;
+    use parquet_variant_json::VariantToJson;
 
+    use super::super::variant_shredding::VariantShreddingConfig;
     use super::{DeltaWriter, WriterConfig};
-    use crate::kernel::DeltaTableError;
+    use crate::deletion_vector::z85::z85_decode;
+    use crate::spec::DeltaError as DeltaTableError;
 
     fn make_batch(values: Vec<i32>, parts: Vec<&str>) -> Result<RecordBatch, DeltaTableError> {
         let schema = Arc::new(Schema::new(vec![
@@ -566,6 +731,39 @@ mod tests {
         RecordBatch::try_new(schema, vec![value_arr, part_arr]).map_err(|e| {
             DeltaTableError::generic(format!("Failed to build test record batch: {e}"))
         })
+    }
+
+    fn make_variant_batch(values: Vec<Option<&str>>) -> Result<RecordBatch, DeltaTableError> {
+        let json = Arc::new(StringArray::from(values.clone())) as ArrayRef;
+        let variant = json_to_variant(&json).map_err(|e| {
+            DeltaTableError::generic(format!("Failed to build test variant array: {e}"))
+        })?;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            variant.field("payload"),
+        ]));
+        let ids = (0..values.len())
+            .map(|value| value as i32)
+            .collect::<Vec<_>>();
+        let id_arr: ArrayRef = Arc::new(Int32Array::from(ids));
+
+        RecordBatch::try_new(schema, vec![id_arr, Arc::new(variant.into_inner())]).map_err(|e| {
+            DeltaTableError::generic(format!("Failed to build test variant record batch: {e}"))
+        })
+    }
+
+    fn decode_variant_stats_json(encoded: &str) -> Result<String, DeltaTableError> {
+        let decoded = z85_decode(encoded)?;
+        let metadata = VariantMetadata::try_new(&decoded).map_err(DeltaTableError::generic_err)?;
+        let metadata_size = metadata.size();
+        let value = decoded
+            .get(metadata_size..)
+            .ok_or_else(|| DeltaTableError::generic("invalid encoded Variant stats".to_string()))?;
+        let variant = Variant::try_new_with_metadata(metadata, value)
+            .map_err(DeltaTableError::generic_err)?;
+        variant
+            .to_json_string()
+            .map_err(DeltaTableError::generic_err)
     }
 
     fn make_writer() -> Result<DeltaWriter, DeltaTableError> {
@@ -582,6 +780,8 @@ mod tests {
             1024,
             32,
             None,
+            Default::default(),
+            VariantShreddingConfig::default(),
         );
         Ok(DeltaWriter::new(object_store, table_path, config))
     }
@@ -622,6 +822,64 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn variant_shredding_writer_drains_pending_batches_sequentially(
+    ) -> Result<(), DeltaTableError> {
+        let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let table_path = Path::from("delta_table");
+        let batch1 = make_variant_batch(vec![Some(r#"{"a":1,"b":"delta","nested":{"c":7}}"#)])?;
+        let batch2 = make_variant_batch(vec![
+            Some(r#"{"a":2,"b":"lake","nested":{"c":9}}"#),
+            Some(r#"{"a":3,"c":"fallback","nested":{"c":11}}"#),
+        ])?;
+
+        let config = WriterConfig::new(
+            batch1.schema(),
+            vec![],
+            vec![],
+            None,
+            1024 * 1024,
+            1024,
+            32,
+            None,
+            HashSet::from(["payload".to_string()]),
+            VariantShreddingConfig {
+                enabled: true,
+                inference_buffer_size: 2,
+                ..Default::default()
+            },
+        );
+        let mut writer = DeltaWriter::new(object_store, table_path, config);
+
+        writer.write(&batch1).await?;
+        writer.write(&batch2).await?;
+        let adds = writer.close().await?;
+
+        assert_eq!(adds.len(), 1);
+        let stats = adds[0].stats.as_deref().unwrap_or_default();
+        assert!(stats.contains(r#""numRecords":3"#));
+        assert!(!stats.contains("typed_value"));
+        let stats: serde_json::Value =
+            serde_json::from_str(stats).map_err(DeltaTableError::generic_err)?;
+        assert_eq!(stats["nullCount"]["payload"], serde_json::json!(0));
+
+        let min_payload = stats["minValues"]["payload"]
+            .as_str()
+            .ok_or_else(|| DeltaTableError::generic("missing min payload stats".to_string()))?;
+        let max_payload = stats["maxValues"]["payload"]
+            .as_str()
+            .ok_or_else(|| DeltaTableError::generic("missing max payload stats".to_string()))?;
+        assert_eq!(
+            decode_variant_stats_json(min_payload)?,
+            r#"{"$['a']":1,"$['b']":"delta","$['nested']['c']":7}"#
+        );
+        assert_eq!(
+            decode_variant_stats_json(max_payload)?,
+            r#"{"$['a']":3,"$['b']":"lake","$['nested']['c']":11}"#
+        );
+        Ok(())
+    }
+
     #[cfg(debug_assertions)]
     #[tokio::test]
     #[should_panic(expected = "input violated partition grouping contract")]
@@ -633,5 +891,74 @@ mod tests {
         #[expect(clippy::unwrap_used)]
         let batch = make_batch(vec![1, 2, 3], vec!["a", "b", "a"]).unwrap();
         let _ = writer.write(&batch).await;
+    }
+
+    #[tokio::test]
+    async fn partition_path_with_percent_encoded_value_is_not_double_encoded(
+    ) -> Result<(), DeltaTableError> {
+        use datafusion::arrow::datatypes::TimeUnit;
+
+        let object_store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let table_path = Path::from("delta_table");
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new(
+                "ts",
+                DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
+                true,
+            ),
+        ]));
+        let config = WriterConfig::new(
+            schema.clone(),
+            vec!["ts".to_string()],
+            vec!["ts".to_string()],
+            None,
+            1024 * 1024,
+            1024,
+            0,
+            None,
+            Default::default(),
+            VariantShreddingConfig::default(),
+        );
+        let mut writer = DeltaWriter::new(Arc::clone(&object_store), table_path.clone(), config);
+
+        use datafusion::arrow::array::{Int32Array, TimestampMicrosecondArray};
+        let ts_us: i64 = 1_705_283_400_i64 * 1_000_000; // 2024-01-15 02:30:00 UTC
+        let id_arr: ArrayRef = Arc::new(Int32Array::from(vec![1_i32]));
+        let ts_arr: ArrayRef = Arc::new(
+            TimestampMicrosecondArray::from(vec![ts_us]).with_timezone(Arc::<str>::from("UTC")),
+        );
+        #[expect(clippy::unwrap_used)]
+        let batch = RecordBatch::try_new(schema, vec![id_arr, ts_arr]).unwrap();
+        writer.write(&batch).await?;
+        let adds = writer.close().await?;
+
+        assert_eq!(adds.len(), 1);
+        let path = &adds[0].path;
+
+        assert!(
+            path.contains("%20"),
+            "path should contain %20 (encoded space) in partition dir, got: {path}"
+        );
+        assert!(
+            !path.contains("%2520"),
+            "path must not contain double-encoded %2520: {path}"
+        );
+        assert!(
+            !path.contains("%253A"),
+            "path must not contain double-encoded %253A: {path}"
+        );
+
+        use crate::spec::utils::{decode_path, encode_path};
+        let encoded = encode_path(path);
+        #[expect(clippy::expect_used)]
+        let decoded = decode_path(&encoded).expect("valid percent-encoded path");
+        assert_eq!(
+            decoded, *path,
+            "path should survive one encode/decode round-trip unchanged"
+        );
+
+        Ok(())
     }
 }

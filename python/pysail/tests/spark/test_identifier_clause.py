@@ -2,7 +2,7 @@
 
 import pytest
 
-from pysail.tests.spark.utils import pyspark_version
+from pysail.testing.spark.utils.common import pyspark_version
 
 # Named SQL parameters via args=dict were introduced in Spark 3.4 / Spark Connect.
 pytestmark = pytest.mark.skipif(

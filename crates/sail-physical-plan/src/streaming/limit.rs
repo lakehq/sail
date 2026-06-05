@@ -28,7 +28,7 @@ pub struct StreamLimitExec {
     skip: usize,
     fetch: Option<usize>,
     data_schema: SchemaRef,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl StreamLimitExec {
@@ -43,12 +43,12 @@ impl StreamLimitExec {
         } else {
             input.boundedness()
         };
-        let properties = PlanProperties::new(
+        let properties = Arc::new(PlanProperties::new(
             input.equivalence_properties().clone(),
             Partitioning::UnknownPartitioning(1),
             input.pipeline_behavior(),
             boundedness,
-        );
+        ));
         Ok(Self {
             input,
             data_schema,
@@ -90,7 +90,7 @@ impl ExecutionPlan for StreamLimitExec {
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 
@@ -151,10 +151,6 @@ impl ExecutionPlan for StreamLimitExec {
             stream,
         ));
         Ok(Box::pin(EncodedFlowEventStream::new(stream)))
-    }
-
-    fn statistics(&self) -> Result<Statistics> {
-        self.partition_statistics(None)
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {

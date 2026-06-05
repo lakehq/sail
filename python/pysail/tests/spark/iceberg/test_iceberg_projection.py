@@ -2,7 +2,7 @@ import pyarrow as pa
 from pyiceberg.schema import Schema
 from pyiceberg.types import IntegerType, NestedField, StringType, StructType
 
-from .utils import create_sql_catalog  # noqa: TID252
+from pysail.tests.spark.iceberg.utils import create_sql_catalog
 
 
 def test_column_projection_subset_and_order(spark, tmp_path):

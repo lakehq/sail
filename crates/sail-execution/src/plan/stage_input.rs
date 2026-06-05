@@ -11,11 +11,11 @@ use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, Pla
 #[derive(Debug, Clone)]
 pub struct StageInputExec<I> {
     input: I,
-    properties: PlanProperties,
+    properties: Arc<PlanProperties>,
 }
 
 impl<I> StageInputExec<I> {
-    pub fn new(input: I, properties: PlanProperties) -> Self {
+    pub fn new(input: I, properties: Arc<PlanProperties>) -> Self {
         Self { input, properties }
     }
 
@@ -50,7 +50,7 @@ where
         self
     }
 
-    fn properties(&self) -> &PlanProperties {
+    fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
 

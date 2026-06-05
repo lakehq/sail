@@ -20,6 +20,10 @@ pub struct BatchAggregateAccumulator {
     inputs: Vec<Vec<ArrayRef>>,
     output_type: DataType,
     aggregator: Box<dyn BatchAggregator>,
+    /// The number of arguments the Python function actually accepts.
+    /// May be less than `input_types.len()` when a dummy argument was injected
+    /// to satisfy DataFusion's requirement that every aggregate has at least one input.
+    actual_arg_count: usize,
 }
 
 impl Debug for BatchAggregateAccumulator {
@@ -37,6 +41,7 @@ impl BatchAggregateAccumulator {
         input_types: Vec<DataType>,
         output_type: DataType,
         aggregator: Box<dyn BatchAggregator>,
+        actual_arg_count: usize,
     ) -> Self {
         let num_inputs = input_types.len();
         Self {
@@ -44,6 +49,7 @@ impl BatchAggregateAccumulator {
             inputs: vec![vec![]; num_inputs],
             output_type,
             aggregator,
+            actual_arg_count,
         }
     }
 
@@ -94,7 +100,7 @@ impl Accumulator for BatchAggregateAccumulator {
                 Ok(input)
             })
             .collect::<Result<Vec<_>>>()?;
-        let array = self.aggregator.call(&inputs)?;
+        let array = self.aggregator.call(&inputs[..self.actual_arg_count])?;
         if array.len() != 1 {
             return exec_err!("expected a single value, got {}", array.len());
         }

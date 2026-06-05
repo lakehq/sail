@@ -6,10 +6,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::catalog::{Session, TableProvider};
+use datafusion::catalog::Session;
+use datafusion::datasource::provider_as_source;
+use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::Result;
-use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat, TableFormatRegistry};
+use sail_common_datafusion::datasource::{
+    OptionLayer, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
+};
 
 use super::datasource::PythonDataSource;
 use super::discovery::DATA_SOURCE_REGISTRY;
@@ -166,19 +170,25 @@ impl TableFormat for PythonTableFormat {
         &self.name
     }
 
-    async fn create_provider(
+    async fn create_source(
         &self,
         _ctx: &dyn Session,
         info: SourceInfo,
-    ) -> Result<Arc<dyn TableProvider>> {
+    ) -> Result<Arc<dyn TableSource>> {
         // Create PythonDataSource from options
-        let datasource = self.create_datasource(&info.options)?;
+        let opaque_options: Vec<HashMap<String, String>> = info
+            .options
+            .into_iter()
+            .map(|l| l.into_opaque_options())
+            .collect();
+        let datasource = self.create_datasource(&opaque_options)?;
 
-        // Get schema (use provided schema or discover from Python)
-        let schema = if let Some(schema) = info.schema {
-            Arc::new(schema)
-        } else {
-            datasource.schema()?
+        // Get schema (use provided schema or discover from Python).
+        // When a table is created without column definitions (e.g. `CREATE TABLE t USING fmt`),
+        // the catalog stores an empty schema. Fall back to Python discovery in that case.
+        let schema = match info.schema {
+            Some(schema) if !schema.fields().is_empty() => Arc::new(schema),
+            _ => datasource.schema()?,
         };
 
         // Create executor (MVP: in-process via PyO3)
@@ -187,7 +197,7 @@ impl TableFormat for PythonTableFormat {
         // Create TableProvider with executor and command bytes
         let provider = PythonTableProvider::new(executor, datasource.command().to_vec(), schema);
 
-        Ok(Arc::new(provider))
+        Ok(provider_as_source(Arc::new(provider)))
     }
 
     async fn create_writer(
@@ -199,7 +209,6 @@ impl TableFormat for PythonTableFormat {
 
         let SinkInfo {
             input,
-            path,
             mode,
             partition_by,
             mut options,
@@ -215,13 +224,9 @@ impl TableFormat for PythonTableFormat {
             );
         }
 
-        // Inject save path into options so the Python DataSource receives it
-        // via self.options["path"] in __init__ (matches PySpark behavior).
-        if !path.is_empty() {
-            let path_option: HashMap<String, String> =
-                [("path".to_string(), path)].into_iter().collect();
-            options.push(path_option);
-        }
+        // The path (if any) is already present in options under the "path" key,
+        // so it will be forwarded to the Python DataSource via self.options["path"]
+        // in __init__ (matches PySpark behavior). No additional injection needed.
 
         // Map save mode to overwrite bool (PySpark convention).
         // PySpark's DataSource.writer(schema, overwrite) only receives a boolean:
@@ -246,14 +251,17 @@ impl TableFormat for PythonTableFormat {
             PhysicalSinkMode::OverwriteIf { .. } => "overwrite",
             PhysicalSinkMode::OverwritePartitions => "overwrite",
         };
-        let mode_option: HashMap<String, String> = [("mode".to_string(), mode_str.to_string())]
-            .into_iter()
-            .collect();
-        options.push(mode_option);
+        options.push(OptionLayer::OptionList {
+            items: vec![("mode".to_string(), mode_str.to_string())],
+        });
 
         // Create datasource and get writer using the same executor configuration
         // path as write execution for consistent Python datasource behavior.
-        let datasource = self.create_datasource(&options)?;
+        let opaque_options: Vec<HashMap<String, String>> = options
+            .into_iter()
+            .map(|l| l.into_opaque_options())
+            .collect();
+        let datasource = self.create_datasource(&opaque_options)?;
         let executor: Arc<dyn super::executor::PythonExecutor> =
             Arc::new(InProcessExecutor::from_app_config());
         let schema = input.schema();

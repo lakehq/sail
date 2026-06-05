@@ -6,16 +6,20 @@ use aws_sdk_glue::types::{
     StorageDescriptor, TableInput, ViewDefinitionInput, ViewRepresentationInput,
 };
 use aws_sdk_glue::Client;
-use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
+use sail_catalog::hive_format::HiveDetectedFormat;
 use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewColumnOptions,
-    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
+    CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions,
+    DropViewOptions, Namespace,
 };
-use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
+use sail_catalog::utils::quote_namespace_if_needed;
+use sail_common_datafusion::catalog::{
+    identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
+};
 use tokio::sync::OnceCell;
 
 use crate::data_type::{arrow_to_glue_type, glue_type_to_arrow};
-use crate::format::GlueStorageFormat;
 use crate::{hive, iceberg};
 
 /// Configuration for AWS Glue Data Catalog.
@@ -43,7 +47,7 @@ impl GlueCatalogProvider {
         }
     }
 
-    pub(crate) async fn get_client(&self) -> CatalogResult<&Client> {
+    pub(super) async fn get_client(&self) -> CatalogResult<&Client> {
         self.client
             .get_or_try_init(|| async {
                 let mut config_loader = aws_config::defaults(BehaviorVersion::latest());
@@ -60,6 +64,17 @@ impl GlueCatalogProvider {
                 Ok(Client::new(&sdk_config))
             })
             .await
+    }
+
+    pub(super) fn database_name(database: &Namespace) -> CatalogResult<String> {
+        if database.tail.is_empty() {
+            Ok(database.head.to_string())
+        } else {
+            Err(CatalogError::InvalidArgument(format!(
+                "Glue catalog does not support multi-level database names: {}",
+                quote_namespace_if_needed(database)
+            )))
+        }
     }
 
     fn database_to_status(
@@ -95,12 +110,26 @@ impl GlueCatalogProvider {
         // Extract location
         let location = storage.and_then(|sd| sd.location()).map(|s| s.to_string());
 
-        // Detect format from serde info
-        let format = storage
-            .and_then(|sd| sd.serde_info())
-            .and_then(|si| si.serialization_library())
-            .map(|lib| GlueStorageFormat::detect_format_from_serde(Some(lib)))
-            .unwrap_or_else(|| "unknown".to_string());
+        // Detect format from serde info and table parameters
+        let format = HiveDetectedFormat::detect(
+            storage
+                .and_then(|sd| sd.serde_info())
+                .and_then(|si| si.serialization_library()),
+            storage.and_then(|sd| sd.input_format()),
+            storage.and_then(|sd| sd.output_format()),
+        )
+        .as_str()
+        .to_string();
+        let format = if format == "unknown" {
+            table
+                .parameters()
+                .and_then(|props| props.get("table_type"))
+                .filter(|v| v == &"iceberg")
+                .map(|_| "iceberg".to_string())
+                .unwrap_or(format)
+        } else {
+            format
+        };
 
         // Extract columns from storage descriptor
         let mut columns: Vec<TableColumnStatus> = storage
@@ -118,6 +147,7 @@ impl GlueCatalogProvider {
                     comment: col.comment().map(|s| s.to_string()),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                     is_partition: false,
                     is_bucket: false,
                     is_cluster: false,
@@ -143,6 +173,7 @@ impl GlueCatalogProvider {
                         comment: pk.comment().map(|s| s.to_string()),
                         default: None,
                         generated_always_as: None,
+                        identity: None,
                         is_partition: true,
                         is_bucket: false,
                         is_cluster: false,
@@ -167,11 +198,11 @@ impl GlueCatalogProvider {
                 constraints: vec![],
                 location,
                 format,
-                partition_by: partition_keys,
+                partition_by: identity_partition_fields(&partition_keys),
                 sort_by: vec![],
                 bucket_by: None,
-                options: vec![],
                 properties,
+                is_external: true,
             },
         })
     }
@@ -207,6 +238,7 @@ impl GlueCatalogProvider {
                     comment: col.comment().map(|s| s.to_string()),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                     is_partition: false,
                     is_bucket: false,
                     is_cluster: false,
@@ -308,7 +340,7 @@ impl CatalogProvider for GlueCatalogProvider {
         options: CreateDatabaseOptions,
     ) -> CatalogResult<DatabaseStatus> {
         let client = self.get_client().await?;
-        let db_name = database.to_string();
+        let database_name = Self::database_name(database)?;
 
         let CreateDatabaseOptions {
             if_not_exists,
@@ -323,25 +355,25 @@ impl CatalogProvider for GlueCatalogProvider {
             Some(properties.into_iter().collect())
         };
 
-        let mut db_input = aws_sdk_glue::types::DatabaseInput::builder().name(&db_name);
+        let mut database_input = aws_sdk_glue::types::DatabaseInput::builder().name(&database_name);
 
         if let Some(desc) = &comment {
-            db_input = db_input.description(desc);
+            database_input = database_input.description(desc);
         }
         if let Some(loc) = &location {
-            db_input = db_input.location_uri(loc);
+            database_input = database_input.location_uri(loc);
         }
         if let Some(params) = parameters {
-            db_input = db_input.set_parameters(Some(params));
+            database_input = database_input.set_parameters(Some(params));
         }
 
-        let db_input = db_input.build().map_err(|e| {
+        let database_input = database_input.build().map_err(|e| {
             CatalogError::InvalidArgument(format!("Failed to build database input: {e}"))
         })?;
 
         let result = client
             .create_database()
-            .database_input(db_input)
+            .database_input(database_input)
             .send()
             .await;
 
@@ -353,7 +385,10 @@ impl CatalogProvider for GlueCatalogProvider {
                     if if_not_exists {
                         self.get_database(database).await
                     } else {
-                        Err(CatalogError::AlreadyExists("database", db_name))
+                        Err(CatalogError::AlreadyExists(
+                            CatalogObject::Database,
+                            database_name,
+                        ))
                     }
                 } else {
                     Err(CatalogError::External(format!(
@@ -366,9 +401,9 @@ impl CatalogProvider for GlueCatalogProvider {
 
     async fn get_database(&self, database: &Namespace) -> CatalogResult<DatabaseStatus> {
         let client = self.get_client().await?;
-        let db_name = database.to_string();
+        let database_name = Self::database_name(database)?;
 
-        let result = client.get_database().name(&db_name).send().await;
+        let result = client.get_database().name(&database_name).send().await;
 
         match result {
             Ok(output) => {
@@ -380,7 +415,10 @@ impl CatalogProvider for GlueCatalogProvider {
             Err(sdk_err) => {
                 let service_err = sdk_err.into_service_error();
                 if service_err.is_entity_not_found_exception() {
-                    Err(CatalogError::NotFound("database", db_name))
+                    Err(CatalogError::NotFound(
+                        CatalogObject::Database,
+                        database_name,
+                    ))
                 } else {
                     Err(CatalogError::External(format!(
                         "Failed to get database: {service_err}"
@@ -408,9 +446,9 @@ impl CatalogProvider for GlueCatalogProvider {
             for db in page.database_list() {
                 let status = self.database_to_status(db)?;
                 if let Some(p) = prefix {
-                    let db_namespace = Namespace::try_from(status.database.clone())
+                    let database_namespace = Namespace::try_from(status.database.clone())
                         .map_err(|e| CatalogError::External(format!("Invalid namespace: {e}")))?;
-                    if !p.is_parent_of(&db_namespace) && p != &db_namespace {
+                    if !p.is_parent_of(&database_namespace) && p != &database_namespace {
                         continue;
                     }
                 }
@@ -427,14 +465,14 @@ impl CatalogProvider for GlueCatalogProvider {
         options: DropDatabaseOptions,
     ) -> CatalogResult<()> {
         let client = self.get_client().await?;
-        let db_name = database.to_string();
+        let database_name = Self::database_name(database)?;
 
         let DropDatabaseOptions {
             if_exists,
             cascade: _, // Glue requires database to be empty; cascade not directly supported
         } = options;
 
-        let result = client.delete_database().name(&db_name).send().await;
+        let result = client.delete_database().name(&database_name).send().await;
 
         match result {
             Ok(_) => Ok(()),
@@ -444,7 +482,10 @@ impl CatalogProvider for GlueCatalogProvider {
                     if if_exists {
                         Ok(())
                     } else {
-                        Err(CatalogError::NotFound("database", db_name))
+                        Err(CatalogError::NotFound(
+                            CatalogObject::Database,
+                            database_name,
+                        ))
                     }
                 } else {
                     Err(CatalogError::External(format!(
@@ -473,11 +514,11 @@ impl CatalogProvider for GlueCatalogProvider {
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
         let client = self.get_client().await?;
-        let db_name = database.to_string();
+        let database_name = Self::database_name(database)?;
 
         let result = client
             .get_table()
-            .database_name(&db_name)
+            .database_name(&database_name)
             .name(table)
             .send()
             .await;
@@ -490,7 +531,10 @@ impl CatalogProvider for GlueCatalogProvider {
 
                 // Reject views - they should be accessed via get_view
                 if matches!(tbl.table_type(), Some(t) if t == "VIRTUAL_VIEW") {
-                    return Err(CatalogError::NotFound("table", table.to_string()));
+                    return Err(CatalogError::NotFound(
+                        CatalogObject::Table,
+                        table.to_string(),
+                    ));
                 }
 
                 self.table_to_status(database, tbl)
@@ -498,7 +542,10 @@ impl CatalogProvider for GlueCatalogProvider {
             Err(sdk_err) => {
                 let service_err = sdk_err.into_service_error();
                 if service_err.is_entity_not_found_exception() {
-                    Err(CatalogError::NotFound("table", table.to_string()))
+                    Err(CatalogError::NotFound(
+                        CatalogObject::Table,
+                        table.to_string(),
+                    ))
                 } else {
                     Err(CatalogError::External(format!(
                         "Failed to get table: {service_err}"
@@ -510,12 +557,12 @@ impl CatalogProvider for GlueCatalogProvider {
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
         let client = self.get_client().await?;
-        let db_name = database.to_string();
+        let database_name = Self::database_name(database)?;
 
         let mut tables = Vec::new();
         let mut paginator = client
             .get_tables()
-            .database_name(&db_name)
+            .database_name(&database_name)
             .into_paginator()
             .send();
 
@@ -552,11 +599,11 @@ impl CatalogProvider for GlueCatalogProvider {
         }
 
         let client = self.get_client().await?;
-        let db_name = database.to_string();
+        let database_name = Self::database_name(database)?;
 
         let result = client
             .delete_table()
-            .database_name(&db_name)
+            .database_name(&database_name)
             .name(table)
             .send()
             .await;
@@ -568,7 +615,10 @@ impl CatalogProvider for GlueCatalogProvider {
                 if service_err.is_entity_not_found_exception() && if_exists {
                     Ok(())
                 } else if service_err.is_entity_not_found_exception() {
-                    Err(CatalogError::NotFound("table", table.to_string()))
+                    Err(CatalogError::NotFound(
+                        CatalogObject::Table,
+                        table.to_string(),
+                    ))
                 } else {
                     Err(CatalogError::External(format!(
                         "Failed to drop table: {service_err}"
@@ -578,6 +628,20 @@ impl CatalogProvider for GlueCatalogProvider {
         }
     }
 
+    async fn alter_table(
+        &self,
+        _database: &Namespace,
+        _table: &str,
+        _options: AlterTableOptions,
+    ) -> CatalogResult<()> {
+        // The Glue catalog does not currently mirror table property changes into
+        // Glue's `Parameters`, but ALTER TABLE is still useful for Glue-tracked Delta
+        // tables where the property change is persisted by the Delta `TableFormat`.
+        // We therefore treat this as a no-op at the catalog layer so the storage-side
+        // commit is not rolled back.
+        Ok(())
+    }
+
     async fn create_view(
         &self,
         database: &Namespace,
@@ -585,7 +649,7 @@ impl CatalogProvider for GlueCatalogProvider {
         options: CreateViewOptions,
     ) -> CatalogResult<TableStatus> {
         let client = self.get_client().await?;
-        let db_name = database.to_string();
+        let database_name = Self::database_name(database)?;
 
         let CreateViewOptions {
             columns,
@@ -613,7 +677,7 @@ impl CatalogProvider for GlueCatalogProvider {
 
         let result = client
             .create_table()
-            .database_name(&db_name)
+            .database_name(&database_name)
             .table_input(view_input)
             .send()
             .await;
@@ -626,7 +690,10 @@ impl CatalogProvider for GlueCatalogProvider {
                     if if_not_exists {
                         self.get_view(database, view).await
                     } else {
-                        Err(CatalogError::AlreadyExists("view", view.to_string()))
+                        Err(CatalogError::AlreadyExists(
+                            CatalogObject::View,
+                            view.to_string(),
+                        ))
                     }
                 } else {
                     Err(CatalogError::External(format!(
@@ -639,11 +706,11 @@ impl CatalogProvider for GlueCatalogProvider {
 
     async fn get_view(&self, database: &Namespace, view: &str) -> CatalogResult<TableStatus> {
         let client = self.get_client().await?;
-        let db_name = database.to_string();
+        let database_name = Self::database_name(database)?;
 
         let result = client
             .get_table()
-            .database_name(&db_name)
+            .database_name(&database_name)
             .name(view)
             .send()
             .await;
@@ -656,7 +723,10 @@ impl CatalogProvider for GlueCatalogProvider {
 
                 let table_type = tbl.table_type().unwrap_or_default();
                 if table_type != "VIRTUAL_VIEW" {
-                    return Err(CatalogError::NotFound("view", view.to_string()));
+                    return Err(CatalogError::NotFound(
+                        CatalogObject::View,
+                        view.to_string(),
+                    ));
                 }
 
                 self.view_to_status(database, tbl)
@@ -664,7 +734,10 @@ impl CatalogProvider for GlueCatalogProvider {
             Err(sdk_err) => {
                 let service_err = sdk_err.into_service_error();
                 if service_err.is_entity_not_found_exception() {
-                    Err(CatalogError::NotFound("view", view.to_string()))
+                    Err(CatalogError::NotFound(
+                        CatalogObject::View,
+                        view.to_string(),
+                    ))
                 } else {
                     Err(CatalogError::External(format!(
                         "Failed to get view: {service_err}"
@@ -676,12 +749,12 @@ impl CatalogProvider for GlueCatalogProvider {
 
     async fn list_views(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
         let client = self.get_client().await?;
-        let db_name = database.to_string();
+        let database_name = Self::database_name(database)?;
 
         let mut views = Vec::new();
         let mut paginator = client
             .get_tables()
-            .database_name(&db_name)
+            .database_name(&database_name)
             .into_paginator()
             .send();
 
@@ -710,11 +783,11 @@ impl CatalogProvider for GlueCatalogProvider {
         let DropViewOptions { if_exists } = options;
 
         let client = self.get_client().await?;
-        let db_name = database.to_string();
+        let database_name = Self::database_name(database)?;
 
         let result = client
             .delete_table()
-            .database_name(&db_name)
+            .database_name(&database_name)
             .name(view)
             .send()
             .await;
@@ -726,7 +799,10 @@ impl CatalogProvider for GlueCatalogProvider {
                 if service_err.is_entity_not_found_exception() && if_exists {
                     Ok(())
                 } else if service_err.is_entity_not_found_exception() {
-                    Err(CatalogError::NotFound("view", view.to_string()))
+                    Err(CatalogError::NotFound(
+                        CatalogObject::View,
+                        view.to_string(),
+                    ))
                 } else {
                     Err(CatalogError::External(format!(
                         "Failed to drop view: {service_err}"

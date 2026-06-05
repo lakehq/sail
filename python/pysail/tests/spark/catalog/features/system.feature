@@ -84,3 +84,39 @@ Feature: System catalog queries
     Then query result
       | count |
       | 1     |
+
+  @sail-only
+  Scenario: Filter and limit pushdown for system.session.options
+    When query
+      """
+      EXPLAIN SELECT * FROM system.session.options
+      WHERE key = 'mode'
+      LIMIT 1
+      """
+    Then query plan matches snapshot
+
+  @sail-only
+  Scenario: Options table queries
+    When query
+      """
+      SELECT value FROM system.session.options WHERE key = 'mode'
+      """
+    Then query result
+      | value |
+      | local |
+
+    When query
+      """
+      SELECT value FROM system.session.options WHERE key = 'execution.default_parallelism'
+      """
+    Then query result
+      | value |
+      | 4     |
+
+    When query
+      """
+      SELECT count(*) > 0 AS has_options FROM system.session.options
+      """
+    Then query result
+      | has_options |
+      | true        |

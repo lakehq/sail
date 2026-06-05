@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use datafusion::common::Result;
+use datafusion::common::{DFSchema, Result};
 use datafusion::execution::SessionState;
-use datafusion::logical_expr::{LogicalPlan, UserDefinedLogicalNode};
+use datafusion::logical_expr::{LogicalPlan, TableScan, UserDefinedLogicalNode};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 
-use crate::logical_plan::SystemTableNode;
 use crate::physical_plan::SystemTableExec;
+use crate::table_source::SystemTableSource;
 
 pub struct SystemTablePhysicalPlanner;
 
@@ -15,24 +15,39 @@ pub struct SystemTablePhysicalPlanner;
 impl ExtensionPlanner for SystemTablePhysicalPlanner {
     async fn plan_extension(
         &self,
-        planner: &dyn PhysicalPlanner,
-        node: &dyn UserDefinedLogicalNode,
+        _planner: &dyn PhysicalPlanner,
+        _node: &dyn UserDefinedLogicalNode,
         _logical_inputs: &[&LogicalPlan],
         _physical_inputs: &[Arc<dyn ExecutionPlan>],
+        _session_state: &SessionState,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        Ok(None)
+    }
+
+    async fn plan_table_scan(
+        &self,
+        planner: &dyn PhysicalPlanner,
+        scan: &TableScan,
         session_state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        if let Some(node) = node.as_any().downcast_ref::<SystemTableNode>() {
-            Ok(Some(Arc::new(SystemTableExec::try_new(
-                node.table(),
-                node.projection().map(|p| p.to_vec()),
-                node.filters()
-                    .iter()
-                    .map(|e| planner.create_physical_expr(e, node.original_schema(), session_state))
-                    .collect::<Result<Vec<_>>>()?,
-                node.fetch(),
-            )?)))
-        } else {
-            Ok(None)
-        }
+        let Some(source) = scan.source.as_any().downcast_ref::<SystemTableSource>() else {
+            return Ok(None);
+        };
+        let table = source.table();
+        let schema = Arc::new(DFSchema::try_from_qualified_schema(
+            scan.table_name.clone(),
+            &table.schema(),
+        )?);
+        let filters = scan
+            .filters
+            .iter()
+            .map(|e| planner.create_physical_expr(e, &schema, session_state))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Some(Arc::new(SystemTableExec::try_new(
+            table,
+            scan.projection.clone(),
+            filters,
+            scan.fetch,
+        )?)))
     }
 }

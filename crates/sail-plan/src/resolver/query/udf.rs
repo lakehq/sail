@@ -15,7 +15,7 @@ use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
 use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
-use sail_python_udf::udf::pyspark_group_map_udf::PySparkGroupMapUDF;
+use sail_python_udf::udf::pyspark_group_map_udf::{PySparkGroupMapMode, PySparkGroupMapUDF};
 use sail_python_udf::udf::pyspark_map_iter_udf::{PySparkMapIterKind, PySparkMapIterUDF};
 
 use crate::error::{PlanError, PlanResult};
@@ -66,6 +66,8 @@ impl PlanResolver<'_> {
             function.eval_type,
             // MapPartitions UDF has the iterator as the only argument
             &[0],
+            &[], // input types not needed for map partitions
+            &[], // map partitions don't use kwargs
             &self.config.pyspark_udf_config,
         )?;
         let kind = match function.eval_type {
@@ -180,13 +182,23 @@ impl PlanResolver<'_> {
         )));
         if !matches!(
             function.eval_type,
-            spec::PySparkUdfType::GroupedMapPandas | spec::PySparkUdfType::GroupedMapArrow
+            spec::PySparkUdfType::GroupedMapPandas
+                | spec::PySparkUdfType::GroupedMapArrow
+                | spec::PySparkUdfType::GroupedMapPandasIter
+                | spec::PySparkUdfType::GroupedMapArrowIter
         ) {
             return Err(PlanError::invalid(
-                "only GroupedMapArrow/GroupedMapPandas UDF is supported in GroupedMap",
+                "only GroupedMapArrow/GroupedMapPandas and iterator variants are supported in GroupedMap",
             ));
         }
-        let is_pandas = matches!(function.eval_type, spec::PySparkUdfType::GroupedMapPandas);
+        let is_pandas = matches!(
+            function.eval_type,
+            spec::PySparkUdfType::GroupedMapPandas | spec::PySparkUdfType::GroupedMapPandasIter
+        );
+        let is_iter = matches!(
+            function.eval_type,
+            spec::PySparkUdfType::GroupedMapPandasIter | spec::PySparkUdfType::GroupedMapArrowIter
+        );
         let input = self.resolve_query_plan(*input, state).await?;
         let schema = input.schema();
         let args = self
@@ -208,6 +220,8 @@ impl PlanResolver<'_> {
             &function.command,
             function.eval_type,
             &offsets,
+            &input_types,
+            &[], // group map UDFs don't use kwargs
             &self.config.pyspark_udf_config,
         )?;
         let udaf = PySparkGroupMapUDF::new(
@@ -217,7 +231,7 @@ impl PlanResolver<'_> {
             input_names,
             input_types,
             udf_output_type,
-            is_pandas,
+            PySparkGroupMapMode { is_pandas, is_iter },
             self.config.pyspark_udf_config.clone(),
         );
         let agg = Expr::AggregateFunction(expr::AggregateFunction {
@@ -293,11 +307,7 @@ impl PlanResolver<'_> {
             .zip(right.grouping.iter())
             .map(|(left, right)| left.clone().eq(right.clone()))
             .collect::<Vec<_>>();
-        let offsets: Vec<usize> = left
-            .offsets
-            .into_iter()
-            .chain(right.offsets.into_iter())
-            .collect();
+        let offsets: Vec<usize> = left.offsets.into_iter().chain(right.offsets).collect();
 
         // prepare the output mapping UDF
         let spec::CommonInlineUserDefinedFunction {
@@ -338,6 +348,8 @@ impl PlanResolver<'_> {
             &function.command,
             function.eval_type,
             &offsets,
+            &[], // input types not needed for cogroup map
+            &[], // cogroup map UDFs don't use kwargs
             &self.config.pyspark_udf_config,
         )?;
         let udf = PySparkCoGroupMapUDF::try_new(

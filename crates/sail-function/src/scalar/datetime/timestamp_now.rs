@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{internal_err, Result, ScalarValue};
-use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyInfo};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
@@ -57,8 +57,8 @@ impl ScalarUDFImpl for TimestampNow {
         internal_err!("invoke should not be called on a simplified timestamp_now() function")
     }
 
-    fn simplify(&self, _args: Vec<Expr>, info: &dyn SimplifyInfo) -> Result<ExprSimplifyResult> {
-        let now = info.execution_props().query_execution_start_time;
+    fn simplify(&self, _args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        let now = info.query_execution_start_time().unwrap_or_default();
         let now = match self.time_unit() {
             TimeUnit::Second => Some(now.timestamp()),
             TimeUnit::Millisecond => Some(now.timestamp_millis()),

@@ -18,13 +18,14 @@
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
-use datafusion::common::{DataFusionError, Result};
+use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{
@@ -34,15 +35,14 @@ use datafusion::datasource::physical_plan::{
 use datafusion::datasource::table_schema::TableSchema;
 use datafusion::physical_expr::{LexOrdering, PhysicalExpr};
 use object_store::path::Path;
+use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 
-use crate::datasource::{
-    create_object_store_url, partitioned_file_from_action, DataFusionMixins, DeltaScanConfig,
-    DeltaTableStateExt,
-};
-use crate::kernel::models::Add;
-use crate::physical_plan::DeltaPhysicalExprAdapterFactory;
+use crate::conversion::ScalarConverter;
+use crate::datasource::{create_object_store_url, partitioned_file_from_action, DeltaScanConfig};
+use crate::schema::arrow_field_physical_name;
+use crate::spec::{Add, MaxStat, MinStat};
 use crate::storage::LogStoreRef;
-use crate::table::DeltaTableState;
+use crate::table::DeltaSnapshot;
 
 /// Parameters for building file scan configuration
 pub struct FileScanParams<'a> {
@@ -51,11 +51,90 @@ pub struct FileScanParams<'a> {
     pub limit: Option<usize>,
     pub pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
     pub sort_order: Option<LexOrdering>,
+    /// How to populate table-level statistics for the scan.
+    ///
+    /// This is separate from per-file statistics attached to each [`PartitionedFile`].
+    pub table_stats_mode: TableStatsMode,
+}
+
+/// Strategy for providing table-level statistics to DataFusion.
+#[derive(Debug, Clone, Copy)]
+pub enum TableStatsMode {
+    /// Use snapshot/log-derived statistics (can be expensive for large snapshots).
+    Snapshot,
+    /// Aggregate statistics only from the provided `Add` actions (chunk-local).
+    AddsOnly,
+    /// Do not compute statistics; return unknown stats.
+    Unknown,
+}
+
+pub(crate) fn physical_to_logical_name_map(snapshot: &DeltaSnapshot) -> HashMap<String, String> {
+    let column_mapping_mode = snapshot.effective_column_mapping_mode();
+    let mut physical_to_logical = HashMap::new();
+    for field in snapshot.schema().fields() {
+        let logical = field.name().clone();
+        let physical = arrow_field_physical_name(field, column_mapping_mode).to_string();
+        physical_to_logical.entry(physical).or_insert(logical);
+    }
+    physical_to_logical
+}
+
+pub(crate) fn file_scan_logical_names(
+    snapshot: &DeltaSnapshot,
+    scan_config: &DeltaScanConfig,
+    file_schema: &SchemaRef,
+) -> Vec<String> {
+    let physical_to_logical = physical_to_logical_name_map(snapshot);
+    let mut names = file_schema
+        .fields()
+        .iter()
+        .map(|field| {
+            physical_to_logical
+                .get(field.name())
+                .cloned()
+                .unwrap_or_else(|| field.name().clone())
+        })
+        .collect::<Vec<_>>();
+    names.extend(snapshot.metadata().partition_columns().iter().cloned());
+    if let Some(file_column_name) = &scan_config.file_column_name {
+        names.push(file_column_name.clone());
+    }
+    if let Some(commit_version_column_name) = &scan_config.commit_version_column_name {
+        names.push(commit_version_column_name.clone());
+    }
+    if let Some(commit_timestamp_column_name) = &scan_config.commit_timestamp_column_name {
+        names.push(commit_timestamp_column_name.clone());
+    }
+    names
+}
+
+pub(crate) fn file_scan_projection_for_schema(
+    snapshot: &DeltaSnapshot,
+    scan_config: &DeltaScanConfig,
+    file_schema: &SchemaRef,
+    output_schema: &SchemaRef,
+) -> Result<Vec<usize>> {
+    let scan_names = file_scan_logical_names(snapshot, scan_config, file_schema);
+    output_schema
+        .fields()
+        .iter()
+        .map(|field| {
+            scan_names
+                .iter()
+                .position(|name| name == field.name())
+                .ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "Column '{}' is not available in Delta file scan schema",
+                        field.name()
+                    ))
+                })
+        })
+        .collect()
 }
 
 /// Build a FileScanConfig from pruned files and scan configuration
 pub fn build_file_scan_config(
-    snapshot: &DeltaTableState,
+    snapshot: &DeltaSnapshot,
     log_store: &LogStoreRef,
     files: &[Add],
     scan_config: &DeltaScanConfig,
@@ -66,31 +145,12 @@ pub fn build_file_scan_config(
     // Get the complete schema that includes partition columns
     let complete_schema = match scan_config.schema.clone() {
         Some(schema) => schema,
-        None => snapshot.input_schema()?,
+        None => Arc::new(snapshot.schema().clone()),
     };
     let config = scan_config.clone();
     let table_partition_cols = snapshot.metadata().partition_columns();
-    let column_mapping_mode = snapshot.effective_column_mapping_mode();
-    let kernel_schema = snapshot.snapshot().schema();
-    let partition_columns_mapped: Vec<(String, String)> = table_partition_cols
-        .iter()
-        .map(|logical| {
-            let physical = kernel_schema
-                .field(logical)
-                .map(|f| f.physical_name(column_mapping_mode).to_string())
-                .unwrap_or_else(|| logical.clone());
-            (logical.clone(), physical)
-        })
-        .collect();
-    let mut physical_to_logical = HashMap::new();
-    for field in complete_schema.fields() {
-        let logical = field.name().clone();
-        let physical = kernel_schema
-            .field(&logical)
-            .map(|f| f.physical_name(column_mapping_mode).to_string())
-            .unwrap_or_else(|| logical.clone());
-        physical_to_logical.entry(physical).or_insert(logical);
-    }
+    let partition_columns_mapped = snapshot.physical_partition_columns();
+    let physical_to_logical = physical_to_logical_name_map(snapshot);
 
     // Build file groups by partition values
     let mut file_groups: HashMap<
@@ -98,10 +158,21 @@ pub fn build_file_scan_config(
         Vec<PartitionedFile>,
     > = HashMap::new();
 
+    // Collect per-file statistics while building `PartitionedFile`s so we can reuse them to
+    // produce chunk-local table statistics without re-parsing JSON.
+    let mut per_file_stats: Vec<Arc<Statistics>> = Vec::new();
+
     for action in files.iter() {
+        // Files with deletion vectors are accepted: DV filtering is applied post-scan
+        // by DeltaScanByAddsExec which tracks row indices and excludes deleted rows.
+        // Note: the physical numRecords in stats is the total file record count
+        // (not accounting for DV deletions), which is correct for scan planning.
+
         let mut part =
             partitioned_file_from_action(action, &partition_columns_mapped, &complete_schema)?;
-        if let Some(stats) = stats_for_add(action, &file_schema, &physical_to_logical)? {
+        let action_stats = stats_for_add(action, &file_schema, &physical_to_logical)?;
+        if let Some(stats) = action_stats {
+            per_file_stats.push(Arc::clone(&stats));
             part.statistics = Some(stats);
         }
 
@@ -138,12 +209,10 @@ pub fn build_file_scan_config(
     // Rewrite file paths with table location prefix
     file_groups.iter_mut().for_each(|(_, files)| {
         files.iter_mut().for_each(|file| {
-            file.object_meta.location = Path::from(format!(
-                "{}{}{}",
-                log_store.config().location.path(),
-                object_store::path::DELIMITER,
-                file.object_meta.location
-            ));
+            file.object_meta.location = rewrite_data_file_location(
+                Path::from(log_store.config().location.path()),
+                file.object_meta.location.clone(),
+            );
         });
     });
 
@@ -204,16 +273,48 @@ pub fn build_file_scan_config(
     };
 
     let table_schema = TableSchema::new(Arc::clone(&file_schema), table_partition_cols_schema);
-    // Calculate table statistics
+    // Calculate table statistics.
     //
-    // `Statistics::column_statistics` expects the same length as the table
-    // schema (file schema + partition columns). If this vector is shorter, projection statistics
-    // can panic when encountering a `Column` referring to a partition column.
-    let mut stats = snapshot
-        .datafusion_table_statistics(params.pruning_mask)
-        .unwrap_or_else(|| {
+    // `Statistics::column_statistics` expects the same length as the table schema
+    // (file schema + partition columns + optional virtual columns). If this vector is shorter,
+    // projection statistics can panic when encountering a `Column` referring to a partition
+    // column.
+    let mut stats = match params.table_stats_mode {
+        TableStatsMode::Snapshot => {
+            let snapshot_schema = Arc::new(snapshot.schema().clone());
+            snapshot
+                .datafusion_table_statistics(params.pruning_mask)
+                .map(|stats| {
+                    map_statistics_to_schema_with_name_mapping(
+                        &stats,
+                        &snapshot_schema,
+                        table_schema.table_schema(),
+                        Some(&physical_to_logical),
+                    )
+                })
+                .unwrap_or_else(|| {
+                    datafusion::common::stats::Statistics::new_unknown(
+                        table_schema.table_schema().as_ref(),
+                    )
+                })
+        }
+        TableStatsMode::AddsOnly => {
+            // Compute stats only for the current `files` slice to match chunked execution.
+            // If any file is missing stats, fall back to unknown rather than mixing partial
+            // aggregates (which can be misleading for the optimizer).
+            let all_have_stats = per_file_stats.len() == files.len();
+            if all_have_stats {
+                aggregate_table_stats_from_files(&per_file_stats)
+            } else {
+                datafusion::common::stats::Statistics::new_unknown(
+                    table_schema.table_schema().as_ref(),
+                )
+            }
+        }
+        TableStatsMode::Unknown => {
             datafusion::common::stats::Statistics::new_unknown(table_schema.table_schema().as_ref())
-        });
+        }
+    };
     let expected_cols = table_schema.table_schema().fields().len();
     if stats.column_statistics.len() < expected_cols {
         stats.column_statistics.extend(
@@ -223,6 +324,9 @@ pub fn build_file_scan_config(
     } else if stats.column_statistics.len() > expected_cols {
         stats.column_statistics.truncate(expected_cols);
     }
+
+    sanitize_statistics_for_schema(table_schema.table_schema(), &mut stats);
+
     let mut parquet_source =
         ParquetSource::new(table_schema).with_table_parquet_options(parquet_options);
 
@@ -260,10 +364,218 @@ pub fn build_file_scan_config(
         .with_statistics(stats)
         .with_projection_indices(params.projection.cloned())?
         .with_limit(params.limit)
-        .with_expr_adapter(Some(Arc::new(DeltaPhysicalExprAdapterFactory {})))
+        .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})))
         .build();
 
     Ok(file_scan_config)
+}
+
+fn aggregate_table_stats_from_files(file_stats: &[Arc<Statistics>]) -> Statistics {
+    let mut num_rows = Precision::Exact(0usize);
+    let mut column_statistics: Option<Vec<ColumnStatistics>> = None;
+
+    for s in file_stats {
+        num_rows = match (num_rows, s.num_rows) {
+            (Precision::Exact(a), Precision::Exact(b)) => Precision::Exact(a.saturating_add(b)),
+            _ => Precision::Absent,
+        };
+
+        match (&mut column_statistics, s.column_statistics.as_slice()) {
+            (None, cols) => column_statistics = Some(cols.to_vec()),
+            (Some(acc), cols) => {
+                let n = acc.len().min(cols.len());
+                for i in 0..n {
+                    acc[i] = add_column_statistics(&acc[i], &cols[i]);
+                }
+            }
+        }
+    }
+
+    Statistics {
+        num_rows,
+        total_byte_size: Precision::Absent,
+        column_statistics: column_statistics.unwrap_or_default(),
+    }
+}
+
+fn add_column_statistics(a: &ColumnStatistics, b: &ColumnStatistics) -> ColumnStatistics {
+    ColumnStatistics {
+        null_count: a.null_count.add(&b.null_count),
+        max_value: merge_max_bounds(&a.max_value, &b.max_value),
+        min_value: merge_min_bounds(&a.min_value, &b.min_value),
+        sum_value: Precision::Absent,
+        distinct_count: a.distinct_count.add(&b.distinct_count),
+        byte_size: a.byte_size.add(&b.byte_size),
+    }
+}
+
+pub(crate) fn sanitize_statistics_for_schema(schema: &SchemaRef, stats: &mut Statistics) {
+    for (idx, field) in schema.fields().iter().enumerate() {
+        if let Some(column_stats) = stats.column_statistics.get_mut(idx) {
+            sanitize_column_statistics_for_field(column_stats, field.name(), field.data_type());
+        }
+    }
+}
+
+fn sanitize_column_statistics_for_field(
+    column_stats: &mut ColumnStatistics,
+    _column_name: &str,
+    data_type: &ArrowDataType,
+) {
+    column_stats.min_value = sanitize_bound_for_type(&column_stats.min_value, data_type);
+    column_stats.max_value = sanitize_bound_for_type(&column_stats.max_value, data_type);
+
+    let min_type = column_stats
+        .min_value
+        .get_value()
+        .map(ScalarValue::data_type);
+    let max_type = column_stats
+        .max_value
+        .get_value()
+        .map(ScalarValue::data_type);
+    if let (Some(min_type), Some(max_type)) = (min_type, max_type) {
+        if min_type != max_type {
+            column_stats.min_value = Precision::Absent;
+            column_stats.max_value = Precision::Absent;
+            return;
+        }
+    }
+    if let (Some(min), Some(max)) = (
+        column_stats.min_value.get_value(),
+        column_stats.max_value.get_value(),
+    ) {
+        if matches!(min.partial_cmp(max), Some(Ordering::Greater)) {
+            column_stats.min_value = Precision::Absent;
+            column_stats.max_value = Precision::Absent;
+        }
+    }
+}
+
+pub(crate) fn map_statistics_to_schema(
+    statistics: &Statistics,
+    source_schema: &SchemaRef,
+    target_schema: &SchemaRef,
+) -> Statistics {
+    map_statistics_to_schema_with_name_mapping(statistics, source_schema, target_schema, None)
+}
+
+pub(crate) fn map_statistics_to_schema_with_name_mapping(
+    statistics: &Statistics,
+    source_schema: &SchemaRef,
+    target_schema: &SchemaRef,
+    target_to_source_names: Option<&HashMap<String, String>>,
+) -> Statistics {
+    let column_statistics = target_schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let source_index = target_to_source_names
+                .and_then(|names| names.get(field.name()))
+                .and_then(|name| source_schema.index_of(name).ok())
+                .or_else(|| source_schema.index_of(field.name()).ok());
+            let mut column_statistics = source_index
+                .and_then(|idx| statistics.column_statistics.get(idx).cloned())
+                .unwrap_or_else(ColumnStatistics::new_unknown);
+            sanitize_column_statistics_for_field(
+                &mut column_statistics,
+                field.name(),
+                field.data_type(),
+            );
+            column_statistics
+        })
+        .collect();
+
+    Statistics {
+        num_rows: statistics.num_rows,
+        total_byte_size: statistics.total_byte_size,
+        column_statistics,
+    }
+}
+
+fn sanitize_bound_for_type(
+    bound: &Precision<ScalarValue>,
+    data_type: &ArrowDataType,
+) -> Precision<ScalarValue> {
+    let sanitize_value = |value: &ScalarValue| {
+        if value.is_null() {
+            return None;
+        }
+        if value.data_type() == *data_type {
+            return Some(value.clone());
+        }
+        value
+            .cast_to(data_type)
+            .ok()
+            .filter(|casted| !casted.is_null())
+    };
+
+    match bound {
+        Precision::Exact(value) => sanitize_value(value)
+            .map(Precision::Exact)
+            .unwrap_or(Precision::Absent),
+        Precision::Inexact(value) => sanitize_value(value)
+            .map(Precision::Inexact)
+            .unwrap_or(Precision::Absent),
+        Precision::Absent => Precision::Absent,
+    }
+}
+
+fn merge_max_bounds(
+    a: &Precision<ScalarValue>,
+    b: &Precision<ScalarValue>,
+) -> Precision<ScalarValue> {
+    if bounds_have_mismatched_types(a, b) {
+        Precision::Absent
+    } else {
+        a.max(b)
+    }
+}
+
+fn merge_min_bounds(
+    a: &Precision<ScalarValue>,
+    b: &Precision<ScalarValue>,
+) -> Precision<ScalarValue> {
+    if bounds_have_mismatched_types(a, b) {
+        Precision::Absent
+    } else {
+        a.min(b)
+    }
+}
+
+fn bounds_have_mismatched_types(a: &Precision<ScalarValue>, b: &Precision<ScalarValue>) -> bool {
+    let lhs = match a {
+        Precision::Exact(v) | Precision::Inexact(v) => Some(v),
+        Precision::Absent => None,
+    };
+    let rhs = match b {
+        Precision::Exact(v) | Precision::Inexact(v) => Some(v),
+        Precision::Absent => None,
+    };
+
+    match (lhs, rhs) {
+        (Some(lhs), Some(rhs)) => lhs.data_type() != rhs.data_type(),
+        _ => false,
+    }
+}
+
+fn rewrite_data_file_location(table_root: Path, location: Path) -> Path {
+    let raw = location.as_ref();
+    if looks_like_absolute_uri(raw) {
+        return location;
+    }
+
+    table_root.parts().chain(location.parts()).collect()
+}
+
+fn looks_like_absolute_uri(path: &str) -> bool {
+    let Some((scheme, rest)) = path.split_once(':') else {
+        return false;
+    };
+    !scheme.is_empty()
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        && rest.starts_with('/')
 }
 
 fn stats_for_add(
@@ -292,22 +604,44 @@ fn stats_for_add(
 
         for name in name_candidates {
             if min_value == Precision::Absent {
-                if let Some(value) = lookup_value_stat(&stats.min_values, name)
-                    .and_then(|v| scalar_from_json(field.data_type(), v))
-                {
-                    min_value = Precision::Exact(value);
+                let min_stat = stats.get_min_stat(name);
+                if let Some(value) = min_stat.value().and_then(|v| {
+                    ScalarConverter::stat_value_to_arrow_scalar_value(v, field.data_type())
+                        .ok()
+                        .flatten()
+                }) {
+                    if !value.is_null() {
+                        min_value = match min_stat {
+                            MinStat::Exact(_) => Precision::Exact(value),
+                            MinStat::LowerBound(_) => Precision::Inexact(value),
+                            MinStat::Absent => Precision::Absent,
+                        };
+                    }
                 }
             }
             if max_value == Precision::Absent {
-                if let Some(value) = lookup_value_stat(&stats.max_values, name)
-                    .and_then(|v| scalar_from_json(field.data_type(), v))
-                {
-                    max_value = Precision::Exact(value);
+                let max_stat = stats.get_max_stat(name);
+                if let Some(value) = max_stat.value().and_then(|v| {
+                    ScalarConverter::stat_value_to_arrow_scalar_value(v, field.data_type())
+                        .ok()
+                        .flatten()
+                }) {
+                    if !value.is_null() {
+                        max_value = match max_stat {
+                            MaxStat::Exact(_) => Precision::Exact(value),
+                            MaxStat::UpperBound(_) => Precision::Inexact(value),
+                            MaxStat::Absent => Precision::Absent,
+                        };
+                    }
                 }
             }
             if null_count == Precision::Absent {
-                if let Some(value) = lookup_count_stat(&stats.null_count, name) {
-                    null_count = Precision::Exact(value.max(0) as usize);
+                if let Some(value) = stats.null_count_value(name) {
+                    null_count = if stats.tight_bounds {
+                        Precision::Exact(value.max(0) as usize)
+                    } else {
+                        Precision::Inexact(value.max(0) as usize)
+                    };
                 }
             }
         }
@@ -335,50 +669,301 @@ fn stats_for_add(
     })))
 }
 
-fn lookup_value_stat<'a>(
-    map: &'a std::collections::HashMap<String, crate::kernel::statistics::ColumnValueStat>,
-    name: &str,
-) -> Option<&'a serde_json::Value> {
-    let mut parts = name.split('.');
-    let first = parts.next()?;
-    let mut cur = map.get(first)?;
-    for p in parts {
-        cur = cur.as_column()?.get(p)?;
-    }
-    cur.as_value()
-}
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
 
-fn lookup_count_stat(
-    map: &std::collections::HashMap<String, crate::kernel::statistics::ColumnCountStat>,
-    name: &str,
-) -> Option<i64> {
-    let mut parts = name.split('.');
-    let first = parts.next()?;
-    let mut cur = map.get(first)?;
-    for p in parts {
-        cur = cur.as_column()?.get(p)?;
-    }
-    cur.as_value()
-}
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
+    use datafusion::common::ScalarValue;
+    use object_store::path::Path;
 
-fn scalar_from_json(
-    dt: &datafusion::arrow::datatypes::DataType,
-    v: &serde_json::Value,
-) -> Option<datafusion::common::ScalarValue> {
-    match v {
-        serde_json::Value::Null => Some(
-            datafusion::common::ScalarValue::try_from(dt)
-                .unwrap_or(datafusion::common::ScalarValue::Null),
-        ),
-        serde_json::Value::Bool(b) => {
-            datafusion::common::ScalarValue::try_from_string(b.to_string(), dt).ok()
-        }
-        serde_json::Value::Number(n) => {
-            datafusion::common::ScalarValue::try_from_string(n.to_string(), dt).ok()
-        }
-        serde_json::Value::String(s) => {
-            datafusion::common::ScalarValue::try_from_string(s.clone(), dt).ok()
-        }
-        other => datafusion::common::ScalarValue::try_from_string(other.to_string(), dt).ok(),
+    use super::{
+        add_column_statistics, map_statistics_to_schema,
+        map_statistics_to_schema_with_name_mapping, rewrite_data_file_location,
+        sanitize_statistics_for_schema, stats_for_add,
+    };
+    use crate::conversion::ScalarConverter;
+    use crate::spec::Add;
+
+    #[test]
+    fn test_scalar_from_json_null_returns_typed_null() {
+        #[expect(clippy::unwrap_used)]
+        let value =
+            ScalarConverter::json_to_arrow_scalar_value(&serde_json::Value::Null, &DataType::Int64)
+                .unwrap();
+        assert_eq!(value, Some(ScalarValue::Int64(None)));
+    }
+
+    #[test]
+    fn test_add_column_statistics_absents_mismatched_bounds() {
+        let lhs = ColumnStatistics {
+            null_count: Precision::Absent,
+            max_value: Precision::Exact(ScalarValue::Null),
+            min_value: Precision::Exact(ScalarValue::Null),
+            sum_value: Precision::Absent,
+            distinct_count: Precision::Absent,
+            byte_size: Precision::Absent,
+        };
+        let rhs = ColumnStatistics {
+            null_count: Precision::Absent,
+            max_value: Precision::Exact(ScalarValue::Int64(Some(5))),
+            min_value: Precision::Exact(ScalarValue::Int64(Some(1))),
+            sum_value: Precision::Absent,
+            distinct_count: Precision::Absent,
+            byte_size: Precision::Absent,
+        };
+
+        let merged = add_column_statistics(&lhs, &rhs);
+        assert_eq!(merged.max_value, Precision::Absent);
+        assert_eq!(merged.min_value, Precision::Absent);
+    }
+
+    #[test]
+    fn test_sanitize_statistics_for_schema_removes_untyped_null_bounds() {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, true)]));
+        let mut stats = Statistics {
+            num_rows: Precision::Exact(10),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Absent,
+                max_value: Precision::Exact(ScalarValue::Int64(Some(5))),
+                min_value: Precision::Exact(ScalarValue::Null),
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Absent,
+                byte_size: Precision::Absent,
+            }],
+        };
+
+        sanitize_statistics_for_schema(&schema, &mut stats);
+
+        assert_eq!(
+            stats.column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Int64(Some(5)))
+        );
+        assert_eq!(stats.column_statistics[0].min_value, Precision::Absent);
+    }
+
+    #[test]
+    fn test_sanitize_statistics_for_schema_removes_invalid_min_max() {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Utf8, true)]));
+        let mut stats = Statistics {
+            num_rows: Precision::Exact(2),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(0),
+                max_value: Precision::Exact(ScalarValue::Int32(Some(22))),
+                min_value: Precision::Exact(ScalarValue::Int32(Some(3))),
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Absent,
+                byte_size: Precision::Absent,
+            }],
+        };
+
+        sanitize_statistics_for_schema(&schema, &mut stats);
+
+        assert_eq!(stats.column_statistics[0].min_value, Precision::Absent);
+        assert_eq!(stats.column_statistics[0].max_value, Precision::Absent);
+    }
+
+    #[test]
+    fn test_map_statistics_to_schema_reorders_partition_columns_by_name() {
+        let source_schema = Arc::new(Schema::new(vec![
+            Field::new("load_date", DataType::Date32, true),
+            Field::new("id", DataType::Utf8, true),
+            Field::new("payload_column_1", DataType::Int32, true),
+            Field::new("some_col", DataType::Utf8, true),
+        ]));
+        let target_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Utf8, true),
+            Field::new("payload_column_1", DataType::Int32, true),
+            Field::new("some_col", DataType::Utf8, true),
+            Field::new("load_date", DataType::Date32, true),
+        ]));
+        let statistics = Statistics {
+            num_rows: Precision::Exact(2),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                ColumnStatistics::new_unknown(),
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Utf8(Some("3".to_string()))),
+                    min_value: Precision::Exact(ScalarValue::Utf8(Some("2".to_string()))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Absent,
+                },
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(22))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(3))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Absent,
+                },
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Utf8(Some("foo".to_string()))),
+                    min_value: Precision::Exact(ScalarValue::Utf8(Some("foo".to_string()))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Absent,
+                },
+            ],
+        };
+
+        let mapped = map_statistics_to_schema(&statistics, &source_schema, &target_schema);
+
+        assert_eq!(mapped.num_rows, Precision::Exact(2));
+        assert_eq!(mapped.column_statistics.len(), 4);
+        assert_eq!(
+            mapped.column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::Utf8(Some("2".to_string())))
+        );
+        assert_eq!(
+            mapped.column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Utf8(Some("3".to_string())))
+        );
+        assert_eq!(
+            mapped.column_statistics[1].min_value,
+            Precision::Exact(ScalarValue::Int32(Some(3)))
+        );
+        assert_eq!(
+            mapped.column_statistics[1].max_value,
+            Precision::Exact(ScalarValue::Int32(Some(22)))
+        );
+        assert_eq!(
+            mapped.column_statistics[2].min_value,
+            Precision::Exact(ScalarValue::Utf8(Some("foo".to_string())))
+        );
+        assert_eq!(mapped.column_statistics[3], ColumnStatistics::new_unknown());
+    }
+
+    #[test]
+    fn test_map_statistics_to_schema_supports_physical_column_names() {
+        let source_schema = Arc::new(Schema::new(vec![Field::new(
+            "payload_column_1",
+            DataType::Int32,
+            true,
+        )]));
+        let target_schema = Arc::new(Schema::new(vec![Field::new(
+            "col-physical-payload",
+            DataType::Int32,
+            true,
+        )]));
+        let statistics = Statistics {
+            num_rows: Precision::Exact(2),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(0),
+                max_value: Precision::Exact(ScalarValue::Int32(Some(22))),
+                min_value: Precision::Exact(ScalarValue::Int32(Some(3))),
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Absent,
+                byte_size: Precision::Absent,
+            }],
+        };
+        let physical_to_logical = HashMap::from([(
+            "col-physical-payload".to_string(),
+            "payload_column_1".to_string(),
+        )]);
+
+        let mapped = map_statistics_to_schema_with_name_mapping(
+            &statistics,
+            &source_schema,
+            &target_schema,
+            Some(&physical_to_logical),
+        );
+
+        assert_eq!(
+            mapped.column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::Int32(Some(3)))
+        );
+        assert_eq!(
+            mapped.column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Int32(Some(22)))
+        );
+    }
+
+    #[test]
+    fn test_rewrite_data_file_location_preserves_absolute_uri_paths() {
+        let table_root = Path::from("bucket/table");
+        let absolute = Path::from("s3://other-bucket/path/part-000.parquet");
+
+        let rewritten = rewrite_data_file_location(table_root, absolute.clone());
+
+        assert_eq!(rewritten, absolute);
+    }
+
+    #[test]
+    fn test_rewrite_data_file_location_prefixes_relative_paths() {
+        let rewritten = rewrite_data_file_location(
+            Path::from("bucket/table"),
+            Path::from("part=1/part-000.parquet"),
+        );
+
+        assert_eq!(
+            rewritten,
+            Path::from("bucket/table/part=1/part-000.parquet")
+        );
+    }
+
+    #[test]
+    fn test_rewrite_data_file_location_preserves_percent_encoded_partition_dirs() {
+        #[expect(clippy::expect_used)]
+        let location =
+            Path::parse("ts_utc=2024-01-15%2010%3A30%3A00.123456/part-00000-abc.snappy.parquet")
+                .expect("valid path");
+
+        let rewritten = rewrite_data_file_location(Path::from("bucket/table"), location);
+
+        assert_eq!(
+            rewritten.as_ref(),
+            "bucket/table/ts_utc=2024-01-15%2010%3A30%3A00.123456/part-00000-abc.snappy.parquet"
+        );
+    }
+
+    #[test]
+    #[expect(clippy::expect_used, clippy::unwrap_used)]
+    fn test_stats_for_add_marks_wide_bounds_as_inexact() {
+        let file_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            true,
+        )]));
+        let add = Add {
+            path: "part-000.parquet".to_string(),
+            partition_values: HashMap::new(),
+            size: 1,
+            modification_time: 0,
+            data_change: true,
+            stats: Some(
+                r#"{"numRecords":3,"tightBounds":false,"minValues":{"value":1},"maxValues":{"value":7},"nullCount":{"value":0}}"#
+                    .to_string(),
+            ),
+            tags: None,
+            deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+            clustering_provider: None,
+            commit_version: None,
+            commit_timestamp: None,
+        };
+
+        let stats = stats_for_add(&add, &file_schema, &HashMap::new())
+            .unwrap()
+            .expect("stats should be present");
+        let column = &stats.column_statistics[0];
+
+        assert_eq!(
+            column.min_value,
+            Precision::Inexact(ScalarValue::Int32(Some(1)))
+        );
+        assert_eq!(
+            column.max_value,
+            Precision::Inexact(ScalarValue::Int32(Some(7)))
+        );
+        assert_eq!(column.null_count, Precision::Inexact(0));
     }
 }

@@ -25,7 +25,12 @@ def pytest_configure(config):
     # Default Syrupy format is Amber (`.ambr`), but we prefer standard YAML multi-doc files.
     default_ext = getattr(config.option, "default_extension", None)
     if default_ext is None:
-        config.option.default_extension = "pysail.tests.snapshot_yaml.YamlSnapshotExtension"
+        config.option.default_extension = "pysail.testing.snapshot.yaml.YamlSnapshotExtension"
+
+    config.addinivalue_line(
+        "markers",
+        "yamlsnapshot: add metadata to customize the YAML snapshot",
+    )
 
     configure_sail_environment()
 
@@ -44,7 +49,8 @@ def configure_sail_environment():
     # snapshot tests involving execution plans.
     os.environ["SAIL_EXECUTION__DEFAULT_PARALLELISM"] = "4"
     # Set the stack size explicitly to assist the configuration removal test.
-    os.environ["SAIL_RUNTIME__STACK_SIZE"] = "8388608"
+    # And we need the larger stack size to support large query plans in the test.
+    os.environ["SAIL_RUNTIME__STACK_SIZE"] = "16777216"
 
     # Ensure the native module can be imported successfully.
     # This allows this function to be future-proof in case we ever change the native module name.

@@ -70,8 +70,8 @@ async fn test_create_table() {
                 bucket_by: None,
                 if_not_exists: false,
                 replace: false,
-                options: vec![],
                 properties: vec![("owner".to_string(), "test_user".to_string())],
+                is_external: true,
             },
         )
         .await
@@ -98,7 +98,13 @@ async fn test_create_table() {
             assert_eq!(comment, &Some("Product catalog table".to_string()));
             assert_eq!(location, &Some("s3://bucket/products".to_string()));
             assert_eq!(format, "parquet");
-            assert_eq!(partition_by, &vec!["category".to_string()]);
+            assert_eq!(
+                partition_by,
+                &vec![CatalogPartitionField {
+                    column: "category".to_string(),
+                    transform: None,
+                }]
+            );
             assert!(properties
                 .iter()
                 .any(|(k, v)| k == "owner" && v == "test_user"));
@@ -185,8 +191,8 @@ async fn test_get_table() {
                 bucket_by: None,
                 if_not_exists: false,
                 replace: false,
-                options: vec![],
                 properties: vec![("key1".to_string(), "value1".to_string())],
+                is_external: true,
             },
         )
         .await
@@ -414,8 +420,8 @@ async fn test_storage_formats() {
                     bucket_by: None,
                     if_not_exists: false,
                     replace: false,
-                    options: vec![],
                     properties: vec![],
+                    is_external: true,
                 },
             )
             .await
@@ -592,8 +598,8 @@ async fn test_partition_transforms() {
                 bucket_by: None,
                 if_not_exists: false,
                 replace: false,
-                options: vec![],
                 properties: vec![],
+                is_external: true,
             },
         )
         .await
@@ -655,8 +661,8 @@ async fn test_hive_rejects_transforms() {
                 bucket_by: None,
                 if_not_exists: false,
                 replace: false,
-                options: vec![],
                 properties: vec![],
+                is_external: true,
             },
         )
         .await;
@@ -699,8 +705,8 @@ async fn test_iceberg_requires_location() {
                 bucket_by: None,
                 if_not_exists: false,
                 replace: false,
-                options: vec![],
                 properties: vec![],
+                is_external: true,
             },
         )
         .await;

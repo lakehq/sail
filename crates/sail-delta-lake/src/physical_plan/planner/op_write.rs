@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result, ToDFSchema};
+use datafusion::logical_expr::Expr;
 use datafusion::physical_expr::expressions::NotExpr;
 use datafusion::physical_expr::{LexRequirement, PhysicalExpr};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -25,17 +26,17 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 
 use super::context::PlannerContext;
+use super::metadata_predicate::{build_metadata_filter, predicate_requires_stats};
 use super::utils::{
-    align_schemas_for_union, build_log_replay_pipeline, build_log_replay_pipeline_with_options,
-    build_standard_write_layers, LogReplayFilter, LogReplayOptions,
+    align_schemas_for_union, build_log_replay_pipeline_with_options, build_standard_write_layers,
+    LogReplayOptions,
 };
-use crate::datasource::schema::DataFusionMixins;
-use crate::datasource::PredicateProperties;
 use crate::kernel::{DeltaOperation, SaveMode};
 use crate::physical_plan::{
     create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaDiscoveryExec,
-    DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec,
+    DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec, DeltaWriterExecOptions,
 };
+use crate::table::DeltaSnapshot;
 
 pub async fn build_write_plan(
     ctx: &PlannerContext<'_>,
@@ -84,15 +85,20 @@ async fn build_full_overwrite_plan(
     let plan = create_sort(plan, ctx.partition_columns().to_vec(), sort_order)?;
 
     let writer_schema = plan.schema();
+    let write_context =
+        ctx.prepare_write_context(&writer_schema, &PhysicalSinkMode::Overwrite, None)?;
     let writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaWriterExec::new(
         plan,
         ctx.table_url().clone(),
-        ctx.options().clone(),
+        DeltaWriterExecOptions::from(ctx.options().clone())
+            .with_generation_expressions(ctx.generation_expressions().clone())
+            .with_identity_columns(ctx.identity_columns().clone()),
+        ctx.metadata_configuration().clone(),
         ctx.partition_columns().to_vec(),
         PhysicalSinkMode::Overwrite,
         ctx.table_exists(),
         writer_schema,
-        None,
+        write_context.clone(),
     )?);
 
     // For existing tables, build a remove plan from the active file set and union it with the
@@ -106,26 +112,10 @@ async fn build_full_overwrite_plan(
         let version = snapshot_state.version();
         let partition_columns = snapshot_state.metadata().partition_columns().clone();
 
-        let kernel_snapshot = snapshot_state.snapshot().snapshot().inner.clone();
-        let log_segment = kernel_snapshot.log_segment();
-        let checkpoint_files = log_segment
-            .checkpoint_parts
-            .iter()
-            .map(|p| p.filename.clone())
-            .collect::<Vec<_>>();
-        let commit_files = log_segment
-            .ascending_commit_files
-            .iter()
-            .map(|p| p.filename.clone())
-            .collect::<Vec<_>>();
-
-        let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline(
+        let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline_with_options(
             ctx,
-            ctx.table_url().clone(),
-            version,
-            partition_columns.clone(),
-            checkpoint_files,
-            commit_files,
+            &snapshot_state,
+            LogReplayOptions::default(),
         )
         .await?;
 
@@ -136,7 +126,10 @@ async fn build_full_overwrite_plan(
             partition_columns,
             true, // partition_scan
         )?);
-        let remove_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaRemoveActionsExec::new(all_adds)?);
+        let remove_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaRemoveActionsExec::try_new(
+            all_adds,
+            Some(snapshot_state.physical_partition_columns()),
+        )?);
 
         UnionExec::try_new(vec![writer, remove_plan])?
     } else {
@@ -150,6 +143,8 @@ async fn build_full_overwrite_plan(
         ctx.table_exists(),
         input_schema,
         PhysicalSinkMode::Overwrite,
+        ctx.options().user_metadata.clone(),
+        write_context.commit_context.clone(),
     )))
 }
 
@@ -167,23 +162,24 @@ async fn build_overwrite_if_plan(
         .clone();
     let version = snapshot_state.version();
     let table_schema = snapshot_state
-        .snapshot()
-        .arrow_schema()
+        .input_schema()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let partition_columns = snapshot_state.metadata().partition_columns().clone();
     let table_df_schema = table_schema
         .clone()
         .to_dfschema()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let condition_expr = condition.expr.clone();
     let physical_condition = ctx
         .session()
-        .create_physical_expr(condition.expr, &table_df_schema)?;
+        .create_physical_expr(condition_expr.clone(), &table_df_schema)?;
     let predicate_source = source.or(condition.source);
 
     let old_data_plan = build_old_data_plan(
         ctx,
+        condition_expr.clone(),
         physical_condition.clone(),
-        version,
+        &snapshot_state,
         table_schema.clone(),
     )
     .await?;
@@ -208,10 +204,28 @@ async fn build_overwrite_if_plan(
         },
         predicate: predicate_source.clone(),
     });
+    let writer_options = DeltaWriterExecOptions::from(ctx.options().clone())
+        .with_generation_expressions(ctx.generation_expressions().clone())
+        .with_identity_columns(ctx.identity_columns().clone());
+    let write_context = crate::physical_plan::prepare_delta_write_context(
+        ctx.table_url(),
+        Some(snapshot_state.as_ref()),
+        &writer_options,
+        ctx.metadata_configuration(),
+        ctx.partition_columns(),
+        &PhysicalSinkMode::OverwriteIf {
+            condition: None,
+            source: predicate_source.clone(),
+        },
+        ctx.table_exists(),
+        &union_plan.schema(),
+        operation_override,
+    )?;
     let writer = Arc::new(DeltaWriterExec::new(
         Arc::clone(&union_plan),
         ctx.table_url().clone(),
-        ctx.options().clone(),
+        writer_options,
+        ctx.metadata_configuration().clone(),
         ctx.partition_columns().to_vec(),
         PhysicalSinkMode::OverwriteIf {
             condition: None,
@@ -219,55 +233,38 @@ async fn build_overwrite_if_plan(
         },
         ctx.table_exists(),
         union_plan.schema(),
-        operation_override,
+        write_context.clone(),
     )?);
 
-    let mut expr_props = PredicateProperties::new(partition_columns.clone());
-    expr_props
-        .analyze_predicate(&physical_condition)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-    let kernel_snapshot = snapshot_state.snapshot().snapshot().inner.clone();
-    let log_segment = kernel_snapshot.log_segment();
-    let checkpoint_files = log_segment
-        .checkpoint_parts
-        .iter()
-        .map(|p| p.filename.clone())
-        .collect::<Vec<_>>();
-    let commit_files = log_segment
-        .ascending_commit_files
-        .iter()
-        .map(|p| p.filename.clone())
-        .collect::<Vec<_>>();
-
-    let mut log_replay_options = LogReplayOptions::default();
-    if expr_props.partition_only {
-        log_replay_options.log_filter = Some(LogReplayFilter {
-            predicate: physical_condition.clone(),
-            table_schema: table_schema.clone(),
-        });
-    }
-    let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline_with_options(
-        ctx,
-        ctx.table_url().clone(),
-        version,
-        partition_columns.clone(),
-        checkpoint_files,
-        commit_files,
-        log_replay_options,
-    )
-    .await?;
+    let partition_only = !predicate_requires_stats(&condition_expr, &partition_columns);
+    let log_replay_options = LogReplayOptions {
+        // `DeltaRemoveActionsExec` decodes Add.stats to report numTouchedRows, including
+        // for partition-only overwrites where data-skipping itself does not need stats_json.
+        include_stats_json: true,
+        ..Default::default()
+    };
+    let meta_scan: Arc<dyn ExecutionPlan> =
+        build_log_replay_pipeline_with_options(ctx, &snapshot_state, log_replay_options).await?;
+    let meta_scan: Arc<dyn ExecutionPlan> = build_metadata_filter(
+        ctx.session(),
+        meta_scan,
+        &snapshot_state,
+        condition_expr.clone(),
+    )?;
 
     let find_files_plan: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
         meta_scan,
         ctx.table_url().clone(),
-        Some(physical_condition.clone()),
-        Some(table_schema.clone()),
+        None,
+        None,
         version,
         partition_columns.clone(),
-        expr_props.partition_only,
+        partition_only,
     )?);
-    let remove_plan = Arc::new(DeltaRemoveActionsExec::new(find_files_plan)?);
+    let remove_plan = Arc::new(DeltaRemoveActionsExec::try_new(
+        find_files_plan,
+        Some(snapshot_state.physical_partition_columns()),
+    )?);
 
     let union_actions = UnionExec::try_new(vec![writer, remove_plan])?;
 
@@ -281,69 +278,47 @@ async fn build_overwrite_if_plan(
             condition: None,
             source: predicate_source,
         },
+        ctx.options().user_metadata.clone(),
+        write_context.commit_context.clone(),
     )))
 }
 
 async fn build_old_data_plan(
     ctx: &PlannerContext<'_>,
+    condition_expr: Expr,
     condition: Arc<dyn PhysicalExpr>,
-    version: i64,
+    snapshot_state: &DeltaSnapshot,
     table_schema: SchemaRef,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    // For partition-only predicates, the scan-by-adds stage will be a no-op (partition_scan=true),
-    // so build the same log-derived metadata path as the main find-files plan.
-    let mut expr_props = PredicateProperties::new(ctx.partition_columns().to_vec());
-    expr_props
-        .analyze_predicate(&condition)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-    let table = ctx.open_table().await?;
-    let snapshot_state = table
-        .snapshot()
-        .map_err(|e| DataFusionError::External(Box::new(e)))?
-        .clone();
-    let kernel_snapshot = snapshot_state.snapshot().snapshot().inner.clone();
-    let log_segment = kernel_snapshot.log_segment();
-    let checkpoint_files = log_segment
-        .checkpoint_parts
-        .iter()
-        .map(|p| p.filename.clone())
-        .collect::<Vec<_>>();
-    let commit_files = log_segment
-        .ascending_commit_files
-        .iter()
-        .map(|p| p.filename.clone())
-        .collect::<Vec<_>>();
-
-    let mut log_replay_options = LogReplayOptions::default();
-    if expr_props.partition_only {
-        log_replay_options.log_filter = Some(LogReplayFilter {
-            predicate: condition.clone(),
-            table_schema: table_schema.clone(),
-        });
-    }
-    let meta_scan: Arc<dyn ExecutionPlan> = build_log_replay_pipeline_with_options(
-        ctx,
-        ctx.table_url().clone(),
-        version,
-        ctx.partition_columns().to_vec(),
-        checkpoint_files,
-        commit_files,
-        log_replay_options,
-    )
-    .await?;
+    let version = snapshot_state.version();
+    let partition_only = !predicate_requires_stats(&condition_expr, ctx.partition_columns());
+    let log_replay_options = LogReplayOptions {
+        include_stats_json: !partition_only,
+        ..Default::default()
+    };
+    let meta_scan: Arc<dyn ExecutionPlan> =
+        build_log_replay_pipeline_with_options(ctx, snapshot_state, log_replay_options).await?;
+    let meta_scan: Arc<dyn ExecutionPlan> = build_metadata_filter(
+        ctx.session(),
+        meta_scan,
+        snapshot_state,
+        condition_expr.clone(),
+    )?;
 
     let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
         meta_scan,
         ctx.table_url().clone(),
-        Some(condition.clone()),
-        Some(table_schema.clone()),
+        None,
+        None,
         version,
         ctx.partition_columns().to_vec(),
-        expr_props.partition_only,
+        partition_only,
     )?);
 
     // Spread Add actions across partitions so `DeltaScanByAddsExec` can scan files in parallel.
+    // TODO(adaptive-partitioning): Keep this aligned with `scan_planner.rs`.
+    // Plan: switch from fixed `target_partitions` + round-robin to size-driven partition count
+    // first, then size-aware distribution to avoid oversharding and worker skew.
     let target_partitions = ctx.session().config().target_partitions().max(1);
     let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
         find_files_exec,
@@ -353,7 +328,13 @@ async fn build_old_data_plan(
     let scan_exec = Arc::new(DeltaScanByAddsExec::new(
         Arc::clone(&find_files_exec),
         ctx.table_url().clone(),
+        version,
+        table_schema.clone(),
         table_schema,
+        crate::datasource::DeltaScanConfig::default(),
+        None,
+        None,
+        None,
     ));
 
     let negated_condition = Arc::new(NotExpr::new(condition));

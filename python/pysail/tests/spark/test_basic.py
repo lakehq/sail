@@ -1,10 +1,12 @@
+from datetime import date
+
 import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pandas.testing import assert_frame_equal
-from pyspark.sql.types import IntegerType, Row, StringType, StructField, StructType
+from pyspark.sql.types import DateType, IntegerType, Row, StringType, StructField, StructType
 
-from pysail.tests.spark.utils import is_jvm_spark, pyspark_version
+from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
 
 @pytest.fixture(scope="module")
@@ -264,42 +266,50 @@ def test_write_partitioned_parquet(spark, df, tmpdir):
     assert_frame_equal(expected, out.toPandas(), check_dtype=False)
 
 
-def test_write_csv(spark, simple_df, tmpdir):
-    path = str(tmpdir.join("simple_df_0.csv"))
+@pytest.mark.parametrize("infer_schema", [True, False])
+def test_write_csv(spark, simple_df, tmpdir, infer_schema):
+    # `simple_df` is `a INT, b STRING`. Spark's `inferSchema` default is
+    # `False`, so a default round-trip reads `a` back as STRING. The test
+    # is parametrized to pin both behaviors.
+    # `inferSchema=True` preserves types; `False` (the Spark default) reads
+    # every column back as STRING.
+    expected_typed = simple_df.toPandas() if infer_schema else simple_df.toPandas().astype(str)
+
+    path = str(tmpdir.join(f"simple_df_0_{infer_schema}.csv"))
     simple_df.write.csv(path)
-    expected = simple_df.toPandas()
+    expected = expected_typed.copy()
     expected.columns = [f"_c{i}" for i in range(expected.shape[1])]
     assert_frame_equal(
         expected,
-        spark.read.csv(path).sort("_c0").toPandas(),
+        spark.read.option("inferSchema", infer_schema).csv(path).sort("_c0").toPandas(),
         check_dtype=False,
     )
 
-    path = str(tmpdir.join("simple_df_1.csv"))
+    path = str(tmpdir.join(f"simple_df_1_{infer_schema}.csv"))
     simple_df.write.csv(path, header=False)
-    expected = simple_df.toPandas()
+    expected = expected_typed.copy()
     expected.columns = [f"_c{i}" for i in range(expected.shape[1])]
     assert_frame_equal(
         expected,
-        spark.read.csv(path).sort("_c0").toPandas(),
+        spark.read.option("inferSchema", infer_schema).csv(path).sort("_c0").toPandas(),
         check_dtype=False,
     )
 
-    path = str(tmpdir.join("simple_df_2.csv"))
+    path = str(tmpdir.join(f"simple_df_2_{infer_schema}.csv"))
     simple_df.write.csv(path)
-    expected = simple_df.toPandas()
+    expected = expected_typed.copy()
     expected.columns = [f"_c{i}" for i in range(expected.shape[1])]
     assert_frame_equal(
         expected,
-        spark.read.csv(path, header=False).sort("_c0").toPandas(),
+        spark.read.option("inferSchema", infer_schema).csv(path, header=False).sort("_c0").toPandas(),
         check_dtype=False,
     )
 
-    path = str(tmpdir.join("simple_df_3.csv"))
+    path = str(tmpdir.join(f"simple_df_3_{infer_schema}.csv"))
     simple_df.write.csv(path, header=True)
     assert_frame_equal(
-        simple_df.toPandas(),
-        spark.read.csv(path, header=True).sort("a").toPandas(),
+        expected_typed,
+        spark.read.option("inferSchema", infer_schema).csv(path, header=True).sort("a").toPandas(),
         check_dtype=False,
     )
 
@@ -405,6 +415,55 @@ def test_sql_dataframe_argument(spark):
     assert_frame_equal(actual, expected)
 
 
+def _date_df(spark):
+    schema = StructType([StructField("date_col", DateType(), True)])
+    return spark.createDataFrame([(date(2024, 1, 15),)], schema)
+
+
+def _assert_coalesce_string_date_ansi_error(df):
+    actual = df.select(F.coalesce(F.lit("default"), F.col("date_col")).alias("c"))
+    assert actual.schema.simpleString() == "struct<c:date>"
+    with pytest.raises(Exception, match=r"."):
+        actual.collect()
+
+
+def test_coalesce_string_literal_and_date_default_ansi_enabled(spark):
+    # This configuration is enabled by test fixture.
+    assert spark.conf.get("spark.sql.ansi.enabled") == "true"
+    df = _date_df(spark)
+    _assert_coalesce_string_date_ansi_error(df)
+
+
+def test_coalesce_string_literal_and_date_ansi_disabled(spark):
+    original = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "false")
+    try:
+        df = _date_df(spark)
+        actual = df.select(F.coalesce(F.lit("default"), F.col("date_col")).alias("c"))
+        assert actual.schema.simpleString() == "struct<c:string>"
+        assert actual.collect() == [Row(c="default")]
+
+        actual = df.select(F.coalesce(F.col("date_col"), F.lit("default")).alias("c"))
+        assert actual.schema.simpleString() == "struct<c:string>"
+        assert actual.collect() == [Row(c="2024-01-15")]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", original)
+
+
+def test_coalesce_string_literal_and_date_ansi_enabled(spark):
+    original = spark.conf.get("spark.sql.ansi.enabled")
+    spark.conf.set("spark.sql.ansi.enabled", "true")
+    try:
+        df = _date_df(spark)
+        _assert_coalesce_string_date_ansi_error(df)
+
+        actual = df.select(F.coalesce(F.col("date_col"), F.lit("default")).alias("c"))
+        assert actual.schema.simpleString() == "struct<c:date>"
+        assert actual.collect() == [Row(c=date(2024, 1, 15))]
+    finally:
+        spark.conf.set("spark.sql.ansi.enabled", original)
+
+
 def test_select_expression(df):
     assert_frame_equal(df.selectExpr("b.foo").toPandas(), pd.DataFrame({"foo": ["hello", "world"]}))
     assert_frame_equal(df.selectExpr("b.*").toPandas(), pd.DataFrame({"foo": ["hello", "world"]}))
@@ -413,3 +472,14 @@ def test_select_expression(df):
 @pytest.mark.skip(reason="not implemented")
 def test_stream(spark):
     spark.readStream.format("rate").load().writeStream.format("console").start()
+
+
+def test_large_plan_no_proto_recursion_limit(spark):
+    # Build a large plan and make sure the protocol buffers message can be handled correctly
+    # without hitting the default recursion limit (100) of the prost library.
+    # Note that this test requires a large stack size beyond the default,
+    # so the test setup contains configuration to accommodate this.
+    df = spark.range(0, 10)
+    for i in range(50):
+        df = df.withColumn(f"c{i}", F.lit("v"))
+    assert df.count() == 10  # noqa: PLR2004

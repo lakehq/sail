@@ -44,7 +44,7 @@ from pyspark.sql.types import (
     StructType as SparkStructType,
 )
 
-from pysail.tests.spark.utils import escape_sql_string_literal
+from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 
 def test_iceberg_write_overwrite_and_read(spark, sql_catalog):
