@@ -26,6 +26,7 @@ sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 arrow-schema = { workspace = true }
+parquet-variant = { workspace = true }
 parquet-variant-compute = { workspace = true }
 
 # Essential utilities

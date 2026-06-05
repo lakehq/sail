@@ -230,6 +230,7 @@ pub struct TableColumnStatus {
     pub comment: Option<String>,
     pub default: Option<String>,
     pub generated_always_as: Option<String>,
+    pub identity: Option<super::CatalogTableColumnIdentity>,
     pub is_partition: bool,
     pub is_bucket: bool,
     pub is_cluster: bool,
@@ -240,6 +241,14 @@ impl TableColumnStatus {
         let mut metadata = std::collections::HashMap::new();
         if let Some(expr) = &self.generated_always_as {
             let builder = ColumnFeaturesBuilder::new().with_generation_expression(expr.clone());
+            metadata.extend(builder.build());
+        }
+        if let Some(expr) = &self.default {
+            let builder = ColumnFeaturesBuilder::new().with_current_default(expr.clone());
+            metadata.extend(builder.build());
+        }
+        if let Some(identity) = &self.identity {
+            let builder = ColumnFeaturesBuilder::new().with_identity(identity);
             metadata.extend(builder.build());
         }
         if let Some(comment) = &self.comment {
@@ -270,6 +279,21 @@ pub fn alter_column_type(
     } else {
         column.data_type = alter_nested_data_type(&column.data_type, nested_path, data_type)?;
     }
+    Ok(())
+}
+
+pub fn alter_column_default(
+    columns: &mut [TableColumnStatus],
+    path: &[String],
+    default: Option<String>,
+) -> Result<()> {
+    let [name] = path else {
+        return plan_err!("ALTER COLUMN DEFAULT only supports top-level columns");
+    };
+    let Some(column) = columns.iter_mut().find(|column| column.name == *name) else {
+        return plan_err!("column '{}' does not exist", path.join("."));
+    };
+    column.default = default;
     Ok(())
 }
 

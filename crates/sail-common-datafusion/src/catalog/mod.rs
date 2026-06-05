@@ -65,6 +65,14 @@ pub struct CatalogTableSort {
     pub ascending: bool,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct CatalogTableColumnIdentity {
+    pub start: i64,
+    pub step: i64,
+    pub allow_explicit_insert: bool,
+    pub high_water_mark: Option<i64>,
+}
+
 impl From<CatalogTableSort> for expr::Sort {
     fn from(value: CatalogTableSort) -> Self {
         let CatalogTableSort { column, ascending } = value;

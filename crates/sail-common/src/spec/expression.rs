@@ -6,6 +6,8 @@ use crate::spec::data_type::DataType;
 use crate::spec::literal::Literal;
 use crate::spec::{QueryPlan, TimestampType};
 
+pub const DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID: &str = "__sail_default_column_value__";
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum Expr {
@@ -69,6 +71,7 @@ pub enum Expr {
         value: Box<Expr>,
     },
     // extensions
+    DefaultColumnValue,
     Placeholder(String),
     Rollup(Vec<Expr>),
     Cube(Vec<Expr>),

@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::compute::concat_batches;
+use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::{Distribution, EquivalenceProperties};
@@ -61,6 +62,7 @@ pub struct IcebergWriterExec {
     sink_mode: PhysicalSinkMode,
     table_exists: bool,
     options: IcebergWriterExecOptions,
+    logical_input_schema: Option<SchemaRef>,
     cache: Arc<PlanProperties>,
 }
 
@@ -96,6 +98,7 @@ impl IcebergWriterExec {
         sink_mode: PhysicalSinkMode,
         table_exists: bool,
         options: IcebergWriterExecOptions,
+        logical_input_schema: Option<SchemaRef>,
     ) -> Self {
         let schema = match iceberg_action_schema() {
             Ok(s) => s,
@@ -112,6 +115,7 @@ impl IcebergWriterExec {
             sink_mode,
             table_exists,
             options,
+            logical_input_schema,
             cache,
         }
     }
@@ -147,6 +151,40 @@ impl IcebergWriterExec {
 
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    pub fn logical_input_schema(&self) -> Option<&SchemaRef> {
+        self.logical_input_schema.as_ref()
+    }
+
+    fn input_schema_with_logical_metadata(&self) -> SchemaRef {
+        let physical_schema = self.input.schema();
+        let Some(logical_schema) = self.logical_input_schema.as_ref() else {
+            return physical_schema;
+        };
+
+        let fields = physical_schema
+            .fields()
+            .iter()
+            .map(|physical_field| {
+                let Ok(logical_field) = logical_schema.field_with_name(physical_field.name())
+                else {
+                    return Arc::clone(physical_field);
+                };
+                if logical_field.metadata().is_empty() {
+                    return Arc::clone(physical_field);
+                }
+
+                let mut metadata = physical_field.metadata().clone();
+                metadata.extend(logical_field.metadata().clone());
+                Arc::new(physical_field.as_ref().clone().with_metadata(metadata))
+            })
+            .collect::<Vec<_>>();
+
+        Arc::new(Schema::new_with_metadata(
+            fields,
+            physical_schema.metadata().clone(),
+        ))
     }
 
     fn get_schema_mode(
@@ -280,6 +318,7 @@ impl ExecutionPlan for IcebergWriterExec {
             self.sink_mode.clone(),
             self.table_exists,
             self.options.clone(),
+            self.logical_input_schema.clone(),
         )))
     }
 
@@ -305,7 +344,7 @@ impl ExecutionPlan for IcebergWriterExec {
         let partition_columns = self.partition_columns.clone();
         let sink_mode = self.sink_mode.clone();
         let table_exists = self.table_exists;
-        let input_schema = self.input.schema();
+        let input_schema = self.input_schema_with_logical_metadata();
         let options = self.options.clone();
         let schema_mode = Self::get_schema_mode(&options, &sink_mode)?;
 
@@ -345,6 +384,7 @@ impl ExecutionPlan for IcebergWriterExec {
                 spec_id_val,
                 commit_schema,
                 commit_requirements,
+                variant_shredding,
             ) = if table_exists {
                 let latest_meta = match metadata_location_from_properties(&options.table_properties)
                 {
@@ -361,6 +401,7 @@ impl ExecutionPlan for IcebergWriterExec {
                 let table_meta = TableMetadata::from_json(&bytes)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let data_dir = Self::resolve_data_dir(&table_meta, &table_url);
+                let variant_shredding = options.variant_shredding_config(&table_meta.properties)?;
                 // FIXME: Concurrency Issue with Schema Evolution.
                 // This requires a mechanism to reserve Field IDs or restart the Writer task upon conflict.
                 let schema_outcome =
@@ -433,12 +474,14 @@ impl ExecutionPlan for IcebergWriterExec {
                     spec_id_val,
                     commit_schema,
                     requirements,
+                    variant_shredding,
                 )
             } else {
                 let (_, metadata_properties) =
                     crate::properties::metadata_properties_from_table_properties(
                         &options.table_properties,
                     )?;
+                let variant_shredding = options.variant_shredding_config(&metadata_properties)?;
                 let input_arrow_schema = input_schema.as_ref().clone();
                 let mut iceberg_schema = arrow_schema_to_iceberg(&input_arrow_schema)?;
                 iceberg_schema = SchemaEvolver::assign_schema_field_ids(&iceberg_schema)?;
@@ -484,6 +527,7 @@ impl ExecutionPlan for IcebergWriterExec {
                     sid,
                     Some(iceberg_schema),
                     Vec::new(),
+                    variant_shredding,
                 )
             };
 
@@ -513,6 +557,7 @@ impl ExecutionPlan for IcebergWriterExec {
                 stats_columns: None,
                 iceberg_schema: Arc::new(iceberg_schema.clone()),
                 partition_spec: unbound_spec,
+                variant_shredding,
             };
 
             let writer_root = crate::utils::url_to_object_path(&table_url)
