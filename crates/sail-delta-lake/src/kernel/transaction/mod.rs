@@ -1195,6 +1195,7 @@ impl PreCommit {
     }
 
     /// Prepare the commit and write it as a Delta catalog-managed staged commit file.
+    #[expect(dead_code)]
     pub fn into_staged_commit_future(
         self,
     ) -> BoxFuture<'static, DeltaResult<CatalogManagedStagedCommit>> {
@@ -1202,6 +1203,20 @@ impl PreCommit {
             self.into_prepared_commit_future()
                 .await?
                 .into_staged_commit_future()
+                .await
+        })
+    }
+
+    /// Prepare the commit and write it as a Delta catalog-managed staged commit file using
+    /// the catalog-ratified latest table version as the commit version source of truth.
+    pub fn into_staged_commit_future_with_catalog_latest_version(
+        self,
+        latest_catalog_version: i64,
+    ) -> BoxFuture<'static, DeltaResult<CatalogManagedStagedCommit>> {
+        Box::pin(async move {
+            self.into_prepared_commit_future()
+                .await?
+                .into_staged_commit_future_with_catalog_latest_version(latest_catalog_version)
                 .await
         })
     }
@@ -1455,62 +1470,101 @@ impl PreparedCommit {
     pub fn into_staged_commit_future(
         self,
     ) -> BoxFuture<'static, DeltaResult<CatalogManagedStagedCommit>> {
+        self.into_staged_commit_future_inner(None)
+    }
+
+    pub fn into_staged_commit_future_with_catalog_latest_version(
+        self,
+        latest_catalog_version: i64,
+    ) -> BoxFuture<'static, DeltaResult<CatalogManagedStagedCommit>> {
+        self.into_staged_commit_future_inner(Some(latest_catalog_version))
+    }
+
+    fn into_staged_commit_future_inner(
+        self,
+        latest_catalog_version: Option<i64>,
+    ) -> BoxFuture<'static, DeltaResult<CatalogManagedStagedCommit>> {
         let this = self;
 
         Box::pin(async move {
             let local_actions: Vec<_> = this.data.actions.to_vec();
             let snapshot_version = this.table_data.as_ref().map(|s| s.version()).unwrap_or(-1);
-            let latest_version = match this.log_store.get_latest_version(snapshot_version).await {
-                Ok(v) => Some(v),
-                Err(DeltaError::MissingVersion) => None,
-                Err(err) => return Err(err),
-            };
 
             let mut read_snapshot: Option<Arc<DeltaSnapshot>> = this.table_data.clone();
-            if let Some(latest_version) = latest_version {
-                if read_snapshot.is_none() {
-                    let snapshot = DeltaSnapshot::try_new(
-                        this.log_store.as_ref(),
-                        Default::default(),
-                        Some(latest_version),
-                        None,
-                    )
-                    .await?;
-                    read_snapshot = Some(Arc::new(snapshot));
-                }
-
-                if let Some(snapshot) = &read_snapshot {
-                    if latest_version > snapshot.version() {
-                        warn!(
-                            "Preparing catalog-managed commit from snapshot {} but the Delta log has advanced to {latest_version}",
+            let latest_version = if let Some(catalog_latest) = latest_catalog_version {
+                if catalog_latest >= 0 {
+                    let Some(snapshot) = &read_snapshot else {
+                        return Err(DeltaError::generic(format!(
+                            "catalog-managed Delta commit requires a snapshot at the catalog latest version {catalog_latest}"
+                        )));
+                    };
+                    if snapshot.version() != catalog_latest {
+                        return Err(DeltaError::generic(format!(
+                            "catalog-managed Delta commit was prepared from snapshot version {}, but the catalog latest ratified version is {catalog_latest}",
                             snapshot.version()
-                        );
-                        for v in (snapshot.version() + 1)..=latest_version {
-                            let summary =
-                                WinningCommitSummary::try_new(this.log_store.as_ref(), v - 1, v)
-                                    .await?;
-                            let transaction_info = TransactionInfo::try_new(
-                                snapshot,
-                                &local_actions,
-                                this.data.operation.read_whole_table(),
-                            )?;
-                            let conflict_checker = ConflictChecker::new(
-                                transaction_info,
-                                summary,
-                                Some(&this.data.operation),
+                        )));
+                    }
+                    Some(catalog_latest)
+                } else {
+                    read_snapshot.as_ref().map(|snapshot| snapshot.version())
+                }
+            } else {
+                let latest_version = match this.log_store.get_latest_version(snapshot_version).await
+                {
+                    Ok(v) => Some(v),
+                    Err(DeltaError::MissingVersion) => None,
+                    Err(err) => return Err(err),
+                };
+
+                if let Some(latest_version) = latest_version {
+                    if read_snapshot.is_none() {
+                        let snapshot = DeltaSnapshot::try_new(
+                            this.log_store.as_ref(),
+                            Default::default(),
+                            Some(latest_version),
+                            None,
+                        )
+                        .await?;
+                        read_snapshot = Some(Arc::new(snapshot));
+                    }
+
+                    if let Some(snapshot) = &read_snapshot {
+                        if latest_version > snapshot.version() {
+                            warn!(
+                                "Preparing catalog-managed commit from snapshot {} but the Delta log has advanced to {latest_version}",
+                                snapshot.version()
                             );
-                            if let Err(err) = conflict_checker.check_conflicts() {
-                                return Err(TransactionError::CommitConflict(err).into());
-                            }
-                        }
-                        if let Some(snapshot) = &mut read_snapshot {
-                            Arc::make_mut(snapshot)
-                                .update(this.log_store.as_ref(), Some(latest_version as u64))
+                            for v in (snapshot.version() + 1)..=latest_version {
+                                let summary = WinningCommitSummary::try_new(
+                                    this.log_store.as_ref(),
+                                    v - 1,
+                                    v,
+                                )
                                 .await?;
+                                let transaction_info = TransactionInfo::try_new(
+                                    snapshot,
+                                    &local_actions,
+                                    this.data.operation.read_whole_table(),
+                                )?;
+                                let conflict_checker = ConflictChecker::new(
+                                    transaction_info,
+                                    summary,
+                                    Some(&this.data.operation),
+                                );
+                                if let Err(err) = conflict_checker.check_conflicts() {
+                                    return Err(TransactionError::CommitConflict(err).into());
+                                }
+                            }
+                            if let Some(snapshot) = &mut read_snapshot {
+                                Arc::make_mut(snapshot)
+                                    .update(this.log_store.as_ref(), Some(latest_version as u64))
+                                    .await?;
+                            }
                         }
                     }
                 }
-            }
+                latest_version
+            };
 
             let version = latest_version.map(|v| v + 1).unwrap_or(0);
             let previous_commit_timestamp =

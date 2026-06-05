@@ -32,10 +32,11 @@ use datafusion::physical_plan::{
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::stream::{self, StreamExt};
+use log::warn;
 use object_store::{Error as ObjectStoreError, ObjectStoreExt, PutMode, PutOptions};
 use sail_catalog::error::CatalogError;
 use sail_catalog::manager::CatalogManager;
-use sail_catalog::provider::CommitTableOptions;
+use sail_catalog::provider::{CommitTableOptions, GetTableCommitsOptions};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
@@ -55,11 +56,13 @@ use crate::schema::{
 };
 use crate::spec::{
     commit_path, contains_timestampntz_arrow, contains_variant_arrow, ColumnMetadataKey,
-    CommitAction, Metadata, MetadataValue, StatValue, Stats, StructField, StructType, TableFeature,
+    CommitAction, DataType as DeltaDataType, Metadata, MetadataValue, PrimitiveType, StatValue,
+    Stats, StructField, StructType, TableFeature,
 };
 use crate::storage::{get_object_store_from_context, LogStoreRef, StorageConfig};
 use crate::table::{
-    create_delta_table_with_object_store, open_table_with_object_store_and_table_config,
+    create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot,
+    open_table_with_object_store_and_table_config,
     open_table_with_object_store_and_table_config_at_version,
 };
 
@@ -74,6 +77,15 @@ struct IdentityColumnCommitInfo {
     start: i64,
     step: i64,
     high_water_mark: Option<i64>,
+}
+
+#[derive(Debug)]
+struct UnityCommitColumnType {
+    type_text: String,
+    type_json: serde_json::Value,
+    type_name: &'static str,
+    type_precision: Option<i32>,
+    type_scale: Option<i32>,
 }
 
 /// Physical execution node for Delta Lake commit operations
@@ -193,6 +205,71 @@ impl DeltaCommitExec {
         }))
     }
 
+    async fn latest_catalog_managed_table_version(
+        context: &Arc<TaskContext>,
+        catalog_table: &[String],
+        table: &DeltaCatalogManagedTable,
+    ) -> Result<i64> {
+        let manager = context.extension::<CatalogManager>()?;
+        manager
+            .get_table_commits(
+                catalog_table,
+                GetTableCommitsOptions {
+                    format: "delta".to_string(),
+                    table_uri: table.table_uri.clone(),
+                    start_version: 1,
+                    end_version: None,
+                },
+            )
+            .await
+            .map(|response| response.latest_table_version)
+            .map_err(|e| DataFusionError::External(Box::new(e)))
+    }
+
+    async fn refresh_catalog_managed_reference(
+        context: &Arc<TaskContext>,
+        catalog_table: &[String],
+        table_url: &Url,
+        log_store: &LogStoreRef,
+        reference: Option<Arc<crate::table::DeltaSnapshot>>,
+        latest_catalog_version: i64,
+    ) -> Result<Option<Arc<crate::table::DeltaSnapshot>>> {
+        let Some(snapshot) = reference else {
+            return Ok(None);
+        };
+        if latest_catalog_version < 0 || snapshot.version() == latest_catalog_version {
+            return Ok(Some(snapshot));
+        }
+        if snapshot.version() > latest_catalog_version {
+            return Err(DataFusionError::Internal(format!(
+                "catalog-managed Delta commit snapshot version {} is newer than catalog latest ratified version {latest_catalog_version}",
+                snapshot.version()
+            )));
+        }
+
+        let catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
+            context.as_ref(),
+            catalog_table,
+            table_url,
+            log_store.clone(),
+            Some(latest_catalog_version),
+        )
+        .await?;
+        let snapshot = crate::table::DeltaSnapshot::try_new(
+            log_store.as_ref(),
+            DeltaSnapshotConfig {
+                require_files: false,
+                catalog_managed_commits,
+                ..Default::default()
+            },
+            Some(latest_catalog_version),
+            None,
+        )
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        Ok(Some(Arc::new(snapshot)))
+    }
+
     fn is_catalog_managed_commit(
         reference: Option<&Arc<crate::table::DeltaSnapshot>>,
         actions: &[CommitAction],
@@ -227,6 +304,207 @@ impl DeltaCommitExec {
         (bootstrap_actions, commit_actions)
     }
 
+    fn unity_commit_metadata(actions: &[CommitAction]) -> Result<Option<serde_json::Value>> {
+        let Some(metadata) = actions.iter().rev().find_map(|action| match action {
+            CommitAction::Metadata(metadata) => Some(metadata),
+            _ => None,
+        }) else {
+            return Ok(None);
+        };
+
+        let schema = metadata
+            .parse_schema()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let columns = schema
+            .fields()
+            .enumerate()
+            .map(|(position, field)| Self::unity_column_info(metadata, field, position))
+            .collect::<Result<Vec<_>>>()?;
+
+        let mut out = serde_json::Map::new();
+        if let Some(description) = metadata.description() {
+            out.insert(
+                "description".to_string(),
+                serde_json::Value::String(description.to_string()),
+            );
+        }
+        out.insert(
+            "schema".to_string(),
+            serde_json::json!({
+                "columns": columns,
+            }),
+        );
+        if !metadata.configuration().is_empty() {
+            out.insert(
+                "properties".to_string(),
+                serde_json::json!({
+                    "properties": metadata.configuration(),
+                }),
+            );
+        }
+
+        Ok(Some(serde_json::Value::Object(out)))
+    }
+
+    fn unity_column_info(
+        metadata: &Metadata,
+        field: &StructField,
+        position: usize,
+    ) -> Result<serde_json::Value> {
+        let column_type = Self::unity_column_type(field.data_type())?;
+        let mut column = serde_json::json!({
+            "name": field.name(),
+            "nullable": field.is_nullable(),
+            "position": i32::try_from(position).unwrap_or(i32::MAX),
+            "type_text": column_type.type_text,
+            "type_json": column_type.type_json.to_string(),
+            "type_name": column_type.type_name,
+        });
+
+        if let Some(precision) = column_type.type_precision {
+            column["type_precision"] = serde_json::json!(precision);
+        }
+        if let Some(scale) = column_type.type_scale {
+            column["type_scale"] = serde_json::json!(scale);
+        }
+        if let Some(partition_index) = metadata
+            .partition_columns()
+            .iter()
+            .position(|column| column.eq_ignore_ascii_case(field.name()))
+        {
+            column["partition_index"] =
+                serde_json::json!(i32::try_from(partition_index).unwrap_or(i32::MAX));
+        }
+        if let Some(MetadataValue::String(comment)) = field.metadata().get("comment") {
+            column["comment"] = serde_json::Value::String(comment.clone());
+        }
+
+        Ok(column)
+    }
+
+    fn unity_column_type(data_type: &DeltaDataType) -> Result<UnityCommitColumnType> {
+        match data_type {
+            DeltaDataType::Primitive(primitive) => Ok(Self::unity_primitive_column_type(primitive)),
+            DeltaDataType::Array(array) => {
+                let element_type = Self::unity_column_type(array.element_type())?;
+                Ok(UnityCommitColumnType {
+                    type_text: format!("array<{}>", element_type.type_text),
+                    type_json: serde_json::json!({
+                        "type": {
+                            "type": "array",
+                            "elementType": element_type.type_json,
+                            "containsNull": array.contains_null(),
+                        },
+                    }),
+                    type_name: "ARRAY",
+                    type_precision: None,
+                    type_scale: None,
+                })
+            }
+            DeltaDataType::Struct(struct_type) => {
+                let mut type_text_parts = Vec::new();
+                let mut fields = Vec::new();
+                for field in struct_type.fields() {
+                    let field_type = Self::unity_column_type(field.data_type())?;
+                    type_text_parts.push(format!("{}:{}", field.name(), field_type.type_text));
+                    fields.push(serde_json::json!({
+                        "name": field.name(),
+                        "type": field_type.type_json,
+                        "nullable": field.is_nullable(),
+                        "metadata": Self::unity_field_metadata(field),
+                    }));
+                }
+                Ok(UnityCommitColumnType {
+                    type_text: format!("struct<{}>", type_text_parts.join(",")),
+                    type_json: serde_json::json!({
+                        "type": {
+                            "type": "struct",
+                            "fields": fields,
+                        },
+                    }),
+                    type_name: "STRUCT",
+                    type_precision: None,
+                    type_scale: None,
+                })
+            }
+            DeltaDataType::Map(map) => {
+                let key_type = Self::unity_column_type(map.key_type())?;
+                let value_type = Self::unity_column_type(map.value_type())?;
+                Ok(UnityCommitColumnType {
+                    type_text: format!("map<{},{}>", key_type.type_text, value_type.type_text),
+                    type_json: serde_json::json!({
+                        "type": {
+                            "type": "map",
+                            "keyType": key_type.type_json,
+                            "valueType": value_type.type_json,
+                            "valueContainsNull": map.value_contains_null(),
+                        },
+                    }),
+                    type_name: "MAP",
+                    type_precision: None,
+                    type_scale: None,
+                })
+            }
+            DeltaDataType::Variant(_) => Err(DataFusionError::NotImplemented(
+                "Unity Catalog metadata payloads for Delta variant columns".to_string(),
+            )),
+        }
+    }
+
+    fn unity_primitive_column_type(primitive: &PrimitiveType) -> UnityCommitColumnType {
+        let (type_text, type_name) = match primitive {
+            PrimitiveType::String => ("string".to_string(), "STRING"),
+            PrimitiveType::Long => ("long".to_string(), "LONG"),
+            PrimitiveType::Integer => ("int".to_string(), "INT"),
+            PrimitiveType::Short => ("short".to_string(), "SHORT"),
+            PrimitiveType::Byte => ("byte".to_string(), "BYTE"),
+            PrimitiveType::Float => ("float".to_string(), "FLOAT"),
+            PrimitiveType::Double => ("double".to_string(), "DOUBLE"),
+            PrimitiveType::Boolean => ("boolean".to_string(), "BOOLEAN"),
+            PrimitiveType::Binary => ("binary".to_string(), "BINARY"),
+            PrimitiveType::Date => ("date".to_string(), "DATE"),
+            PrimitiveType::Timestamp => ("timestamp".to_string(), "TIMESTAMP"),
+            PrimitiveType::TimestampNtz => ("timestamp_ntz".to_string(), "TIMESTAMP_NTZ"),
+            PrimitiveType::Decimal(decimal) => {
+                return UnityCommitColumnType {
+                    type_text: format!("decimal({},{})", decimal.precision(), decimal.scale()),
+                    type_json: serde_json::json!({
+                        "type": {
+                            "type": "decimal",
+                            "precision": decimal.precision(),
+                            "scale": decimal.scale(),
+                        },
+                    }),
+                    type_name: "DECIMAL",
+                    type_precision: Some(i32::from(decimal.precision())),
+                    type_scale: Some(i32::from(decimal.scale())),
+                };
+            }
+        };
+
+        UnityCommitColumnType {
+            type_json: serde_json::Value::String(type_text.clone()),
+            type_text,
+            type_name,
+            type_precision: None,
+            type_scale: None,
+        }
+    }
+
+    fn unity_field_metadata(field: &StructField) -> serde_json::Value {
+        let metadata = field
+            .metadata()
+            .iter()
+            .map(|(key, value)| {
+                (
+                    key.clone(),
+                    serde_json::to_value(value).unwrap_or(serde_json::Value::Null),
+                )
+            })
+            .collect();
+        serde_json::Value::Object(metadata)
+    }
+
     fn write_operation_for_sink_mode(
         partition_columns: &[String],
         sink_mode: &PhysicalSinkMode,
@@ -258,6 +536,8 @@ impl DeltaCommitExec {
         catalog_table: &[String],
         table: &DeltaCatalogManagedTable,
         staged: &CatalogManagedStagedCommit,
+        actions: &[CommitAction],
+        latest_backfilled_version: Option<i64>,
     ) -> Result<()> {
         let manager = context.extension::<CatalogManager>()?;
         let mut update = serde_json::json!({
@@ -271,8 +551,11 @@ impl DeltaCommitExec {
                 "file_modification_timestamp": staged.file_modification_timestamp,
             }
         });
-        if staged.version > 0 {
-            update["latest_backfilled_version"] = serde_json::json!(staged.version - 1);
+        if let Some(latest_backfilled_version) = latest_backfilled_version {
+            update["latest_backfilled_version"] = serde_json::json!(latest_backfilled_version);
+        }
+        if let Some(metadata) = Self::unity_commit_metadata(actions)? {
+            update["metadata"] = metadata;
         }
         manager
             .commit_table(
@@ -320,6 +603,26 @@ impl DeltaCommitExec {
             Err(ObjectStoreError::AlreadyExists { .. }) => Ok(()),
             Err(err) => Err(DataFusionError::External(Box::new(err))),
         }
+    }
+
+    async fn latest_published_backfilled_version(
+        log_store: &LogStoreRef,
+        end_version: i64,
+    ) -> Result<Option<i64>> {
+        if end_version < 0 {
+            return Ok(None);
+        }
+
+        let store = log_store.object_store(None);
+        let mut latest = None;
+        for version in 0..=end_version {
+            match store.head(&commit_path(version)).await {
+                Ok(_) => latest = Some(version),
+                Err(ObjectStoreError::NotFound { .. }) => break,
+                Err(err) => return Err(DataFusionError::External(Box::new(err))),
+            }
+        }
+        Ok(latest)
     }
 }
 
@@ -811,20 +1114,49 @@ impl ExecutionPlan for DeltaCommitExec {
                     .map_err(|e| DataFusionError::External(Box::new(e)))?
                 } else {
                     operation_metrics.finalize_for(&operation);
+                    let latest_catalog_version =
+                        Self::latest_catalog_managed_table_version(&context, catalog_table, table)
+                            .await?;
+                    let reference = Self::refresh_catalog_managed_reference(
+                        &context,
+                        catalog_table,
+                        &table_url,
+                        &log_store,
+                        reference,
+                        latest_catalog_version,
+                    )
+                    .await?;
                     let pre_commit = CommitBuilder::from(
                         CommitProperties::default()
                             .with_operation_metrics(operation_metrics)
                             .with_user_metadata(user_metadata),
                     )
-                    .with_actions(final_actions)
+                    .with_actions(final_actions.clone())
                     .build(reference, log_store.clone(), operation);
                     let staged = pre_commit
-                        .into_staged_commit_future()
+                        .into_staged_commit_future_with_catalog_latest_version(
+                            latest_catalog_version,
+                        )
                         .await
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                    Self::commit_catalog_managed_table(&context, catalog_table, table, &staged)
-                        .await?;
-                    Self::publish_staged_commit(&log_store, &staged).await?;
+                    let latest_backfilled_version =
+                        Self::latest_published_backfilled_version(&log_store, staged.version - 1)
+                            .await?;
+                    Self::commit_catalog_managed_table(
+                        &context,
+                        catalog_table,
+                        table,
+                        &staged,
+                        &final_actions,
+                        latest_backfilled_version,
+                    )
+                    .await?;
+                    if let Err(err) = Self::publish_staged_commit(&log_store, &staged).await {
+                        warn!(
+                            "Failed to publish catalog-managed Delta commit version {} after catalog ratification: {}",
+                            staged.version, err
+                        );
+                    }
                     FinalizedCommit {
                         snapshot: None,
                         version: staged.version,

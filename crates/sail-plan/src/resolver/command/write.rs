@@ -325,9 +325,16 @@ impl PlanResolver<'_> {
                         ));
                     }
                     info.validate_file_write_options(&file_write_options)?;
-                    input = self
-                        .rewrite_write_input(input, column_match, info, state)
-                        .await?;
+                    let delta_merge_schema = info.format.eq_ignore_ascii_case("delta")
+                        && Self::has_truthy_option(
+                            &file_write_options.options,
+                            &["mergeSchema", "merge_schema"],
+                        );
+                    if !delta_merge_schema {
+                        input = self
+                            .rewrite_write_input(input, column_match, info, state)
+                            .await?;
+                    }
                     input = self
                         .apply_delta_table_constraints(input, info, state)
                         .await?;

@@ -219,6 +219,69 @@ Feature: Unity Catalog managed Delta table operations
     Then staged Delta commit for version 2 exists in location
     Then Unity Catalog Delta commit for table unity_table_test.managed_delta_multi_commit_t version 3 references staged Delta commit in location
 
+  Scenario: Managed Delta writes use Unity latest version when prior commit is unpublished
+    Given statement
+      """
+      CREATE TABLE unity_table_test.managed_delta_unpublished_latest_t
+      USING delta
+      AS SELECT * FROM VALUES
+        (1, 'one')
+      AS t(id, name)
+      """
+    Given variable location for table unity_table_test.managed_delta_unpublished_latest_t
+    Given published Delta commit for version 1 in location is removed
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_unpublished_latest_t VALUES
+        (2, 'two')
+      """
+    Then staged Delta commit for version 1 exists in location without published backfill
+    Then Unity Catalog Delta commit for table unity_table_test.managed_delta_unpublished_latest_t version 2 references staged Delta commit in location
+
+  Scenario: Managed Delta write succeeds when publish backfill fails after Unity ratification
+    Given statement
+      """
+      CREATE TABLE unity_table_test.managed_delta_publish_failure_t (
+        id INT,
+        name STRING
+      )
+      USING delta
+      """
+    Given variable location for table unity_table_test.managed_delta_publish_failure_t
+    Given published Delta commit path for version 1 in location is blocked
+    Given statement
+      """
+      INSERT INTO unity_table_test.managed_delta_publish_failure_t VALUES
+        (1, 'one')
+      """
+    Then Unity Catalog Delta commit for table unity_table_test.managed_delta_publish_failure_t version 1 references staged Delta commit in location without published backfill
+    Then published Delta commit for version 1 in location is a directory
+
+  Scenario: Managed Delta schema merge updates Unity Catalog metadata
+    Given statement
+      """
+      CREATE TABLE unity_table_test.managed_delta_schema_merge_t (
+        id INT,
+        name STRING
+      )
+      USING delta
+      """
+    Given append id, name, and extra rows to Unity Catalog managed Delta table unity_table_test.managed_delta_schema_merge_t with mergeSchema
+    Given variable location for table unity_table_test.managed_delta_schema_merge_t
+    When query
+      """
+      SELECT id, name, extra FROM unity_table_test.managed_delta_schema_merge_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name | extra |
+      | 1  | one  | new   |
+    Then Unity Catalog table unity_table_test.managed_delta_schema_merge_t has columns
+      | name  | type_name |
+      | id    | INT       |
+      | name  | STRING    |
+      | extra | STRING    |
+    Then Unity Catalog Delta commit for table unity_table_test.managed_delta_schema_merge_t version 1 references staged Delta commit in location
+
   Scenario: DELETE on managed Delta table is coordinated by Unity Catalog
     Given statement
       """

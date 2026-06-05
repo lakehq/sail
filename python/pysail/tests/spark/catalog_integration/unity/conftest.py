@@ -308,6 +308,14 @@ def final_unity_managed_table_cleanup(
     response.raise_for_status()
 
 
+@given(
+    parsers.parse("append id, name, and extra rows to Unity Catalog managed Delta table {table_name} with mergeSchema")
+)
+def append_rows_with_merge_schema(table_name: str, spark: SparkSession) -> None:
+    df = spark.createDataFrame([(1, "one", "new")], "id INT, name STRING, extra STRING")
+    df.write.format("delta").mode("append").option("mergeSchema", "true").saveAsTable(table_name)
+
+
 def _table_location(spark: SparkSession, table_name: str) -> str:
     rows = spark.sql(f"DESCRIBE EXTENDED {table_name}").collect()
     for row in rows:
@@ -332,6 +340,10 @@ def _first_delta_metadata(location: Path) -> dict:
 
 def _delta_commit_file(location: Path, version: int) -> Path:
     return location / "_delta_log" / f"{version:020}.json"
+
+
+def _staged_delta_commit_files(location: Path, version: int) -> list[Path]:
+    return sorted((location / "_delta_log" / "_staged_commits").glob(f"{version:020}.*.json"))
 
 
 def _delta_commit_actions(location: Path, version: int) -> list[dict]:
@@ -432,6 +444,26 @@ def delta_commit_exists(version: int, location_var: str, variables: dict) -> Non
     _delta_commit_actions(Path(location.path), version)
 
 
+@given(parsers.parse("published Delta commit for version {version:d} in {location_var} is removed"))
+def remove_published_delta_commit(version: int, location_var: str, variables: dict) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    commit_file = _delta_commit_file(Path(location.path), version)
+    assert commit_file.is_file(), f"published Delta commit file does not exist: {commit_file}"
+    commit_file.unlink()
+
+
+@given(parsers.parse("published Delta commit path for version {version:d} in {location_var} is blocked"))
+def block_published_delta_commit_path(version: int, location_var: str, variables: dict) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    commit_path = _delta_commit_file(Path(location.path), version)
+    assert not commit_path.exists(), f"Delta commit path already exists: {commit_path}"
+    commit_path.mkdir(parents=True)
+
+
 @then(parsers.parse("Delta commit for version {version:d} in {location_var} has catalog-managed commit info"))
 def delta_commit_has_catalog_managed_commit_info(version: int, location_var: str, variables: dict) -> None:
     location = variables.get(location_var)
@@ -455,9 +487,30 @@ def staged_delta_commit_exists(version: int, location_var: str, variables: dict)
     log_dir = Path(location.path) / "_delta_log"
     published = log_dir / f"{version:020}.json"
     staged_dir = log_dir / "_staged_commits"
-    staged = list(staged_dir.glob(f"{version:020}.*.json"))
+    staged = _staged_delta_commit_files(Path(location.path), version)
     assert published.exists(), f"published Delta commit does not exist: {published}"
     assert staged, f"staged Delta commit for version {version} does not exist in {staged_dir}"
+
+
+@then(parsers.parse("staged Delta commit for version {version:d} exists in {location_var} without published backfill"))
+def staged_delta_commit_exists_without_published_backfill(version: int, location_var: str, variables: dict) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    location_path = Path(location.path)
+    published = _delta_commit_file(location_path, version)
+    staged = _staged_delta_commit_files(location_path, version)
+    assert not published.exists(), f"published Delta commit unexpectedly exists: {published}"
+    assert staged, f"staged Delta commit for version {version} does not exist"
+
+
+@then(parsers.parse("published Delta commit for version {version:d} in {location_var} is a directory"))
+def published_delta_commit_is_directory(version: int, location_var: str, variables: dict) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    commit_path = _delta_commit_file(Path(location.path), version)
+    assert commit_path.is_dir(), f"published Delta commit path is not a directory: {commit_path}"
 
 
 @then(
@@ -493,6 +546,38 @@ def unity_delta_commit_references_staged_commit(
         assert file_size == staged.stat().st_size
 
 
+@then(
+    parsers.parse(
+        "Unity Catalog Delta commit for table {table_name} version {version:d} references staged Delta commit in {location_var} without published backfill"
+    )
+)
+def unity_delta_commit_references_staged_commit_without_published_backfill(
+    table_name: str,
+    version: int,
+    location_var: str,
+    unity_rest_url: str,
+    variables: dict,
+) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    commit = _unity_delta_commit_info(unity_rest_url, table_name, version)
+    file_name = _commit_field(commit, "file_name", "fileName")
+    assert isinstance(file_name, str)
+    assert file_name.startswith(f"{version:020}.")
+    assert file_name.endswith(".json")
+
+    location_path = Path(location.path)
+    staged = location_path / "_delta_log" / "_staged_commits" / file_name
+    published = _delta_commit_file(location_path, version)
+    assert staged.exists(), f"Unity Catalog staged Delta commit does not exist: {staged}"
+    assert not published.is_file(), f"published Delta commit unexpectedly exists as a file: {published}"
+
+    file_size = _commit_field(commit, "file_size", "fileSize")
+    if file_size is not None:
+        assert file_size == staged.stat().st_size
+
+
 @then(parsers.parse("Unity Catalog Delta commit for table {table_name} version {version:d} exists"))
 def unity_delta_commit_exists(
     table_name: str,
@@ -500,3 +585,14 @@ def unity_delta_commit_exists(
     unity_rest_url: str,
 ) -> None:
     _unity_delta_commit_info(unity_rest_url, table_name, version)
+
+
+@then(parsers.parse("Unity Catalog table {table_name} has columns"))
+def unity_table_has_columns(table_name: str, unity_rest_url: str, datatable) -> None:
+    table_info = _unity_table_info(unity_rest_url, table_name)
+    actual_columns = table_info.get("columns") or []
+    actual = [(column.get("name"), column.get("type_name")) for column in actual_columns]
+
+    expected_rows = [list(row) for row in datatable[1:]]
+    expected = [(row[0], row[1]) for row in expected_rows]
+    assert actual == expected, f"expected Unity Catalog columns {expected!r}, got {actual!r}"
