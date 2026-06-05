@@ -1027,13 +1027,11 @@ impl CatalogProvider for HmsCatalogProvider {
             ));
         }
         let db_name = validate_namespace(database)?;
-        if format == "iceberg" {
-            if !options.is_write_precondition {
-                return Err(CatalogError::NotSupported(
-                    "Hive Metastore catalog does not support plain CREATE TABLE USING ICEBERG yet"
-                        .to_string(),
-                ));
-            }
+        if format == "iceberg" && !options.is_write_precondition {
+            return Err(CatalogError::NotSupported(
+                "Hive Metastore catalog does not support plain CREATE TABLE USING ICEBERG yet"
+                    .to_string(),
+            ));
         }
         let format = HiveCatalogFormat::from_format(&format)?;
         let partition_columns: Vec<String> = options
