@@ -1194,19 +1194,6 @@ impl PreCommit {
         })
     }
 
-    /// Prepare the commit and write it as a Delta catalog-managed staged commit file.
-    #[expect(dead_code)]
-    pub fn into_staged_commit_future(
-        self,
-    ) -> BoxFuture<'static, DeltaResult<CatalogManagedStagedCommit>> {
-        Box::pin(async move {
-            self.into_prepared_commit_future()
-                .await?
-                .into_staged_commit_future()
-                .await
-        })
-    }
-
     /// Prepare the commit and write it as a Delta catalog-managed staged commit file using
     /// the catalog-ratified latest table version as the commit version source of truth.
     pub fn into_staged_commit_future_with_catalog_latest_version(
@@ -1467,103 +1454,38 @@ impl std::future::IntoFuture for PreparedCommit {
 }
 
 impl PreparedCommit {
-    pub fn into_staged_commit_future(
-        self,
-    ) -> BoxFuture<'static, DeltaResult<CatalogManagedStagedCommit>> {
-        self.into_staged_commit_future_inner(None)
-    }
-
     pub fn into_staged_commit_future_with_catalog_latest_version(
         self,
         latest_catalog_version: i64,
     ) -> BoxFuture<'static, DeltaResult<CatalogManagedStagedCommit>> {
-        self.into_staged_commit_future_inner(Some(latest_catalog_version))
+        self.into_staged_commit_future_inner(latest_catalog_version)
     }
 
     fn into_staged_commit_future_inner(
         self,
-        latest_catalog_version: Option<i64>,
+        latest_catalog_version: i64,
     ) -> BoxFuture<'static, DeltaResult<CatalogManagedStagedCommit>> {
         let this = self;
 
         Box::pin(async move {
             let local_actions: Vec<_> = this.data.actions.to_vec();
-            let snapshot_version = this.table_data.as_ref().map(|s| s.version()).unwrap_or(-1);
 
-            let mut read_snapshot: Option<Arc<DeltaSnapshot>> = this.table_data.clone();
-            let latest_version = if let Some(catalog_latest) = latest_catalog_version {
-                if catalog_latest >= 0 {
-                    let Some(snapshot) = &read_snapshot else {
-                        return Err(DeltaError::generic(format!(
-                            "catalog-managed Delta commit requires a snapshot at the catalog latest version {catalog_latest}"
-                        )));
-                    };
-                    if snapshot.version() != catalog_latest {
-                        return Err(DeltaError::generic(format!(
-                            "catalog-managed Delta commit was prepared from snapshot version {}, but the catalog latest ratified version is {catalog_latest}",
-                            snapshot.version()
-                        )));
-                    }
-                    Some(catalog_latest)
-                } else {
-                    read_snapshot.as_ref().map(|snapshot| snapshot.version())
-                }
-            } else {
-                let latest_version = match this.log_store.get_latest_version(snapshot_version).await
-                {
-                    Ok(v) => Some(v),
-                    Err(DeltaError::MissingVersion) => None,
-                    Err(err) => return Err(err),
+            let read_snapshot: Option<Arc<DeltaSnapshot>> = this.table_data.clone();
+            let latest_version = if latest_catalog_version >= 0 {
+                let Some(snapshot) = &read_snapshot else {
+                    return Err(DeltaError::generic(format!(
+                        "catalog-managed Delta commit requires a snapshot at the catalog latest version {latest_catalog_version}"
+                    )));
                 };
-
-                if let Some(latest_version) = latest_version {
-                    if read_snapshot.is_none() {
-                        let snapshot = DeltaSnapshot::try_new(
-                            this.log_store.as_ref(),
-                            Default::default(),
-                            Some(latest_version),
-                            None,
-                        )
-                        .await?;
-                        read_snapshot = Some(Arc::new(snapshot));
-                    }
-
-                    if let Some(snapshot) = &read_snapshot {
-                        if latest_version > snapshot.version() {
-                            warn!(
-                                "Preparing catalog-managed commit from snapshot {} but the Delta log has advanced to {latest_version}",
-                                snapshot.version()
-                            );
-                            for v in (snapshot.version() + 1)..=latest_version {
-                                let summary = WinningCommitSummary::try_new(
-                                    this.log_store.as_ref(),
-                                    v - 1,
-                                    v,
-                                )
-                                .await?;
-                                let transaction_info = TransactionInfo::try_new(
-                                    snapshot,
-                                    &local_actions,
-                                    this.data.operation.read_whole_table(),
-                                )?;
-                                let conflict_checker = ConflictChecker::new(
-                                    transaction_info,
-                                    summary,
-                                    Some(&this.data.operation),
-                                );
-                                if let Err(err) = conflict_checker.check_conflicts() {
-                                    return Err(TransactionError::CommitConflict(err).into());
-                                }
-                            }
-                            if let Some(snapshot) = &mut read_snapshot {
-                                Arc::make_mut(snapshot)
-                                    .update(this.log_store.as_ref(), Some(latest_version as u64))
-                                    .await?;
-                            }
-                        }
-                    }
+                if snapshot.version() != latest_catalog_version {
+                    return Err(DeltaError::generic(format!(
+                        "catalog-managed Delta commit was prepared from snapshot version {}, but the catalog latest ratified version is {latest_catalog_version}",
+                        snapshot.version()
+                    )));
                 }
-                latest_version
+                Some(latest_catalog_version)
+            } else {
+                read_snapshot.as_ref().map(|snapshot| snapshot.version())
             };
 
             let version = latest_version.map(|v| v + 1).unwrap_or(0);
@@ -2074,9 +1996,6 @@ pub struct FinalizedCommit {
     /// succeeded regardless.
     pub snapshot: Option<Arc<DeltaSnapshot>>,
 
-    /// Version of the finalized commit
-    pub version: i64,
-
     /// Metrics associated with the commit operation
     pub metrics: Metrics,
 }
@@ -2092,19 +2011,6 @@ pub struct CatalogManagedStagedCommit {
     pub staged_path: object_store::path::Path,
     pub metrics: CommitMetrics,
 }
-impl FinalizedCommit {
-    /// The new table state after a commit
-    #[expect(dead_code)]
-    pub fn snapshot(&self) -> Option<Arc<DeltaSnapshot>> {
-        self.snapshot.clone()
-    }
-    /// Version of the finalized commit
-    #[expect(dead_code)]
-    pub fn version(&self) -> i64 {
-        self.version
-    }
-}
-
 impl std::future::IntoFuture for PostCommit {
     type Output = DeltaResult<FinalizedCommit>;
     type IntoFuture = BoxFuture<'static, Self::Output>;
@@ -2281,7 +2187,6 @@ impl std::future::IntoFuture for PostCommit {
 
             Ok(FinalizedCommit {
                 snapshot: state,
-                version: this.version,
                 metrics: Metrics {
                     num_retries: this.metrics.num_retries,
                     new_checkpoint_created: checkpoint_created,

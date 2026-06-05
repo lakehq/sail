@@ -1159,7 +1159,6 @@ impl ExecutionPlan for DeltaCommitExec {
                     }
                     FinalizedCommit {
                         snapshot: None,
-                        version: staged.version,
                         metrics: CommitFinalMetrics {
                             num_retries: staged.metrics.num_retries,
                             new_checkpoint_created: false,
