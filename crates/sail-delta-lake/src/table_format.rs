@@ -248,6 +248,7 @@ impl TableFormat for DeltaTableFormat {
             table_exists,
         )
         .with_generation_expressions(extract_generation_expressions(logical_schema.as_deref()))
+        .with_identity_columns(extract_identity_columns(logical_schema.as_deref()))
         .with_table_snapshot(table_snapshot);
         let planner_ctx = PlannerContext::new(ctx, table_config);
         let planner = DeltaPhysicalPlanner::new(planner_ctx);
@@ -817,6 +818,23 @@ fn extract_generation_expressions(logical_schema: Option<&DFSchema>) -> HashMap<
             ColumnFeatures::from_map(field.metadata())
                 .generation_expression()
                 .map(|expr| (field.name().clone(), expr))
+        })
+        .collect()
+}
+
+fn extract_identity_columns(
+    logical_schema: Option<&DFSchema>,
+) -> HashMap<String, sail_common_datafusion::catalog::CatalogTableColumnIdentity> {
+    let Some(schema) = logical_schema else {
+        return HashMap::new();
+    };
+    schema
+        .fields()
+        .iter()
+        .filter_map(|field| {
+            ColumnFeatures::from_map(field.metadata())
+                .identity()
+                .map(|identity| (field.name().clone(), identity))
         })
         .collect()
 }

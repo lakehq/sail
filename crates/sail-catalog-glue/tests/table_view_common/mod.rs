@@ -30,6 +30,7 @@ pub fn col(name: &str, data_type: DataType) -> CreateTableColumnOptions {
         comment: None,
         default: None,
         generated_always_as: None,
+        identity: None,
     }
 }
 

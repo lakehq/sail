@@ -42,7 +42,10 @@ use crate::physical_plan::{decode_actions_and_meta_from_batch, DeltaCommitContex
 use crate::schema::{
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
 };
-use crate::spec::{contains_variant_arrow, CommitAction, StructType};
+use crate::spec::{
+    contains_variant_arrow, ColumnMetadataKey, CommitAction, Metadata, MetadataValue, StatValue,
+    Stats, StructField, StructType,
+};
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::{
     create_delta_table_with_object_store, open_table_with_object_store_and_table_config,
@@ -52,6 +55,15 @@ use crate::table::{
 const METRIC_NUM_COMMIT_RETRIES: &str = "num_commit_retries";
 const METRIC_CHECKPOINT_CREATED: &str = "checkpoint_created";
 const METRIC_LOG_FILES_CLEANED: &str = "log_files_cleaned";
+
+#[derive(Debug, Clone)]
+struct IdentityColumnCommitInfo {
+    name: String,
+    stats_name: String,
+    start: i64,
+    step: i64,
+    high_water_mark: Option<i64>,
+}
 
 /// Physical execution node for Delta Lake commit operations
 #[derive(Debug)]
@@ -324,6 +336,9 @@ impl ExecutionPlan for DeltaCommitExec {
             // Prepend initial actions
             let mut final_actions = initial_actions;
             final_actions.extend(actions);
+            if !table_exists {
+                final_actions = apply_identity_high_water_marks(final_actions, None)?;
+            }
             let kinds: Vec<&'static str> = final_actions
                 .iter()
                 .map(|a| match a {
@@ -355,7 +370,7 @@ impl ExecutionPlan for DeltaCommitExec {
             // For new tables, always ensure Protocol + Metadata are present and use Create.
             // Even if the writer supplied an operation (e.g., Overwrite), the first commit
             // must initialize the table with protocol and metadata.
-            let (operation, final_actions) = if !table_exists {
+            let (operation, mut final_actions) = if !table_exists {
                 let protocol_in_actions = final_actions.iter().find_map(|a| match a {
                     CommitAction::Protocol(p) => Some(p.clone()),
                     _ => None,
@@ -380,6 +395,7 @@ impl ExecutionPlan for DeltaCommitExec {
                     // Construct minimal protocol/metadata and insert them
                     let normalized_sink = normalize_delta_schema(&sink_schema);
                     let protocol = protocol_for_create(
+                        false,
                         false,
                         false,
                         false,
@@ -514,6 +530,13 @@ impl ExecutionPlan for DeltaCommitExec {
                 None
             };
 
+            if table_exists {
+                final_actions = apply_identity_high_water_marks(
+                    final_actions,
+                    reference.as_deref().map(|snapshot| snapshot.metadata()),
+                )?;
+            }
+
             operation_metrics.finalize_for(&operation);
 
             let finalized_commit = CommitBuilder::from(
@@ -557,6 +580,249 @@ impl ExecutionPlan for DeltaCommitExec {
             self.schema(),
             stream,
         )))
+    }
+}
+
+fn apply_identity_high_water_marks(
+    mut actions: Vec<CommitAction>,
+    reference_metadata: Option<&Metadata>,
+) -> Result<Vec<CommitAction>> {
+    let metadata_index = actions
+        .iter()
+        .rposition(|action| matches!(action, CommitAction::Metadata(_)));
+    let Some(base_metadata) = metadata_index
+        .and_then(|idx| match &actions[idx] {
+            CommitAction::Metadata(metadata) => Some(metadata.clone()),
+            _ => None,
+        })
+        .or_else(|| reference_metadata.cloned())
+    else {
+        return Ok(actions);
+    };
+
+    let schema = base_metadata
+        .parse_schema()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let identity_columns = collect_identity_columns_for_commit(&schema)?;
+    if identity_columns.is_empty() {
+        return Ok(actions);
+    }
+
+    let candidates = collect_identity_high_water_mark_candidates(&actions, &identity_columns)?;
+    if candidates.is_empty() {
+        return Ok(actions);
+    }
+
+    let (updated_schema, changed) =
+        update_identity_high_water_marks_in_schema(schema, &identity_columns, &candidates)?;
+    if !changed {
+        return Ok(actions);
+    }
+
+    let updated_metadata = base_metadata
+        .with_schema(&updated_schema)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    if let Some(idx) = metadata_index {
+        actions[idx] = CommitAction::Metadata(updated_metadata);
+    } else {
+        actions.insert(0, CommitAction::Metadata(updated_metadata));
+    }
+    Ok(actions)
+}
+
+fn collect_identity_columns_for_commit(
+    schema: &StructType,
+) -> Result<Vec<IdentityColumnCommitInfo>> {
+    schema
+        .fields()
+        .filter_map(|field| {
+            let start = metadata_i64(field, &ColumnMetadataKey::IdentityStart)?;
+            let step = metadata_i64(field, &ColumnMetadataKey::IdentityStep)?;
+            let _allow_explicit =
+                metadata_bool(field, &ColumnMetadataKey::IdentityAllowExplicitInsert)?;
+            let high_water_mark = metadata_i64(field, &ColumnMetadataKey::IdentityHighWaterMark);
+            let stats_name = metadata_string(field, &ColumnMetadataKey::ColumnMappingPhysicalName)
+                .unwrap_or_else(|| field.name.clone());
+            Some(if step == 0 {
+                Err(DataFusionError::Plan(format!(
+                    "identity column `{}` has invalid step 0",
+                    field.name
+                )))
+            } else {
+                Ok(IdentityColumnCommitInfo {
+                    name: field.name.clone(),
+                    stats_name,
+                    start,
+                    step,
+                    high_water_mark,
+                })
+            })
+        })
+        .collect()
+}
+
+fn collect_identity_high_water_mark_candidates(
+    actions: &[CommitAction],
+    identity_columns: &[IdentityColumnCommitInfo],
+) -> Result<HashMap<String, i64>> {
+    let mut candidates: HashMap<String, i64> = HashMap::new();
+    for action in actions {
+        let CommitAction::Add(add) = action else {
+            continue;
+        };
+        let Some(stats_json) = add.stats.as_deref() else {
+            continue;
+        };
+        let stats = Stats::from_json_str(stats_json).map_err(|e| {
+            DataFusionError::Plan(format!("failed to parse Delta AddFile stats: {e}"))
+        })?;
+        for identity in identity_columns {
+            let stat = if identity.step > 0 {
+                stats.max_value(&identity.stats_name)
+            } else {
+                stats.min_value(&identity.stats_name)
+            };
+            let Some(value) = stat.and_then(stat_value_i64) else {
+                continue;
+            };
+            candidates
+                .entry(identity.name.clone())
+                .and_modify(|current| {
+                    if identity.step > 0 {
+                        *current = (*current).max(value);
+                    } else {
+                        *current = (*current).min(value);
+                    }
+                })
+                .or_insert(value);
+        }
+    }
+    Ok(candidates)
+}
+
+fn update_identity_high_water_marks_in_schema(
+    schema: StructType,
+    identity_columns: &[IdentityColumnCommitInfo],
+    candidates: &HashMap<String, i64>,
+) -> Result<(StructType, bool)> {
+    let identity_by_name = identity_columns
+        .iter()
+        .map(|identity| (identity.name.as_str(), identity))
+        .collect::<HashMap<_, _>>();
+    let mut changed = false;
+    let fields = schema
+        .into_fields()
+        .map(|field| {
+            let Some(identity) = identity_by_name.get(field.name.as_str()) else {
+                return Ok(field);
+            };
+            let Some(candidate) = candidates.get(&identity.name).copied() else {
+                return Ok(field);
+            };
+            let before_start =
+                identity_value_is_before_start(candidate, identity.start, identity.step);
+            let rounded = round_identity_high_water_mark(identity.start, identity.step, candidate)?;
+            let new_high_water_mark = match identity.high_water_mark {
+                Some(old) if identity.step > 0 => old.max(rounded),
+                Some(old) => old.min(rounded),
+                None => rounded,
+            };
+            let old_bad = identity.high_water_mark.is_some_and(|old| {
+                identity_value_is_before_start(old, identity.start, identity.step)
+            });
+            if old_bad || (!before_start && identity.high_water_mark != Some(new_high_water_mark)) {
+                changed = true;
+                let StructField {
+                    name,
+                    data_type,
+                    nullable,
+                    mut metadata,
+                } = field;
+                metadata.insert(
+                    ColumnMetadataKey::IdentityHighWaterMark
+                        .as_ref()
+                        .to_string(),
+                    MetadataValue::Number(new_high_water_mark),
+                );
+                Ok(StructField {
+                    name,
+                    data_type,
+                    nullable,
+                    metadata,
+                })
+            } else {
+                Ok(field)
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok((
+        StructType::try_new(fields).map_err(|e| DataFusionError::External(Box::new(e)))?,
+        changed,
+    ))
+}
+
+fn identity_value_is_before_start(value: i64, start: i64, step: i64) -> bool {
+    if step > 0 {
+        value < start
+    } else {
+        value > start
+    }
+}
+
+fn round_identity_high_water_mark(start: i64, step: i64, value: i64) -> Result<i64> {
+    let value_offset = value.checked_sub(start).ok_or_else(|| {
+        DataFusionError::Plan(format!(
+            "identity high water mark `{value}` cannot be compared with start `{start}` without overflowing BIGINT"
+        ))
+    })?;
+    if value_offset % step == 0 {
+        return Ok(value);
+    }
+    let quotient = value_offset / step;
+    let same_direction = (value_offset > 0 && step > 0) || (value_offset < 0 && step < 0);
+    let step_multiple = if same_direction {
+        quotient.checked_add(1).ok_or_else(|| {
+            DataFusionError::Plan("identity high water mark rounding overflowed BIGINT".to_string())
+        })?
+    } else {
+        quotient
+    };
+    let delta = step.checked_mul(step_multiple).ok_or_else(|| {
+        DataFusionError::Plan("identity high water mark rounding overflowed BIGINT".to_string())
+    })?;
+    start.checked_add(delta).ok_or_else(|| {
+        DataFusionError::Plan("identity high water mark rounding overflowed BIGINT".to_string())
+    })
+}
+
+fn metadata_i64(field: &StructField, key: &ColumnMetadataKey) -> Option<i64> {
+    match field.metadata.get(key.as_ref())? {
+        MetadataValue::Number(value) => Some(*value),
+        MetadataValue::String(value) => value.parse().ok(),
+        _ => None,
+    }
+}
+
+fn metadata_bool(field: &StructField, key: &ColumnMetadataKey) -> Option<bool> {
+    match field.metadata.get(key.as_ref())? {
+        MetadataValue::Boolean(value) => Some(*value),
+        MetadataValue::String(value) => value.parse().ok(),
+        _ => None,
+    }
+}
+
+fn metadata_string(field: &StructField, key: &ColumnMetadataKey) -> Option<String> {
+    match field.metadata.get(key.as_ref())? {
+        MetadataValue::String(value) => Some(value.clone()),
+        _ => None,
+    }
+}
+
+fn stat_value_i64(value: &StatValue) -> Option<i64> {
+    match value {
+        StatValue::Number(value) => value.as_i64(),
+        StatValue::String(value) => value.parse().ok(),
+        _ => None,
     }
 }
 

@@ -926,6 +926,16 @@ pub struct TableColumnDefinition {
     pub default: Option<String>,
     /// An optional SQL expression string to calculate the generated value.
     pub generated_always_as: Option<String>,
+    /// Delta identity column metadata.
+    pub identity: Option<TableColumnIdentity>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableColumnIdentity {
+    pub start: Option<i64>,
+    pub step: Option<i64>,
+    pub allow_explicit_insert: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
