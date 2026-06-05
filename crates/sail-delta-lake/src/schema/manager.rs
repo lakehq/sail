@@ -396,7 +396,7 @@ mod tests {
             "delta.feature.variantType-preview".to_string(),
             "supported".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, true, &config)?;
+        let protocol = protocol_for_create(false, false, false, false, false, true, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::VariantTypePreview));
@@ -415,7 +415,7 @@ mod tests {
             "delta.enableVariantShredding".to_string(),
             "true".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, false, &config)?;
+        let protocol = protocol_for_create(false, false, false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(!protocol.has_reader_feature(&TableFeature::VariantType));
@@ -436,7 +436,7 @@ mod tests {
             "delta.enableVariantShredding".to_string(),
             "true".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, true, &config)?;
+        let protocol = protocol_for_create(false, false, false, false, false, true, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::VariantType));
@@ -455,7 +455,7 @@ mod tests {
             "delta.feature.variantShredding".to_string(),
             "supported".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, false, &config)?;
+        let protocol = protocol_for_create(false, false, false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(!protocol.has_reader_feature(&TableFeature::VariantType));
@@ -480,7 +480,7 @@ mod tests {
             "delta.feature.variantShredding".to_string(),
             "supported".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, true, &config)?;
+        let protocol = protocol_for_create(false, false, false, false, false, true, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::VariantType));
@@ -499,7 +499,7 @@ mod tests {
             "delta.feature.variantShredding-preview".to_string(),
             "supported".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, false, &config)?;
+        let protocol = protocol_for_create(false, false, false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(!protocol.has_reader_feature(&TableFeature::VariantType));
@@ -518,7 +518,7 @@ mod tests {
             "delta.feature.variantShredding".to_string(),
             "supported".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, true, &config)?;
+        let protocol = protocol_for_create(false, false, false, false, false, true, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::VariantType));
