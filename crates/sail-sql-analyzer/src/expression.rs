@@ -509,6 +509,7 @@ pub fn from_ast_expression(expr: Expr) -> SqlResult<spec::Expr> {
     }
 }
 
+// FIXME: Move DEFAULT interpretation to plan resolution and keep it unresolved here.
 pub(crate) fn expr_with_default_column_values(expr: spec::Expr) -> spec::Expr {
     match expr {
         spec::Expr::UnresolvedAttribute {
