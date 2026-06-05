@@ -7691,7 +7691,6 @@ dependencies = [
  "datafusion-common",
  "datafusion-functions-nested",
  "datafusion-physical-expr",
- "educe",
  "futures",
  "indexmap 2.14.0",
  "itertools",

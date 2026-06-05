@@ -35,7 +35,6 @@ parquet-variant-compute = { workspace = true }
 
 # Essential utilities
 async-trait = { workspace = true }
-educe = { workspace = true }
 object_store = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }

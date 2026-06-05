@@ -100,6 +100,7 @@ pub async fn build_delete_plan(
         None,
         None,
         None,
+        ctx.catalog_table().cloned(),
     ));
 
     // Adapt the predicate to the scan schema. PhysicalExpr Column indices are schema-dependent,
@@ -144,6 +145,7 @@ pub async fn build_delete_plan(
         table_schema,
         ctx.options().user_metadata.clone(),
         write_context,
+        ctx.catalog_table().cloned(),
     )
 }
 

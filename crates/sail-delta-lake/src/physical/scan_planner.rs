@@ -371,6 +371,7 @@ pub(crate) async fn plan_delta_scan(
             scan_projection.clone(),
             limit,
             pushdown_filter,
+            None,
         )
         .with_table_statistics(snapshot.datafusion_table_statistics(None)),
     );

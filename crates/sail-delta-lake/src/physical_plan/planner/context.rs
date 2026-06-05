@@ -29,8 +29,8 @@ use crate::physical_plan::{
 };
 use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
 use crate::table::{
-    create_delta_table_with_object_store, open_table_with_object_store_and_table_config,
-    DeltaSnapshot, DeltaTable,
+    create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot, DeltaSnapshot,
+    DeltaTable,
 };
 
 /// Configuration shared by all Delta planners.
@@ -302,14 +302,24 @@ impl<'a> PlannerContext<'a> {
             table.state = Some(Arc::clone(snapshot));
             Ok(table)
         } else {
-            open_table_with_object_store_and_table_config(
-                self.config.table_url.clone(),
-                object_store,
-                StorageConfig,
-                table_config,
-            )
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))
+            let log_store = self.log_store()?;
+            let mut table_config = table_config;
+            if let Some(catalog_table) = &self.config.catalog_table {
+                table_config.catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
+                    &self.session,
+                    catalog_table,
+                    &self.config.table_url,
+                    log_store.clone(),
+                    None,
+                )
+                .await?;
+            }
+            let mut table = DeltaTable::new(log_store, table_config);
+            table
+                .load()
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            Ok(table)
         }
     }
 }

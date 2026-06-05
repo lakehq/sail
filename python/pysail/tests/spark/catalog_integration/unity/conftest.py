@@ -1,6 +1,6 @@
 """Pytest fixtures for Unity Catalog integration tests.
 
-Uses PostgreSQL as the backend database and the Unity Catalog OSS Docker image.
+Uses the Unity Catalog OSS Docker image with its embedded H2 backend.
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ import pytest
 import requests
 from pytest_bdd import given, parsers, then
 from testcontainers.core.container import DockerContainer
-from testcontainers.core.network import Network
 from testcontainers.core.waiting_utils import wait_for_logs
 
 from pysail.testing.spark.steps.sql import PathWrapper
@@ -34,79 +33,14 @@ if TYPE_CHECKING:
     from pyspark.sql import SparkSession
 
 DEFAULT_CATALOG = "sail_test_catalog"
+# GitHub has a v0.4.1 release, but Docker Hub currently publishes versioned
+# server images only up to v0.4.0. Keep this on an existing tag so the black-box
+# integration suite is runnable; override PYSAIL_UNITY_CATALOG_IMAGE when a
+# newer server image is published.
 UNITY_CATALOG_IMAGE = os.environ.get(
     "PYSAIL_UNITY_CATALOG_IMAGE",
     "unitycatalog/unitycatalog:v0.4.0",
 )
-
-
-def _exec_postgres_sql(
-    container: DockerContainer,
-    sql: str,
-    description: str,
-) -> str:
-    command = [
-        "psql",
-        "-U",
-        "test",
-        "-d",
-        "test",
-        "-v",
-        "ON_ERROR_STOP=1",
-        "-tA",
-    ]
-    command.extend(["-c", sql])
-    result = container.exec(command)
-    output = result.output.decode("utf-8", errors="replace")
-    if result.exit_code != 0:
-        pytest.fail(f"{description}: {output}")
-    return output.strip()
-
-
-@pytest.fixture(scope="module")
-def docker_network() -> Generator[Network, None, None]:
-    """Create a Docker network for inter-container communication."""
-    network = Network()
-    network.create()
-    yield network
-    network.remove()
-
-
-@pytest.fixture(scope="module")
-def postgres_container(docker_network: Network) -> Generator[DockerContainer, None, None]:
-    """Start a PostgreSQL container for Unity Catalog backend."""
-    container = (
-        DockerContainer("postgres:18.3")
-        .with_env("POSTGRES_USER", "test")
-        .with_env("POSTGRES_PASSWORD", "test")
-        .with_env("POSTGRES_DB", "test")
-        .with_network(docker_network)
-        .with_network_aliases("postgres")
-    )
-    container.start()
-    wait_for_logs(container, "database system is ready to accept connections", timeout=120)
-    # Wait a bit for PostgreSQL to be fully ready
-    time.sleep(2)
-    delta_commits_sql = """
-CREATE TABLE IF NOT EXISTS uc_delta_commits (
-    id uuid PRIMARY KEY,
-    table_id uuid NOT NULL,
-    commit_version bigint NOT NULL,
-    commit_filename varchar(255) NOT NULL,
-    commit_filesize bigint NOT NULL,
-    commit_file_modification_timestamp timestamp NOT NULL,
-    commit_timestamp timestamp NOT NULL,
-    is_backfilled_latest_commit boolean NOT NULL,
-    CONSTRAINT uc_delta_commits_table_version UNIQUE (table_id, commit_version)
-)
-"""
-    _exec_postgres_sql(
-        container,
-        delta_commits_sql,
-        "failed to initialize Unity Delta commits table",
-    )
-    yield container
-    container.stop()
 
 
 @pytest.fixture(scope="module")
@@ -117,23 +51,11 @@ def unity_storage_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture(scope="module")
 def unity_container(
-    docker_network: Network,
-    postgres_container: DockerContainer,  # noqa: ARG001
     tmp_path_factory: pytest.TempPathFactory,
     unity_storage_root: Path,
 ) -> Generator[DockerContainer, None, None]:
-    """Start a Unity Catalog container with PostgreSQL backend."""
-    # Write hibernate config that points to the internal PostgreSQL hostname
-    hibernate_config = (
-        "hibernate.connection.driver_class=org.postgresql.Driver\n"
-        "hibernate.connection.url=jdbc:postgresql://postgres:5432/test\n"
-        "hibernate.connection.username=test\n"
-        "hibernate.connection.password=test\n"
-        "hibernate.hbm2ddl.auto=update\n"
-    )
+    """Start a Unity Catalog container with its embedded H2 backend."""
     tmp_dir = tmp_path_factory.mktemp("unity")
-    hibernate_path = tmp_dir / "hibernate.properties"
-    hibernate_path.write_text(hibernate_config)
     server_config = "server.env=dev\nserver.authorization=disable\nserver.managed-table.enabled=true\n"
     server_path = tmp_dir / "server.properties"
     server_path.write_text(server_config)
@@ -141,11 +63,8 @@ def unity_container(
     container = (
         DockerContainer(UNITY_CATALOG_IMAGE)
         .with_exposed_ports(8080)
-        .with_volume_mapping(str(hibernate_path), "/home/unitycatalog/etc/conf/hibernate.properties", "ro")
         .with_volume_mapping(str(server_path), "/home/unitycatalog/etc/conf/server.properties", "ro")
         .with_volume_mapping(str(unity_storage_root), str(unity_storage_root), "rw")
-        .with_network(docker_network)
-        .with_network_aliases("unity-catalog")
     )
     container.start()
     wait_for_logs(
@@ -248,6 +167,7 @@ def _location_to_path(location: str) -> Path:
 
 
 def _write_seed_delta_log(location: Path, table_id: str) -> None:
+    """Seed version 0 because OSS Unity Catalog registers metadata, not Delta log files."""
     timestamp = int(time.time() * 1000)
     schema = {
         "type": "struct",
@@ -314,8 +234,11 @@ def _unity_column(name: str, type_name: str, position: int) -> dict:
     }
 
 
-@given(parsers.parse("Unity Catalog managed Delta table {table_name} exists with id and name columns"))
-def unity_managed_delta_table_exists(table_name: str, unity_rest_url: str) -> None:
+def _create_unity_managed_delta_table(
+    table_name: str,
+    unity_rest_url: str,
+    columns: list[dict],
+) -> None:
     catalog_name, schema_name, name = _unity_table_parts(table_name)
     staging_response = requests.post(
         f"{unity_rest_url}/staging-tables",
@@ -341,43 +264,48 @@ def unity_managed_delta_table_exists(table_name: str, unity_rest_url: str) -> No
             "table_type": "MANAGED",
             "data_source_format": "DELTA",
             "storage_location": staging_location,
-            "columns": [
-                _unity_column("id", "INT", 0),
-                _unity_column("name", "STRING", 1),
-            ],
+            "columns": columns,
         },
         timeout=10,
     )
     create_response.raise_for_status()
 
 
+@given(parsers.parse("Unity Catalog managed Delta table {table_name} exists with id and name columns"))
+def unity_managed_delta_table_exists(table_name: str, unity_rest_url: str) -> None:
+    _create_unity_managed_delta_table(
+        table_name,
+        unity_rest_url,
+        [
+            _unity_column("id", "INT", 0),
+            _unity_column("name", "STRING", 1),
+        ],
+    )
+
+
+@given(
+    parsers.parse(
+        "Unity Catalog managed Delta table {table_name} exists with no catalog columns and id and name Delta schema"
+    )
+)
+def unity_managed_delta_table_with_empty_catalog_schema_exists(table_name: str, unity_rest_url: str) -> None:
+    _create_unity_managed_delta_table(table_name, unity_rest_url, [])
+
+
 @given(parsers.parse("final Unity Catalog managed table cleanup for {table_name}"))
 def final_unity_managed_table_cleanup(
     table_name: str,
     unity_rest_url: str,
-    postgres_container: DockerContainer,
 ) -> Generator[None, None, None]:
     yield
-    try:
-        table_info = _unity_table_info(unity_rest_url, table_name)
-    except requests.HTTPError as e:
-        if e.response is not None and e.response.status_code == requests.codes.not_found:
-            return
-        raise
-    table_id = table_info.get("table_id")
-    assert isinstance(table_id, str)
-    table_uuid = str(uuid.UUID(table_id))
-    sql = f"""
-DELETE FROM uc_delta_commits WHERE table_id = '{table_uuid}'::uuid;
-DELETE FROM uc_properties WHERE entity_id = '{table_uuid}'::uuid AND entity_type = 'table';
-DELETE FROM uc_columns WHERE table_id = '{table_uuid}'::uuid;
-DELETE FROM uc_tables WHERE id = '{table_uuid}'::uuid;
-"""  # noqa: S608
-    _exec_postgres_sql(
-        postgres_container,
-        sql,
-        "failed to clean Unity managed table metadata",
+    full_name = _qualified_table_name(table_name)
+    response = requests.delete(
+        f"{unity_rest_url}/tables/{quote(full_name, safe='')}",
+        timeout=10,
     )
+    if response.status_code == requests.codes.not_found:
+        return
+    response.raise_for_status()
 
 
 def _table_location(spark: SparkSession, table_name: str) -> str:
@@ -402,6 +330,45 @@ def _first_delta_metadata(location: Path) -> dict:
     pytest.fail(f"metaData action not found in {first_log}")
 
 
+def _delta_commit_file(location: Path, version: int) -> Path:
+    return location / "_delta_log" / f"{version:020}.json"
+
+
+def _delta_commit_actions(location: Path, version: int) -> list[dict]:
+    commit_file = _delta_commit_file(location, version)
+    assert commit_file.exists(), f"Delta commit does not exist: {commit_file}"
+    with commit_file.open(encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+def _unity_delta_commit_info(unity_rest_url: str, table_name: str, version: int) -> dict:
+    table_info = _unity_table_info(unity_rest_url, table_name)
+    table_id = table_info.get("table_id")
+    storage_location = table_info.get("storage_location")
+    assert isinstance(table_id, str)
+    assert isinstance(storage_location, str)
+    response = requests.get(
+        f"{unity_rest_url}/delta/preview/commits",
+        json={
+            "table_id": table_id,
+            "table_uri": storage_location,
+            "start_version": version,
+            "end_version": version,
+        },
+        timeout=10,
+    )
+    response.raise_for_status()
+    commits = response.json().get("commits") or []
+    for commit in commits:
+        if commit.get("version") == version:
+            return commit
+    pytest.fail(f"Unity Catalog Delta commit for {table_name} version {version} does not exist")
+
+
+def _commit_field(commit: dict, snake_name: str, camel_name: str) -> object:
+    return commit.get(snake_name, commit.get(camel_name))
+
+
 @given(parsers.parse("variable {name} for table {table_name}"), target_fixture="variables")
 @given(parsers.parse("variable {name} for location of table {table_name}"), target_fixture="variables")
 def variable_for_table_location(name: str, table_name: str, spark: SparkSession, variables: dict) -> dict:
@@ -417,6 +384,23 @@ def unity_table_is_managed_delta(table_name: str, unity_rest_url: str) -> None:
     assert table_info.get("data_source_format") == "DELTA"
     assert table_info.get("table_id")
     assert table_info.get("storage_location")
+
+
+@then(parsers.parse("Unity Catalog table {table_name} storage location is under managed storage root"))
+def unity_table_storage_location_is_managed(
+    table_name: str,
+    unity_rest_url: str,
+    unity_storage_root: Path,
+) -> None:
+    table_info = _unity_table_info(unity_rest_url, table_name)
+    storage_location = table_info.get("storage_location")
+    assert isinstance(storage_location, str)
+    storage_path = _location_to_path(storage_location).resolve()
+    root_path = unity_storage_root.resolve()
+    assert storage_path.is_relative_to(root_path)
+    relative_parts = storage_path.relative_to(root_path).parts
+    assert "__unitystorage" in relative_parts
+    assert "tables" in relative_parts
 
 
 @then(parsers.parse("Unity Catalog table {table_name} table id matches Delta metadata in {location_var}"))
@@ -440,6 +424,29 @@ def unity_table_id_matches_delta_metadata(
     assert configuration.get("io.unitycatalog.tableId") == table_id
 
 
+@then(parsers.parse("Delta commit for version {version:d} exists in {location_var}"))
+def delta_commit_exists(version: int, location_var: str, variables: dict) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    _delta_commit_actions(Path(location.path), version)
+
+
+@then(parsers.parse("Delta commit for version {version:d} in {location_var} has catalog-managed commit info"))
+def delta_commit_has_catalog_managed_commit_info(version: int, location_var: str, variables: dict) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    actions = _delta_commit_actions(Path(location.path), version)
+    commit_info = next((action.get("commitInfo") for action in actions if "commitInfo" in action), None)
+    assert isinstance(commit_info, dict), f"commitInfo action not found for Delta version {version}"
+    assert isinstance(commit_info.get("timestamp"), int)
+    assert isinstance(commit_info.get("inCommitTimestamp"), int)
+    txn_id = commit_info.get("txnId")
+    assert isinstance(txn_id, str)
+    assert txn_id
+
+
 @then(parsers.parse("staged Delta commit for version {version:d} exists in {location_var}"))
 def staged_delta_commit_exists(version: int, location_var: str, variables: dict) -> None:
     location = variables.get(location_var)
@@ -453,24 +460,43 @@ def staged_delta_commit_exists(version: int, location_var: str, variables: dict)
     assert staged, f"staged Delta commit for version {version} does not exist in {staged_dir}"
 
 
+@then(
+    parsers.parse(
+        "Unity Catalog Delta commit for table {table_name} version {version:d} references staged Delta commit in {location_var}"
+    )
+)
+def unity_delta_commit_references_staged_commit(
+    table_name: str,
+    version: int,
+    location_var: str,
+    unity_rest_url: str,
+    variables: dict,
+) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    commit = _unity_delta_commit_info(unity_rest_url, table_name, version)
+    file_name = _commit_field(commit, "file_name", "fileName")
+    assert isinstance(file_name, str)
+    assert file_name.startswith(f"{version:020}.")
+    assert file_name.endswith(".json")
+
+    log_dir = Path(location.path) / "_delta_log"
+    staged = log_dir / "_staged_commits" / file_name
+    published = log_dir / f"{version:020}.json"
+    assert staged.exists(), f"Unity Catalog staged Delta commit does not exist: {staged}"
+    assert published.exists(), f"published Delta commit does not exist: {published}"
+    assert published.read_bytes() == staged.read_bytes()
+
+    file_size = _commit_field(commit, "file_size", "fileSize")
+    if file_size is not None:
+        assert file_size == staged.stat().st_size
+
+
 @then(parsers.parse("Unity Catalog Delta commit for table {table_name} version {version:d} exists"))
 def unity_delta_commit_exists(
     table_name: str,
     version: int,
     unity_rest_url: str,
-    postgres_container: DockerContainer,
 ) -> None:
-    table_info = _unity_table_info(unity_rest_url, table_name)
-    table_id = table_info.get("table_id")
-    assert isinstance(table_id, str)
-    table_uuid = str(uuid.UUID(table_id))
-    sql = (
-        "SELECT count(*) FROM uc_delta_commits "  # noqa: S608
-        f"WHERE table_id = '{table_uuid}'::uuid AND commit_version = {version}"
-    )
-    count = _exec_postgres_sql(
-        postgres_container,
-        sql,
-        "failed to query Unity Delta commits table",
-    )
-    assert count == "1"
+    _unity_delta_commit_info(unity_rest_url, table_name, version)

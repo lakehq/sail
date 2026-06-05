@@ -4,6 +4,7 @@ use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::manager::CatalogManager;
 use crate::provider::{
     AlterTableOptions, CommitTableOptions, CreateTableOptions, DropTableOptions,
+    GetTableCommitsOptions, GetTableCommitsResponse,
 };
 use crate::utils::match_pattern;
 
@@ -98,6 +99,15 @@ impl CatalogManager {
     ) -> CatalogResult<TableStatus> {
         let (provider, database, table) = self.resolve_object(table)?;
         provider.commit_table(&database, &table, options).await
+    }
+
+    pub async fn get_table_commits<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        options: GetTableCommitsOptions,
+    ) -> CatalogResult<GetTableCommitsResponse> {
+        let (provider, database, table) = self.resolve_object(table)?;
+        provider.get_table_commits(&database, &table, options).await
     }
 
     pub async fn get_table_or_view<T: AsRef<str>>(

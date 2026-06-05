@@ -613,6 +613,11 @@ impl CommitData {
         // Merge base info + app metadata (app metadata wins on conflicts).
         let mut merged_info = commit_info.info.clone();
         merged_info.extend(app_metadata.clone());
+        if Self::actions_enable_catalog_managed(&actions) {
+            merged_info
+                .entry("txnId".to_string())
+                .or_insert_with(|| Value::String(Uuid::new_v4().to_string()));
+        }
         if !merged_operation_metrics.is_empty() {
             merged_info.insert(
                 "operationMetrics".to_string(),
@@ -662,6 +667,16 @@ impl CommitData {
             }
             _ => false,
         }
+    }
+
+    fn actions_enable_catalog_managed(actions: &[CommitAction]) -> bool {
+        actions.iter().any(|action| {
+            let CommitAction::Protocol(protocol) = action else {
+                return false;
+            };
+            protocol.has_reader_feature(&TableFeature::CatalogManaged)
+                && protocol.has_writer_feature(&TableFeature::CatalogManaged)
+        })
     }
 }
 

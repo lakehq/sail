@@ -14,17 +14,16 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use arrow::datatypes::DataType;
-use progenitor_client::ClientInfo;
 use reqwest::header::HeaderValue;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
     AlterTableOptions, CatalogProvider, CommitTableOptions, CreateDatabaseOptions,
     CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
-    Namespace,
+    GetTableCommitsOptions, GetTableCommitsResponse, Namespace, TableCommitInfo,
 };
 use sail_catalog::utils::{get_property, quote_namespace_if_needed};
 use sail_common_datafusion::catalog::delta::{
-    DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
+    unity_table_id_value, DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
 };
 use sail_common_datafusion::catalog::{
     identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
@@ -651,6 +650,8 @@ impl CatalogProvider for UnityCatalogProvider {
                 )
             })?
         } else {
+            // The SQL planner supplies generated default locations for managed tables. Unity
+            // managed table creation must use a staging location allocated by the catalog.
             let request = types::CreateStagingTable::builder()
                 .name(table)
                 .catalog_name(&catalog_name)
@@ -793,32 +794,22 @@ impl CatalogProvider for UnityCatalogProvider {
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
         let full_name = Self::get_full_table_name(&catalog_name, &schema_name, table);
 
-        let url = format!(
-            "{}/tables/{}",
-            client.baseurl,
-            progenitor_client::encode_path(&full_name)
-        );
-        let response = client
-            .client
-            .delete(url)
-            .header(reqwest::header::ACCEPT, "application/json")
-            .header(
-                reqwest::header::HeaderName::from_static("api-version"),
-                Client::api_version(),
-            )
-            .send()
-            .await
-            .map_err(|e| CatalogError::External(format!("Failed to drop table: {e}")))?;
-        let status = response.status();
-        if status.is_success() || (status.as_u16() == 404 && if_exists) {
-            Ok(())
-        } else {
-            let body = response.text().await.unwrap_or_else(|e| {
-                format!("failed to read Unity Catalog error response body: {e}")
-            });
-            Err(CatalogError::External(format!(
-                "Failed to drop table: HTTP {status}: {body}"
-            )))
+        match client.delete_table().full_name(full_name).send().await {
+            Ok(_) => Ok(()),
+            // The OSS Unity Catalog server currently returns a plain "200 OK" body
+            // for DELETE even though the OpenAPI spec declares a JSON response.
+            Err(progenitor_client::Error::InvalidResponsePayload(bytes, _))
+                if bytes.as_ref() == b"200 OK" =>
+            {
+                Ok(())
+            }
+            Err(e)
+                if e.status()
+                    .is_some_and(|status| status.as_u16() == 404 && if_exists) =>
+            {
+                Ok(())
+            }
+            Err(e) => Err(CatalogError::External(format!("Failed to drop table: {e}"))),
         }
     }
 
@@ -868,47 +859,133 @@ impl CatalogProvider for UnityCatalogProvider {
             .await
             .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
 
-        let url = format!("{}/delta/preview/commits", client.baseurl);
-        let response = client
-            .client
-            .post(url)
-            .header(reqwest::header::ACCEPT, "application/json")
-            .header(
-                reqwest::header::HeaderName::from_static("api-version"),
-                Client::api_version(),
-            )
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| {
-                CatalogError::External(format!(
-                    "Failed to commit Delta table to Unity Catalog: {e}"
-                ))
-            })?;
-        let status = response.status();
-        if status.is_success() {
-            return self.get_table(database, table).await;
+        match client.commit().body(request).send().await {
+            Ok(_) => self.get_table(database, table).await,
+            // The OSS Unity Catalog server currently returns a plain "200 OK" body
+            // for Delta commits even though the OpenAPI spec declares a JSON response.
+            Err(progenitor_client::Error::InvalidResponsePayload(bytes, _))
+                if bytes.as_ref() == b"200 OK" =>
+            {
+                self.get_table(database, table).await
+            }
+            Err(e) if e.status().is_some_and(|status| status.as_u16() == 409) => Err(
+                CatalogError::Conflict(format!("Unity Catalog Delta commit conflict: {e}")),
+            ),
+            Err(e) if e.status().is_some_and(|status| status.as_u16() == 400) => {
+                Err(CatalogError::InvalidArgument(format!(
+                    "Unity Catalog Delta commit invalid argument: {e}"
+                )))
+            }
+            Err(e) if e.status().is_some_and(|status| status.as_u16() == 501) => Err(
+                CatalogError::NotSupported("Unity Catalog Delta commit endpoint".to_string()),
+            ),
+            Err(e) => Err(CatalogError::External(format!(
+                "Failed to commit Delta table to Unity Catalog: {e}"
+            ))),
         }
-        let body = response
-            .text()
-            .await
-            .unwrap_or_else(|e| format!("failed to read Unity Catalog error response body: {e}"));
-        if status.as_u16() == 409 {
-            Err(CatalogError::Conflict(format!(
-                "Unity Catalog Delta commit conflict: HTTP {status}: {body}"
-            )))
-        } else if status.as_u16() == 400 {
-            Err(CatalogError::InvalidArgument(format!(
-                "Unity Catalog Delta commit invalid argument: HTTP {status}: {body}"
-            )))
-        } else if status.as_u16() == 501 {
-            Err(CatalogError::NotSupported(
-                "Unity Catalog Delta commit endpoint".to_string(),
-            ))
+    }
+
+    async fn get_table_commits(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: GetTableCommitsOptions,
+    ) -> CatalogResult<GetTableCommitsResponse> {
+        if !options.format.eq_ignore_ascii_case("delta") {
+            return Err(CatalogError::NotSupported(format!(
+                "Unity Catalog commit discovery for {} tables",
+                options.format
+            )));
+        }
+
+        let status = self.get_table(database, table).await?;
+        let (format, location, properties) = match &status.kind {
+            TableKind::Table {
+                format,
+                location,
+                properties,
+                ..
+            } => (format, location, properties),
+            _ => {
+                return Err(CatalogError::InvalidArgument(format!(
+                    "Unity Catalog commit discovery expects a table: {table}"
+                )));
+            }
+        };
+        if !format.eq_ignore_ascii_case("delta") {
+            return Err(CatalogError::NotSupported(format!(
+                "Unity Catalog commit discovery for {format} tables"
+            )));
+        }
+        let table_uri = if let Some(location) = location {
+            if location.trim_end_matches('/') != options.table_uri.trim_end_matches('/') {
+                return Err(CatalogError::InvalidArgument(format!(
+                    "Unity Catalog Delta commit discovery table URI mismatch: catalog location `{location}`, requested `{}`",
+                    options.table_uri
+                )));
+            }
+            location.clone()
         } else {
-            Err(CatalogError::External(format!(
-                "Failed to commit Delta table to Unity Catalog: HTTP {status}: {body}"
-            )))
+            options.table_uri
+        };
+        let table_id = unity_table_id_value(
+            properties
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        )
+        .ok_or_else(|| {
+            CatalogError::InvalidArgument(format!(
+                "Unity Catalog Delta table `{table}` is missing table id property"
+            ))
+        })?;
+
+        let request = types::DeltaGetCommits {
+            end_version: options.end_version,
+            start_version: options.start_version,
+            table_id: table_id.to_string(),
+            table_uri,
+        };
+        let client = self
+            .get_client()
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
+        let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
+        let full_name = Self::get_full_table_name(&catalog_name, &schema_name, table);
+
+        match client.get_commits().body(request).send().await {
+            Ok(response) => {
+                let response = response.into_inner();
+                Ok(GetTableCommitsResponse {
+                    latest_table_version: response.latest_table_version,
+                    commits: response
+                        .commits
+                        .into_iter()
+                        .map(|commit| TableCommitInfo {
+                            version: commit.version,
+                            timestamp: commit.timestamp,
+                            file_name: commit.file_name,
+                            file_size: commit.file_size,
+                            file_modification_timestamp: commit.file_modification_timestamp,
+                        })
+                        .collect(),
+                })
+            }
+            Err(e) if e.status().is_some_and(|status| status.as_u16() == 400) => {
+                Err(CatalogError::InvalidArgument(format!(
+                    "Unity Catalog Delta commit discovery invalid argument: {e}"
+                )))
+            }
+            Err(e) if e.status().is_some_and(|status| status.as_u16() == 404) => {
+                Err(CatalogError::NotFound(CatalogObject::Table, full_name))
+            }
+            Err(e) if e.status().is_some_and(|status| status.as_u16() == 501) => {
+                Err(CatalogError::NotSupported(
+                    "Unity Catalog Delta commit discovery endpoint".to_string(),
+                ))
+            }
+            Err(e) => Err(CatalogError::External(format!(
+                "Failed to get Delta commits from Unity Catalog: {e}"
+            ))),
         }
     }
 

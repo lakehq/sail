@@ -32,10 +32,10 @@ pub const MERGE_ROW_INDEX_COLUMN: &str = "__sail_file_row_index";
 /// Value is one of the [`RowLevelOperationType`] integer constants.
 pub const OPERATION_COLUMN: &str = "__sail_operation_type";
 
-/// Internal write option carrying the fully qualified catalog table name as a JSON string.
+/// Reserved write option name for the fully qualified catalog table name.
 ///
-/// Table formats use this to coordinate storage commits with catalog commits. It is injected by
-/// the planner and must not be persisted as a user table property.
+/// The planner carries this as typed private state on [`SinkInfo`]. User-visible option layers must
+/// reject this key so it cannot become part of the public write API.
 pub const CATALOG_TABLE_OPTION: &str = "__sail.catalog.table";
 
 /// Internal column carrying pre-aggregated MERGE source row counts on
@@ -182,6 +182,11 @@ pub struct BucketBy {
 #[derive(Debug, Clone)]
 pub struct SourceInfo {
     pub paths: Vec<String>,
+    /// Fully qualified catalog table name for catalog-coordinated reads.
+    ///
+    /// This is injected by the planner and must not be accepted from user-facing
+    /// data source options.
+    pub catalog_table: Option<Vec<String>>,
     /// The (optional) schema of the data source including partitioning columns.
     pub schema: Option<Schema>,
     pub constraints: Constraints,
@@ -212,6 +217,11 @@ pub struct SinkInfo {
     /// A later set of options can override earlier ones.
     /// The path for the sink is stored under the `"path"` key in options.
     pub options: Vec<OptionLayer>,
+    /// Fully qualified catalog table name for catalog-coordinated writes.
+    ///
+    /// This is injected by the planner and must not be accepted from user-facing
+    /// data source options.
+    pub catalog_table: Option<Vec<String>>,
     /// The logical schema of the writer's input, if available. This schema can
     /// preserve arrow field metadata that the physical planner may strip (e.g.
     /// metadata attached via `Expr::Alias::with_metadata`). Table formats can use

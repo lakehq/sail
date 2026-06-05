@@ -575,6 +575,7 @@ message DeltaWriterExecNode {
   PhysicalSinkMode sink_mode = 7;
   map<string, string> metadata_configuration = 8;
   DeltaWriteContext write_context = 9;
+  repeated string catalog_table = 10;
 }
 
 message DeltaCommitExecNode {
@@ -600,6 +601,7 @@ message DeltaScanByAddsExecNode {
   optional bytes pushdown_filter = 8;
   int64 version = 9;
   optional bytes statistics = 10;
+  repeated string catalog_table = 11;
   // TODO: Consider snapshot hints (partition columns, kernel schema) to avoid worker log reads.
 }
 

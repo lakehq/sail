@@ -68,6 +68,30 @@ pub struct CommitTableOptions {
     pub updates: Vec<serde_json::Value>,
 }
 
+/// Options for retrieving table-format commits tracked by a catalog.
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct GetTableCommitsOptions {
+    pub format: String,
+    pub table_uri: String,
+    pub start_version: i64,
+    pub end_version: Option<i64>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct TableCommitInfo {
+    pub version: i64,
+    pub timestamp: i64,
+    pub file_name: String,
+    pub file_size: i64,
+    pub file_modification_timestamp: i64,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct GetTableCommitsResponse {
+    pub latest_table_version: i64,
+    pub commits: Vec<TableCommitInfo>,
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct CreateViewOptions {
     pub columns: Vec<CreateViewColumnOptions>,

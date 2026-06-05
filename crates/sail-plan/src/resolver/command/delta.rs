@@ -121,6 +121,7 @@ impl PlanResolver<'_> {
         })?;
         let info = SourceInfo {
             paths: vec![path.clone()],
+            catalog_table: None,
             schema: None,
             constraints: Default::default(),
             partition_by: vec![],
@@ -515,6 +516,7 @@ impl PlanResolver<'_> {
         })?;
         let source = SourceInfo {
             paths: vec![location.clone()],
+            catalog_table: None,
             schema: None,
             constraints: Default::default(),
             partition_by: vec![],
