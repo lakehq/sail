@@ -39,6 +39,8 @@ pub enum ColumnFeatureKey {
     /// SQL expression that deterministically produces the column's value.
     GenerationExpression,
     /// SQL expression used when a write explicitly or implicitly requests the column default.
+    /// Delta/Spark persists the current default in `StructField.metadata` under
+    /// the `CURRENT_DEFAULT` key when the `allowColumnDefaults` table feature is enabled.
     CurrentDefault,
     /// Sail-only marker used in the planning pipeline to preserve a Delta NOT NULL
     /// constraint when DataFusion expression rewrites make the output nullable.

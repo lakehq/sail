@@ -463,6 +463,8 @@ impl DeltaTableFormat {
             Err(DeltaTableError::InvalidTableLocation(message))
                 if message.contains("No commit files found in _delta_log") =>
             {
+                // FIXME: This string match is brittle. Replace it with a typed
+                // missing-log/table-not-found error.
                 return Ok(());
             }
             Err(e) => return Err(DataFusionError::External(Box::new(e))),
@@ -661,6 +663,8 @@ impl DeltaTableFormat {
             Err(DeltaTableError::InvalidTableLocation(message))
                 if message.contains("No commit files found in _delta_log") =>
             {
+                // FIXME: This string match is brittle. Replace it with a typed
+                // missing-log/table-not-found error when the Delta table API exposes one.
                 return Ok(());
             }
             Err(e) => return Err(DataFusionError::External(Box::new(e))),
@@ -767,6 +771,8 @@ impl DeltaTableFormat {
             Err(DeltaTableError::InvalidTableLocation(message))
                 if message.contains("No commit files found in _delta_log") =>
             {
+                // FIXME: This string match is brittle. Replace it with a typed
+                // missing-log/table-not-found error when the Delta table API exposes one.
                 return Ok(());
             }
             Err(e) => return Err(DataFusionError::External(Box::new(e))),

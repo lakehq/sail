@@ -11,14 +11,14 @@ use crate::ast::data_type::{DataType, IntervalDayTimeUnit, IntervalYearMonthUnit
 use crate::ast::identifier::{Ident, ObjectName, Variable};
 use crate::ast::keywords::{
     All, And, Any, As, Asc, Between, Both, By, Case, Cast, Cube, Current, CurrentDate,
-    CurrentTimestamp, CurrentUser, Date, Day, Days, Default, Desc, Distinct, Div, Else, End,
-    Escape, Exists, Extract, False, Filter, First, Following, For, From, Group, Grouping, Hour,
-    Hours, Identifier, Ignore, Ilike, In, Interval, Is, Last, Leading, Like, Microsecond,
-    Microseconds, Millisecond, Milliseconds, Minute, Minutes, Month, Months, Not, Null, Nulls, Or,
-    Order, Over, Overlay, Placing, Position, Preceding, Range, Regexp, Respect, Rlike, Rollup, Row,
-    Rows, Second, Seconds, Sets, Similar, Struct, Substr, Substring, Table, Then, Time, Timestamp,
-    TimestampLtz, TimestampNtz, To, Trailing, Trim, True, TryCast, Unbounded, Unknown, Week, Weeks,
-    When, Where, Within, Year, Years,
+    CurrentTimestamp, CurrentUser, Date, Day, Days, Desc, Distinct, Div, Else, End, Escape, Exists,
+    Extract, False, Filter, First, Following, For, From, Group, Grouping, Hour, Hours, Identifier,
+    Ignore, Ilike, In, Interval, Is, Last, Leading, Like, Microsecond, Microseconds, Millisecond,
+    Milliseconds, Minute, Minutes, Month, Months, Not, Null, Nulls, Or, Order, Over, Overlay,
+    Placing, Position, Preceding, Range, Regexp, Respect, Rlike, Rollup, Row, Rows, Second,
+    Seconds, Sets, Similar, Struct, Substr, Substring, Table, Then, Time, Timestamp, TimestampLtz,
+    TimestampNtz, To, Trailing, Trim, True, TryCast, Unbounded, Unknown, Week, Weeks, When, Where,
+    Within, Year, Years,
 };
 use crate::ast::literal::{NumberLiteral, StringLiteral};
 use crate::ast::operator;
@@ -234,7 +234,6 @@ pub enum AtomExpr {
     DateLiteral(Date, StringLiteral),
     TimeLiteral(Time, StringLiteral),
     Null(Null),
-    Default(Default),
     Interval(
         Interval,
         #[parser(function = |(e, _, _), o| boxed(compose(e, o)))] Box<IntervalExpr>,
