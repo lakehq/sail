@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion_common::{DataFusionError, Result};
+use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
 use sail_common_datafusion::column_features::SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY;
 use sail_common_datafusion::datasource::{
     PhysicalSinkMode, MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN,
@@ -19,7 +20,7 @@ use crate::schema::{
     is_supported_type_change_for_schema_evolution, metadata_for_create_with_struct_type,
     normalize_delta_schema, protocol_can_write_type_widening, protocol_for_create,
     schema_contains_type_widening_metadata, schema_has_column_defaults,
-    schema_has_generated_columns,
+    schema_has_generated_columns, schema_has_identity_columns,
 };
 use crate::spec::{
     contains_timestampntz_arrow, contains_variant_arrow, Action, ColumnMappingMode,
@@ -194,6 +195,9 @@ pub fn prepare_delta_write_context(
         if !options.default_expressions.is_empty() {
             kernel_schema = inject_default_expressions(kernel_schema, &options.default_expressions);
         }
+        if !options.identity_columns.is_empty() {
+            kernel_schema = inject_identity_columns(kernel_schema, &options.identity_columns);
+        }
 
         let mut configuration = metadata_configuration.clone();
         let metadata_schema = if !matches!(effective_mode, ColumnMappingMode::None) {
@@ -218,6 +222,7 @@ pub fn prepare_delta_write_context(
             TableProperties::from(configuration.iter()).enable_in_commit_timestamps(),
             schema_has_generated_columns(&metadata_schema),
             schema_has_column_defaults(&metadata_schema),
+            schema_has_identity_columns(&metadata_schema),
             has_variant,
             &configuration,
         )
@@ -646,6 +651,53 @@ fn inject_default_expressions(
                     nullable,
                     metadata,
                 }
+            }
+        } else {
+            field
+        }
+    });
+    StructType::new_unchecked(fields)
+}
+
+fn inject_identity_columns(
+    schema: StructType,
+    identity_columns: &HashMap<String, CatalogTableColumnIdentity>,
+) -> StructType {
+    let fields = schema.into_fields().map(|field| {
+        if let Some(identity) = identity_columns.get(&field.name) {
+            let StructField {
+                name,
+                data_type,
+                nullable,
+                mut metadata,
+            } = field;
+            metadata.insert(
+                ColumnMetadataKey::IdentityStart.as_ref().to_string(),
+                MetadataValue::Number(identity.start),
+            );
+            metadata.insert(
+                ColumnMetadataKey::IdentityStep.as_ref().to_string(),
+                MetadataValue::Number(identity.step),
+            );
+            metadata.insert(
+                ColumnMetadataKey::IdentityAllowExplicitInsert
+                    .as_ref()
+                    .to_string(),
+                MetadataValue::Boolean(identity.allow_explicit_insert),
+            );
+            if let Some(high_water_mark) = identity.high_water_mark {
+                metadata.insert(
+                    ColumnMetadataKey::IdentityHighWaterMark
+                        .as_ref()
+                        .to_string(),
+                    MetadataValue::Number(high_water_mark),
+                );
+            }
+            StructField {
+                name,
+                data_type,
+                nullable,
+                metadata,
             }
         } else {
             field

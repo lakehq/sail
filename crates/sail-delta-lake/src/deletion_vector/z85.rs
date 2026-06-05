@@ -29,6 +29,21 @@ pub(crate) fn z85_encode(data: &[u8]) -> DeltaResult<String> {
     Ok(result)
 }
 
+/// Encode arbitrary binary data to a Z85 string.
+///
+/// Unaligned input is padded with trailing zero bytes.
+pub(crate) fn z85_encode_padded(data: &[u8]) -> DeltaResult<String> {
+    if data.len().is_multiple_of(4) {
+        return z85_encode(data);
+    }
+
+    let aligned_len = data.len().next_multiple_of(4);
+    let mut aligned = Vec::with_capacity(aligned_len);
+    aligned.extend_from_slice(data);
+    aligned.resize(aligned_len, 0);
+    z85_encode(&aligned)
+}
+
 /// Decode a Z85 string back to binary data.
 ///
 /// The input length must be divisible by 5.
@@ -80,6 +95,14 @@ mod tests {
         let result = z85_encode(&[1, 2, 3]);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("divisible by 4"));
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn test_z85_encode_padded_accepts_unaligned_input() {
+        let encoded = z85_encode_padded(&[1, 2, 3]).unwrap();
+        let decoded = z85_decode(&encoded).unwrap();
+        assert_eq!(decoded, vec![1, 2, 3, 0]);
     }
 
     #[test]

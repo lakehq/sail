@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 
+use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
 use sail_data_source::options::gen::DeltaWriteOptions;
 use serde::{Deserialize, Serialize};
 
@@ -32,6 +33,8 @@ pub struct DeltaWriterExecOptions {
     pub default_expressions: HashMap<String, String>,
     #[serde(default)]
     pub target_nullability: HashMap<String, bool>,
+    #[serde(default)]
+    pub identity_columns: HashMap<String, CatalogTableColumnIdentity>,
 }
 
 impl From<DeltaWriteOptions> for DeltaWriterExecOptions {
@@ -45,6 +48,7 @@ impl From<DeltaWriteOptions> for DeltaWriterExecOptions {
             generation_expressions: HashMap::new(),
             default_expressions: HashMap::new(),
             target_nullability: HashMap::new(),
+            identity_columns: HashMap::new(),
         }
     }
 }
@@ -72,6 +76,14 @@ impl DeltaWriterExecOptions {
 
     pub fn with_target_nullability(mut self, target_nullability: HashMap<String, bool>) -> Self {
         self.target_nullability = target_nullability;
+        self
+    }
+
+    pub fn with_identity_columns(
+        mut self,
+        identity_columns: HashMap<String, CatalogTableColumnIdentity>,
+    ) -> Self {
+        self.identity_columns = identity_columns;
         self
     }
 }

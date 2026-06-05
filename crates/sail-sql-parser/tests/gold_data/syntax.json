@@ -1481,6 +1481,47 @@
                         "nonTerminal": "Keyword(As)"
                       },
                       {
+                        "nonTerminal": "Keyword(Identity)"
+                      },
+                      {
+                        "nonTerminal": "Option(TableColumnIdentityOptions)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Generated)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(By)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Default)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(As)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Identity)"
+                      },
+                      {
+                        "nonTerminal": "Option(TableColumnIdentityOptions)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Generated)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Always)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(As)"
+                      },
+                      {
                         "nonTerminal": "Operator(LeftParenthesis)"
                       },
                       {
@@ -4834,6 +4875,14 @@
               }
             },
             {
+              "name": "Keyword(Identity)",
+              "node": {
+                "terminal": {
+                  "keyword": "IDENTITY"
+                }
+              }
+            },
+            {
               "name": "Keyword(If)",
               "node": {
                 "terminal": {
@@ -4870,6 +4919,14 @@
               "node": {
                 "terminal": {
                   "keyword": "INCLUDE"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Increment)",
+              "node": {
+                "terminal": {
+                  "keyword": "INCREMENT"
                 }
               }
             },
@@ -5726,6 +5783,14 @@
               "node": {
                 "terminal": {
                   "keyword": "SOURCE"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Start)",
+              "node": {
+                "terminal": {
+                  "keyword": "START"
                 }
               }
             },
@@ -7447,6 +7512,14 @@
               "node": {
                 "optional": {
                   "nonTerminal": "StringLiteral"
+                }
+              }
+            },
+            {
+              "name": "Option(TableColumnIdentityOptions)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "TableColumnIdentityOptions"
                 }
               }
             },
@@ -9948,6 +10021,61 @@
               }
             },
             {
+              "name": "TableColumnIdentityOption",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Start)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(With)"
+                      },
+                      {
+                        "nonTerminal": "Option(Either(Operator(Plus), Operator(Minus)))"
+                      },
+                      {
+                        "nonTerminal": "NumberLiteral"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(Increment)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(By)"
+                      },
+                      {
+                        "nonTerminal": "Option(Either(Operator(Plus), Operator(Minus)))"
+                      },
+                      {
+                        "nonTerminal": "NumberLiteral"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "name": "TableColumnIdentityOptions",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Operator(LeftParenthesis)"
+                  },
+                  {
+                    "nonTerminal": "Vector(TableColumnIdentityOption)"
+                  },
+                  {
+                    "nonTerminal": "Operator(RightParenthesis)"
+                  }
+                ]
+              }
+            },
+            {
               "name": "TableExpr",
               "node": {
                 "choice": [
@@ -11581,6 +11709,14 @@
               "node": {
                 "zeroOrMore": {
                   "nonTerminal": "StringLiteral"
+                }
+              }
+            },
+            {
+              "name": "Vector(TableColumnIdentityOption)",
+              "node": {
+                "zeroOrMore": {
+                  "nonTerminal": "TableColumnIdentityOption"
                 }
               }
             },

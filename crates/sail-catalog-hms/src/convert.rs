@@ -553,16 +553,20 @@ fn columns_from_spark_properties(
     };
     let columns = spark_struct_json_to_fields(&schema)?
         .into_iter()
-        .map(|field| TableColumnStatus {
-            name: field.name().to_string(),
-            data_type: field.data_type().clone(),
-            nullable: field.is_nullable(),
-            comment: field.metadata().get(COMMENT_KEY).cloned(),
-            default: ColumnFeatures::from_field(&field).current_default(),
-            generated_always_as: ColumnFeatures::from_field(&field).generation_expression(),
-            is_partition: false,
-            is_bucket: false,
-            is_cluster: false,
+        .map(|field| {
+            let features = ColumnFeatures::from_field(&field);
+            TableColumnStatus {
+                name: field.name().to_string(),
+                data_type: field.data_type().clone(),
+                nullable: field.is_nullable(),
+                comment: field.metadata().get(COMMENT_KEY).cloned(),
+                default: features.current_default(),
+                generated_always_as: features.generation_expression(),
+                identity: features.identity(),
+                is_partition: false,
+                is_bucket: false,
+                is_cluster: false,
+            }
         })
         .collect();
     Ok(Some(columns))
@@ -729,6 +733,7 @@ fn field_schema_to_status(
         comment: field.comment.as_ref().map(ToString::to_string),
         default: None,
         generated_always_as: None,
+        identity: None,
         is_partition,
         is_bucket: false,
         is_cluster: false,
@@ -814,6 +819,7 @@ mod tests {
                 comment: None,
                 default: None,
                 generated_always_as: None,
+                identity: None,
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
@@ -851,6 +857,7 @@ mod tests {
                 comment: None,
                 default: None,
                 generated_always_as: None,
+                identity: None,
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
@@ -881,6 +888,7 @@ mod tests {
                 comment: None,
                 default: None,
                 generated_always_as: None,
+                identity: None,
             }],
             vec!["missing_partition".to_string()],
             Some("s3://warehouse/items".to_string()),
@@ -913,6 +921,7 @@ mod tests {
                 comment: None,
                 default: None,
                 generated_always_as: None,
+                identity: None,
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
@@ -948,6 +957,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
                 CreateTableColumnOptions {
                     name: "day".to_string(),
@@ -956,6 +966,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
             ],
             vec!["day".to_string()],
@@ -997,6 +1008,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
                 CreateTableColumnOptions {
                     name: "day".to_string(),
@@ -1005,6 +1017,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
             ],
             vec!["day".to_string()],
@@ -1028,6 +1041,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
                 CreateTableColumnOptions {
                     name: "day".to_string(),
@@ -1036,6 +1050,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
             ],
             &["day".to_string()],
@@ -1069,6 +1084,7 @@ mod tests {
                     comment: Some("pk".to_string()),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
                 CreateTableColumnOptions {
                     name: "day".to_string(),
@@ -1077,6 +1093,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
             ],
             vec!["day".to_string()],
@@ -1100,6 +1117,7 @@ mod tests {
                     comment: Some("pk".to_string()),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
                 CreateTableColumnOptions {
                     name: "day".to_string(),
@@ -1108,6 +1126,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
             ],
             &["day".to_string()],
@@ -1615,6 +1634,7 @@ mod tests {
                     comment: Some("primary key".to_string()),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
                 CreateTableColumnOptions {
                     name: "payload".to_string(),
@@ -1660,6 +1680,7 @@ mod tests {
                     comment: Some("nested payload".to_string()),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
                 CreateTableColumnOptions {
                     name: "category".to_string(),
@@ -1668,6 +1689,7 @@ mod tests {
                     comment: Some("category partition".to_string()),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
                 CreateTableColumnOptions {
                     name: "event_date".to_string(),
@@ -1676,6 +1698,7 @@ mod tests {
                     comment: Some("date partition".to_string()),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
             ],
             vec!["category".to_string(), "event_date".to_string()],
@@ -1697,6 +1720,7 @@ mod tests {
                 comment: Some("primary key".to_string()),
                 default: None,
                 generated_always_as: None,
+                identity: None,
             },
             CreateTableColumnOptions {
                 name: "payload".to_string(),
@@ -1742,6 +1766,7 @@ mod tests {
                 comment: Some("nested payload".to_string()),
                 default: None,
                 generated_always_as: None,
+                identity: None,
             },
             CreateTableColumnOptions {
                 name: "category".to_string(),
@@ -1750,6 +1775,7 @@ mod tests {
                 comment: Some("category partition".to_string()),
                 default: None,
                 generated_always_as: None,
+                identity: None,
             },
             CreateTableColumnOptions {
                 name: "event_date".to_string(),
@@ -1758,6 +1784,7 @@ mod tests {
                 comment: Some("date partition".to_string()),
                 default: None,
                 generated_always_as: None,
+                identity: None,
             },
         ];
 
@@ -1855,6 +1882,7 @@ mod tests {
                 comment: None,
                 default: None,
                 generated_always_as: None,
+                identity: None,
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
@@ -1885,6 +1913,7 @@ mod tests {
                 comment: None,
                 default: None,
                 generated_always_as: None,
+                identity: None,
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),

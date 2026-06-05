@@ -124,6 +124,53 @@
         - mergeSchema
       parser: crate::options::parsers::parse_bool
 
+- key: shred_variants
+  description: |
+    If `true`, write Iceberg Variant columns using Parquet variant shredding when
+    a shredding schema can be inferred from buffered rows.
+  default:
+    value: "false"
+    parser: crate::options::parsers::parse_bool
+  supported: true
+  rust_type: bool
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - shred-variants
+        - shred_variants
+        - shredVariants
+      parser: crate::options::parsers::parse_bool
+    - type: table_property
+      keys:
+        - write.parquet.shred-variants
+      case_sensitive: true
+      parser: crate::options::parsers::parse_bool
+
+- key: variant_inference_buffer_size
+  description: |
+    Number of rows to buffer before inferring the Parquet variant shredding schema.
+  default:
+    value: "100"
+    parser: crate::options::parsers::parse_usize
+  supported: true
+  rust_type: usize
+  scopes:
+    - write
+  origins:
+    - type: option
+      keys:
+        - variant-inference-buffer-size
+        - variant_inference_buffer_size
+        - variantInferenceBufferSize
+      parser: crate::options::parsers::parse_usize
+    - type: table_property
+      keys:
+        - write.parquet.variant-inference-buffer-size
+      case_sensitive: true
+      parser: crate::options::parsers::parse_usize
+
 ### Iceberg Read Options Not Yet Implemented ###
 
 - key: start_snapshot_id

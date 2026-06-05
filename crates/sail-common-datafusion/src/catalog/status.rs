@@ -230,6 +230,7 @@ pub struct TableColumnStatus {
     pub comment: Option<String>,
     pub default: Option<String>,
     pub generated_always_as: Option<String>,
+    pub identity: Option<super::CatalogTableColumnIdentity>,
     pub is_partition: bool,
     pub is_bucket: bool,
     pub is_cluster: bool,
@@ -244,6 +245,10 @@ impl TableColumnStatus {
         }
         if let Some(expr) = &self.default {
             let builder = ColumnFeaturesBuilder::new().with_current_default(expr.clone());
+            metadata.extend(builder.build());
+        }
+        if let Some(identity) = &self.identity {
+            let builder = ColumnFeaturesBuilder::new().with_identity(identity);
             metadata.extend(builder.build());
         }
         if let Some(comment) = &self.comment {

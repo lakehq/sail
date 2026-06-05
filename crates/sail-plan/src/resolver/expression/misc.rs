@@ -32,10 +32,21 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let expr = self.resolve_expression(expr, schema, state).await?;
         let name = name.into_iter().map(|x| x.into()).collect::<Vec<String>>();
+        let named_expr = self.resolve_named_expression(expr, schema, state).await?;
+        let NamedExpr {
+            name: inner_name,
+            expr,
+            metadata: inner_metadata,
+        } = named_expr;
+        if name.is_empty() {
+            return Ok(
+                NamedExpr::new(inner_name, expr).with_metadata(metadata.unwrap_or(inner_metadata))
+            );
+        }
+        let metadata = metadata.unwrap_or(inner_metadata);
         let expr = if let [n] = name.as_slice() {
-            if let Some(metadata) = metadata {
+            if !metadata.is_empty() {
                 let metadata_map: HashMap<String, String> = metadata.into_iter().collect();
                 let field_metadata = Some(FieldMetadata::from(metadata_map));
                 expr.alias_with_metadata(n, field_metadata)

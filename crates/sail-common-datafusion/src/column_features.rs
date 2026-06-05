@@ -22,6 +22,8 @@ use std::collections::HashMap;
 
 use datafusion::arrow::datatypes::Field;
 
+use crate::catalog::CatalogTableColumnIdentity;
+
 /// Sail-private field metadata used while planning writes. It records the target
 /// catalog field nullability so table formats can preserve it even if expression
 /// simplification proves the current write value itself is non-null.
@@ -38,6 +40,14 @@ pub enum ColumnFeatureKey {
     GenerationExpression,
     /// SQL expression used when a write explicitly or implicitly requests the column default.
     CurrentDefault,
+    /// Starting value for a Delta identity column.
+    IdentityStart,
+    /// Increment between generated identity values.
+    IdentityStep,
+    /// Highest generated identity value recorded in the Delta log.
+    IdentityHighWaterMark,
+    /// Whether explicit inserts are allowed for the identity column.
+    IdentityAllowExplicitInsert,
 }
 
 impl ColumnFeatureKey {
@@ -45,6 +55,10 @@ impl ColumnFeatureKey {
         match self {
             Self::GenerationExpression => "delta.generationExpression",
             Self::CurrentDefault => "CURRENT_DEFAULT",
+            Self::IdentityStart => "delta.identity.start",
+            Self::IdentityStep => "delta.identity.step",
+            Self::IdentityHighWaterMark => "delta.identity.highWaterMark",
+            Self::IdentityAllowExplicitInsert => "delta.identity.allowExplicitInsert",
         }
     }
 }
@@ -94,9 +108,40 @@ impl<'a> ColumnFeatures<'a> {
             .map(|v| serde_json::from_str::<String>(v).unwrap_or_else(|_| v.clone()))
     }
 
+    /// Returns identity column metadata if the column is an identity column.
+    pub fn identity(&self) -> Option<CatalogTableColumnIdentity> {
+        let start = self.parse_i64(ColumnFeatureKey::IdentityStart)?;
+        let step = self.parse_i64(ColumnFeatureKey::IdentityStep)?;
+        let allow_explicit_insert =
+            self.parse_bool(ColumnFeatureKey::IdentityAllowExplicitInsert)?;
+        let high_water_mark = self.parse_i64(ColumnFeatureKey::IdentityHighWaterMark);
+        Some(CatalogTableColumnIdentity {
+            start,
+            step,
+            allow_explicit_insert,
+            high_water_mark,
+        })
+    }
+
     /// Returns the raw stored value for a feature key, bypassing decoding.
     pub fn raw(&self, key: ColumnFeatureKey) -> Option<&str> {
         self.metadata.get(key.as_str()).map(String::as_str)
+    }
+
+    fn parse_i64(&self, key: ColumnFeatureKey) -> Option<i64> {
+        self.metadata.get(key.as_str()).and_then(|value| {
+            serde_json::from_str::<i64>(value)
+                .or_else(|_| value.parse())
+                .ok()
+        })
+    }
+
+    fn parse_bool(&self, key: ColumnFeatureKey) -> Option<bool> {
+        self.metadata.get(key.as_str()).and_then(|value| {
+            serde_json::from_str::<bool>(value)
+                .or_else(|_| value.parse())
+                .ok()
+        })
     }
 }
 
@@ -127,6 +172,30 @@ impl ColumnFeaturesBuilder {
             ColumnFeatureKey::CurrentDefault.as_str().to_string(),
             expr.into(),
         );
+        self
+    }
+
+    pub fn with_identity(mut self, identity: &CatalogTableColumnIdentity) -> Self {
+        self.entries.insert(
+            ColumnFeatureKey::IdentityStart.as_str().to_string(),
+            identity.start.to_string(),
+        );
+        self.entries.insert(
+            ColumnFeatureKey::IdentityStep.as_str().to_string(),
+            identity.step.to_string(),
+        );
+        self.entries.insert(
+            ColumnFeatureKey::IdentityAllowExplicitInsert
+                .as_str()
+                .to_string(),
+            identity.allow_explicit_insert.to_string(),
+        );
+        if let Some(high_water_mark) = identity.high_water_mark {
+            self.entries.insert(
+                ColumnFeatureKey::IdentityHighWaterMark.as_str().to_string(),
+                high_water_mark.to_string(),
+            );
+        }
         self
     }
 

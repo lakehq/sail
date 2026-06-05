@@ -5,27 +5,25 @@ use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::execution::cache::cache_manager::FileStatisticsCache;
-use datafusion::execution::cache::cache_unit::DefaultFileStatisticsCache;
 use datafusion::logical_expr::expr::Sort;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableSource, TableType};
+use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{Constraints, Result};
-use datafusion_datasource::TableSchema;
+use datafusion_datasource::{ListingTableUrl, TableSchema};
 
 use crate::listing::source::ReadFormat;
 use crate::listing::utils::can_be_evaluated_for_partition_pruning;
 
 #[derive(Clone, Debug)]
 pub struct ListingTableSourceConfig {
-    pub table_paths: Vec<datafusion_datasource::ListingTableUrl>,
-    pub file_extension: String,
+    pub table_paths: Vec<ListingTableUrl>,
     pub schema: TableSchema,
     pub constraints: Constraints,
     pub file_sort_order: Vec<Vec<Sort>>,
     pub collect_stat: bool,
     pub target_partitions: usize,
     pub read_format: Arc<dyn ReadFormat>,
-    pub compression: Option<datafusion_common::parsers::CompressionTypeVariant>,
+    pub compression: CompressionTypeVariant,
 }
 
 /// A [`TableSource`] that represents reading one or more files via listing.
@@ -35,23 +33,15 @@ pub struct ListingTableSourceConfig {
 #[derive(Clone, Debug)]
 pub struct ListingTableSource {
     config: ListingTableSourceConfig,
-    collected_statistics: Arc<dyn FileStatisticsCache>,
 }
 
 impl ListingTableSource {
     pub fn try_new(config: ListingTableSourceConfig) -> Result<Self> {
-        Ok(Self {
-            config,
-            collected_statistics: Arc::new(DefaultFileStatisticsCache::default()),
-        })
+        Ok(Self { config })
     }
 
     pub fn config(&self) -> &ListingTableSourceConfig {
         &self.config
-    }
-
-    pub fn collected_statistics(&self) -> Arc<dyn FileStatisticsCache> {
-        Arc::clone(&self.collected_statistics)
     }
 }
 

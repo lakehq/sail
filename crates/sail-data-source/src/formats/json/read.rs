@@ -1,15 +1,20 @@
+use std::io::BufReader;
 use std::sync::Arc;
 
+use bytes::Buf;
+use datafusion::arrow::datatypes::{Schema, SchemaRef};
+use datafusion::arrow::json::reader::{infer_json_schema_from_iterator, ValueIter};
 use datafusion::catalog::Session;
-use datafusion::datasource::file_format::json::JsonFormat;
-use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::physical_plan::JsonSource;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
+use datafusion_datasource_json::utils::JsonArrayToNdjsonReader;
+use object_store::{GetResultPayload, ObjectStoreExt};
 
-use crate::listing::source::{ListingScanInput, ReadFormat, SchemaInfer};
+use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
+use crate::listing::utils::infer_listing_compression;
 use crate::options::gen::JsonReadOptions;
 
 #[derive(Debug, Clone)]
@@ -19,38 +24,80 @@ pub struct JsonReadFormat {
 
 #[async_trait::async_trait]
 impl ReadFormat for JsonReadFormat {
-    fn create_read_format(
-        &self,
-        compression: Option<CompressionTypeVariant>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        let mut options = self
-            .options
-            .clone()
-            .into_table_options()
-            .map_err(DataFusionError::from)?;
-        if let Some(compression) = compression {
-            options.compression = compression;
-        }
-        Ok(Arc::new(JsonFormat::default().with_options(options)))
-    }
-
-    fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
-        Arc::new(crate::listing::source::DefaultSchemaInfer)
-    }
-
-    async fn scan(
+    async fn infer_compression(
         &self,
         _ctx: &dyn Session,
-        mut input: ListingScanInput,
-    ) -> Result<FileScanConfig> {
+        files: &[ListingFileSample<'_>],
+    ) -> Result<CompressionTypeVariant> {
+        let options = self
+            .options
+            .clone()
+            .into_table_options()
+            .map_err(DataFusionError::from)?;
+        if options.compression != CompressionTypeVariant::UNCOMPRESSED {
+            return Ok(options.compression);
+        }
+        Ok(infer_listing_compression(files)?.unwrap_or(CompressionTypeVariant::UNCOMPRESSED))
+    }
+
+    async fn infer_schema(
+        &self,
+        _ctx: &dyn Session,
+        files: &[ListingFileSample<'_>],
+        compression: CompressionTypeVariant,
+    ) -> Result<SchemaRef> {
+        let mut schemas: Vec<Schema> = vec![];
+        let mut records_to_read = self.options.schema_infer_max_records;
+        let file_compression_type = FileCompressionType::from(compression);
+        let newline_delimited = true;
+
+        'outer: for group in files {
+            for object in &group.objects {
+                if records_to_read == 0 {
+                    break 'outer;
+                }
+
+                let r = group.store.as_ref().get(&object.location).await?;
+                let decoder = match r.payload {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    GetResultPayload::File(file, _) => file_compression_type.convert_read(file)?,
+                    GetResultPayload::Stream(_) => {
+                        // Fetching entire file is potentially wasteful but required for stream payloads.
+                        let data = r.bytes().await?;
+                        file_compression_type.convert_read(data.reader())?
+                    }
+                };
+                let reader = BufReader::new(decoder);
+                let (schema, records_consumed) = if newline_delimited {
+                    let iter = ValueIter::new(reader, None);
+                    let mut count = 0;
+                    let schema = infer_json_schema_from_iterator(iter.take_while(|_| {
+                        let should_take = count < records_to_read;
+                        if should_take {
+                            count += 1;
+                        }
+                        should_take
+                    }))?;
+                    (schema, count)
+                } else {
+                    infer_schema_from_json_array(reader, records_to_read)?
+                };
+
+                schemas.push(schema);
+                records_to_read = records_to_read.saturating_sub(records_consumed);
+            }
+        }
+
+        Ok(Arc::new(Schema::try_merge(schemas)?))
+    }
+
+    async fn scan(&self, _ctx: &dyn Session, input: ListingScanInput) -> Result<FileScanConfig> {
         let mut options = self
             .options
             .clone()
             .into_table_options()
             .map_err(DataFusionError::from)?;
-        if let Some(compression) = input.compression.take() {
-            options.compression = compression;
-        }
+        options.compression = input.compression;
 
         let source =
             JsonSource::new(input.schema).with_newline_delimited(options.newline_delimited);
@@ -69,4 +116,23 @@ impl ReadFormat for JsonReadFormat {
 
         Ok(config)
     }
+}
+
+/// A tuple of (Schema, records_consumed) where records_consumed is the number of records that were
+/// processed for schema inference.
+fn infer_schema_from_json_array<R: std::io::Read>(
+    reader: R,
+    max_records: usize,
+) -> Result<(Schema, usize)> {
+    let ndjson_reader = JsonArrayToNdjsonReader::new(reader);
+    let iter = ValueIter::new(ndjson_reader, None);
+    let mut count = 0;
+    let schema = infer_json_schema_from_iterator(iter.take_while(|_| {
+        let should_take = count < max_records;
+        if should_take {
+            count += 1;
+        }
+        should_take
+    }))?;
+    Ok((schema, count))
 }

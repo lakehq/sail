@@ -275,6 +275,7 @@ impl TableFormat for DeltaTableFormat {
         .with_generation_expressions(extract_generation_expressions(logical_schema.as_deref()))
         .with_default_expressions(extract_default_expressions(logical_schema.as_deref()))
         .with_target_nullability(extract_target_nullability(logical_schema.as_deref()))
+        .with_identity_columns(extract_identity_columns(logical_schema.as_deref()))
         .with_table_snapshot(table_snapshot);
         let planner_ctx = PlannerContext::new(ctx, table_config);
         let planner = DeltaPhysicalPlanner::new(planner_ctx);
@@ -1055,6 +1056,23 @@ fn extract_target_nullability(logical_schema: Option<&DFSchema>) -> HashMap<Stri
                 .get(SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY)
                 .and_then(|value| value.parse::<bool>().ok())
                 .map(|nullable| (field.name().clone(), nullable))
+        })
+        .collect()
+}
+
+fn extract_identity_columns(
+    logical_schema: Option<&DFSchema>,
+) -> HashMap<String, sail_common_datafusion::catalog::CatalogTableColumnIdentity> {
+    let Some(schema) = logical_schema else {
+        return HashMap::new();
+    };
+    schema
+        .fields()
+        .iter()
+        .filter_map(|field| {
+            ColumnFeatures::from_map(field.metadata())
+                .identity()
+                .map(|identity| (field.name().clone(), identity))
         })
         .collect()
 }

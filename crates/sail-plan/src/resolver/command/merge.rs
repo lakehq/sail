@@ -63,6 +63,15 @@ impl PlanResolver<'_> {
 
         let target_schema = target_plan.schema();
         let source_schema = source_plan.schema();
+        if target_schema.fields().iter().any(|field| {
+            ColumnFeatures::from_map(field.metadata())
+                .identity()
+                .is_some()
+        }) {
+            return Err(PlanError::unsupported(
+                "MERGE INTO tables with Delta identity columns is not yet supported",
+            ));
+        }
 
         // Capture the user-facing field names before further resolution pollutes the state.
         let resolved_target_field_names = Self::get_field_names(target_schema, state)?;

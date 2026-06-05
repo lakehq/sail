@@ -952,6 +952,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                     is_partition: false,
                     is_bucket: false,
                     is_cluster: false,

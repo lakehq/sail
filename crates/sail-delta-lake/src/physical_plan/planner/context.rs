@@ -17,6 +17,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result};
 use object_store::ObjectStore;
+use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_data_source::options::gen::DeltaWriteOptions;
 use url::Url;
@@ -52,6 +53,7 @@ pub struct DeltaPlannerConfig {
     pub default_expressions: HashMap<String, String>,
     /// Target catalog field nullability keyed by column name.
     pub target_nullability: HashMap<String, bool>,
+    pub identity_columns: HashMap<String, CatalogTableColumnIdentity>,
     pub table_snapshot: Option<Arc<DeltaSnapshot>>,
 }
 
@@ -74,6 +76,7 @@ impl DeltaPlannerConfig {
             generation_expressions: HashMap::new(),
             default_expressions: HashMap::new(),
             target_nullability: HashMap::new(),
+            identity_columns: HashMap::new(),
             table_snapshot: None,
         }
     }
@@ -96,6 +99,14 @@ impl DeltaPlannerConfig {
 
     pub fn with_target_nullability(mut self, target_nullability: HashMap<String, bool>) -> Self {
         self.target_nullability = target_nullability;
+        self
+    }
+
+    pub fn with_identity_columns(
+        mut self,
+        identity_columns: HashMap<String, CatalogTableColumnIdentity>,
+    ) -> Self {
+        self.identity_columns = identity_columns;
         self
     }
 
@@ -167,6 +178,10 @@ impl<'a> PlannerContext<'a> {
         &self.config.target_nullability
     }
 
+    pub fn identity_columns(&self) -> &HashMap<String, CatalogTableColumnIdentity> {
+        &self.config.identity_columns
+    }
+
     pub fn table_snapshot(&self) -> Option<&Arc<DeltaSnapshot>> {
         self.config.table_snapshot.as_ref()
     }
@@ -186,7 +201,8 @@ impl<'a> PlannerContext<'a> {
         let options = DeltaWriterExecOptions::from(self.options().clone())
             .with_generation_expressions(self.generation_expressions().clone())
             .with_default_expressions(self.default_expressions().clone())
-            .with_target_nullability(self.target_nullability().clone());
+            .with_target_nullability(self.target_nullability().clone())
+            .with_identity_columns(self.identity_columns().clone());
         prepare_delta_write_context(
             self.table_url(),
             self.table_snapshot().map(|snapshot| snapshot.as_ref()),

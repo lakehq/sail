@@ -4,7 +4,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion_expr::LogicalPlan;
 pub use sail_common_datafusion::catalog::{CatalogPartitionField, PartitionTransform};
 use sail_common_datafusion::catalog::{
-    CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
+    CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableConstraint, CatalogTableSort,
 };
 use serde::{Deserialize, Serialize};
 
@@ -47,6 +47,7 @@ pub struct CreateTableColumnOptions {
     pub comment: Option<String>,
     pub default: Option<String>,
     pub generated_always_as: Option<String>,
+    pub identity: Option<CatalogTableColumnIdentity>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
