@@ -24,7 +24,10 @@ use sail_sql_parser::tree::TreeText;
 
 use crate::data_type::from_ast_data_type;
 use crate::error::{SqlError, SqlResult};
-use crate::expression::{from_ast_expression, from_ast_identifier_list, from_ast_object_name};
+use crate::expression::{
+    expr_with_default_column_values, from_ast_expression, from_ast_identifier_list,
+    from_ast_object_name,
+};
 use crate::query::from_ast_query;
 use crate::value::from_ast_string;
 
@@ -747,6 +750,10 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                                         values.len()
                                     )));
                                 }
+                                let values = values
+                                    .into_iter()
+                                    .map(expr_with_default_column_values)
+                                    .collect();
                                 spec::MergeNotMatchedByTargetAction::InsertColumns {
                                     columns,
                                     values,
@@ -1302,15 +1309,15 @@ fn from_ast_table_columns(
             data_type,
             options,
         } = column;
-        // TODO: support `default` SQL expression strings
         let ColumnDefinitionOptions {
             not_null,
-            default: _,
+            default,
             generated_always_as,
             identity,
             comment,
         } = options.try_into()?;
         let comment = comment.map(from_ast_string).transpose()?;
+        let default = default.map(|expr| expr.text().trim().to_string());
         let generated_always_as = generated_always_as.map(|expr| expr.text().trim().to_string());
         let identity = identity
             .map(|(options, allow_explicit_insert)| {
@@ -1321,7 +1328,7 @@ fn from_ast_table_columns(
             name: name.value,
             data_type: from_ast_data_type(data_type)?,
             nullable: !not_null,
-            default: None,
+            default,
             generated_always_as,
             identity,
             comment,
@@ -1992,7 +1999,10 @@ fn from_ast_merge_assignment_list(
         .into_items()
         .map(|assignment| {
             let Assignment { target, value, .. } = assignment;
-            Ok((from_ast_object_name(target)?, from_ast_expression(value)?))
+            Ok((
+                from_ast_object_name(target)?,
+                expr_with_default_column_values(from_ast_expression(value)?),
+            ))
         })
         .collect()
 }
@@ -2023,6 +2033,22 @@ fn from_ast_alter_table_operation(
         } => Ok(spec::AlterTableOperation::AlterColumnType {
             name: from_ast_object_name(name)?,
             data_type: from_ast_data_type(data_type)?,
+        }),
+        AlterTableOperation::AlterColumn {
+            name,
+            operation: AlterColumnOperation::SetDefault(_, _, expr),
+            ..
+        } => Ok(spec::AlterTableOperation::AlterColumnDefault {
+            name: from_ast_object_name(name)?,
+            default: Some(expr.text().trim().to_string()),
+        }),
+        AlterTableOperation::AlterColumn {
+            name,
+            operation: AlterColumnOperation::DropDefault(_, _),
+            ..
+        } => Ok(spec::AlterTableOperation::AlterColumnDefault {
+            name: from_ast_object_name(name)?,
+            default: None,
         }),
         AlterTableOperation::AddConstraint {
             name, expression, ..

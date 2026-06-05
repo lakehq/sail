@@ -1336,6 +1336,10 @@ pub enum AlterTableOperation {
         name: ObjectName,
         data_type: DataType,
     },
+    AlterColumnDefault {
+        name: ObjectName,
+        default: Option<String>,
+    },
     AddCheckConstraint {
         name: Identifier,
         expression: ExprWithSource,

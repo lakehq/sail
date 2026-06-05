@@ -482,6 +482,12 @@ impl PlanResolver<'_> {
                     data_type: self.resolve_data_type(&data_type, state)?,
                 }
             }
+            spec::AlterTableOperation::AlterColumnDefault { name, default } => {
+                AlterTableOptions::AlterColumnDefault {
+                    name: name.into(),
+                    default,
+                }
+            }
             spec::AlterTableOperation::AddCheckConstraint { .. } => {
                 return Err(PlanError::unsupported(
                     "ALTER TABLE ADD CONSTRAINT is only supported for Delta Lake tables",

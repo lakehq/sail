@@ -320,6 +320,11 @@ pub enum TableFormatAlterTableOperation {
         column_path: Vec<String>,
         data_type: DataType,
     },
+    /// Alters the default expression of a table column.
+    AlterColumnDefault {
+        column_path: Vec<String>,
+        default: Option<String>,
+    },
     /// Adds a CHECK constraint after the caller has validated existing rows.
     AddCheckConstraint { name: String, expression: String },
 }
@@ -387,8 +392,83 @@ pub trait TableFormat: Send + Sync {
         path: &str,
         operation: TableFormatAlterTableOperation,
     ) -> Result<()> {
-        let _ = (runtime_env, path, operation);
-        not_impl_err!("ALTER TABLE is not supported for {} format", self.name())
+        match operation {
+            TableFormatAlterTableOperation::SetTableProperties { changes, if_exists } => {
+                self.alter_table_properties(runtime_env, path, changes, if_exists)
+                    .await
+            }
+            TableFormatAlterTableOperation::AlterColumnType {
+                column_path,
+                data_type,
+            } => {
+                self.alter_table_column_type(runtime_env, path, column_path, data_type)
+                    .await
+            }
+            TableFormatAlterTableOperation::AlterColumnDefault {
+                column_path,
+                default,
+            } => {
+                self.alter_table_column_default(runtime_env, path, column_path, default)
+                    .await
+            }
+            TableFormatAlterTableOperation::AddCheckConstraint { .. } => {
+                not_impl_err!(
+                    "CHECK constraint alteration not supported for {} format",
+                    self.name()
+                )
+            }
+        }
+    }
+
+    /// Alters table properties (SET/UNSET TBLPROPERTIES).
+    ///
+    /// `changes` is a list of `(key, value)` pairs where `value` is `Some(v)` to set a property,
+    /// or `None` to unset/remove it. When `if_exists` is `false`, implementations MUST error if
+    /// an UNSET key is not present on the table; when `if_exists` is `true`, UNSET for a missing
+    /// key is a no-op. The implementation is responsible for committing these changes to the
+    /// underlying table storage (e.g., writing a new Delta log entry).
+    async fn alter_table_properties(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+        changes: Vec<(String, Option<String>)>,
+        if_exists: bool,
+    ) -> Result<()> {
+        let _ = (runtime_env, path, changes, if_exists);
+        not_impl_err!(
+            "Table properties alteration not supported for {} format",
+            self.name()
+        )
+    }
+
+    /// Alters the type of a table column.
+    async fn alter_table_column_type(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+        column_path: Vec<String>,
+        data_type: datafusion::arrow::datatypes::DataType,
+    ) -> Result<()> {
+        let _ = (runtime_env, path, column_path, data_type);
+        not_impl_err!(
+            "Column type alteration not supported for {} format",
+            self.name()
+        )
+    }
+
+    /// Alters the default expression of a table column.
+    async fn alter_table_column_default(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+        column_path: Vec<String>,
+        default: Option<String>,
+    ) -> Result<()> {
+        let _ = (runtime_env, path, column_path, default);
+        not_impl_err!(
+            "Column default alteration not supported for {} format",
+            self.name()
+        )
     }
 }
 

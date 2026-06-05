@@ -622,14 +622,14 @@ fn table_format_alter_operation(options: &AlterTableOptions) -> TableFormatAlter
             TableFormatAlterTableOperation::SetTableProperties {
                 changes: properties
                     .iter()
-                    .map(|(k, v)| (k.clone(), Some(v.clone())))
+                    .map(|(key, value)| (key.clone(), Some(value.clone())))
                     .collect(),
                 if_exists: false,
             }
         }
         AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
             TableFormatAlterTableOperation::SetTableProperties {
-                changes: keys.iter().map(|k| (k.clone(), None)).collect(),
+                changes: keys.iter().map(|key| (key.clone(), None)).collect(),
                 if_exists: *if_exists,
             }
         }
@@ -637,6 +637,12 @@ fn table_format_alter_operation(options: &AlterTableOptions) -> TableFormatAlter
             TableFormatAlterTableOperation::AlterColumnType {
                 column_path: name.clone(),
                 data_type: data_type.clone(),
+            }
+        }
+        AlterTableOptions::AlterColumnDefault { name, default } => {
+            TableFormatAlterTableOperation::AlterColumnDefault {
+                column_path: name.clone(),
+                default: default.clone(),
             }
         }
         AlterTableOptions::AddCheckConstraint { name, expression } => {

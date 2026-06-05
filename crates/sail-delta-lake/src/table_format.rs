@@ -8,7 +8,9 @@ use datafusion::common::{not_impl_err, plan_err, DFSchema, DataFusionError, Resu
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
-use sail_common_datafusion::column_features::{ColumnFeatureKey, ColumnFeatures};
+use sail_common_datafusion::column_features::{
+    ColumnFeatureKey, ColumnFeatures, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
+};
 use sail_common_datafusion::datasource::{
     find_path_in_options, MergeStrategy, OptionLayer, PhysicalSinkMode, RowLevelCommand,
     RowLevelWriteInfo, SinkInfo, SourceInfo, TableFormat, TableFormatAlterTableOperation,
@@ -31,8 +33,9 @@ use crate::schema::{
     is_supported_type_change_for_write, protocol_can_write_type_widening,
 };
 use crate::spec::{
-    canonicalize_and_validate_table_properties, route_table_property_key, CommitAction,
-    DataType as DeltaDataType, DeltaOperation, Protocol, StructField, StructType, TableFeature,
+    canonicalize_and_validate_table_properties, route_table_property_key, ColumnMetadataKey,
+    CommitAction, DataType as DeltaDataType, DeltaOperation, MetadataValue, Protocol, StructField,
+    StructType, TableFeature,
 };
 use crate::table::{
     infer_delta_logical_metadata, infer_delta_logical_schema, open_table_with_object_store,
@@ -271,6 +274,8 @@ impl TableFormat for DeltaTableFormat {
             table_exists,
         )
         .with_generation_expressions(extract_generation_expressions(logical_schema.as_deref()))
+        .with_default_expressions(extract_default_expressions(logical_schema.as_deref()))
+        .with_target_nullability(extract_target_nullability(logical_schema.as_deref()))
         .with_metadata_schema(extract_metadata_schema(logical_schema.as_deref()))
         .with_identity_columns(extract_identity_columns(logical_schema.as_deref()))
         .with_table_snapshot(table_snapshot);
@@ -396,6 +401,13 @@ impl TableFormat for DeltaTableFormat {
                 self.alter_table_column_type(runtime_env, path, column_path, data_type)
                     .await
             }
+            TableFormatAlterTableOperation::AlterColumnDefault {
+                column_path,
+                default,
+            } => {
+                self.alter_table_column_default(runtime_env, path, column_path, default)
+                    .await
+            }
             TableFormatAlterTableOperation::AddCheckConstraint { name, expression } => {
                 self.add_check_constraint(runtime_env, path, &name, &expression)
                     .await
@@ -436,7 +448,7 @@ impl DeltaTableFormat {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
         // Only protocol and metadata are needed for ALTER TABLE; skip loading file-level actions.
-        let table = open_table_with_object_store_and_table_config(
+        let table = match open_table_with_object_store_and_table_config(
             url,
             object_store,
             Default::default(),
@@ -446,7 +458,17 @@ impl DeltaTableFormat {
             },
         )
         .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        {
+            Ok(table) => table,
+            Err(DeltaTableError::InvalidTableLocation(message))
+                if message.contains("No commit files found in _delta_log") =>
+            {
+                // FIXME: This string match is brittle. Replace it with a typed
+                // missing-log/table-not-found error.
+                return Ok(());
+            }
+            Err(e) => return Err(DataFusionError::External(Box::new(e))),
+        };
 
         let snapshot = table
             .snapshot()
@@ -626,7 +648,7 @@ impl DeltaTableFormat {
             .object_store_registry
             .get_store(&url)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let table = open_table_with_object_store_and_table_config(
+        let table = match open_table_with_object_store_and_table_config(
             url,
             object_store,
             Default::default(),
@@ -636,7 +658,17 @@ impl DeltaTableFormat {
             },
         )
         .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        {
+            Ok(table) => table,
+            Err(DeltaTableError::InvalidTableLocation(message))
+                if message.contains("No commit files found in _delta_log") =>
+            {
+                // FIXME: This string match is brittle. Replace it with a typed
+                // missing-log/table-not-found error when the Delta table API exposes one.
+                return Ok(());
+            }
+            Err(e) => return Err(DataFusionError::External(Box::new(e))),
+        };
 
         let snapshot = table
             .snapshot()
@@ -704,6 +736,176 @@ impl DeltaTableFormat {
             .await
             .map(|_| ())
             .map_err(|e| DataFusionError::External(Box::new(e)))
+    }
+
+    async fn alter_table_column_default(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+        column_path: Vec<String>,
+        default: Option<String>,
+    ) -> Result<()> {
+        use crate::kernel::transaction::CommitBuilder;
+        use crate::schema::protocol_for_metadata;
+
+        let url = parse_location_to_url(path)?;
+        let object_store = runtime_env
+            .object_store_registry
+            .get_store(&url)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        if column_path.len() != 1 {
+            return plan_err!("ALTER COLUMN DEFAULT only supports top-level columns");
+        }
+        let table = match open_table_with_object_store_and_table_config(
+            url,
+            object_store,
+            Default::default(),
+            DeltaSnapshotConfig {
+                require_files: false,
+                ..Default::default()
+            },
+        )
+        .await
+        {
+            Ok(table) => table,
+            Err(DeltaTableError::InvalidTableLocation(message))
+                if message.contains("No commit files found in _delta_log") =>
+            {
+                // FIXME: This string match is brittle. Replace it with a typed
+                // missing-log/table-not-found error when the Delta table API exposes one.
+                return Ok(());
+            }
+            Err(e) => return Err(DataFusionError::External(Box::new(e))),
+        };
+
+        let snapshot = table
+            .snapshot()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .clone();
+        let current_kernel = StructType::try_from(snapshot.schema())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let candidate_kernel =
+            alter_delta_column_default(&current_kernel, &column_path, default.clone())
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        if candidate_kernel == current_kernel {
+            return Ok(());
+        }
+
+        let updated_metadata = snapshot
+            .metadata()
+            .clone()
+            .with_schema(&candidate_kernel)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let desired_protocol = protocol_for_metadata(&updated_metadata)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let desired_protocol = avoid_stable_type_widening_auto_upgrade_for_preview_tables(
+            snapshot.protocol(),
+            &desired_protocol,
+            updated_metadata.configuration(),
+        );
+        let (merged_protocol, protocol_upgraded) =
+            merge_protocol_for_upgrade(snapshot.protocol(), &desired_protocol);
+
+        let operation_column = operation_column_json(&candidate_kernel, &column_path)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let mut actions = Vec::new();
+        if protocol_upgraded {
+            actions.push(CommitAction::Protocol(merged_protocol));
+        }
+        actions.push(CommitAction::Metadata(updated_metadata));
+
+        CommitBuilder::default()
+            .with_actions(actions)
+            .build(
+                Some(snapshot),
+                table.log_store(),
+                DeltaOperation::AlterColumn {
+                    column: operation_column,
+                },
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| DataFusionError::External(Box::new(e)))
+    }
+}
+
+fn alter_delta_column_default(
+    schema: &StructType,
+    column_path: &[String],
+    default: Option<String>,
+) -> crate::spec::DeltaResult<StructType> {
+    let Some((name, nested_path)) = column_path.split_first() else {
+        return Err(DeltaTableError::schema(
+            "ALTER COLUMN DEFAULT requires a column name",
+        ));
+    };
+    let mut found = false;
+    StructType::try_from_results(schema.fields().map(|field| {
+        if field.name() == name {
+            found = true;
+            if nested_path.is_empty() {
+                Ok(apply_default_to_field(field, default.clone()))
+            } else {
+                alter_nested_delta_column_default(field, nested_path, column_path, default.clone())
+            }
+        } else {
+            Ok(field.clone())
+        }
+    }))
+    .and_then(|schema| {
+        if found {
+            Ok(schema)
+        } else {
+            Err(DeltaTableError::missing_column(column_path.join(".")))
+        }
+    })
+}
+
+fn alter_nested_delta_column_default(
+    field: &StructField,
+    nested_path: &[String],
+    full_path: &[String],
+    default: Option<String>,
+) -> crate::spec::DeltaResult<StructField> {
+    match field.data_type() {
+        DeltaDataType::Struct(struct_type) => {
+            let data_type = DeltaDataType::from(alter_delta_column_default(
+                struct_type,
+                nested_path,
+                default,
+            )?);
+            Ok(StructField {
+                name: field.name().clone(),
+                data_type,
+                nullable: field.is_nullable(),
+                metadata: field.metadata().clone(),
+            })
+        }
+        other => Err(DeltaTableError::schema(format!(
+            "cannot resolve ALTER COLUMN DEFAULT path '{}' through {other}",
+            full_path.join(".")
+        ))),
+    }
+}
+
+fn apply_default_to_field(field: &StructField, default: Option<String>) -> StructField {
+    let mut metadata = field.metadata().clone();
+    match default {
+        Some(expr) => {
+            metadata.insert(
+                ColumnMetadataKey::CurrentDefault.as_ref().to_string(),
+                MetadataValue::String(expr),
+            );
+        }
+        None => {
+            metadata.remove(ColumnMetadataKey::CurrentDefault.as_ref());
+        }
+    }
+    StructField {
+        name: field.name().clone(),
+        data_type: field.data_type().clone(),
+        nullable: field.is_nullable(),
+        metadata,
     }
 }
 
@@ -958,6 +1160,38 @@ fn extract_generation_expressions(logical_schema: Option<&DFSchema>) -> HashMap<
         .collect()
 }
 
+fn extract_default_expressions(logical_schema: Option<&DFSchema>) -> HashMap<String, String> {
+    let Some(schema) = logical_schema else {
+        return HashMap::new();
+    };
+    schema
+        .fields()
+        .iter()
+        .filter_map(|field| {
+            ColumnFeatures::from_map(field.metadata())
+                .current_default()
+                .map(|expr| (field.name().clone(), expr))
+        })
+        .collect()
+}
+
+fn extract_target_nullability(logical_schema: Option<&DFSchema>) -> HashMap<String, bool> {
+    let Some(schema) = logical_schema else {
+        return HashMap::new();
+    };
+    schema
+        .fields()
+        .iter()
+        .filter_map(|field| {
+            field
+                .metadata()
+                .get(SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY)
+                .and_then(|value| value.parse::<bool>().ok())
+                .map(|nullable| (field.name().clone(), nullable))
+        })
+        .collect()
+}
+
 fn extract_metadata_schema(logical_schema: Option<&DFSchema>) -> Option<SchemaRef> {
     let schema = logical_schema?;
     let mut changed = false;
@@ -1194,5 +1428,63 @@ mod tests {
             }
             _ => unreachable!("expected OptionList"),
         }
+    }
+
+    #[test]
+    fn preview_type_widening_guard_removes_implicit_stable_upgrade() {
+        let existing = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::TypeWideningPreview]),
+            Some(vec![TableFeature::TypeWideningPreview]),
+        );
+        let desired = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::TypeWidening]),
+            Some(vec![
+                TableFeature::AllowColumnDefaults,
+                TableFeature::TypeWidening,
+            ]),
+        );
+
+        let adjusted = avoid_stable_type_widening_auto_upgrade_for_preview_tables(
+            &existing,
+            &desired,
+            &HashMap::new(),
+        );
+
+        assert!(!adjusted.has_reader_feature(&TableFeature::TypeWidening));
+        assert!(!adjusted.has_writer_feature(&TableFeature::TypeWidening));
+        assert!(adjusted.has_writer_feature(&TableFeature::AllowColumnDefaults));
+    }
+
+    #[test]
+    fn preview_type_widening_guard_preserves_explicit_stable_request() {
+        let existing = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::TypeWideningPreview]),
+            Some(vec![TableFeature::TypeWideningPreview]),
+        );
+        let desired = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::TypeWidening]),
+            Some(vec![TableFeature::TypeWidening]),
+        );
+        let configuration = HashMap::from([(
+            "delta.feature.typeWidening".to_string(),
+            "supported".to_string(),
+        )]);
+
+        let adjusted = avoid_stable_type_widening_auto_upgrade_for_preview_tables(
+            &existing,
+            &desired,
+            &configuration,
+        );
+
+        assert!(adjusted.has_reader_feature(&TableFeature::TypeWidening));
+        assert!(adjusted.has_writer_feature(&TableFeature::TypeWidening));
     }
 }

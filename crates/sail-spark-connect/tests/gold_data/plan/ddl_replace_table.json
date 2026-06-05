@@ -1890,7 +1890,7 @@
                   },
                   "nullable": false,
                   "comment": null,
-                  "default": null,
+                  "default": "'abc'",
                   "generatedAlwaysAs": null,
                   "identity": null
                 }

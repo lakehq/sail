@@ -27,6 +27,14 @@ pub fn schema_has_generated_columns(schema: &StructType) -> bool {
     })
 }
 
+/// Check if a Delta StructType schema contains any columns with current default expressions.
+pub fn schema_has_column_defaults(schema: &StructType) -> bool {
+    schema.fields().any(|f| {
+        f.get_config_value(&ColumnMetadataKey::CurrentDefault)
+            .is_some()
+    })
+}
+
 /// Check if a Delta metadata configuration contains table CHECK constraints.
 pub fn configuration_has_check_constraints(configuration: &HashMap<String, String>) -> bool {
     const PREFIX: &str = "delta.constraints.";
@@ -110,6 +118,7 @@ pub fn protocol_for_metadata(metadata: &Metadata) -> DeltaResult<Protocol> {
         contains_timestampntz(schema.fields()),
         table_properties.enable_in_commit_timestamps(),
         schema_has_generated_columns(&schema),
+        schema_has_column_defaults(&schema),
         schema_has_identity_columns(&schema),
         contains_variant(schema.fields()),
         configuration,
@@ -212,6 +221,7 @@ pub fn protocol_for_create(
     enable_timestamp_ntz: bool,
     enable_in_commit_timestamps: bool,
     enable_generated_columns: bool,
+    enable_column_defaults: bool,
     enable_identity_columns: bool,
     enable_variant: bool,
     configuration: &HashMap<String, String>,
@@ -235,6 +245,9 @@ pub fn protocol_for_create(
     }
     if enable_generated_columns {
         writer_features.push(TableFeature::GeneratedColumns);
+    }
+    if enable_column_defaults {
+        writer_features.push(TableFeature::AllowColumnDefaults);
     }
     if enable_identity_columns {
         writer_features.push(TableFeature::IdentityColumns);
@@ -354,8 +367,16 @@ mod tests {
 
     #[test]
     fn protocol_for_create_treats_in_commit_timestamp_as_writer_only() -> DeltaResult<()> {
-        let protocol =
-            protocol_for_create(false, false, true, false, false, false, &HashMap::new())?;
+        let protocol = protocol_for_create(
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            &HashMap::new(),
+        )?;
         assert_eq!(protocol.min_reader_version(), 1);
         assert_eq!(protocol.min_writer_version(), 7);
         assert_eq!(protocol.reader_features(), None);
@@ -374,7 +395,8 @@ mod tests {
             "delta.feature.v2Checkpoint".to_string(),
             "enabled".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, false, false, &config)?;
+        let protocol =
+            protocol_for_create(false, false, false, false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::V2Checkpoint));
@@ -390,7 +412,8 @@ mod tests {
             "delta.feature.v2Checkpoint".to_string(),
             "supported".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, false, false, &config)?;
+        let protocol =
+            protocol_for_create(false, false, false, false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::V2Checkpoint));
@@ -400,8 +423,16 @@ mod tests {
 
     #[test]
     fn protocol_for_create_activates_variant_type_from_schema() -> DeltaResult<()> {
-        let protocol =
-            protocol_for_create(false, false, false, false, false, true, &HashMap::new())?;
+        let protocol = protocol_for_create(
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            true,
+            &HashMap::new(),
+        )?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::VariantType));
@@ -416,7 +447,8 @@ mod tests {
             "delta.constraints.positive_id".to_string(),
             "id > 0".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, false, false, &config)?;
+        let protocol =
+            protocol_for_create(false, false, false, false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 1);
         assert_eq!(protocol.min_writer_version(), 3);
         assert_eq!(protocol.reader_features(), None);
@@ -432,7 +464,8 @@ mod tests {
             "id > 0".to_string(),
         );
         config.insert("delta.checkpointPolicy".to_string(), "v2".to_string());
-        let protocol = protocol_for_create(false, false, false, false, false, false, &config)?;
+        let protocol =
+            protocol_for_create(false, false, false, false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::V2Checkpoint));
@@ -448,7 +481,8 @@ mod tests {
             "delta.feature.variantType-preview".to_string(),
             "supported".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, false, true, &config)?;
+        let protocol =
+            protocol_for_create(false, false, false, false, false, false, true, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::VariantTypePreview));
@@ -467,7 +501,8 @@ mod tests {
             "delta.enableVariantShredding".to_string(),
             "true".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, false, false, &config)?;
+        let protocol =
+            protocol_for_create(false, false, false, false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(!protocol.has_reader_feature(&TableFeature::VariantType));
@@ -488,7 +523,8 @@ mod tests {
             "delta.enableVariantShredding".to_string(),
             "true".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, false, true, &config)?;
+        let protocol =
+            protocol_for_create(false, false, false, false, false, false, true, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::VariantType));
@@ -507,7 +543,8 @@ mod tests {
             "delta.feature.variantShredding".to_string(),
             "supported".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, false, false, &config)?;
+        let protocol =
+            protocol_for_create(false, false, false, false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(!protocol.has_reader_feature(&TableFeature::VariantType));
@@ -532,7 +569,8 @@ mod tests {
             "delta.feature.variantShredding".to_string(),
             "supported".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, false, true, &config)?;
+        let protocol =
+            protocol_for_create(false, false, false, false, false, false, true, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::VariantType));
@@ -551,7 +589,8 @@ mod tests {
             "delta.feature.variantShredding-preview".to_string(),
             "supported".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, false, false, &config)?;
+        let protocol =
+            protocol_for_create(false, false, false, false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(!protocol.has_reader_feature(&TableFeature::VariantType));
@@ -570,7 +609,8 @@ mod tests {
             "delta.feature.variantShredding".to_string(),
             "supported".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, false, true, &config)?;
+        let protocol =
+            protocol_for_create(false, false, false, false, false, false, true, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::VariantType));
@@ -621,7 +661,8 @@ mod tests {
     fn protocol_for_create_activates_v2_checkpoint_from_checkpoint_policy() -> DeltaResult<()> {
         let mut config = HashMap::new();
         config.insert("delta.checkpointPolicy".to_string(), "v2".to_string());
-        let protocol = protocol_for_create(false, false, false, false, false, false, &config)?;
+        let protocol =
+            protocol_for_create(false, false, false, false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::V2Checkpoint));
@@ -633,7 +674,8 @@ mod tests {
     fn protocol_for_create_classic_policy_does_not_activate_v2_checkpoint() -> DeltaResult<()> {
         let mut config = HashMap::new();
         config.insert("delta.checkpointPolicy".to_string(), "classic".to_string());
-        let protocol = protocol_for_create(false, false, false, false, false, false, &config)?;
+        let protocol =
+            protocol_for_create(false, false, false, false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 1);
         assert_eq!(protocol.min_writer_version(), 2);
         assert!(!protocol.has_reader_feature(&TableFeature::V2Checkpoint));
@@ -650,7 +692,8 @@ mod tests {
             "delta.feature.v2Checkpiont".to_string(), // intentional typo
             "supported".to_string(),
         );
-        let Err(err) = protocol_for_create(false, false, false, false, false, false, &config)
+        let Err(err) =
+            protocol_for_create(false, false, false, false, false, false, false, &config)
         else {
             panic!("expected protocol_for_create to error on unknown feature name");
         };
@@ -670,7 +713,8 @@ mod tests {
             "delta.feature.v2Checkpoint".to_string(),
             "true".to_string(), // invalid
         );
-        let Err(err) = protocol_for_create(false, false, false, false, false, false, &config)
+        let Err(err) =
+            protocol_for_create(false, false, false, false, false, false, false, &config)
         else {
             panic!("expected protocol_for_create to error on invalid feature value");
         };
@@ -690,7 +734,8 @@ mod tests {
             "delta.enableDeletionVectors".to_string(),
             "true".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, false, false, &config)?;
+        let protocol =
+            protocol_for_create(false, false, false, false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::DeletionVectors));
@@ -706,7 +751,8 @@ mod tests {
             "delta.enableDeletionVectors".to_string(),
             "false".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, false, false, &config)?;
+        let protocol =
+            protocol_for_create(false, false, false, false, false, false, false, &config)?;
         assert!(!protocol.has_reader_feature(&TableFeature::DeletionVectors));
         assert!(!protocol.has_writer_feature(&TableFeature::DeletionVectors));
         Ok(())

@@ -15,9 +15,10 @@ use tokio::sync::Mutex;
 use volo_thrift::MaybeException;
 
 use crate::convert::{
-    build_database, build_generic_table, build_view, database_to_status, inject_spark_metadata,
-    is_view_table, reject_spark_properties, reject_spark_property_keys, table_to_status,
-    validate_namespace, view_to_status, GenericTableFormat,
+    alter_spark_column_default, build_database, build_generic_table, build_view,
+    database_to_status, inject_spark_metadata, is_view_table, reject_spark_properties,
+    reject_spark_property_keys, table_to_status, validate_namespace, view_to_status,
+    GenericTableFormat,
 };
 use crate::data_type::arrow_to_hive_type;
 use crate::hms::{
@@ -144,6 +145,9 @@ fn apply_alter_table_options(
                 )));
             };
             column.r#type = Some(FastStr::from(hive_type));
+        }
+        AlterTableOptions::AlterColumnDefault { name, default } => {
+            alter_spark_column_default(hms_table, &name, default)?;
         }
         AlterTableOptions::AddCheckConstraint { .. } => {
             return Err(CatalogError::NotSupported(

@@ -24,6 +24,11 @@ use datafusion::arrow::datatypes::Field;
 
 use crate::catalog::CatalogTableColumnIdentity;
 
+/// Sail-private field metadata used while planning writes. It records the target
+/// catalog field nullability so table formats can preserve it even if expression
+/// simplification proves the current write value itself is non-null.
+pub const SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY: &str = "__sail.writeTargetNullable";
+
 /// Keys identifying column features carried on arrow field metadata.
 ///
 /// This enum is `#[non_exhaustive]` so additional features (identity, default
@@ -33,6 +38,10 @@ use crate::catalog::CatalogTableColumnIdentity;
 pub enum ColumnFeatureKey {
     /// SQL expression that deterministically produces the column's value.
     GenerationExpression,
+    /// SQL expression used when a write explicitly or implicitly requests the column default.
+    /// Delta/Spark persists the current default in `StructField.metadata` under
+    /// the `CURRENT_DEFAULT` key when the `allowColumnDefaults` table feature is enabled.
+    CurrentDefault,
     /// Sail-only marker used in the planning pipeline to preserve a Delta NOT NULL
     /// constraint when DataFusion expression rewrites make the output nullable.
     /// Delta/Spark stores this as `StructField(nullable = false)`, not as column metadata.
@@ -51,6 +60,7 @@ impl ColumnFeatureKey {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::GenerationExpression => "delta.generationExpression",
+            Self::CurrentDefault => "CURRENT_DEFAULT",
             Self::NotNullConstraint => "sail.column.notNull",
             Self::IdentityStart => "delta.identity.start",
             Self::IdentityStep => "delta.identity.step",
@@ -95,6 +105,13 @@ impl<'a> ColumnFeatures<'a> {
     pub fn generation_expression(&self) -> Option<String> {
         self.metadata
             .get(ColumnFeatureKey::GenerationExpression.as_str())
+            .map(|v| serde_json::from_str::<String>(v).unwrap_or_else(|_| v.clone()))
+    }
+
+    /// Returns the current default expression SQL text, if this column has one.
+    pub fn current_default(&self) -> Option<String> {
+        self.metadata
+            .get(ColumnFeatureKey::CurrentDefault.as_str())
             .map(|v| serde_json::from_str::<String>(v).unwrap_or_else(|_| v.clone()))
     }
 
@@ -158,6 +175,14 @@ impl ColumnFeaturesBuilder {
     pub fn with_generation_expression(mut self, expr: impl Into<String>) -> Self {
         self.entries.insert(
             ColumnFeatureKey::GenerationExpression.as_str().to_string(),
+            expr.into(),
+        );
+        self
+    }
+
+    pub fn with_current_default(mut self, expr: impl Into<String>) -> Self {
+        self.entries.insert(
+            ColumnFeatureKey::CurrentDefault.as_str().to_string(),
             expr.into(),
         );
         self

@@ -48,6 +48,11 @@ pub struct DeltaPlannerConfig {
     /// Delta commit (new tables) even when the physical planner strips the arrow
     /// field metadata set at logical-plan construction time.
     pub generation_expressions: HashMap<String, String>,
+    /// Column-level default expressions keyed by column name. Populated from
+    /// `CURRENT_DEFAULT` metadata attached to the write input's logical schema.
+    pub default_expressions: HashMap<String, String>,
+    /// Target catalog field nullability keyed by column name.
+    pub target_nullability: HashMap<String, bool>,
     /// Logical schema override used for Delta metadata planning. It can carry
     /// nullability/metadata that the physical plan schema cannot represent after
     /// projection rewrites.
@@ -73,6 +78,8 @@ impl DeltaPlannerConfig {
             table_schema_for_cond,
             table_exists,
             generation_expressions: HashMap::new(),
+            default_expressions: HashMap::new(),
+            target_nullability: HashMap::new(),
             metadata_schema: None,
             identity_columns: HashMap::new(),
             table_snapshot: None,
@@ -84,6 +91,19 @@ impl DeltaPlannerConfig {
         generation_expressions: HashMap<String, String>,
     ) -> Self {
         self.generation_expressions = generation_expressions;
+        self
+    }
+
+    pub fn with_default_expressions(
+        mut self,
+        default_expressions: HashMap<String, String>,
+    ) -> Self {
+        self.default_expressions = default_expressions;
+        self
+    }
+
+    pub fn with_target_nullability(mut self, target_nullability: HashMap<String, bool>) -> Self {
+        self.target_nullability = target_nullability;
         self
     }
 
@@ -160,6 +180,14 @@ impl<'a> PlannerContext<'a> {
         &self.config.generation_expressions
     }
 
+    pub fn default_expressions(&self) -> &HashMap<String, String> {
+        &self.config.default_expressions
+    }
+
+    pub fn target_nullability(&self) -> &HashMap<String, bool> {
+        &self.config.target_nullability
+    }
+
     pub fn metadata_schema(&self) -> Option<&SchemaRef> {
         self.config.metadata_schema.as_ref()
     }
@@ -186,6 +214,8 @@ impl<'a> PlannerContext<'a> {
     ) -> Result<DeltaWriteContext> {
         let options = DeltaWriterExecOptions::from(self.options().clone())
             .with_generation_expressions(self.generation_expressions().clone())
+            .with_default_expressions(self.default_expressions().clone())
+            .with_target_nullability(self.target_nullability().clone())
             .with_identity_columns(self.identity_columns().clone());
         let input_schema = self.metadata_schema().unwrap_or(input_schema);
         prepare_delta_write_context(

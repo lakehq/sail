@@ -149,7 +149,7 @@ impl PlanResolver<'_> {
                     data_type: field.data_type().clone(),
                     nullable: field.is_nullable(),
                     comment: None,
-                    default: None,
+                    default: features.current_default(),
                     generated_always_as: features.generation_expression(),
                     identity: features.identity(),
                     is_partition: false,
@@ -162,9 +162,13 @@ impl PlanResolver<'_> {
             metadata.schema.fields().iter().map(|field| field.as_ref()),
             &metadata.properties,
         );
-        if !columns
-            .iter()
-            .any(|column| column.generated_always_as.is_some() || column.identity.is_some())
+        let has_column_expressions = columns.iter().any(|column| {
+            column.generated_always_as.is_some()
+                || column.default.is_some()
+                || column.identity.is_some()
+        });
+        if !has_column_expressions
+            && !Self::plan_has_default_column_value(&input)?
             && constraints.is_empty()
         {
             return Ok(input);

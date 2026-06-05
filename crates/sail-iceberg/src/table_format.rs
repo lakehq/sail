@@ -211,6 +211,9 @@ impl TableFormat for IcebergTableFormat {
             TableFormatAlterTableOperation::AlterColumnType { .. } => {
                 not_impl_err!("Column type alteration not supported for Iceberg format")
             }
+            TableFormatAlterTableOperation::AlterColumnDefault { .. } => {
+                not_impl_err!("Column default alteration not supported for Iceberg format")
+            }
             TableFormatAlterTableOperation::AddCheckConstraint { .. } => {
                 not_impl_err!("CHECK constraints not supported for Iceberg format")
             }

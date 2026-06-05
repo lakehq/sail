@@ -720,7 +720,7 @@ pub(super) fn merge_disambiguate_unqualified_plan_ids(
                 })
                 .collect(),
         },
-        Expr::Placeholder(_) => expr,
+        Expr::DefaultColumnValue | Expr::Placeholder(_) => expr,
         Expr::Rollup(exprs) => Expr::Rollup(
             exprs
                 .into_iter()

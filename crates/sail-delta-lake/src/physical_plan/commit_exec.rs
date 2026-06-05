@@ -41,10 +41,11 @@ use crate::physical_plan::action_schema::ExecCommitMeta;
 use crate::physical_plan::{decode_actions_and_meta_from_batch, DeltaCommitContext, COL_ACTION};
 use crate::schema::{
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
+    schema_has_column_defaults, schema_has_generated_columns, schema_has_identity_columns,
 };
 use crate::spec::{
-    contains_variant_arrow, ColumnMetadataKey, CommitAction, Metadata, MetadataValue, StatValue,
-    Stats, StructField, StructType,
+    contains_timestampntz_arrow, contains_variant_arrow, ColumnMetadataKey, CommitAction, Metadata,
+    MetadataValue, StatValue, Stats, StructField, StructType,
 };
 use crate::storage::{get_object_store_from_context, StorageConfig};
 use crate::table::{
@@ -394,20 +395,22 @@ impl ExecutionPlan for DeltaCommitExec {
                 } else {
                     // Construct minimal protocol/metadata and insert them
                     let normalized_sink = normalize_delta_schema(&sink_schema);
+                    let kernel_schema = StructType::try_from(normalized_sink.as_ref())
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
                     let protocol = protocol_for_create(
                         false,
+                        contains_timestampntz_arrow(normalized_sink.as_ref()),
                         false,
-                        false,
-                        false,
-                        false,
+                        schema_has_generated_columns(&kernel_schema),
+                        schema_has_column_defaults(&kernel_schema),
+                        schema_has_identity_columns(&kernel_schema),
                         contains_variant_arrow(normalized_sink.as_ref()),
                         &HashMap::new(),
                     )
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
                     let metadata = metadata_for_create_with_struct_type(
-                        StructType::try_from(normalized_sink.as_ref())
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?,
+                        kernel_schema,
                         partition_columns.to_vec(),
                         Utc::now().timestamp_millis(),
                         HashMap::new(),
