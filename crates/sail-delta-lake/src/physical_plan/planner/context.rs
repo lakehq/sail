@@ -17,6 +17,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result};
 use object_store::ObjectStore;
+use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_data_source::options::gen::DeltaWriteOptions;
 use url::Url;
@@ -51,6 +52,7 @@ pub struct DeltaPlannerConfig {
     /// nullability/metadata that the physical plan schema cannot represent after
     /// projection rewrites.
     pub metadata_schema: Option<SchemaRef>,
+    pub identity_columns: HashMap<String, CatalogTableColumnIdentity>,
     pub table_snapshot: Option<Arc<DeltaSnapshot>>,
 }
 
@@ -72,6 +74,7 @@ impl DeltaPlannerConfig {
             table_exists,
             generation_expressions: HashMap::new(),
             metadata_schema: None,
+            identity_columns: HashMap::new(),
             table_snapshot: None,
         }
     }
@@ -86,6 +89,14 @@ impl DeltaPlannerConfig {
 
     pub fn with_metadata_schema(mut self, metadata_schema: Option<SchemaRef>) -> Self {
         self.metadata_schema = metadata_schema;
+        self
+    }
+
+    pub fn with_identity_columns(
+        mut self,
+        identity_columns: HashMap<String, CatalogTableColumnIdentity>,
+    ) -> Self {
+        self.identity_columns = identity_columns;
         self
     }
 
@@ -153,6 +164,10 @@ impl<'a> PlannerContext<'a> {
         self.config.metadata_schema.as_ref()
     }
 
+    pub fn identity_columns(&self) -> &HashMap<String, CatalogTableColumnIdentity> {
+        &self.config.identity_columns
+    }
+
     pub fn table_snapshot(&self) -> Option<&Arc<DeltaSnapshot>> {
         self.config.table_snapshot.as_ref()
     }
@@ -170,7 +185,8 @@ impl<'a> PlannerContext<'a> {
         operation_override: Option<crate::kernel::DeltaOperation>,
     ) -> Result<DeltaWriteContext> {
         let options = DeltaWriterExecOptions::from(self.options().clone())
-            .with_generation_expressions(self.generation_expressions().clone());
+            .with_generation_expressions(self.generation_expressions().clone())
+            .with_identity_columns(self.identity_columns().clone());
         let input_schema = self.metadata_schema().unwrap_or(input_schema);
         prepare_delta_write_context(
             self.table_url(),

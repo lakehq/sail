@@ -272,6 +272,7 @@ impl TableFormat for DeltaTableFormat {
         )
         .with_generation_expressions(extract_generation_expressions(logical_schema.as_deref()))
         .with_metadata_schema(extract_metadata_schema(logical_schema.as_deref()))
+        .with_identity_columns(extract_identity_columns(logical_schema.as_deref()))
         .with_table_snapshot(table_snapshot);
         let planner_ctx = PlannerContext::new(ctx, table_config);
         let planner = DeltaPhysicalPlanner::new(planner_ctx);
@@ -980,6 +981,23 @@ fn extract_metadata_schema(logical_schema: Option<&DFSchema>) -> Option<SchemaRe
         })
         .collect::<Vec<_>>();
     changed.then(|| Arc::new(Schema::new(fields)))
+}
+
+fn extract_identity_columns(
+    logical_schema: Option<&DFSchema>,
+) -> HashMap<String, sail_common_datafusion::catalog::CatalogTableColumnIdentity> {
+    let Some(schema) = logical_schema else {
+        return HashMap::new();
+    };
+    schema
+        .fields()
+        .iter()
+        .filter_map(|field| {
+            ColumnFeatures::from_map(field.metadata())
+                .identity()
+                .map(|identity| (field.name().clone(), identity))
+        })
+        .collect()
 }
 
 /// Detect the merge strategy for a Delta table by inspecting its snapshot properties.

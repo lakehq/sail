@@ -111,9 +111,9 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#105@0 as MobilePhoneModel, #106@1 as u]
       ProjectionExec: expr=[CAST(#105@0 AS LargeBinary) as #105, #106@1 as #106]
-        SortPreservingMergeExec: [count(DISTINCT hits.#9)@2 DESC NULLS LAST], fetch=10
+        SortPreservingMergeExec: [#106@1 DESC NULLS LAST], fetch=10
           SortExec: TopK(fetch=10), expr=[#106@1 DESC NULLS LAST], preserve_partitioning=[true]
-            ProjectionExec: expr=[#34@0 as #105, count(alias1)@1 as #106, count(alias1)@1 as count(DISTINCT hits.#9)]
+            ProjectionExec: expr=[#34@0 as #105, count(alias1)@1 as #106]
               AggregateExec: mode=FinalPartitioned, gby=[#34@0 as #34], aggr=[count(alias1)]
                 RepartitionExec: partitioning=Hash([#34@0], 4), input_partitions=4
                   AggregateExec: mode=Partial, gby=[#34@0 as #34], aggr=[count(alias1)]
@@ -131,9 +131,9 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#105@0 as MobilePhone, #106@1 as MobilePhoneModel, #107@2 as u]
       ProjectionExec: expr=[#105@0 as #105, CAST(#106@1 AS LargeBinary) as #106, #107@2 as #107]
-        SortPreservingMergeExec: [count(DISTINCT hits.#9)@3 DESC NULLS LAST], fetch=10
+        SortPreservingMergeExec: [#107@2 DESC NULLS LAST], fetch=10
           SortExec: TopK(fetch=10), expr=[#107@2 DESC NULLS LAST], preserve_partitioning=[true]
-            ProjectionExec: expr=[#33@0 as #105, #34@1 as #106, count(alias1)@2 as #107, count(alias1)@2 as count(DISTINCT hits.#9)]
+            ProjectionExec: expr=[#33@0 as #105, #34@1 as #106, count(alias1)@2 as #107]
               AggregateExec: mode=FinalPartitioned, gby=[#33@0 as #33, #34@1 as #34], aggr=[count(alias1)]
                 RepartitionExec: partitioning=Hash([#33@0, #34@1], 4), input_partitions=4
                   AggregateExec: mode=Partial, gby=[#33@0 as #33, #34@1 as #34], aggr=[count(alias1)]
@@ -151,9 +151,9 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#105@0 as SearchPhrase, #106@1 as c]
       ProjectionExec: expr=[CAST(#105@0 AS LargeBinary) as #105, #106@1 as #106]
-        SortPreservingMergeExec: [count(Int64(1))@2 DESC NULLS LAST], fetch=10
+        SortPreservingMergeExec: [#106@1 DESC NULLS LAST], fetch=10
           SortExec: TopK(fetch=10), expr=[#106@1 DESC NULLS LAST], preserve_partitioning=[true]
-            ProjectionExec: expr=[#39@0 as #105, count(Int64(1))@1 as #106, count(Int64(1))@1 as count(Int64(1))]
+            ProjectionExec: expr=[#39@0 as #105, count(Int64(1))@1 as #106]
               AggregateExec: mode=FinalPartitioned, gby=[#39@0 as #39], aggr=[count(Int64(1))]
                 RepartitionExec: partitioning=Hash([#39@0], 4), input_partitions=4
                   AggregateExec: mode=Partial, gby=[#39@0 as #39], aggr=[count(Int64(1))]
@@ -168,9 +168,9 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#105@0 as SearchPhrase, #106@1 as u]
       ProjectionExec: expr=[CAST(#105@0 AS LargeBinary) as #105, #106@1 as #106]
-        SortPreservingMergeExec: [count(DISTINCT hits.#9)@2 DESC NULLS LAST], fetch=10
+        SortPreservingMergeExec: [#106@1 DESC NULLS LAST], fetch=10
           SortExec: TopK(fetch=10), expr=[#106@1 DESC NULLS LAST], preserve_partitioning=[true]
-            ProjectionExec: expr=[#39@0 as #105, count(alias1)@1 as #106, count(alias1)@1 as count(DISTINCT hits.#9)]
+            ProjectionExec: expr=[#39@0 as #105, count(alias1)@1 as #106]
               AggregateExec: mode=FinalPartitioned, gby=[#39@0 as #39], aggr=[count(alias1)]
                 RepartitionExec: partitioning=Hash([#39@0], 4), input_partitions=4
                   AggregateExec: mode=Partial, gby=[#39@0 as #39], aggr=[count(alias1)]
@@ -188,9 +188,9 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#105@0 as SearchEngineID, #106@1 as SearchPhrase, #107@2 as c]
       ProjectionExec: expr=[#105@0 as #105, CAST(#106@1 AS LargeBinary) as #106, #107@2 as #107]
-        SortPreservingMergeExec: [count(Int64(1))@3 DESC NULLS LAST], fetch=10
+        SortPreservingMergeExec: [#107@2 DESC NULLS LAST], fetch=10
           SortExec: TopK(fetch=10), expr=[#107@2 DESC NULLS LAST], preserve_partitioning=[true]
-            ProjectionExec: expr=[#38@0 as #105, #39@1 as #106, count(Int64(1))@2 as #107, count(Int64(1))@2 as count(Int64(1))]
+            ProjectionExec: expr=[#38@0 as #105, #39@1 as #106, count(Int64(1))@2 as #107]
               AggregateExec: mode=FinalPartitioned, gby=[#38@0 as #38, #39@1 as #39], aggr=[count(Int64(1))]
                 RepartitionExec: partitioning=Hash([#38@0, #39@1], 4), input_partitions=4
                   AggregateExec: mode=Partial, gby=[#38@0 as #38, #39@1 as #39], aggr=[count(Int64(1))]
@@ -268,9 +268,9 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#105@0 as SearchPhrase, #106@1 as MIN(URL), #107@2 as c]
       ProjectionExec: expr=[CAST(#105@0 AS LargeBinary) as #105, CAST(#106@1 AS LargeBinary) as #106, #107@2 as #107]
-        SortPreservingMergeExec: [count(Int64(1))@3 DESC NULLS LAST], fetch=10
+        SortPreservingMergeExec: [#107@2 DESC NULLS LAST], fetch=10
           SortExec: TopK(fetch=10), expr=[#107@2 DESC NULLS LAST], preserve_partitioning=[true]
-            ProjectionExec: expr=[#39@0 as #105, min(hits.#13)@1 as #106, count(Int64(1))@2 as #107, count(Int64(1))@2 as count(Int64(1))]
+            ProjectionExec: expr=[#39@0 as #105, min(hits.#13)@1 as #106, count(Int64(1))@2 as #107]
               AggregateExec: mode=FinalPartitioned, gby=[#39@0 as #39], aggr=[min(hits.#13), count(Int64(1))]
                 RepartitionExec: partitioning=Hash([#39@0], 4), input_partitions=4
                   AggregateExec: mode=Partial, gby=[#39@1 as #39], aggr=[min(hits.#13), count(Int64(1))]
@@ -285,9 +285,9 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#105@0 as SearchPhrase, #106@1 as MIN(URL), #107@2 as MIN(Title), #108@3 as c, #109@4 as count(DISTINCT UserID)]
       ProjectionExec: expr=[CAST(#105@0 AS LargeBinary) as #105, CAST(#106@1 AS LargeBinary) as #106, CAST(#107@2 AS LargeBinary) as #107, #108@3 as #108, #109@4 as #109]
-        SortPreservingMergeExec: [count(Int64(1))@5 DESC NULLS LAST], fetch=10
+        SortPreservingMergeExec: [#108@3 DESC NULLS LAST], fetch=10
           SortExec: TopK(fetch=10), expr=[#108@3 DESC NULLS LAST], preserve_partitioning=[true]
-            ProjectionExec: expr=[#39@0 as #105, min(hits.#13)@1 as #106, min(hits.#2)@2 as #107, count(Int64(1))@3 as #108, count(DISTINCT hits.#9)@4 as #109, count(Int64(1))@3 as count(Int64(1))]
+            ProjectionExec: expr=[#39@0 as #105, min(hits.#13)@1 as #106, min(hits.#2)@2 as #107, count(Int64(1))@3 as #108, count(DISTINCT hits.#9)@4 as #109]
               AggregateExec: mode=FinalPartitioned, gby=[#39@0 as #39], aggr=[min(hits.#13), min(hits.#2), count(Int64(1)), count(DISTINCT hits.#9)]
                 RepartitionExec: partitioning=Hash([#39@0], 4), input_partitions=4
                   AggregateExec: mode=Partial, gby=[#39@3 as #39], aggr=[min(hits.#13), min(hits.#2), count(Int64(1)), count(DISTINCT hits.#9)]
@@ -397,34 +397,32 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#105@0 as SearchEngineID, #106@1 as ClientIP, #107@2 as c, #108@3 as SUM(IsRefresh), #109@4 as AVG(ResolutionWidth)]
-      ProjectionExec: expr=[#105@0 as #105, #106@1 as #106, #107@2 as #107, #108@3 as #108, #109@4 as #109]
-        SortPreservingMergeExec: [count(Int64(1))@5 DESC NULLS LAST], fetch=10
-          SortExec: TopK(fetch=10), expr=[#107@2 DESC NULLS LAST], preserve_partitioning=[true]
-            ProjectionExec: expr=[#38@0 as #105, #7@1 as #106, count(Int64(1))@2 as #107, sum(hits.#15)@3 as #108, avg(hits.#20)@4 as #109, count(Int64(1))@2 as count(Int64(1))]
-              AggregateExec: mode=FinalPartitioned, gby=[#38@0 as #38, #7@1 as #7], aggr=[count(Int64(1)), sum(hits.#15), avg(hits.#20)]
-                RepartitionExec: partitioning=Hash([#38@0, #7@1], 4), input_partitions=4
-                  AggregateExec: mode=Partial, gby=[#38@3 as #38, #7@0 as #7], aggr=[count(Int64(1)), sum(hits.#15), avg(hits.#20)]
-                    ProjectionExec: expr=[ClientIP@0 as #7, IsRefresh@1 as #15, ResolutionWidth@2 as #20, SearchEngineID@3 as #38]
-                      FilterExec: SearchPhrase@4 != , projection=[ClientIP@0, IsRefresh@1, ResolutionWidth@2, SearchEngineID@3]
-                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                          DataSourceExec: file_groups={1 group: [[<tmp>/hits.parquet]]}, projection=[ClientIP, IsRefresh, ResolutionWidth, SearchEngineID, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
+      SortPreservingMergeExec: [#107@2 DESC NULLS LAST], fetch=10
+        SortExec: TopK(fetch=10), expr=[#107@2 DESC NULLS LAST], preserve_partitioning=[true]
+          ProjectionExec: expr=[#38@0 as #105, #7@1 as #106, count(Int64(1))@2 as #107, sum(hits.#15)@3 as #108, avg(hits.#20)@4 as #109]
+            AggregateExec: mode=FinalPartitioned, gby=[#38@0 as #38, #7@1 as #7], aggr=[count(Int64(1)), sum(hits.#15), avg(hits.#20)]
+              RepartitionExec: partitioning=Hash([#38@0, #7@1], 4), input_partitions=4
+                AggregateExec: mode=Partial, gby=[#38@3 as #38, #7@0 as #7], aggr=[count(Int64(1)), sum(hits.#15), avg(hits.#20)]
+                  ProjectionExec: expr=[ClientIP@0 as #7, IsRefresh@1 as #15, ResolutionWidth@2 as #20, SearchEngineID@3 as #38]
+                    FilterExec: SearchPhrase@4 != , projection=[ClientIP@0, IsRefresh@1, ResolutionWidth@2, SearchEngineID@3]
+                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                        DataSourceExec: file_groups={1 group: [[<tmp>/hits.parquet]]}, projection=[ClientIP, IsRefresh, ResolutionWidth, SearchEngineID, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 ---
 name: "test_clickbench_query_plan[31]"
 data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#105@0 as WatchID, #106@1 as ClientIP, #107@2 as c, #108@3 as SUM(IsRefresh), #109@4 as AVG(ResolutionWidth)]
-      ProjectionExec: expr=[#105@0 as #105, #106@1 as #106, #107@2 as #107, #108@3 as #108, #109@4 as #109]
-        SortPreservingMergeExec: [count(Int64(1))@5 DESC NULLS LAST], fetch=10
-          SortExec: TopK(fetch=10), expr=[#107@2 DESC NULLS LAST], preserve_partitioning=[true]
-            ProjectionExec: expr=[#0@0 as #105, #7@1 as #106, count(Int64(1))@2 as #107, sum(hits.#15)@3 as #108, avg(hits.#20)@4 as #109, count(Int64(1))@2 as count(Int64(1))]
-              AggregateExec: mode=FinalPartitioned, gby=[#0@0 as #0, #7@1 as #7], aggr=[count(Int64(1)), sum(hits.#15), avg(hits.#20)]
-                RepartitionExec: partitioning=Hash([#0@0, #7@1], 4), input_partitions=4
-                  AggregateExec: mode=Partial, gby=[#0@0 as #0, #7@1 as #7], aggr=[count(Int64(1)), sum(hits.#15), avg(hits.#20)]
-                    ProjectionExec: expr=[WatchID@0 as #0, ClientIP@1 as #7, IsRefresh@2 as #15, ResolutionWidth@3 as #20]
-                      FilterExec: SearchPhrase@4 != , projection=[WatchID@0, ClientIP@1, IsRefresh@2, ResolutionWidth@3]
-                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                          DataSourceExec: file_groups={1 group: [[<tmp>/hits.parquet]]}, projection=[WatchID, ClientIP, IsRefresh, ResolutionWidth, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
+      SortPreservingMergeExec: [#107@2 DESC NULLS LAST], fetch=10
+        SortExec: TopK(fetch=10), expr=[#107@2 DESC NULLS LAST], preserve_partitioning=[true]
+          ProjectionExec: expr=[#0@0 as #105, #7@1 as #106, count(Int64(1))@2 as #107, sum(hits.#15)@3 as #108, avg(hits.#20)@4 as #109]
+            AggregateExec: mode=FinalPartitioned, gby=[#0@0 as #0, #7@1 as #7], aggr=[count(Int64(1)), sum(hits.#15), avg(hits.#20)]
+              RepartitionExec: partitioning=Hash([#0@0, #7@1], 4), input_partitions=4
+                AggregateExec: mode=Partial, gby=[#0@0 as #0, #7@1 as #7], aggr=[count(Int64(1)), sum(hits.#15), avg(hits.#20)]
+                  ProjectionExec: expr=[WatchID@0 as #0, ClientIP@1 as #7, IsRefresh@2 as #15, ResolutionWidth@3 as #20]
+                    FilterExec: SearchPhrase@4 != , projection=[WatchID@0, ClientIP@1, IsRefresh@2, ResolutionWidth@3]
+                      RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                        DataSourceExec: file_groups={1 group: [[<tmp>/hits.parquet]]}, projection=[WatchID, ClientIP, IsRefresh, ResolutionWidth, SearchPhrase], file_type=parquet, predicate=SearchPhrase@39 != , pruning_predicate=SearchPhrase_null_count@2 != row_count@3 AND (SearchPhrase_min@0 !=  OR  != SearchPhrase_max@1), required_guarantees=[SearchPhrase not in ()]
 ---
 name: "test_clickbench_query_plan[32]"
 data:
@@ -441,20 +439,22 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#105@0 as URL, #106@1 as c]
-      SortExec: TopK(fetch=10), expr=[#106@1 DESC NULLS LAST], preserve_partitioning=[false]
-        ProjectionExec: expr=[CAST(#13@0 AS LargeBinary) as #105, count(Int64(1))@1 as #106]
-          AggregateExec: mode=SinglePartitioned, gby=[#13@0 as #13], aggr=[count(Int64(1))]
-            DataSourceExec: file_groups={1 group: [[<tmp>/hits.parquet]]}, projection=[URL@13 as #13], file_type=parquet
+      ProjectionExec: expr=[CAST(#105@0 AS LargeBinary) as #105, #106@1 as #106]
+        SortExec: TopK(fetch=10), expr=[#106@1 DESC NULLS LAST], preserve_partitioning=[false]
+          ProjectionExec: expr=[#13@0 as #105, count(Int64(1))@1 as #106]
+            AggregateExec: mode=SinglePartitioned, gby=[#13@0 as #13], aggr=[count(Int64(1))]
+              DataSourceExec: file_groups={1 group: [[<tmp>/hits.parquet]]}, projection=[URL@13 as #13], file_type=parquet
 ---
 name: "test_clickbench_query_plan[34]"
 data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#105@0 as 1, #106@1 as URL, #107@2 as c]
-      SortExec: TopK(fetch=10), expr=[#107@2 DESC NULLS LAST], preserve_partitioning=[false]
-        ProjectionExec: expr=[1 as #105, CAST(#13@0 AS LargeBinary) as #106, count(Int64(1))@1 as #107]
-          AggregateExec: mode=SinglePartitioned, gby=[#13@0 as #13], aggr=[count(Int64(1))]
-            DataSourceExec: file_groups={1 group: [[<tmp>/hits.parquet]]}, projection=[URL@13 as #13], file_type=parquet
+      ProjectionExec: expr=[#105@0 as #105, CAST(#106@1 AS LargeBinary) as #106, #107@2 as #107]
+        SortExec: TopK(fetch=10), expr=[#107@2 DESC NULLS LAST], preserve_partitioning=[false]
+          ProjectionExec: expr=[1 as #105, #13@0 as #106, count(Int64(1))@1 as #107]
+            AggregateExec: mode=SinglePartitioned, gby=[#13@0 as #13], aggr=[count(Int64(1))]
+              DataSourceExec: file_groups={1 group: [[<tmp>/hits.parquet]]}, projection=[URL@13 as #13], file_type=parquet
 ---
 name: "test_clickbench_query_plan[35]"
 data:
@@ -472,9 +472,9 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#105@0 as URL, #106@1 as PageViews]
       ProjectionExec: expr=[CAST(#105@0 AS LargeBinary) as #105, #106@1 as #106]
-        SortPreservingMergeExec: [count(Int64(1))@2 DESC NULLS LAST], fetch=10
+        SortPreservingMergeExec: [#106@1 DESC NULLS LAST], fetch=10
           SortExec: TopK(fetch=10), expr=[#106@1 DESC NULLS LAST], preserve_partitioning=[true]
-            ProjectionExec: expr=[#13@0 as #105, count(Int64(1))@1 as #106, count(Int64(1))@1 as count(Int64(1))]
+            ProjectionExec: expr=[#13@0 as #105, count(Int64(1))@1 as #106]
               AggregateExec: mode=FinalPartitioned, gby=[#13@0 as #13], aggr=[count(Int64(1))]
                 RepartitionExec: partitioning=Hash([#13@0], 4), input_partitions=4
                   AggregateExec: mode=Partial, gby=[#13@0 as #13], aggr=[count(Int64(1))]
@@ -489,9 +489,9 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#105@0 as Title, #106@1 as PageViews]
       ProjectionExec: expr=[CAST(#105@0 AS LargeBinary) as #105, #106@1 as #106]
-        SortPreservingMergeExec: [count(Int64(1))@2 DESC NULLS LAST], fetch=10
+        SortPreservingMergeExec: [#106@1 DESC NULLS LAST], fetch=10
           SortExec: TopK(fetch=10), expr=[#106@1 DESC NULLS LAST], preserve_partitioning=[true]
-            ProjectionExec: expr=[#2@0 as #105, count(Int64(1))@1 as #106, count(Int64(1))@1 as count(Int64(1))]
+            ProjectionExec: expr=[#2@0 as #105, count(Int64(1))@1 as #106]
               AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[count(Int64(1))]
                 RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=4
                   AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[count(Int64(1))]
@@ -507,9 +507,9 @@ data:
     ProjectionExec: expr=[#105@0 as URL, #106@1 as PageViews]
       ProjectionExec: expr=[CAST(#105@0 AS LargeBinary) as #105, #106@1 as #106]
         GlobalLimitExec: skip=1000, fetch=10
-          SortPreservingMergeExec: [count(Int64(1))@2 DESC NULLS LAST], fetch=1010
+          SortPreservingMergeExec: [#106@1 DESC NULLS LAST], fetch=1010
             SortExec: TopK(fetch=1010), expr=[#106@1 DESC NULLS LAST], preserve_partitioning=[true]
-              ProjectionExec: expr=[#13@0 as #105, count(Int64(1))@1 as #106, count(Int64(1))@1 as count(Int64(1))]
+              ProjectionExec: expr=[#13@0 as #105, count(Int64(1))@1 as #106]
                 AggregateExec: mode=FinalPartitioned, gby=[#13@0 as #13], aggr=[count(Int64(1))]
                   RepartitionExec: partitioning=Hash([#13@0], 4), input_partitions=4
                     AggregateExec: mode=Partial, gby=[#13@0 as #13], aggr=[count(Int64(1))]
@@ -525,9 +525,9 @@ data:
     ProjectionExec: expr=[#105@0 as TraficSourceID, #106@1 as SearchEngineID, #107@2 as AdvEngineID, #108@3 as Src, #109@4 as Dst, #110@5 as PageViews]
       ProjectionExec: expr=[#105@0 as #105, #106@1 as #106, #107@2 as #107, CAST(#108@3 AS LargeBinary) as #108, CAST(#109@4 AS LargeBinary) as #109, #110@5 as #110]
         GlobalLimitExec: skip=1000, fetch=10
-          SortPreservingMergeExec: [count(Int64(1))@6 DESC NULLS LAST], fetch=1010
+          SortPreservingMergeExec: [#110@5 DESC NULLS LAST], fetch=1010
             SortExec: TopK(fetch=1010), expr=[#110@5 DESC NULLS LAST], preserve_partitioning=[true]
-              ProjectionExec: expr=[#37@0 as #105, #38@1 as #106, #40@2 as #107, Src@3 as #108, Dst@4 as #109, count(Int64(1))@5 as #110, count(Int64(1))@5 as count(Int64(1))]
+              ProjectionExec: expr=[#37@0 as #105, #38@1 as #106, #40@2 as #107, Src@3 as #108, Dst@4 as #109, count(Int64(1))@5 as #110]
                 AggregateExec: mode=FinalPartitioned, gby=[#37@0 as #37, #38@1 as #38, #40@2 as #40, Src@3 as Src, Dst@4 as Dst], aggr=[count(Int64(1))]
                   RepartitionExec: partitioning=Hash([#37@0, #38@1, #40@2, Src@3, Dst@4], 4), input_partitions=4
                     AggregateExec: mode=Partial, gby=[#37@2 as #37, #38@3 as #38, #40@4 as #40, CASE WHEN #38@3 = 0 AND #40@4 = 0 THEN #14@1 ELSE  END as Src, #13@0 as Dst], aggr=[count(Int64(1))]
@@ -541,36 +541,34 @@ data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#105@0 as URLHash, #106@1 as EventDate, #107@2 as PageViews]
-      ProjectionExec: expr=[#105@0 as #105, #106@1 as #106, #107@2 as #107]
-        GlobalLimitExec: skip=100, fetch=10
-          SortPreservingMergeExec: [count(Int64(1))@3 DESC NULLS LAST], fetch=110
-            SortExec: TopK(fetch=110), expr=[#107@2 DESC NULLS LAST], preserve_partitioning=[true]
-              ProjectionExec: expr=[#103@0 as #105, #5@1 as #106, count(Int64(1))@2 as #107, count(Int64(1))@2 as count(Int64(1))]
-                AggregateExec: mode=FinalPartitioned, gby=[#103@0 as #103, #5@1 as #5], aggr=[count(Int64(1))]
-                  RepartitionExec: partitioning=Hash([#103@0, #5@1], 4), input_partitions=4
-                    AggregateExec: mode=Partial, gby=[#103@1 as #103, #5@0 as #5], aggr=[count(Int64(1))]
-                      ProjectionExec: expr=[1970-01-01 + CAST(CAST(EventDate@0 AS Utf8) ||  days AS Interval(DayTime)) as #5, URLHash@1 as #103]
-                        FilterExec: CounterID@1 = 62 AND 1970-01-01 + CAST(CAST(EventDate@0 AS Utf8) ||  days AS Interval(DayTime)) >= 2013-07-01 AND 1970-01-01 + CAST(CAST(EventDate@0 AS Utf8) ||  days AS Interval(DayTime)) <= 2013-07-31 AND IsRefresh@2 = 0 AND (TraficSourceID@3 = -1 OR TraficSourceID@3 = 6) AND RefererHash@4 = 3594120000172545465, projection=[EventDate@0, URLHash@5]
-                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                            DataSourceExec: file_groups={1 group: [[<tmp>/hits.parquet]]}, projection=[EventDate, CounterID, IsRefresh, TraficSourceID, RefererHash, URLHash], file_type=parquet, predicate=CounterID@6 = 62 AND 1970-01-01 + CAST(CAST(EventDate@5 AS Utf8) ||  days AS Interval(DayTime)) >= 2013-07-01 AND 1970-01-01 + CAST(CAST(EventDate@5 AS Utf8) ||  days AS Interval(DayTime)) <= 2013-07-31 AND IsRefresh@15 = 0 AND (TraficSourceID@37 = -1 OR TraficSourceID@37 = 6) AND RefererHash@102 = 3594120000172545465, pruning_predicate=CounterID_null_count@2 != row_count@3 AND CounterID_min@0 <= 62 AND 62 <= CounterID_max@1 AND IsRefresh_null_count@6 != row_count@3 AND IsRefresh_min@4 <= 0 AND 0 <= IsRefresh_max@5 AND (TraficSourceID_null_count@9 != row_count@3 AND TraficSourceID_min@7 <= -1 AND -1 <= TraficSourceID_max@8 OR TraficSourceID_null_count@9 != row_count@3 AND TraficSourceID_min@7 <= 6 AND 6 <= TraficSourceID_max@8) AND RefererHash_null_count@12 != row_count@3 AND RefererHash_min@10 <= 3594120000172545465 AND 3594120000172545465 <= RefererHash_max@11, required_guarantees=[CounterID in (62), IsRefresh in (0), RefererHash in (3594120000172545465), TraficSourceID in (-1, 6)]
+      GlobalLimitExec: skip=100, fetch=10
+        SortPreservingMergeExec: [#107@2 DESC NULLS LAST], fetch=110
+          SortExec: TopK(fetch=110), expr=[#107@2 DESC NULLS LAST], preserve_partitioning=[true]
+            ProjectionExec: expr=[#103@0 as #105, #5@1 as #106, count(Int64(1))@2 as #107]
+              AggregateExec: mode=FinalPartitioned, gby=[#103@0 as #103, #5@1 as #5], aggr=[count(Int64(1))]
+                RepartitionExec: partitioning=Hash([#103@0, #5@1], 4), input_partitions=4
+                  AggregateExec: mode=Partial, gby=[#103@1 as #103, #5@0 as #5], aggr=[count(Int64(1))]
+                    ProjectionExec: expr=[1970-01-01 + CAST(CAST(EventDate@0 AS Utf8) ||  days AS Interval(DayTime)) as #5, URLHash@1 as #103]
+                      FilterExec: CounterID@1 = 62 AND 1970-01-01 + CAST(CAST(EventDate@0 AS Utf8) ||  days AS Interval(DayTime)) >= 2013-07-01 AND 1970-01-01 + CAST(CAST(EventDate@0 AS Utf8) ||  days AS Interval(DayTime)) <= 2013-07-31 AND IsRefresh@2 = 0 AND (TraficSourceID@3 = -1 OR TraficSourceID@3 = 6) AND RefererHash@4 = 3594120000172545465, projection=[EventDate@0, URLHash@5]
+                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                          DataSourceExec: file_groups={1 group: [[<tmp>/hits.parquet]]}, projection=[EventDate, CounterID, IsRefresh, TraficSourceID, RefererHash, URLHash], file_type=parquet, predicate=CounterID@6 = 62 AND 1970-01-01 + CAST(CAST(EventDate@5 AS Utf8) ||  days AS Interval(DayTime)) >= 2013-07-01 AND 1970-01-01 + CAST(CAST(EventDate@5 AS Utf8) ||  days AS Interval(DayTime)) <= 2013-07-31 AND IsRefresh@15 = 0 AND (TraficSourceID@37 = -1 OR TraficSourceID@37 = 6) AND RefererHash@102 = 3594120000172545465, pruning_predicate=CounterID_null_count@2 != row_count@3 AND CounterID_min@0 <= 62 AND 62 <= CounterID_max@1 AND IsRefresh_null_count@6 != row_count@3 AND IsRefresh_min@4 <= 0 AND 0 <= IsRefresh_max@5 AND (TraficSourceID_null_count@9 != row_count@3 AND TraficSourceID_min@7 <= -1 AND -1 <= TraficSourceID_max@8 OR TraficSourceID_null_count@9 != row_count@3 AND TraficSourceID_min@7 <= 6 AND 6 <= TraficSourceID_max@8) AND RefererHash_null_count@12 != row_count@3 AND RefererHash_min@10 <= 3594120000172545465 AND 3594120000172545465 <= RefererHash_max@11, required_guarantees=[CounterID in (62), IsRefresh in (0), RefererHash in (3594120000172545465), TraficSourceID in (-1, 6)]
 ---
 name: "test_clickbench_query_plan[41]"
 data:
   |-
     == Physical Plan ==
     ProjectionExec: expr=[#105@0 as WindowClientWidth, #106@1 as WindowClientHeight, #107@2 as PageViews]
-      ProjectionExec: expr=[#105@0 as #105, #106@1 as #106, #107@2 as #107]
-        GlobalLimitExec: skip=10000, fetch=10
-          SortPreservingMergeExec: [count(Int64(1))@3 DESC NULLS LAST], fetch=10010
-            SortExec: TopK(fetch=10010), expr=[#107@2 DESC NULLS LAST], preserve_partitioning=[true]
-              ProjectionExec: expr=[#42@0 as #105, #43@1 as #106, count(Int64(1))@2 as #107, count(Int64(1))@2 as count(Int64(1))]
-                AggregateExec: mode=FinalPartitioned, gby=[#42@0 as #42, #43@1 as #43], aggr=[count(Int64(1))]
-                  RepartitionExec: partitioning=Hash([#42@0, #43@1], 4), input_partitions=4
-                    AggregateExec: mode=Partial, gby=[#42@0 as #42, #43@1 as #43], aggr=[count(Int64(1))]
-                      ProjectionExec: expr=[WindowClientWidth@0 as #42, WindowClientHeight@1 as #43]
-                        FilterExec: CounterID@1 = 62 AND 1970-01-01 + CAST(CAST(EventDate@0 AS Utf8) ||  days AS Interval(DayTime)) >= 2013-07-01 AND 1970-01-01 + CAST(CAST(EventDate@0 AS Utf8) ||  days AS Interval(DayTime)) <= 2013-07-31 AND IsRefresh@2 = 0 AND DontCountHits@5 = 0 AND URLHash@6 = 2868770270353813622, projection=[WindowClientWidth@3, WindowClientHeight@4]
-                          RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-                            DataSourceExec: file_groups={1 group: [[<tmp>/hits.parquet]]}, projection=[EventDate, CounterID, IsRefresh, WindowClientWidth, WindowClientHeight, DontCountHits, URLHash], file_type=parquet, predicate=CounterID@6 = 62 AND 1970-01-01 + CAST(CAST(EventDate@5 AS Utf8) ||  days AS Interval(DayTime)) >= 2013-07-01 AND 1970-01-01 + CAST(CAST(EventDate@5 AS Utf8) ||  days AS Interval(DayTime)) <= 2013-07-31 AND IsRefresh@15 = 0 AND DontCountHits@61 = 0 AND URLHash@103 = 2868770270353813622, pruning_predicate=CounterID_null_count@2 != row_count@3 AND CounterID_min@0 <= 62 AND 62 <= CounterID_max@1 AND IsRefresh_null_count@6 != row_count@3 AND IsRefresh_min@4 <= 0 AND 0 <= IsRefresh_max@5 AND DontCountHits_null_count@9 != row_count@3 AND DontCountHits_min@7 <= 0 AND 0 <= DontCountHits_max@8 AND URLHash_null_count@12 != row_count@3 AND URLHash_min@10 <= 2868770270353813622 AND 2868770270353813622 <= URLHash_max@11, required_guarantees=[CounterID in (62), DontCountHits in (0), IsRefresh in (0), URLHash in (2868770270353813622)]
+      GlobalLimitExec: skip=10000, fetch=10
+        SortPreservingMergeExec: [#107@2 DESC NULLS LAST], fetch=10010
+          SortExec: TopK(fetch=10010), expr=[#107@2 DESC NULLS LAST], preserve_partitioning=[true]
+            ProjectionExec: expr=[#42@0 as #105, #43@1 as #106, count(Int64(1))@2 as #107]
+              AggregateExec: mode=FinalPartitioned, gby=[#42@0 as #42, #43@1 as #43], aggr=[count(Int64(1))]
+                RepartitionExec: partitioning=Hash([#42@0, #43@1], 4), input_partitions=4
+                  AggregateExec: mode=Partial, gby=[#42@0 as #42, #43@1 as #43], aggr=[count(Int64(1))]
+                    ProjectionExec: expr=[WindowClientWidth@0 as #42, WindowClientHeight@1 as #43]
+                      FilterExec: CounterID@1 = 62 AND 1970-01-01 + CAST(CAST(EventDate@0 AS Utf8) ||  days AS Interval(DayTime)) >= 2013-07-01 AND 1970-01-01 + CAST(CAST(EventDate@0 AS Utf8) ||  days AS Interval(DayTime)) <= 2013-07-31 AND IsRefresh@2 = 0 AND DontCountHits@5 = 0 AND URLHash@6 = 2868770270353813622, projection=[WindowClientWidth@3, WindowClientHeight@4]
+                        RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+                          DataSourceExec: file_groups={1 group: [[<tmp>/hits.parquet]]}, projection=[EventDate, CounterID, IsRefresh, WindowClientWidth, WindowClientHeight, DontCountHits, URLHash], file_type=parquet, predicate=CounterID@6 = 62 AND 1970-01-01 + CAST(CAST(EventDate@5 AS Utf8) ||  days AS Interval(DayTime)) >= 2013-07-01 AND 1970-01-01 + CAST(CAST(EventDate@5 AS Utf8) ||  days AS Interval(DayTime)) <= 2013-07-31 AND IsRefresh@15 = 0 AND DontCountHits@61 = 0 AND URLHash@103 = 2868770270353813622, pruning_predicate=CounterID_null_count@2 != row_count@3 AND CounterID_min@0 <= 62 AND 62 <= CounterID_max@1 AND IsRefresh_null_count@6 != row_count@3 AND IsRefresh_min@4 <= 0 AND 0 <= IsRefresh_max@5 AND DontCountHits_null_count@9 != row_count@3 AND DontCountHits_min@7 <= 0 AND 0 <= DontCountHits_max@8 AND URLHash_null_count@12 != row_count@3 AND URLHash_min@10 <= 2868770270353813622 AND 2868770270353813622 <= URLHash_max@11, required_guarantees=[CounterID in (62), DontCountHits in (0), IsRefresh in (0), URLHash in (2868770270353813622)]
 ---
 name: "test_clickbench_query_plan[42]"
 data:

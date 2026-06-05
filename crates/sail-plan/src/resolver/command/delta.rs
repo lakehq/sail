@@ -1,12 +1,10 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::{Column, DFSchemaRef};
 use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::{
-    col, lit, when, BinaryExpr, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder,
-    Operator, ScalarUDF,
+    col, lit, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUDF,
 };
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::error::CatalogError;
@@ -14,7 +12,7 @@ use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::AlterTableOptions;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{TableColumnStatus, TableKind};
-use sail_common_datafusion::column_features::{ColumnFeatures, ColumnFeaturesBuilder};
+use sail_common_datafusion::column_features::ColumnFeatures;
 use sail_common_datafusion::datasource::{
     find_path_in_options, OptionLayer, SourceInfo, TableFormatRegistry,
 };
@@ -43,10 +41,6 @@ struct DeltaCheckConstraint {
     violation: DeltaConstraintViolation,
 }
 
-pub(super) fn delta_generated_column_expression(field: &Field) -> Option<String> {
-    ColumnFeatures::from_field(field).generation_expression()
-}
-
 impl PlanResolver<'_> {
     pub(super) async fn resolve_delta_alter_table_or_catalog(
         &self,
@@ -63,17 +57,12 @@ impl PlanResolver<'_> {
             }
         }
         match operation {
-            spec::AlterTableOperation::AddCheckConstraint {
-                name,
-                expression,
-                expression_source,
-            } => {
+            spec::AlterTableOperation::AddCheckConstraint { name, expression } => {
                 self.resolve_delta_add_check_constraint(
                     table,
                     if_exists,
                     name.into(),
                     expression,
-                    expression_source,
                     state,
                 )
                 .await
@@ -153,16 +142,20 @@ impl PlanResolver<'_> {
             .schema
             .fields()
             .iter()
-            .map(|field| TableColumnStatus {
-                name: field.name().clone(),
-                data_type: field.data_type().clone(),
-                nullable: field.is_nullable(),
-                comment: None,
-                default: None,
-                generated_always_as: ColumnFeatures::from_field(field).generation_expression(),
-                is_partition: false,
-                is_bucket: false,
-                is_cluster: false,
+            .map(|field| {
+                let features = ColumnFeatures::from_field(field);
+                TableColumnStatus {
+                    name: field.name().clone(),
+                    data_type: field.data_type().clone(),
+                    nullable: field.is_nullable(),
+                    comment: None,
+                    default: None,
+                    generated_always_as: features.generation_expression(),
+                    identity: features.identity(),
+                    is_partition: false,
+                    is_bucket: false,
+                    is_cluster: false,
+                }
             })
             .collect::<Vec<_>>();
         let constraints = delta_constraints_from_schema_and_properties(
@@ -171,7 +164,7 @@ impl PlanResolver<'_> {
         );
         if !columns
             .iter()
-            .any(|column| column.generated_always_as.is_some())
+            .any(|column| column.generated_always_as.is_some() || column.identity.is_some())
             && constraints.is_empty()
         {
             return Ok(input);
@@ -198,8 +191,7 @@ impl PlanResolver<'_> {
         table: spec::ObjectName,
         if_exists: bool,
         name: String,
-        expression: spec::Expr,
-        expression_source: String,
+        expression: spec::ExprWithSource,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let status = match self
@@ -251,6 +243,16 @@ impl PlanResolver<'_> {
             )));
         }
 
+        let spec::ExprWithSource {
+            expr,
+            source: expression_source,
+        } = expression;
+        let expression_source = expression_source.ok_or_else(|| {
+            PlanError::invalid(format!(
+                "ALTER TABLE ADD CONSTRAINT `{name}` requires SQL source text for the CHECK expression"
+            ))
+        })?;
+
         let scan = self
             .resolve_query_plan(
                 spec::QueryPlan {
@@ -270,9 +272,7 @@ impl PlanResolver<'_> {
             )
             .await?;
         let schema = scan.schema().clone();
-        let resolved_expr = self
-            .resolve_expression(expression.clone(), &schema, state)
-            .await?;
+        let resolved_expr = self.resolve_expression(expr, &schema, state).await?;
         let data_type = resolved_expr.get_type(&schema)?;
         if data_type != DataType::Boolean {
             return Err(PlanError::invalid(format!(
@@ -321,14 +321,6 @@ impl PlanResolver<'_> {
             .await
     }
 
-    pub(super) fn delta_table_requires_feature_rewrite(info: &TableInfo) -> bool {
-        is_delta_format(&info.format)
-            && info
-                .columns
-                .iter()
-                .any(|column| column.generated_always_as.is_some() || !column.nullable)
-    }
-
     pub(super) async fn apply_delta_table_constraints(
         &self,
         input: LogicalPlan,
@@ -341,153 +333,6 @@ impl PlanResolver<'_> {
         let constraints = self.delta_constraints_from_table_info(info).await?;
         self.apply_delta_check_constraints(input, constraints, state)
             .await
-    }
-
-    /// Rewrite Delta generated columns and generation-expression metadata.
-    ///
-    /// This path normalizes column matching, resolves `delta.generationExpression`
-    /// against registered resolver field IDs, enforces user-provided generated
-    /// column values, and preserves the generation expression on the output
-    /// Arrow field metadata.
-    pub(super) async fn rewrite_delta_write_input_with_generated_columns(
-        &self,
-        input: LogicalPlan,
-        column_match: WriteColumnMatch,
-        info: &TableInfo,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<LogicalPlan> {
-        let table_field_count = info.columns.len();
-        let generated_count = info
-            .columns
-            .iter()
-            .filter(|c| c.generated_always_as.is_some())
-            .count();
-        let non_generated_count = table_field_count - generated_count;
-        let input_field_count = input.schema().fields().len();
-
-        let provided_by_input = Self::classify_delta_generated_input_to_table_columns(
-            &input,
-            &column_match,
-            info,
-            input_field_count,
-            table_field_count,
-            non_generated_count,
-        )?;
-
-        let field_ids: Vec<String> = info
-            .columns
-            .iter()
-            .map(|c| state.register_field_name(c.name.clone()))
-            .collect();
-        let mut gen_check_field_ids: Vec<Option<String>> = vec![None; table_field_count];
-
-        let mut intermediate_aliases: Vec<Expr> = Vec::new();
-        for (idx, provided) in provided_by_input.iter().enumerate() {
-            let col = &info.columns[idx];
-            if col.generated_always_as.is_some() {
-                if let Some(user_expr) = provided {
-                    let check_id = state.register_hidden_field_name(format!("{}__user", col.name));
-                    let cast_expr = user_expr
-                        .clone()
-                        .cast_to(col.field().data_type(), input.schema())?;
-                    intermediate_aliases.push(cast_expr.alias(check_id.clone()));
-                    gen_check_field_ids[idx] = Some(check_id);
-                }
-                continue;
-            }
-            let Some(input_expr) = provided else {
-                return Err(PlanError::invalid(format!(
-                    "INSERT is missing value for non-generated column `{}`",
-                    col.name
-                )));
-            };
-            let cast_expr = input_expr
-                .clone()
-                .cast_to(col.field().data_type(), input.schema())?;
-            intermediate_aliases.push(cast_expr.alias(field_ids[idx].clone()));
-        }
-        let intermediate = LogicalPlanBuilder::new(input)
-            .project(intermediate_aliases)?
-            .build()?;
-        let intermediate_schema = intermediate.schema().clone();
-
-        let mut gen_exprs: HashMap<String, Expr> = HashMap::new();
-        for col in &info.columns {
-            let Some(gen_expr_str) = col.generated_always_as.as_deref() else {
-                continue;
-            };
-            let ast_expr =
-                sail_sql_analyzer::parser::parse_expression(gen_expr_str).map_err(|e| {
-                    PlanError::invalid(format!(
-                        "failed to parse generation expression `{gen_expr_str}`: {e}"
-                    ))
-                })?;
-            let spec_expr =
-                sail_sql_analyzer::expression::from_ast_expression(ast_expr).map_err(|e| {
-                    PlanError::invalid(format!(
-                        "failed to analyze generation expression `{gen_expr_str}`: {e}"
-                    ))
-                })?;
-            let resolved = self
-                .resolve_expression(spec_expr, &intermediate_schema, state)
-                .await?;
-            gen_exprs.insert(col.name.clone(), resolved);
-        }
-
-        let mut final_exprs: Vec<Expr> = Vec::with_capacity(info.columns.len());
-        for (idx, table_col) in info.columns.iter().enumerate() {
-            let out_name = table_col.name.clone();
-            let field = table_col.field();
-            let expr = if let Some(gen_expr_str) = table_col.generated_always_as.as_deref() {
-                let gen_expr = gen_exprs.get(&table_col.name).cloned().ok_or_else(|| {
-                    PlanError::internal(format!(
-                        "expected resolved generation expression for `{}`",
-                        table_col.name
-                    ))
-                })?;
-                let final_expr = if let Some(check_id) = &gen_check_field_ids[idx] {
-                    let user_value = col(Column::from_name(check_id));
-                    let user_value_cast = user_value
-                        .clone()
-                        .cast_to(field.data_type(), &intermediate_schema)?;
-                    let gen_expr_cast = gen_expr
-                        .clone()
-                        .cast_to(field.data_type(), &intermediate_schema)?;
-                    let check = user_value
-                        .clone()
-                        .is_null()
-                        .or(Expr::BinaryExpr(BinaryExpr::new(
-                            Box::new(user_value_cast),
-                            Operator::IsNotDistinctFrom,
-                            Box::new(gen_expr_cast),
-                        )));
-                    let err_msg = format!(
-                        "[DELTA_GENERATED_COLUMNS_VALUE_MISMATCH] \
-                         CHECK constraint for generated column `{}` \
-                         (expression: {}) violated: user-provided value does not match.",
-                        table_col.name, gen_expr_str
-                    );
-                    let raise = ScalarUDF::from(RaiseError::new()).call(vec![lit(err_msg)]);
-                    when(check, gen_expr).otherwise(raise)?
-                } else {
-                    gen_expr
-                };
-                final_expr.cast_to(field.data_type(), &intermediate_schema)?
-            } else {
-                col(Column::from_name(&field_ids[idx]))
-                    .cast_to(field.data_type(), &intermediate_schema)?
-            };
-            let meta = Self::delta_column_metadata(table_col);
-            let alias = if let Some(meta) = meta {
-                expr.alias_with_metadata(out_name, Some(meta))
-            } else {
-                expr.alias(out_name)
-            };
-            final_exprs.push(alias);
-        }
-        Ok(LogicalPlanBuilder::new(intermediate)
-            .project(final_exprs)?
-            .build()?)
     }
 
     pub(super) async fn resolve_delta_merge_check_constraints(
@@ -605,20 +450,8 @@ impl PlanResolver<'_> {
     ) -> PlanResult<Vec<DeltaCheckConstraintExpr>> {
         let mut out = Vec::with_capacity(constraints.len());
         for constraint in constraints {
-            let ast_expr = sail_sql_analyzer::parser::parse_expression(&constraint.expression)
-                .map_err(|e| {
-                    PlanError::invalid(format!(
-                        "failed to parse Delta CHECK constraint `{}` expression `{}`: {e}",
-                        constraint.name, constraint.expression
-                    ))
-                })?;
             let spec_expr =
-                sail_sql_analyzer::expression::from_ast_expression(ast_expr).map_err(|e| {
-                    PlanError::invalid(format!(
-                        "failed to analyze Delta CHECK constraint `{}` expression `{}`: {e}",
-                        constraint.name, constraint.expression
-                    ))
-                })?;
+                parse_delta_check_constraint_expr(&constraint.name, &constraint.expression)?;
             let expr = self.resolve_expression(spec_expr, schema, state).await?;
             let data_type = expr.get_type(schema)?;
             if data_type != DataType::Boolean {
@@ -696,110 +529,6 @@ impl PlanResolver<'_> {
                 Ok(None)
             }
         }
-    }
-
-    fn classify_delta_generated_input_to_table_columns(
-        input: &LogicalPlan,
-        column_match: &WriteColumnMatch,
-        info: &TableInfo,
-        input_field_count: usize,
-        table_field_count: usize,
-        non_generated_count: usize,
-    ) -> PlanResult<Vec<Option<Expr>>> {
-        let input_cols = input.schema().columns();
-        let mut out: Vec<Option<Expr>> = vec![None; table_field_count];
-        match column_match {
-            WriteColumnMatch::ByPosition => {
-                if input_field_count == table_field_count {
-                    for (i, input_col) in input_cols.iter().enumerate() {
-                        out[i] = Some(col(input_col.clone()));
-                    }
-                } else if input_field_count == non_generated_count {
-                    let mut non_gen_idx = 0usize;
-                    for (i, table_col) in info.columns.iter().enumerate() {
-                        if table_col.generated_always_as.is_some() {
-                            continue;
-                        }
-                        out[i] = Some(col(input_cols[non_gen_idx].clone()));
-                        non_gen_idx += 1;
-                    }
-                } else {
-                    return Err(PlanError::invalid(format!(
-                        "input schema for INSERT has {input_field_count} fields, but table schema has {table_field_count} fields (with {} generated)",
-                        table_field_count - non_generated_count
-                    )));
-                }
-            }
-            WriteColumnMatch::ByName => {
-                for (i, table_col) in info.columns.iter().enumerate() {
-                    let mut matches = input
-                        .schema()
-                        .fields()
-                        .iter()
-                        .filter(|f| f.name().eq_ignore_ascii_case(&table_col.name));
-                    let first = matches.next();
-                    if matches.next().is_some() {
-                        return Err(PlanError::invalid(format!(
-                            "ambiguous column for INSERT by name: {}",
-                            table_col.name
-                        )));
-                    }
-                    if let Some(f) = first {
-                        out[i] = Some(col(Column::from_name(f.name())));
-                    } else if table_col.generated_always_as.is_none() {
-                        return Err(PlanError::invalid(format!(
-                            "column not found for INSERT by name: {}",
-                            table_col.name
-                        )));
-                    }
-                }
-            }
-            WriteColumnMatch::ByColumns { columns } => {
-                if columns.len() != input_field_count {
-                    return Err(PlanError::invalid(format!(
-                        "input schema for INSERT has {input_field_count} fields, but {} columns are specified",
-                        columns.len()
-                    )));
-                }
-                let name_to_pos: HashMap<String, usize> = info
-                    .columns
-                    .iter()
-                    .enumerate()
-                    .map(|(i, c)| (c.name.to_lowercase(), i))
-                    .collect();
-                for (input_col, user_col) in input_cols.iter().zip(columns.iter()) {
-                    let key = user_col.as_ref().to_lowercase();
-                    let Some(&pos) = name_to_pos.get(&key) else {
-                        return Err(PlanError::invalid(format!(
-                            "column not found in target table: {}",
-                            user_col.as_ref()
-                        )));
-                    };
-                    if out[pos].is_some() {
-                        return Err(PlanError::invalid(format!(
-                            "column `{}` specified more than once in INSERT column list",
-                            user_col.as_ref()
-                        )));
-                    }
-                    out[pos] = Some(col(input_col.clone()));
-                }
-            }
-        }
-        Ok(out)
-    }
-
-    fn delta_column_metadata(column: &TableColumnStatus) -> Option<FieldMetadata> {
-        let mut builder = ColumnFeaturesBuilder::new();
-        let mut has_metadata = false;
-        if let Some(expr) = column.generated_always_as.as_deref() {
-            builder = builder.with_generation_expression(expr);
-            has_metadata = true;
-        }
-        if !column.nullable {
-            builder = builder.with_not_null_constraint();
-            has_metadata = true;
-        }
-        has_metadata.then(|| FieldMetadata::from(builder.build()))
     }
 }
 
@@ -942,7 +671,7 @@ fn delta_invariant_expression(field: &Field) -> Option<String> {
         })
 }
 
-fn parse_delta_generation_expr(gen_expr_str: &str) -> PlanResult<spec::Expr> {
+pub(super) fn parse_delta_generation_expr(gen_expr_str: &str) -> PlanResult<spec::Expr> {
     let ast_expr = sail_sql_analyzer::parser::parse_expression(gen_expr_str).map_err(|e| {
         PlanError::invalid(format!(
             "failed to parse generation expression `{gen_expr_str}`: {e}"
@@ -951,6 +680,19 @@ fn parse_delta_generation_expr(gen_expr_str: &str) -> PlanResult<spec::Expr> {
     sail_sql_analyzer::expression::from_ast_expression(ast_expr).map_err(|e| {
         PlanError::invalid(format!(
             "failed to analyze generation expression `{gen_expr_str}`: {e}"
+        ))
+    })
+}
+
+fn parse_delta_check_constraint_expr(name: &str, expression: &str) -> PlanResult<spec::Expr> {
+    let ast_expr = sail_sql_analyzer::parser::parse_expression(expression).map_err(|e| {
+        PlanError::invalid(format!(
+            "failed to parse Delta CHECK constraint `{name}` expression `{expression}`: {e}"
+        ))
+    })?;
+    sail_sql_analyzer::expression::from_ast_expression(ast_expr).map_err(|e| {
+        PlanError::invalid(format!(
+            "failed to analyze Delta CHECK constraint `{name}` expression `{expression}`: {e}"
         ))
     })
 }

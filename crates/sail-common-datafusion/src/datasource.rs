@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::plan_datafusion_err;
 use datafusion::physical_expr::{
@@ -464,13 +464,13 @@ pub fn create_sort_order(
     }
 }
 
-/// Given a schema and a list of partition columns, returns the partition columns
-/// with their data types, and a schema with the partition columns removed.
+/// Given a schema and a list of partition column names, returns the partition fields
+/// and a schema with the partition columns removed.
 pub fn get_partition_columns_and_file_schema(
     schema: &Schema,
     partition_by: Vec<String>,
-) -> Result<(Vec<(String, DataType)>, Schema)> {
-    let partition_columns = partition_by
+) -> Result<(Vec<FieldRef>, Schema)> {
+    let partition_fields = partition_by
         .into_iter()
         .map(|col| {
             let mut candidates = schema
@@ -478,7 +478,7 @@ pub fn get_partition_columns_and_file_schema(
                 .iter()
                 .filter(|f| f.name().eq_ignore_ascii_case(&col));
             match (candidates.next(), candidates.next()) {
-                (Some(field), None) => Ok((col, field.data_type().clone())),
+                (Some(field), None) => Ok(field.clone()),
                 _ => {
                     plan_err!("missing or ambiguous partition column: {col}")
                 }
@@ -489,14 +489,14 @@ pub fn get_partition_columns_and_file_schema(
         .fields()
         .iter()
         .filter(|f| {
-            !partition_columns
+            !partition_fields
                 .iter()
-                .any(|(col, _)| col.eq_ignore_ascii_case(f.name()))
+                .any(|p| f.name().eq_ignore_ascii_case(p.name()))
         })
         .cloned()
         .collect::<Vec<_>>();
     let file_schema = Schema::new(file_schema_fields);
-    Ok((partition_columns, file_schema))
+    Ok((partition_fields, file_schema))
 }
 
 #[cfg(test)]

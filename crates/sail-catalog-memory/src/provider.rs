@@ -201,6 +201,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                     comment,
                     default,
                     generated_always_as,
+                    identity,
                 } = x;
                 let is_partition = partition_by
                     .iter()
@@ -215,6 +216,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                     comment,
                     default,
                     generated_always_as,
+                    identity,
                     is_partition,
                     is_bucket,
                     is_cluster: false,
@@ -404,6 +406,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                     comment,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                     is_partition: false,
                     is_bucket: false,
                     is_cluster: false,

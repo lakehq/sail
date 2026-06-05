@@ -1,9 +1,15 @@
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::Schema;
+use datafusion::arrow::datatypes::{Field, Schema};
+use datafusion::functions_window::row_number::row_number_udwf;
+use datafusion::logical_expr::expr::NullTreatment;
 use datafusion_common::{Column, DFSchema};
-use datafusion_expr::expr::Sort;
-use datafusion_expr::{col, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::expr::{self, FieldMetadata, Sort, WindowFunctionParams};
+use datafusion_expr::{
+    col, lit, when, BinaryExpr, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder,
+    Operator, ScalarUDF, WindowFrame, WindowFunctionDefinition,
+};
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::error::CatalogError;
 use sail_catalog::manager::CatalogManager;
@@ -12,8 +18,10 @@ use sail_catalog::provider::{
 };
 use sail_common::spec;
 use sail_common_datafusion::catalog::{
-    CatalogTableBucketBy, CatalogTableSort, TableColumnStatus, TableKind,
+    CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableSort, TableColumnStatus,
+    TableKind,
 };
+use sail_common_datafusion::column_features::{ColumnFeatures, ColumnFeaturesBuilder};
 use sail_common_datafusion::datasource::{
     find_path_in_options, BucketBy, OptionLayer, SinkMode, SourceInfo, TableFormatRegistry,
 };
@@ -22,10 +30,13 @@ use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::math::spark_try_add::SparkTryAdd;
+use sail_function::scalar::math::spark_try_mult::SparkTryMult;
+use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::file_write::{FileWriteNode, FileWriteOptions};
 
-use super::delta::delta_generated_column_expression;
+use super::delta::parse_delta_generation_expr;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
@@ -399,6 +410,7 @@ impl PlanResolver<'_> {
                             comment: None,
                             default: None,
                             generated_always_as: None,
+                            identity: None,
                         })
                         .collect();
                     // TODO: Revisit passing write options as table properties.
@@ -570,29 +582,43 @@ impl PlanResolver<'_> {
                                 "failed to infer metadata for table `{table:?}` from format `{format}`: {e}",
                             ))
                         })?;
-                    columns = metadata
-                        .schema
-                        .fields()
-                        .iter()
-                        .map(|f| {
-                            let generated_always_as = delta_generated_column_expression(f);
-                            TableColumnStatus {
-                                name: f.name().clone(),
-                                data_type: f.data_type().clone(),
-                                nullable: f.is_nullable(),
-                                comment: None,
-                                default: None,
-                                generated_always_as,
-                                is_partition: false,
-                                is_bucket: false,
-                                is_cluster: false,
-                            }
-                        })
-                        .collect();
+                    columns = Self::delta_log_columns_from_schema(metadata.schema.as_ref());
                     if !metadata.properties.is_empty() {
                         let mut merged_properties = metadata.properties;
                         merged_properties.extend(properties);
                         properties = merged_properties;
+                    }
+                } else if format.eq_ignore_ascii_case("delta") && location.is_some() {
+                    let registry = self.ctx.extension::<TableFormatRegistry>().map_err(|e| {
+                        PlanError::invalid(format!(
+                            "failed to access table format registry for table `{table:?}`: {e}",
+                        ))
+                    })?;
+                    let table_format = registry.get(&format).map_err(|e| {
+                        PlanError::invalid(format!(
+                            "failed to resolve table format `{format}` for table `{table:?}`: {e}",
+                        ))
+                    })?;
+                    let info = SourceInfo {
+                        paths: location.iter().cloned().collect(),
+                        schema: None,
+                        constraints: Default::default(),
+                        partition_by: vec![],
+                        bucket_by: None,
+                        sort_order: vec![],
+                        options: vec![OptionLayer::TablePropertyList {
+                            items: properties.to_vec(),
+                        }],
+                    };
+                    match table_format.infer_schema(&self.ctx.state(), info).await {
+                        Ok(schema) => {
+                            Self::merge_delta_log_columns(&mut columns, schema.as_ref());
+                        }
+                        Err(e) => {
+                            log::debug!(
+                                "using catalog schema for Delta table `{table:?}` because the Delta log schema could not be loaded yet: {e}"
+                            );
+                        }
                     }
                 }
                 Ok(Some(TableInfo {
@@ -609,6 +635,64 @@ impl PlanResolver<'_> {
         }
     }
 
+    fn delta_log_columns_from_schema(schema: &Schema) -> Vec<TableColumnStatus> {
+        schema
+            .fields()
+            .iter()
+            .map(|field| Self::delta_log_column_from_field(field.as_ref()))
+            .collect()
+    }
+
+    fn delta_log_column_from_field(field: &Field) -> TableColumnStatus {
+        // Read Delta column features from Arrow field metadata. `ColumnFeatures`
+        // transparently JSON-unwraps generation expressions when external
+        // writers store them as JSON-encoded strings.
+        let features = ColumnFeatures::from_field(field);
+        TableColumnStatus {
+            name: field.name().clone(),
+            data_type: field.data_type().clone(),
+            nullable: field.is_nullable(),
+            comment: None,
+            default: None,
+            generated_always_as: features.generation_expression(),
+            identity: features.identity(),
+            is_partition: false,
+            is_bucket: false,
+            is_cluster: false,
+        }
+    }
+
+    fn merge_delta_log_columns(columns: &mut Vec<TableColumnStatus>, schema: &Schema) {
+        let fields_by_name = schema
+            .fields()
+            .iter()
+            .map(|field| (field.name().to_lowercase(), field.as_ref()))
+            .collect::<HashMap<_, _>>();
+        let existing_names = columns
+            .iter()
+            .map(|column| column.name.to_lowercase())
+            .collect::<HashSet<_>>();
+
+        for column in columns.iter_mut() {
+            let Some(field) = fields_by_name.get(&column.name.to_lowercase()) else {
+                continue;
+            };
+            let features = ColumnFeatures::from_field(field);
+            column.data_type = field.data_type().clone();
+            column.nullable = field.is_nullable();
+            column.generated_always_as = features.generation_expression();
+            column.identity = features.identity();
+        }
+
+        columns.extend(
+            schema
+                .fields()
+                .iter()
+                .filter(|field| !existing_names.contains(&field.name().to_lowercase()))
+                .map(|field| Self::delta_log_column_from_field(field.as_ref())),
+        );
+    }
+
     pub(super) async fn rewrite_write_input(
         &self,
         input: LogicalPlan,
@@ -616,8 +700,14 @@ impl PlanResolver<'_> {
         info: &TableInfo,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        if Self::delta_table_requires_feature_rewrite(info) {
-            self.rewrite_delta_write_input_with_generated_columns(input, column_match, info, state)
+        let has_column_expressions = info
+            .columns
+            .iter()
+            .any(|c| c.generated_always_as.is_some() || c.identity.is_some());
+        let requires_delta_not_null_metadata =
+            info.format.eq_ignore_ascii_case("delta") && info.columns.iter().any(|c| !c.nullable);
+        if has_column_expressions || requires_delta_not_null_metadata {
+            self.rewrite_write_input_with_column_expressions(input, column_match, info, state)
                 .await
         } else {
             Self::rewrite_standard_write_input(input, column_match, info)
@@ -699,6 +789,445 @@ impl PlanResolver<'_> {
                 Self::rewrite_standard_write_input(plan, WriteColumnMatch::ByName, info)
             }
         }
+    }
+
+    /// Rewrite the write input when the target table has column-level expressions
+    /// (currently: generated columns). This is the unified path that governs:
+    ///
+    /// - Column matching: `ByPosition` / `ByName` / `ByColumns` are all normalized
+    ///   to a per-table-column provenance map of `input_provided | generated_only`.
+    /// - Expression resolution: generation expressions are parsed, analyzed, and
+    ///   resolved against an intermediate projection whose fields carry the
+    ///   non-generated input values (keyed by registered field IDs).
+    /// - Protocol enforcement: when the user explicitly provides a value for a
+    ///   generated column, the Delta protocol requires
+    ///   `value IS NULL OR value <=> expr IS TRUE`. We enforce this with
+    ///   `CASE WHEN cond THEN gen_expr ELSE raise_error(msg) END`, so mismatches
+    ///   fail at runtime instead of being silently overwritten.
+    /// - Metadata propagation: `delta.generationExpression` is attached via
+    ///   `Alias::with_metadata` so the final arrow schema reaching the writer
+    ///   carries it — this is the canonical carrier for column-level metadata.
+    ///
+    /// This helper is structured so that identity columns and default columns
+    /// can be introduced here using the same column-expression plumbing.
+    async fn rewrite_write_input_with_column_expressions(
+        &self,
+        input: LogicalPlan,
+        column_match: WriteColumnMatch,
+        info: &TableInfo,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let table_field_count = info.columns.len();
+        let generated_count = info
+            .columns
+            .iter()
+            .filter(|c| c.generated_always_as.is_some())
+            .count();
+        let identity_count = info.columns.iter().filter(|c| c.identity.is_some()).count();
+        let required_count = table_field_count - generated_count - identity_count;
+        let input_field_count = input.schema().fields().len();
+
+        // Determine, for each table column, whether the user provided a value (`Some(expr)`
+        // where `expr` is taken from the input plan) or not (`None`, generated cols only).
+        // This produces a deterministic mapping regardless of the column-match strategy.
+        let provided_by_input = Self::classify_input_to_table_columns(
+            &input,
+            &column_match,
+            info,
+            input_field_count,
+            table_field_count,
+            required_count,
+        )?;
+
+        // Register field IDs for each table column. Non-generated cols get their input
+        // aliased to this field ID in the intermediate plan; generated cols are computed
+        // against the intermediate plan in the final projection.
+        let field_ids: Vec<String> = info
+            .columns
+            .iter()
+            .map(|c| state.register_field_name(c.name.clone()))
+            .collect();
+
+        // Field IDs for user-provided values of generated columns — only used when the
+        // user explicitly supplied a value, so the final projection can reach the value
+        // via the intermediate plan to enforce the CHECK.
+        let mut gen_check_field_ids: Vec<Option<String>> = vec![None; table_field_count];
+
+        // Build intermediate plan: one alias expression per non-generated/non-identity table column,
+        // plus one extra alias per user-provided generated-column value.
+        // Cast each expression to the target column type so that generation expressions
+        // are resolved against correctly-typed values (e.g. INT -> BIGINT, string ->
+        // timestamp) and the mismatch check compares type-compatible values.
+        let mut intermediate_aliases: Vec<Expr> = Vec::new();
+        for (idx, provided) in provided_by_input.iter().enumerate() {
+            let col = &info.columns[idx];
+            if col.generated_always_as.is_some() {
+                if let Some(user_expr) = provided {
+                    let check_id = state.register_hidden_field_name(format!("{}__user", col.name));
+                    let cast_expr = user_expr
+                        .clone()
+                        .cast_to(col.field().data_type(), input.schema())?;
+                    intermediate_aliases.push(cast_expr.alias(check_id.clone()));
+                    gen_check_field_ids[idx] = Some(check_id);
+                }
+                continue;
+            }
+            if let Some(identity) = &col.identity {
+                if let Some(user_expr) = provided {
+                    if !identity.allow_explicit_insert {
+                        return Err(PlanError::invalid(format!(
+                            "Providing values for GENERATED ALWAYS AS IDENTITY column `{}` is not supported",
+                            col.name
+                        )));
+                    }
+                    let cast_expr = user_expr
+                        .clone()
+                        .cast_to(col.field().data_type(), input.schema())?;
+                    intermediate_aliases.push(cast_expr.alias(field_ids[idx].clone()));
+                }
+                continue;
+            }
+            let Some(input_expr) = provided else {
+                return Err(PlanError::invalid(format!(
+                    "INSERT is missing value for non-generated column `{}`",
+                    col.name
+                )));
+            };
+            let cast_expr = input_expr
+                .clone()
+                .cast_to(col.field().data_type(), input.schema())?;
+            intermediate_aliases.push(cast_expr.alias(field_ids[idx].clone()));
+        }
+        let intermediate = LogicalPlanBuilder::new(input)
+            .project(intermediate_aliases)?
+            .build()?;
+        let identity_row_number = if identity_count > 0 {
+            Some(state.register_hidden_field_name("__identity_row_number"))
+        } else {
+            None
+        };
+        let plan_for_final_projection = if let Some(alias) = identity_row_number.as_deref() {
+            let row_number_window = Expr::WindowFunction(Box::new(expr::WindowFunction {
+                fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+                params: WindowFunctionParams {
+                    args: vec![],
+                    partition_by: vec![],
+                    order_by: vec![],
+                    window_frame: WindowFrame::new(None),
+                    filter: None,
+                    null_treatment: Some(NullTreatment::RespectNulls),
+                    distinct: false,
+                },
+            }))
+            .alias(alias);
+            LogicalPlanBuilder::from(intermediate)
+                .window(vec![row_number_window])?
+                .build()?
+        } else {
+            intermediate
+        };
+        let intermediate_schema = plan_for_final_projection.schema().clone();
+
+        // Resolve each generation expression against the intermediate schema.
+        let mut gen_exprs: HashMap<String, Expr> = HashMap::new();
+        for col in &info.columns {
+            let Some(gen_expr_str) = col.generated_always_as.as_deref() else {
+                continue;
+            };
+            let spec_expr = parse_delta_generation_expr(gen_expr_str)?;
+            let resolved = self
+                .resolve_expression(spec_expr, &intermediate_schema, state)
+                .await?;
+            gen_exprs.insert(col.name.clone(), resolved);
+        }
+
+        // Build the final projection (one expression per table column, in table order).
+        // The output alias is the human-readable column name so the arrow schema reaching
+        // the writer matches the catalog's table schema by name.
+        let mut final_exprs: Vec<Expr> = Vec::with_capacity(info.columns.len());
+        for (idx, table_col) in info.columns.iter().enumerate() {
+            let out_name = table_col.name.clone();
+            let field = table_col.field();
+            let expr = if let Some(gen_expr_str) = table_col.generated_always_as.as_deref() {
+                let gen_expr = gen_exprs.get(&table_col.name).cloned().ok_or_else(|| {
+                    PlanError::internal(format!(
+                        "expected resolved generation expression for `{}`",
+                        table_col.name
+                    ))
+                })?;
+                let final_expr = if let Some(check_id) = &gen_check_field_ids[idx] {
+                    // User explicitly provided a value. Enforce Delta protocol:
+                    //     value IS NULL OR value <=> generation_expression IS TRUE
+                    // Use `<=>` (null-safe equal) so NULL on either side is handled
+                    // without spurious "IS TRUE" wrapping.
+                    // Cast both sides to the target column type so that type-compatible
+                    // values (e.g. INT 2024 vs BIGINT 2024) are not treated as mismatches.
+                    let user_value = col(Column::from_name(check_id));
+                    let user_value_cast = user_value
+                        .clone()
+                        .cast_to(field.data_type(), &intermediate_schema)?;
+                    let gen_expr_cast = gen_expr
+                        .clone()
+                        .cast_to(field.data_type(), &intermediate_schema)?;
+                    let check = user_value
+                        .clone()
+                        .is_null()
+                        .or(Expr::BinaryExpr(BinaryExpr::new(
+                            Box::new(user_value_cast),
+                            Operator::IsNotDistinctFrom,
+                            Box::new(gen_expr_cast),
+                        )));
+                    let err_msg = format!(
+                        "[DELTA_GENERATED_COLUMNS_VALUE_MISMATCH] \
+                         CHECK constraint for generated column `{}` \
+                         (expression: {}) violated: user-provided value does not match.",
+                        table_col.name, gen_expr_str
+                    );
+                    let raise = ScalarUDF::from(RaiseError::new()).call(vec![lit(err_msg)]);
+                    when(check, gen_expr).otherwise(raise)?
+                } else {
+                    gen_expr
+                };
+                final_expr.cast_to(field.data_type(), &intermediate_schema)?
+            } else if let Some(identity) = &table_col.identity {
+                if provided_by_input[idx].is_some() {
+                    col(Column::from_name(&field_ids[idx]))
+                        .cast_to(field.data_type(), &intermediate_schema)?
+                } else {
+                    let row_number_alias = identity_row_number.as_deref().ok_or_else(|| {
+                        PlanError::internal(format!(
+                            "expected row number for identity column `{}`",
+                            table_col.name
+                        ))
+                    })?;
+                    Self::make_identity_value_expr(
+                        &table_col.name,
+                        identity,
+                        row_number_alias,
+                        &intermediate_schema,
+                    )?
+                    .cast_to(field.data_type(), &intermediate_schema)?
+                }
+            } else {
+                // Regular column: reference the aliased field in intermediate plan.
+                col(Column::from_name(&field_ids[idx]))
+                    .cast_to(field.data_type(), &intermediate_schema)?
+            };
+            let field_meta = Self::make_column_field_metadata(
+                table_col,
+                info.format.eq_ignore_ascii_case("delta") && !table_col.nullable,
+            );
+            let alias = if let Some(meta) = field_meta {
+                expr.alias_with_metadata(out_name, Some(meta))
+            } else {
+                expr.alias(out_name)
+            };
+            final_exprs.push(alias);
+        }
+        Ok(LogicalPlanBuilder::new(plan_for_final_projection)
+            .project(final_exprs)?
+            .build()?)
+    }
+
+    /// Build an `Expr` for each table column that references a user-provided input
+    /// value (if any). `None` indicates the user did not supply a value for that
+    /// table column (only valid for generated columns and identity columns).
+    ///
+    /// Rules per `column_match`:
+    ///
+    /// - `ByPosition`:
+    ///   - If input has `table_field_count` fields: column `i` maps to input `i`.
+    ///   - If input has `required_count` fields: the input lines up with the
+    ///     non-generated/non-identity table columns in table order; generated and
+    ///     identity columns get `None`.
+    ///   - Otherwise: error.
+    /// - `ByName`: each table column looks up (case-insensitive) in the input schema.
+    ///   Columns not found map to `None` (allowed only for generated/identity cols).
+    /// - `ByColumns { columns }`: `columns` enumerates the table columns being
+    ///   provided. Input field `i` binds to the table column whose name matches
+    ///   `columns[i]` (case-insensitive). Anything not listed maps to `None`.
+    fn classify_input_to_table_columns(
+        input: &LogicalPlan,
+        column_match: &WriteColumnMatch,
+        info: &TableInfo,
+        input_field_count: usize,
+        table_field_count: usize,
+        required_count: usize,
+    ) -> PlanResult<Vec<Option<Expr>>> {
+        let input_cols = input.schema().columns();
+        let mut out: Vec<Option<Expr>> = vec![None; table_field_count];
+        match column_match {
+            WriteColumnMatch::ByPosition => {
+                if input_field_count == table_field_count {
+                    if let Some(column) = info.columns.iter().find(|c| {
+                        c.identity
+                            .as_ref()
+                            .is_some_and(|i| !i.allow_explicit_insert)
+                    }) {
+                        return Err(PlanError::invalid(format!(
+                            "Providing values for GENERATED ALWAYS AS IDENTITY column `{}` is not supported",
+                            column.name
+                        )));
+                    }
+                    for (i, input_col) in input_cols.iter().enumerate() {
+                        out[i] = Some(col(input_col.clone()));
+                    }
+                } else if input_field_count == required_count {
+                    let mut required_idx = 0usize;
+                    for (i, table_col) in info.columns.iter().enumerate() {
+                        if Self::table_column_is_omittable(table_col) {
+                            continue;
+                        }
+                        out[i] = Some(col(input_cols[required_idx].clone()));
+                        required_idx += 1;
+                    }
+                } else {
+                    return Err(PlanError::invalid(format!(
+                        "input schema for INSERT has {input_field_count} fields, but table schema has {table_field_count} fields (with {} generated or identity)",
+                        table_field_count - required_count
+                    )));
+                }
+            }
+            WriteColumnMatch::ByName => {
+                for (i, table_col) in info.columns.iter().enumerate() {
+                    let mut matches = input
+                        .schema()
+                        .fields()
+                        .iter()
+                        .filter(|f| f.name().eq_ignore_ascii_case(&table_col.name));
+                    let first = matches.next();
+                    if matches.next().is_some() {
+                        return Err(PlanError::invalid(format!(
+                            "ambiguous column for INSERT by name: {}",
+                            table_col.name
+                        )));
+                    }
+                    if let Some(f) = first {
+                        out[i] = Some(col(Column::from_name(f.name())));
+                        if table_col
+                            .identity
+                            .as_ref()
+                            .is_some_and(|identity| !identity.allow_explicit_insert)
+                        {
+                            return Err(PlanError::invalid(format!(
+                                "Providing values for GENERATED ALWAYS AS IDENTITY column `{}` is not supported",
+                                table_col.name
+                            )));
+                        }
+                    } else if !Self::table_column_is_omittable(table_col) {
+                        return Err(PlanError::invalid(format!(
+                            "column not found for INSERT by name: {}",
+                            table_col.name
+                        )));
+                    }
+                }
+            }
+            WriteColumnMatch::ByColumns { columns } => {
+                if columns.len() != input_field_count {
+                    return Err(PlanError::invalid(format!(
+                        "input schema for INSERT has {input_field_count} fields, but {} columns are specified",
+                        columns.len()
+                    )));
+                }
+                let name_to_pos: HashMap<String, usize> = info
+                    .columns
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| (c.name.to_lowercase(), i))
+                    .collect();
+                for (input_col, user_col) in input_cols.iter().zip(columns.iter()) {
+                    let key = user_col.as_ref().to_lowercase();
+                    let Some(&pos) = name_to_pos.get(&key) else {
+                        return Err(PlanError::invalid(format!(
+                            "column not found in target table: {}",
+                            user_col.as_ref()
+                        )));
+                    };
+                    if out[pos].is_some() {
+                        return Err(PlanError::invalid(format!(
+                            "column `{}` specified more than once in INSERT column list",
+                            user_col.as_ref()
+                        )));
+                    }
+                    if info.columns[pos]
+                        .identity
+                        .as_ref()
+                        .is_some_and(|identity| !identity.allow_explicit_insert)
+                    {
+                        return Err(PlanError::invalid(format!(
+                            "Providing values for GENERATED ALWAYS AS IDENTITY column `{}` is not supported",
+                            info.columns[pos].name
+                        )));
+                    }
+                    out[pos] = Some(col(input_col.clone()));
+                }
+                for table_col in &info.columns {
+                    if !Self::table_column_is_omittable(table_col)
+                        && !columns
+                            .iter()
+                            .any(|name| name.as_ref().eq_ignore_ascii_case(&table_col.name))
+                    {
+                        return Err(PlanError::invalid(format!(
+                            "INSERT is missing value for non-generated column `{}`",
+                            table_col.name
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    fn table_column_is_omittable(column: &TableColumnStatus) -> bool {
+        column.generated_always_as.is_some() || column.identity.is_some()
+    }
+
+    fn make_column_field_metadata(
+        column: &TableColumnStatus,
+        preserve_delta_not_null: bool,
+    ) -> Option<FieldMetadata> {
+        let mut builder = ColumnFeaturesBuilder::new();
+        if let Some(expr) = column.generated_always_as.as_deref() {
+            builder = builder.with_generation_expression(expr);
+        }
+        if let Some(identity) = column.identity.as_ref() {
+            builder = builder.with_identity(identity);
+        }
+        if preserve_delta_not_null {
+            builder = builder.with_not_null_constraint();
+        }
+        (!builder.is_empty()).then(|| FieldMetadata::from(builder.build()))
+    }
+
+    fn make_identity_value_expr(
+        column_name: &str,
+        identity: &CatalogTableColumnIdentity,
+        row_number_alias: &str,
+        schema: &DFSchema,
+    ) -> PlanResult<Expr> {
+        let base = match identity.high_water_mark {
+            Some(high_water_mark) => high_water_mark.checked_add(identity.step).ok_or_else(|| {
+                PlanError::invalid(format!(
+                    "identity column `{column_name}` cannot generate a next value without overflowing BIGINT"
+                ))
+            })?,
+            None => identity.start,
+        };
+        let row_number = col(Column::from_name(row_number_alias))
+            .cast_to(&datafusion::arrow::datatypes::DataType::Int64, schema)?;
+        let row_offset = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(row_number),
+            Operator::Minus,
+            Box::new(lit(1_i64)),
+        ));
+        let product =
+            ScalarUDF::from(SparkTryMult::new()).call(vec![row_offset, lit(identity.step)]);
+        let value = ScalarUDF::from(SparkTryAdd::new()).call(vec![lit(base), product.clone()]);
+        let err_msg = format!(
+            "[DELTA_IDENTITY_COLUMN_VALUE_OVERFLOW] identity column `{column_name}` overflowed BIGINT while generating values"
+        );
+        let raise = ScalarUDF::from(RaiseError::new()).call(vec![lit(err_msg)]);
+        Ok(when(product.is_null().or(value.clone().is_null()), raise).otherwise(value)?)
     }
 
     pub(super) fn resolve_partition_by_expression(

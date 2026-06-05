@@ -6,6 +6,7 @@ use datafusion_expr::{build_join_schema, Expr, Extension, LogicalPlan, SubqueryA
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::TableKind;
+use sail_common_datafusion::column_features::ColumnFeatures;
 use sail_common_datafusion::datasource::OptionLayer;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
@@ -62,6 +63,15 @@ impl PlanResolver<'_> {
 
         let target_schema = target_plan.schema();
         let source_schema = source_plan.schema();
+        if target_schema.fields().iter().any(|field| {
+            ColumnFeatures::from_map(field.metadata())
+                .identity()
+                .is_some()
+        }) {
+            return Err(PlanError::unsupported(
+                "MERGE INTO tables with Delta identity columns is not yet supported",
+            ));
+        }
 
         // Capture the user-facing field names before further resolution pollutes the state.
         let resolved_target_field_names = Self::get_field_names(target_schema, state)?;

@@ -11,13 +11,14 @@ use crate::ast::keywords::{
     Comment, Compute, Constraint, Cost, Create, Data, Database, Databases, Dbproperties, Default,
     Defined, Delete, Delimited, Desc, Describe, Directory, Distributed, Drop, Escaped, Evolution,
     Exists, Explain, Extended, External, Fields, Fileformat, First, For, Format, Formatted, From,
-    Function, Functions, Generated, Global, If, In, Inpath, Inputformat, Insert, Into, Is, Items,
-    Keys, Lazy, Like, Lines, Load, Local, Location, Map, Matched, Merge, Name, Namespace,
-    Namespaces, Noscan, Not, Null, On, Options, Or, Outputformat, Overwrite, Partition,
-    Partitioned, Partitions, Properties, Purge, Recover, Refresh, Rename, Replace, Restrict, Row,
-    Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted, Source, Statistics, Stored, Table,
-    Tables, Target, Tblproperties, Temp, Temporary, Terminated, Then, Time, To, Type, Uncache,
-    Unset, Update, Use, Using, Values, Verbose, View, Views, When, With, Zone,
+    Function, Functions, Generated, Global, Identity, If, In, Increment, Inpath, Inputformat,
+    Insert, Into, Is, Items, Keys, Lazy, Like, Lines, Load, Local, Location, Map, Matched, Merge,
+    Name, Namespace, Namespaces, Noscan, Not, Null, On, Options, Or, Outputformat, Overwrite,
+    Partition, Partitioned, Partitions, Properties, Purge, Recover, Refresh, Rename, Replace,
+    Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted, Source, Start,
+    Statistics, Stored, Table, Tables, Target, Tblproperties, Temp, Temporary, Terminated, Then,
+    Time, To, Type, Uncache, Unset, Update, Use, Using, Values, Verbose, View, Views, When, With,
+    Zone,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{
@@ -436,6 +437,21 @@ pub struct ColumnDefinition {
 pub enum ColumnDefinitionOption {
     NotNull(Not, Null),
     Default(Default, #[parser(function = |e, _| e)] Expr),
+    GeneratedAlwaysIdentity(
+        Generated,
+        Always,
+        As,
+        Identity,
+        Option<TableColumnIdentityOptions>,
+    ),
+    GeneratedByDefaultIdentity(
+        Generated,
+        By,
+        Default,
+        As,
+        Identity,
+        Option<TableColumnIdentityOptions>,
+    ),
     Generated(
         Generated,
         Always,
@@ -445,6 +461,19 @@ pub enum ColumnDefinitionOption {
         RightParenthesis,
     ),
     Comment(Comment, StringLiteral),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub struct TableColumnIdentityOptions {
+    pub left: LeftParenthesis,
+    pub options: Vec<TableColumnIdentityOption>,
+    pub right: RightParenthesis,
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum TableColumnIdentityOption {
+    StartWith(Start, With, Option<Either<Plus, Minus>>, NumberLiteral),
+    IncrementBy(Increment, By, Option<Either<Plus, Minus>>, NumberLiteral),
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
