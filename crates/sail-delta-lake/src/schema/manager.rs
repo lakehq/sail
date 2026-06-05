@@ -447,7 +447,8 @@ mod tests {
             "delta.constraints.positive_id".to_string(),
             "id > 0".to_string(),
         );
-        let protocol = protocol_for_create(false, false, false, false, false, false, &config)?;
+        let protocol =
+            protocol_for_create(false, false, false, false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 1);
         assert_eq!(protocol.min_writer_version(), 3);
         assert_eq!(protocol.reader_features(), None);
@@ -463,7 +464,8 @@ mod tests {
             "id > 0".to_string(),
         );
         config.insert("delta.checkpointPolicy".to_string(), "v2".to_string());
-        let protocol = protocol_for_create(false, false, false, false, false, false, &config)?;
+        let protocol =
+            protocol_for_create(false, false, false, false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
         assert!(protocol.has_reader_feature(&TableFeature::V2Checkpoint));

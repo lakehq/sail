@@ -798,6 +798,11 @@ impl DeltaTableFormat {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let desired_protocol = protocol_for_metadata(&updated_metadata)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let desired_protocol = avoid_stable_type_widening_auto_upgrade_for_preview_tables(
+            snapshot.protocol(),
+            &desired_protocol,
+            updated_metadata.configuration(),
+        );
         let (merged_protocol, protocol_upgraded) =
             merge_protocol_for_upgrade(snapshot.protocol(), &desired_protocol);
 
@@ -1423,5 +1428,63 @@ mod tests {
             }
             _ => unreachable!("expected OptionList"),
         }
+    }
+
+    #[test]
+    fn preview_type_widening_guard_removes_implicit_stable_upgrade() {
+        let existing = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::TypeWideningPreview]),
+            Some(vec![TableFeature::TypeWideningPreview]),
+        );
+        let desired = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::TypeWidening]),
+            Some(vec![
+                TableFeature::AllowColumnDefaults,
+                TableFeature::TypeWidening,
+            ]),
+        );
+
+        let adjusted = avoid_stable_type_widening_auto_upgrade_for_preview_tables(
+            &existing,
+            &desired,
+            &HashMap::new(),
+        );
+
+        assert!(!adjusted.has_reader_feature(&TableFeature::TypeWidening));
+        assert!(!adjusted.has_writer_feature(&TableFeature::TypeWidening));
+        assert!(adjusted.has_writer_feature(&TableFeature::AllowColumnDefaults));
+    }
+
+    #[test]
+    fn preview_type_widening_guard_preserves_explicit_stable_request() {
+        let existing = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::TypeWideningPreview]),
+            Some(vec![TableFeature::TypeWideningPreview]),
+        );
+        let desired = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::TypeWidening]),
+            Some(vec![TableFeature::TypeWidening]),
+        );
+        let configuration = HashMap::from([(
+            "delta.feature.typeWidening".to_string(),
+            "supported".to_string(),
+        )]);
+
+        let adjusted = avoid_stable_type_widening_auto_upgrade_for_preview_tables(
+            &existing,
+            &desired,
+            &configuration,
+        );
+
+        assert!(adjusted.has_reader_feature(&TableFeature::TypeWidening));
+        assert!(adjusted.has_writer_feature(&TableFeature::TypeWidening));
     }
 }
