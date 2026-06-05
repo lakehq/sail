@@ -264,6 +264,7 @@ impl UnityCatalogProvider {
                     comment,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                     is_partition: partition_index.is_some(),
                     is_bucket: false,
                     is_cluster: false,

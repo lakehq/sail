@@ -1113,7 +1113,7 @@ service ThriftHiveMetastore
   GetTableResult get_table_req(1:GetTableRequest req)
                        throws (1:MetaException o1, 2:NoSuchObjectException o2)
   GetTablesResult get_table_objects_by_name_req(1:GetTablesRequest req)
-				   throws (1:MetaException o1, 2:InvalidOperationException o2, 3:UnknownDBException o3)
+                   throws (1:MetaException o1, 2:InvalidOperationException o2, 3:UnknownDBException o3)
 
   // Get a list of table names that match a filter.
   // The filter operators are LIKE, <, <=, >, >=, =, <>
@@ -1240,14 +1240,14 @@ service ThriftHiveMetastore
   // number of partition columns - the unspecified values are considered the same
   // as "".
   list<Partition> get_partitions_ps(1:string db_name 2:string tbl_name
-  	3:list<string> part_vals, 4:i16 max_parts=-1)
+    3:list<string> part_vals, 4:i16 max_parts=-1)
                        throws(1:MetaException o1, 2:NoSuchObjectException o2)
   list<Partition> get_partitions_ps_with_auth(1:string db_name, 2:string tbl_name, 3:list<string> part_vals, 4:i16 max_parts=-1,
      5: string user_name, 6: list<string> group_names) throws(1:NoSuchObjectException o1, 2:MetaException o2)
 
   list<string> get_partition_names_ps(1:string db_name,
-  	2:string tbl_name, 3:list<string> part_vals, 4:i16 max_parts=-1)
-  	                   throws(1:MetaException o1, 2:NoSuchObjectException o2)
+    2:string tbl_name, 3:list<string> part_vals, 4:i16 max_parts=-1)
+                       throws(1:MetaException o1, 2:NoSuchObjectException o2)
 
   // get the partitions matching the given partition filter
   list<Partition> get_partitions_by_filter(1:string db_name 2:string tbl_name
@@ -1299,7 +1299,7 @@ service ThriftHiveMetastore
   // returns whether or not the partition name is valid based on the value of the config
   // hive.metastore.partition.name.whitelist.pattern
   bool partition_name_has_valid_characters(1:list<string> part_vals, 2:bool throw_exception)
- 	throws(1: MetaException o1)
+     throws(1: MetaException o1)
 
   // gets the value of the configuration key in the metastore server. returns
   // defaultValue if the key does not exist. if the configuration key does not
