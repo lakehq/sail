@@ -108,6 +108,7 @@ message ExtendedScalarUdf {
     SparkStructRenameUdf spark_struct_rename = 26;
     SparkWindowBucketsUdf spark_window_buckets = 27;
     SparkToCharUdf spark_to_char = 28;
+    SparkToXmlUdf spark_to_xml = 29;
   }
 }
 
@@ -162,6 +163,10 @@ message ExplodeUdf {
 
 message XpathTypedUdf {
   string name = 1;
+}
+
+message SparkToXmlUdf {
+    string session_timezone = 1;
 }
 
 message SparkUnixTimestampUdf {
