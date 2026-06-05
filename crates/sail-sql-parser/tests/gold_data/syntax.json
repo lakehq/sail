@@ -186,6 +186,31 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(Add)"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Constraint)"
+                      },
+                      {
+                        "nonTerminal": "Identifier"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Check)"
+                      },
+                      {
+                        "nonTerminal": "Operator(LeftParenthesis)"
+                      },
+                      {
+                        "nonTerminal": "Expression"
+                      },
+                      {
+                        "nonTerminal": "Operator(RightParenthesis)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Keyword(Drop)"
                       },
                       {
@@ -4236,6 +4261,14 @@
               }
             },
             {
+              "name": "Keyword(Check)",
+              "node": {
+                "terminal": {
+                  "keyword": "CHECK"
+                }
+              }
+            },
+            {
               "name": "Keyword(Clear)",
               "node": {
                 "terminal": {
@@ -4304,6 +4337,14 @@
               "node": {
                 "terminal": {
                   "keyword": "COMPUTE"
+                }
+              }
+            },
+            {
+              "name": "Keyword(Constraint)",
+              "node": {
+                "terminal": {
+                  "keyword": "CONSTRAINT"
                 }
               }
             },

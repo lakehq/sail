@@ -145,6 +145,11 @@ fn apply_alter_table_options(
             };
             column.r#type = Some(FastStr::from(hive_type));
         }
+        AlterTableOptions::AddCheckConstraint { .. } => {
+            return Err(CatalogError::NotSupported(
+                "CHECK constraints are handled by lakehouse table formats".to_string(),
+            ));
+        }
     }
     Ok(())
 }

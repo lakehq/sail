@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion::arrow::datatypes::{FieldRef, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::plan_datafusion_err;
 use datafusion::physical_expr::{
@@ -187,6 +187,13 @@ pub struct SourceInfo {
     pub options: Vec<OptionLayer>,
 }
 
+/// Metadata about an existing table format instance needed during logical planning.
+#[derive(Debug, Clone)]
+pub struct TableFormatMetadata {
+    pub schema: SchemaRef,
+    pub properties: Vec<(String, String)>,
+}
+
 /// Information required to create a data writer.
 #[derive(Debug, Clone)]
 pub struct SinkInfo {
@@ -295,6 +302,28 @@ pub struct RowLevelWriteInfo {
 // - Emit Metadata (and Protocol if required) in writer/commit so the new schema is persisted and readable.
 // - Reading: time-travel must stay on the requested version; non-time-travel can refresh to latest snapshot to see new schema.
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum TableFormatAlterTableOperation {
+    /// Alters table properties (SET/UNSET TBLPROPERTIES).
+    ///
+    /// `changes` is a list of `(key, value)` pairs where `value` is `Some(v)` to set a property,
+    /// or `None` to unset/remove it. When `if_exists` is `false`, implementations MUST error if
+    /// an UNSET key is not present on the table; when `if_exists` is `true`, UNSET for a missing
+    /// key is a no-op. The implementation is responsible for committing these changes to the
+    /// underlying table storage (e.g., writing a new Delta log entry).
+    SetTableProperties {
+        changes: Vec<(String, Option<String>)>,
+        if_exists: bool,
+    },
+    /// Alters the type of a table column.
+    AlterColumnType {
+        column_path: Vec<String>,
+        data_type: DataType,
+    },
+    /// Adds a CHECK constraint after the caller has validated existing rows.
+    AddCheckConstraint { name: String, expression: String },
+}
+
 /// A trait for preparing physical execution for a specific format.
 #[async_trait]
 pub trait TableFormat: Send + Sync {
@@ -311,6 +340,18 @@ pub trait TableFormat: Send + Sync {
     /// Infers the logical schema for planning without requiring callers to construct a read source.
     async fn infer_schema(&self, ctx: &dyn Session, info: SourceInfo) -> Result<SchemaRef> {
         Ok(self.create_source(ctx, info).await?.schema())
+    }
+
+    /// Infers table metadata for planning without requiring callers to construct a read source.
+    async fn infer_metadata(
+        &self,
+        ctx: &dyn Session,
+        info: SourceInfo,
+    ) -> Result<TableFormatMetadata> {
+        Ok(TableFormatMetadata {
+            schema: self.infer_schema(ctx, info).await?,
+            properties: vec![],
+        })
     }
 
     /// Creates a `ExecutionPlan` for write.
@@ -339,40 +380,15 @@ pub trait TableFormat: Send + Sync {
         MergeStrategy::Eager
     }
 
-    /// Alters table properties (SET/UNSET TBLPROPERTIES).
-    ///
-    /// `changes` is a list of `(key, value)` pairs where `value` is `Some(v)` to set a property,
-    /// or `None` to unset/remove it. When `if_exists` is `false`, implementations MUST error if
-    /// an UNSET key is not present on the table; when `if_exists` is `true`, UNSET for a missing
-    /// key is a no-op. The implementation is responsible for committing these changes to the
-    /// underlying table storage (e.g., writing a new Delta log entry).
-    async fn alter_table_properties(
+    /// Alters table-format storage metadata for an existing table.
+    async fn alter_table(
         &self,
         runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
         path: &str,
-        changes: Vec<(String, Option<String>)>,
-        if_exists: bool,
+        operation: TableFormatAlterTableOperation,
     ) -> Result<()> {
-        let _ = (runtime_env, path, changes, if_exists);
-        not_impl_err!(
-            "Table properties alteration not supported for {} format",
-            self.name()
-        )
-    }
-
-    /// Alters the type of a table column.
-    async fn alter_table_column_type(
-        &self,
-        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
-        path: &str,
-        column_path: Vec<String>,
-        data_type: datafusion::arrow::datatypes::DataType,
-    ) -> Result<()> {
-        let _ = (runtime_env, path, column_path, data_type);
-        not_impl_err!(
-            "Column type alteration not supported for {} format",
-            self.name()
-        )
+        let _ = (runtime_env, path, operation);
+        not_impl_err!("ALTER TABLE is not supported for {} format", self.name())
     }
 }
 

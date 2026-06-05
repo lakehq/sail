@@ -429,6 +429,7 @@ impl OperationMetrics {
             | DeltaOperation::Write { .. }
             | DeltaOperation::Create { .. }
             | DeltaOperation::SetTableProperties { .. }
+            | DeltaOperation::AddConstraint { .. }
             | DeltaOperation::UnsetTableProperties { .. }
             | DeltaOperation::AlterColumn { .. } => {} // TODO: When the following operations are implemented, extend this match:
                                                        //   - UPDATE: numAddedFiles, numRemovedFiles, numUpdatedRows, numCopiedRows,

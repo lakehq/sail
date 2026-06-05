@@ -2024,6 +2024,18 @@ fn from_ast_alter_table_operation(
             name: from_ast_object_name(name)?,
             data_type: from_ast_data_type(data_type)?,
         }),
+        AlterTableOperation::AddConstraint {
+            name, expression, ..
+        } => {
+            let source = expression.text().trim().to_string();
+            Ok(spec::AlterTableOperation::AddCheckConstraint {
+                name: name.value.into(),
+                expression: spec::ExprWithSource {
+                    expr: from_ast_expression(expression)?,
+                    source: Some(source),
+                },
+            })
+        }
         AlterTableOperation::RenameTable { .. }
         | AlterTableOperation::RenamePartition { .. }
         | AlterTableOperation::DropColumns { .. }

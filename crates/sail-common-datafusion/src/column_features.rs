@@ -1,7 +1,7 @@
 //! Engine-level contract for column-feature metadata.
 //!
-//! Column features (generation expressions, identity columns, invariants,
-//! default values, internal markers) are carried on arrow `Field::metadata`
+//! Column features (generation expressions, identity columns, default values,
+//! internal markers) are carried on arrow `Field::metadata`
 //! throughout the plan pipeline. This module defines the canonical key
 //! namespace and provides a typed read/write API so callers do not reach for
 //! raw string keys.
@@ -27,12 +27,16 @@ use crate::catalog::CatalogTableColumnIdentity;
 /// Keys identifying column features carried on arrow field metadata.
 ///
 /// This enum is `#[non_exhaustive]` so additional features (identity, default
-/// value, invariants, …) can be added without breaking downstream matches.
+/// value, constraints, …) can be added without breaking downstream matches.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ColumnFeatureKey {
     /// SQL expression that deterministically produces the column's value.
     GenerationExpression,
+    /// Sail-only marker used in the planning pipeline to preserve a Delta NOT NULL
+    /// constraint when DataFusion expression rewrites make the output nullable.
+    /// Delta/Spark stores this as `StructField(nullable = false)`, not as column metadata.
+    NotNullConstraint,
     /// Starting value for a Delta identity column.
     IdentityStart,
     /// Increment between generated identity values.
@@ -47,6 +51,7 @@ impl ColumnFeatureKey {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::GenerationExpression => "delta.generationExpression",
+            Self::NotNullConstraint => "sail.column.notNull",
             Self::IdentityStart => "delta.identity.start",
             Self::IdentityStep => "delta.identity.step",
             Self::IdentityHighWaterMark => "delta.identity.highWaterMark",
@@ -64,7 +69,7 @@ impl AsRef<str> for ColumnFeatureKey {
 /// Typed read-only view over a column's engine-level feature metadata.
 ///
 /// Construct via [`ColumnFeatures::from_field`] or [`ColumnFeatures::from_map`]
-/// to read generation expressions, identity specs, invariants, defaults, etc.
+/// to read generation expressions, identity specs, defaults, etc.
 /// without touching raw string keys.
 #[derive(Debug, Clone, Copy)]
 pub struct ColumnFeatures<'a> {
@@ -91,6 +96,12 @@ impl<'a> ColumnFeatures<'a> {
         self.metadata
             .get(ColumnFeatureKey::GenerationExpression.as_str())
             .map(|v| serde_json::from_str::<String>(v).unwrap_or_else(|_| v.clone()))
+    }
+
+    pub fn is_not_null_constraint(&self) -> bool {
+        self.metadata
+            .get(ColumnFeatureKey::NotNullConstraint.as_str())
+            .is_some_and(|v| v.eq_ignore_ascii_case("true"))
     }
 
     /// Returns identity column metadata if the column is an identity column.
@@ -148,6 +159,14 @@ impl ColumnFeaturesBuilder {
         self.entries.insert(
             ColumnFeatureKey::GenerationExpression.as_str().to_string(),
             expr.into(),
+        );
+        self
+    }
+
+    pub fn with_not_null_constraint(mut self) -> Self {
+        self.entries.insert(
+            ColumnFeatureKey::NotNullConstraint.as_str().to_string(),
+            "true".to_string(),
         );
         self
     }

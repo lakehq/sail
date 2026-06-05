@@ -346,7 +346,7 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     // writer_features.insert(TableFeature::ChangeDataFeed);
     // FIXME: implement delta.invariants
     writer_features.insert(TableFeature::Invariants);
-    // writer_features.insert(TableFeature::CheckConstraints);
+    writer_features.insert(TableFeature::CheckConstraints);
     writer_features.insert(TableFeature::GeneratedColumns);
     writer_features.insert(TableFeature::IdentityColumns);
     writer_features.insert(TableFeature::V2Checkpoint);
