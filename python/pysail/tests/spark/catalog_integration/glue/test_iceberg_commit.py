@@ -55,6 +55,39 @@ def _metadata_filename(location: str) -> str:
     return PurePosixPath(urllib.parse.urlparse(location).path).name
 
 
+def test_ctas_records_glue_iceberg_metadata_location(
+    glue_spark: SparkSession,
+    moto_endpoint: str,
+    tmp_path: Path,
+) -> None:
+    database = "glue_iceberg_ctas_db"
+    table = "ctas_t"
+    table_fqn = f"{database}.{table}"
+    location = (tmp_path / "ctas_t").as_uri()
+
+    glue_spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
+    try:
+        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        glue_spark.sql(
+            f"""
+            CREATE TABLE {table_fqn}
+            USING ICEBERG
+            LOCATION '{location}'
+            AS SELECT 1 AS id, 'a' AS name
+            """
+        )
+
+        metadata_location = _metadata_location(moto_endpoint, database, table)
+        assert metadata_location.startswith(location)
+        assert not _metadata_filename(metadata_location).startswith("v")
+
+        rows = glue_spark.sql(f"SELECT id, name FROM {table_fqn}").collect()
+        assert [(row.id, row.name) for row in rows] == [(1, "a")]
+    finally:
+        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        glue_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+
+
 def test_insert_advances_glue_iceberg_metadata_location(
     glue_spark: SparkSession,
     moto_endpoint: str,

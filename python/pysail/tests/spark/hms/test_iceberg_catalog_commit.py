@@ -68,19 +68,15 @@ def test_sail_insert_advances_hms_iceberg_metadata_location(
 
     hms_s3_spark.sql(
         f"""
-        CREATE TABLE {table_fqn} (
-          id INT,
-          name STRING
-        )
+        CREATE TABLE {table_fqn}
         USING ICEBERG
+        AS SELECT 1 AS id, 'a' AS name
         """
     )
-
-    hms_s3_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a'), (2, 'b')")
     first_location = _metadata_location(reference_spark_s3, hms_s3_database, table)
     assert not _metadata_filename(first_location).startswith("v")
 
-    hms_s3_spark.sql(f"INSERT INTO {table_fqn} VALUES (3, 'c')")
+    hms_s3_spark.sql(f"INSERT INTO {table_fqn} VALUES (2, 'b'), (3, 'c')")
     second_location = _metadata_location(reference_spark_s3, hms_s3_database, table)
     assert second_location != first_location
     assert not _metadata_filename(second_location).startswith("v")
@@ -99,14 +95,11 @@ def test_sail_reads_and_appends_hms_iceberg_table_with_jvm_style_marker(
 
     hms_s3_spark.sql(
         f"""
-        CREATE TABLE {table_fqn} (
-          id INT,
-          name STRING
-        )
+        CREATE TABLE {table_fqn}
         USING ICEBERG
+        AS SELECT 1 AS id, 'a' AS name
         """
     )
-    hms_s3_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a')")
     first_location = _metadata_location(reference_spark_s3, hms_s3_database, table)
 
     properties = _catalog_properties(reference_spark_s3, hms_s3_database, table)
@@ -141,14 +134,11 @@ def test_hms_rejects_stale_iceberg_metadata_location_update(
 
     hms_s3_spark.sql(
         f"""
-        CREATE TABLE {table_fqn} (
-          id INT,
-          name STRING
-        )
+        CREATE TABLE {table_fqn}
         USING ICEBERG
+        AS SELECT 1 AS id, 'a' AS name
         """
     )
-    hms_s3_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a')")
     current_location = _metadata_location(reference_spark_s3, hms_s3_database, table)
 
     with pytest.raises(Exception, match="base metadata location"):
@@ -163,3 +153,25 @@ def test_hms_rejects_stale_iceberg_metadata_location_update(
         )
 
     assert _metadata_location(reference_spark_s3, hms_s3_database, table) == current_location
+
+
+def test_hms_rejects_plain_iceberg_create_without_metadata_location(
+    hms_s3_spark: SparkSession,
+    hms_s3_database: str,
+) -> None:
+    table = "iceberg_plain_create"
+    table_fqn = f"{hms_s3_database}.{table}"
+
+    with pytest.raises(Exception, match="plain CREATE TABLE USING ICEBERG"):
+        hms_s3_spark.sql(
+            f"""
+            CREATE TABLE {table_fqn} (
+              id INT,
+              name STRING
+            )
+            USING ICEBERG
+            """
+        )
+
+    rows = hms_s3_spark.sql(f"SHOW TABLES IN {hms_s3_database} LIKE '{table}'").collect()
+    assert rows == []

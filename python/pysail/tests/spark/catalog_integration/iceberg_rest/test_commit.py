@@ -32,6 +32,30 @@ def _load_table(iceberg_rest_endpoint: str, table_name: str) -> dict:
         return json.load(response)
 
 
+def test_ctas_records_rest_catalog_metadata_location(
+    iceberg_spark: SparkSession,
+    iceberg_rest_endpoint: str,
+) -> None:
+    table_name = "ctas_t"
+    iceberg_spark.sql(f"DROP TABLE IF EXISTS {NAMESPACE}.{table_name}")
+    iceberg_spark.sql(
+        f"""
+        CREATE TABLE {NAMESPACE}.{table_name}
+        USING iceberg
+        AS SELECT 1 AS id, 'a' AS name
+        """
+    )
+
+    table = _load_table(iceberg_rest_endpoint, table_name)
+    metadata_location = table["metadata-location"]
+    assert metadata_location
+    assert not PurePosixPath(metadata_location).name.startswith("v")
+    assert table["metadata"]["current-snapshot-id"] is not None
+
+    rows = iceberg_spark.sql(f"SELECT id, name FROM {NAMESPACE}.{table_name}").collect()  # noqa: S608
+    assert [(row["id"], row["name"]) for row in rows] == [(1, "a")]
+
+
 def test_insert_advances_rest_catalog_metadata_location(
     iceberg_spark: SparkSession,
     iceberg_rest_endpoint: str,
