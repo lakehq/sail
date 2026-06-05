@@ -611,6 +611,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
         },
         CreateTableColumnOptions {
             name: "bar".to_string(),
@@ -626,6 +627,7 @@ async fn test_create_table() {
             comment: Some("meow".to_string()),
             default: None,
             generated_always_as: None,
+            identity: None,
         },
         CreateTableColumnOptions {
             name: "baz".to_string(),
@@ -644,6 +646,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
         },
         CreateTableColumnOptions {
             name: "mew".to_string(),
@@ -655,6 +658,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
         },
     ];
 
@@ -730,6 +734,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: false,
             is_bucket: false,
             is_cluster: false,
@@ -750,6 +755,7 @@ async fn test_create_table() {
             comment: Some("meow".to_string()),
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: false,
             is_bucket: false,
             is_cluster: false,
@@ -773,6 +779,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: false,
             is_bucket: false,
             is_cluster: false,
@@ -789,6 +796,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: false,
             is_bucket: false,
             is_cluster: false,
@@ -847,6 +855,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
         },
         CreateTableColumnOptions {
             name: "bar".to_string(),
@@ -855,6 +864,7 @@ async fn test_create_table() {
             comment: Some("meow".to_string()),
             default: None,
             generated_always_as: None,
+            identity: None,
         },
         CreateTableColumnOptions {
             name: "baz".to_string(),
@@ -863,6 +873,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
         },
     ];
     let table = unity_catalog
@@ -948,6 +959,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: false,
             is_bucket: false,
             is_cluster: false,
@@ -961,6 +973,7 @@ async fn test_create_table() {
             comment: Some("meow".to_string()),
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: false,
             is_bucket: false,
             is_cluster: false,
@@ -974,6 +987,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: true,
             is_bucket: false,
             is_cluster: false,
@@ -1019,6 +1033,7 @@ async fn test_get_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
         },
         CreateTableColumnOptions {
             name: "bar".to_string(),
@@ -1027,6 +1042,7 @@ async fn test_get_table() {
             comment: Some("meow".to_string()),
             default: None,
             generated_always_as: None,
+            identity: None,
         },
         CreateTableColumnOptions {
             name: "baz".to_string(),
@@ -1035,6 +1051,7 @@ async fn test_get_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
         },
     ];
     unity_catalog
@@ -1129,6 +1146,7 @@ async fn test_get_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: false,
             is_bucket: false,
             is_cluster: false,
@@ -1142,6 +1160,7 @@ async fn test_get_table() {
             comment: Some("meow".to_string()),
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: false,
             is_bucket: false,
             is_cluster: false,
@@ -1155,6 +1174,7 @@ async fn test_get_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: true,
             is_bucket: false,
             is_cluster: false,
@@ -1195,6 +1215,7 @@ async fn test_list_tables() {
         comment: None,
         default: None,
         generated_always_as: None,
+        identity: None,
     }];
 
     let tables = unity_catalog.list_tables(&ns).await.unwrap();
@@ -1291,6 +1312,7 @@ async fn test_drop_table() {
         comment: None,
         default: None,
         generated_always_as: None,
+        identity: None,
     }];
 
     unity_catalog

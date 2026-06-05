@@ -19,6 +19,7 @@ use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use sail_common_datafusion::logical_expr::ExprWithSource;
+use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 
 use super::commit::assemble_commit_plan;
 use super::context::PlannerContext;
@@ -26,8 +27,8 @@ use super::metadata_predicate::{build_metadata_filter, predicate_requires_stats}
 use super::utils::{build_log_replay_pipeline_with_options, LogReplayOptions};
 use crate::kernel::DeltaOperation;
 use crate::physical_plan::{
-    prepare_delta_write_context, DeltaCommitContext, DeltaDiscoveryExec,
-    DeltaPhysicalExprAdapterFactory, DeltaScanByAddsExec, DeltaWriterExecOptions,
+    prepare_delta_write_context, DeltaCommitContext, DeltaDiscoveryExec, DeltaScanByAddsExec,
+    DeltaWriterExecOptions,
 };
 
 pub async fn build_delete_plan(
@@ -103,7 +104,7 @@ pub async fn build_delete_plan(
 
     // Adapt the predicate to the scan schema. PhysicalExpr Column indices are schema-dependent,
     // and DeltaScanByAddsExec may reorder/augment the schema compared to the original table schema.
-    let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
+    let adapter_factory = Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {});
     let adapter = adapter_factory
         .create(table_schema.clone(), scan_exec.schema())
         .map_err(|e| DataFusionError::External(Box::new(e)))?;

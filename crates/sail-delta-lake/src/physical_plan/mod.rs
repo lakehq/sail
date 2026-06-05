@@ -30,7 +30,6 @@ mod action_schema;
 mod commit_exec;
 pub mod discovery_exec;
 mod dv_writer_exec;
-mod expr_adapter;
 mod log_replay_exec;
 mod meta_adds;
 mod metadata_stats_exec;
@@ -48,7 +47,6 @@ pub use action_schema::{
 pub use commit_exec::DeltaCommitExec;
 pub use discovery_exec::DeltaDiscoveryExec;
 pub use dv_writer_exec::{DeletionVectorRowsWriterExec, DeletionVectorWriterExec};
-pub use expr_adapter::{DeltaCastColumnExpr, DeltaPhysicalExprAdapterFactory};
 pub use log_replay_exec::DeltaLogReplayExec;
 pub use metadata_stats_exec::DeltaMetadataStatsExec;
 pub mod planner;

@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::plan_datafusion_err;
 use datafusion::physical_expr::{
@@ -193,6 +193,13 @@ pub struct SourceInfo {
     pub options: Vec<OptionLayer>,
 }
 
+/// Metadata about an existing table format instance needed during logical planning.
+#[derive(Debug, Clone)]
+pub struct TableFormatMetadata {
+    pub schema: SchemaRef,
+    pub properties: Vec<(String, String)>,
+}
+
 /// Information required to create a data writer.
 #[derive(Debug, Clone)]
 pub struct SinkInfo {
@@ -301,6 +308,33 @@ pub struct RowLevelWriteInfo {
 // - Emit Metadata (and Protocol if required) in writer/commit so the new schema is persisted and readable.
 // - Reading: time-travel must stay on the requested version; non-time-travel can refresh to latest snapshot to see new schema.
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum TableFormatAlterTableOperation {
+    /// Alters table properties (SET/UNSET TBLPROPERTIES).
+    ///
+    /// `changes` is a list of `(key, value)` pairs where `value` is `Some(v)` to set a property,
+    /// or `None` to unset/remove it. When `if_exists` is `false`, implementations MUST error if
+    /// an UNSET key is not present on the table; when `if_exists` is `true`, UNSET for a missing
+    /// key is a no-op. The implementation is responsible for committing these changes to the
+    /// underlying table storage (e.g., writing a new Delta log entry).
+    SetTableProperties {
+        changes: Vec<(String, Option<String>)>,
+        if_exists: bool,
+    },
+    /// Alters the type of a table column.
+    AlterColumnType {
+        column_path: Vec<String>,
+        data_type: DataType,
+    },
+    /// Alters the default expression of a table column.
+    AlterColumnDefault {
+        column_path: Vec<String>,
+        default: Option<String>,
+    },
+    /// Adds a CHECK constraint after the caller has validated existing rows.
+    AddCheckConstraint { name: String, expression: String },
+}
+
 /// A trait for preparing physical execution for a specific format.
 #[async_trait]
 pub trait TableFormat: Send + Sync {
@@ -317,6 +351,18 @@ pub trait TableFormat: Send + Sync {
     /// Infers the logical schema for planning without requiring callers to construct a read source.
     async fn infer_schema(&self, ctx: &dyn Session, info: SourceInfo) -> Result<SchemaRef> {
         Ok(self.create_source(ctx, info).await?.schema())
+    }
+
+    /// Infers table metadata for planning without requiring callers to construct a read source.
+    async fn infer_metadata(
+        &self,
+        ctx: &dyn Session,
+        info: SourceInfo,
+    ) -> Result<TableFormatMetadata> {
+        Ok(TableFormatMetadata {
+            schema: self.infer_schema(ctx, info).await?,
+            properties: vec![],
+        })
     }
 
     /// Creates a `ExecutionPlan` for write.
@@ -343,6 +389,41 @@ pub trait TableFormat: Send + Sync {
     /// Defaults to [`MergeStrategy::Eager`]. Override for Merge-on-Read formats.
     fn merge_strategy(&self) -> MergeStrategy {
         MergeStrategy::Eager
+    }
+
+    /// Alters table-format storage metadata for an existing table.
+    async fn alter_table(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+        operation: TableFormatAlterTableOperation,
+    ) -> Result<()> {
+        match operation {
+            TableFormatAlterTableOperation::SetTableProperties { changes, if_exists } => {
+                self.alter_table_properties(runtime_env, path, changes, if_exists)
+                    .await
+            }
+            TableFormatAlterTableOperation::AlterColumnType {
+                column_path,
+                data_type,
+            } => {
+                self.alter_table_column_type(runtime_env, path, column_path, data_type)
+                    .await
+            }
+            TableFormatAlterTableOperation::AlterColumnDefault {
+                column_path,
+                default,
+            } => {
+                self.alter_table_column_default(runtime_env, path, column_path, default)
+                    .await
+            }
+            TableFormatAlterTableOperation::AddCheckConstraint { .. } => {
+                not_impl_err!(
+                    "CHECK constraint alteration not supported for {} format",
+                    self.name()
+                )
+            }
+        }
     }
 
     /// Alters table properties (SET/UNSET TBLPROPERTIES).
@@ -377,6 +458,21 @@ pub trait TableFormat: Send + Sync {
         let _ = (runtime_env, path, column_path, data_type);
         not_impl_err!(
             "Column type alteration not supported for {} format",
+            self.name()
+        )
+    }
+
+    /// Alters the default expression of a table column.
+    async fn alter_table_column_default(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+        column_path: Vec<String>,
+        default: Option<String>,
+    ) -> Result<()> {
+        let _ = (runtime_env, path, column_path, default);
+        not_impl_err!(
+            "Column default alteration not supported for {} format",
             self.name()
         )
     }
@@ -454,13 +550,13 @@ pub fn create_sort_order(
     }
 }
 
-/// Given a schema and a list of partition columns, returns the partition columns
-/// with their data types, and a schema with the partition columns removed.
+/// Given a schema and a list of partition column names, returns the partition fields
+/// and a schema with the partition columns removed.
 pub fn get_partition_columns_and_file_schema(
     schema: &Schema,
     partition_by: Vec<String>,
-) -> Result<(Vec<(String, DataType)>, Schema)> {
-    let partition_columns = partition_by
+) -> Result<(Vec<FieldRef>, Schema)> {
+    let partition_fields = partition_by
         .into_iter()
         .map(|col| {
             let mut candidates = schema
@@ -468,7 +564,7 @@ pub fn get_partition_columns_and_file_schema(
                 .iter()
                 .filter(|f| f.name().eq_ignore_ascii_case(&col));
             match (candidates.next(), candidates.next()) {
-                (Some(field), None) => Ok((col, field.data_type().clone())),
+                (Some(field), None) => Ok(field.clone()),
                 _ => {
                     plan_err!("missing or ambiguous partition column: {col}")
                 }
@@ -479,14 +575,14 @@ pub fn get_partition_columns_and_file_schema(
         .fields()
         .iter()
         .filter(|f| {
-            !partition_columns
+            !partition_fields
                 .iter()
-                .any(|(col, _)| col.eq_ignore_ascii_case(f.name()))
+                .any(|p| f.name().eq_ignore_ascii_case(p.name()))
         })
         .cloned()
         .collect::<Vec<_>>();
     let file_schema = Schema::new(file_schema_fields);
-    Ok((partition_columns, file_schema))
+    Ok((partition_fields, file_schema))
 }
 
 #[cfg(test)]

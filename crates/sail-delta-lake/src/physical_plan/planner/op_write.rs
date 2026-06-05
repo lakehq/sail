@@ -91,7 +91,8 @@ async fn build_full_overwrite_plan(
         plan,
         ctx.table_url().clone(),
         DeltaWriterExecOptions::from(ctx.options().clone())
-            .with_generation_expressions(ctx.generation_expressions().clone()),
+            .with_generation_expressions(ctx.generation_expressions().clone())
+            .with_identity_columns(ctx.identity_columns().clone()),
         ctx.metadata_configuration().clone(),
         ctx.partition_columns().to_vec(),
         PhysicalSinkMode::Overwrite,
@@ -205,7 +206,8 @@ async fn build_overwrite_if_plan(
         predicate: predicate_source.clone(),
     });
     let writer_options = DeltaWriterExecOptions::from(ctx.options().clone())
-        .with_generation_expressions(ctx.generation_expressions().clone());
+        .with_generation_expressions(ctx.generation_expressions().clone())
+        .with_identity_columns(ctx.identity_columns().clone());
     let write_context = crate::physical_plan::prepare_delta_write_context(
         ctx.table_url(),
         Some(snapshot_state.as_ref()),
