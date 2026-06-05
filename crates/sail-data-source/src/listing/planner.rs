@@ -8,6 +8,7 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::helpers::pruned_partition_list;
+use datafusion::execution::cache::cache_manager::CachedFileMetadata;
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
 use datafusion::logical_expr::{Expr, LogicalPlan, TableScan, UserDefinedLogicalNode};
@@ -277,7 +278,7 @@ async fn list_files_for_scan<'a>(
             store.as_ref(),
             table_path,
             filters,
-            &source.config().file_extension,
+            "",
             &partition_cols,
         )
     }))
@@ -349,13 +350,11 @@ async fn do_collect_statistics_and_ordering(
     store: &Arc<dyn ObjectStore>,
     part_file: &datafusion_datasource::PartitionedFile,
 ) -> datafusion_common::Result<(Arc<Statistics>, Option<LexOrdering>)> {
-    use datafusion::execution::cache::cache_manager::CachedFileMetadata;
-
     let path = &part_file.object_meta.location;
     let meta = &part_file.object_meta;
-    let collected_statistics = source.collected_statistics();
+    let file_statistic_cache = ctx.runtime_env().cache_manager.get_file_statistic_cache();
 
-    if let Some(cached) = collected_statistics.get(path) {
+    if let Some(cached) = file_statistic_cache.as_ref().and_then(|x| x.get(path)) {
         if cached.is_valid_for(meta) {
             return Ok((Arc::clone(&cached.statistics), cached.ordering.clone()));
         }
@@ -367,20 +366,23 @@ async fn do_collect_statistics_and_ordering(
         .infer_file_meta(
             ctx,
             store,
-            source.config().schema.file_schema().clone(),
             meta,
+            source.config().schema.file_schema().clone(),
+            source.config().compression,
         )
         .await?;
     let statistics = Arc::new(file_meta.statistics);
 
-    collected_statistics.put(
-        path,
-        CachedFileMetadata::new(
-            meta.clone(),
-            Arc::clone(&statistics),
-            file_meta.ordering.clone(),
-        ),
-    );
+    file_statistic_cache.as_ref().map(|x| {
+        x.put(
+            path,
+            CachedFileMetadata::new(
+                meta.clone(),
+                Arc::clone(&statistics),
+                file_meta.ordering.clone(),
+            ),
+        )
+    });
 
     Ok((statistics, file_meta.ordering))
 }

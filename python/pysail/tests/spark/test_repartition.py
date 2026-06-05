@@ -31,7 +31,9 @@ def normalized_plan(df):
 
 def test_explicit_repartition(spark):
     assert partition_count(spark.range(0, 10, 1, 2)) == 2  # noqa: PLR2004
-    assert partition_count(spark.range(0, 10, 1, 3).select("id", F.lit("foo").alias("a")).repartition("a")) == 3  # noqa: PLR2004
+    assert (
+        partition_count(spark.range(0, 10, 1, 3).select("id", F.lit("foo").alias("a")).repartition("a")) == 3  # noqa: PLR2004
+    )
     assert partition_count(spark.sql("SELECT 1 AS a, 'foo' as b").repartition(5)) == 5  # noqa: PLR2004
     assert partition_count(spark.sql("SELECT 1 AS a, 'foo' as b").repartition(6, "b", "a")) == 6  # noqa: PLR2004
     assert partition_count(spark.sql("SELECT 1 AS a, 'foo' as b").repartition("a")) == 1
@@ -57,7 +59,8 @@ def test_repartition_assigns_rows_round_robin(spark):
     repartitioned = df.repartition(2)
     repartitioned.createOrReplaceTempView("repartitioned_rows")
 
-    result = spark.sql("""
+    result = spark.sql(
+        """
         WITH repartitioned AS (
           SELECT id, spark_partition_id() AS pid
           FROM repartitioned_rows
@@ -65,7 +68,8 @@ def test_repartition_assigns_rows_round_robin(spark):
         SELECT id, DENSE_RANK() OVER (ORDER BY pid) - 1 AS pid
         FROM repartitioned
         ORDER BY id
-    """).collect()
+    """
+    ).collect()
 
     assert [(row["id"], row["pid"]) for row in result] == [
         (0, 0),
@@ -77,7 +81,7 @@ def test_repartition_assigns_rows_round_robin(spark):
     ]
 
 
-def test_explicit_repartition_plan_shape_matches_pyspark(spark):
+def test_explicit_repartition_plan_shape_uses_expected_physical_nodes(spark):
     round_robin_plan = normalized_plan(spark.sql("SELECT 1 AS a, 'foo' AS b").repartition(5))
     repartition_one_plan = normalized_plan(spark.range(0, 8, 1, 2).repartition(1))
     hash_plan = normalized_plan(

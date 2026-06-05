@@ -695,6 +695,11 @@ impl JobScheduler {
             OutputDistribution::RoundRobin { channels } => TaskOutputDistribution::RoundRobin {
                 channels: *channels,
             },
+            OutputDistribution::RoundRobinRow { channels } => {
+                TaskOutputDistribution::RoundRobinRow {
+                    channels: *channels,
+                }
+            }
         };
         let locator = match stage.mode {
             OutputMode::Pipelined => TaskOutputLocator::Local { replicas },

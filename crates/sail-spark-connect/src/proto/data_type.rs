@@ -57,6 +57,7 @@ impl TryFrom<sdt::StructField> for spec::FieldRef {
         let data_type = data_type.required("data type")?;
         let data_type = spec::DataType::try_from(data_type)?;
         let metadata = metadata
+            .filter(|m| !m.trim().is_empty())
             .map(|m| vec![(spec::SPARK_METADATA_JSON_KEY.to_string(), m)])
             .unwrap_or_default();
         Ok(Arc::new(spec::Field {
