@@ -982,6 +982,7 @@ mod tests {
                 comment: None,
                 default: None,
                 generated_always_as: None,
+                identity: None,
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),

@@ -125,6 +125,7 @@ pub fn simple_table_options_with_format(
         replace: false,
         properties: vec![],
         is_external: true,
+        is_write_precondition: false,
     }
 }
 

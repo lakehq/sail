@@ -248,6 +248,7 @@ fn validate_iceberg_options(options: CreateTableOptions) -> CatalogResult<Valida
         replace,
         properties,
         is_external,
+        is_write_precondition: _,
     } = options;
 
     if replace {

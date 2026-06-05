@@ -520,6 +520,7 @@ impl CatalogProvider for UnityCatalogProvider {
             replace,
             properties,
             is_external: _,
+            is_write_precondition: _,
         } = options;
 
         if replace {

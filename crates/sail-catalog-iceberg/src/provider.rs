@@ -900,6 +900,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             replace,
             properties,
             is_external: _,
+            is_write_precondition: _,
         } = options;
 
         if if_not_exists {

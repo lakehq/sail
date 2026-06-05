@@ -37,6 +37,8 @@ pub struct CreateTableOptions {
     pub replace: bool,
     pub properties: Vec<(String, String)>,
     pub is_external: bool,
+    #[serde(default)]
+    pub is_write_precondition: bool,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]

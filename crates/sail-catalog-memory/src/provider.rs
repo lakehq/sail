@@ -171,6 +171,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             replace,
             properties,
             is_external,
+            is_write_precondition: _,
         } = options;
         if !format.eq_ignore_ascii_case("iceberg")
             && partition_by.iter().any(|f| f.transform.is_some())

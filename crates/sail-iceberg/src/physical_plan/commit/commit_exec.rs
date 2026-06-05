@@ -71,6 +71,12 @@ enum CatalogCommitOutcome {
     Conflict,
 }
 
+#[derive(Debug, Default)]
+struct CatalogTableInfo {
+    metadata_location: Option<String>,
+    is_iceberg_table: bool,
+}
+
 #[derive(Debug)]
 pub struct IcebergCommitExec {
     input: Arc<dyn ExecutionPlan>,
@@ -304,10 +310,38 @@ impl IcebergCommitExec {
         )
     }
 
-    fn metadata_location_from_status(status: &TableStatus) -> Option<String> {
+    fn catalog_table_info_from_status(status: &TableStatus) -> CatalogTableInfo {
         match &status.kind {
-            TableKind::Table { properties, .. } => metadata_location_from_properties(properties),
-            _ => None,
+            TableKind::Table {
+                format, properties, ..
+            } => CatalogTableInfo {
+                metadata_location: metadata_location_from_properties(properties),
+                is_iceberg_table: format.eq_ignore_ascii_case("iceberg")
+                    || Self::is_metadata_location_catalog_table(properties),
+            },
+            _ => CatalogTableInfo::default(),
+        }
+    }
+
+    async fn load_catalog_table_info(
+        context: &Arc<TaskContext>,
+        catalog_table: &[String],
+    ) -> Result<CatalogTableInfo> {
+        let manager = match context.extension::<CatalogManager>() {
+            Ok(manager) => manager,
+            Err(err) => {
+                log::debug!(
+                    "Catalog manager unavailable while resolving Iceberg metadata location: {err}"
+                );
+                return Ok(CatalogTableInfo::default());
+            }
+        };
+        match manager.get_table(catalog_table).await {
+            Ok(status) => Ok(Self::catalog_table_info_from_status(&status)),
+            Err(CatalogError::NotFound(_, _)) | Err(CatalogError::NotSupported(_)) => {
+                Ok(CatalogTableInfo::default())
+            }
+            Err(err) => Err(DataFusionError::External(Box::new(err))),
         }
     }
 
@@ -315,20 +349,9 @@ impl IcebergCommitExec {
         context: &Arc<TaskContext>,
         catalog_table: &[String],
     ) -> Result<Option<String>> {
-        let manager = match context.extension::<CatalogManager>() {
-            Ok(manager) => manager,
-            Err(err) => {
-                log::debug!(
-                    "Catalog manager unavailable while resolving Iceberg metadata location: {err}"
-                );
-                return Ok(None);
-            }
-        };
-        match manager.get_table(catalog_table).await {
-            Ok(status) => Ok(Self::metadata_location_from_status(&status)),
-            Err(CatalogError::NotFound(_, _)) | Err(CatalogError::NotSupported(_)) => Ok(None),
-            Err(err) => Err(DataFusionError::External(Box::new(err))),
-        }
+        Ok(Self::load_catalog_table_info(context, catalog_table)
+            .await?
+            .metadata_location)
     }
 
     fn catalog_requirements(
@@ -536,15 +559,17 @@ impl ExecutionPlan for IcebergCommitExec {
             };
 
             let catalog_table = catalog_table_from_properties(&commit_info.table_properties)?;
+            let CatalogTableInfo {
+                metadata_location: catalog_status_metadata_location,
+                is_iceberg_table: is_catalog_status_iceberg_table,
+            } = match catalog_table.as_ref() {
+                Some(table) => Self::load_catalog_table_info(&context, table).await?,
+                None => CatalogTableInfo::default(),
+            };
             let catalog_metadata_location =
                 match metadata_location_from_properties(&commit_info.table_properties) {
                     Some(location) => Some(location),
-                    None => match catalog_table.as_ref() {
-                        Some(table) => {
-                            Self::load_catalog_metadata_location(&context, table).await?
-                        }
-                        None => None,
-                    },
+                    None => catalog_status_metadata_location,
                 };
 
             // Load table metadata JSON if exists; catalog tables use the authoritative
@@ -554,7 +579,8 @@ impl ExecutionPlan for IcebergCommitExec {
                 None => crate::table::find_latest_metadata_file(&object_store, &table_url).await,
             };
             let is_metadata_location_catalog_table =
-                Self::is_metadata_location_catalog_table(&commit_info.table_properties);
+                Self::is_metadata_location_catalog_table(&commit_info.table_properties)
+                    || is_catalog_status_iceberg_table;
             let catalog_commit_table = catalog_table.as_ref().filter(|_| {
                 catalog_metadata_location.is_some() || is_metadata_location_catalog_table
             });

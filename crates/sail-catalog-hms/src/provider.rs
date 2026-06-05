@@ -1027,6 +1027,14 @@ impl CatalogProvider for HmsCatalogProvider {
             ));
         }
         let db_name = validate_namespace(database)?;
+        if format == "iceberg" {
+            if !options.is_write_precondition {
+                return Err(CatalogError::NotSupported(
+                    "Hive Metastore catalog does not support plain CREATE TABLE USING ICEBERG yet"
+                        .to_string(),
+                ));
+            }
+        }
         let format = HiveCatalogFormat::from_format(&format)?;
         let partition_columns: Vec<String> = options
             .partition_by
@@ -1250,7 +1258,7 @@ mod tests {
     use crate::hms::Table;
 
     #[tokio::test]
-    async fn test_create_table_allows_iceberg_format() {
+    async fn test_create_table_requires_write_precondition_for_iceberg_format() {
         let runtime = RuntimeHandle::new(
             tokio::runtime::Handle::current(),
             tokio::runtime::Handle::current(),
@@ -1294,6 +1302,39 @@ mod tests {
                     replace: false,
                     properties: vec![],
                     is_external: true,
+                    is_write_precondition: false,
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, CatalogError::NotSupported(_)));
+
+        let error = provider
+            .create_table(
+                &Namespace::try_from(vec!["default"]).unwrap(),
+                "items",
+                CreateTableOptions {
+                    columns: vec![CreateTableColumnOptions {
+                        name: "id".to_string(),
+                        data_type: DataType::Int64,
+                        nullable: false,
+                        comment: None,
+                        default: None,
+                        generated_always_as: None,
+                        identity: None,
+                    }],
+                    comment: None,
+                    constraints: vec![],
+                    location: None,
+                    format: "iceberg".to_string(),
+                    partition_by: vec![],
+                    sort_by: vec![],
+                    bucket_by: None,
+                    if_not_exists: false,
+                    replace: false,
+                    properties: vec![],
+                    is_external: true,
+                    is_write_precondition: true,
                 },
             )
             .await

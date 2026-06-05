@@ -418,7 +418,7 @@ impl PlanResolver<'_> {
                         })
                         .collect();
                     // TODO: Revisit passing write options as table properties.
-                    let properties = file_write_options
+                    let properties: Vec<(String, String)> = file_write_options
                         .options
                         .clone()
                         .into_iter()
@@ -456,6 +456,7 @@ impl PlanResolver<'_> {
                             replace,
                             properties,
                             is_external: table_is_external || write_options_had_location,
+                            is_write_precondition: true,
                         },
                     };
                     preconditions.push(Arc::new(self.resolve_catalog_command(command)?));
