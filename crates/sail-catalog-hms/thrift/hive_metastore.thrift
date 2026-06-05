@@ -1113,7 +1113,7 @@ service ThriftHiveMetastore
   GetTableResult get_table_req(1:GetTableRequest req)
                        throws (1:MetaException o1, 2:NoSuchObjectException o2)
   GetTablesResult get_table_objects_by_name_req(1:GetTablesRequest req)
-				   throws (1:MetaException o1, 2:InvalidOperationException o2, 3:UnknownDBException o3)
+                   throws (1:MetaException o1, 2:InvalidOperationException o2, 3:UnknownDBException o3)
 
   // Get a list of table names that match a filter.
   // The filter operators are LIKE, <, <=, >, >=, =, <>
