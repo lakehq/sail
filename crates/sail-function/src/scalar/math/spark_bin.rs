@@ -269,10 +269,15 @@ fn cast_overflow_err(value: f64) -> datafusion_common::DataFusionError {
 }
 
 /// Spark's DOUBLE -> BIGINT cast: Rust's `as` matches the JVM's `(long) double`
-/// (NaN -> 0, +/-Infinity -> i64::MAX/MIN, truncate toward zero). ANSI mode
-/// raises CAST_OVERFLOW on NaN/Infinity instead of saturating.
+/// (NaN -> 0, +/-Infinity -> i64::MAX/MIN, truncate toward zero, finite
+/// out-of-range saturates). ANSI mode instead raises CAST_OVERFLOW for any value
+/// outside the BIGINT range — NaN, +/-Infinity, and finite overflow alike.
 fn double_to_i64(value: f64, ansi: bool) -> Result<i64> {
-    if ansi && (value.is_nan() || value.is_infinite()) {
+    // `2^63` (= i64::MAX + 1) is the first f64 above the BIGINT range; i64::MIN
+    // (`-2^63`) is exactly representable. The comparisons also cover +/-Infinity;
+    // NaN needs an explicit check since all NaN comparisons are false.
+    const I64_RANGE_LIMIT: f64 = 9223372036854775808.0;
+    if ansi && (value.is_nan() || value < i64::MIN as f64 || value >= I64_RANGE_LIMIT) {
         return Err(cast_overflow_err(value));
     }
     Ok(value as i64)

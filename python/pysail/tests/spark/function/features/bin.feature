@@ -338,3 +338,21 @@ Feature: bin converts integral values to binary strings
       Then query result
         | result                                                          |
         | 111111111111111111111111111111111111111111111111111111111111111 |
+
+    Scenario: bin out-of-range DOUBLE errors under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT bin(CAST(1e30 AS DOUBLE)) AS result
+        """
+      Then query error CAST_OVERFLOW
+
+    Scenario: bin out-of-range DOUBLE saturates to LONG_MAX under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT bin(CAST(1e30 AS DOUBLE)) AS result
+        """
+      Then query result
+        | result                                                          |
+        | 111111111111111111111111111111111111111111111111111111111111111 |
