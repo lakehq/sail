@@ -18,9 +18,8 @@ use sail_sql_parser::common::Sequence;
 
 use crate::error::{SqlError, SqlResult};
 use crate::expression::{
-    expr_with_default_column_values, from_ast_expression, from_ast_function_arguments,
-    from_ast_grouping_expression, from_ast_identifier_list, from_ast_object_name,
-    from_ast_order_by,
+    from_ast_expression, from_ast_function_arguments, from_ast_grouping_expression,
+    from_ast_identifier_list, from_ast_object_name, from_ast_order_by,
 };
 
 #[derive(Default)]
@@ -380,11 +379,8 @@ fn from_ast_values(values: ValuesClause) -> SqlResult<spec::QueryPlan> {
             Expr::Atom(AtomExpr::Tuple(_, expressions, _)) => expressions
                 .into_items()
                 .map(from_ast_named_expression)
-                .map(|result| result.map(expr_with_default_column_values))
                 .collect::<SqlResult<Vec<_>>>(),
-            x => Ok(vec![expr_with_default_column_values(from_ast_expression(
-                x,
-            )?)]),
+            x => Ok(vec![from_ast_expression(x)?]),
         })
         .collect::<SqlResult<Vec<_>>>()?;
     let plan = spec::QueryPlan::new(spec::QueryNode::Values(rows));

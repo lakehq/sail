@@ -49,7 +49,7 @@ impl PlanResolver<'_> {
             .with_format(format)
             .with_options(options)
             .with_options(vec![("path".to_string(), location)]);
-        let input = self.resolve_write_input(input, state).await?;
+        let input = self.resolve_write_input(input, false, state).await?;
         self.resolve_write_with_builder(input, builder, state).await
     }
 
@@ -70,7 +70,7 @@ impl PlanResolver<'_> {
             ));
         }
 
-        let input = self.resolve_write_input(input, state).await?;
+        let input = self.resolve_write_input(input, true, state).await?;
 
         if !partition.is_empty() {
             return Err(PlanError::todo("PARTITION for write"));

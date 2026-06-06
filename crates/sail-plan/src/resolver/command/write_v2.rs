@@ -26,7 +26,7 @@ impl PlanResolver<'_> {
             table_properties,
         } = write_to;
 
-        let input = self.resolve_write_input(*input, state).await?;
+        let input = self.resolve_write_input(*input, true, state).await?;
         let partition_by = self.resolve_write_partition_by_expressions(partitioning_columns)?;
         let cluster_by = self.resolve_write_cluster_by_columns(clustering_columns)?;
 

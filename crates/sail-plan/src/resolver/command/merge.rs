@@ -16,6 +16,7 @@ use sail_logical_plan::merge::{
     MergeNotMatchedByTargetClause, MergeTargetInfo,
 };
 
+use super::write::rewrite_default_column_value_expr;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
@@ -398,6 +399,7 @@ impl PlanResolver<'_> {
             let resolved_column = self
                 .resolve_merge_column(column, target_schema.clone(), state)
                 .await?;
+            let value = rewrite_default_column_value_expr(value);
             let value = merge_disambiguate_unqualified_plan_ids(
                 value,
                 state,
@@ -439,6 +441,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<Vec<Expr>> {
         let mut out = Vec::with_capacity(values.len());
         for value in values {
+            let value = rewrite_default_column_value_expr(value);
             let value =
                 merge_disambiguate_unqualified_plan_ids(value, state, target_schema, source_schema);
             out.push(self.resolve_expression(value, merge_schema, state).await?);

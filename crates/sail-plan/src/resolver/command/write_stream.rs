@@ -35,7 +35,13 @@ impl PlanResolver<'_> {
                 "foreach batch is not supported in write stream",
             ));
         }
-        let input = self.resolve_write_input(*input, state).await?;
+        let allow_default_column_values = matches!(
+            &sink_destination,
+            Some(WriteStreamSinkDestination::Table { .. })
+        );
+        let input = self
+            .resolve_write_input(*input, allow_default_column_values, state)
+            .await?;
         let clustering_columns = self.resolve_write_cluster_by_columns(clustering_column_names)?;
         let partition_by = partitioning_column_names
             .into_iter()
