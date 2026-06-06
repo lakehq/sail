@@ -384,6 +384,7 @@ Feature: ceil() / floor() — preimage hook (filter pushdown)
         """
       Then query plan matches snapshot
 
+  @sail-only
   Rule: Simplify + preimage interaction — ceil(ceil(x)) chains correctly
 
     Scenario: ceil(ceil(x)) collapses to ceil(x) then preimage applies
