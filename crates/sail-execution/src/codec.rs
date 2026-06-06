@@ -2626,8 +2626,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::XpathTyped(gen::XpathTypedUdf { name })
         } else if let Some(func) = node.inner().downcast_ref::<SparkUnixTimestamp>() {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkToXml>() {
-             let session_timezone = func.session_timezone().to_string();
-             UdfKind::SparkToXml(gen::SparkToXmlUdf { session_timezone })    
+            let session_timezone = func.session_timezone().to_string();
+            UdfKind::SparkToXml(gen::SparkToXmlUdf { session_timezone })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkUnixTimestamp>() {
             let timezone = func.timezone().to_string();
             UdfKind::SparkUnixTimestamp(gen::SparkUnixTimestampUdf { timezone })

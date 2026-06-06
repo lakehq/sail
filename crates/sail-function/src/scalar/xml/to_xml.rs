@@ -23,7 +23,6 @@ pub struct SparkToXml {
     signature: Signature,
 }
 
-
 #[derive(Debug)]
 struct SparkToXmlOptions {
     row_tag: String,
@@ -133,7 +132,8 @@ impl SparkToXmlOptions {
 
     #[inline]
     fn strip_prefix<'a>(&self, name: &'a str) -> &'a str {
-        &name[self.attribute_prefix.len()..]
+        name.strip_prefix(self.attribute_prefix.as_str())
+            .unwrap_or(name)
     }
 }
 
@@ -167,6 +167,13 @@ impl SparkToXml {
     pub fn session_timezone(&self) -> &str {
         &self.session_timezone
     }
+
+    fn column_name(args: &[datafusion_expr::Expr]) -> String {
+        let Some(input) = args.first() else {
+            return format!("{}()", Self::TO_XML_NAME);
+        };
+        format!("{}({})", Self::TO_XML_NAME, input.schema_name())
+    }
 }
 
 impl Default for SparkToXml {
@@ -190,6 +197,10 @@ impl ScalarUDFImpl for SparkToXml {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Utf8)
+    }
+
+    fn schema_name(&self, args: &[datafusion_expr::Expr]) -> Result<String> {
+        Ok(Self::column_name(args))
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -307,17 +318,19 @@ fn write_struct(
         }
     }
 
-    buf.push_str(">\n");
-
-    for (col_idx, field) in &elem_cols {
-        let col = array.column(*col_idx);
-        write_field(buf, col, row, field, depth + 1, options)?;
+    if elem_cols.is_empty() {
+        buf.push_str("/>\n");
+    } else {
+        buf.push_str(">\n");
+        for (col_idx, field) in &elem_cols {
+            let col = array.column(*col_idx);
+            write_field(buf, col, row, field, depth + 1, options)?;
+        }
+        buf.push_str(&pad);
+        buf.push_str("</");
+        buf.push_str(tag);
+        buf.push_str(">\n");
     }
-
-    buf.push_str(&pad);
-    buf.push_str("</");
-    buf.push_str(tag);
-    buf.push_str(">\n");
 
     Ok(())
 }
@@ -528,14 +541,21 @@ fn format_decimal128(raw: i128, scale: u32) -> String {
     let integer_part = raw_abs / divisor;
     let fractional_part = raw_abs % divisor;
     let sign = if negative { "-" } else { "" };
-    format!("{sign}{integer_part}.{fractional_part:0>width$}", width = scale as usize)
+    format!(
+        "{sign}{integer_part}.{fractional_part:0>width$}",
+        width = scale as usize
+    )
 }
 
 fn format_float(v: f64) -> String {
     if v.is_nan() {
         "NaN".to_string()
     } else if v.is_infinite() {
-        if v > 0.0 { "Infinity".to_string() } else { "-Infinity".to_string() }
+        if v > 0.0 {
+            "Infinity".to_string()
+        } else {
+            "-Infinity".to_string()
+        }
     } else {
         format!("{v}")
     }
@@ -543,26 +563,22 @@ fn format_float(v: f64) -> String {
 
 fn scalar_to_display_string(scalar: &ScalarValue) -> Result<String> {
     match scalar {
-        ScalarValue::Boolean(Some(v))    => Ok(v.to_string()),
-        ScalarValue::Int8(Some(v))       => Ok(v.to_string()),
-        ScalarValue::Int16(Some(v))      => Ok(v.to_string()),
-        ScalarValue::Int32(Some(v))      => Ok(v.to_string()),
-        ScalarValue::Int64(Some(v))      => Ok(v.to_string()),
-        ScalarValue::UInt8(Some(v))      => Ok(v.to_string()),
-        ScalarValue::UInt16(Some(v))     => Ok(v.to_string()),
-        ScalarValue::UInt32(Some(v))     => Ok(v.to_string()),
-        ScalarValue::UInt64(Some(v))     => Ok(v.to_string()),
-        ScalarValue::Float32(Some(v))    => Ok(format_float(*v as f64)),
-        ScalarValue::Float64(Some(v))    => Ok(format_float(*v)),
+        ScalarValue::Boolean(Some(v)) => Ok(v.to_string()),
+        ScalarValue::Int8(Some(v)) => Ok(v.to_string()),
+        ScalarValue::Int16(Some(v)) => Ok(v.to_string()),
+        ScalarValue::Int32(Some(v)) => Ok(v.to_string()),
+        ScalarValue::Int64(Some(v)) => Ok(v.to_string()),
+        ScalarValue::UInt8(Some(v)) => Ok(v.to_string()),
+        ScalarValue::UInt16(Some(v)) => Ok(v.to_string()),
+        ScalarValue::UInt32(Some(v)) => Ok(v.to_string()),
+        ScalarValue::UInt64(Some(v)) => Ok(v.to_string()),
+        ScalarValue::Float32(Some(v)) => Ok(format_float(*v as f64)),
+        ScalarValue::Float64(Some(v)) => Ok(format_float(*v)),
         ScalarValue::Utf8(Some(v))
         | ScalarValue::LargeUtf8(Some(v))
         | ScalarValue::Utf8View(Some(v)) => Ok(v.clone()),
-        sv if sv.is_null() => exec_err!(
-            "to_xml: scalar_to_display_string called on null: {sv:?}"
-        ),
-        _ => exec_err!(
-            "to_xml: unsupported scalar type for XML serialization: {scalar:?}"
-        ),
+        sv if sv.is_null() => exec_err!("to_xml: scalar_to_display_string called on null: {sv:?}"),
+        _ => exec_err!("to_xml: unsupported scalar type for XML serialization: {scalar:?}"),
     }
 }
 
@@ -584,12 +600,10 @@ fn format_timestamp_field(
         TimeUnit::Microsecond => array
             .as_primitive::<TimestampMicrosecondType>()
             .value(row_idx),
-        TimeUnit::Nanosecond => {
-            array
-                .as_primitive::<TimestampNanosecondType>()
-                .value(row_idx)
-                / 1_000
-        }
+        TimeUnit::Nanosecond => array
+            .as_primitive::<TimestampNanosecondType>()
+            .value(row_idx)
+            .div_euclid(1_000),
     };
 
     let secs = micros.div_euclid(1_000_000);
@@ -614,14 +628,11 @@ fn format_timestamp_field(
                 .to_string()
                 .replace("+00:00", "Z"))
         } else {
-            let fmt = options
-                .timestamp_ltz_format
-                .as_deref()
-                .ok_or_else(|| {
-                    DataFusionError::Internal(
-                        "timestamp_ltz_format missing despite non-default path".to_string(),
-                    )
-                })?;
+            let fmt = options.timestamp_ltz_format.as_deref().ok_or_else(|| {
+                DataFusionError::Internal(
+                    "timestamp_ltz_format missing despite non-default path".to_string(),
+                )
+            })?;
 
             Ok(local_dt.format(fmt).to_string())
         }
@@ -716,7 +727,7 @@ fn find_key_value(map: &MapArray, key: &str) -> Option<String> {
         .downcast_ref::<StringArray>()?;
 
     for i in 0..keys.len() {
-        if !keys.is_null(i) && keys.value(i) == key {
+        if !keys.is_null(i) && keys.value(i).eq_ignore_ascii_case(key) {
             return if values.is_null(i) {
                 None
             } else {
@@ -766,20 +777,23 @@ mod tests {
     }
 
     #[test]
-    fn test_null_row_produces_null_output() -> Result<(), Box<dyn std::error::Error>>{
+    fn test_null_row_produces_null_output() -> Result<(), Box<dyn std::error::Error>> {
         let fields = Fields::from(vec![Field::new("a", DataType::Int32, true)]);
         let col = Arc::new(Int32Array::from(vec![Some(1)])) as Arc<dyn Array>;
         let array = make_struct(fields, vec![col], Some(vec![false]));
         assert!(array.is_null(0));
 
         let result = spark_to_xml_inner(&array, &default_opts())?;
-        let output = result.as_any().downcast_ref::<StringArray>().ok_or("expected StringArray output")?;
+        let output = result
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or("expected StringArray output")?;
         assert!(output.is_null(0), "null row must produce SQL NULL output");
         Ok(())
     }
 
     #[test]
-    fn test_simple_struct() -> Result<(), Box<dyn std::error::Error>>{
+    fn test_simple_struct() -> Result<(), Box<dyn std::error::Error>> {
         let fields = Fields::from(vec![
             Field::new("a", DataType::Int32, true),
             Field::new("b", DataType::Int32, true),
@@ -814,7 +828,7 @@ mod tests {
     }
 
     #[test]
-    fn test_null_field_emitted_when_null_value_set() -> Result<(), Box<dyn std::error::Error>>{
+    fn test_null_field_emitted_when_null_value_set() -> Result<(), Box<dyn std::error::Error>> {
         let fields = Fields::from(vec![Field::new("x", DataType::Int32, true)]);
         let col = Arc::new(Int32Array::from(vec![None::<i32>])) as Arc<dyn Array>;
         let array = make_struct(fields.clone(), vec![col], None);
@@ -855,7 +869,8 @@ mod tests {
     }
 
     #[test]
-    fn test_attribute_prefix_field_written_as_xml_attribute() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_attribute_prefix_field_written_as_xml_attribute(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let fields = Fields::from(vec![
             Field::new("_id", DataType::Int32, true),
             Field::new("name", DataType::Utf8, true),
@@ -913,7 +928,7 @@ mod tests {
     }
 
     #[test]
-    fn test_timestamp_ntz_has_no_offset()-> Result<(), Box<dyn std::error::Error>> {
+    fn test_timestamp_ntz_has_no_offset() -> Result<(), Box<dyn std::error::Error>> {
         use datafusion::arrow::array::TimestampMicrosecondArray;
 
         let micros: i64 = 1_780_617_600_000_000;
@@ -935,7 +950,7 @@ mod tests {
     }
 
     #[test]
-    fn test_format_decimal128() -> Result<(), Box<dyn std::error::Error>>{
+    fn test_format_decimal128() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(format_decimal128(25, 1), "2.5");
         assert_eq!(format_decimal128(-99, 2), "-0.99");
         assert_eq!(format_decimal128(100, 2), "1.00");
@@ -946,7 +961,7 @@ mod tests {
     }
 
     #[test]
-    fn test_format_float() -> Result<(), Box<dyn std::error::Error>>{
+    fn test_format_float() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(format_float(f64::NAN), "NaN");
         assert_eq!(format_float(f64::INFINITY), "Infinity");
         assert_eq!(format_float(f64::NEG_INFINITY), "-Infinity");
