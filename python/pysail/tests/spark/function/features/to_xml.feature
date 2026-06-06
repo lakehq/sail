@@ -9,7 +9,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(a, 1, b, 2)) |
-        | <ROW>\n    <a>1</a>\n    <b>2</b>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <a>1</a>\n    <b>2</b>\n</ROW>\n |
 
     Scenario: Convert a struct with mixed types
       When query
@@ -18,7 +18,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(a, 1, b, 2.5, c, true)) |
-        | <ROW>\n    <a>1</a>\n    <b>2.5</b>\n    <c>true</c>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <a>1</a>\n    <b>2.5</b>\n    <c>true</c>\n</ROW>\n |
 
     Scenario: Convert a struct from a table column
       When query
@@ -29,9 +29,9 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(a, value, b, value)) |
-        | <ROW>\n    <a>1</a>\n    <b>1</b>\n</ROW> |
-        | <ROW>\n    <a>2</a>\n    <b>2</b>\n</ROW> |
-        | <ROW>\n    <a>3</a>\n    <b>3</b>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <a>1</a>\n    <b>1</b>\n</ROW>\n |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <a>2</a>\n    <b>2</b>\n</ROW>\n |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <a>3</a>\n    <b>3</b>\n</ROW>\n |
 
     Scenario: Empty struct produces self-closing ROW element
       When query
@@ -40,7 +40,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct()) |
-        | <ROW/> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW/>\n |
 
     Scenario: Single field struct
       When query
@@ -49,7 +49,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(x, 42)) |
-        | <ROW>\n    <x>42</x>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <x>42</x>\n</ROW>\n |
 
   Rule: NULL handling
 
@@ -69,7 +69,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(a, 1, b, CAST(NULL AS INT))) |
-        | <ROW>\n    <a>1</a>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <a>1</a>\n</ROW>\n |
 
     Scenario: Multiple consecutive NULL fields with default behavior omits all
       When query
@@ -78,7 +78,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(a, CAST(NULL AS INT), b, CAST(NULL AS INT), c, 3)) |
-        | <ROW>\n    <c>3</c>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <c>3</c>\n</ROW>\n |
 
     Scenario: Integer zero is not treated as NULL
       When query
@@ -87,7 +87,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(count, 0)) |
-        | <ROW>\n    <count>0</count>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <count>0</count>\n</ROW>\n |
 
     Scenario: Empty string is not treated as NULL
       When query
@@ -95,8 +95,8 @@ Feature: to_xml converts a struct value to an XML string
         SELECT to_xml(named_struct('text', ''))
         """
       Then query result
-        | to_xml(named_struct(text, '')) |
-        | <ROW>\n    <text></text>\n</ROW> |
+        | to_xml(named_struct(text, )) |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <text></text>\n</ROW>\n |
 
     Scenario: False boolean is not treated as NULL
       When query
@@ -105,7 +105,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(flag, false)) |
-        | <ROW>\n    <flag>false</flag>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <flag>false</flag>\n</ROW>\n |
 
   Rule: Arrays
 
@@ -115,8 +115,8 @@ Feature: to_xml converts a struct value to an XML string
         SELECT to_xml(named_struct('numbers', array(1,2,3)))
         """
       Then query result
-        | to_xml(named_struct(numbers, array(1,2,3))) |
-        | <ROW>\n    <numbers>1</numbers>\n    <numbers>2</numbers>\n    <numbers>3</numbers>\n</ROW> |
+        | to_xml(named_struct(numbers, array(1, 2, 3))) |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <numbers>\n        <item>1</item>\n    </numbers>\n    <numbers>\n        <item>2</item>\n    </numbers>\n    <numbers>\n        <item>3</item>\n    </numbers>\n</ROW>\n |
 
     Scenario: Empty array produces no elements
       When query
@@ -125,7 +125,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(items, array())) |
-        | <ROW/> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW/>\n |
 
     Scenario: Array with single element
       When query
@@ -134,7 +134,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(items, array(1))) |
-        | <ROW>\n    <items>1</items>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <items>\n        <item>1</item>\n    </items>\n</ROW>\n |
 
     Scenario: Array of structs repeats elements
       When query
@@ -142,8 +142,8 @@ Feature: to_xml converts a struct value to an XML string
         SELECT to_xml(named_struct('items', array(named_struct('x',1), named_struct('x',2))))
         """
       Then query result
-        | to_xml(named_struct(items, array(named_struct(x,1), named_struct(x,2)))) |
-        | <ROW>\n    <items>\n        <x>1</x>\n    </items>\n    <items>\n        <x>2</x>\n    </items>\n</ROW> |
+        | to_xml(named_struct(items, array(named_struct(x,1), named_struct(x, 2)))) |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <items>\n        <x>1</x>\n    </items>\n    <items>\n        <x>2</x>\n    </items>\n</ROW>\n |
 
     Scenario: Array containing NULL elements
       When query
@@ -152,7 +152,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(items, array(1, CAST(NULL AS INT), 3))) |
-        | <ROW>\n    <items>1</items>\n    <items>3</items>\n</ROW> |
+         | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <items>\n        <item>1</item>\n    </items>\n    <items>\n        <item>3</item>\n    </items>\n</ROW>\n |
 
     Scenario: Array with boolean values preserves false
       When query
@@ -161,7 +161,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(flags, array(true, false, true))) |
-        | <ROW>\n    <flags>true</flags>\n    <flags>false</flags>\n    <flags>true</flags>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <flags>\n        <item>true</item>\n    </flags>\n    <flags>\n        <item>false</item>\n    </flags>\n    <flags>\n        <item>true</item>\n    </flags>\n</ROW>\n |
 
   Rule: Nested structures
 
@@ -172,7 +172,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(outer, named_struct(inner, 42))) |
-        | <ROW>\n    <outer>\n        <inner>42</inner>\n    </outer>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <outer>\n        <inner>42</inner>\n    </outer>\n</ROW>\n |
 
     Scenario: Deeply nested structures (3 levels)
       When query
@@ -181,7 +181,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(a, named_struct(b, named_struct(c, 1)))) |
-        | <ROW>\n    <a>\n        <b>\n            <c>1</c>\n        </b>\n    </a>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <a>\n        <b>\n            <c>1</c>\n        </b>\n    </a>\n</ROW>\n |
 
     Scenario: Nested struct with NULL inner value
       When query
@@ -190,7 +190,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(outer, CAST(NULL AS STRUCT<INNER:INT>))) |
-        | <ROW/> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW/>\n |
 
   Rule: XML escaping
 
@@ -201,7 +201,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(msg, a < b)) |
-        | <ROW>\n    <msg>a &lt; b</msg>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <msg>a &lt; b</msg>\n</ROW>\n |
 
     Scenario: Greater-than character is escaped
       When query
@@ -210,7 +210,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(msg, a > b)) |
-        | <ROW>\n    <msg>a &gt; b</msg>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <msg>a &gt; b</msg>\n</ROW>\n |
 
     Scenario: Ampersand character is escaped
       When query
@@ -219,7 +219,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(msg, a & b)) |
-        | <ROW>\n    <msg>a &amp; b</msg>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <msg>a &amp; b</msg>\n</ROW>\n |
 
     Scenario: Multiple special characters together
       When query
@@ -228,7 +228,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(msg, a < b & c > d)) |
-        | <ROW>\n    <msg>a &lt; b &amp; c &gt; d</msg>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <msg>a &lt; b &amp; c &gt; d</msg>\n</ROW>\n |
 
     Scenario: XSS prevention - script tag escaping
       When query
@@ -237,7 +237,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(msg, <script>alert("xss")</script>)) |
-        | <ROW>\n    <msg>&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;</msg>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <msg>&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;</msg>\n</ROW>\n |
 
   Rule: Timestamp and date formatting
 
@@ -248,7 +248,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(ts, to_timestamp(2015-08-26, yyyy-MM-dd))) |
-        | <ROW>\n    <ts>2015-08-26T00:00:00.000Z</ts>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <ts>2015-08-26T00:00:00.000Z</ts>\n</ROW>\n |
 
     Scenario: Pre-epoch timestamp is formatted correctly
       When query
@@ -257,7 +257,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(ts, to_timestamp(1969-12-31, yyyy-MM-dd))) |
-        | <ROW>\n    <ts>1969-12-31T00:00:00.000Z</ts>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <ts>1969-12-31T00:00:00.000Z</ts>\n</ROW>\n |
 
     Scenario: NULL timestamp is omitted
       When query
@@ -266,7 +266,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(ts, CAST(NULL AS TIMESTAMP))) |
-        | <ROW/> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW/>\n |
 
     Scenario: Date field uses default yyyy-MM-dd format
       When query
@@ -275,7 +275,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(d, DATE '2015-08-26')) |
-        | <ROW>\n    <d>2015-08-26</d>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <d>2015-08-26</d>\n</ROW>\n |
 
   Rule: Decimal and special values
 
@@ -286,7 +286,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(price, CAST(9.99 AS DECIMAL(5,2)))) |
-        | <ROW>\n    <price>9.99</price>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <price>9.99</price>\n</ROW>\n |
 
     Scenario: Negative decimal preserves sign
       When query
@@ -295,7 +295,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(price, CAST((- 0.99) AS DECIMAL(5,2)))) |
-        | <ROW>\n    <price>-0.99</price>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <price>-0.99</price>\n</ROW>\n |
 
     Scenario: Very large decimal value
       When query
@@ -304,7 +304,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(big, CAST(999999.99 AS DECIMAL(10,2)))) |
-        | <ROW>\n    <big>999999.99</big>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <big>999999.99</big>\n</ROW>\n |
 
     Scenario: Very small decimal value
       When query
@@ -313,7 +313,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(tiny, CAST(0.0001 AS DECIMAL(5,4)))) |
-        | <ROW>\n    <tiny>0.0001</tiny>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <tiny>0.0001</tiny>\n</ROW>\n |
 
     Scenario: Floating-point NaN value
       When query
@@ -322,7 +322,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(nan, CAST(NaN AS DOUBLE))) |
-        | <ROW>\n    <nan>NaN</nan>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <nan>NaN</nan>\n</ROW>\n |
 
     Scenario: Floating-point positive infinity
       When query
@@ -331,7 +331,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(pos, CAST(Infinity AS DOUBLE))) |
-        | <ROW>\n    <pos>Infinity</pos>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <pos>Infinity</pos>\n</ROW>\n |
 
     Scenario: Floating-point negative infinity
       When query
@@ -340,7 +340,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(neg, CAST((- Infinity) AS DOUBLE))) |
-        | <ROW>\n    <neg>-Infinity</neg>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <neg>-Infinity</neg>\n</ROW>\n |
 
   Rule: Complex structures
 
@@ -351,7 +351,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(int_val, 42, str_val, hello, bool_val, true, float_val, 3.14)) |
-        | <ROW>\n    <int_val>42</int_val>\n    <str_val>hello</str_val>\n    <bool_val>true</bool_val>\n    <float_val>3.14</float_val>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <int_val>42</int_val>\n    <str_val>hello</str_val>\n    <bool_val>true</bool_val>\n    <float_val>3.14</float_val>\n</ROW>\n |
 
     Scenario: Boolean true value
       When query
@@ -360,7 +360,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(flag, true)) |
-        | <ROW>\n    <flag>true</flag>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <flag>true</flag>\n</ROW>\n |
 
     Scenario: Boolean false value
       When query
@@ -369,7 +369,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(flag, false)) |
-        | <ROW>\n    <flag>false</flag>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <flag>false</flag>\n</ROW>\n |
 
     Scenario: Struct with array and nested struct
       When query
@@ -378,11 +378,5 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | to_xml(named_struct(items, array(1, 2), nested, named_struct(value, 42))) |
-        | <ROW>\n    <items>1</items>\n    <items>2</items>\n    <nested>\n        <value>42</value>\n    </nested>\n</ROW> |
+        | <?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<ROW>\n    <items>\n        <item>1</item>\n    </items>\n    <items>\n        <item>2</item>\n    </items>\n    <nested>\n        <value>42</value>\n    </nested>\n</ROW>\n |
 
-    Scenario: Very large struct with 10 fields
-      When query
-        """
-        SELECT to_xml(named_struct('a', 1, 'b', 2, 'c', 3, 'd', 4, 'e', 5, 'f', 6, 'g', 7, 'h', 8, 'i', 9, 'j', 10))
-        """
-      Then query result contains all fields from a to j

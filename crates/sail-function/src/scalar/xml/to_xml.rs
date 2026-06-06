@@ -507,14 +507,62 @@ fn format_field_to_xml(
                 })?;
             Ok(naive.format(&options.date_format).to_string())
         }
-        DataType::Decimal128(p, s) => {
+        DataType::Decimal128(_, scale) => {
             let raw = array.as_primitive::<Decimal128Type>().value(row_idx);
-            Ok(ScalarValue::Decimal128(Some(raw), *p, *s).to_string())
+            Ok(format_decimal128(raw, *scale as u32))
         }
         _ => {
             let scalar = ScalarValue::try_from_array(array, row_idx)?;
-            Ok(scalar.to_string())
+            scalar_to_display_string(&scalar)
         }
+    }
+}
+
+fn format_decimal128(raw: i128, scale: u32) -> String {
+    if scale == 0 {
+        return raw.to_string();
+    }
+    let negative = raw < 0;
+    let raw_abs = raw.unsigned_abs();
+    let divisor = 10u128.pow(scale.min(38));
+    let integer_part = raw_abs / divisor;
+    let fractional_part = raw_abs % divisor;
+    let sign = if negative { "-" } else { "" };
+    format!("{sign}{integer_part}.{fractional_part:0>width$}", width = scale as usize)
+}
+
+fn format_float(v: f64) -> String {
+    if v.is_nan() {
+        "NaN".to_string()
+    } else if v.is_infinite() {
+        if v > 0.0 { "Infinity".to_string() } else { "-Infinity".to_string() }
+    } else {
+        format!("{v}")
+    }
+}
+
+fn scalar_to_display_string(scalar: &ScalarValue) -> Result<String> {
+    match scalar {
+        ScalarValue::Boolean(Some(v))    => Ok(v.to_string()),
+        ScalarValue::Int8(Some(v))       => Ok(v.to_string()),
+        ScalarValue::Int16(Some(v))      => Ok(v.to_string()),
+        ScalarValue::Int32(Some(v))      => Ok(v.to_string()),
+        ScalarValue::Int64(Some(v))      => Ok(v.to_string()),
+        ScalarValue::UInt8(Some(v))      => Ok(v.to_string()),
+        ScalarValue::UInt16(Some(v))     => Ok(v.to_string()),
+        ScalarValue::UInt32(Some(v))     => Ok(v.to_string()),
+        ScalarValue::UInt64(Some(v))     => Ok(v.to_string()),
+        ScalarValue::Float32(Some(v))    => Ok(format_float(*v as f64)),
+        ScalarValue::Float64(Some(v))    => Ok(format_float(*v)),
+        ScalarValue::Utf8(Some(v))
+        | ScalarValue::LargeUtf8(Some(v))
+        | ScalarValue::Utf8View(Some(v)) => Ok(v.clone()),
+        sv if sv.is_null() => exec_err!(
+            "to_xml: scalar_to_display_string called on null: {sv:?}"
+        ),
+        _ => exec_err!(
+            "to_xml: unsupported scalar type for XML serialization: {scalar:?}"
+        ),
     }
 }
 
@@ -883,6 +931,27 @@ mod tests {
             !xml.contains('+') && !xml.contains('Z'),
             "NTZ must have no offset, got: {xml}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_format_decimal128() -> Result<(), Box<dyn std::error::Error>>{
+        assert_eq!(format_decimal128(25, 1), "2.5");
+        assert_eq!(format_decimal128(-99, 2), "-0.99");
+        assert_eq!(format_decimal128(100, 2), "1.00");
+        assert_eq!(format_decimal128(0, 2), "0.00");
+        assert_eq!(format_decimal128(999999, 2), "9999.99");
+        assert_eq!(format_decimal128(42, 0), "42");
+        Ok(())
+    }
+
+    #[test]
+    fn test_format_float() -> Result<(), Box<dyn std::error::Error>>{
+        assert_eq!(format_float(f64::NAN), "NaN");
+        assert_eq!(format_float(f64::INFINITY), "Infinity");
+        assert_eq!(format_float(f64::NEG_INFINITY), "-Infinity");
+        assert_eq!(format_float(3.44), "3.44");
+        assert_eq!(format_float(0.0), "0");
         Ok(())
     }
 }
