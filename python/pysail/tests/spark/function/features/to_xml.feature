@@ -307,6 +307,30 @@ Feature: to_xml converts a struct value to an XML string
         | result     |
         | 2026-06-06 |
 
+    Scenario: Custom timestampFormat applies to TIMESTAMP_LTZ
+      When query
+        """
+        SELECT xpath_string(
+          to_xml(named_struct('ts', to_timestamp('2026-06-06', 'yyyy-MM-dd')), map('timestampFormat', 'dd/MM/yyyy')),
+          '/ROW/ts'
+        ) AS result
+        """
+      Then query result
+        | result     |
+        | 06/06/2026 |
+
+    Scenario: Custom dateFormat applies to DATE fields
+      When query
+        """
+        SELECT xpath_string(
+          to_xml(named_struct('d', DATE '2026-06-06'), map('dateFormat', 'dd/MM/yyyy')),
+          '/ROW/d'
+        ) AS result
+        """
+      Then query result
+        | result     |
+        | 06/06/2026 |
+
   Rule: Decimal and special values
 
     Scenario: Decimal field is formatted as fixed-point string
@@ -422,6 +446,44 @@ Feature: to_xml converts a struct value to an XML string
       When query
         """
         SELECT to_xml(named_struct('a', 1), map('rowTag', 'Person')) LIKE '%<Person>%' AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: valueTag field is written as inline text content on the parent element
+      When query
+        """
+        SELECT to_xml(named_struct('_id', 1, '_VALUE', 'hello')) LIKE '%hello%' AS has_content,
+               to_xml(named_struct('_id', 1, '_VALUE', 'hello')) LIKE '%<_VALUE>%' AS has_element
+        """
+      Then query result
+        | has_content | has_element |
+        | true        | false       |
+
+    Scenario: Custom valueTag option controls which field becomes text content
+      When query
+        """
+        SELECT to_xml(named_struct('_id', 7, 'body', 'world'), map('valueTag', 'body')) LIKE '%world%' AS has_content,
+               to_xml(named_struct('_id', 7, 'body', 'world'), map('valueTag', 'body')) LIKE '%<body>%' AS has_element
+        """
+      Then query result
+        | has_content | has_element |
+        | true        | false       |
+
+    Scenario: Option keys are case-insensitive
+      When query
+        """
+        SELECT to_xml(named_struct('a', 1), map('ROWTAG', 'Item')) LIKE '%<Item>%' AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: Custom arrayElementName changes inner element tag
+      When query
+        """
+        SELECT to_xml(named_struct('nums', array(10, 20)), map('arrayElementName', 'val')) LIKE '%<val>10</val>%' AS result
         """
       Then query result
         | result |

@@ -995,4 +995,126 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn test_value_tag_written_as_text_content() -> Result<(), Box<dyn std::error::Error>> {
+        let fields = Fields::from(vec![
+            Field::new("_id", DataType::Int32, true),
+            Field::new("_VALUE", DataType::Utf8, true),
+        ]);
+        let col_id = Arc::new(Int32Array::from(vec![1])) as Arc<dyn Array>;
+        let col_val = Arc::new(StringArray::from(vec!["hello"])) as Arc<dyn Array>;
+        let array = make_struct(fields.clone(), vec![col_id, col_val], None);
+        let xml = write_row(&array, 0, &fields, &default_opts())?;
+        assert!(xml.contains("hello"), "got: {xml}");
+        assert!(!xml.contains("<_VALUE>"), "got: {xml}");
+        assert!(!xml.contains("<_VALUE/>"), "got: {xml}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_custom_value_tag() -> Result<(), Box<dyn std::error::Error>> {
+        let fields = Fields::from(vec![
+            Field::new("_id", DataType::Int32, true),
+            Field::new("body", DataType::Utf8, true),
+        ]);
+        let col_id = Arc::new(Int32Array::from(vec![7])) as Arc<dyn Array>;
+        let col_val = Arc::new(StringArray::from(vec!["world"])) as Arc<dyn Array>;
+        let array = make_struct(fields.clone(), vec![col_id, col_val], None);
+        let mut opts = default_opts();
+        opts.value_tag = "body".to_string();
+        let xml = write_row(&array, 0, &fields, &opts)?;
+        assert!(xml.contains("world"), "got: {xml}");
+        assert!(!xml.contains("<body>"), "got: {xml}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_option_keys_are_case_insensitive() -> Result<(), Box<dyn std::error::Error>> {
+        // find_key_value uses eq_ignore_ascii_case — verify uppercase key still resolves
+        let fields = Fields::from(vec![Field::new("a", DataType::Int32, false)]);
+        let col = Arc::new(Int32Array::from(vec![1])) as Arc<dyn Array>;
+        let array = make_struct(fields.clone(), vec![col], None);
+        let mut opts = default_opts();
+        opts.row_tag = "Item".to_string();
+        let xml = write_row(&array, 0, &fields, &opts)?;
+        assert!(xml.contains("<Item>"), "got: {xml}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_custom_array_element_name() -> Result<(), Box<dyn std::error::Error>> {
+        use datafusion::arrow::array::{Int32Builder, ListBuilder};
+        let mut builder = ListBuilder::new(Int32Builder::new());
+        builder.values().append_value(10);
+        builder.values().append_value(20);
+        builder.append(true);
+        let list_col = Arc::new(builder.finish()) as Arc<dyn Array>;
+
+        let fields = Fields::from(vec![Field::new(
+            "nums",
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            false,
+        )]);
+        let array = make_struct(fields.clone(), vec![list_col], None);
+        let mut opts = default_opts();
+        opts.array_element_name = "val".to_string();
+        let xml = write_row(&array, 0, &fields, &opts)?;
+        assert!(xml.contains("<val>10</val>"), "got: {xml}");
+        assert!(xml.contains("<val>20</val>"), "got: {xml}");
+        assert!(!xml.contains("<item>"), "got: {xml}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_timestamp_ltz_non_utc_session_timezone() -> Result<(), Box<dyn std::error::Error>> {
+        use datafusion::arrow::array::TimestampMicrosecondArray;
+        let micros: i64 = 1_780_704_000_000_000;
+        let fields = Fields::from(vec![Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
+            false,
+        )]);
+        let col = Arc::new(TimestampMicrosecondArray::from(vec![micros]).with_timezone("UTC"))
+            as Arc<dyn Array>;
+        let array = make_struct(fields.clone(), vec![col], None);
+        let mut opts = default_opts();
+        opts.session_timezone = "America/New_York".to_string();
+        let xml = write_row(&array, 0, &fields, &opts)?;
+        assert!(xml.contains("2026-06-05T20:00:00.000-04:00"), "got: {xml}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_custom_timestamp_format() -> Result<(), Box<dyn std::error::Error>> {
+        use datafusion::arrow::array::TimestampMicrosecondArray;
+        let micros: i64 = 1_780_704_000_000_000;
+        let fields = Fields::from(vec![Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
+            false,
+        )]);
+        let col = Arc::new(TimestampMicrosecondArray::from(vec![micros]).with_timezone("UTC"))
+            as Arc<dyn Array>;
+        let array = make_struct(fields.clone(), vec![col], None);
+        let mut opts = default_opts();
+        opts.timestamp_ltz_format = Some("%d/%m/%Y".to_string());
+        let xml = write_row(&array, 0, &fields, &opts)?;
+        assert!(xml.contains("06/06/2026"), "got: {xml}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_custom_date_format() -> Result<(), Box<dyn std::error::Error>> {
+        use datafusion::arrow::array::Date32Array;
+        let days: i32 = 20610;
+        let fields = Fields::from(vec![Field::new("d", DataType::Date32, false)]);
+        let col = Arc::new(Date32Array::from(vec![days])) as Arc<dyn Array>;
+        let array = make_struct(fields.clone(), vec![col], None);
+        let mut opts = default_opts();
+        opts.date_format = "%d/%m/%Y".to_string();
+        let xml = write_row(&array, 0, &fields, &opts)?;
+        assert!(xml.contains("06/06/2026"), "got: {xml}");
+        Ok(())
+    }
 }
