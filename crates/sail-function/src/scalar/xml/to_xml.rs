@@ -321,15 +321,22 @@ fn write_struct(
     if elem_cols.is_empty() {
         buf.push_str("/>\n");
     } else {
+        let content_start = buf.len();
         buf.push_str(">\n");
         for (col_idx, field) in &elem_cols {
             let col = array.column(*col_idx);
             write_field(buf, col, row, field, depth + 1, options)?;
         }
-        buf.push_str(&pad);
-        buf.push_str("</");
-        buf.push_str(tag);
-        buf.push_str(">\n");
+        let content_end = buf.len();
+        if content_end == content_start + 2 {
+            buf.truncate(content_start);
+            buf.push_str("/>\n");
+        } else {
+            buf.push_str(&pad);
+            buf.push_str("</");
+            buf.push_str(tag);
+            buf.push_str(">\n");
+        }
     }
 
     Ok(())
@@ -967,6 +974,25 @@ mod tests {
         assert_eq!(format_float(f64::NEG_INFINITY), "-Infinity");
         assert_eq!(format_float(3.44), "3.44");
         assert_eq!(format_float(0.0), "0");
+        Ok(())
+    }
+
+    #[test]
+    fn test_null_field_produces_self_closing_tag() -> Result<(), Box<dyn std::error::Error>> {
+        use datafusion::arrow::array::TimestampMicrosecondArray;
+        let fields = Fields::from(vec![Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("UTC"))),
+            true,
+        )]);
+        let col = Arc::new(TimestampMicrosecondArray::from(vec![None::<i64>]).with_timezone("UTC"))
+            as Arc<dyn Array>;
+        let array = make_struct(fields.clone(), vec![col], None);
+        let xml = write_row(&array, 0, &fields, &default_opts())?;
+        assert!(
+            xml.contains("<ROW/>"),
+            "expected self-closing tag, got:\n{xml}"
+        );
         Ok(())
     }
 }

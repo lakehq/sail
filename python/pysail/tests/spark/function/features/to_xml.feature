@@ -95,8 +95,8 @@ Feature: to_xml converts a struct value to an XML string
           xpath_string(to_xml(named_struct('a', 1, 'b', CAST(NULL AS INT))), '/ROW/b') AS b
         """
       Then query result
-        | a | b    |
-        | 1 | NULL |
+        | a | b |
+        | 1 |   |
 
     Scenario: Multiple consecutive NULL fields with default behavior omits all
       When query
@@ -107,8 +107,8 @@ Feature: to_xml converts a struct value to an XML string
           xpath_string(to_xml(named_struct('a', CAST(NULL AS INT), 'b', CAST(NULL AS INT), 'c', 3)), '/ROW/c') AS c
         """
       Then query result
-        | a    | b    | c |
-        | NULL | NULL | 3 |
+        | a | b | c |
+        |   |   | 3 |
 
     Scenario: Integer zero is not treated as NULL
       When query
