@@ -1,6 +1,10 @@
 import pytest
 
 
+def test_default_can_be_column_name(spark):
+    assert spark.sql("SELECT DEFAULT FROM VALUES (1) AS t(DEFAULT)").collect() == [(1,)]
+
+
 def test_predicate_negation(spark):
     assert spark.sql("SELECT NOT '' LIKE '%'").collect() == [(False,)]
     assert spark.sql("SELECT NOT ('' LIKE '%')").collect() == [(False,)]

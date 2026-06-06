@@ -12,6 +12,7 @@
 
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::common::Result;
 use datafusion::physical_expr::expressions::Column;
@@ -39,6 +40,7 @@ pub struct IcebergPlanBuilder<'a> {
     table_config: IcebergTableConfig,
     sink_mode: PhysicalSinkMode,
     sort_order: Option<Vec<PhysicalSortExpr>>,
+    logical_input_schema: Option<SchemaRef>,
     #[expect(unused)]
     session: &'a dyn Session,
 }
@@ -49,6 +51,7 @@ impl<'a> IcebergPlanBuilder<'a> {
         table_config: IcebergTableConfig,
         sink_mode: PhysicalSinkMode,
         sort_order: Option<Vec<PhysicalSortExpr>>,
+        logical_input_schema: Option<SchemaRef>,
         session: &'a dyn Session,
     ) -> Self {
         Self {
@@ -56,6 +59,7 @@ impl<'a> IcebergPlanBuilder<'a> {
             table_config,
             sink_mode,
             sort_order,
+            logical_input_schema,
             session,
         }
     }
@@ -142,6 +146,7 @@ impl<'a> IcebergPlanBuilder<'a> {
             self.sink_mode.clone(),
             self.table_config.table_exists,
             self.table_config.options.clone(),
+            self.logical_input_schema.clone(),
         )))
     }
 

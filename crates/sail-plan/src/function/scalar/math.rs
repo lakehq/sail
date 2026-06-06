@@ -19,6 +19,7 @@ use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
 use sail_function::scalar::math::spark_div::SparkIntervalDiv;
+use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
 use sail_function::scalar::math::spark_try_add::SparkTryAdd;
 use sail_function::scalar::math::spark_try_div::SparkTryDiv;
@@ -572,6 +573,12 @@ fn spark_abs(input: ScalarFunctionInput) -> PlanResult<Expr> {
     Ok(udf.call(input.arguments))
 }
 
+fn spark_pmod(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
+    let udf = ScalarUDF::from(SparkPmod::new(ansi_mode));
+    Ok(udf.call(input.arguments))
+}
+
 pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -618,7 +625,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("mod", F::custom(spark_modulo)),
         ("negative", F::unary(|x| Expr::Negative(Box::new(x)))),
         ("pi", F::nullary(expr_fn::pi)),
-        ("pmod", F::binary(math_fn::pmod)),
+        ("pmod", F::custom(spark_pmod)),
         ("positive", F::unary(positive)),
         ("pow", F::binary(power)),
         ("power", F::binary(power)),

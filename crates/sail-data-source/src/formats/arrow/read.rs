@@ -7,8 +7,6 @@ use datafusion::arrow::ipc::convert::fb_to_schema;
 use datafusion::arrow::ipc::reader::{FileReader, StreamReader};
 use datafusion::arrow::ipc::root_as_message;
 use datafusion::catalog::Session;
-use datafusion::datasource::file_format::arrow::ArrowFormat;
-use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::physical_plan::ArrowSource;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{internal_datafusion_err, Result};
@@ -18,7 +16,7 @@ use futures::StreamExt;
 use object_store::path::Path;
 use object_store::{GetOptions, GetRange, GetResultPayload, ObjectStore, ObjectStoreExt};
 
-use crate::listing::source::{ListingScanInput, ReadFormat};
+use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
 
 #[derive(Debug, Default, Clone)]
 pub struct ArrowReadFormat;
@@ -44,44 +42,49 @@ async fn is_object_in_arrow_ipc_file_format(
 
 #[async_trait::async_trait]
 impl ReadFormat for ArrowReadFormat {
-    fn create_read_format(
+    async fn infer_compression(
         &self,
-        _compression: Option<CompressionTypeVariant>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        Ok(Arc::new(ArrowFormat))
+        _ctx: &dyn Session,
+        _files: &[ListingFileSample<'_>],
+    ) -> Result<CompressionTypeVariant> {
+        Ok(CompressionTypeVariant::UNCOMPRESSED)
     }
 
     async fn infer_schema(
         &self,
         _ctx: &dyn Session,
-        store: &Arc<dyn ObjectStore>,
-        objects: &[object_store::ObjectMeta],
+        files: &[ListingFileSample<'_>],
         _compression: CompressionTypeVariant,
     ) -> Result<SchemaRef> {
+        let _ = self;
         let mut schemas = vec![];
-        for object in objects {
-            let r = store.as_ref().get(&object.location).await?;
-            let schema = match r.payload {
-                #[cfg(not(target_arch = "wasm32"))]
-                GetResultPayload::File(mut file, _) => match FileReader::try_new(&mut file, None) {
-                    Ok(reader) => reader.schema(),
-                    Err(file_error) => {
-                        // `FileReader` read some bytes while trying to parse the file,
-                        // so we need to rewind it to the beginning.
-                        file.seek(SeekFrom::Start(0))?;
-                        match StreamReader::try_new(&mut file, None) {
+        for group in files {
+            for object in &group.objects {
+                let r = group.store.as_ref().get(&object.location).await?;
+                let schema = match r.payload {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    GetResultPayload::File(mut file, _) => {
+                        match FileReader::try_new(&mut file, None) {
                             Ok(reader) => reader.schema(),
-                            Err(stream_error) => {
-                                return Err(internal_datafusion_err!(
+                            Err(file_error) => {
+                                // `FileReader` read some bytes while trying to parse the file,
+                                // so we need to rewind it to the beginning.
+                                file.seek(SeekFrom::Start(0))?;
+                                match StreamReader::try_new(&mut file, None) {
+                                    Ok(reader) => reader.schema(),
+                                    Err(stream_error) => {
+                                        return Err(internal_datafusion_err!(
                                     "Failed to parse Arrow file as either file format or stream format. File format error: {file_error}. Stream format error: {stream_error}"
                                 ));
+                                    }
+                                }
                             }
                         }
                     }
-                },
-                GetResultPayload::Stream(stream) => infer_stream_schema(stream).await?,
-            };
-            schemas.push(schema.as_ref().clone());
+                    GetResultPayload::Stream(stream) => infer_stream_schema(stream).await?,
+                };
+                schemas.push(schema.as_ref().clone());
+            }
         }
         Ok(Arc::new(Schema::try_merge(schemas)?))
     }

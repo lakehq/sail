@@ -1,4 +1,5 @@
 pub mod array;
+pub mod array_struct_field;
 pub mod collection;
 pub mod csv;
 pub mod datetime;
