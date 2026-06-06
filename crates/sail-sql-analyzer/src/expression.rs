@@ -1,6 +1,6 @@
 use std::iter::once;
 
-use sail_common::spec::{self, Window};
+use sail_common::spec::{self};
 use sail_sql_parser::ast::expression::{
     AtomExpr, BinaryOperator, CaseElse, CaseWhen, DuplicateTreatment, Expr, FilterClause,
     FunctionArgument, FunctionArgumentList, FunctionExpr, GroupingExpr, GroupingSet,
