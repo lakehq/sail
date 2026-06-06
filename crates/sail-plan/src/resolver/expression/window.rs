@@ -10,7 +10,7 @@ use datafusion_expr::{
     expr, AggregateUDF, ExprSchemable, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use sail_catalog::manager::CatalogManager;
-use sail_common::spec;
+use sail_common::spec::{self};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::session::plan::PlanService;
@@ -35,6 +35,14 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        let window = match window {
+            spec::Window::Named(name) => state
+                .get_window(name.as_ref())
+                .ok_or_else(|| PlanError::invalid(format!("undefined window: {}", name.as_ref())))?
+                .clone(),
+            w => w,
+        };
+
         let spec::Window::Unnamed {
             cluster_by,
             partition_by,
@@ -42,7 +50,7 @@ impl PlanResolver<'_> {
             frame,
         } = window
         else {
-            return Err(PlanError::todo("named window"));
+            return Err(PlanError::analysis("named windows in window expressions"));
         };
         if !cluster_by.is_empty() {
             return Err(PlanError::unsupported(

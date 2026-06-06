@@ -1,6 +1,6 @@
 use std::iter::once;
 
-use sail_common::spec;
+use sail_common::spec::{self, Window};
 use sail_sql_parser::ast::expression::{
     AtomExpr, BinaryOperator, CaseElse, CaseWhen, DuplicateTreatment, Expr, FilterClause,
     FunctionArgument, FunctionArgumentList, FunctionExpr, GroupingExpr, GroupingSet,
@@ -1053,48 +1053,9 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
             });
             if let Some(over_clause) = over_clause {
                 let OverClause { over: _, window } = over_clause;
-                let window = match window {
-                    WindowSpec::Named(x) => spec::Window::Named(x.value.into()),
-                    WindowSpec::Unnamed {
-                        left: _,
-                        modifiers,
-                        window_frame,
-                        right: _,
-                    } => {
-                        let WindowModifiers {
-                            cluster_by,
-                            partition_by,
-                            order_by,
-                        } = modifiers.try_into()?;
-                        let cluster_by = cluster_by
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(from_ast_expression)
-                            .collect::<SqlResult<Vec<_>>>()?;
-                        let partition_by = partition_by
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(from_ast_expression)
-                            .collect::<SqlResult<Vec<_>>>()?;
-                        let order_by = order_by
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(from_ast_order_by)
-                            .collect::<SqlResult<Vec<_>>>()?;
-                        let frame = window_frame
-                            .map(|f| from_ast_window_frame(*f))
-                            .transpose()?;
-                        spec::Window::Unnamed {
-                            cluster_by,
-                            partition_by,
-                            order_by,
-                            frame,
-                        }
-                    }
-                };
                 Ok(spec::Expr::Window {
                     window_function: Box::new(function),
-                    window,
+                    window: from_ast_window(window)?,
                 })
             } else {
                 Ok(function)
@@ -1219,5 +1180,47 @@ fn from_ast_pattern_escape_string(escape: Option<PatternEscape>) -> SqlResult<Op
         _ => Err(SqlError::invalid(format!(
             "invalid escape character: {value}"
         ))),
+    }
+}
+
+pub(crate) fn from_ast_window(window: WindowSpec) -> SqlResult<spec::Window> {
+    match window {
+        WindowSpec::Named(x) => Ok(spec::Window::Named(x.value.into())),
+        WindowSpec::Unnamed {
+            left: _,
+            modifiers,
+            window_frame,
+            right: _,
+        } => {
+            let WindowModifiers {
+                cluster_by,
+                partition_by,
+                order_by,
+            } = modifiers.try_into()?;
+            let cluster_by = cluster_by
+                .unwrap_or_default()
+                .into_iter()
+                .map(from_ast_expression)
+                .collect::<SqlResult<Vec<_>>>()?;
+            let partition_by = partition_by
+                .unwrap_or_default()
+                .into_iter()
+                .map(from_ast_expression)
+                .collect::<SqlResult<Vec<_>>>()?;
+            let order_by = order_by
+                .unwrap_or_default()
+                .into_iter()
+                .map(from_ast_order_by)
+                .collect::<SqlResult<Vec<_>>>()?;
+            let frame = window_frame
+                .map(|f| from_ast_window_frame(*f))
+                .transpose()?;
+            Ok(spec::Window::Unnamed {
+                cluster_by,
+                partition_by,
+                order_by,
+                frame,
+            })
+        }
     }
 }

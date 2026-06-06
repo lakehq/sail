@@ -20,7 +20,7 @@ use crate::error::{SqlError, SqlResult};
 use crate::expression::{
     expr_with_default_column_values, from_ast_expression, from_ast_function_arguments,
     from_ast_grouping_expression, from_ast_identifier_list, from_ast_object_name,
-    from_ast_order_by,
+    from_ast_order_by, from_ast_window,
 };
 
 #[derive(Default)]
@@ -136,7 +136,7 @@ pub(crate) fn from_ast_query(query: Query) -> SqlResult<spec::QueryPlan> {
         distribute_by,
         offset,
         limit,
-        window: _, // TODO: support window
+        window,
     } = modifiers.try_into()?;
 
     if cluster_by.is_some() {
@@ -193,6 +193,11 @@ pub(crate) fn from_ast_query(query: Query) -> SqlResult<spec::QueryPlan> {
             })
         }
     };
+
+    let plan = spec::QueryPlan::new(spec::QueryNode::NamedWindows {
+        input: Box::new(plan),
+        windows: from_ast_named_windows(window)?,
+    });
 
     if let Some(WithClause {
         with: _,
@@ -802,6 +807,19 @@ pub fn from_ast_with(
                 columns,
             });
             Ok((name, plan))
+        })
+        .collect::<SqlResult<Vec<_>>>()
+}
+
+pub fn from_ast_named_windows(
+    windows: Vec<NamedWindow>,
+) -> SqlResult<Vec<(spec::Identifier, spec::Window)>> {
+    windows
+        .into_iter()
+        .map(|window| {
+            let name = spec::Identifier::from(window.name.value);
+            let window = from_ast_window(window.window)?;
+            Ok((name, window))
         })
         .collect::<SqlResult<Vec<_>>>()
 }

@@ -85,6 +85,8 @@ pub(super) struct PlanResolverState {
     /// Positional parameter values available for IDENTIFIER clause evaluation.
     /// Set alongside `param_values` when resolving a `WithParameters` query node.
     positional_param_values: Vec<ScalarValue>,
+    /// The named windows defined in the current query, keyed by window name.
+    windows: HashMap<String, spec::Window>,
 }
 
 impl Default for PlanResolverState {
@@ -105,6 +107,7 @@ impl PlanResolverState {
             config: PlanResolverStateConfig::default(),
             param_values: HashMap::new(),
             positional_param_values: Vec::new(),
+            windows: HashMap::new(),
         }
     }
 
@@ -244,6 +247,14 @@ impl PlanResolverState {
 
     pub fn enter_config_scope(&mut self) -> ConfigScope<'_> {
         ConfigScope::new(self)
+    }
+
+    pub fn insert_window(&mut self, name: String, window: spec::Window) {
+        self.windows.insert(name, window);
+    }
+
+    pub fn get_window(&self, name: &str) -> Option<&spec::Window> {
+        self.windows.get(name)
     }
 
     // TODO:
