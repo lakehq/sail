@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 
+use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
 use sail_data_source::options::gen::DeltaWriteOptions;
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +29,12 @@ pub struct DeltaWriterExecOptions {
     pub replace_where: Option<String>,
     #[serde(default)]
     pub generation_expressions: HashMap<String, String>,
+    #[serde(default)]
+    pub default_expressions: HashMap<String, String>,
+    #[serde(default)]
+    pub target_nullability: HashMap<String, bool>,
+    #[serde(default)]
+    pub identity_columns: HashMap<String, CatalogTableColumnIdentity>,
 }
 
 impl From<DeltaWriteOptions> for DeltaWriterExecOptions {
@@ -39,6 +46,9 @@ impl From<DeltaWriteOptions> for DeltaWriterExecOptions {
             overwrite_schema: options.overwrite_schema,
             replace_where: options.replace_where,
             generation_expressions: HashMap::new(),
+            default_expressions: HashMap::new(),
+            target_nullability: HashMap::new(),
+            identity_columns: HashMap::new(),
         }
     }
 }
@@ -51,6 +61,29 @@ impl DeltaWriterExecOptions {
         generation_expressions: HashMap<String, String>,
     ) -> Self {
         self.generation_expressions = generation_expressions;
+        self
+    }
+
+    /// Attach column-level default expressions resolved from the write input's
+    /// logical schema.
+    pub fn with_default_expressions(
+        mut self,
+        default_expressions: HashMap<String, String>,
+    ) -> Self {
+        self.default_expressions = default_expressions;
+        self
+    }
+
+    pub fn with_target_nullability(mut self, target_nullability: HashMap<String, bool>) -> Self {
+        self.target_nullability = target_nullability;
+        self
+    }
+
+    pub fn with_identity_columns(
+        mut self,
+        identity_columns: HashMap<String, CatalogTableColumnIdentity>,
+    ) -> Self {
+        self.identity_columns = identity_columns;
         self
     }
 }

@@ -40,9 +40,9 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use object_store::ObjectMeta;
+use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 use url::Url;
 
-use crate::datasource::expr_adapter::IcebergPhysicalExprAdapterFactory;
 use crate::datasource::expressions::simplify_expr;
 use crate::datasource::pruning::{
     prune_data_files_by_partition_values, prune_files, prune_manifests_by_partition_summaries,
@@ -775,7 +775,7 @@ impl TableProvider for IcebergTableProvider {
                 .with_statistics(table_stats)
                 .with_projection_indices(expanded_projection)?
                 .with_limit(limit)
-                .with_expr_adapter(Some(Arc::new(IcebergPhysicalExprAdapterFactory {})
+                .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})
                     as Arc<dyn PhysicalExprAdapterFactory>))
                 .build();
             return Ok(DataSourceExec::from_data_source(file_scan_config));
@@ -804,7 +804,7 @@ impl TableProvider for IcebergTableProvider {
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(file_groups)
-                    .with_expr_adapter(Some(Arc::new(IcebergPhysicalExprAdapterFactory {})
+                    .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})
                         as Arc<dyn PhysicalExprAdapterFactory>))
                     .build();
             branches.push(DataSourceExec::from_data_source(file_scan_config));
@@ -818,7 +818,7 @@ impl TableProvider for IcebergTableProvider {
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(vec![FileGroup::from(partitioned)])
-                    .with_expr_adapter(Some(Arc::new(IcebergPhysicalExprAdapterFactory {})
+                    .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})
                         as Arc<dyn PhysicalExprAdapterFactory>))
                     .build();
             let data_scan: Arc<dyn ExecutionPlan> =

@@ -14,6 +14,7 @@ use sail_common::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
+use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp_ntz::SparkMakeTimestampNtz;
@@ -81,17 +82,18 @@ fn trunc(date: Expr, part: Expr) -> Expr {
 
 fn date_trunc(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let (part, timestamp) = input.arguments.two()?;
-    let truncated = expr_fn::date_trunc(trunc_part_conversion(part), timestamp);
-    match truncated.get_type(input.function_context.schema)? {
-        DataType::Timestamp(TimeUnit::Microsecond, _) => Ok(truncated),
-        DataType::Timestamp(_, tz) => Ok(cast(
-            truncated,
-            DataType::Timestamp(TimeUnit::Microsecond, tz),
-        )),
+    let truncated =
+        ScalarUDF::from(SparkDateTrunc::new()).call(vec![trunc_part_conversion(part), timestamp]);
+    let truncated = match truncated.get_type(input.function_context.schema)? {
+        DataType::Timestamp(TimeUnit::Microsecond, _) => truncated,
+        DataType::Timestamp(_, tz) => {
+            cast(truncated, DataType::Timestamp(TimeUnit::Microsecond, tz))
+        }
         other => Err(PlanError::InternalError(format!(
             "date_trunc expected a timestamp result, got {other:?}"
-        ))),
-    }
+        )))?,
+    };
+    Ok(truncated)
 }
 
 fn interval_arithmetic(input: ScalarFunctionInput, unit: &str, op: Operator) -> PlanResult<Expr> {
@@ -259,8 +261,12 @@ fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
         crate::function::scalar::conversion::cast_to_date(input)
     } else if input.arguments.len() == 2 {
         let (expr, format) = input.arguments.two()?;
-        let expr = match expr.get_type(input.function_context.schema) {
-            Ok(DataType::Timestamp(_time_unit, _tz)) => cast(expr, DataType::Utf8),
+        let expr_type = expr.get_type(input.function_context.schema);
+        if let Ok(DataType::Timestamp(_, _)) = expr_type {
+            let expr = expr_fn::to_local_time(vec![expr]);
+            return Ok(cast(expr, DataType::Date32)); // In case of data type timestamp, ignore format
+        }
+        let expr = match expr_type {
             Ok(_other) => expr,
             Err(_) => cast(expr, DataType::Utf8), // In case of error, cast to string
         };
@@ -814,6 +820,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
                 )
             }),
         ),
+        ("timestampdiff", F::custom(datediff)),
         ("to_date", F::custom(to_date)),
         ("to_time", F::var_arg(to_time)),
         (

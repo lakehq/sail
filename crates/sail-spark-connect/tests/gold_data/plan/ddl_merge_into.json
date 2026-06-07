@@ -1153,15 +1153,7 @@
                             "target",
                             "col2"
                           ],
-                          {
-                            "unresolvedAttribute": {
-                              "name": [
-                                "DEFAULT"
-                              ],
-                              "planId": null,
-                              "isMetadataColumn": false
-                            }
-                          }
+                          "defaultColumnValue"
                         ]
                       ]
                     }
@@ -1228,15 +1220,7 @@
                               "isMetadataColumn": false
                             }
                           },
-                          {
-                            "unresolvedAttribute": {
-                              "name": [
-                                "DEFAULT"
-                              ],
-                              "planId": null,
-                              "isMetadataColumn": false
-                            }
-                          }
+                          "defaultColumnValue"
                         ]
                       }
                     }
@@ -1328,15 +1312,7 @@
                             "target",
                             "col2"
                           ],
-                          {
-                            "unresolvedAttribute": {
-                              "name": [
-                                "DEFAULT"
-                              ],
-                              "planId": null,
-                              "isMetadataColumn": false
-                            }
-                          }
+                          "defaultColumnValue"
                         ]
                       ]
                     }

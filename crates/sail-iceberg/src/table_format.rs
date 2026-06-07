@@ -22,7 +22,7 @@ use object_store::ObjectStoreExt;
 use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::{
     find_path_in_options, OptionLayer, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat,
-    TableFormatRegistry,
+    TableFormatAlterTableOperation, TableFormatRegistry,
 };
 use sail_data_source::options::gen::{IcebergReadOptions, IcebergWriteOptions};
 use sail_data_source::options::ResolveOptions;
@@ -88,7 +88,7 @@ impl TableFormat for IcebergTableFormat {
             bucket_by,
             sort_order,
             options,
-            logical_schema: _,
+            logical_schema,
         } = info;
 
         if bucket_by.is_some() {
@@ -97,6 +97,8 @@ impl TableFormat for IcebergTableFormat {
 
         let table_url = Self::parse_table_url(vec![path]).await?;
         let (options, table_properties) = split_iceberg_write_options_and_table_properties(options);
+        let variant_shredding_option_presence =
+            IcebergWriterExecOptions::variant_shredding_option_presence(&options);
         let iceberg_options = IcebergWriteOptions::resolve(ctx, options)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
@@ -164,6 +166,7 @@ impl TableFormat for IcebergTableFormat {
         };
 
         let mut options = IcebergWriterExecOptions::from(iceberg_options);
+        options.apply_variant_shredding_option_presence(variant_shredding_option_presence);
         options.table_properties = table_properties;
         let table_config = IcebergTableConfig {
             table_url,
@@ -181,11 +184,44 @@ impl TableFormat for IcebergTableFormat {
                 .collect::<Vec<_>>()
         });
 
-        let builder = IcebergPlanBuilder::new(input, table_config, mode, physical_sort, ctx);
+        let logical_input_schema = logical_schema.map(|schema| Arc::new(schema.as_arrow().clone()));
+        let builder = IcebergPlanBuilder::new(
+            input,
+            table_config,
+            mode,
+            physical_sort,
+            logical_input_schema,
+            ctx,
+        );
         let exec = builder.build().await?;
         Ok(exec)
     }
 
+    async fn alter_table(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+        operation: TableFormatAlterTableOperation,
+    ) -> Result<()> {
+        match operation {
+            TableFormatAlterTableOperation::SetTableProperties { changes, if_exists } => {
+                self.alter_table_properties(runtime_env, path, changes, if_exists)
+                    .await
+            }
+            TableFormatAlterTableOperation::AlterColumnType { .. } => {
+                not_impl_err!("Column type alteration not supported for Iceberg format")
+            }
+            TableFormatAlterTableOperation::AlterColumnDefault { .. } => {
+                not_impl_err!("Column default alteration not supported for Iceberg format")
+            }
+            TableFormatAlterTableOperation::AddCheckConstraint { .. } => {
+                not_impl_err!("CHECK constraints not supported for Iceberg format")
+            }
+        }
+    }
+}
+
+impl IcebergTableFormat {
     async fn alter_table_properties(
         &self,
         runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,

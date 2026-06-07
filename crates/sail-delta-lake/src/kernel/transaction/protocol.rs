@@ -223,11 +223,45 @@ impl ProtocolChecker {
         if contains_variant
             && !(protocol.min_reader_version() >= 3
                 && protocol.min_writer_version() >= 7
-                && protocol.has_reader_feature(&TableFeature::VariantType)
-                && protocol.has_writer_feature(&TableFeature::VariantType))
+                && protocol
+                    .reader_features()
+                    .unwrap_or(&[])
+                    .iter()
+                    .any(TableFeature::is_variant_type_feature)
+                && protocol
+                    .writer_features()
+                    .unwrap_or(&[])
+                    .iter()
+                    .any(TableFeature::is_variant_type_feature))
         {
             return Err(TransactionError::TableFeaturesRequired(
                 TableFeature::VariantType,
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn check_can_write_variant_shredding_to_protocol(
+        &self,
+        protocol: &Protocol,
+        variant_shredding_enabled: bool,
+    ) -> Result<(), TransactionError> {
+        if variant_shredding_enabled
+            && !(protocol.min_reader_version() >= 3
+                && protocol.min_writer_version() >= 7
+                && protocol
+                    .reader_features()
+                    .unwrap_or(&[])
+                    .iter()
+                    .any(TableFeature::is_variant_shredding_feature)
+                && protocol
+                    .writer_features()
+                    .unwrap_or(&[])
+                    .iter()
+                    .any(TableFeature::is_variant_shredding_feature))
+        {
+            return Err(TransactionError::TableFeaturesRequired(
+                TableFeature::VariantShredding,
             ));
         }
         Ok(())
@@ -296,6 +330,9 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     reader_features.insert(TableFeature::TypeWideningPreview);
     reader_features.insert(TableFeature::TypeWidening);
     reader_features.insert(TableFeature::VariantType);
+    reader_features.insert(TableFeature::VariantTypePreview);
+    reader_features.insert(TableFeature::VariantShredding);
+    reader_features.insert(TableFeature::VariantShreddingPreview);
     let mut writer_features = HashSet::new();
     // Keep this list aligned with end-to-end behavior, not just protocol parsing.
     // For writer versions 2..=6, claiming support here also means accepting older tables whose
@@ -309,13 +346,114 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     // writer_features.insert(TableFeature::ChangeDataFeed);
     // FIXME: implement delta.invariants
     writer_features.insert(TableFeature::Invariants);
-    // writer_features.insert(TableFeature::CheckConstraints);
+    writer_features.insert(TableFeature::CheckConstraints);
     writer_features.insert(TableFeature::GeneratedColumns);
-    // writer_features.insert(TableFeature::IdentityColumns);
+    writer_features.insert(TableFeature::AllowColumnDefaults);
+    writer_features.insert(TableFeature::IdentityColumns);
     writer_features.insert(TableFeature::V2Checkpoint);
     writer_features.insert(TableFeature::TypeWideningPreview);
     writer_features.insert(TableFeature::TypeWidening);
     writer_features.insert(TableFeature::VariantType);
+    writer_features.insert(TableFeature::VariantTypePreview);
+    writer_features.insert(TableFeature::VariantShredding);
+    writer_features.insert(TableFeature::VariantShreddingPreview);
 
     ProtocolChecker::new(reader_features, writer_features)
 });
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn global_checker_accepts_variant_shredding_features() {
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![
+                TableFeature::VariantType,
+                TableFeature::VariantShredding,
+            ]),
+            Some(vec![
+                TableFeature::AppendOnly,
+                TableFeature::Invariants,
+                TableFeature::VariantType,
+                TableFeature::VariantShredding,
+            ]),
+        );
+
+        INSTANCE.can_read_from_protocol(&protocol).unwrap();
+        INSTANCE.can_write_to_protocol(&protocol).unwrap();
+        INSTANCE
+            .check_can_write_variant_shredding_to_protocol(&protocol, true)
+            .unwrap();
+    }
+
+    #[test]
+    fn global_checker_accepts_preview_variant_shredding_features() {
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![
+                TableFeature::VariantType,
+                TableFeature::VariantShreddingPreview,
+            ]),
+            Some(vec![
+                TableFeature::AppendOnly,
+                TableFeature::Invariants,
+                TableFeature::VariantType,
+                TableFeature::VariantShreddingPreview,
+            ]),
+        );
+
+        INSTANCE.can_read_from_protocol(&protocol).unwrap();
+        INSTANCE.can_write_to_protocol(&protocol).unwrap();
+        INSTANCE
+            .check_can_write_variant_shredding_to_protocol(&protocol, true)
+            .unwrap();
+    }
+
+    #[test]
+    fn global_checker_accepts_variant_shredding_without_variant_type() {
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::VariantShreddingPreview]),
+            Some(vec![
+                TableFeature::VariantShreddingPreview,
+                TableFeature::AppendOnly,
+                TableFeature::Invariants,
+            ]),
+        );
+
+        INSTANCE.can_read_from_protocol(&protocol).unwrap();
+        INSTANCE.can_write_to_protocol(&protocol).unwrap();
+        INSTANCE
+            .check_can_write_variant_shredding_to_protocol(&protocol, true)
+            .unwrap();
+    }
+
+    #[test]
+    fn global_checker_rejects_enabled_variant_shredding_without_shredding_feature() {
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::VariantType]),
+            Some(vec![
+                TableFeature::VariantType,
+                TableFeature::AppendOnly,
+                TableFeature::Invariants,
+            ]),
+        );
+
+        let err = INSTANCE
+            .check_can_write_variant_shredding_to_protocol(&protocol, true)
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            TransactionError::TableFeaturesRequired(TableFeature::VariantShredding)
+        ));
+    }
+}

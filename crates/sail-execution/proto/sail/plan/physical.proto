@@ -62,16 +62,17 @@ message ExtendedPhysicalPlanNode {
     SparkPartitionIdExecNode spark_partition_id = 47;
     DeletionVectorWriterExecNode deletion_vector_writer = 48;
     DeletionVectorRowsWriterExecNode deletion_vector_rows_writer = 49;
+    CoalesceExecNode coalesce = 50;
   }
 }
 
 message ExtendedPhysicalExprNode {
   oneof ExprKind {
-    DeltaCastColumnExprNode delta_cast = 1;
+    CastColumnExprNode schema_evolution_cast = 1;
   }
 }
 
-message DeltaCastColumnExprNode {
+message CastColumnExprNode {
   bytes input_schema = 1;
   bytes target_schema = 2;
 }
@@ -100,6 +101,9 @@ message ExtendedScalarUdf {
     SparkAbsUdf spark_abs = 20;
     SparkMakeTimestampNtzUdf spark_make_timestamp_ntz = 21;
     ConvertTzUdf convert_tz = 22;
+    SparkToCsvUdf spark_to_csv = 23;
+    SparkPmodUdf spark_pmod = 24;
+    SparkParseJsonUdf spark_parse_json = 25;
   }
 }
 
@@ -198,7 +202,19 @@ message SparkAbsUdf {
   bool ansi_mode = 1;
 }
 
+message SparkParseJsonUdf {
+  bool safe = 1;
+}
+
+message SparkPmodUdf {
+  bool ansi_mode = 1;
+}
+
 message SparkFromCsvUdf {
+  string session_timezone = 1;
+}
+
+message SparkToCsvUdf {
   string session_timezone = 1;
 }
 
@@ -262,6 +278,7 @@ message PySparkGroupMapUdaf {
   bytes output_type = 6;
   bool is_pandas = 7;
   PySparkUdfConfig config = 8;
+  bool is_iter = 9;
 }
 
 message PySparkBatchCollectorUdaf {
@@ -672,6 +689,11 @@ message SparkPartitionIdExecNode {
   bytes schema = 3;
 }
 
+message CoalesceExecNode {
+  bytes input = 1;
+  uint64 output_partitions = 2;
+}
+
 message RelaxedTzCastExecNode {
   bytes input = 1;
   bytes schema = 2;
@@ -734,6 +756,7 @@ message IcebergWriterExecNode {
   PhysicalSinkMode sink_mode = 4;
   bool table_exists = 5;
   string options = 6;
+  bytes logical_input_schema = 7;
 }
 
 message IcebergCommitExecNode {
