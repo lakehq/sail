@@ -273,11 +273,23 @@ Feature: unary minus (negative) honors ANSI overflow semantics
 
   Rule: Negating the maximum decimal overflows its precision
 
-    # @sail-bug: Spark promotes `-DECIMAL(38,0)` to DECIMAL(39,0), which exceeds
-    # the max precision, so negating the maximum value raises
-    # NUMERIC_VALUE_OUT_OF_RANGE. Sail keeps DECIMAL(38,0) and returns the value.
+    # Spark promotes `-DECIMAL(38,0)` to DECIMAL(39,0), which exceeds the max
+    # precision (38), so negating the maximum value raises NUMERIC_VALUE_OUT_OF_RANGE.
+    # This is a TYPE-precision overflow, so it errors regardless of ANSI mode (unlike
+    # a value overflow, which only errors under ANSI on). Sail keeps DECIMAL(38,0)
+    # and returns the value in both modes.
     @sail-bug
-    Scenario: negate the maximum DECIMAL(38,0) errors
+    Scenario: negate the maximum DECIMAL(38,0) errors under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT -CAST('99999999999999999999999999999999999999' AS DECIMAL(38,0)) AS result
+        """
+      Then query error (?i)out.of.range
+
+    @sail-bug
+    Scenario: negate the maximum DECIMAL(38,0) also errors under ANSI off
+      Given config spark.sql.ansi.enabled = false
       When query
         """
         SELECT -CAST('99999999999999999999999999999999999999' AS DECIMAL(38,0)) AS result

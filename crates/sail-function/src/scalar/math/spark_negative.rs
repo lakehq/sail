@@ -9,8 +9,8 @@ use datafusion_spark::function::math::negative::SparkNegative as DataFusionNegat
 
 /// `ConfigOptions` snapshots with `execution.enable_ansi_mode` pinned. Negation
 /// only reads the ANSI flag, so the two possible snapshots are built once and
-/// shared process-wide; each batch clones an `Arc` (a refcount bump) instead of
-/// deep-cloning the session config.
+/// shared process-wide; each batch clones an `Arc` instead of deep-cloning the
+/// session config.
 static ANSI_CONFIG: LazyLock<Arc<ConfigOptions>> = LazyLock::new(|| make_config(true));
 static NON_ANSI_CONFIG: LazyLock<Arc<ConfigOptions>> = LazyLock::new(|| make_config(false));
 
@@ -26,10 +26,6 @@ fn make_config(ansi_mode: bool) -> Arc<ConfigOptions> {
 /// serialized through the physical codec, so the value the client requested
 /// reaches every worker — unlike reading DataFusion's session-level
 /// `execution.enable_ansi_mode`, which only reflects the driver's context.
-///
-/// Under ANSI mode, negating the minimum value of an integral type raises
-/// ARITHMETIC_OVERFLOW; otherwise it wraps two's complement (the minimum negates
-/// to itself). Decimal/interval overflow always errors.
 ///
 /// Name, signature, return type, and the negate kernel are delegated to upstream
 /// `datafusion_spark::SparkNegative` (its free `spark_negative` helper is private).
