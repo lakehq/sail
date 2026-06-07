@@ -89,7 +89,7 @@ con.sql("SELECT country, COUNT(*) AS n FROM users GROUP BY country").execute()
 For production use, run Sail on your own infrastructure and have your Ibis client connect to it over the network.
 See the [Deployment](/guide/deployment/) guide for how to run Sail on Kubernetes or in a container.
 
-Once Sail is running, point Ibis at its address. The client code is the same as local use; only the `sc://` URL changes.
+Once Sail is running, point Ibis at its address. The client code is the same as local use. Only the `sc://` URL changes.
 
 ```python
 import ibis
