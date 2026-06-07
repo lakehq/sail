@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{expr, lit, when, ExprSchemable, Operator, ScalarUDF};
@@ -9,13 +10,19 @@ use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
 use sail_function::scalar::misc::monotonically_increasing_id::SparkMonotonicallyIncreasingId;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::misc::spark_aes::{
     SparkAESDecrypt, SparkAESEncrypt, SparkTryAESDecrypt, SparkTryAESEncrypt,
 };
 use sail_function::scalar::misc::spark_partition_id::SparkPartitionId;
+use sail_function::scalar::misc::theta_sketch::{
+    ThetaDifferenceFunction, ThetaIntersectionFunction, ThetaSketchEstimateFunction,
+    ThetaUnionFunction,
+};
 use sail_function::scalar::misc::version::SparkVersion;
+use sail_function::sketch::DEFAULT_THETA_LG_NOM_ENTRIES;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -123,6 +130,60 @@ fn bitmap_bucket_number(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     .end()?)
 }
 
+fn theta_union(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
+    let arguments = match arguments.len() {
+        2 => {
+            let (first, second) = arguments.two()?;
+            vec![first, second, lit(DEFAULT_THETA_LG_NOM_ENTRIES)]
+        }
+        3 => {
+            let (first, second, lg_nom_entries) = arguments.three()?;
+            vec![
+                first,
+                second,
+                expr::Expr::Cast(expr::Cast {
+                    expr: Box::new(lg_nom_entries),
+                    data_type: DataType::Int32,
+                }),
+            ]
+        }
+        count => {
+            return Err(PlanError::invalid(format!(
+                "theta_union requires 2 or 3 arguments, got {count}"
+            )))
+        }
+    };
+    Ok(ScalarUDF::from(ThetaUnionFunction::new()).call(arguments))
+}
+
+fn hll_union(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
+    let arguments = match arguments.len() {
+        2 => {
+            let (first, second) = arguments.two()?;
+            vec![first, second, lit(false)]
+        }
+        3 => {
+            let (first, second, allow_different_lg_config_k) = arguments.three()?;
+            vec![
+                first,
+                second,
+                expr::Expr::Cast(expr::Cast {
+                    expr: Box::new(allow_different_lg_config_k),
+                    data_type: DataType::Boolean,
+                }),
+            ]
+        }
+        count => {
+            return Err(PlanError::invalid(format!(
+                "hll_union requires 2 or 3 arguments, got {count}"
+            )))
+        }
+    };
+    Ok(ScalarUDF::from(HllUnionFunction::new()).call(arguments))
+}
+
 pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -140,8 +201,21 @@ pub(super) fn list_built_in_misc_functions() -> Vec<(&'static str, ScalarFunctio
         ("from_avro", F::unknown("from_avro")),
         ("from_protobuf", F::unknown("from_protobuf")),
         ("equal_null", F::binary_op(Operator::IsNotDistinctFrom)),
-        ("hll_sketch_estimate", F::unknown("hll_sketch_estimate")),
-        ("hll_union", F::unknown("hll_union")),
+        (
+            "hll_sketch_estimate",
+            F::udf(HllSketchEstimateFunction::new()),
+        ),
+        ("hll_union", F::custom(hll_union)),
+        ("theta_difference", F::udf(ThetaDifferenceFunction::new())),
+        (
+            "theta_intersection",
+            F::udf(ThetaIntersectionFunction::new()),
+        ),
+        (
+            "theta_sketch_estimate",
+            F::udf(ThetaSketchEstimateFunction::new()),
+        ),
+        ("theta_union", F::custom(theta_union)),
         (
             "input_file_block_length",
             F::unknown("input_file_block_length"),

@@ -9,7 +9,8 @@ use sail_catalog::provider::{
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
-    alter_column_type, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
+    alter_column_default, alter_column_type, DatabaseStatus, TableColumnStatus, TableKind,
+    TableStatus,
 };
 
 struct MemoryDatabase {
@@ -201,6 +202,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                     comment,
                     default,
                     generated_always_as,
+                    identity,
                 } = x;
                 let is_partition = partition_by
                     .iter()
@@ -215,6 +217,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                     comment,
                     default,
                     generated_always_as,
+                    identity,
                     is_partition,
                     is_bucket,
                     is_cluster: false,
@@ -349,6 +352,17 @@ impl CatalogProvider for MemoryCatalogProvider {
                         ))
                     })
                 }
+                AlterTableOptions::AlterColumnDefault { name, default } => {
+                    alter_column_default(columns, &name, default).map_err(|e| {
+                        CatalogError::InvalidArgument(format!(
+                            "failed to alter column default for '{}': {e}",
+                            name.join(".")
+                        ))
+                    })
+                }
+                AlterTableOptions::AddCheckConstraint { .. } => Err(CatalogError::NotSupported(
+                    "CHECK constraints are handled by lakehouse table formats".to_string(),
+                )),
             },
             _ => Err(CatalogError::NotSupported(
                 "ALTER TABLE is not supported for views".to_string(),
@@ -401,6 +415,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                     comment,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                     is_partition: false,
                     is_bucket: false,
                     is_cluster: false,

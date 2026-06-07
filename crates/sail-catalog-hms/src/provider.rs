@@ -1,15 +1,6 @@
 use std::time::Duration;
 
 use futures::future::try_join_all;
-use hive_metastore::{
-    EnvironmentContext, GetTableRequest, Table, ThriftHiveMetastoreAlterTableException,
-    ThriftHiveMetastoreClient, ThriftHiveMetastoreClientBuilder,
-    ThriftHiveMetastoreCreateDatabaseException, ThriftHiveMetastoreCreateTableException,
-    ThriftHiveMetastoreDropDatabaseException, ThriftHiveMetastoreDropTableException,
-    ThriftHiveMetastoreDropTableWithEnvironmentContextException,
-    ThriftHiveMetastoreGetDatabaseException, ThriftHiveMetastoreGetTableException,
-    ThriftHiveMetastoreGetTableReqException,
-};
 use pilota::{AHashMap, FastStr};
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::hive_format::HiveCatalogFormat;
@@ -24,11 +15,21 @@ use tokio::sync::Mutex;
 use volo_thrift::MaybeException;
 
 use crate::convert::{
-    build_database, build_generic_table, build_view, database_to_status, inject_spark_metadata,
-    is_view_table, reject_spark_properties, reject_spark_property_keys, table_to_status,
-    validate_namespace, view_to_status, GenericTableFormat,
+    alter_spark_column_default, build_database, build_generic_table, build_view,
+    database_to_status, inject_spark_metadata, is_view_table, reject_spark_properties,
+    reject_spark_property_keys, table_to_status, validate_namespace, view_to_status,
+    GenericTableFormat,
 };
 use crate::data_type::arrow_to_hive_type;
+use crate::hms::{
+    EnvironmentContext, GetTableRequest, Table, ThriftHiveMetastoreAlterTableException,
+    ThriftHiveMetastoreClient, ThriftHiveMetastoreClientBuilder,
+    ThriftHiveMetastoreCreateDatabaseException, ThriftHiveMetastoreCreateTableException,
+    ThriftHiveMetastoreDropDatabaseException, ThriftHiveMetastoreDropTableException,
+    ThriftHiveMetastoreDropTableWithEnvironmentContextException,
+    ThriftHiveMetastoreGetDatabaseException, ThriftHiveMetastoreGetTableException,
+    ThriftHiveMetastoreGetTableReqException,
+};
 use crate::security::{KerberosMakeTransport, SaslQop};
 
 #[derive(Debug, Clone, Default)]
@@ -144,6 +145,14 @@ fn apply_alter_table_options(
                 )));
             };
             column.r#type = Some(FastStr::from(hive_type));
+        }
+        AlterTableOptions::AlterColumnDefault { name, default } => {
+            alter_spark_column_default(hms_table, &name, default)?;
+        }
+        AlterTableOptions::AddCheckConstraint { .. } => {
+            return Err(CatalogError::NotSupported(
+                "CHECK constraints are handled by lakehouse table formats".to_string(),
+            ));
         }
     }
     Ok(())
@@ -1203,7 +1212,6 @@ mod tests {
     use std::time::Duration;
 
     use arrow::datatypes::DataType;
-    use hive_metastore::Table;
     use pilota::{AHashMap, FastStr};
     use sail_catalog::error::{CatalogError, CatalogObject};
     use sail_catalog::provider::{
@@ -1212,6 +1220,7 @@ mod tests {
     use sail_common::runtime::RuntimeHandle;
 
     use super::{HmsCatalogConfig, HmsCatalogProvider};
+    use crate::hms::Table;
 
     #[tokio::test]
     async fn test_create_table_rejects_iceberg_format() {
@@ -1245,6 +1254,7 @@ mod tests {
                         comment: None,
                         default: None,
                         generated_always_as: None,
+                        identity: None,
                     }],
                     comment: None,
                     constraints: vec![],

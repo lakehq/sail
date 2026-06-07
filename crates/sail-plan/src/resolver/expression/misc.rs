@@ -9,7 +9,7 @@ use datafusion_expr::{expr, lit, BinaryExpr, ExprSchemable, ScalarUDF};
 use datafusion_expr_common::operator::Operator;
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_functions_nested::expr_fn::{array_element, map_extract};
-use sail_common::spec;
+use sail_common::spec::{self, DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::session::plan::PlanService;
@@ -32,10 +32,21 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
-        let expr = self.resolve_expression(expr, schema, state).await?;
         let name = name.into_iter().map(|x| x.into()).collect::<Vec<String>>();
+        let named_expr = self.resolve_named_expression(expr, schema, state).await?;
+        let NamedExpr {
+            name: inner_name,
+            expr,
+            metadata: inner_metadata,
+        } = named_expr;
+        if name.is_empty() {
+            return Ok(
+                NamedExpr::new(inner_name, expr).with_metadata(metadata.unwrap_or(inner_metadata))
+            );
+        }
+        let metadata = metadata.unwrap_or(inner_metadata);
         let expr = if let [n] = name.as_slice() {
-            if let Some(metadata) = metadata {
+            if !metadata.is_empty() {
                 let metadata_map: HashMap<String, String> = metadata.into_iter().collect();
                 let field_metadata = Some(FieldMetadata::from(metadata_map));
                 expr.alias_with_metadata(n, field_metadata)
@@ -55,6 +66,14 @@ impl PlanResolver<'_> {
         let name = placeholder.clone();
         let expr = expr::Expr::Placeholder(expr::Placeholder::new_with_field(placeholder, None));
         Ok(NamedExpr::new(vec![name], expr))
+    }
+
+    pub(super) fn resolve_expression_default_column_value(&self) -> PlanResult<NamedExpr> {
+        let expr = expr::Expr::Placeholder(expr::Placeholder::new_with_field(
+            DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID.to_string(),
+            None,
+        ));
+        Ok(NamedExpr::new(vec!["DEFAULT".to_string()], expr))
     }
 
     pub(super) async fn resolve_expression_identifier_clause(

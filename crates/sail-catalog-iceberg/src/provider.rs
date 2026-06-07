@@ -326,6 +326,7 @@ impl IcebergRestCatalogProvider {
                     comment: field.doc.clone(),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                     is_partition: partition_field_ids.contains(&field_id),
                     is_bucket: bucket_field_ids.contains(&field_id),
                     is_cluster: false,
@@ -518,6 +519,7 @@ impl IcebergRestCatalogProvider {
                     comment: field.doc.clone(),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                     is_partition: false,
                     is_bucket: false,
                     is_cluster: false,
@@ -1289,6 +1291,7 @@ fn columns_to_nested_fields(
             comment,
             default,
             generated_always_as: _,
+            identity: _,
         } = col;
 
         let field_type = arrow_type_to_iceberg(data_type).map_err(|e| {

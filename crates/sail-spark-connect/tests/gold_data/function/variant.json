@@ -349,7 +349,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_parse_json"
+        "success": "ok"
       }
     },
     {
@@ -371,7 +371,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_parse_json"
+        "success": "ok"
       }
     },
     {
