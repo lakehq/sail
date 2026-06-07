@@ -197,15 +197,9 @@ pub(crate) fn extract_percentiles_array(expr: &Arc<dyn PhysicalExpr>) -> Result<
 /// clear message, rather than as a low-level evaluation error against a
 /// synthetic empty `RecordBatch`.
 fn evaluate_percentile_literal(expr: &Arc<dyn PhysicalExpr>) -> Result<ScalarValue> {
-    if expr
-        .as_any()
-        .downcast_ref::<datafusion_physical_expr::expressions::Literal>()
-        .is_none()
-    {
-        return Err(DataFusionError::Plan(
-            "percentile must be a literal (constant) value".into(),
-        ));
-    }
+    // Evaluate against an empty 1-row batch: any foldable constant (a literal, or
+    // a cast/expression over literals like `CAST(1 AS DOUBLE)`) yields a value,
+    // while a column-dependent expression errors because the batch has no columns.
     let schema = Arc::new(Schema::new(Vec::<Field>::new()));
     let batch = RecordBatch::try_new_with_options(
         schema,
