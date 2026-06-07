@@ -705,12 +705,14 @@ fn months_between(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
 const MICROS_PER_DAY: i64 = 24 * 60 * 60 * 1_000_000;
 
-/// Parses a `window` duration/start-time argument (interval string or literal)
-/// into microseconds. Months/years are rejected (non-constant length).
+/// Parses a `window` duration/start-time argument (interval string, day-time
+/// interval, or integer number of microseconds, matching Spark's
+/// `TimeWindow.parseExpression`) into microseconds. Months/years are rejected
+/// (non-constant length).
 fn window_interval_micros(expr: &Expr) -> PlanResult<i64> {
     let Expr::Literal(value, _) = expr else {
         return Err(PlanError::invalid(
-            "window durations and start time must be literal strings or intervals",
+            "window durations and start time must be literal strings, intervals, or integers",
         ));
     };
     if let Some(s) = value.try_as_str().flatten() {
@@ -724,6 +726,9 @@ fn window_interval_micros(expr: &Expr) -> PlanResult<i64> {
         };
     }
     match value {
+        // Spark interprets integer literals as microseconds.
+        ScalarValue::Int32(Some(v)) => Ok(*v as i64),
+        ScalarValue::Int64(Some(v)) => Ok(*v),
         ScalarValue::DurationMicrosecond(Some(v)) => Ok(*v),
         ScalarValue::DurationMillisecond(Some(v)) => Ok(*v * 1_000),
         ScalarValue::DurationSecond(Some(v)) => Ok(*v * 1_000_000),
@@ -735,7 +740,7 @@ fn window_interval_micros(expr: &Expr) -> PlanResult<i64> {
             Ok(v.days as i64 * MICROS_PER_DAY + v.nanoseconds / 1_000)
         }
         _ => Err(PlanError::invalid(
-            "window durations and start time must be literal strings or day-time intervals",
+            "window durations and start time must be literal strings, day-time intervals, or integers",
         )),
     }
 }
@@ -810,8 +815,13 @@ fn window_field_type(
 ) -> PlanResult<DataType> {
     Ok(match time_type {
         DataType::Timestamp(_, tz) => DataType::Timestamp(TimeUnit::Microsecond, tz.clone()),
-        DataType::Date32 | DataType::Date64 => DataType::Timestamp(TimeUnit::Microsecond, None),
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+        // Spark casts dates and strings to `TimestampType` (session time zone), so a
+        // date becomes midnight in the session time zone, not a naive timestamp.
+        DataType::Date32
+        | DataType::Date64
+        | DataType::Utf8
+        | DataType::LargeUtf8
+        | DataType::Utf8View => {
             DataType::Timestamp(TimeUnit::Microsecond, Some(session_tz.clone()))
         }
         other => {
