@@ -3,13 +3,13 @@ use std::mem::{size_of, size_of_val};
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, ArrowNumericType, AsArray, Float64Array, ListArray, PrimitiveArray,
+    Array, ArrayRef, ArrowNumericType, AsArray, Float64Array, Int64Array, ListArray, PrimitiveArray,
 };
 use datafusion::arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use datafusion::arrow::datatypes::{
     DataType, Decimal128Type, Decimal256Type, Field, FieldRef, Float16Type, Float32Type,
-    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalUnit, UInt16Type, UInt32Type,
+    UInt64Type, UInt8Type,
 };
 use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -20,8 +20,8 @@ use datafusion::logical_expr::{
 
 use crate::aggregate::percentile_disc_groups::PercentileDiscGroupsAccumulator;
 use crate::aggregate::utils::{
-    calculate_percentile_disc, cast_to_type, extract_percentile_literal, extract_percentiles_array,
-    percentile_disc_index,
+    calculate_percentile_disc, cast_to_type_with_safe, extract_percentile_literal,
+    extract_percentiles_array, percentile_disc_index,
 };
 
 macro_rules! dispatch_numeric_type {
@@ -51,31 +51,31 @@ macro_rules! dispatch_numeric_type {
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct PercentileDisc {
     signature: Signature,
+    /// When `true`, casting a non-numeric STRING ORDER BY column to `f64` is
+    /// strict (invalid values raise an error). When `false`, the cast is safe
+    /// (invalid values become NULL and are ignored). Mirrors
+    /// `spark.sql.ansi.enabled`.
+    ansi_mode: bool,
 }
 
 impl Default for PercentileDisc {
     fn default() -> Self {
-        Self::new()
+        Self::new(false)
     }
 }
 
 impl PercentileDisc {
-    pub fn new() -> Self {
-        // `Signature::user_defined` so the planner calls our `coerce_types`,
-        // which:
-        // * coerces the ORDER BY column from any numeric (including
-        //   `Decimal128`/`Decimal256` of arbitrary precision/scale) to itself
-        //   when primitive, or to `Float64` for decimals
-        // * coerces the percentile argument to either `Float64` (scalar form)
-        //   or `List<Float64>` (array-of-percentiles form)
-        //
-        // This unlocks both `percentile_disc(0.5) WITHIN GROUP (ORDER BY x)`
-        // and `percentile_disc(array(p1, p2, ...)) WITHIN GROUP (ORDER BY x)`
-        // for every numeric type without enumerating one `Exact` variant per
-        // `(precision, scale)` pair.
+    pub fn new(ansi_mode: bool) -> Self {
+        // `user_defined` so the planner calls our `coerce_types` (see there).
         Self {
             signature: Signature::user_defined(Volatility::Immutable),
+            ansi_mode,
         }
+    }
+
+    /// `true` when running under `spark.sql.ansi.enabled = true`.
+    pub fn ansi_mode(&self) -> bool {
+        self.ansi_mode
     }
 
     /// `true` when the (single) `ORDER BY` direction is `DESC`.
@@ -84,6 +84,21 @@ impl PercentileDisc {
             .first()
             .map(|sort_expr| sort_expr.options.descending)
             .unwrap_or(false)
+    }
+
+    /// Spark requires exactly one `ORDER BY` expression inside `WITHIN GROUP`
+    /// (`INVALID_WITHIN_GROUP_EXPRESSION.WRONG_NUM_ORDERINGS`). The discrete
+    /// percentile is defined over a single ordered dimension, so reject anything
+    /// else rather than silently using only the first expression.
+    fn ensure_single_order_by(args: &AccumulatorArgs) -> Result<()> {
+        if args.order_bys.len() != 1 {
+            return Err(DataFusionError::Plan(format!(
+                "percentile_disc requires exactly one ORDER BY expression within \
+                 the WITHIN GROUP clause, got {}",
+                args.order_bys.len()
+            )));
+        }
+        Ok(())
     }
 
     /// Extract the scalar percentile literal. We do NOT invert for `DESC` here:
@@ -135,17 +150,36 @@ impl AggregateUDFImpl for PercentileDisc {
             )));
         }
         // arg[0]: ORDER BY column. Spark accepts every numeric type and STRING
-        // (cast-to-double semantics) and always returns `double`. Route ALL
-        // accepted inputs through `Float64` so the accumulator produces `f64`
-        // consistently. Spark also accepts `INTERVAL`/`DURATION` (returns the
-        // interval type), but Sail's percentile_disc does not yet implement
-        // those accumulators — reject them at planning time with a clear error.
+        // (cast-to-double semantics, always returns `double`) and ANSI day-time
+        // intervals (returns the interval type). Numerics route through `Float64`;
+        // STRING and INTERVAL/DURATION are left UNCHANGED so the accumulator can
+        // handle them (string→double cast with the ANSI flag; intervals stored as
+        // `i64` and reconstructed to the original type).
         let order_by = match &arg_types[0] {
             dt if dt.is_numeric() => DataType::Float64,
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => DataType::Float64,
+            // Leave STRING types UNCHANGED so the planner inserts no cast. The
+            // string→double cast is performed inside the accumulator with a
+            // safe/strict flag driven by ANSI mode: under ANSI a non-numeric
+            // string errors, otherwise it becomes NULL and is ignored. Forcing
+            // `Float64` here would make DataFusion insert a strict planning-time
+            // cast that fails before the accumulator runs.
+            dt @ (DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) => dt.clone(),
+            // Calendar intervals (month-day-nano, e.g. `make_interval`) are NOT
+            // orderable in Spark — reject them like Spark's INVALID_ORDERING_TYPE.
+            DataType::Interval(IntervalUnit::MonthDayNano) => {
+                return Err(DataFusionError::Plan(
+                    "percentile_disc: calendar INTERVAL (month-day-nano) is not orderable; \
+                     use an ANSI day-time interval"
+                        .into(),
+                ));
+            }
+            // Keep ANSI day-time/year-month INTERVAL and DURATION so the discrete
+            // value (and its type) survives to the accumulator; Spark returns the
+            // same interval type.
+            dt @ (DataType::Interval(_) | DataType::Duration(_)) => dt.clone(),
             other => {
                 return Err(DataFusionError::Plan(format!(
-                    "percentile_disc: ORDER BY column must be numeric or string, got {other}"
+                    "percentile_disc: ORDER BY column must be numeric, string, or interval, got {other}"
                 )));
             }
         };
@@ -189,33 +223,48 @@ impl AggregateUDFImpl for PercentileDisc {
     }
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
-        // `coerce_types` already mapped every ORDER BY input to `Float64` and
-        // the percentile arg to either `Float64` (scalar) or
-        // `List<Float64>` (array form). So:
-        //   - scalar form → `Float64` (matches Spark's `double` return)
-        //   - array form  → `List<Float64>` (Spark's `array<double>`)
         if matches!(arg_types.get(1), Some(DataType::List(_))) {
-            return Ok(DataType::List(Arc::new(Field::new(
-                "item",
-                DataType::Float64,
-                true,
-            ))));
+            // INTERVAL/DURATION inputs yield `array<interval>`; everything else
+            // yields `array<double>`.
+            let item = if matches!(arg_types[0], DataType::Interval(_) | DataType::Duration(_)) {
+                arg_types[0].clone()
+            } else {
+                DataType::Float64
+            };
+            return Ok(DataType::List(Arc::new(Field::new("item", item, true))));
+        }
+        // STRING ORDER BY columns are left unchanged by `coerce_types` (no
+        // planning-time cast), but Spark's `percentile_disc` always returns
+        // `double` for string input, so report `Float64` here.
+        if matches!(
+            arg_types[0],
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+        ) {
+            return Ok(DataType::Float64);
         }
         Ok(arg_types[0].clone())
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        // After `coerce_types`, decimals have been mapped to `Float64`. Storage
-        // type is `Float64` for the array form, otherwise the (already-coerced)
-        // input numeric type.
         let is_array_percentiles = matches!(
             args.input_fields.get(1).map(|f| f.data_type()),
             Some(DataType::List(_))
         );
-        let value_type = if is_array_percentiles {
+        let input_type = args.input_fields[0].data_type();
+        let value_type = if matches!(input_type, DataType::Interval(_) | DataType::Duration(_)) {
+            // Intervals are stored as their `i64` representation (scalar and array forms).
+            DataType::Int64
+        } else if is_array_percentiles {
+            DataType::Float64
+        } else if matches!(
+            input_type,
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+        ) {
+            // STRING input is left uncoerced at plan time but stored as `f64`
+            // inside the accumulator.
             DataType::Float64
         } else {
-            args.input_fields[0].data_type().clone()
+            input_type.clone()
         };
         let field = Field::new_list_field(value_type, true);
         let state_name = if args.is_distinct {
@@ -243,13 +292,28 @@ impl AggregateUDFImpl for PercentileDisc {
                 "percentile_disc does not support DISTINCT with WITHIN GROUP".into(),
             ));
         }
+        Self::ensure_single_order_by(&args)?;
+
+        let ansi_mode = self.ansi_mode;
 
         // Array-of-percentiles form: `percentile_disc(array(p1, p2, ...))`.
         if let Some(percentiles) = Self::try_resolve_percentiles_array(&args)? {
+            let descending = Self::is_descending(&args);
+            let input_dt = args.exprs[0].data_type(args.schema)?;
+            // INTERVAL/DURATION array form returns `array<interval>`, not doubles.
+            if matches!(input_dt, DataType::Interval(_) | DataType::Duration(_)) {
+                return Ok(Box::new(MultiIntervalPercentileDiscAccumulator {
+                    all_values: vec![],
+                    percentiles,
+                    descending,
+                    data_type: input_dt,
+                }));
+            }
             return Ok(Box::new(MultiPercentileDiscAccumulator {
                 all_values: vec![],
                 percentiles,
-                descending: Self::is_descending(&args),
+                descending,
+                ansi_mode,
             }));
         }
 
@@ -265,11 +329,36 @@ impl AggregateUDFImpl for PercentileDisc {
                     all_values: vec![],
                     percentile,
                     descending,
+                    ansi_mode,
                 }))
             };
         }
 
         let input_dt = args.exprs[0].data_type(args.schema)?;
+        // STRING input is stored as `f64`; the string→double cast happens in
+        // `update_batch` with a safe/strict flag driven by ANSI mode.
+        if matches!(
+            input_dt,
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+        ) {
+            return Ok(Box::new(PercentileDiscAccumulator::<Float64Type> {
+                data_type: DataType::Float64,
+                all_values: vec![],
+                percentile,
+                descending,
+                ansi_mode,
+            }));
+        }
+        // INTERVAL/DURATION input: store the `i64` representation and reconstruct
+        // the interval type on output (Spark returns the interval type).
+        if matches!(input_dt, DataType::Interval(_) | DataType::Duration(_)) {
+            return Ok(Box::new(IntervalPercentileDiscAccumulator {
+                all_values: vec![],
+                percentile,
+                descending,
+                data_type: input_dt.clone(),
+            }));
+        }
         dispatch_numeric_type!(input_dt, helper, "PercentileDiscAccumulator")
     }
 
@@ -277,33 +366,57 @@ impl AggregateUDFImpl for PercentileDisc {
         if args.is_distinct {
             return false;
         }
-        // Array-of-percentiles is not yet supported by the groups accumulator
-        // fast path; fall back to the regular per-group accumulator above.
+        // Array-of-percentiles and INTERVAL/DURATION inputs are not supported by
+        // the groups accumulator fast path; fall back to the regular per-group
+        // accumulator above (which handles both).
         let arr_form = args
             .exprs
             .get(1)
             .and_then(|e| e.data_type(args.schema).ok())
             .map(|dt| matches!(dt, DataType::List(_)))
             .unwrap_or(false);
-        !arr_form
+        let interval_input = args
+            .exprs
+            .first()
+            .and_then(|e| e.data_type(args.schema).ok())
+            .map(|dt| matches!(dt, DataType::Interval(_) | DataType::Duration(_)))
+            .unwrap_or(false);
+        !arr_form && !interval_input
     }
 
     fn create_groups_accumulator(
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn GroupsAccumulator>> {
+        Self::ensure_single_order_by(&args)?;
         let percentile = Self::resolve_percentile(&args)?;
         let descending = Self::is_descending(&args);
+        let ansi_mode = self.ansi_mode;
 
         macro_rules! helper {
             ($t:ty, $dt:expr) => {
                 Ok(Box::new(PercentileDiscGroupsAccumulator::<$t>::new(
-                    $dt, percentile, descending,
+                    $dt, percentile, descending, ansi_mode,
                 )))
             };
         }
 
         let input_dt = args.exprs[0].data_type(args.schema)?;
+        // STRING input is stored as `f64`; the string→double cast happens in
+        // `update_batch` with a safe/strict flag driven by ANSI mode.
+        if matches!(
+            input_dt,
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+        ) {
+            return Ok(Box::new(
+                PercentileDiscGroupsAccumulator::<Float64Type>::new(
+                    DataType::Float64,
+                    percentile,
+                    descending,
+                    ansi_mode,
+                ),
+            ));
+        }
         dispatch_numeric_type!(input_dt, helper, "PercentileDiscGroupsAccumulator")
     }
 }
@@ -313,6 +426,10 @@ struct PercentileDiscAccumulator<T: ArrowNumericType> {
     all_values: Vec<T::Native>,
     percentile: f64,
     descending: bool,
+    /// When `true`, the input→storage cast is strict (invalid string values
+    /// error). When `false`, it is safe (invalid values become NULL and are
+    /// ignored). Mirrors `spark.sql.ansi.enabled`.
+    ansi_mode: bool,
 }
 
 impl<T: ArrowNumericType> Debug for PercentileDiscAccumulator<T> {
@@ -346,7 +463,7 @@ impl<T: ArrowNumericType> Accumulator for PercentileDiscAccumulator<T> {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values_array = cast_to_type(&values[0], &self.data_type)?;
+        let values_array = cast_to_type_with_safe(&values[0], &self.data_type, !self.ansi_mode)?;
 
         let null_count = values_array.null_count();
         let values = values_array.as_primitive::<T>();
@@ -382,6 +499,10 @@ struct MultiPercentileDiscAccumulator {
     all_values: Vec<f64>,
     percentiles: Vec<f64>,
     descending: bool,
+    /// When `true`, the input→`f64` cast is strict (invalid string values
+    /// error). When `false`, it is safe (invalid values become NULL and are
+    /// ignored). Mirrors `spark.sql.ansi.enabled`.
+    ansi_mode: bool,
 }
 
 impl Debug for MultiPercentileDiscAccumulator {
@@ -416,7 +537,7 @@ impl Accumulator for MultiPercentileDiscAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
-        let values_array = cast_to_type(&values[0], &DataType::Float64)?;
+        let values_array = cast_to_type_with_safe(&values[0], &DataType::Float64, !self.ansi_mode)?;
         let null_count = values_array.null_count();
         let values = values_array.as_primitive::<Float64Type>();
         self.all_values.reserve(values.len() - null_count);
@@ -472,8 +593,253 @@ impl Accumulator for MultiPercentileDiscAccumulator {
     }
 }
 
-pub fn percentile_disc_udaf() -> Arc<datafusion::logical_expr::AggregateUDF> {
+/// Accumulator for ANSI interval / duration ORDER BY columns. Each value is
+/// stored as its `i64` representation; on output we pick the discrete percentile
+/// and reconstruct the original interval/duration type. Mirrors `percentile.rs`'s
+/// interval handling but selects discretely (no interpolation).
+struct IntervalPercentileDiscAccumulator {
+    all_values: Vec<i64>,
+    percentile: f64,
+    descending: bool,
+    data_type: DataType,
+}
+
+impl Debug for IntervalPercentileDiscAccumulator {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "IntervalPercentileDiscAccumulator({}, percentile={}, descending={})",
+            self.data_type, self.percentile, self.descending
+        )
+    }
+}
+
+/// Convert one interval/duration array element to its scalar `i64` representation.
+fn interval_to_i64(data_type: &DataType, array: &ArrayRef, row: usize) -> Result<i64> {
+    use datafusion::arrow::datatypes::{IntervalUnit, TimeUnit};
+    let v = match data_type {
+        DataType::Interval(IntervalUnit::YearMonth) => array
+            .as_primitive::<datafusion::arrow::datatypes::IntervalYearMonthType>()
+            .value(row) as i64,
+        DataType::Interval(IntervalUnit::DayTime) => {
+            let val = array
+                .as_primitive::<datafusion::arrow::datatypes::IntervalDayTimeType>()
+                .value(row);
+            val.days as i64 * 86_400_000 + val.milliseconds as i64
+        }
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            let val = array
+                .as_primitive::<datafusion::arrow::datatypes::IntervalMonthDayNanoType>()
+                .value(row);
+            val.months as i64 * 2_592_000_000_000_000
+                + val.days as i64 * 86_400_000_000_000
+                + val.nanoseconds
+        }
+        DataType::Duration(TimeUnit::Second) => array
+            .as_primitive::<datafusion::arrow::datatypes::DurationSecondType>()
+            .value(row),
+        DataType::Duration(TimeUnit::Millisecond) => array
+            .as_primitive::<datafusion::arrow::datatypes::DurationMillisecondType>()
+            .value(row),
+        DataType::Duration(TimeUnit::Microsecond) => array
+            .as_primitive::<datafusion::arrow::datatypes::DurationMicrosecondType>()
+            .value(row),
+        DataType::Duration(TimeUnit::Nanosecond) => array
+            .as_primitive::<datafusion::arrow::datatypes::DurationNanosecondType>()
+            .value(row),
+        other => {
+            return Err(DataFusionError::Internal(format!(
+                "percentile_disc interval accumulator does not support {other}"
+            )));
+        }
+    };
+    Ok(v)
+}
+
+/// Reconstruct a `ScalarValue` of `data_type` from an `i64`, or a typed NULL.
+fn i64_to_interval_scalar(data_type: &DataType, value: Option<i64>) -> Result<ScalarValue> {
+    use datafusion::arrow::datatypes::{
+        IntervalDayTime, IntervalMonthDayNano, IntervalUnit, TimeUnit,
+    };
+    Ok(match data_type {
+        DataType::Interval(IntervalUnit::YearMonth) => {
+            ScalarValue::IntervalYearMonth(value.map(|v| v as i32))
+        }
+        DataType::Interval(IntervalUnit::DayTime) => {
+            ScalarValue::IntervalDayTime(value.map(|v| IntervalDayTime {
+                days: (v / 86_400_000) as i32,
+                milliseconds: (v % 86_400_000) as i32,
+            }))
+        }
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            ScalarValue::IntervalMonthDayNano(value.map(|v| {
+                let months = (v / 2_592_000_000_000_000) as i32;
+                let rem = v % 2_592_000_000_000_000;
+                IntervalMonthDayNano {
+                    months,
+                    days: (rem / 86_400_000_000_000) as i32,
+                    nanoseconds: rem % 86_400_000_000_000,
+                }
+            }))
+        }
+        DataType::Duration(TimeUnit::Second) => ScalarValue::DurationSecond(value),
+        DataType::Duration(TimeUnit::Millisecond) => ScalarValue::DurationMillisecond(value),
+        DataType::Duration(TimeUnit::Microsecond) => ScalarValue::DurationMicrosecond(value),
+        DataType::Duration(TimeUnit::Nanosecond) => ScalarValue::DurationNanosecond(value),
+        other => {
+            return Err(DataFusionError::Internal(format!(
+                "percentile_disc interval accumulator does not support {other}"
+            )));
+        }
+    })
+}
+
+impl Accumulator for IntervalPercentileDiscAccumulator {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![
+            0_i32,
+            self.all_values.len() as i32,
+        ]));
+        let values_array = Int64Array::from(std::mem::take(&mut self.all_values));
+        let list_array = ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int64, true)),
+            offsets,
+            Arc::new(values_array),
+            None,
+        );
+        Ok(vec![ScalarValue::List(Arc::new(list_array))])
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let array = &values[0];
+        self.all_values.reserve(array.len() - array.null_count());
+        for row in 0..array.len() {
+            if !array.is_null(row) {
+                let v = interval_to_i64(&self.data_type, array, row)?;
+                self.all_values.push(v);
+            }
+        }
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        let array = states[0].as_list::<i32>();
+        for v in array.iter().flatten() {
+            self.all_values
+                .extend(v.as_primitive::<Int64Type>().iter().flatten());
+        }
+        Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        if self.all_values.is_empty() {
+            return i64_to_interval_scalar(&self.data_type, None);
+        }
+        let mut sorted = std::mem::take(&mut self.all_values);
+        sorted.sort_unstable();
+        let idx = percentile_disc_index(sorted.len(), self.percentile, self.descending);
+        i64_to_interval_scalar(&self.data_type, Some(sorted[idx]))
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self) + self.all_values.capacity() * size_of::<i64>()
+    }
+}
+
+/// Array-of-percentiles form for interval/duration inputs. Stores values as `i64`,
+/// computes each percentile discretely, and reconstructs a `List<interval>`
+/// (matching Spark's `array<interval>` return, not `array<double>`).
+struct MultiIntervalPercentileDiscAccumulator {
+    all_values: Vec<i64>,
+    percentiles: Vec<f64>,
+    descending: bool,
+    data_type: DataType,
+}
+
+impl Debug for MultiIntervalPercentileDiscAccumulator {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "MultiIntervalPercentileDiscAccumulator({}, percentiles={:?}, descending={})",
+            self.data_type, self.percentiles, self.descending
+        )
+    }
+}
+
+impl Accumulator for MultiIntervalPercentileDiscAccumulator {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![
+            0_i32,
+            self.all_values.len() as i32,
+        ]));
+        let values_array = Int64Array::from(std::mem::take(&mut self.all_values));
+        let list_array = ListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int64, true)),
+            offsets,
+            Arc::new(values_array),
+            None,
+        );
+        Ok(vec![ScalarValue::List(Arc::new(list_array))])
+    }
+
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        let array = &values[0];
+        self.all_values.reserve(array.len() - array.null_count());
+        for row in 0..array.len() {
+            if !array.is_null(row) {
+                let v = interval_to_i64(&self.data_type, array, row)?;
+                self.all_values.push(v);
+            }
+        }
+        Ok(())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        let array = states[0].as_list::<i32>();
+        for v in array.iter().flatten() {
+            self.all_values
+                .extend(v.as_primitive::<Int64Type>().iter().flatten());
+        }
+        Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        // Empty input or empty percentile array → NULL list (matches the numeric form).
+        if self.all_values.is_empty() || self.percentiles.is_empty() {
+            let field = Arc::new(Field::new_list_field(self.data_type.clone(), true));
+            return Ok(ScalarValue::List(Arc::new(ListArray::new_null(field, 1))));
+        }
+        let mut sorted = std::mem::take(&mut self.all_values);
+        sorted.sort_unstable();
+        let len = sorted.len();
+        let scalars: Vec<ScalarValue> = self
+            .percentiles
+            .iter()
+            .map(|&p| {
+                let idx = percentile_disc_index(len, p, self.descending);
+                i64_to_interval_scalar(&self.data_type, Some(sorted[idx]))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let values_array = ScalarValue::iter_to_array(scalars)?;
+        let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, values_array.len() as i32]));
+        let list_array = ListArray::new(
+            Arc::new(Field::new_list_field(self.data_type.clone(), true)),
+            offsets,
+            values_array,
+            None,
+        );
+        Ok(ScalarValue::List(Arc::new(list_array)))
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+            + self.all_values.capacity() * size_of::<i64>()
+            + self.percentiles.capacity() * size_of::<f64>()
+    }
+}
+
+pub fn percentile_disc_udaf(ansi_mode: bool) -> Arc<datafusion::logical_expr::AggregateUDF> {
     Arc::new(datafusion::logical_expr::AggregateUDF::from(
-        PercentileDisc::new(),
+        PercentileDisc::new(ansi_mode),
     ))
 }

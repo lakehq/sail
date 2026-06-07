@@ -258,9 +258,10 @@ fn percentile_disc(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let column = sort.expr;
     let percentile = input.arguments.one()?;
     let args = vec![column, percentile];
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
 
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: percentile_disc_udaf(),
+        func: percentile_disc_udaf(ansi_mode),
         params: AggregateFunctionParams {
             args,
             distinct: input.distinct,

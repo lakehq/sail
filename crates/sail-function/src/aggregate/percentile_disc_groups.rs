@@ -11,7 +11,9 @@ use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::common::{DataFusionError, Result};
 use datafusion::logical_expr::{EmitTo, GroupsAccumulator};
 
-use crate::aggregate::utils::{calculate_percentile_disc, cast_to_type, filtered_null_mask};
+use crate::aggregate::utils::{
+    calculate_percentile_disc, cast_to_type_with_safe, filtered_null_mask,
+};
 
 #[derive(Debug)]
 pub struct PercentileDiscGroupsAccumulator<T: ArrowNumericType + Send> {
@@ -19,15 +21,20 @@ pub struct PercentileDiscGroupsAccumulator<T: ArrowNumericType + Send> {
     group_values: Vec<Vec<T::Native>>,
     percentile: f64,
     descending: bool,
+    /// When `true`, casts of the ORDER BY input to the storage type are strict
+    /// (invalid values raise an error). When `false`, casts are safe (invalid
+    /// values become NULL and are ignored). Mirrors `spark.sql.ansi.enabled`.
+    ansi_mode: bool,
 }
 
 impl<T: ArrowNumericType + Send> PercentileDiscGroupsAccumulator<T> {
-    pub fn new(data_type: DataType, percentile: f64, descending: bool) -> Self {
+    pub fn new(data_type: DataType, percentile: f64, descending: bool, ansi_mode: bool) -> Self {
         Self {
             data_type,
             group_values: Vec::new(),
             percentile,
             descending,
+            ansi_mode,
         }
     }
 
@@ -94,7 +101,7 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for PercentileDiscGroupsAccum
         opt_filter: Option<&BooleanArray>,
         total_num_groups: usize,
     ) -> Result<()> {
-        let values_array = cast_to_type(&values[0], &self.data_type)?;
+        let values_array = cast_to_type_with_safe(&values[0], &self.data_type, !self.ansi_mode)?;
         let values = values_array.as_primitive::<T>();
 
         self.group_values.resize(total_num_groups, Vec::new());
@@ -211,7 +218,7 @@ impl<T: ArrowNumericType + Send> GroupsAccumulator for PercentileDiscGroupsAccum
         values: &[ArrayRef],
         opt_filter: Option<&BooleanArray>,
     ) -> Result<Vec<ArrayRef>> {
-        let values_array = cast_to_type(&values[0], &self.data_type)?;
+        let values_array = cast_to_type_with_safe(&values[0], &self.data_type, !self.ansi_mode)?;
         let input_array = values_array.as_primitive::<T>();
 
         let values = PrimitiveArray::<T>::new(input_array.values().clone(), None)

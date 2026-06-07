@@ -2692,7 +2692,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "min_by" => Ok(Arc::new(AggregateUDF::from(MinByFunction::new()))),
                 "mode" => Ok(Arc::new(AggregateUDF::from(ModeFunction::new()))),
                 "percentile" => Ok(Arc::new(AggregateUDF::from(PercentileFunction::new()))),
-                "percentile_disc" => Ok(Arc::new(AggregateUDF::from(PercentileDisc::new()))),
                 "product" => Ok(Arc::new(AggregateUDF::from(ProductFunction::new()))),
                 "schema_of_variant_agg" => Ok(Arc::new(AggregateUDF::from(
                     SchemaOfVariantAggFunction::new(),
@@ -2789,6 +2788,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udaf = PySparkBatchCollectorUDF::new(input_types, input_names);
                 Ok(Arc::new(AggregateUDF::from(udaf)))
             }
+            Some(UdafKind::PercentileDisc(gen::PercentileDiscUdaf { ansi_mode })) => {
+                Ok(Arc::new(AggregateUDF::from(PercentileDisc::new(ansi_mode))))
+            }
             None => plan_err!("ExtendedAggregateUdf: no UDF found for {name}"),
         }
     }
@@ -2807,7 +2809,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<MinByFunction>()
             || node.inner().as_any().is::<ModeFunction>()
             || node.inner().as_any().is::<PercentileFunction>()
-            || node.inner().as_any().is::<PercentileDisc>()
             || node.inner().as_any().is::<ProductFunction>()
             || node.inner().as_any().is::<SchemaOfVariantAggFunction>()
             || node.inner().as_any().is::<SkewnessFunc>()
@@ -2874,6 +2875,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdafKind::PySparkBatchCollector(gen::PySparkBatchCollectorUdaf {
                 input_types,
                 input_names: func.input_names().to_vec(),
+            })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<PercentileDisc>() {
+            UdafKind::PercentileDisc(gen::PercentileDiscUdaf {
+                ansi_mode: func.ansi_mode(),
             })
         } else {
             return Ok(());
