@@ -391,7 +391,7 @@ def test_sql_with_clause(spark, df, df_view):
 
 def test_sql_named_window_clause(spark, df_view):
     assert_frame_equal(
-        spark.sql(f"SELECT min(a) OVER w AS min FROM {df_view} WINDOW w AS (ORDER BY a)").toPandas(),
+        spark.sql(f"SELECT min(a) OVER w AS min FROM {df_view} WINDOW w AS (ORDER BY a)").toPandas(),  # noqa: S608
         pd.DataFrame({"min": [1, 1]}, dtype="int32"),
     )
 

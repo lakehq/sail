@@ -31,7 +31,7 @@ struct QueryModifiers {
     distribute_by: Option<Vec<Expr>>,
     offset: Option<Expr>,
     limit: Option<LimitValue>,
-    window: Vec<NamedWindow>,
+    window: Option<Vec<NamedWindow>>,
 }
 
 impl TryFrom<Vec<QueryModifier>> for QueryModifiers {
@@ -42,7 +42,13 @@ impl TryFrom<Vec<QueryModifier>> for QueryModifiers {
         for modifier in value {
             match modifier {
                 QueryModifier::Window(WindowClause { window: _, items }) => {
-                    output.window.extend(items.into_items())
+                    if output
+                        .window
+                        .replace(items.into_items().collect())
+                        .is_some()
+                    {
+                        return Err(SqlError::invalid("duplicated WINDOW clause"));
+                    }
                 }
                 QueryModifier::OrderBy(OrderByClause { order_by: _, items }) => {
                     if output
@@ -194,10 +200,14 @@ pub(crate) fn from_ast_query(query: Query) -> SqlResult<spec::QueryPlan> {
         }
     };
 
-    let plan = spec::QueryPlan::new(spec::QueryNode::NamedWindows {
-        input: Box::new(plan),
-        windows: from_ast_named_windows(window)?,
-    });
+    let plan = if let Some(w) = window {
+        spec::QueryPlan::new(spec::QueryNode::NamedWindows {
+            input: Box::new(plan),
+            windows: from_ast_named_windows(w)?,
+        })
+    } else {
+        plan
+    };
 
     if let Some(WithClause {
         with: _,
