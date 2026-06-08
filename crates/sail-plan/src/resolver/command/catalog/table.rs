@@ -90,6 +90,7 @@ impl PlanResolver<'_> {
                 replace,
                 properties,
                 is_external,
+                is_write_precondition: false,
             },
         };
         self.resolve_catalog_command(command)

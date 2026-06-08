@@ -425,7 +425,7 @@ impl PlanResolver<'_> {
                         })
                         .collect();
                     // TODO: Revisit passing write options as table properties.
-                    let properties = file_write_options
+                    let properties: Vec<(String, String)> = file_write_options
                         .options
                         .clone()
                         .into_iter()
@@ -463,6 +463,7 @@ impl PlanResolver<'_> {
                             replace,
                             properties,
                             is_external: table_is_external || write_options_had_location,
+                            is_write_precondition: true,
                         },
                     };
                     preconditions.push(Arc::new(self.resolve_catalog_command(command)?));
@@ -648,6 +649,7 @@ impl PlanResolver<'_> {
                     }
                 }
                 Ok(Some(TableInfo {
+                    catalog_table: Some(table.clone().into()),
                     columns,
                     location,
                     format,
@@ -1674,6 +1676,7 @@ fn extract_partition_int_arg(
 }
 
 pub(super) struct TableInfo {
+    pub(super) catalog_table: Option<Vec<String>>,
     pub(super) columns: Vec<TableColumnStatus>,
     pub(super) location: Option<String>,
     pub(super) format: String,

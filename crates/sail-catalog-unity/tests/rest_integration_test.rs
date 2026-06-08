@@ -679,6 +679,7 @@ async fn test_create_table() {
                 replace: false,
                 properties: vec![],
                 is_external: true,
+                is_write_precondition: false,
             },
         )
         .await
@@ -820,6 +821,7 @@ async fn test_create_table() {
                 replace: false,
                 properties: vec![],
                 is_external: true,
+                is_write_precondition: false,
             },
         )
         .await;
@@ -842,6 +844,7 @@ async fn test_create_table() {
                 replace: false,
                 properties: vec![],
                 is_external: true,
+                is_write_precondition: false,
             },
         )
         .await;
@@ -900,6 +903,7 @@ async fn test_create_table() {
                     ("team".to_string(), "data-eng".to_string()),
                 ],
                 is_external: true,
+                is_write_precondition: false,
             },
         )
         .await
@@ -1078,6 +1082,7 @@ async fn test_get_table() {
                     ("team".to_string(), "data-eng".to_string()),
                 ],
                 is_external: true,
+                is_write_precondition: false,
             },
         )
         .await
@@ -1238,6 +1243,7 @@ async fn test_list_tables() {
                 replace: false,
                 properties: vec![],
                 is_external: true,
+                is_write_precondition: false,
             },
         )
         .await
@@ -1260,6 +1266,7 @@ async fn test_list_tables() {
                 replace: false,
                 properties: vec![],
                 is_external: true,
+                is_write_precondition: false,
             },
         )
         .await
@@ -1332,6 +1339,7 @@ async fn test_drop_table() {
                 replace: false,
                 properties: vec![],
                 is_external: true,
+                is_write_precondition: false,
             },
         )
         .await

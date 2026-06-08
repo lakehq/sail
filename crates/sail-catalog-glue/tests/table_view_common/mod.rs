@@ -49,6 +49,7 @@ pub fn simple_table_options(columns: Vec<CreateTableColumnOptions>) -> CreateTab
         replace: false,
         properties: vec![],
         is_external: true,
+        is_write_precondition: false,
     }
 }
 

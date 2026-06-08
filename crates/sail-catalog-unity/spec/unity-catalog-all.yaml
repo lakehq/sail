@@ -32,7 +32,7 @@ tags:
       A schema (also called a database) is the second layer of Unity Catalog’s three-level namespace. A schema organizes tables, volumes and functions.
   - name: Tables
     description: |
-      A table resides in the third layer of Unity Catalog’s three-level namespace. It contains rows of data. 
+      A table resides in the third layer of Unity Catalog’s three-level namespace. It contains rows of data.
       A table can be managed or external.
   - name: Volumes
     description: |
@@ -532,12 +532,12 @@ paths:
           in: query
           description: |+
             Maximum number of volumes to return (page length).
-            
+
             If not set, the page length is set to a server configured value.
             - when set to a value greater than 0, the page length is the minimum of this value and a server configured value;
             - when set to 0, the page length is set to a server configured value;
             - when set to a value less than 0, an invalid parameter error is returned;
-            
+
             Note: this parameter controls only the maximum number of volumes to return. The actual number of volumes returned in a page may be smaller than this value, including 0, even if there are more pages.
 
           required: false
@@ -623,7 +623,7 @@ paths:
       summary: Update a Volume
       description: |
         Updates the specified volume under the specified parent catalog and schema.
-        
+
         Currently only the name or the comment of the volume could be updated.
       requestBody:
         content:
@@ -1502,8 +1502,8 @@ paths:
                 $ref: '#/components/schemas/DeltaCommitResponse'
         '400':
           description: |
-            Bad request or Invalid Argument. Example: Commit version is not expected (e.g., latest_table_version +1) 
-            or Latest backfilled version exceeds the last commit version or table_uri in the request doesn't match the 
+            Bad request or Invalid Argument. Example: Commit version is not expected (e.g., latest_table_version +1)
+            or Latest backfilled version exceeds the last commit version or table_uri in the request doesn't match the
             existing table_uri for the table.
         '401':
           description: Unauthorized. Authentication credentials are missing or incorrect.
@@ -2366,17 +2366,17 @@ components:
       properties:
         catalog_name:
           description: |
-            Catalog name for which temporary credentials are generated. 
+            Catalog name for which temporary credentials are generated.
             Can be obtained from models/{full_name} (get model info) API.
           type: string
         schema_name:
           description: |
-            Schema name for which temporary credentials are generated. 
+            Schema name for which temporary credentials are generated.
             Can be obtained from models/{full_name} (get model info) API.
           type: string
         model_name:
           description: |
-            Model name for which temporary credentials are generated. 
+            Model name for which temporary credentials are generated.
             Can be obtained from models/{full_name} (get model info) API.
           type: string
         version:
@@ -2406,7 +2406,7 @@ components:
       properties:
         table_id:
           description: |
-            Table id for which temporary credentials are generated. 
+            Table id for which temporary credentials are generated.
             Can be obtained from tables/{full_name} (get table info) API.
           type: string
         operation:
@@ -2450,7 +2450,7 @@ components:
       properties:
         volume_id:
           description: |
-            Volume id for which temporary credentials are generated. 
+            Volume id for which temporary credentials are generated.
             Can be obtained from volumes/{full_name} (get volume info) API.
           type: string
         operation:
@@ -3027,7 +3027,7 @@ components:
         table_uri:
           type: string
           description: |
-            The URI of the storage location of the table. If the table_id exists but the table_uri is 
+            The URI of the storage location of the table. If the table_id exists but the table_uri is
             different from the one previously registered (e.g., if the client moved the table), the request will fail.
             Example: s3://bucket-name/tables/some-table-id
         commit_info:
@@ -3036,7 +3036,7 @@ components:
           type: integer
           format: int64
           description: |
-            The highest version of the commits that have been backfilled for this table; meaning UC no longer 
+            The highest version of the commits that have been backfilled for this table; meaning UC no longer
             needs to keep track of commits of versions <= this version.
         metadata:
           $ref: '#/components/schemas/DeltaMetadata'
@@ -3045,7 +3045,7 @@ components:
           description: |
             Optional UniForm metadata to be committed alongside this Delta commit. Whether this field is
             strictly required by a UC API compatible implementation is left up to the implementation.
-            It is set by UniForm conversion processes after converting a Delta commit. When set, 
+            It is set by UniForm conversion processes after converting a Delta commit. When set,
             UC will atomically update the table's format-specific metadata (e.g. DeltaUniformIceberg),
             keeping the conversion state synchronized with the Delta version.
             Uniform enables Delta tables to be read by other table formats (e.g., Iceberg) without data conversion.
@@ -3128,7 +3128,7 @@ components:
       type: object
       description: |
         Iceberg conversion metadata tracking the Delta-to-Iceberg conversion state.
-        It contains the metadata location pointer, converted Delta version, timestamp, and 
+        It contains the metadata location pointer, converted Delta version, timestamp, and
         optional base converted Delta version of the corresponding conversion.
       properties:
         metadata_location:
@@ -3170,7 +3170,7 @@ components:
         table_uri:
           type: string
           description: |
-            The URI of the storage location of the table. If the table_id exists but the table_uri is 
+            The URI of the storage location of the table. If the table_id exists but the table_uri is
             different from the one previously registered (e.g., if the client moved the table), the request will fail.
             Example: s3://bucket-name/tables/some-table-id
         start_version:
@@ -3205,9 +3205,9 @@ components:
           type: integer
           format: int64
           description: |
-            Represents the latest version of the table tracked by UC. If no commits have occurred via UC yet, 
-            then UC cannot determine the latest version and returns -1. Use this field to manage pagination — 
-            if the returned commits don't cover the range up to latest_table_version or end_version (whichever is smaller), 
+            Represents the latest version of the table tracked by UC. If no commits have occurred via UC yet,
+            then UC cannot determine the latest version and returns -1. Use this field to manage pagination —
+            if the returned commits don't cover the range up to latest_table_version or end_version (whichever is smaller),
             it indicates that more unbackfilled commits may be available.
       required:
         - commits
