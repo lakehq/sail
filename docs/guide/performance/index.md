@@ -17,13 +17,13 @@ Refer to the [Configuration Guide](../configuration/) for more information on ho
 `execution.batch_size` controls the number of rows processed in each batch during execution.
 Increasing this value can improve performance by reducing the overhead of processing many small batches.
 However, setting it too high may lead to potential out-of-memory errors.
-It is recommended to experiment with different batch sizes to find the optimal value for your workload.
+Experiment with different batch sizes to find the optimal value for your workload.
 
 `execution.default_parallelism` determines the default number of partitions for physical operators.
 The default value `0` indicates that parallelism is determined based on the available CPU cores, which is a good default for local mode.
 However, when running in cluster mode, this default parallelism is determined by the available CPU cores on the driver, which typically has only a small number of CPU cores.
 Since this configuration option is in effect during physical planning on the driver, the default parallelism does not take into account the actual size of the cluster.
-Therefore, in cluster mode, it is recommended to set this option explicitly so that the parallelism is appropriate for distributed task execution on the workers.
+Therefore, in cluster mode, set this option explicitly so that the parallelism is appropriate for distributed task execution on the workers.
 
 `cluster.worker_task_slots` controls the number of tasks that can run concurrently on each worker.
 Note that within a task region, some tasks can share a slot if their stages belong to the same slot-sharing group.
