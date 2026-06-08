@@ -107,8 +107,7 @@ impl ScalarUDFImpl for SparkToChar {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
-        // Extract format string (must be scalar/constant).
-        // Uses try_as_str() to support Utf8, LargeUtf8, and Utf8View scalar variants.
+        // try_as_str() supports the Utf8, LargeUtf8, and Utf8View scalar variants.
         let format_str = match &args[1] {
             ColumnarValue::Scalar(scalar) => match scalar.try_as_str().flatten() {
                 Some(s) => s.to_string(),
@@ -210,20 +209,21 @@ impl ScalarUDFImpl for SparkToChar {
                         }
                     }
                     ColumnarValue::Array(arr) => {
+                        let dec128 = matches!(arr.data_type(), DataType::Decimal128(_, _))
+                            .then(|| arr.as_primitive::<datatypes::Decimal128Type>());
+                        let dec256 = matches!(arr.data_type(), DataType::Decimal256(_, _))
+                            .then(|| arr.as_primitive::<datatypes::Decimal256Type>());
                         let values = (0..arr.len())
                             .map(|i| {
                                 if arr.is_null(i) {
                                     return Ok(None);
                                 }
-                                let is_neg = match arr.data_type() {
-                                    DataType::Decimal128(_, _) => {
-                                        arr.as_primitive::<datatypes::Decimal128Type>().value(i) < 0
-                                    }
-                                    DataType::Decimal256(_, _) => arr
-                                        .as_primitive::<datatypes::Decimal256Type>()
-                                        .value(i)
-                                        .is_negative(),
-                                    _ => false,
+                                let is_neg = if let Some(a) = dec128 {
+                                    a.value(i) < 0
+                                } else if let Some(a) = dec256 {
+                                    a.value(i).is_negative()
+                                } else {
+                                    false
                                 };
                                 Ok(Some(if is_neg {
                                     neg_overflow.as_str()
@@ -248,11 +248,8 @@ impl ScalarUDFImpl for SparkToChar {
             _ => None,
         };
 
-        // All-null input column → all-null output (Utf8). Placed after format
-        // validation (RegexSpec/NumberComponents above) so invalid-format errors
-        // still propagate. Saves the per-row iter().map() which allocates
-        // multiple Strings per row (format_integer_part + grouping + sign +
-        // currency). MED-ROI per arrow-check Rule 20.
+        // Must stay AFTER format validation: an invalid format with all-null
+        // input must still error, not return NULL.
         if let ColumnarValue::Array(arr) = &args[0] {
             if arr.null_count() == arr.len() {
                 return Ok(ColumnarValue::Array(
@@ -512,13 +509,11 @@ fn format_spark_number(value: f64, spec: &RegexSpec, components: &NumberComponen
         int_part_str.len()
     };
 
-    // Integer overflow check
     if int_digits > int_slots {
         return build_overflow_string(is_negative, spec, components);
     }
 
-    // Format integer part with 0/9 padding
-    // Spark: if value has decimals, always show at least one leading 0
+    // Spark: if value has decimals, always show at least one leading 0.
     let effective_int = if int_part_str == "0" && scale > 0 {
         "0".to_string()
     } else if int_part_str == "0" {
@@ -528,17 +523,13 @@ fn format_spark_number(value: f64, spec: &RegexSpec, components: &NumberComponen
     };
     let formatted_int = format_integer_part(&effective_int, &components.numbers);
 
-    // Format decimal part
     let formatted_dec = if scale > 0 {
         format!(".{dec_part_str}")
     } else {
         String::new()
     };
 
-    // Insert grouping separators
     let with_grouping = insert_grouping_separators(&formatted_int, &spec.numbers);
-
-    // Combine number body
     let number_str = format!("{with_grouping}{formatted_dec}");
 
     // Composition order: currency is INSIDE sign/brackets. Spark reference
@@ -565,7 +556,6 @@ fn split_number(abs_value: f64, scale: usize) -> (String, String) {
         return (int_val.to_string(), String::new());
     }
 
-    // Format with enough decimal places, then split
     let formatted = format!("{:.prec$}", abs_value, prec = scale);
     if let Some((int_str, dec_str)) = formatted.split_once('.') {
         (int_str.to_string(), dec_str.to_string())

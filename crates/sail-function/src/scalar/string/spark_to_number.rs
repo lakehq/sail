@@ -155,11 +155,9 @@ pub fn spark_to_number_inner(args: &[ArrayRef], safe: bool) -> Result<ArrayRef> 
         precision, scale, ..
     } = number_components;
 
-    // All-null input column → all-null Decimal256 output. Placed AFTER format
-    // validation (so invalid-format errors still propagate) and AFTER computing
-    // precision/scale so the output dtype matches what the kernel would
-    // produce row-by-row. Saves the per-row regex match + Decimal256 parse
-    // pipeline entirely. HIGH-ROI per arrow-check Rule 20 (regex in hot loop).
+    // Must stay AFTER format validation (so invalid formats still error) and
+    // AFTER computing precision/scale (so the output dtype matches the per-row
+    // kernel).
     if values.null_count() == values.len() {
         return Ok(datafusion::arrow::array::new_null_array(
             &DataType::Decimal256(precision, scale),
@@ -167,7 +165,6 @@ pub fn spark_to_number_inner(args: &[ArrayRef], safe: bool) -> Result<ArrayRef> 
         ));
     }
 
-    // Getting the regex expression according to the format for the value
     let value_regex: Regex = create_regex_expression(&format_spec)?;
 
     let scalars: Result<Vec<ScalarValue>> = values
@@ -235,7 +232,6 @@ impl TryFrom<&Captures<'_>> for NumberComponents {
         // This is semantically incorrect, because captures can be from a different regex than the format pattern.
         // And RegexSpec is a struct assumed to be used with the format pattern.
         // However, in this case, we will use just numbers and decimals parts. So, it's ok.
-        // Just keep in mind this in the future.
         let spec = RegexSpec::try_from(captures)?;
         let spec: NumberComponents = NumberComponents::try_from(&spec)?;
         Ok(spec)
@@ -278,7 +274,6 @@ impl ParsedNumber {
 // String (e.g. RegexSpec fields built ONCE per batch) add `.map(str::to_string)`
 // explicitly. Per-row hot-path callers (get_sign_factor, match_grouping) work
 // directly on &str without allocation — this cuts N Strings/row to 0.
-// See arrow-check Rule 6.
 macro_rules! get_opt_capture_group {
     ($captures:expr, $group_name:expr) => {
         $captures.name($group_name).map(|m| m.as_str().trim())
@@ -414,15 +409,12 @@ pub fn parse_number(
         ..
     } = number_components;
 
-    // Matching the raw value pattern weather it's correct or not is not
     let value_captures: Captures = match_regex(value, value_regex)?;
     match_angled_condition(value)?;
     let factor: i8 = get_sign_factor(&value_captures);
 
-    // Check if the numbers groupings match the format
     match_grouping(&value_captures, format_spec)?;
 
-    // Getting the numbers, decimals, precision and scale from the value captures
     let NumberComponents {
         numbers: v_numbers,
         decimals: v_decimals,
@@ -430,7 +422,6 @@ pub fn parse_number(
         scale: v_scale,
     } = NumberComponents::try_from(&value_captures)?;
 
-    // Check if the value's precision and scale are greater than the format's
     if f_precision < &v_precision || f_scale < &v_scale {
         return exec_err!(
             "Value's precision and scale are greater than the format's: Value ({v_precision}, {v_scale}) vs Format ({f_precision}, {f_scale})"
@@ -442,7 +433,6 @@ pub fn parse_number(
         .map(|_| '0')
         .collect::<String>();
 
-    // Format the value with the decimals if present
     let value: String = if let Some(decimals) = v_decimals {
         format!("{v_numbers}{decimals}{right_zeros}")
     } else {
@@ -450,7 +440,6 @@ pub fn parse_number(
         format!("{v_numbers}{decimals}")
     };
 
-    // Parse the value to i256 and return the result
     let value: i256 = value
         .parse::<i256>()
         .map_err(|e| exec_datafusion_err!("Failed to parse composed number '{value}': {e}"))?;
@@ -655,10 +644,8 @@ fn match_grouping(value_captures: &Captures, format_spec: &RegexSpec) -> Result<
     let numbers = get_capture_group!(value_captures, "numbers")?;
     let format_numbers = format_spec.numbers.clone();
 
-    // Get the positions of the groupings in the format
     let format_positions = get_grouping_positions(&format_numbers);
 
-    //Check if format has only ',' or 'G' characters
     let all_character_same = [',', 'G']
         .iter()
         .any(|c| format_positions.iter().all(|(_, d)| *d == *c));
@@ -704,7 +691,6 @@ fn create_regex_expression(format_spec: &RegexSpec) -> Result<Regex> {
 
 /// Compiles a regex pattern and matches it against a given string, capturing groups.
 fn match_regex<'a>(value: &'a str, regex: &Regex) -> Result<Captures<'a>> {
-    // Check if the format matches the regex pattern
     if regex.is_match(value) {
         regex
             .captures(value)
