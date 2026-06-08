@@ -99,6 +99,7 @@ async fn build_full_overwrite_plan(
         ctx.table_exists(),
         writer_schema,
         write_context.clone(),
+        ctx.catalog_table().cloned(),
     )?);
 
     // For existing tables, build a remove plan from the active file set and union it with the
@@ -145,6 +146,7 @@ async fn build_full_overwrite_plan(
         PhysicalSinkMode::Overwrite,
         ctx.options().user_metadata.clone(),
         write_context.commit_context.clone(),
+        ctx.catalog_table().cloned(),
     )))
 }
 
@@ -234,6 +236,7 @@ async fn build_overwrite_if_plan(
         ctx.table_exists(),
         union_plan.schema(),
         write_context.clone(),
+        ctx.catalog_table().cloned(),
     )?);
 
     let partition_only = !predicate_requires_stats(&condition_expr, &partition_columns);
@@ -280,6 +283,7 @@ async fn build_overwrite_if_plan(
         },
         ctx.options().user_metadata.clone(),
         write_context.commit_context.clone(),
+        ctx.catalog_table().cloned(),
     )))
 }
 
@@ -335,6 +339,7 @@ async fn build_old_data_plan(
         None,
         None,
         None,
+        ctx.catalog_table().cloned(),
     ));
 
     let negated_condition = Arc::new(NotExpr::new(condition));
