@@ -6,7 +6,7 @@ use tokio::runtime::Handle;
 use super::{
     AlterTableOptions, CatalogProvider, CommitTableOptions, CreateDatabaseOptions,
     CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
-    Namespace,
+    GetTableCommitsOptions, GetTableCommitsResponse, Namespace,
 };
 use crate::error::{CatalogError, CatalogResult};
 
@@ -158,6 +158,23 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             .spawn(async move { inner.commit_table(&database, &table, options).await })
             .await
             .map_err(|e| CatalogError::External(format!("Failed to execute commit_table: {e}")))?
+    }
+
+    async fn get_table_commits(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: GetTableCommitsOptions,
+    ) -> CatalogResult<GetTableCommitsResponse> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        self.handle
+            .spawn(async move { inner.get_table_commits(&database, &table, options).await })
+            .await
+            .map_err(|e| {
+                CatalogError::External(format!("Failed to execute get_table_commits: {e}"))
+            })?
     }
 
     async fn create_view(

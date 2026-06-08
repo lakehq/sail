@@ -24,7 +24,7 @@ use sail_common_datafusion::catalog::managed::metadata_location_value;
 use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::{
     find_path_in_options, OptionLayer, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat,
-    TableFormatAlterTableOperation, TableFormatRegistry, CATALOG_TABLE_OPTION,
+    TableFormatAlterTableOperation, TableFormatRegistry,
 };
 use sail_data_source::options::gen::{IcebergReadOptions, IcebergWriteOptions};
 use sail_data_source::options::ResolveOptions;
@@ -90,6 +90,7 @@ impl TableFormat for IcebergTableFormat {
             bucket_by,
             sort_order,
             options,
+            catalog_table,
             logical_schema,
         } = info;
 
@@ -98,10 +99,10 @@ impl TableFormat for IcebergTableFormat {
         }
 
         let table_url = Self::parse_table_url(vec![path]).await?;
-        let catalog_table = catalog_table_from_options(&options)?;
         let metadata_location = metadata_location_from_options(&options);
         let catalog_managed_table = catalog_managed_iceberg_from_options(&options);
-        let (options, table_properties) = split_iceberg_write_options_and_table_properties(options);
+        let (options, table_properties) =
+            split_iceberg_write_options_and_table_properties(options)?;
         let variant_shredding_option_presence =
             IcebergWriterExecOptions::variant_shredding_option_presence(&options);
         let iceberg_options = IcebergWriteOptions::resolve(ctx, options)
@@ -183,7 +184,7 @@ impl TableFormat for IcebergTableFormat {
         options.table_properties = table_properties;
         if let Some(catalog_table) = catalog_table {
             options.table_properties.push((
-                CATALOG_TABLE_OPTION.to_string(),
+                sail_common_datafusion::datasource::CATALOG_TABLE_OPTION.to_string(),
                 serde_json::to_string(&catalog_table)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?,
             ));
@@ -399,6 +400,7 @@ async fn build_iceberg_provider(
 ) -> Result<Arc<IcebergTableProvider>> {
     let SourceInfo {
         paths,
+        catalog_table: _,
         schema: _,
         constraints: _,
         partition_by: _,
@@ -531,7 +533,9 @@ pub(crate) fn catalog_table_from_properties(
     properties
         .iter()
         .rev()
-        .find(|(key, _)| key == CATALOG_TABLE_OPTION)
+        .find(|(key, _)| {
+            key.eq_ignore_ascii_case(sail_common_datafusion::datasource::CATALOG_TABLE_OPTION)
+        })
         .map(|(_, value)| {
             serde_json::from_str::<Vec<String>>(value)
                 .map_err(|e| DataFusionError::Plan(format!("invalid catalog table reference: {e}")))
@@ -539,26 +543,34 @@ pub(crate) fn catalog_table_from_properties(
         .transpose()
 }
 
-fn catalog_table_from_options(options: &[OptionLayer]) -> Result<Option<Vec<String>>> {
-    for layer in options.iter().rev() {
-        let OptionLayer::OptionList { items } = layer else {
-            continue;
-        };
-        if let Some(table) = catalog_table_from_properties(items)? {
-            return Ok(Some(table));
-        }
-    }
-    Ok(None)
-}
-
 fn split_iceberg_write_options_and_table_properties(
     options: Vec<OptionLayer>,
-) -> (Vec<OptionLayer>, Vec<(String, String)>) {
+) -> Result<(Vec<OptionLayer>, Vec<(String, String)>)> {
+    let catalog_table_option = sail_common_datafusion::datasource::CATALOG_TABLE_OPTION;
     let mut table_properties = Vec::new();
     let clean_options = options
         .into_iter()
-        .inspect(|layer| {
-            if let OptionLayer::TablePropertyList { items } = layer {
+        .map(|layer| match layer {
+            OptionLayer::OptionList { items } => {
+                if items
+                    .iter()
+                    .any(|(key, _)| key.eq_ignore_ascii_case(catalog_table_option))
+                {
+                    return plan_err!(
+                        "Iceberg write option `{catalog_table_option}` is reserved for internal use"
+                    );
+                }
+                Ok(Some(OptionLayer::OptionList { items }))
+            }
+            OptionLayer::TablePropertyList { items } => {
+                if items
+                    .iter()
+                    .any(|(key, _)| key.eq_ignore_ascii_case(catalog_table_option))
+                {
+                    return plan_err!(
+                        "Iceberg table property `{catalog_table_option}` is reserved for internal use"
+                    );
+                }
                 // Catalog-encoded OPTIONS are stored as `option.*` table properties.
                 // Keep them for option resolution, but do not commit them to Iceberg metadata.
                 table_properties.extend(
@@ -567,10 +579,15 @@ fn split_iceberg_write_options_and_table_properties(
                         .filter(|(key, _)| !key.starts_with("option."))
                         .cloned(),
                 );
+                Ok(Some(OptionLayer::TablePropertyList { items }))
             }
+            other => Ok(Some(other)),
         })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
         .collect();
-    (clean_options, table_properties)
+    Ok((clean_options, table_properties))
 }
 
 fn alter_table_properties_conflict_error() -> DataFusionError {
@@ -584,7 +601,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn split_iceberg_write_options_keeps_catalog_options_out_of_table_properties() {
+    fn split_iceberg_write_options_keeps_catalog_options_out_of_table_properties() -> Result<()> {
         let options = vec![
             OptionLayer::TablePropertyList {
                 items: vec![
@@ -606,7 +623,7 @@ mod tests {
         ];
 
         let (clean_options, table_properties) =
-            split_iceberg_write_options_and_table_properties(options);
+            split_iceberg_write_options_and_table_properties(options)?;
 
         assert_eq!(
             table_properties,
@@ -632,6 +649,39 @@ mod tests {
             iceberg_options.write_folder_storage_path.as_deref(),
             Some("legacy_data")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn catalog_table_option_is_reserved_for_iceberg_options() {
+        let options = vec![OptionLayer::OptionList {
+            items: vec![(
+                sail_common_datafusion::datasource::CATALOG_TABLE_OPTION.to_string(),
+                r#"["catalog","schema","table"]"#.to_string(),
+            )],
+        }];
+
+        let result = split_iceberg_write_options_and_table_properties(options);
+        assert!(matches!(
+            &result,
+            Err(err) if format!("{err}").contains("reserved for internal use")
+        ));
+    }
+
+    #[test]
+    fn catalog_table_option_is_reserved_for_iceberg_table_properties() {
+        let options = vec![OptionLayer::TablePropertyList {
+            items: vec![(
+                sail_common_datafusion::datasource::CATALOG_TABLE_OPTION.to_string(),
+                r#"["catalog","schema","table"]"#.to_string(),
+            )],
+        }];
+
+        let result = split_iceberg_write_options_and_table_properties(options);
+        assert!(matches!(
+            &result,
+            Err(err) if format!("{err}").contains("reserved for internal use")
+        ));
     }
 
     #[test]

@@ -11,7 +11,7 @@ use crate::error::{CatalogError, CatalogResult};
 use crate::provider::{
     AlterTableOptions, CatalogProvider, CommitTableOptions, CreateDatabaseOptions,
     CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
-    Namespace,
+    GetTableCommitsOptions, GetTableCommitsResponse, Namespace,
 };
 
 #[derive(Clone)]
@@ -331,6 +331,15 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
             c.invalidate(database).await;
         }
         Ok(status)
+    }
+
+    async fn get_table_commits(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: GetTableCommitsOptions,
+    ) -> CatalogResult<GetTableCommitsResponse> {
+        self.inner.get_table_commits(database, table, options).await
     }
 
     async fn create_view(

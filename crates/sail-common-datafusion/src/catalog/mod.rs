@@ -1,3 +1,4 @@
+pub mod delta;
 pub mod display;
 pub mod iceberg;
 pub mod managed;

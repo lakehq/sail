@@ -45,6 +45,7 @@ impl TableFormat for ConsoleTableFormat {
             bucket_by,
             sort_order,
             options,
+            catalog_table: _,
             logical_schema: _,
         } = info;
         if !is_flow_event_schema(&input.schema()) {

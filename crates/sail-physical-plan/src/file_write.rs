@@ -25,6 +25,7 @@ pub async fn create_file_write_physical_plan(
         sort_by,
         bucket_by,
         options,
+        catalog_table,
     } = options;
     let mode = match mode {
         SinkMode::ErrorIfExists => PhysicalSinkMode::ErrorIfExists,
@@ -49,6 +50,7 @@ pub async fn create_file_write_physical_plan(
         sort_order,
         // TODO: detect duplicated keys in each set of options
         options,
+        catalog_table,
         logical_schema: Some(logical_input.schema().clone()),
     };
     let registry = ctx.extension::<TableFormatRegistry>()?;

@@ -91,6 +91,20 @@ pub trait CatalogProvider: Send + Sync {
         )))
     }
 
+    /// Gets table-format commits tracked by the catalog control plane.
+    async fn get_table_commits(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: GetTableCommitsOptions,
+    ) -> CatalogResult<GetTableCommitsResponse> {
+        let _ = (database, table);
+        Err(crate::error::CatalogError::NotSupported(format!(
+            "catalog commit discovery for {} tables",
+            options.format
+        )))
+    }
+
     /// Creates a view in the catalog.
     async fn create_view(
         &self,

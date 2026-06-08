@@ -27,7 +27,6 @@ use sail_common_datafusion::column_features::{
 };
 use sail_common_datafusion::datasource::{
     find_path_in_options, BucketBy, OptionLayer, SinkMode, SourceInfo, TableFormatRegistry,
-    CATALOG_TABLE_OPTION,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
@@ -244,6 +243,7 @@ impl PlanResolver<'_> {
                 .into_iter()
                 .map(|items| OptionLayer::OptionList { items })
                 .collect(),
+            catalog_table: None,
         };
         let mut preconditions = vec![];
         match target {
@@ -325,9 +325,16 @@ impl PlanResolver<'_> {
                         ));
                     }
                     info.validate_file_write_options(&file_write_options)?;
-                    input = self
-                        .rewrite_write_input(input, column_match, info, state)
-                        .await?;
+                    let delta_merge_schema = info.format.eq_ignore_ascii_case("delta")
+                        && Self::has_truthy_option(
+                            &file_write_options.options,
+                            &["mergeSchema", "merge_schema"],
+                        );
+                    if !delta_merge_schema {
+                        input = self
+                            .rewrite_write_input(input, column_match, info, state)
+                            .await?;
+                    }
                     input = self
                         .apply_delta_table_constraints(input, info, state)
                         .await?;
@@ -462,17 +469,13 @@ impl PlanResolver<'_> {
                     preconditions.push(Arc::new(self.resolve_catalog_command(command)?));
                 }
 
-                let catalog_table = table
-                    .parts()
-                    .iter()
-                    .map(|part| part.as_ref().to_string())
-                    .collect::<Vec<_>>();
-                let catalog_table = serde_json::to_string(&catalog_table).map_err(|e| {
-                    PlanError::internal(format!("failed to encode catalog table reference: {e}"))
-                })?;
-                file_write_options.options.push(OptionLayer::OptionList {
-                    items: vec![(CATALOG_TABLE_OPTION.to_string(), catalog_table)],
-                });
+                file_write_options.catalog_table = Some(
+                    table
+                        .parts()
+                        .iter()
+                        .map(|part| part.as_ref().to_string())
+                        .collect::<Vec<_>>(),
+                );
 
                 file_write_options.mode = self
                     .resolve_write_mode(mode, schema_for_cond.as_ref(), state)
@@ -582,6 +585,7 @@ impl PlanResolver<'_> {
                     })?;
                     let info = SourceInfo {
                         paths: location.iter().cloned().collect(),
+                        catalog_table: Some(table.clone().into()),
                         schema: None,
                         constraints: Default::default(),
                         partition_by: vec![],
@@ -618,6 +622,7 @@ impl PlanResolver<'_> {
                     })?;
                     let info = SourceInfo {
                         paths: location.iter().cloned().collect(),
+                        catalog_table: Some(table.clone().into()),
                         schema: None,
                         constraints: Default::default(),
                         partition_by: vec![],
@@ -644,6 +649,7 @@ impl PlanResolver<'_> {
                     }
                 }
                 Ok(Some(TableInfo {
+                    catalog_table: Some(table.clone().into()),
                     columns,
                     location,
                     format,
@@ -1670,6 +1676,7 @@ fn extract_partition_int_arg(
 }
 
 pub(super) struct TableInfo {
+    pub(super) catalog_table: Option<Vec<String>>,
     pub(super) columns: Vec<TableColumnStatus>,
     pub(super) location: Option<String>,
     pub(super) format: String,
