@@ -201,10 +201,10 @@ pub fn spark_to_number_inner(args: &[ArrayRef], safe: bool) -> Result<ArrayRef> 
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct NumberComponents {
-    pub numbers: String,
-    pub decimals: Option<String>,
-    pub precision: u8,
-    pub scale: i8,
+    pub(in crate::scalar::string) numbers: String,
+    pub(in crate::scalar::string) decimals: Option<String>,
+    pub(in crate::scalar::string) precision: u8,
+    pub(in crate::scalar::string) scale: i8,
 }
 
 impl TryFrom<&RegexSpec> for NumberComponents {
@@ -293,13 +293,13 @@ macro_rules! get_capture_group {
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RegexSpec {
-    pub(crate) left_sign: Option<String>,
-    pub(crate) currency_left: Option<String>,
-    pub(crate) numbers: String,
-    pub(crate) dot: Option<String>,
-    pub(crate) decimals: Option<String>,
-    pub(crate) currency_right: Option<String>,
-    pub(crate) right_sign: Option<String>,
+    pub(in crate::scalar::string) left_sign: Option<String>,
+    pub(in crate::scalar::string) currency_left: Option<String>,
+    pub(in crate::scalar::string) numbers: String,
+    pub(in crate::scalar::string) dot: Option<String>,
+    pub(in crate::scalar::string) decimals: Option<String>,
+    pub(in crate::scalar::string) currency_right: Option<String>,
+    pub(in crate::scalar::string) right_sign: Option<String>,
 }
 impl TryFrom<&str> for RegexSpec {
     type Error = DataFusionError;

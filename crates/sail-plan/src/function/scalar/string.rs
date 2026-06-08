@@ -389,7 +389,10 @@ fn to_char(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } else if dt.is_numeric()
         || matches!(
             dt,
-            DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_)
+            DataType::Binary
+                | DataType::LargeBinary
+                | DataType::FixedSizeBinary(_)
+                | DataType::BinaryView
         )
     {
         Ok(ScalarUDF::from(SparkToChar::new()).call(vec![value, format]))

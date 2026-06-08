@@ -82,6 +82,7 @@ impl ScalarUDFImpl for SparkToChar {
             DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => {
                 arg_types[0].clone()
             }
+            DataType::BinaryView => DataType::Binary,
             DataType::Null => DataType::Int64,
             _ => {
                 return Err(unsupported_data_types_exec_err(

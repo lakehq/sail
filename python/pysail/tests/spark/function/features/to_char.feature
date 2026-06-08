@@ -585,6 +585,35 @@ Feature: to_char and to_varchar comprehensive tests
         | result                  |
         | 2024-01-15 13:45:30.123 |
 
+    # Standalone fractional-seconds patterns: the chrono mapping uses a leading dot
+    # (SSS -> %.3f), but a standalone pattern must drop it. Validated against Spark JVM.
+    Scenario: timestamp with standalone milliseconds
+      When query
+        """
+        SELECT to_char(TIMESTAMP'2024-01-15 13:45:30.123', 'SSS') AS result
+        """
+      Then query result
+        | result |
+        | 123    |
+
+    Scenario: timestamp with standalone centiseconds
+      When query
+        """
+        SELECT to_char(TIMESTAMP'2024-01-15 13:45:30.123', 'SS') AS result
+        """
+      Then query result
+        | result |
+        | 12     |
+
+    Scenario: timestamp with standalone deciseconds
+      When query
+        """
+        SELECT to_char(TIMESTAMP'2024-01-15 13:45:30.123', 'S') AS result
+        """
+      Then query result
+        | result |
+        | 1      |
+
     Scenario: timestamp with microseconds
       When query
         """
@@ -694,6 +723,17 @@ Feature: to_char and to_varchar comprehensive tests
       Then query result
         | result |
         |        |
+
+    # Wrap with delimiters so the harness (which strips surrounding whitespace)
+    # actually verifies the space padding width. Validated against Spark JVM.
+    Scenario: zero with optional digit format pads to exact width
+      When query
+        """
+        SELECT concat('[', to_char(0, '999'), ']') AS result
+        """
+      Then query result
+        | result |
+        | [   ]  |
 
     Scenario: decimal with zero padding
       When query
@@ -1366,6 +1406,22 @@ Feature: to_char and to_varchar comprehensive tests
       Then query result
         | result      |
         | hello world |
+
+    # Spark decodes UTF-8 strictly: invalid bytes raise MALFORMED_CHARACTER_CODING,
+    # they are NOT replaced lossily. Validated against Spark JVM.
+    Scenario: invalid UTF-8 binary errors
+      When query
+        """
+        SELECT to_char(X'FF', 'utf-8') AS result
+        """
+      Then query error .*
+
+    Scenario: invalid UTF-8 byte mid-string errors
+      When query
+        """
+        SELECT to_char(X'48FF65', 'utf-8') AS result
+        """
+      Then query error .*
 
     Scenario: binary to base64
       When query
