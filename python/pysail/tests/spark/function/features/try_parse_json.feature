@@ -375,8 +375,6 @@ Feature: try_parse_json comprehensive tests
         | result |
         | NULL   |
 
-    @sail-bug
-    # Sail doesn't normalize -0 to 0 in Variant
     Scenario: negative zero becomes zero
       When query
         """
@@ -386,8 +384,6 @@ Feature: try_parse_json comprehensive tests
         | result |
         | 0      |
 
-    @sail-bug
-    # Sail doesn't normalize -0.0 to 0 in Variant
     Scenario: negative zero float becomes zero
       When query
         """
@@ -635,7 +631,7 @@ Feature: try_parse_json comprehensive tests
         | NULL    |
 
     @sail-bug
-    # Sail fails on -0 normalization and 1e10 scientific notation in multi-row
+    # Sail renders 1e10 as 10000000000 instead of Spark's 1.0E10 (scientific notation).
     Scenario: multi-row with number edge cases
       When query
         """
