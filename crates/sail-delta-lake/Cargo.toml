@@ -18,6 +18,7 @@ edition = { workspace = true }
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-catalog = { path = "../sail-catalog" }
 sail-data-source = { path = "../sail-data-source" }
 sail-physical-plan = { path = "../sail-physical-plan" }
 
@@ -34,7 +35,6 @@ parquet-variant-compute = { workspace = true }
 
 # Essential utilities
 async-trait = { workspace = true }
-educe = { workspace = true }
 object_store = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }

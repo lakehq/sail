@@ -147,10 +147,23 @@ def iceberg_rest_endpoint(iceberg_rest_container: DockerContainer) -> str:
 
 
 @pytest.fixture(scope="module")
-def iceberg_spark(iceberg_rest_endpoint: str) -> Generator[SparkSession, None, None]:
+def iceberg_spark(
+    iceberg_rest_endpoint: str,
+    seaweedfs_host_endpoint: str,
+) -> Generator[SparkSession, None, None]:
     """Start Sail server with Iceberg REST catalog and create a Spark session."""
     catalog_config = f'[{{name="sail", type="iceberg-rest", uri="{iceberg_rest_endpoint}"}}]'
-    server, remote, saved_env = start_sail_server(catalog_list=catalog_config)
+    server, remote, saved_env = start_sail_server(
+        catalog_list=catalog_config,
+        extra_env={
+            "AWS_ACCESS_KEY_ID": "admin",
+            "AWS_SECRET_ACCESS_KEY": "password",
+            "AWS_REGION": "us-east-1",
+            "AWS_ENDPOINT": seaweedfs_host_endpoint,
+            "AWS_VIRTUAL_HOSTED_STYLE_REQUEST": "false",
+            "AWS_ALLOW_HTTP": "true",
+        },
+    )
     spark = create_spark_session(remote, "iceberg_rest_catalog_test")
     yield spark
     with contextlib.suppress(Exception):

@@ -137,6 +137,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
     ) -> Result<Arc<dyn TableSource>> {
         let SourceInfo {
             paths,
+            catalog_table: _,
             schema,
             constraints,
             partition_by,
@@ -227,6 +228,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             bucket_by,
             sort_order,
             options,
+            catalog_table: _,
             logical_schema: _,
         } = info;
         if is_flow_event_schema(&input.schema()) {
