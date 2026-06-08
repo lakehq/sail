@@ -228,6 +228,7 @@ pub(crate) enum SparkThrowable {
     SparkRuntimeException(String),
     #[expect(dead_code)]
     SparkUpgradeException(String),
+    SparkException(String),
     PythonException(String),
 }
 
@@ -246,6 +247,7 @@ impl SparkThrowable {
             | SparkThrowable::DateTimeException(message)
             | SparkThrowable::SparkRuntimeException(message)
             | SparkThrowable::SparkUpgradeException(message)
+            | SparkThrowable::SparkException(message)
             | SparkThrowable::PythonException(message) => message,
         }
     }
@@ -274,6 +276,7 @@ impl SparkThrowable {
             SparkThrowable::DateTimeException(_) => "java.time.DateTimeException",
             SparkThrowable::SparkRuntimeException(_) => "org.apache.spark.SparkRuntimeException",
             SparkThrowable::SparkUpgradeException(_) => "org.apache.spark.SparkUpgradeException",
+            SparkThrowable::SparkException(_) => "org.apache.spark.SparkException",
             SparkThrowable::PythonException(_) => "org.apache.spark.api.python.PythonException",
         }
     }
@@ -287,34 +290,41 @@ impl SparkThrowable {
 /// - `grpc-status-details-bin`: base64-encoded protobuf (~4/3x expansion)
 ///
 /// Combined worst-case encoding overhead is approximately 4.33x the raw message length
-/// (3x + 4/3x). A cap of 3700 bytes keeps the combined encoded size under 16384 bytes
-/// even in the worst case (3700 * 4.33 ≈ 16,021), with some margin for other headers.
-const MAX_GRPC_STATUS_MESSAGE_LEN: usize = 3700;
+/// (3x + 4/3x). A cap of 2500 bytes leaves room for `ErrorInfo` details and other
+/// gRPC headers in addition to the duplicated status message.
+const MAX_GRPC_STATUS_MESSAGE_LEN: usize = 2500;
 
-const TRUNCATED_SUFFIX: &str = "\n[truncated]";
+const TRUNCATED_MARKER: &str = "\n[truncated]\n";
 
 /// Truncate a gRPC status message to at most [`MAX_GRPC_STATUS_MESSAGE_LEN`] bytes.
 ///
-/// Truncation respects UTF-8 character boundaries. If the original message ends with
-/// a newline character, the truncated result also ends with a newline so that callers
-/// that rely on a trailing newline (e.g. Python traceback formatting) are not affected.
+/// Truncation respects UTF-8 character boundaries and keeps both the start and the end
+/// of the message. Python tracebacks often include the Spark error class in the final
+/// exception line, so prefix-only truncation can hide the user-facing error.
 fn truncate_grpc_message(message: &str) -> String {
     if message.len() <= MAX_GRPC_STATUS_MESSAGE_LEN {
         return message.to_string();
     }
-    let trailing_newline = message.ends_with('\n');
-    let suffix = if trailing_newline {
-        format!("{TRUNCATED_SUFFIX}\n")
-    } else {
-        TRUNCATED_SUFFIX.to_string()
-    };
-    let take = MAX_GRPC_STATUS_MESSAGE_LEN.saturating_sub(suffix.len());
-    // Walk back from `take` bytes to find a valid UTF-8 char boundary.
-    let mut pos = take;
-    while pos > 0 && !message.is_char_boundary(pos) {
-        pos -= 1;
+
+    let keep = MAX_GRPC_STATUS_MESSAGE_LEN.saturating_sub(TRUNCATED_MARKER.len());
+    let head_take = keep / 3;
+    let tail_take = keep - head_take;
+
+    let mut head_end = head_take;
+    while head_end > 0 && !message.is_char_boundary(head_end) {
+        head_end -= 1;
     }
-    format!("{}{suffix}", &message[..pos])
+
+    let mut tail_start = message.len().saturating_sub(tail_take);
+    while tail_start < message.len() && !message.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+
+    format!(
+        "{}{TRUNCATED_MARKER}{}",
+        &message[..head_end],
+        &message[tail_start..]
+    )
 }
 
 impl From<SparkThrowable> for Status {
@@ -377,7 +387,11 @@ impl From<CommonErrorCause> for SparkThrowable {
                 } else {
                     format!("{summary}\n")
                 };
-                SparkThrowable::PythonException(message)
+                if message.contains("net.razorvine.pickle.PickleException") {
+                    SparkThrowable::SparkException(message)
+                } else {
+                    SparkThrowable::PythonException(message)
+                }
             }
             CommonErrorCause::ArrowCast(x)
             | CommonErrorCause::Schema(x)
@@ -433,6 +447,21 @@ impl From<SparkError> for Status {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truncate_grpc_message_preserves_tail() {
+        let message = format!(
+            "python traceback start\n{}\npyspark.errors.PythonException: [UDTF_ARROW_TYPE_CONVERSION_ERROR]\n",
+            "x".repeat(MAX_GRPC_STATUS_MESSAGE_LEN * 2)
+        );
+
+        let truncated = truncate_grpc_message(&message);
+
+        assert!(truncated.len() <= MAX_GRPC_STATUS_MESSAGE_LEN);
+        assert!(truncated.starts_with("python traceback start\n"));
+        assert!(truncated.contains(TRUNCATED_MARKER));
+        assert!(truncated.ends_with("[UDTF_ARROW_TYPE_CONVERSION_ERROR]\n"));
+    }
 
     #[test]
     fn execution_timestamp_parse_error_maps_to_datetime_exception() {

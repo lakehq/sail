@@ -35,6 +35,15 @@ pub struct Table {
 impl Table {
     /// Load table metadata and IO context using the provided execution session.
     pub async fn load(ctx: &dyn Session, table_url: Url) -> Result<Self> {
+        Self::load_with_metadata_location(ctx, table_url, None).await
+    }
+
+    /// Load table metadata from an explicit metadata location when one is provided.
+    pub async fn load_with_metadata_location(
+        ctx: &dyn Session,
+        table_url: Url,
+        metadata_location: Option<String>,
+    ) -> Result<Self> {
         log::trace!("Loading Iceberg table: {}", table_url);
         let object_store = ctx
             .runtime_env()
@@ -42,8 +51,10 @@ impl Table {
             .get_store(&table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let store_ctx = StoreContext::new(object_store.clone(), &table_url)?;
-        let metadata_location =
-            metadata_loader::find_latest_metadata_file(&object_store, &table_url).await?;
+        let metadata_location = match metadata_location {
+            Some(location) => metadata_loader::metadata_location_to_object_path_string(&location)?,
+            None => metadata_loader::find_latest_metadata_file(&object_store, &table_url).await?,
+        };
         log::trace!("Found Iceberg metadata file at {}", metadata_location);
         let metadata_data =
             metadata_loader::load_metadata_file_bytes(&object_store, &metadata_location).await?;

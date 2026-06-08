@@ -46,6 +46,7 @@ impl SystemCatalogProvider {
                 comment: Some(col.description.to_string()),
                 default: None,
                 generated_always_as: None,
+                identity: None,
                 is_partition: false,
                 is_bucket: false,
                 is_cluster: false,

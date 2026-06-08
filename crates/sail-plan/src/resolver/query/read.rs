@@ -105,6 +105,7 @@ impl PlanResolver<'_> {
                     .await?;
                 let info = SourceInfo {
                     paths: location.map(|x| vec![x]).unwrap_or_default(),
+                    catalog_table: Some(reference.clone()),
                     schema: Some(schema),
                     constraints,
                     partition_by: partition_by.into_iter().map(|field| field.column).collect(),
@@ -453,6 +454,7 @@ impl PlanResolver<'_> {
         };
         let info = SourceInfo {
             paths,
+            catalog_table: None,
             schema,
             constraints: Default::default(),
             partition_by: vec![],

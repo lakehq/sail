@@ -19,10 +19,12 @@ use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
 use object_store::ObjectStoreExt;
+use sail_common_datafusion::catalog::iceberg::is_iceberg_table_marker;
+use sail_common_datafusion::catalog::managed::metadata_location_value;
 use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::{
     find_path_in_options, OptionLayer, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat,
-    TableFormatRegistry,
+    TableFormatAlterTableOperation, TableFormatRegistry,
 };
 use sail_data_source::options::gen::{IcebergReadOptions, IcebergWriteOptions};
 use sail_data_source::options::ResolveOptions;
@@ -36,7 +38,7 @@ use crate::physical_plan::IcebergWriterExecOptions;
 use crate::spec::{MetadataLog, PartitionSpec, Schema, Snapshot, TableMetadata};
 use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
-    metadata_file_version_from_path,
+    metadata_file_version_from_path, metadata_location_to_object_path_string,
 };
 use crate::table::{find_latest_metadata_file, Table};
 use crate::utils::metadata::metadata_files_for_version;
@@ -88,7 +90,8 @@ impl TableFormat for IcebergTableFormat {
             bucket_by,
             sort_order,
             options,
-            logical_schema: _,
+            catalog_table,
+            logical_schema,
         } = info;
 
         if bucket_by.is_some() {
@@ -96,7 +99,12 @@ impl TableFormat for IcebergTableFormat {
         }
 
         let table_url = Self::parse_table_url(vec![path]).await?;
-        let (options, table_properties) = split_iceberg_write_options_and_table_properties(options);
+        let metadata_location = metadata_location_from_options(&options);
+        let catalog_managed_table = catalog_managed_iceberg_from_options(&options);
+        let (options, table_properties) =
+            split_iceberg_write_options_and_table_properties(options)?;
+        let variant_shredding_option_presence =
+            IcebergWriterExecOptions::variant_shredding_option_presence(&options);
         let iceberg_options = IcebergWriteOptions::resolve(ctx, options)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
@@ -105,7 +113,12 @@ impl TableFormat for IcebergTableFormat {
             .object_store_registry
             .get_store(&table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let exists_res = find_latest_metadata_file(&store, &table_url).await;
+        let exists_res = match metadata_location.as_deref() {
+            Some(location) if catalog_managed_table => {
+                metadata_location_to_object_path_string(location)
+            }
+            _ => find_latest_metadata_file(&store, &table_url).await,
+        };
         let table_exists = exists_res.is_ok();
 
         match mode {
@@ -123,7 +136,10 @@ impl TableFormat for IcebergTableFormat {
 
         // Get existing partition spec (encoded as partition expressions) if table exists
         let existing_partition_columns = if table_exists {
-            let table = Table::load(ctx, table_url.clone()).await?;
+            let metadata_location = catalog_managed_table.then_some(metadata_location).flatten();
+            let table =
+                Table::load_with_metadata_location(ctx, table_url.clone(), metadata_location)
+                    .await?;
             Some(Self::partition_columns_from_metadata(&table)?)
         } else {
             None
@@ -164,7 +180,15 @@ impl TableFormat for IcebergTableFormat {
         };
 
         let mut options = IcebergWriterExecOptions::from(iceberg_options);
+        options.apply_variant_shredding_option_presence(variant_shredding_option_presence);
         options.table_properties = table_properties;
+        if let Some(catalog_table) = catalog_table {
+            options.table_properties.push((
+                sail_common_datafusion::datasource::CATALOG_TABLE_OPTION.to_string(),
+                serde_json::to_string(&catalog_table)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?,
+            ));
+        }
         let table_config = IcebergTableConfig {
             table_url,
             partition_columns: resolved_partition_columns,
@@ -181,11 +205,44 @@ impl TableFormat for IcebergTableFormat {
                 .collect::<Vec<_>>()
         });
 
-        let builder = IcebergPlanBuilder::new(input, table_config, mode, physical_sort, ctx);
+        let logical_input_schema = logical_schema.map(|schema| Arc::new(schema.as_arrow().clone()));
+        let builder = IcebergPlanBuilder::new(
+            input,
+            table_config,
+            mode,
+            physical_sort,
+            logical_input_schema,
+            ctx,
+        );
         let exec = builder.build().await?;
         Ok(exec)
     }
 
+    async fn alter_table(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        path: &str,
+        operation: TableFormatAlterTableOperation,
+    ) -> Result<()> {
+        match operation {
+            TableFormatAlterTableOperation::SetTableProperties { changes, if_exists } => {
+                self.alter_table_properties(runtime_env, path, changes, if_exists)
+                    .await
+            }
+            TableFormatAlterTableOperation::AlterColumnType { .. } => {
+                not_impl_err!("Column type alteration not supported for Iceberg format")
+            }
+            TableFormatAlterTableOperation::AlterColumnDefault { .. } => {
+                not_impl_err!("Column default alteration not supported for Iceberg format")
+            }
+            TableFormatAlterTableOperation::AddCheckConstraint { .. } => {
+                not_impl_err!("CHECK constraints not supported for Iceberg format")
+            }
+        }
+    }
+}
+
+impl IcebergTableFormat {
     async fn alter_table_properties(
         &self,
         runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
@@ -321,15 +378,18 @@ pub async fn create_iceberg_provider(
     table_url: Url,
     options: IcebergReadOptions,
 ) -> Result<Arc<dyn TableProvider>> {
-    Ok(create_iceberg_provider_concrete(ctx, table_url, options).await?)
+    Ok(create_iceberg_provider_concrete(ctx, table_url, options, None, false).await?)
 }
 
 pub(crate) async fn create_iceberg_provider_concrete(
     ctx: &dyn Session,
     table_url: Url,
     options: IcebergReadOptions,
+    metadata_location: Option<String>,
+    catalog_managed_table: bool,
 ) -> Result<Arc<IcebergTableProvider>> {
-    let table = Table::load(ctx, table_url).await?;
+    let metadata_location = catalog_managed_table.then_some(metadata_location).flatten();
+    let table = Table::load_with_metadata_location(ctx, table_url, metadata_location).await?;
     let provider = table.to_provider(&options)?;
     Ok(Arc::new(provider))
 }
@@ -340,6 +400,7 @@ async fn build_iceberg_provider(
 ) -> Result<Arc<IcebergTableProvider>> {
     let SourceInfo {
         paths,
+        catalog_table: _,
         schema: _,
         constraints: _,
         partition_by: _,
@@ -349,9 +410,18 @@ async fn build_iceberg_provider(
     } = info;
 
     let table_url = IcebergTableFormat::parse_table_url(paths).await?;
+    let metadata_location = metadata_location_from_options(&options);
+    let catalog_managed_table = catalog_managed_iceberg_from_options(&options);
     let iceberg_options = IcebergReadOptions::resolve(ctx, options)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    create_iceberg_provider_concrete(ctx, table_url, iceberg_options).await
+    create_iceberg_provider_concrete(
+        ctx,
+        table_url,
+        iceberg_options,
+        metadata_location,
+        catalog_managed_table,
+    )
+    .await
 }
 
 /// Load metadata and pick snapshot per options (precedence: snapshot_id > ref > timestamp > current).
@@ -423,14 +493,85 @@ impl IcebergTableFormat {
     }
 }
 
+pub(crate) fn metadata_location_from_properties(properties: &[(String, String)]) -> Option<String> {
+    metadata_location_value(
+        properties
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    )
+    .map(ToString::to_string)
+}
+
+pub(crate) fn metadata_location_from_options(options: &[OptionLayer]) -> Option<String> {
+    options.iter().rev().find_map(|layer| match layer {
+        OptionLayer::TablePropertyList { items } | OptionLayer::OptionList { items } => {
+            metadata_location_from_properties(items)
+        }
+        _ => None,
+    })
+}
+
+pub(crate) fn catalog_managed_iceberg_from_properties(properties: &[(String, String)]) -> bool {
+    properties.iter().any(|(key, value)| {
+        let key = key.trim();
+        is_iceberg_table_marker(key, value.trim()) || key.starts_with("metadata.")
+    })
+}
+
+pub(crate) fn catalog_managed_iceberg_from_options(options: &[OptionLayer]) -> bool {
+    options.iter().any(|layer| match layer {
+        OptionLayer::TablePropertyList { items } | OptionLayer::OptionList { items } => {
+            catalog_managed_iceberg_from_properties(items)
+        }
+        _ => false,
+    })
+}
+
+pub(crate) fn catalog_table_from_properties(
+    properties: &[(String, String)],
+) -> Result<Option<Vec<String>>> {
+    properties
+        .iter()
+        .rev()
+        .find(|(key, _)| {
+            key.eq_ignore_ascii_case(sail_common_datafusion::datasource::CATALOG_TABLE_OPTION)
+        })
+        .map(|(_, value)| {
+            serde_json::from_str::<Vec<String>>(value)
+                .map_err(|e| DataFusionError::Plan(format!("invalid catalog table reference: {e}")))
+        })
+        .transpose()
+}
+
+#[expect(clippy::type_complexity)]
 fn split_iceberg_write_options_and_table_properties(
     options: Vec<OptionLayer>,
-) -> (Vec<OptionLayer>, Vec<(String, String)>) {
+) -> Result<(Vec<OptionLayer>, Vec<(String, String)>)> {
+    let catalog_table_option = sail_common_datafusion::datasource::CATALOG_TABLE_OPTION;
     let mut table_properties = Vec::new();
     let clean_options = options
         .into_iter()
-        .inspect(|layer| {
-            if let OptionLayer::TablePropertyList { items } = layer {
+        .map(|layer| match layer {
+            OptionLayer::OptionList { items } => {
+                if items
+                    .iter()
+                    .any(|(key, _)| key.eq_ignore_ascii_case(catalog_table_option))
+                {
+                    return plan_err!(
+                        "Iceberg write option `{catalog_table_option}` is reserved for internal use"
+                    );
+                }
+                Ok(Some(OptionLayer::OptionList { items }))
+            }
+            OptionLayer::TablePropertyList { items } => {
+                if items
+                    .iter()
+                    .any(|(key, _)| key.eq_ignore_ascii_case(catalog_table_option))
+                {
+                    return plan_err!(
+                        "Iceberg table property `{catalog_table_option}` is reserved for internal use"
+                    );
+                }
                 // Catalog-encoded OPTIONS are stored as `option.*` table properties.
                 // Keep them for option resolution, but do not commit them to Iceberg metadata.
                 table_properties.extend(
@@ -439,10 +580,15 @@ fn split_iceberg_write_options_and_table_properties(
                         .filter(|(key, _)| !key.starts_with("option."))
                         .cloned(),
                 );
+                Ok(Some(OptionLayer::TablePropertyList { items }))
             }
+            other => Ok(Some(other)),
         })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
         .collect();
-    (clean_options, table_properties)
+    Ok((clean_options, table_properties))
 }
 
 fn alter_table_properties_conflict_error() -> DataFusionError {
@@ -456,7 +602,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn split_iceberg_write_options_keeps_catalog_options_out_of_table_properties() {
+    fn split_iceberg_write_options_keeps_catalog_options_out_of_table_properties() -> Result<()> {
         let options = vec![
             OptionLayer::TablePropertyList {
                 items: vec![
@@ -478,7 +624,7 @@ mod tests {
         ];
 
         let (clean_options, table_properties) =
-            split_iceberg_write_options_and_table_properties(options);
+            split_iceberg_write_options_and_table_properties(options)?;
 
         assert_eq!(
             table_properties,
@@ -504,5 +650,54 @@ mod tests {
             iceberg_options.write_folder_storage_path.as_deref(),
             Some("legacy_data")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn catalog_table_option_is_reserved_for_iceberg_options() {
+        let options = vec![OptionLayer::OptionList {
+            items: vec![(
+                sail_common_datafusion::datasource::CATALOG_TABLE_OPTION.to_string(),
+                r#"["catalog","schema","table"]"#.to_string(),
+            )],
+        }];
+
+        let result = split_iceberg_write_options_and_table_properties(options);
+        assert!(matches!(
+            &result,
+            Err(err) if format!("{err}").contains("reserved for internal use")
+        ));
+    }
+
+    #[test]
+    fn catalog_table_option_is_reserved_for_iceberg_table_properties() {
+        let options = vec![OptionLayer::TablePropertyList {
+            items: vec![(
+                sail_common_datafusion::datasource::CATALOG_TABLE_OPTION.to_string(),
+                r#"["catalog","schema","table"]"#.to_string(),
+            )],
+        }];
+
+        let result = split_iceberg_write_options_and_table_properties(options);
+        assert!(matches!(
+            &result,
+            Err(err) if format!("{err}").contains("reserved for internal use")
+        ));
+    }
+
+    #[test]
+    fn catalog_managed_iceberg_detection_requires_marker_or_metadata_summary() {
+        assert!(!catalog_managed_iceberg_from_properties(&[(
+            "metadata-location".to_string(),
+            "file:///tmp/table/metadata/v1.metadata.json".to_string(),
+        )]));
+        assert!(catalog_managed_iceberg_from_properties(&[(
+            "table_type".to_string(),
+            "ICEBERG".to_string(),
+        )]));
+        assert!(catalog_managed_iceberg_from_properties(&[(
+            "metadata.table-uuid".to_string(),
+            "9f7c2fc5-2e7d-4a6a-b3f9-0f6a47a3522c".to_string(),
+        )]));
     }
 }

@@ -5,6 +5,61 @@ next: false
 
 # Changelog
 
+## 0.6.4
+
+_June 6, 2026_
+
+- Improved Delta Lake integration ([#1966](https://github.com/lakehq/sail/pull/1966), [#1992](https://github.com/lakehq/sail/pull/1992), [#1993](https://github.com/lakehq/sail/pull/1993), [#2004](https://github.com/lakehq/sail/pull/2004), [#2007](https://github.com/lakehq/sail/pull/2007), [#2015](https://github.com/lakehq/sail/pull/2015), and [#2020](https://github.com/lakehq/sail/pull/2020)).
+- Improved Iceberg integration ([#2021](https://github.com/lakehq/sail/pull/2021)).
+- Improved physical execution for the `coalesce()` and `repartition()` methods in the Spark DataFrame API ([#1856](https://github.com/lakehq/sail/pull/1856), [#1999](https://github.com/lakehq/sail/pull/1999), and [#2037](https://github.com/lakehq/sail/pull/2037)).
+- Added iterator UDF support for the `applyInArrow()` and `applyInPandas()` methods in the Spark DataFrame API ([#1763](https://github.com/lakehq/sail/pull/1763)).
+- Improved the join reorder optimizer ([#1954](https://github.com/lakehq/sail/pull/1954)).
+- Added support for the following SQL functions ([#1919](https://github.com/lakehq/sail/pull/1919), [#2012](https://github.com/lakehq/sail/pull/2012), [#1636](https://github.com/lakehq/sail/pull/1636), [#2017](https://github.com/lakehq/sail/pull/2017), [#1982](https://github.com/lakehq/sail/pull/1982), and [#1971](https://github.com/lakehq/sail/pull/1971)):
+  - `to_csv`
+  - `try_parse_json`
+  - `grouping_id`
+  - `timestamp_diff`
+  - `count_min_sketch`
+  - `hll_sketch_agg`
+  - `hll_union_agg`
+  - `hll_sketch_estimate`
+  - `hll_union`
+  - `theta_difference`
+  - `theta_intersection`
+  - `theta_intersection_agg`
+  - `theta_sketch_agg`
+  - `theta_union_agg`
+  - `theta_sketch_estimate`
+  - `theta_union`
+- Improved the following SQL functions ([#1979](https://github.com/lakehq/sail/pull/1979), [#1964](https://github.com/lakehq/sail/pull/1964), [#1977](https://github.com/lakehq/sail/pull/1977), [#1968](https://github.com/lakehq/sail/pull/1968), [#1961](https://github.com/lakehq/sail/pull/1961), [#1983](https://github.com/lakehq/sail/pull/1983), [#2027](https://github.com/lakehq/sail/pull/2027), [#2025](https://github.com/lakehq/sail/pull/2025), and [#2033](https://github.com/lakehq/sail/pull/2033)):
+  - `assert_true`
+  - `variant_get`
+  - `try_variant_get`
+  - `parse_json`
+  - `regexp_extract_all`
+  - `startswith`
+  - `endswith`
+  - `randn`
+  - `randstr`
+  - `array_intersect`
+  - `sort_array`
+  - `pmod`
+  - `to_date`
+- Improved datetime exception handling ([#1970](https://github.com/lakehq/sail/pull/1970)).
+- Improved the performance for datetime formatting string parsing ([#1925](https://github.com/lakehq/sail/pull/1925)).
+- Improved complex type and nullability handling logic ([#1950](https://github.com/lakehq/sail/pull/1950)).
+- Added support for referring to nested struct fields within arrays ([#2029](https://github.com/lakehq/sail/pull/2029)).
+- Fixed an issue with rendering the `TIME` data type as strings ([#1978](https://github.com/lakehq/sail/pull/1978)).
+- Fixed an issue with the partitioning logic for Python data sources ([#1934](https://github.com/lakehq/sail/pull/1934)).
+- Improved the internals for data sources and file listing ([#1877](https://github.com/lakehq/sail/pull/1877), [#2003](https://github.com/lakehq/sail/pull/2003), and [#2009](https://github.com/lakehq/sail/pull/2009)).
+- Improved the internals for Hive Metastore support ([#1990](https://github.com/lakehq/sail/pull/1990)).
+- Improved the internals for Arrow extension types ([#1958](https://github.com/lakehq/sail/pull/1958)).
+- Improved the internals for user-defined types and column metadata ([#1938](https://github.com/lakehq/sail/pull/1938)).
+
+### Contributors
+
+Huge thanks to [@davidlghellin](https://github.com/davidlghellin), [@twsl](https://github.com/twsl), [@anarefolio](https://github.com/anarefolio), [@CoderHariswar](https://github.com/CoderHariswar), and [@nis12ram](https://github.com/nis12ram) (_first-time contributor_) for your contributions!
+
 ## 0.6.3
 
 _May 21, 2026_
