@@ -543,6 +543,7 @@ pub(crate) fn catalog_table_from_properties(
         .transpose()
 }
 
+#[expect(clippy::type_complexity)]
 fn split_iceberg_write_options_and_table_properties(
     options: Vec<OptionLayer>,
 ) -> Result<(Vec<OptionLayer>, Vec<(String, String)>)> {
