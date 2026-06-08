@@ -162,16 +162,13 @@ impl ScalarUDFImpl for SparkToChar {
             && (args[0].data_type().is_integer()
                 || matches!(args[0].data_type(), DataType::Decimal128(_, 0)));
 
-        // Exact decimal path: Decimal128 with scale > 0 (avoids f64 precision loss for
-        // values with more than ~15 significant digits).
-        let decimal128_input_scale = if let DataType::Decimal128(_, s) = args[0].data_type() {
-            if s > 0 {
-                Some(s as usize)
-            } else {
-                None
-            }
-        } else {
-            None
+        // Exact decimal path: non-negative-scale Decimal128 → format from the raw i128
+        // (avoids f64 precision loss for values with more than ~15 significant digits).
+        // scale == 0 with a fractional format lands here too; the integer path above only
+        // takes scale == 0 when the format scale is also 0.
+        let decimal128_input_scale = match args[0].data_type() {
+            DataType::Decimal128(_, s) if s >= 0 => Some(s as usize),
+            _ => None,
         };
 
         // Decimal overflow: Spark checks input type's scale vs format's scale.

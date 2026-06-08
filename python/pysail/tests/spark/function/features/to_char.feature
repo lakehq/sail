@@ -1877,6 +1877,54 @@ Feature: to_char and to_varchar comprehensive tests
         | result |
         | +1.5   |
 
+    # Decimal128(_, 0) with a fractional format must use the exact i128 path, not
+    # f64 — values beyond ~15 significant digits lose precision through a double.
+    # Validated against Spark JVM.
+    Scenario: Decimal scale-0 with fractional format keeps full precision
+      When query
+        """
+        SELECT to_char(CAST(12345678901234567 AS DECIMAL(38,0)), '99999999999999999.99') AS result
+        """
+      Then query result
+        | result               |
+        | 12345678901234567.00 |
+
+    Scenario: Large decimal scale-0 with fractional format is exact not overflow
+      When query
+        """
+        SELECT to_char(CAST(99999999999999999999 AS DECIMAL(38,0)), '99999999999999999999.99') AS result
+        """
+      Then query result
+        | result                  |
+        | 99999999999999999999.00 |
+
+    Scenario: Negative decimal scale-0 with sign and fractional format
+      When query
+        """
+        SELECT to_char(CAST(-12345678901234567 AS DECIMAL(38,0)), 'S99999999999999999.99') AS result
+        """
+      Then query result
+        | result                |
+        | -12345678901234567.00 |
+
+    Scenario: Decimal scale-0 with grouping and fractional format
+      When query
+        """
+        SELECT to_char(CAST(12345678901234567 AS DECIMAL(38,0)), '99,999,999,999,999,999.99') AS result
+        """
+      Then query result
+        | result                    |
+        | 12,345,678,901,234,567.00 |
+
+    Scenario: Small decimal scale-0 with fractional format
+      When query
+        """
+        SELECT to_char(CAST(7 AS DECIMAL(38,0)), '9.99') AS result
+        """
+      Then query result
+        | result |
+        | 7.00   |
+
   Rule: Trailing S on decimal (bug-hunt additions)
     # Existing coverage has S prefix (numeric) and S suffix with integers
     # only. Trailing S combined with decimal format is the natural
