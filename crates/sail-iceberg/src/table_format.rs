@@ -19,6 +19,7 @@ use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
 use object_store::ObjectStoreExt;
+use sail_common_datafusion::catalog::iceberg::is_iceberg_table_marker;
 use sail_common_datafusion::catalog::managed::metadata_location_value;
 use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::{
@@ -99,6 +100,7 @@ impl TableFormat for IcebergTableFormat {
         let table_url = Self::parse_table_url(vec![path]).await?;
         let catalog_table = catalog_table_from_options(&options)?;
         let metadata_location = metadata_location_from_options(&options);
+        let catalog_managed_table = catalog_managed_iceberg_from_options(&options);
         let (options, table_properties) = split_iceberg_write_options_and_table_properties(options);
         let variant_shredding_option_presence =
             IcebergWriterExecOptions::variant_shredding_option_presence(&options);
@@ -111,8 +113,10 @@ impl TableFormat for IcebergTableFormat {
             .get_store(&table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let exists_res = match metadata_location.as_deref() {
-            Some(location) => metadata_location_to_object_path_string(location),
-            None => find_latest_metadata_file(&store, &table_url).await,
+            Some(location) if catalog_managed_table => {
+                metadata_location_to_object_path_string(location)
+            }
+            _ => find_latest_metadata_file(&store, &table_url).await,
         };
         let table_exists = exists_res.is_ok();
 
@@ -131,6 +135,7 @@ impl TableFormat for IcebergTableFormat {
 
         // Get existing partition spec (encoded as partition expressions) if table exists
         let existing_partition_columns = if table_exists {
+            let metadata_location = catalog_managed_table.then_some(metadata_location).flatten();
             let table =
                 Table::load_with_metadata_location(ctx, table_url.clone(), metadata_location)
                     .await?;
@@ -372,7 +377,7 @@ pub async fn create_iceberg_provider(
     table_url: Url,
     options: IcebergReadOptions,
 ) -> Result<Arc<dyn TableProvider>> {
-    Ok(create_iceberg_provider_concrete(ctx, table_url, options, None).await?)
+    Ok(create_iceberg_provider_concrete(ctx, table_url, options, None, false).await?)
 }
 
 pub(crate) async fn create_iceberg_provider_concrete(
@@ -380,7 +385,9 @@ pub(crate) async fn create_iceberg_provider_concrete(
     table_url: Url,
     options: IcebergReadOptions,
     metadata_location: Option<String>,
+    catalog_managed_table: bool,
 ) -> Result<Arc<IcebergTableProvider>> {
+    let metadata_location = catalog_managed_table.then_some(metadata_location).flatten();
     let table = Table::load_with_metadata_location(ctx, table_url, metadata_location).await?;
     let provider = table.to_provider(&options)?;
     Ok(Arc::new(provider))
@@ -402,9 +409,17 @@ async fn build_iceberg_provider(
 
     let table_url = IcebergTableFormat::parse_table_url(paths).await?;
     let metadata_location = metadata_location_from_options(&options);
+    let catalog_managed_table = catalog_managed_iceberg_from_options(&options);
     let iceberg_options = IcebergReadOptions::resolve(ctx, options)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    create_iceberg_provider_concrete(ctx, table_url, iceberg_options, metadata_location).await
+    create_iceberg_provider_concrete(
+        ctx,
+        table_url,
+        iceberg_options,
+        metadata_location,
+        catalog_managed_table,
+    )
+    .await
 }
 
 /// Load metadata and pick snapshot per options (precedence: snapshot_id > ref > timestamp > current).
@@ -491,6 +506,22 @@ pub(crate) fn metadata_location_from_options(options: &[OptionLayer]) -> Option<
             metadata_location_from_properties(items)
         }
         _ => None,
+    })
+}
+
+pub(crate) fn catalog_managed_iceberg_from_properties(properties: &[(String, String)]) -> bool {
+    properties.iter().any(|(key, value)| {
+        let key = key.trim();
+        is_iceberg_table_marker(key, value.trim()) || key.starts_with("metadata.")
+    })
+}
+
+pub(crate) fn catalog_managed_iceberg_from_options(options: &[OptionLayer]) -> bool {
+    options.iter().any(|layer| match layer {
+        OptionLayer::TablePropertyList { items } | OptionLayer::OptionList { items } => {
+            catalog_managed_iceberg_from_properties(items)
+        }
+        _ => false,
     })
 }
 
@@ -601,5 +632,21 @@ mod tests {
             iceberg_options.write_folder_storage_path.as_deref(),
             Some("legacy_data")
         );
+    }
+
+    #[test]
+    fn catalog_managed_iceberg_detection_requires_marker_or_metadata_summary() {
+        assert!(!catalog_managed_iceberg_from_properties(&[(
+            "metadata-location".to_string(),
+            "file:///tmp/table/metadata/v1.metadata.json".to_string(),
+        )]));
+        assert!(catalog_managed_iceberg_from_properties(&[(
+            "table_type".to_string(),
+            "ICEBERG".to_string(),
+        )]));
+        assert!(catalog_managed_iceberg_from_properties(&[(
+            "metadata.table-uuid".to_string(),
+            "9f7c2fc5-2e7d-4a6a-b3f9-0f6a47a3522c".to_string(),
+        )]));
     }
 }

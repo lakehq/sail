@@ -33,7 +33,6 @@ use object_store::ObjectStoreExt;
 use sail_catalog::error::CatalogError;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{AlterTableOptions, CommitTableOptions};
-use sail_common_datafusion::catalog::iceberg::is_iceberg_table_properties;
 use sail_common_datafusion::catalog::managed::{
     existing_metadata_location_key, METADATA_LOCATION_KEY, PREVIOUS_METADATA_LOCATION_KEY,
 };
@@ -43,8 +42,8 @@ use url::Url;
 
 use crate::io::StoreContext;
 use crate::operations::bootstrap::{
-    bootstrap_first_snapshot, bootstrap_new_table, bootstrap_new_table_with_style,
-    bootstrap_snapshot_action_commit, NewTableMetadataStyle, PersistStrategy,
+    bootstrap_first_snapshot, bootstrap_new_table_with_style, bootstrap_snapshot_action_commit,
+    NewTableMetadataStyle, PersistStrategy,
 };
 use crate::operations::helpers::format_version_for_schema;
 use crate::operations::{SnapshotProduceOperation, Transaction, TransactionAction};
@@ -59,7 +58,10 @@ use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
     metadata_file_version_from_path, metadata_location_to_object_path_string,
 };
-use crate::table_format::{catalog_table_from_properties, metadata_location_from_properties};
+use crate::table_format::{
+    catalog_managed_iceberg_from_properties, catalog_table_from_properties,
+    metadata_location_from_properties,
+};
 use crate::utils::get_object_store_from_context;
 use crate::utils::metadata::metadata_files_for_version;
 const MAX_COMMIT_RETRIES: usize = 5;
@@ -74,7 +76,7 @@ enum CatalogCommitOutcome {
 #[derive(Debug, Default)]
 struct CatalogTableInfo {
     metadata_location: Option<String>,
-    is_iceberg_table: bool,
+    is_catalog_managed_iceberg_table: bool,
 }
 
 #[derive(Debug)]
@@ -302,22 +304,17 @@ impl IcebergCommitExec {
         UnboundPartitionSpec { fields }
     }
 
-    fn is_metadata_location_catalog_table(properties: &[(String, String)]) -> bool {
-        is_iceberg_table_properties(
-            properties
-                .iter()
-                .map(|(key, value)| (key.as_str(), value.as_str())),
-        )
-    }
-
     fn catalog_table_info_from_status(status: &TableStatus) -> CatalogTableInfo {
         match &status.kind {
             TableKind::Table {
-                format, properties, ..
+                format: _,
+                properties,
+                ..
             } => CatalogTableInfo {
                 metadata_location: metadata_location_from_properties(properties),
-                is_iceberg_table: format.eq_ignore_ascii_case("iceberg")
-                    || Self::is_metadata_location_catalog_table(properties),
+                is_catalog_managed_iceberg_table: catalog_managed_iceberg_from_properties(
+                    properties,
+                ),
             },
             _ => CatalogTableInfo::default(),
         }
@@ -561,33 +558,36 @@ impl ExecutionPlan for IcebergCommitExec {
             let catalog_table = catalog_table_from_properties(&commit_info.table_properties)?;
             let CatalogTableInfo {
                 metadata_location: catalog_status_metadata_location,
-                is_iceberg_table: is_catalog_status_iceberg_table,
+                is_catalog_managed_iceberg_table: is_catalog_status_managed_iceberg_table,
             } = match catalog_table.as_ref() {
                 Some(table) => Self::load_catalog_table_info(&context, table).await?,
                 None => CatalogTableInfo::default(),
             };
-            let catalog_metadata_location =
-                match metadata_location_from_properties(&commit_info.table_properties) {
-                    Some(location) => Some(location),
-                    None => catalog_status_metadata_location,
-                };
+            let table_property_metadata_location =
+                metadata_location_from_properties(&commit_info.table_properties);
+            let catalog_recorded_metadata_location = table_property_metadata_location
+                .clone()
+                .or(catalog_status_metadata_location);
+            let catalog_managed_table =
+                catalog_managed_iceberg_from_properties(&commit_info.table_properties)
+                    || is_catalog_status_managed_iceberg_table;
+            let catalog_metadata_location = catalog_managed_table
+                .then(|| catalog_recorded_metadata_location.clone())
+                .flatten();
 
-            // Load table metadata JSON if exists; catalog tables use the authoritative
-            // metadata-location rather than Hadoop version-hint discovery.
+            // Managed external catalogs use the authoritative metadata-location.
+            // Path tables may record metadata-location in the session catalog for display, but
+            // their current state is discovered from the metadata directory and version hint.
             let latest_meta_res = match catalog_metadata_location.as_deref() {
                 Some(location) => Ok(metadata_location_to_object_path_string(location)?),
                 None => crate::table::find_latest_metadata_file(&object_store, &table_url).await,
             };
-            let is_metadata_location_catalog_table =
-                Self::is_metadata_location_catalog_table(&commit_info.table_properties)
-                    || is_catalog_status_iceberg_table;
-            let catalog_commit_table = catalog_table.as_ref().filter(|_| {
-                catalog_metadata_location.is_some() || is_metadata_location_catalog_table
-            });
+            let catalog_commit_table = catalog_table.as_ref().filter(|_| catalog_managed_table);
             log::debug!(
-                "Iceberg catalog commit context: table={:?}, metadata_location={:?}",
+                "Iceberg catalog commit context: table={:?}, metadata_location={:?}, managed={}",
                 catalog_table,
-                catalog_metadata_location
+                catalog_metadata_location,
+                catalog_managed_table
             );
 
             if latest_meta_res.is_err()
@@ -595,9 +595,8 @@ impl ExecutionPlan for IcebergCommitExec {
                     || matches!(commit_info.operation, crate::spec::Operation::Append))
             {
                 Self::validate_requirements(None, &commit_info.requirements)?;
-                if let Some(catalog_table) = catalog_table
-                    .as_ref()
-                    .filter(|_| is_metadata_location_catalog_table)
+                if let Some(catalog_table) =
+                    catalog_table.as_ref().filter(|_| catalog_managed_table)
                 {
                     let bootstrap_result = bootstrap_new_table_with_style(
                         &table_url,
@@ -618,7 +617,27 @@ impl ExecutionPlan for IcebergCommitExec {
                     .await?;
                 } else {
                     // Bootstrap a new table using the Hadoop/path-table convention.
-                    bootstrap_new_table(&table_url, &store_ctx, &commit_info).await?;
+                    let bootstrap_result = bootstrap_new_table_with_style(
+                        &table_url,
+                        &store_ctx,
+                        &commit_info,
+                        NewTableMetadataStyle::Hadoop,
+                    )
+                    .await?;
+                    if let Some(catalog_table) = catalog_table.as_ref() {
+                        let new_metadata_location = Self::table_metadata_location(
+                            &table_url,
+                            &bootstrap_result.metadata_file,
+                        )?;
+                        Self::update_catalog_metadata_location(
+                            &context,
+                            catalog_table,
+                            &commit_info.table_properties,
+                            catalog_recorded_metadata_location.as_deref(),
+                            &new_metadata_location,
+                        )
+                        .await?;
+                    }
                 }
 
                 let array = Arc::new(UInt64Array::from(vec![commit_info.row_count]));
@@ -720,9 +739,9 @@ impl ExecutionPlan for IcebergCommitExec {
                     && (matches!(commit_info.operation, crate::spec::Operation::Overwrite)
                         || matches!(commit_info.operation, crate::spec::Operation::Append))
                 {
-                    let mut catalog_fallback_table = catalog_table.as_ref().filter(|_| {
-                        catalog_commit_table.is_none() && is_metadata_location_catalog_table
-                    });
+                    let mut catalog_fallback_table = catalog_table
+                        .as_ref()
+                        .filter(|_| catalog_commit_table.is_none() && catalog_managed_table);
                     if let Some(catalog_table) = catalog_commit_table {
                         let action_commit = bootstrap_snapshot_action_commit(
                             &table_url,
@@ -1051,6 +1070,17 @@ impl ExecutionPlan for IcebergCommitExec {
                         catalog_table,
                         &commit_info.table_properties,
                         catalog_metadata_location.as_deref(),
+                        &new_metadata_location,
+                    )
+                    .await?;
+                } else if let Some(catalog_table) =
+                    catalog_table.as_ref().filter(|_| !catalog_managed_table)
+                {
+                    Self::update_catalog_metadata_location(
+                        &context,
+                        catalog_table,
+                        &commit_info.table_properties,
+                        catalog_recorded_metadata_location.as_deref(),
                         &new_metadata_location,
                     )
                     .await?;
