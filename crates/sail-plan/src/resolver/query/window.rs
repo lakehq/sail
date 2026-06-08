@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use datafusion_expr::LogicalPlan;
 use sail_common::spec::{self, Identifier};
 
@@ -12,19 +14,23 @@ impl PlanResolver<'_> {
         window: Vec<(Identifier, spec::Window)>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        let mut windows: HashMap<String, spec::Window> = HashMap::new();
         for (name, w) in window {
-            if state.get_window(name.as_ref()).is_some() {
-                return Err(PlanError::AnalysisError(format!(
+            if windows.get(name.as_ref()).is_some() {
+                return Err(PlanError::analysis(format!(
                     "Name {} is used more than once in WINDOW clause",
                     name.as_ref()
                 )));
             } else {
-                state.insert_window(name.into(), w);
+                windows.insert(name.into(), w);
             }
         }
+
+        let old_windows = state.set_windows(windows);
         let input = self
             .resolve_query_plan_with_hidden_fields(input, state)
             .await?;
+        let _ = state.set_windows(old_windows);
         Ok(input)
     }
 }

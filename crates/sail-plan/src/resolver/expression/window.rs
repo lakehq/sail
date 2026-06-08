@@ -38,7 +38,7 @@ impl PlanResolver<'_> {
         let window = match window {
             spec::Window::Named(name) => state
                 .get_window(name.as_ref())
-                .ok_or_else(|| PlanError::invalid(format!("undefined window: {}", name.as_ref())))?
+                .ok_or_else(|| PlanError::analysis(format!("undefined window: {}", name.as_ref())))?
                 .clone(),
             w => w,
         };

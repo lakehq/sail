@@ -249,8 +249,11 @@ impl PlanResolverState {
         ConfigScope::new(self)
     }
 
-    pub fn insert_window(&mut self, name: String, window: spec::Window) {
-        self.windows.insert(name, window);
+    pub fn set_windows(
+        &mut self,
+        windows: HashMap<String, spec::Window>,
+    ) -> HashMap<String, spec::Window> {
+        std::mem::replace(&mut self.windows, windows)
     }
 
     pub fn get_window(&self, name: &str) -> Option<&spec::Window> {
