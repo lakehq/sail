@@ -19,6 +19,7 @@ use crate::kernel::checkpoints::{
     replay_commit_header_actions_with_compactions, ReconciledCheckpointState,
     ReconciledHeaderState, ReplayedTableState,
 };
+use crate::kernel::CatalogManagedCommitSet;
 use crate::spec::{
     is_json_checkpoint_filename, CheckpointActionRow, DeltaError as DeltaTableError, DeltaResult,
 };
@@ -78,6 +79,7 @@ fn is_json_checkpoint_location(meta: &ObjectMeta) -> bool {
 pub(crate) async fn load_replayed_table_state(
     version: i64,
     log_store: &dyn LogStore,
+    catalog_managed_commits: Option<&CatalogManagedCommitSet>,
 ) -> DeltaResult<ReplayedTableState> {
     if version < 0 {
         return Err(DeltaTableError::generic(format!(
@@ -85,7 +87,7 @@ pub(crate) async fn load_replayed_table_state(
         )));
     }
 
-    let segment = LogSegmentResolver::new(log_store, version, None)
+    let segment = LogSegmentResolver::new(log_store, version, None, catalog_managed_commits)
         .resolve_for_full_state()
         .await?;
 
@@ -168,6 +170,7 @@ pub(crate) async fn load_replayed_table_header(
     version: i64,
     log_store: &dyn LogStore,
     replay_hint: Option<&ReplayedTableHeader>,
+    catalog_managed_commits: Option<&CatalogManagedCommitSet>,
 ) -> DeltaResult<Option<ReplayedTableHeader>> {
     if version < 0 {
         return Err(DeltaTableError::generic(format!(
@@ -175,7 +178,7 @@ pub(crate) async fn load_replayed_table_header(
         )));
     }
 
-    let segment = LogSegmentResolver::new(log_store, version, replay_hint)
+    let segment = LogSegmentResolver::new(log_store, version, replay_hint, catalog_managed_commits)
         .resolve_for_header()
         .await?;
 

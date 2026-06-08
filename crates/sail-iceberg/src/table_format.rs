@@ -88,6 +88,7 @@ impl TableFormat for IcebergTableFormat {
             bucket_by,
             sort_order,
             options,
+            catalog_table: _,
             logical_schema,
         } = info;
 
@@ -376,6 +377,7 @@ async fn build_iceberg_provider(
 ) -> Result<Arc<IcebergTableProvider>> {
     let SourceInfo {
         paths,
+        catalog_table: _,
         schema: _,
         constraints: _,
         partition_by: _,

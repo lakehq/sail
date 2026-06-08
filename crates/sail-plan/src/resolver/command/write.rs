@@ -243,6 +243,7 @@ impl PlanResolver<'_> {
                 .into_iter()
                 .map(|items| OptionLayer::OptionList { items })
                 .collect(),
+            catalog_table: None,
         };
         let mut preconditions = vec![];
         match target {
@@ -324,9 +325,16 @@ impl PlanResolver<'_> {
                         ));
                     }
                     info.validate_file_write_options(&file_write_options)?;
-                    input = self
-                        .rewrite_write_input(input, column_match, info, state)
-                        .await?;
+                    let delta_merge_schema = info.format.eq_ignore_ascii_case("delta")
+                        && Self::has_truthy_option(
+                            &file_write_options.options,
+                            &["mergeSchema", "merge_schema"],
+                        );
+                    if !delta_merge_schema {
+                        input = self
+                            .rewrite_write_input(input, column_match, info, state)
+                            .await?;
+                    }
                     input = self
                         .apply_delta_table_constraints(input, info, state)
                         .await?;
@@ -441,7 +449,7 @@ impl PlanResolver<'_> {
                     let sort_by = self.resolve_catalog_table_sort(sort_by)?;
                     let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
                     let command = CatalogCommand::CreateTable {
-                        table: table.into(),
+                        table: table.clone().into(),
                         options: CreateTableOptions {
                             columns,
                             comment: None,
@@ -459,6 +467,14 @@ impl PlanResolver<'_> {
                     };
                     preconditions.push(Arc::new(self.resolve_catalog_command(command)?));
                 }
+
+                file_write_options.catalog_table = Some(
+                    table
+                        .parts()
+                        .iter()
+                        .map(|part| part.as_ref().to_string())
+                        .collect::<Vec<_>>(),
+                );
 
                 file_write_options.mode = self
                     .resolve_write_mode(mode, schema_for_cond.as_ref(), state)
@@ -568,6 +584,7 @@ impl PlanResolver<'_> {
                     })?;
                     let info = SourceInfo {
                         paths: location.iter().cloned().collect(),
+                        catalog_table: Some(table.clone().into()),
                         schema: None,
                         constraints: Default::default(),
                         partition_by: vec![],
@@ -604,6 +621,7 @@ impl PlanResolver<'_> {
                     })?;
                     let info = SourceInfo {
                         paths: location.iter().cloned().collect(),
+                        catalog_table: Some(table.clone().into()),
                         schema: None,
                         constraints: Default::default(),
                         partition_by: vec![],

@@ -77,6 +77,34 @@ pub trait CatalogProvider: Send + Sync {
         options: AlterTableOptions,
     ) -> CatalogResult<()>;
 
+    /// Commits table-format metadata through the catalog control plane.
+    async fn commit_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: CommitTableOptions,
+    ) -> CatalogResult<TableStatus> {
+        let _ = (database, table);
+        Err(crate::error::CatalogError::NotSupported(format!(
+            "catalog commit for {} tables",
+            options.format
+        )))
+    }
+
+    /// Gets table-format commits tracked by the catalog control plane.
+    async fn get_table_commits(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: GetTableCommitsOptions,
+    ) -> CatalogResult<GetTableCommitsResponse> {
+        let _ = (database, table);
+        Err(crate::error::CatalogError::NotSupported(format!(
+            "catalog commit discovery for {} tables",
+            options.format
+        )))
+    }
+
     /// Creates a view in the catalog.
     async fn create_view(
         &self,

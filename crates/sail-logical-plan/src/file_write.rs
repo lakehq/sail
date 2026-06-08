@@ -17,6 +17,7 @@ pub struct FileWriteOptions {
     pub sort_by: Vec<Sort>,
     pub bucket_by: Option<BucketBy>,
     pub options: Vec<OptionLayer>,
+    pub catalog_table: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
