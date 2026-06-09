@@ -515,7 +515,7 @@ Feature: to_xml converts a struct value to an XML string
       Then query result
         | result |
         | true   |
-        
+
   Rule: Map fields
 
     Scenario: Map keys become child tag names

@@ -510,14 +510,11 @@ fn write_map(
     depth: usize,
     options: &SparkToXmlOptions,
 ) -> Result<()> {
-    let map_array = col
-        .as_any()
-        .downcast_ref::<MapArray>()
-        .ok_or_else(|| {
-            DataFusionError::Internal(format!(
-                "to_xml: expected MapArray for field '{field_name}'"
-            ))
-        })?;
+    let map_array = col.as_any().downcast_ref::<MapArray>().ok_or_else(|| {
+        DataFusionError::Internal(format!(
+            "to_xml: expected MapArray for field '{field_name}'"
+        ))
+    })?;
 
     let pad = INDENT.repeat(depth);
 
@@ -591,7 +588,65 @@ fn write_map(
                     write_struct(&mut inner, child, i, child_fields, &key, depth + 1, options)?;
                 }
                 DataType::List(item_field) | DataType::LargeList(item_field) => {
-                    write_array(&mut inner, values, i, &key, item_field, depth + 1, options)?;
+                    let (offsets_start, offsets_end, array_values): (usize, usize, ArrayRef) =
+                        if let Some(list) = values.as_any().downcast_ref::<ListArray>() {
+                            (
+                                list.offsets()[i] as usize,
+                                list.offsets()[i + 1] as usize,
+                                list.values().clone(),
+                            )
+                        } else if let Some(list) = values.as_any().downcast_ref::<LargeListArray>()
+                        {
+                            (
+                                list.offsets()[i] as usize,
+                                list.offsets()[i + 1] as usize,
+                                list.values().clone(),
+                            )
+                        } else {
+                            return exec_err!(
+                                "to_xml: expected ListArray for map value in field '{field_name}'"
+                            );
+                        };
+                    for elem_idx in offsets_start..offsets_end {
+                        if array_values.is_null(elem_idx) {
+                            if let Some(ref nv) = options.null_value {
+                                inner.push_str(&INDENT.repeat(depth + 1));
+                                push_element(&mut inner, &key, &escape_text(nv));
+                                inner.push('\n');
+                            }
+                        } else {
+                            match item_field.data_type() {
+                                DataType::Struct(child_fields) => {
+                                    let child = array_values
+                                        .as_any()
+                                        .downcast_ref::<StructArray>()
+                                        .ok_or_else(|| DataFusionError::Internal(format!(
+                                            "to_xml: expected StructArray in map array value for '{field_name}'"
+                                        )))?;
+                                    write_struct(
+                                        &mut inner,
+                                        child,
+                                        elem_idx,
+                                        child_fields,
+                                        &key,
+                                        depth + 1,
+                                        options,
+                                    )?;
+                                }
+                                _ => {
+                                    let text = format_field_to_xml(
+                                        &array_values,
+                                        elem_idx,
+                                        item_field.data_type(),
+                                        options,
+                                    )?;
+                                    inner.push_str(&INDENT.repeat(depth + 1));
+                                    push_element(&mut inner, &key, &escape_text(&text));
+                                    inner.push('\n');
+                                }
+                            }
+                        }
+                    }
                 }
                 _ => {
                     let text = format_field_to_xml(values, i, val_dt, options)?;
@@ -1242,7 +1297,9 @@ mod tests {
         Ok(())
     }
 
-    fn make_string_to_int_map(entries: Vec<(&str, Option<i32>)>,) -> Result<Arc<dyn Array>, Box<dyn std::error::Error>> {
+    fn make_string_to_int_map(
+        entries: Vec<(&str, Option<i32>)>,
+    ) -> Result<Arc<dyn Array>, Box<dyn std::error::Error>> {
         use datafusion::arrow::array::{Int32Builder, MapBuilder, MapFieldNames, StringBuilder};
         let mut builder = MapBuilder::new(
             Some(MapFieldNames {
@@ -1262,7 +1319,7 @@ mod tests {
         }
         builder.append(true)?;
         Ok(Arc::new(builder.finish()) as Arc<dyn Array>)
-}
+    }
 
     fn map_field(name: &str) -> Field {
         Field::new(
@@ -1307,7 +1364,8 @@ mod tests {
     }
 
     #[test]
-    fn test_map_null_value_rendered_with_null_value_option() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_map_null_value_rendered_with_null_value_option(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let map_col = make_string_to_int_map(vec![("k1", Some(1)), ("k2", None)])?;
         let fields = Fields::from(vec![map_field("m")]);
         let array = make_struct(fields.clone(), vec![map_col], None);
@@ -1335,12 +1393,16 @@ mod tests {
         let fields = Fields::from(vec![map_field("m")]);
         let array = make_struct(fields.clone(), vec![map_col], None);
         let xml = write_row(&array, 0, &fields, &default_opts())?;
-        assert!(xml.contains("<m/>"), "all nulls omitted should self-close, got: {xml}");
+        assert!(
+            xml.contains("<m/>"),
+            "all nulls omitted should self-close, got: {xml}"
+        );
         Ok(())
     }
 
     #[test]
-    fn test_map_key_with_illegal_first_char_returns_error() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_map_key_with_illegal_first_char_returns_error() -> Result<(), Box<dyn std::error::Error>>
+    {
         let map_col = make_string_to_int_map(vec![("1bad", Some(1))])?;
         let fields = Fields::from(vec![map_field("m")]);
         let array = make_struct(fields.clone(), vec![map_col], None);
@@ -1352,6 +1414,41 @@ mod tests {
                 "error should mention the key, got: {e}"
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_map_array_value_repeats_key_as_siblings() -> Result<(), Box<dyn std::error::Error>> {
+        use datafusion::arrow::array::{
+            Int32Builder, ListBuilder, MapBuilder, MapFieldNames, StringBuilder,
+        };
+        let value_builder = ListBuilder::new(Int32Builder::new());
+        let mut builder = MapBuilder::new(
+            Some(MapFieldNames {
+                entry: "entries".to_string(),
+                key: SAIL_MAP_KEY_FIELD_NAME.to_string(),
+                value: SAIL_MAP_VALUE_FIELD_NAME.to_string(),
+            }),
+            StringBuilder::new(),
+            value_builder,
+        );
+        builder.keys().append_value("nums");
+        builder.values().append_value([Some(1), Some(2), Some(3)]);
+        builder.append(true)?;
+        let map_col = Arc::new(builder.finish()) as Arc<dyn Array>;
+        let map_col_type = map_col.data_type().clone();
+        let fields = Fields::from(vec![Field::new("m", map_col_type, false)]);
+        let array = make_struct(fields.clone(), vec![map_col], None);
+        let xml = write_row(&array, 0, &fields, &default_opts())?;
+
+        assert!(xml.contains("<nums>1</nums>"), "got: {xml}");
+        assert!(xml.contains("<nums>2</nums>"), "got: {xml}");
+        assert!(xml.contains("<nums>3</nums>"), "got: {xml}");
+
+        assert!(
+            !xml.contains("<item>"),
+            "should not have item wrapper, got: {xml}"
+        );
         Ok(())
     }
 }
