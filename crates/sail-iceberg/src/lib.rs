@@ -11,9 +11,11 @@
 // limitations under the License.
 
 pub mod datasource;
+pub mod error;
 pub mod io;
 pub mod logical;
 pub mod operations;
+pub mod options;
 pub mod physical;
 pub mod physical_plan;
 pub(crate) mod properties;

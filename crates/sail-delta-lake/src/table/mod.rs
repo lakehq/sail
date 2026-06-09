@@ -47,7 +47,6 @@ pub use features::{
     ChangeDataFeedSupport, ChangeDataFeedToken, ColumnMappingToken, DeletionVectorToken,
     EnabledRowTrackingToken, RowTrackingToken, SupportedRowTrackingToken,
 };
-use sail_data_source::options::gen::DeltaReadOptions;
 
 use crate::delta_log::resolve_version_timestamp;
 pub use crate::kernel::snapshot::DeltaSnapshot;
@@ -57,6 +56,7 @@ use crate::kernel::{
     SaveMode,
 };
 use crate::logical::table_source::DeltaTableSource;
+use crate::options::gen::DeltaReadOptions;
 use crate::schema::{
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
     schema_has_column_defaults, schema_has_generated_columns, schema_has_identity_columns,
