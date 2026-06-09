@@ -235,8 +235,22 @@ impl ScalarUDFImpl for SparkToXml {
         let session_timezone = self.session_timezone.as_ref();
 
         let options = if args.len() == 2 {
-            let map_array = to_map_array(&args[1])?;
-            SparkToXmlOptions::from_map(&map_array, session_timezone)?
+            match &args[1] {
+                ColumnarValue::Scalar(s) if s.is_null() => SparkToXmlOptions {
+                    session_timezone: session_timezone.to_string(),
+                    ..SparkToXmlOptions::default()
+                },
+                ColumnarValue::Array(arr) if matches!(arr.data_type(), DataType::Null) => {
+                    SparkToXmlOptions {
+                        session_timezone: session_timezone.to_string(),
+                        ..SparkToXmlOptions::default()
+                    }
+                }
+                _ => {
+                    let map_array = to_map_array(&args[1])?;
+                    SparkToXmlOptions::from_map(&map_array, session_timezone)?
+                }
+            }
         } else {
             SparkToXmlOptions {
                 session_timezone: session_timezone.to_string(),
@@ -459,7 +473,7 @@ fn write_array(
                     buf,
                     &values,
                     item_idx,
-                    &options.array_element_name.clone(),
+                    options.array_element_name.as_str(),
                     inner_field,
                     depth,
                     options,
@@ -1449,6 +1463,22 @@ mod tests {
             !xml.contains("<item>"),
             "should not have item wrapper, got: {xml}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_null_options_argument_uses_defaults() -> Result<(), Box<dyn std::error::Error>> {
+        let fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, false),
+        ]);
+        let col_a = Arc::new(Int32Array::from(vec![1])) as Arc<dyn Array>;
+        let col_b = Arc::new(StringArray::from(vec!["hello"])) as Arc<dyn Array>;
+        let array = make_struct(fields.clone(), vec![col_a, col_b], None);
+        let opts = default_opts();
+        let xml = write_row(&array, 0, &fields, &opts)?;
+        assert!(xml.contains("<a>1</a>"), "got: {xml}");
+        assert!(xml.contains("<b>hello</b>"), "got: {xml}");
         Ok(())
     }
 }
