@@ -354,9 +354,8 @@ async fn do_collect_statistics_and_ordering(
     let path = &part_file.object_meta.location;
     let meta = &part_file.object_meta;
     let collected_statistics = source.collected_statistics();
-    // DF54 changed the file-statistics cache key from `Path` to `TableScopedPath`.
-    // The listing planner has no table reference at this point, so we scope the
-    // entries under `None` — equivalent to the pre-DF54 path-only key.
+    // The listing planner has no table reference here, so the cache entry is
+    // scoped under `None`.
     let cache_key = TableScopedPath {
         table: None,
         path: path.clone(),

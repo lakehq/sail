@@ -7,7 +7,7 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signatur
 
 /// Spark-compatible "rename struct fields by position".
 ///
-/// DataFusion 54 only allows casting between structs that share at least one
+/// DataFusion only allows casting between structs that share at least one
 /// field name. Spark allows positional casts between structs of matching arity
 /// even when no names overlap (e.g. `CAST(struct(x, x) AS struct<f1:T, f2:T>)`).
 ///

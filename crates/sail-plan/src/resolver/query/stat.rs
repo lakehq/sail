@@ -74,9 +74,9 @@ impl PlanResolver<'_> {
 
             if let Ok(field) = input.schema().field_from_column(column) {
                 let original_dtype = field.data_type().clone();
-                // DataFusion 54 changed approx_percentile_cont / approx_median to always
-                // return Float64. Spark's `summary` preserves the input column's integer
-                // type for percentile rows, so we cast back when the source is integer.
+                // DataFusion's approx_percentile_cont / approx_median return Float64,
+                // but Spark's `summary` preserves the input column's integer type for
+                // percentile rows, so we cast back when the source is integer.
                 let percentile_cast = original_dtype.is_integer().then(|| original_dtype.clone());
                 if field.data_type().is_numeric() {
                     if statistics.contains("mean") {

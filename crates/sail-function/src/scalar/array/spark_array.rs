@@ -108,8 +108,8 @@ impl ScalarUDFImpl for SparkArray {
             plan_datafusion_err!("Spark array function requires at least one argument")
         })?;
         // Spark non-ANSI semantics: when mixing strings with other (non-null) types,
-        // coerce everything to string. DataFusion 54 changed `comparison_coercion` to
-        // prefer numeric types, which breaks Spark's string-wins behavior and causes
+        // coerce everything to string. DataFusion's `comparison_coercion` prefers
+        // numeric types, which would break Spark's string-wins behavior and cause
         // runtime cast failures for values like `array('a', 1)`.
         let is_string_like = |dt: &DataType| {
             matches!(

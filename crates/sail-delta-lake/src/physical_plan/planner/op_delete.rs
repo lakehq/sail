@@ -64,12 +64,8 @@ pub async fn build_delete_plan(
         ..Default::default()
     };
 
-    // Build TWO independent find_files pipelines so the writer branch (scan) and
-    // the remove branch don't share an Arc subtree. In distributed execution, sharing
-    // the same Arc across two UnionExec branches led to the remove branch receiving
-    // zero rows while the writer branch worked normally (DF54 regression).
-    //
-    // --- Writer branch's find_files pipeline ---
+    // Independent pipeline per branch: a shared Arc subtree starves the remove
+    // branch (zero rows) under distributed execution.
     let meta_scan_w: Arc<dyn ExecutionPlan> =
         build_log_replay_pipeline_with_options(ctx, snapshot_state, log_replay_options.clone())
             .await?;
@@ -89,7 +85,6 @@ pub async fn build_delete_plan(
         partition_only,
     )?);
 
-    // --- Remove branch's find_files pipeline (independent Arc tree) ---
     let meta_scan_r: Arc<dyn ExecutionPlan> =
         build_log_replay_pipeline_with_options(ctx, snapshot_state, log_replay_options).await?;
     let meta_scan_r: Arc<dyn ExecutionPlan> =
