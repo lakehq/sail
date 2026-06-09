@@ -1,4 +1,3 @@
-import dataclasses
 from pathlib import Path
 
 import duckdb
@@ -50,7 +49,6 @@ def test_derived_tpcds_query_result(spark, query, snapshot):
 def test_derived_tpcds_query_plan(spark, query, snapshot):
     for sql in read_sql(query):
         plan = normalize_plan_text(spark.sql(sql)._explain_string())  # noqa: SLF001
-        plan = _edit_tpcds_plan(query, plan)
         assert plan == snapshot
 
 
@@ -62,24 +60,3 @@ def read_sql(query):
         sql = sql.strip()  # noqa: PLW2901
         if sql:
             yield sql
-
-
-@dataclasses.dataclass
-class PlanEditRule:
-    query: str
-    source: str
-    target: str
-
-
-TPC_DS_PLAN_EDIT_RULES: list[PlanEditRule] = []
-
-
-def _edit_tpcds_plan(query: str, plan: str) -> str:
-    for rule in TPC_DS_PLAN_EDIT_RULES:
-        if rule.query == query:
-            plan = plan.replace(rule.source, rule.target)
-            # The source string may or may not be present in the plan before replacement.
-            # But if the target string is missing in the plan after replacement,
-            # the plan edit rule is known to be outdated and should be updated or removed.
-            assert rule.target in plan, f"edit rule not applied: {rule}"
-    return plan
