@@ -391,6 +391,9 @@ fn write_field(
         DataType::List(item_field) | DataType::LargeList(item_field) => {
             write_array(buf, col, row, name, item_field, depth, options)?;
         }
+        DataType::Map(_, _) => {
+            write_map(buf, col, row, name, depth, options)?;
+        }
         _ => {
             let text = format_field_to_xml(col, row, field.data_type(), options)?;
             buf.push_str(&pad);
@@ -494,6 +497,127 @@ fn write_array(
                 }
             }
         }
+    }
+
+    Ok(())
+}
+
+fn write_map(
+    buf: &mut String,
+    col: &ArrayRef,
+    row: usize,
+    field_name: &str,
+    depth: usize,
+    options: &SparkToXmlOptions,
+) -> Result<()> {
+    let map_array = col
+        .as_any()
+        .downcast_ref::<MapArray>()
+        .ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "to_xml: expected MapArray for field '{field_name}'"
+            ))
+        })?;
+
+    let pad = INDENT.repeat(depth);
+
+    let entries = map_array.value(row);
+    let num_entries = entries.len();
+    let keys = entries
+        .column_by_name(SAIL_MAP_KEY_FIELD_NAME)
+        .ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "to_xml: map field '{field_name}' missing key column"
+            ))
+        })?;
+    let values = entries
+        .column_by_name(SAIL_MAP_VALUE_FIELD_NAME)
+        .ok_or_else(|| {
+            DataFusionError::Internal(format!(
+                "to_xml: map field '{field_name}' missing value column"
+            ))
+        })?;
+
+    let mut inner = String::new();
+    for i in 0..num_entries {
+        if keys.is_null(i) {
+            return exec_err!(
+                "to_xml: map field '{field_name}' has a null key, \
+                 which cannot be used as an XML tag name"
+            );
+        }
+        let key_scalar = ScalarValue::try_from_array(keys, i)?;
+        let key = match key_scalar {
+            ScalarValue::Utf8(Some(s))
+            | ScalarValue::LargeUtf8(Some(s))
+            | ScalarValue::Utf8View(Some(s)) => s,
+            other => {
+                return exec_err!(
+                    "to_xml: map keys must be strings to be valid XML tag names, got {other:?}"
+                )
+            }
+        };
+        if key.is_empty() {
+            return exec_err!(
+                "to_xml: map field '{field_name}' has an empty key, \
+                 which is not a valid XML tag name"
+            );
+        }
+        let first = key.chars().next().unwrap_or('\0');
+        if first.is_ascii_digit() || first == '-' || first == '.' {
+            return exec_err!(
+                "to_xml: map key '{key}' starts with '{first}', \
+                 which is not a valid XML name start character"
+            );
+        }
+        if values.is_null(i) {
+            if let Some(ref nv) = options.null_value {
+                inner.push_str(&INDENT.repeat(depth + 1));
+                push_element(&mut inner, &key, &escape_text(nv));
+                inner.push('\n');
+            }
+        } else {
+            let val_dt = values.data_type();
+            match val_dt {
+                DataType::Struct(child_fields) => {
+                    let child = values
+                        .as_any()
+                        .downcast_ref::<StructArray>()
+                        .ok_or_else(|| {
+                            DataFusionError::Internal(format!(
+                                "to_xml: expected StructArray for map value in '{field_name}'"
+                            ))
+                        })?;
+                    write_struct(&mut inner, child, i, child_fields, &key, depth + 1, options)?;
+                }
+                DataType::List(item_field) | DataType::LargeList(item_field) => {
+                    write_array(&mut inner, values, i, &key, item_field, depth + 1, options)?;
+                }
+                _ => {
+                    let text = format_field_to_xml(values, i, val_dt, options)?;
+                    inner.push_str(&INDENT.repeat(depth + 1));
+                    push_element(&mut inner, &key, &escape_text(&text));
+                    inner.push('\n');
+                }
+            }
+        }
+    }
+
+    if inner.is_empty() {
+        buf.push_str(&pad);
+        buf.push('<');
+        buf.push_str(field_name);
+        buf.push_str("/>\n");
+    } else {
+        buf.push_str(&pad);
+        buf.push('<');
+        buf.push_str(field_name);
+        buf.push_str(">\n");
+        buf.push_str(&inner);
+        buf.push_str(&pad);
+        buf.push_str("</");
+        buf.push_str(field_name);
+        buf.push_str(">\n");
     }
 
     Ok(())
@@ -1115,6 +1239,119 @@ mod tests {
         opts.date_format = "%d/%m/%Y".to_string();
         let xml = write_row(&array, 0, &fields, &opts)?;
         assert!(xml.contains("06/06/2026"), "got: {xml}");
+        Ok(())
+    }
+
+    fn make_string_to_int_map(entries: Vec<(&str, Option<i32>)>,) -> Result<Arc<dyn Array>, Box<dyn std::error::Error>> {
+        use datafusion::arrow::array::{Int32Builder, MapBuilder, MapFieldNames, StringBuilder};
+        let mut builder = MapBuilder::new(
+            Some(MapFieldNames {
+                entry: "entries".to_string(),
+                key: SAIL_MAP_KEY_FIELD_NAME.to_string(),
+                value: SAIL_MAP_VALUE_FIELD_NAME.to_string(),
+            }),
+            StringBuilder::new(),
+            Int32Builder::new(),
+        );
+        for (k, v) in entries {
+            builder.keys().append_value(k);
+            match v {
+                Some(n) => builder.values().append_value(n),
+                None => builder.values().append_null(),
+            }
+        }
+        builder.append(true)?;
+        Ok(Arc::new(builder.finish()) as Arc<dyn Array>)
+}
+
+    fn map_field(name: &str) -> Field {
+        Field::new(
+            name,
+            DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new(SAIL_MAP_KEY_FIELD_NAME, DataType::Utf8, false),
+                        Field::new(SAIL_MAP_VALUE_FIELD_NAME, DataType::Int32, true),
+                    ])),
+                    false,
+                )),
+                false,
+            ),
+            false,
+        )
+    }
+
+    #[test]
+    fn test_map_basic_keys_become_child_tags() -> Result<(), Box<dyn std::error::Error>> {
+        let map_col = make_string_to_int_map(vec![("k1", Some(1)), ("k2", Some(2))])?;
+        let fields = Fields::from(vec![map_field("m")]);
+        let array = make_struct(fields.clone(), vec![map_col], None);
+        let xml = write_row(&array, 0, &fields, &default_opts())?;
+        assert!(xml.contains("<m>"), "got: {xml}");
+        assert!(xml.contains("<k1>1</k1>"), "got: {xml}");
+        assert!(xml.contains("<k2>2</k2>"), "got: {xml}");
+        assert!(xml.contains("</m>"), "got: {xml}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_map_null_value_omitted_by_default() -> Result<(), Box<dyn std::error::Error>> {
+        let map_col = make_string_to_int_map(vec![("k1", Some(1)), ("k2", None)])?;
+        let fields = Fields::from(vec![map_field("m")]);
+        let array = make_struct(fields.clone(), vec![map_col], None);
+        let xml = write_row(&array, 0, &fields, &default_opts())?;
+        assert!(xml.contains("<k1>1</k1>"), "got: {xml}");
+        assert!(!xml.contains("<k2>"), "k2 should be omitted, got: {xml}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_map_null_value_rendered_with_null_value_option() -> Result<(), Box<dyn std::error::Error>> {
+        let map_col = make_string_to_int_map(vec![("k1", Some(1)), ("k2", None)])?;
+        let fields = Fields::from(vec![map_field("m")]);
+        let array = make_struct(fields.clone(), vec![map_col], None);
+        let mut opts = default_opts();
+        opts.null_value = Some("N/A".to_string());
+        let xml = write_row(&array, 0, &fields, &opts)?;
+        assert!(xml.contains("<k1>1</k1>"), "got: {xml}");
+        assert!(xml.contains("<k2>N/A</k2>"), "got: {xml}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_map_empty_produces_self_closing() -> Result<(), Box<dyn std::error::Error>> {
+        let map_col = make_string_to_int_map(vec![])?;
+        let fields = Fields::from(vec![map_field("m")]);
+        let array = make_struct(fields.clone(), vec![map_col], None);
+        let xml = write_row(&array, 0, &fields, &default_opts())?;
+        assert!(xml.contains("<m/>"), "expected self-closing, got: {xml}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_map_all_null_values_produces_self_closing() -> Result<(), Box<dyn std::error::Error>> {
+        let map_col = make_string_to_int_map(vec![("k1", None), ("k2", None)])?;
+        let fields = Fields::from(vec![map_field("m")]);
+        let array = make_struct(fields.clone(), vec![map_col], None);
+        let xml = write_row(&array, 0, &fields, &default_opts())?;
+        assert!(xml.contains("<m/>"), "all nulls omitted should self-close, got: {xml}");
+        Ok(())
+    }
+
+    #[test]
+    fn test_map_key_with_illegal_first_char_returns_error() -> Result<(), Box<dyn std::error::Error>> {
+        let map_col = make_string_to_int_map(vec![("1bad", Some(1))])?;
+        let fields = Fields::from(vec![map_field("m")]);
+        let array = make_struct(fields.clone(), vec![map_col], None);
+        let result = write_row(&array, 0, &fields, &default_opts());
+        assert!(result.is_err(), "expected error for illegal XML tag name");
+        if let Err(e) = result {
+            assert!(
+                e.to_string().contains("1bad"),
+                "error should mention the key, got: {e}"
+            );
+        }
         Ok(())
     }
 }

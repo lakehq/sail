@@ -515,3 +515,81 @@ Feature: to_xml converts a struct value to an XML string
       Then query result
         | result |
         | true   |
+        
+  Rule: Map fields
+
+    Scenario: Map keys become child tag names
+      When query
+        """
+        SELECT
+          xpath_string(to_xml(named_struct('m', map('k1', 1, 'k2', 2))), '/ROW/m/k1') AS k1,
+          xpath_string(to_xml(named_struct('m', map('k1', 1, 'k2', 2))), '/ROW/m/k2') AS k2
+        """
+      Then query result
+        | k1 | k2 |
+        | 1  | 2  |
+
+    Scenario: Map with null value omits that entry by default
+      When query
+        """
+        SELECT
+          xpath_string(to_xml(named_struct('m', map('k1', 1, 'k2', CAST(NULL AS INT)))), '/ROW/m/k1') AS k1,
+          xpath_string(to_xml(named_struct('m', map('k1', 1, 'k2', CAST(NULL AS INT)))), '/ROW/m/k2') AS k2
+        """
+      Then query result
+        | k1 | k2 |
+        | 1  |    |
+
+    Scenario: Map with null value renders with nullValue option
+      When query
+        """
+        SELECT to_xml(named_struct('m', map('k1', CAST(NULL AS INT))), map('nullValue', 'N/A')) LIKE '%<k1>N/A</k1>%' AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: Map with string value
+      When query
+        """
+        SELECT xpath_string(to_xml(named_struct('m', map('hello', 'world'))), '/ROW/m/hello') AS result
+        """
+      Then query result
+        | result |
+        | world  |
+
+    Scenario: Map with struct value nests struct inside key tag
+      When query
+        """
+        SELECT xpath_string(to_xml(named_struct('m', map('person', named_struct('age', 30)))), '/ROW/m/person/age') AS result
+        """
+      Then query result
+        | result |
+        | 30     |
+
+    Scenario: Map with array value repeats key as sibling tags
+      When query
+        """
+        SELECT xpath(to_xml(named_struct('m', map('nums', array(1, 2, 3)))), '/ROW/m/nums/text()') AS result
+        """
+      Then query result
+        | result    |
+        | [1, 2, 3] |
+
+    Scenario: Map field nested inside struct
+      When query
+        """
+        SELECT xpath_string(to_xml(named_struct('outer', named_struct('m', map('k', 1)))), '/ROW/outer/m/k') AS result
+        """
+      Then query result
+        | result |
+        | 1      |
+
+    Scenario: Map inside array of structs expands per element
+      When query
+        """
+        SELECT xpath(to_xml(named_struct('items', array(named_struct('m', map('k', 1)), named_struct('m', map('k', 2))))), '/ROW/items/m/k/text()') AS result
+        """
+      Then query result
+        | result |
+        | [1, 2] |
