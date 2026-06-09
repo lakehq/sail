@@ -354,6 +354,9 @@ async fn do_collect_statistics_and_ordering(
     let path = &part_file.object_meta.location;
     let meta = &part_file.object_meta;
     let collected_statistics = source.collected_statistics();
+    // No table reference is available here, so entries are cached under the global
+    // scope (`table: None`). The cache is size-bounded (`cache_limit`) and per-table
+    // invalidation is not used, so unscoped keys are intentional and safe.
     let cache_key = TableScopedPath {
         table: None,
         path: path.clone(),
