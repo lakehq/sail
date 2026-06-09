@@ -16,7 +16,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let mut windows: HashMap<String, spec::Window> = HashMap::new();
         for (name, w) in window {
-            if windows.get(name.as_ref()).is_some() {
+            if windows.contains_key(name.as_ref()) {
                 return Err(PlanError::analysis(format!(
                     "Name {} is used more than once in WINDOW clause",
                     name.as_ref()
