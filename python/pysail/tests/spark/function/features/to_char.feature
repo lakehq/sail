@@ -42,6 +42,33 @@ Feature: to_char and to_varchar comprehensive tests
         | result |
         | NULL   |
 
+    # Untyped NULL literal: Spark treats it as numeric — a valid number format
+    # returns NULL, an invalid one still errors. Validated against Spark JVM.
+    Scenario: untyped NULL with valid numeric format
+      When query
+        """
+        SELECT to_char(NULL, '999') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: untyped NULL with currency format
+      When query
+        """
+        SELECT to_char(NULL, '$9,999') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: untyped NULL with invalid format still errors
+      When query
+        """
+        SELECT to_char(NULL, 'invalidxyz') AS result
+        """
+      Then query error .*
+
     Scenario: valid int with NULL format
       When query
         """

@@ -389,7 +389,8 @@ fn to_char(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     } else if dt.is_numeric()
         || matches!(
             dt,
-            DataType::Binary
+            DataType::Null
+                | DataType::Binary
                 | DataType::LargeBinary
                 | DataType::FixedSizeBinary(_)
                 | DataType::BinaryView
