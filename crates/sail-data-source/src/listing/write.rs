@@ -9,19 +9,22 @@ use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::{BucketBy, OptionLayer, SinkMode};
 use sail_common_datafusion::utils::items::ItemTaker;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
+use crate::listing::source::WriteFormat;
+
+#[derive(Clone, Debug, Educe)]
+#[educe(PartialEq, Eq, Hash, PartialOrd)]
 pub struct FileWriteOptions {
-    pub format: String,
+    #[educe(PartialEq(ignore), Hash(ignore), PartialOrd(ignore))]
+    pub format: Arc<dyn WriteFormat>,
     pub mode: SinkMode,
     pub partition_by: Vec<CatalogPartitionField>,
-    pub sort_by: Vec<Sort>,
+    pub sort_order: Vec<Sort>,
     pub bucket_by: Option<BucketBy>,
     pub options: Vec<OptionLayer>,
-    pub catalog_table: Option<Vec<String>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
-#[educe(PartialOrd)]
+#[derive(Clone, Debug, Educe)]
+#[educe(PartialEq, Eq, Hash, PartialOrd)]
 pub struct FileWriteNode {
     input: Arc<LogicalPlan>,
     options: FileWriteOptions,

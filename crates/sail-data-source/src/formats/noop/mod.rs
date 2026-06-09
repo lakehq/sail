@@ -2,11 +2,16 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::catalog::Session;
-use datafusion::logical_expr::TableSource;
+use datafusion::execution::SessionState;
+use datafusion::logical_expr::{Extension, LogicalPlan, TableSource, UserDefinedLogicalNode};
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
+use datafusion_common::{internal_err, not_impl_err, plan_err, DFSchema, DFSchemaRef, Result};
+use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
+use educe::Educe;
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
+use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::formats::noop::writer::NoopSinkExec;
 
@@ -29,11 +34,7 @@ impl TableFormat for NoopTableFormat {
         not_impl_err!("noop format does not support reading")
     }
 
-    async fn create_writer(
-        &self,
-        _ctx: &dyn Session,
-        info: SinkInfo,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
+    async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
         let SinkInfo {
             input,
             partition_by,
@@ -42,7 +43,7 @@ impl TableFormat for NoopTableFormat {
             ..
         } = info;
 
-        if is_flow_event_schema(&input.schema()) {
+        if is_flow_event_schema(input.schema().as_arrow()) {
             return plan_err!("cannot write streaming data to noop format");
         }
 
@@ -54,6 +55,75 @@ impl TableFormat for NoopTableFormat {
             return not_impl_err!("partitioning for noop write format");
         }
 
-        Ok(Arc::new(NoopSinkExec::new(input)))
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(NoopWriteNode::new(Arc::new(input))),
+        }))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
+pub struct NoopWriteNode {
+    input: Arc<LogicalPlan>,
+    #[educe(PartialOrd(ignore))]
+    schema: DFSchemaRef,
+}
+
+impl NoopWriteNode {
+    pub fn new(input: Arc<LogicalPlan>) -> Self {
+        Self {
+            input,
+            schema: Arc::new(DFSchema::empty()),
+        }
+    }
+}
+
+impl UserDefinedLogicalNodeCore for NoopWriteNode {
+    fn name(&self) -> &str {
+        "NoopWrite"
+    }
+
+    fn inputs(&self) -> Vec<&LogicalPlan> {
+        vec![self.input.as_ref()]
+    }
+
+    fn schema(&self) -> &DFSchemaRef {
+        &self.schema
+    }
+
+    fn expressions(&self) -> Vec<Expr> {
+        vec![]
+    }
+
+    fn fmt_for_explain(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "NoopWrite")
+    }
+
+    fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
+        exprs.zero()?;
+        Ok(Self::new(Arc::new(inputs.one()?)))
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct NoopPhysicalPlanner;
+
+#[async_trait]
+impl ExtensionPlanner for NoopPhysicalPlanner {
+    async fn plan_extension(
+        &self,
+        _planner: &dyn PhysicalPlanner,
+        node: &dyn UserDefinedLogicalNode,
+        _logical_inputs: &[&LogicalPlan],
+        physical_inputs: &[Arc<dyn ExecutionPlan>],
+        _session_state: &SessionState,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        if node.as_any().downcast_ref::<NoopWriteNode>().is_none() {
+            return Ok(None);
+        }
+        let [input] = physical_inputs else {
+            return internal_err!("NoopWriteNode requires exactly one physical input");
+        };
+        Ok(Some(Arc::new(NoopSinkExec::new(input.clone()))))
     }
 }

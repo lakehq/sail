@@ -8,8 +8,10 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::helpers::pruned_partition_list;
+use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use datafusion::execution::cache::cache_manager::CachedFileMetadata;
 use datafusion::execution::SessionState;
+use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
 use datafusion::logical_expr::{Expr, LogicalPlan, TableScan, UserDefinedLogicalNode};
 use datafusion::physical_expr::create_lex_ordering;
@@ -18,16 +20,18 @@ use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::stats::Precision;
-use datafusion_common::{project_schema, Statistics};
+use datafusion_common::{internal_err, plan_err, project_schema, Statistics};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::source::DataSourceExec;
 use futures::{future, stream, Stream, StreamExt};
 use object_store::ObjectStore;
+use sail_common_datafusion::datasource::{create_sort_order, find_path_in_options};
 
-use crate::listing::source::ListingScanInput;
+use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::can_be_evaluated_for_partition_pruning;
+use crate::listing::write::FileWriteNode;
 
 /// Result of a file listing operation for listing table scans.
 #[derive(Debug)]
@@ -41,18 +45,29 @@ struct ListFilesResult {
 ///
 /// Plans `ListingTableSource` table scans directly without an intermediate `TableProvider`.
 #[derive(Debug, Default)]
-pub struct ListingTablePhysicalPlanner;
+pub struct ListingPhysicalPlanner;
 
 #[async_trait]
-impl ExtensionPlanner for ListingTablePhysicalPlanner {
+impl ExtensionPlanner for ListingPhysicalPlanner {
     async fn plan_extension(
         &self,
         _planner: &dyn PhysicalPlanner,
-        _node: &dyn UserDefinedLogicalNode,
-        _logical_inputs: &[&LogicalPlan],
-        _physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &SessionState,
+        node: &dyn UserDefinedLogicalNode,
+        logical_inputs: &[&LogicalPlan],
+        physical_inputs: &[Arc<dyn ExecutionPlan>],
+        session_state: &SessionState,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
+        if let Some(node) = node.as_any().downcast_ref::<FileWriteNode>() {
+            let [logical_input] = logical_inputs else {
+                return internal_err!("FileWriteNode requires exactly one logical input");
+            };
+            let [physical_input] = physical_inputs else {
+                return internal_err!("FileWriteNode requires exactly one physical input");
+            };
+            return plan_file_write(session_state, logical_input, physical_input.clone(), node)
+                .await
+                .map(Some);
+        }
         Ok(None)
     }
 
@@ -171,6 +186,65 @@ impl ExtensionPlanner for ListingTablePhysicalPlanner {
 
         Ok(Some(DataSourceExec::from_data_source(config)))
     }
+}
+
+async fn plan_file_write(
+    session_state: &SessionState,
+    logical_input: &LogicalPlan,
+    physical_input: Arc<dyn ExecutionPlan>,
+    node: &FileWriteNode,
+) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+    let Some(path) = find_path_in_options(&node.options().options) else {
+        return plan_err!("missing path in listing table options");
+    };
+    // always write multi-file output
+    let path = if path.ends_with(object_store::path::DELIMITER) {
+        path
+    } else {
+        format!("{path}{}", object_store::path::DELIMITER)
+    };
+    let table_paths = crate::url::resolve_listing_urls(session_state, vec![path.clone()]).await?;
+    let object_store_url = if let Some(path) = table_paths.first() {
+        path.object_store()
+    } else {
+        return internal_err!("empty listing table path: {path}");
+    };
+    // We do not need to specify the exact data type for partition columns,
+    // since the type is inferred from the record batch during writing.
+    let table_partition_cols = node
+        .options()
+        .partition_by
+        .iter()
+        .map(|field| (field.column.clone(), DataType::Null))
+        .collect::<Vec<_>>();
+    let conf = FileSinkConfig {
+        original_url: path,
+        object_store_url,
+        file_group: Default::default(),
+        table_paths,
+        output_schema: physical_input.schema(),
+        table_partition_cols,
+        insert_op: InsertOp::Append,
+        keep_partition_by_columns: false,
+        file_extension: String::new(),
+        file_output_mode: FileOutputMode::Automatic,
+    };
+    let sort_order = create_sort_order(
+        session_state,
+        node.options().sort_order.clone(),
+        logical_input.schema(),
+    )?;
+    node.options()
+        .format
+        .sink(
+            session_state,
+            ListingSinkInput {
+                input: physical_input,
+                sink: conf,
+                sort_order,
+            },
+        )
+        .await
 }
 
 fn try_create_output_ordering(

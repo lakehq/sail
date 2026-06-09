@@ -28,7 +28,7 @@ use crate::physical_plan::planner::{DeltaPlannerConfig, PlannerContext};
 use crate::physical_plan::{DeltaDiscoveryExec, DeltaScanByAddsExec, RelaxedTzCastExec};
 use crate::schema::get_physical_schema;
 use crate::spec::{Add, ColumnMappingMode, StructType};
-use crate::storage::LogStoreRef;
+use crate::storage::{directory_url, LogStoreRef};
 use crate::table::DeltaSnapshot;
 
 pub(crate) async fn plan_delta_scan(
@@ -284,7 +284,7 @@ pub(crate) async fn plan_delta_scan(
     }
 
     // Metadata-as-data path: log scan -> replay -> discovery -> scan by adds.
-    let table_url = log_store.config().location.clone();
+    let table_url = directory_url(log_store.config().location.clone());
 
     // TODO: Decouple planning for reading and writing. It is strange to require
     // construction of write options (DeltaWritePartialOptions) just to drive the

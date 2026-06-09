@@ -10,7 +10,6 @@ use crate::listing::source::{FormatFactory, ListingTableFormat};
 use crate::options::gen::BinaryReadOptions;
 use crate::options::ResolveOptions;
 
-pub mod file_format;
 pub mod options;
 mod read;
 pub mod reader;

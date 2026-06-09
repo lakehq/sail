@@ -27,7 +27,7 @@ use crate::options::gen::DeltaWriteOptions;
 use crate::physical_plan::{
     prepare_delta_write_context, DeltaCommitContext, DeltaWriteContext, DeltaWriterExecOptions,
 };
-use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
+use crate::storage::{default_logstore, directory_url, LogStoreRef, StorageConfig};
 use crate::table::{
     create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot, DeltaSnapshot,
     DeltaTable,
@@ -72,7 +72,7 @@ impl DeltaPlannerConfig {
         table_exists: bool,
     ) -> Self {
         Self {
-            table_url,
+            table_url: directory_url(table_url),
             options,
             metadata_configuration,
             partition_columns,
