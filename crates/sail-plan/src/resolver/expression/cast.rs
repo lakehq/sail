@@ -187,11 +187,9 @@ impl PlanResolver<'_> {
                 lit(ScalarValue::try_from(&to)?)
             }
             (from, to, _) if needs_struct_field_rename(&from, &to) => {
-                // Spark allows casting structs (and list/map of struct) by
-                // POSITION even when field names don't overlap, which DataFusion
-                // rejects at planning time. Pre-rename the source struct fields
-                // positionally so the subsequent cast becomes a no-op or a valid
-                // name-matched cast.
+                // Pre-rename the source struct fields positionally so the cast
+                // becomes a no-op or a valid name-matched one (see
+                // `needs_struct_field_rename`).
                 let renamed_target = build_rename_target_type(&from, &to);
                 let renamed =
                     ScalarUDF::new_from_impl(SparkStructRename::new(renamed_target.clone()))
@@ -217,8 +215,6 @@ impl PlanResolver<'_> {
 fn needs_struct_field_rename(from: &DataType, to: &DataType) -> bool {
     match (from, to) {
         (DataType::Struct(a), DataType::Struct(b)) => {
-            // Same arity with at least one name mismatch: rename positionally
-            // upfront so the struct cast validator accepts it.
             a.len() == b.len()
                 && a.iter()
                     .zip(b.iter())

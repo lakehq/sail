@@ -103,7 +103,6 @@ impl<'a> SourceMetricColumn<'a> {
         match column.data_type() {
             DataType::UInt64 => {
                 let values = column
-
                     .as_any().downcast_ref::<UInt64Array>()
                     .ok_or_else(|| {
                         DataFusionError::Internal(format!(
@@ -114,7 +113,6 @@ impl<'a> SourceMetricColumn<'a> {
             }
             DataType::Int64 => {
                 let values = column
-
                     .as_any().downcast_ref::<Int64Array>()
                     .ok_or_else(|| {
                         DataFusionError::Internal(format!(

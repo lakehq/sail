@@ -354,8 +354,6 @@ async fn do_collect_statistics_and_ordering(
     let path = &part_file.object_meta.location;
     let meta = &part_file.object_meta;
     let collected_statistics = source.collected_statistics();
-    // The listing planner has no table reference here, so the cache entry is
-    // scoped under `None`.
     let cache_key = TableScopedPath {
         table: None,
         path: path.clone(),

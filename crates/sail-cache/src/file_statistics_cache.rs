@@ -50,9 +50,8 @@ impl CacheAccessor<TableScopedPath, CachedFileMetadata> for MokaFileStatisticsCa
     }
 
     fn put(&self, key: &TableScopedPath, value: CachedFileMetadata) -> Option<CachedFileMetadata> {
-        // Honor the runtime `cache_limit`; moka's `entry_count` is eventually
-        // consistent so the bound is `cache_limit + O(concurrent writers)`.
-        // Updates to existing keys are always allowed.
+        // Updates to existing keys always pass; new keys only while under `cache_limit`.
+        // The bound is soft: moka's `entry_count` is eventually consistent.
         let cache_limit = self.cache_limit.load(Ordering::Relaxed);
         if self.statistics.contains_key(key)
             || (self.statistics.entry_count() as usize) < cache_limit
@@ -103,7 +102,7 @@ impl FileStatisticsCache for MokaFileStatisticsCache {
                         num_rows: cached.statistics.num_rows,
                         num_columns: cached.statistics.column_statistics.len(),
                         table_size_bytes: cached.statistics.total_byte_size,
-                        statistics_size_bytes: 0,
+                        statistics_size_bytes: 0, // TODO: set to the real size in the future
                         has_ordering: cached.ordering.is_some(),
                     },
                 )
@@ -125,7 +124,6 @@ impl FileStatisticsCache for MokaFileStatisticsCache {
     }
 }
 
-/// Helper to create a `TableScopedPath` from a bare `Path` (no table scope).
 pub fn scoped_path(path: Path) -> TableScopedPath {
     TableScopedPath { table: None, path }
 }
