@@ -16,6 +16,7 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
+sail-catalog = { path = "../sail-catalog" }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-data-source = { path = "../sail-data-source" }
@@ -53,6 +54,9 @@ apache-avro = { workspace = true }
 rust_decimal = { workspace = true }
 # base64 = { workspace = true }
 murmur3 = { workspace = true }
+
+[build-dependencies]
+sail-build-scripts = { path = "../sail-build-scripts" }
 
 [lints]
 workspace = true

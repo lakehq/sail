@@ -66,7 +66,6 @@ use datafusion_spark::function::map::map_from_arrays::MapFromArrays;
 use datafusion_spark::function::map::map_from_entries::MapFromEntries;
 use datafusion_spark::function::math::expm1::SparkExpm1;
 use datafusion_spark::function::math::hex::SparkHex;
-use datafusion_spark::function::math::modulus::SparkPmod;
 use datafusion_spark::function::math::width_bucket::SparkWidthBucket;
 use datafusion_spark::function::string::elt::SparkElt;
 use datafusion_spark::function::string::format_string::FormatStringFunc;
@@ -104,6 +103,7 @@ use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
 use sail_function::aggregate::count_min_sketch::CountMinSketchFunction;
+use sail_function::aggregate::grouping_id::GroupingIdFunction;
 use sail_function::aggregate::histogram_numeric::HistogramNumericFunction;
 use sail_function::aggregate::hll_sketch::{HllSketchAggFunction, HllUnionAggFunction};
 use sail_function::aggregate::kurtosis::KurtosisFunction;
@@ -125,6 +125,7 @@ use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
 use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_function::scalar::array::spark_sequence::SparkSequence;
+use sail_function::scalar::array_struct_field::ArrayStructField;
 use sail_function::scalar::collection::spark_concat::SparkConcat;
 use sail_function::scalar::collection::spark_reverse::SparkReverse;
 use sail_function::scalar::csv::spark_from_csv::SparkFromCSV;
@@ -133,6 +134,7 @@ use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::spark_date::SparkDate;
+use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
 };
@@ -168,6 +170,7 @@ use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
 use sail_function::scalar::math::spark_div::SparkIntervalDiv;
+use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
 use sail_function::scalar::math::spark_try_add::SparkTryAdd;
 use sail_function::scalar::math::spark_try_div::SparkTryDiv;
@@ -211,7 +214,7 @@ use sail_function::scalar::url::parse_url::ParseUrl;
 use sail_function::scalar::url::spark_try_parse_url::SparkTryParseUrl;
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 use sail_function::scalar::variant::spark_is_variant_null::SparkIsVariantNullUdf;
-use sail_function::scalar::variant::spark_json_to_variant::SparkJsonToVariantUdf;
+use sail_function::scalar::variant::spark_parse_json::SparkParseJson;
 use sail_function::scalar::variant::spark_schema_of_variant::SparkSchemaOfVariantUdf;
 use sail_function::scalar::variant::spark_to_variant_object::SparkToVariantObjectUdf;
 use sail_function::scalar::variant::spark_variant_explode::SparkVariantExplodeUdf;
@@ -629,6 +632,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     sink_mode,
                     metadata_configuration,
                     write_context,
+                    catalog_table,
                 } = *delta_writer;
                 let input = self.try_decode_plan(&input, ctx)?;
                 let sink_schema = self.try_decode_schema(&sink_schema)?;
@@ -658,6 +662,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     table_exists,
                     Arc::new(sink_schema),
                     write_context,
+                    (!catalog_table.is_empty()).then_some(catalog_table),
                 )?))
             }
             NodeKind::DeltaCommit(gen::DeltaCommitExecNode {
@@ -669,6 +674,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sink_mode,
                 user_metadata,
                 commit_context,
+                catalog_table,
             }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let sink_schema = self.try_decode_schema(&sink_schema)?;
@@ -694,6 +700,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     sink_mode,
                     user_metadata,
                     commit_context,
+                    (!catalog_table.is_empty()).then_some(catalog_table),
                 )))
             }
             NodeKind::DeltaScanByAdds(gen::DeltaScanByAddsExecNode {
@@ -707,6 +714,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 pushdown_filter,
                 version,
                 statistics,
+                catalog_table,
             }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let table_url = Url::parse(&table_url)
@@ -761,6 +769,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         projection,
                         limit,
                         pushdown_filter,
+                        (!catalog_table.is_empty()).then_some(catalog_table),
                     )
                     .with_output_statistics(statistics),
                 ))
@@ -1588,6 +1597,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 write_context: Some(
                     self.try_encode_delta_write_context(delta_writer_exec.write_context())?,
                 ),
+                catalog_table: delta_writer_exec
+                    .catalog_table()
+                    .map(|table| table.to_vec())
+                    .unwrap_or_default(),
             }))
         } else if let Some(delta_commit_exec) = node.downcast_ref::<DeltaCommitExec>() {
             let input = self.try_encode_plan(delta_commit_exec.input().clone())?;
@@ -1603,6 +1616,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 commit_context: Some(
                     self.try_encode_delta_commit_context(delta_commit_exec.commit_context())?,
                 ),
+                catalog_table: delta_commit_exec
+                    .catalog_table()
+                    .map(|table| table.to_vec())
+                    .unwrap_or_default(),
             })
         } else if let Some(delta_scan_by_adds_exec) = node.downcast_ref::<DeltaScanByAddsExec>() {
             let input = self.try_encode_plan(delta_scan_by_adds_exec.input().clone())?;
@@ -1642,6 +1659,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 pushdown_filter,
                 version: delta_scan_by_adds_exec.version(),
                 statistics,
+                catalog_table: delta_scan_by_adds_exec
+                    .catalog_table()
+                    .map(|table| table.to_vec())
+                    .unwrap_or_default(),
             })
         } else if let Some(delta_discovery_exec) = node.downcast_ref::<DeltaDiscoveryExec>() {
             let input = Some(self.try_encode_plan(delta_discovery_exec.input())?);
@@ -2188,6 +2209,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkAbs(gen::SparkAbsUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkAbs::new(ansi_mode))));
             }
+            UdfKind::SparkPmod(gen::SparkPmodUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkPmod::new(ansi_mode))));
+            }
             UdfKind::SparkMakeTimestampNtz(gen::SparkMakeTimestampNtzUdf { is_try }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new(
                     is_try,
@@ -2195,6 +2219,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             UdfKind::ConvertTz(gen::ConvertTzUdf { classic }) => {
                 return Ok(Arc::new(ScalarUDF::from(ConvertTz::new(classic))));
+            }
+            UdfKind::SparkParseJson(gen::SparkParseJsonUdf { safe }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkParseJson::new(safe))));
             }
             UdfKind::SparkStructRename(gen::SparkStructRenameUdf { target_type }) => {
                 let target_type = self.try_decode_data_type(&target_type)?;
@@ -2207,6 +2234,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "array_item_with_position" => {
                 Ok(Arc::new(ScalarUDF::from(ArrayItemWithPosition::new())))
             }
+            "array_struct_field" => Ok(Arc::new(ScalarUDF::from(ArrayStructField::new()))),
             "array_min" => Ok(Arc::new(ScalarUDF::from(ArrayMin::new()))),
             "array_max" => Ok(Arc::new(ScalarUDF::from(ArrayMax::new()))),
             "array_intersect" | "list_intersect" => {
@@ -2228,7 +2256,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_cast_to_variant" => Ok(Arc::new(ScalarUDF::from(SparkCastToVariant::new()))),
             "is_variant_null" => Ok(Arc::new(ScalarUDF::from(SparkIsVariantNullUdf::new()))),
             "variant_to_json" => Ok(Arc::new(ScalarUDF::from(SparkVariantToJsonUdf::new()))),
-            "parse_json" => Ok(Arc::new(ScalarUDF::from(SparkJsonToVariantUdf::new()))),
             "spark_variant_explode" => Ok(Arc::new(ScalarUDF::from(SparkVariantExplodeUdf::new()))),
             "to_variant_object" => Ok(Arc::new(ScalarUDF::from(SparkToVariantObjectUdf::new()))),
             "schema_of_variant" => Ok(Arc::new(ScalarUDF::from(SparkSchemaOfVariantUdf::new()))),
@@ -2325,6 +2352,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeYmInterval::new())))
             }
             "spark_make_time" | "make_time" => Ok(Arc::new(ScalarUDF::from(SparkMakeTime::new()))),
+            "date_trunc" => Ok(Arc::new(ScalarUDF::from(SparkDateTrunc::new()))),
             "spark_time_diff" | "time_diff" => Ok(Arc::new(ScalarUDF::from(SparkTimeDiff::new()))),
             "spark_time_trunc" | "time_trunc" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTimeTrunc::new())))
@@ -2349,7 +2377,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToTimestamp::new())))
             }
             "spark_expm1" | "expm1" => Ok(Arc::new(ScalarUDF::from(SparkExpm1::new()))),
-            "spark_pmod" | "pmod" => Ok(Arc::new(ScalarUDF::from(SparkPmod::new()))),
             "spark_ceil" | "ceil" => Ok(Arc::new(ScalarUDF::from(SparkCeil::new()))),
             "spark_floor" | "floor" => Ok(Arc::new(ScalarUDF::from(SparkFloor::new()))),
             "spark_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8::new()))),
@@ -2386,6 +2413,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         // TODO: Implement custom registry to avoid codec for built-in functions
         let node_inner = node.inner();
         let udf_kind: UdfKind = if node_inner.is::<ArrayItemWithPosition>()
+            || node_inner.is::<ArrayStructField>()
             || node_inner.is::<ArrayMax>()
             || node_inner.is::<ArrayMin>()
             || node_inner.is::<ArrayIntersect>()
@@ -2428,6 +2456,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkConcat>()
             || node_inner.is::<SparkConv>()
             || node_inner.is::<SparkCrc32>()
+            || node_inner.is::<SparkDateTrunc>()
             || node_inner.is::<SparkDayTimeInterval>()
             || node_inner.is::<SparkDecode>()
             || node_inner.is::<SparkElt>()
@@ -2438,7 +2467,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkIntervalDiv>()
             || node_inner.is::<SparkCastToVariant>()
             || node_inner.is::<SparkIsVariantNullUdf>()
-            || node_inner.is::<SparkJsonToVariantUdf>()
             || node_inner.is::<SparkVariantExplodeUdf>()
             || node_inner.is::<SparkToVariantObjectUdf>()
             || node_inner.is::<SparkSchemaOfVariantUdf>()
@@ -2454,7 +2482,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkMask>()
             || node_inner.is::<SparkConcatWs>()
             || node_inner.is::<SparkMurmur3Hash>()
-            || node_inner.is::<SparkPmod>()
             || node_inner.is::<SparkRegexpExtractAll>()
             || node_inner.is::<SparkReverse>()
             || node_inner.is::<SparkSequence>()
@@ -2590,6 +2617,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkVariantGet>() {
             let safe = func.safe();
             UdfKind::SparkVariantGet(gen::SparkVariantGetUdf { safe })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkParseJson>() {
+            let safe = func.safe();
+            UdfKind::SparkParseJson(gen::SparkParseJsonUdf { safe })
         } else if let Some(func) = node.inner().downcast_ref::<SparkFromCSV>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone })
@@ -2608,6 +2638,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkAbs>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkAbs(gen::SparkAbsUdf { ansi_mode })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkPmod>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkPmod(gen::SparkPmodUdf { ansi_mode })
         } else if let Some(func) = node.inner().downcast_ref::<SparkMakeTimestampNtz>() {
             let is_try = func.is_try();
             UdfKind::SparkMakeTimestampNtz(gen::SparkMakeTimestampNtzUdf { is_try })
@@ -2641,6 +2674,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "count_min_sketch" => {
                     Ok(Arc::new(AggregateUDF::from(CountMinSketchFunction::new())))
                 }
+                "grouping_id" => Ok(Arc::new(AggregateUDF::from(GroupingIdFunction::new()))),
                 "histogram_numeric" => Ok(Arc::new(AggregateUDF::from(
                     HistogramNumericFunction::new(),
                 ))),
@@ -2765,6 +2799,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node
                 .inner()
                 .downcast_ref::<CountMinSketchFunction>()
+                .is_some()
+            || node
+                .inner()
+                .downcast_ref::<GroupingIdFunction>()
                 .is_some()
             || node
                 .inner()

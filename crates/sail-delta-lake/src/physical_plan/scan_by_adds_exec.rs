@@ -58,6 +58,7 @@ struct ScanByAddsStreamState {
     table_version: i64,
     output_schema: SchemaRef,
     scan_config: DeltaScanConfig,
+    catalog_table: Option<Vec<String>>,
     limit: Option<usize>,
     pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
 
@@ -78,6 +79,7 @@ struct ScanByAddsStreamState {
 }
 
 impl ScanByAddsStreamState {
+    #[expect(clippy::too_many_arguments)]
     fn new(
         input: SendableRecordBatchStream,
         context: Arc<TaskContext>,
@@ -85,6 +87,7 @@ impl ScanByAddsStreamState {
         table_version: i64,
         output_schema: SchemaRef,
         scan_config: DeltaScanConfig,
+        catalog_table: Option<Vec<String>>,
         limit: Option<usize>,
         pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
     ) -> Self {
@@ -95,6 +98,7 @@ impl ScanByAddsStreamState {
             table_version,
             output_schema,
             scan_config,
+            catalog_table,
             limit,
             pushdown_filter,
             table_opened: false,
@@ -117,17 +121,24 @@ impl ScanByAddsStreamState {
         }
         // Prefer a session-scoped cache. This avoids leaking state across sessions / RuntimeEnvs.
         // If the cache extension is not installed, fall back to no caching.
+        let catalog_table = self.catalog_table.as_deref();
         let cached = match self.context.as_ref().extension::<DeltaTableCache>() {
             Ok(cache) => {
                 cache
-                    .get(self.context.as_ref(), &self.table_url, self.table_version)
+                    .get(
+                        self.context.as_ref(),
+                        &self.table_url,
+                        self.table_version,
+                        catalog_table,
+                    )
                     .await?
             }
             Err(_) => {
                 load_table_uncached(
-                    self.context.runtime_env(),
+                    self.context.as_ref(),
                     &self.table_url,
                     self.table_version,
+                    catalog_table,
                 )
                 .await?
             }
@@ -581,6 +592,7 @@ pub struct DeltaScanByAddsExec {
     projection: Option<Vec<usize>>,
     limit: Option<usize>,
     pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
+    catalog_table: Option<Vec<String>>,
     statistics: Statistics,
     cache: Arc<PlanProperties>,
 }
@@ -597,6 +609,7 @@ impl DeltaScanByAddsExec {
         projection: Option<Vec<usize>>,
         limit: Option<usize>,
         pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
+        catalog_table: Option<Vec<String>>,
     ) -> Self {
         let statistics = Statistics::new_unknown(output_schema.as_ref());
         let cache = Self::compute_properties(
@@ -613,6 +626,7 @@ impl DeltaScanByAddsExec {
             projection,
             limit,
             pushdown_filter,
+            catalog_table,
             statistics,
             cache,
         }
@@ -676,6 +690,10 @@ impl DeltaScanByAddsExec {
         self.pushdown_filter.as_ref()
     }
 
+    pub fn catalog_table(&self) -> Option<&[String]> {
+        self.catalog_table.as_deref()
+    }
+
     pub fn statistics(&self) -> &Statistics {
         &self.statistics
     }
@@ -734,6 +752,7 @@ impl ExecutionPlan for DeltaScanByAddsExec {
         let table_version = self.version;
         let output_schema = self.schema();
         let scan_config = self.scan_config.clone();
+        let catalog_table = self.catalog_table.clone();
         let limit = self.limit;
         let pushdown_filter = self.pushdown_filter.clone();
         let state = ScanByAddsStreamState::new(
@@ -743,6 +762,7 @@ impl ExecutionPlan for DeltaScanByAddsExec {
             table_version,
             Arc::clone(&output_schema),
             scan_config,
+            catalog_table,
             limit,
             pushdown_filter,
         );
@@ -989,6 +1009,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .with_table_statistics(Some(table_stats));
 
@@ -1039,6 +1060,7 @@ mod tests {
             table_schema,
             output_schema,
             crate::datasource::DeltaScanConfig::default(),
+            None,
             None,
             None,
             None,

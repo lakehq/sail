@@ -101,8 +101,10 @@ message ExtendedScalarUdf {
     SparkAbsUdf spark_abs = 20;
     SparkMakeTimestampNtzUdf spark_make_timestamp_ntz = 21;
     ConvertTzUdf convert_tz = 22;
-    SparkStructRenameUdf spark_struct_rename = 23;
-    SparkToCsvUdf spark_to_csv = 24;
+    SparkToCsvUdf spark_to_csv = 23;
+    SparkPmodUdf spark_pmod = 24;
+    SparkParseJsonUdf spark_parse_json = 25;
+    SparkStructRenameUdf spark_struct_rename = 26;
   }
 }
 
@@ -198,6 +200,14 @@ message SparkNextDayUdf {
 }
 
 message SparkAbsUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkParseJsonUdf {
+  bool safe = 1;
+}
+
+message SparkPmodUdf {
   bool ansi_mode = 1;
 }
 
@@ -572,6 +582,7 @@ message DeltaWriterExecNode {
   PhysicalSinkMode sink_mode = 7;
   map<string, string> metadata_configuration = 8;
   DeltaWriteContext write_context = 9;
+  repeated string catalog_table = 10;
 }
 
 message DeltaCommitExecNode {
@@ -583,6 +594,7 @@ message DeltaCommitExecNode {
   PhysicalSinkMode sink_mode = 6;
   optional string user_metadata = 7;
   DeltaCommitContext commit_context = 8;
+  repeated string catalog_table = 9;
 }
 
 message DeltaScanByAddsExecNode {
@@ -596,6 +608,7 @@ message DeltaScanByAddsExecNode {
   optional bytes pushdown_filter = 8;
   int64 version = 9;
   optional bytes statistics = 10;
+  repeated string catalog_table = 11;
   // TODO: Consider snapshot hints (partition columns, kernel schema) to avoid worker log reads.
 }
 

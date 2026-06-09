@@ -58,6 +58,7 @@ use crate::operations::write::variant_shredding::{
     variant_top_level_columns, VariantShreddingConfig,
 };
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
+use crate::physical_plan::catalog_location::resolve_catalog_table_url;
 use crate::physical_plan::writer_options::DeltaWriterExecOptions;
 use crate::physical_plan::{
     delta_action_schema, encode_actions, DeltaWriteContext, ExecCommitMeta,
@@ -289,6 +290,7 @@ pub struct DeltaWriterExec {
     table_exists: bool,
     sink_schema: SchemaRef,
     write_context: DeltaWriteContext,
+    catalog_table: Option<Vec<String>>,
     metrics: ExecutionPlanMetricsSet,
     cache: Arc<PlanProperties>,
 }
@@ -319,6 +321,7 @@ impl DeltaWriterExec {
         table_exists: bool,
         sink_schema: SchemaRef,
         write_context: DeltaWriteContext,
+        catalog_table: Option<Vec<String>>,
     ) -> Result<Self> {
         let schema = delta_action_schema()?;
         let output_partitions = input.output_partitioning().partition_count().max(1);
@@ -333,6 +336,7 @@ impl DeltaWriterExec {
             table_exists,
             sink_schema,
             write_context,
+            catalog_table,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
         })
@@ -381,6 +385,10 @@ impl DeltaWriterExec {
 
     pub fn write_context(&self) -> &DeltaWriteContext {
         &self.write_context
+    }
+
+    pub fn catalog_table(&self) -> Option<&[String]> {
+        self.catalog_table.as_deref()
     }
 
     fn effective_protocol_and_metadata(
@@ -564,6 +572,7 @@ impl ExecutionPlan for DeltaWriterExec {
             self.table_exists,
             self.sink_schema.clone(),
             self.write_context.clone(),
+            self.catalog_table.clone(),
         )?))
     }
 
@@ -599,6 +608,7 @@ impl DeltaWriterExec {
         let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(partition);
 
         let table_url = self.table_url.clone();
+        let catalog_table = self.catalog_table.clone();
         let options = self.options.clone();
         let partition_columns = self.partition_columns.clone();
         let sink_mode = self.sink_mode.clone();
@@ -621,6 +631,8 @@ impl DeltaWriterExec {
             } = &options;
             let timezone = session_timezone;
 
+            let table_url =
+                resolve_catalog_table_url(&context, catalog_table.as_deref(), &table_url).await?;
             let object_store = get_object_store_from_context(&context, &table_url)?;
 
             match &sink_mode {

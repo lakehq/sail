@@ -353,7 +353,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Internal error: Function 'approx_percentile_cont' failed to match any signature, errors: Error during planning: Function 'approx_percentile_cont' expects 2 arguments but received 3,Error during planning: Function 'approx_percentile_cont' requires Float64, but received List(Decimal(1, 1)) (DataType: List(Decimal128(1, 1)))..\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues. No function matches the given name and argument types 'approx_percentile_cont(Int32, List(Decimal128(1, 1)), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tapprox_percentile_cont(Float, Float64)\n\tapprox_percentile_cont(Float, Float64, Integer)"
+        "failure": "error in DataFusion: Error during planning: Internal error: Function 'approx_percentile_cont' failed to match any signature, errors: Error during planning: Function 'approx_percentile_cont' expects 2 arguments but received 3,Error during planning: Function 'approx_percentile_cont' requires Float64, but received List(non-null Decimal(1, 1)) (DataType: List(non-null Decimal128(1, 1)))..\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues. No function matches the given name and argument types 'approx_percentile_cont(Int32, List(non-null Decimal128(1, 1)), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tapprox_percentile_cont(Float, Float64)\n\tapprox_percentile_cont(Float, Float64, Integer)"
       }
     },
     {
@@ -379,7 +379,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Internal error: Function 'approx_percentile_cont' failed to match any signature, errors: Error during planning: Function 'approx_percentile_cont' expects 2 arguments but received 3,Error during planning: Function 'approx_percentile_cont' requires Float, but received Duration(µs) (DataType: Duration(µs))..\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues. No function matches the given name and argument types 'approx_percentile_cont(Duration(µs), List(Decimal128(1, 1)), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tapprox_percentile_cont(Float, Float64)\n\tapprox_percentile_cont(Float, Float64, Integer)"
+        "failure": "error in DataFusion: Error during planning: Internal error: Function 'approx_percentile_cont' failed to match any signature, errors: Error during planning: Function 'approx_percentile_cont' expects 2 arguments but received 3,Error during planning: Function 'approx_percentile_cont' requires Float, but received Duration(µs) (DataType: Duration(µs))..\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues. No function matches the given name and argument types 'approx_percentile_cont(Duration(µs), List(non-null Decimal128(1, 1)), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tapprox_percentile_cont(Float, Float64)\n\tapprox_percentile_cont(Float, Float64, Integer)"
       }
     },
     {
@@ -2197,7 +2197,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: grouping_id"
+        "success": "ok"
       }
     },
     {
@@ -2363,7 +2363,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Internal error: Function 'approx_percentile_cont' failed to match any signature, errors: Error during planning: Function 'approx_percentile_cont' expects 2 arguments but received 3,Error during planning: Function 'approx_percentile_cont' requires Float64, but received List(Decimal(1, 1)) (DataType: List(Decimal128(1, 1)))..\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues. No function matches the given name and argument types 'approx_percentile_cont(Int32, List(Decimal128(1, 1)), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tapprox_percentile_cont(Float, Float64)\n\tapprox_percentile_cont(Float, Float64, Integer)"
+        "failure": "error in DataFusion: Error during planning: Internal error: Function 'approx_percentile_cont' failed to match any signature, errors: Error during planning: Function 'approx_percentile_cont' expects 2 arguments but received 3,Error during planning: Function 'approx_percentile_cont' requires Float64, but received List(non-null Decimal(1, 1)) (DataType: List(non-null Decimal128(1, 1)))..\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues. No function matches the given name and argument types 'approx_percentile_cont(Int32, List(non-null Decimal128(1, 1)), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tapprox_percentile_cont(Float, Float64)\n\tapprox_percentile_cont(Float, Float64, Integer)"
       }
     },
     {
@@ -2389,7 +2389,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Internal error: Function 'approx_percentile_cont' failed to match any signature, errors: Error during planning: Function 'approx_percentile_cont' expects 2 arguments but received 3,Error during planning: Function 'approx_percentile_cont' requires Float, but received Duration(µs) (DataType: Duration(µs))..\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues. No function matches the given name and argument types 'approx_percentile_cont(Duration(µs), List(Decimal128(1, 1)), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tapprox_percentile_cont(Float, Float64)\n\tapprox_percentile_cont(Float, Float64, Integer)"
+        "failure": "error in DataFusion: Error during planning: Internal error: Function 'approx_percentile_cont' failed to match any signature, errors: Error during planning: Function 'approx_percentile_cont' expects 2 arguments but received 3,Error during planning: Function 'approx_percentile_cont' requires Float, but received Duration(µs) (DataType: Duration(µs))..\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues. No function matches the given name and argument types 'approx_percentile_cont(Duration(µs), List(non-null Decimal128(1, 1)), Int32)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tapprox_percentile_cont(Float, Float64)\n\tapprox_percentile_cont(Float, Float64, Integer)"
       }
     },
     {

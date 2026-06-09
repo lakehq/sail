@@ -21,6 +21,7 @@ datafusion-expr-common = { workspace = true }
 datafusion-functions = { workspace = true }
 datafusion-functions-nested = { workspace = true }
 datafusion-physical-expr = { workspace = true }
+datafusion-spark = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
 regex = { workspace = true }
@@ -44,6 +45,7 @@ parquet-variant-json = { workspace = true }
 percent-encoding = { workspace = true }
 jiter = { workspace = true }
 thiserror = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 xee-xpath = { workspace = true }
 xot = { workspace = true }

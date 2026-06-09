@@ -10,9 +10,13 @@ use sail_catalog::provider::{
     Namespace,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
+use sail_common_datafusion::catalog::iceberg::{
+    is_iceberg_table_properties, ICEBERG_TABLE_TYPE_KEY, ICEBERG_TABLE_TYPE_VALUE,
+};
 use sail_common_datafusion::catalog::{
     identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
 };
+use sail_common_datafusion::column_features::{ColumnFeatures, ColumnFeaturesBuilder};
 
 use crate::data_type::{
     arrow_to_hive_type, hive_type_to_arrow, spark_struct_json_from_fields,
@@ -89,15 +93,19 @@ pub(crate) fn table_to_status(
     let location = storage
         .and_then(|sd| sd.location.as_ref())
         .map(ToString::to_string);
-    let format = table_provider_format(table.parameters.as_ref()).unwrap_or_else(|| {
-        detect_hms_logical_format(
-            storage
-                .and_then(|sd| sd.serde_info.as_ref())
-                .and_then(|serde| serde.serialization_lib.as_deref()),
-            storage.and_then(|sd| sd.input_format.as_deref()),
-            storage.and_then(|sd| sd.output_format.as_deref()),
-        )
-    });
+    let format = if is_iceberg_table_parameters(table.parameters.as_ref()) {
+        ICEBERG_TABLE_TYPE_VALUE.to_string()
+    } else {
+        table_provider_format(table.parameters.as_ref()).unwrap_or_else(|| {
+            detect_hms_logical_format(
+                storage
+                    .and_then(|sd| sd.serde_info.as_ref())
+                    .and_then(|serde| serde.serialization_lib.as_deref()),
+                storage.and_then(|sd| sd.input_format.as_deref()),
+                storage.and_then(|sd| sd.output_format.as_deref()),
+            )
+        })
+    };
     let partition_by = table
         .partition_keys
         .as_ref()
@@ -197,14 +205,23 @@ pub(crate) fn build_generic_table(
     let (regular_columns, partition_keys) = build_columns(columns, &partition_columns)?;
     let mut parameters = vec_to_map(properties);
     insert_comment(&mut parameters, comment);
+    let table_parameters = parameters.get_or_insert_with(AHashMap::new);
     if format.logical_format.eq_ignore_ascii_case("delta") {
-        parameters.get_or_insert_with(AHashMap::new).insert(
+        table_parameters.insert(
             FastStr::from_static_str(SPARK_DATASOURCE_PROVIDER_KEY),
             FastStr::from_static_str("delta"),
         );
+    } else if format
+        .logical_format
+        .eq_ignore_ascii_case(ICEBERG_TABLE_TYPE_VALUE)
+    {
+        table_parameters.insert(
+            FastStr::from_static_str(ICEBERG_TABLE_TYPE_KEY),
+            FastStr::from_static_str(ICEBERG_TABLE_TYPE_VALUE),
+        );
     }
 
-    parameters.get_or_insert_with(AHashMap::new).insert(
+    table_parameters.insert(
         FastStr::from_static_str(EXTERNAL_KEY),
         FastStr::from_static_str(EXTERNAL_TRUE),
     );
@@ -261,6 +278,20 @@ pub(crate) fn inject_spark_metadata(
         .iter()
         .map(|col| {
             let mut metadata = std::collections::HashMap::new();
+            if let Some(expr) = &col.generated_always_as {
+                metadata.extend(
+                    ColumnFeaturesBuilder::new()
+                        .with_generation_expression(expr.clone())
+                        .build(),
+                );
+            }
+            if let Some(expr) = &col.default {
+                metadata.extend(
+                    ColumnFeaturesBuilder::new()
+                        .with_current_default(expr.clone())
+                        .build(),
+                );
+            }
             if let Some(comment) = &col.comment {
                 metadata.insert("comment".to_string(), comment.clone());
             }
@@ -298,6 +329,52 @@ pub(crate) fn inject_spark_metadata(
         FastStr::from_string(format!("sail-{}", env!("CARGO_PKG_VERSION"))),
     );
 
+    Ok(())
+}
+
+pub(crate) fn alter_spark_column_default(
+    table: &mut Table,
+    column_path: &[String],
+    default: Option<String>,
+) -> CatalogResult<()> {
+    let [column_name] = column_path else {
+        return Err(CatalogError::NotSupported(
+            "Hive Metastore catalog does not support altering nested column defaults".to_string(),
+        ));
+    };
+    let Some(mut columns) = columns_from_spark_properties(table.parameters.as_ref())? else {
+        return Ok(());
+    };
+    let Some(column) = columns
+        .iter_mut()
+        .find(|column| column.name.eq_ignore_ascii_case(column_name))
+    else {
+        return Err(CatalogError::InvalidArgument(format!(
+            "Column '{column_name}' does not exist"
+        )));
+    };
+    column.default = default;
+
+    let fields = columns
+        .iter()
+        .map(TableColumnStatus::field)
+        .collect::<Vec<_>>();
+    let schema_value = spark_struct_json_from_fields(&fields)?;
+    let schema_json = serde_json::to_string(&schema_value).map_err(|e| {
+        CatalogError::External(format!("Failed to serialize Spark schema JSON: {e}"))
+    })?;
+    let parameters = table.parameters.get_or_insert_with(AHashMap::new);
+    let num_parts_prefix = format!("{SPARK_SCHEMA_KEY}.numParts");
+    let part_prefix = format!("{SPARK_SCHEMA_KEY}.part.");
+    parameters.retain(|key, _| {
+        let key = key.as_str();
+        key != SPARK_SCHEMA_KEY
+            && !key.starts_with(&num_parts_prefix)
+            && !key.starts_with(&part_prefix)
+    });
+    for (key, value) in split_large_table_prop(SPARK_SCHEMA_KEY, &schema_json, 4000) {
+        parameters.insert(FastStr::from_string(key), FastStr::from_string(value));
+    }
     Ok(())
 }
 
@@ -369,6 +446,16 @@ fn table_provider_format(parameters: Option<&AHashMap<FastStr, FastStr>>) -> Opt
     Some(match provider.as_str() {
         "deltalake" => "delta".to_string(),
         _ => provider,
+    })
+}
+
+fn is_iceberg_table_parameters(parameters: Option<&AHashMap<FastStr, FastStr>>) -> bool {
+    parameters.is_some_and(|properties| {
+        is_iceberg_table_properties(
+            properties
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        )
     })
 }
 
@@ -492,16 +579,20 @@ fn columns_from_spark_properties(
     };
     let columns = spark_struct_json_to_fields(&schema)?
         .into_iter()
-        .map(|field| TableColumnStatus {
-            name: field.name().to_string(),
-            data_type: field.data_type().clone(),
-            nullable: field.is_nullable(),
-            comment: field.metadata().get(COMMENT_KEY).cloned(),
-            default: None,
-            generated_always_as: None,
-            is_partition: false,
-            is_bucket: false,
-            is_cluster: false,
+        .map(|field| {
+            let features = ColumnFeatures::from_field(&field);
+            TableColumnStatus {
+                name: field.name().to_string(),
+                data_type: field.data_type().clone(),
+                nullable: field.is_nullable(),
+                comment: field.metadata().get(COMMENT_KEY).cloned(),
+                default: features.current_default(),
+                generated_always_as: features.generation_expression(),
+                identity: features.identity(),
+                is_partition: false,
+                is_bucket: false,
+                is_cluster: false,
+            }
         })
         .collect();
     Ok(Some(columns))
@@ -668,6 +759,7 @@ fn field_schema_to_status(
         comment: field.comment.as_ref().map(ToString::to_string),
         default: None,
         generated_always_as: None,
+        identity: None,
         is_partition,
         is_bucket: false,
         is_cluster: false,
@@ -753,6 +845,7 @@ mod tests {
                 comment: None,
                 default: None,
                 generated_always_as: None,
+                identity: None,
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
@@ -790,6 +883,7 @@ mod tests {
                 comment: None,
                 default: None,
                 generated_always_as: None,
+                identity: None,
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
@@ -820,6 +914,7 @@ mod tests {
                 comment: None,
                 default: None,
                 generated_always_as: None,
+                identity: None,
             }],
             vec!["missing_partition".to_string()],
             Some("s3://warehouse/items".to_string()),
@@ -852,6 +947,7 @@ mod tests {
                 comment: None,
                 default: None,
                 generated_always_as: None,
+                identity: None,
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
@@ -874,6 +970,41 @@ mod tests {
     }
 
     #[test]
+    fn test_table_to_status_detects_jvm_iceberg_table_type_case_insensitive() {
+        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let table = build_generic_table(
+            "default",
+            "items",
+            vec![CreateTableColumnOptions {
+                name: "id".to_string(),
+                data_type: DataType::Int64,
+                nullable: false,
+                comment: None,
+                default: None,
+                generated_always_as: None,
+                identity: None,
+            }],
+            vec![],
+            Some("s3://warehouse/items".to_string()),
+            GenericTableFormat {
+                logical_format: "parquet",
+                storage: &HiveStorageFormat::parquet(),
+            },
+            None,
+            vec![("table_type".to_string(), "ICEBERG".to_string())],
+        )
+        .unwrap();
+
+        let status = super::table_to_status("hms", &namespace, &table).unwrap();
+        match status.kind {
+            sail_common_datafusion::catalog::TableKind::Table { format, .. } => {
+                assert_eq!(format, "iceberg");
+            }
+            other => panic!("expected table, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_table_to_status_converts_partition_columns_to_identity_fields() {
         let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
         let table = build_generic_table(
@@ -887,6 +1018,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
                 CreateTableColumnOptions {
                     name: "day".to_string(),
@@ -895,6 +1027,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
             ],
             vec!["day".to_string()],
@@ -936,6 +1069,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
                 CreateTableColumnOptions {
                     name: "day".to_string(),
@@ -944,6 +1078,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
             ],
             vec!["day".to_string()],
@@ -967,6 +1102,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
                 CreateTableColumnOptions {
                     name: "day".to_string(),
@@ -975,6 +1111,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
             ],
             &["day".to_string()],
@@ -1008,6 +1145,7 @@ mod tests {
                     comment: Some("pk".to_string()),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
                 CreateTableColumnOptions {
                     name: "day".to_string(),
@@ -1016,6 +1154,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
             ],
             vec!["day".to_string()],
@@ -1039,6 +1178,7 @@ mod tests {
                     comment: Some("pk".to_string()),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
                 CreateTableColumnOptions {
                     name: "day".to_string(),
@@ -1047,6 +1187,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
             ],
             &["day".to_string()],
@@ -1554,6 +1695,7 @@ mod tests {
                     comment: Some("primary key".to_string()),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
                 CreateTableColumnOptions {
                     name: "payload".to_string(),
@@ -1599,6 +1741,7 @@ mod tests {
                     comment: Some("nested payload".to_string()),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
                 CreateTableColumnOptions {
                     name: "category".to_string(),
@@ -1607,6 +1750,7 @@ mod tests {
                     comment: Some("category partition".to_string()),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
                 CreateTableColumnOptions {
                     name: "event_date".to_string(),
@@ -1615,6 +1759,7 @@ mod tests {
                     comment: Some("date partition".to_string()),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
             ],
             vec!["category".to_string(), "event_date".to_string()],
@@ -1636,6 +1781,7 @@ mod tests {
                 comment: Some("primary key".to_string()),
                 default: None,
                 generated_always_as: None,
+                identity: None,
             },
             CreateTableColumnOptions {
                 name: "payload".to_string(),
@@ -1681,6 +1827,7 @@ mod tests {
                 comment: Some("nested payload".to_string()),
                 default: None,
                 generated_always_as: None,
+                identity: None,
             },
             CreateTableColumnOptions {
                 name: "category".to_string(),
@@ -1689,6 +1836,7 @@ mod tests {
                 comment: Some("category partition".to_string()),
                 default: None,
                 generated_always_as: None,
+                identity: None,
             },
             CreateTableColumnOptions {
                 name: "event_date".to_string(),
@@ -1697,6 +1845,7 @@ mod tests {
                 comment: Some("date partition".to_string()),
                 default: None,
                 generated_always_as: None,
+                identity: None,
             },
         ];
 
@@ -1794,6 +1943,7 @@ mod tests {
                 comment: None,
                 default: None,
                 generated_always_as: None,
+                identity: None,
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
@@ -1824,6 +1974,7 @@ mod tests {
                 comment: None,
                 default: None,
                 generated_always_as: None,
+                identity: None,
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),

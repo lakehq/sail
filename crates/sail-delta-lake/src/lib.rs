@@ -10,10 +10,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod catalog_managed;
 pub mod conversion;
 pub mod datasource;
 pub mod deletion_vector;
 mod delta_log;
+pub mod error;
 mod kernel;
 pub mod logical;
 pub mod operations;

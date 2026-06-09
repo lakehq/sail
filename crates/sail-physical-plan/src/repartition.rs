@@ -83,11 +83,7 @@ impl RowRoundRobinPartitioner {
     }
 }
 
-/// A stream that holds shared references to spawned round-robin tasks.
-/// When all output streams are dropped, the `Arc` refcount reaches zero and
-/// `SpawnedTask`'s `Drop` implementation cancels the background tasks.
 struct RoundRobinReceiverStream {
-    _tasks: Arc<Vec<SpawnedTask<()>>>,
     state: Arc<Mutex<ExplicitRepartitionState>>,
     inner: Receiver<Result<RecordBatch>>,
 }
@@ -106,12 +102,12 @@ impl Drop for RoundRobinReceiverStream {
             return;
         };
         state.active_streams = state.active_streams.saturating_sub(1);
-        if state.active_streams == 0 {
-            if let Some(receivers) = state.receivers.as_mut() {
-                for receiver in receivers.iter_mut() {
-                    receiver.take();
-                }
-            }
+        let all_receivers_taken = state
+            .receivers
+            .as_ref()
+            .is_some_and(|receivers| receivers.iter().all(Option::is_none));
+        if state.active_streams == 0 && all_receivers_taken {
+            state.receivers.take();
             state.tasks.take();
         }
     }
@@ -121,10 +117,9 @@ impl Drop for RoundRobinReceiverStream {
 struct ExplicitRepartitionState {
     receivers: Option<Vec<Option<Receiver<Result<RecordBatch>>>>>,
     active_streams: usize,
-    /// Handle to spawned tasks, released once all receivers have been taken.
-    /// After that point only the output streams hold strong references, so
-    /// dropping all streams cancels the tasks via SpawnedTask's Drop impl.
-    tasks: Option<Arc<Vec<SpawnedTask<()>>>>,
+    /// Handles to spawned tasks, removed once every output receiver has been
+    /// taken and the active output stream count reaches zero.
+    tasks: Option<Vec<SpawnedTask<()>>>,
 }
 
 /// A physical plan node for explicit repartitioning in the query.
@@ -205,7 +200,7 @@ impl ExplicitRepartitionExec {
         }
 
         state.receivers = Some(receivers);
-        state.tasks = Some(Arc::new(tasks));
+        state.tasks = Some(tasks);
         Ok(())
     }
 
@@ -215,9 +210,9 @@ impl ExplicitRepartitionExec {
                 "round-robin repartition state lock poisoned".to_string(),
             )
         })?;
-        let Some(tasks) = state.tasks.as_ref().map(Arc::clone) else {
+        if state.tasks.is_none() {
             return internal_err!("round-robin repartition tasks are not initialized");
-        };
+        }
         let Some(receivers) = state.receivers.as_mut() else {
             return internal_err!("round-robin repartition receivers are not initialized");
         };
@@ -232,15 +227,8 @@ impl ExplicitRepartitionExec {
                 "round-robin repartition output partition {partition} was already executed"
             ))
         })?;
-        let all_receivers_taken = receivers.iter().all(Option::is_none);
         state.active_streams += 1;
-        // Release the state's strong reference once all receivers have been taken,
-        // so that tasks are cancelled when all output streams are dropped.
-        if all_receivers_taken {
-            state.tasks.take();
-        }
         Ok(RoundRobinReceiverStream {
-            _tasks: tasks,
             state: Arc::clone(&self.state),
             inner: receiver,
         })
@@ -423,7 +411,7 @@ impl DisplayAs for ExplicitRepartitionExec {
         match &self.properties.partitioning {
             Partitioning::RoundRobinBatch(partitions) => write!(
                 f,
-                "RepartitionExec: partitioning=RoundRobinBatch({}), input_partitions={}",
+                "ExplicitRepartitionExec: partitioning=RoundRobinBatch({}), input_partitions={}",
                 partitions,
                 self.input.output_partitioning().partition_count(),
             ),
