@@ -3,8 +3,8 @@ use sail_common_datafusion::catalog::TableStatus;
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::manager::CatalogManager;
 use crate::provider::{
-    AlterTableOptions, CommitTableOptions, CreateTableOptions, DropTableOptions,
-    GetTableCommitsOptions, GetTableCommitsResponse,
+    AlterTableOptions, CommitTableOptions, CreateTableMetadataRequirement, CreateTableOptions,
+    DropTableOptions, GetTableCommitsOptions, GetTableCommitsResponse,
 };
 use crate::utils::match_pattern;
 
@@ -16,6 +16,15 @@ impl CatalogManager {
     ) -> CatalogResult<TableStatus> {
         let (provider, database, table) = self.resolve_object(table)?;
         provider.create_table(&database, &table, options).await
+    }
+
+    pub fn create_table_metadata_requirement<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        options: &CreateTableOptions,
+    ) -> CatalogResult<CreateTableMetadataRequirement> {
+        let (provider, _, _) = self.resolve_object(table)?;
+        Ok(provider.create_table_metadata_requirement(options))
     }
 
     pub async fn get_table<T: AsRef<str>>(&self, table: &[T]) -> CatalogResult<TableStatus> {

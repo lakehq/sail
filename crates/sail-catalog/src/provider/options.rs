@@ -41,6 +41,29 @@ pub struct CreateTableOptions {
     pub is_write_precondition: bool,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub enum CreateTableMetadataRequirement {
+    None,
+    TableFormat { catalog_managed: bool },
+}
+
+pub fn plain_lakehouse_create_table_metadata_requirement(
+    options: &CreateTableOptions,
+) -> CreateTableMetadataRequirement {
+    if options.is_write_precondition {
+        return CreateTableMetadataRequirement::None;
+    }
+    if options.format.eq_ignore_ascii_case("delta")
+        || options.format.eq_ignore_ascii_case("iceberg")
+    {
+        CreateTableMetadataRequirement::TableFormat {
+            catalog_managed: false,
+        }
+    } else {
+        CreateTableMetadataRequirement::None
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct CreateTableColumnOptions {
     pub name: String,

@@ -111,9 +111,15 @@ def test_insert_advances_glue_iceberg_metadata_location(
             LOCATION '{location}'
             """
         )
+        created_location = _metadata_location(moto_endpoint, database, table)
+        assert created_location.startswith(location)
+        assert not _metadata_filename(created_location).startswith("v")
+        rows = glue_spark.sql(f"SELECT id, name FROM {table_fqn}").collect()
+        assert rows == []
 
         glue_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a'), (2, 'b')")
         first_location = _metadata_location(moto_endpoint, database, table)
+        assert first_location != created_location
         assert first_location.startswith(location)
         assert not _metadata_filename(first_location).startswith("v")
 

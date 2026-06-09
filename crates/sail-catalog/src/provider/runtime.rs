@@ -5,8 +5,8 @@ use tokio::runtime::Handle;
 
 use super::{
     AlterTableOptions, CatalogProvider, CommitTableOptions, CreateDatabaseOptions,
-    CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
-    GetTableCommitsOptions, GetTableCommitsResponse, Namespace,
+    CreateTableMetadataRequirement, CreateTableOptions, CreateViewOptions, DropDatabaseOptions,
+    DropTableOptions, DropViewOptions, GetTableCommitsOptions, GetTableCommitsResponse, Namespace,
 };
 use crate::error::{CatalogError, CatalogResult};
 
@@ -94,6 +94,13 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             .spawn(async move { inner.create_table(&database, &table, options).await })
             .await
             .map_err(|e| CatalogError::External(format!("Failed to execute create_table: {e}")))?
+    }
+
+    fn create_table_metadata_requirement(
+        &self,
+        options: &CreateTableOptions,
+    ) -> CreateTableMetadataRequirement {
+        self.inner.create_table_metadata_requirement(options)
     }
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {

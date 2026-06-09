@@ -5,9 +5,9 @@ use pilota::{AHashMap, FastStr};
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::hive_format::HiveCatalogFormat;
 use sail_catalog::provider::{
-    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
-    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
-    PartitionTransform,
+    plain_lakehouse_create_table_metadata_requirement, AlterTableOptions, CatalogProvider,
+    CreateDatabaseOptions, CreateTableMetadataRequirement, CreateTableOptions, CreateViewOptions,
+    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
 };
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
@@ -1027,12 +1027,6 @@ impl CatalogProvider for HmsCatalogProvider {
             ));
         }
         let db_name = validate_namespace(database)?;
-        if format == "iceberg" && !options.is_write_precondition {
-            return Err(CatalogError::NotSupported(
-                "Hive Metastore catalog does not support plain CREATE TABLE USING ICEBERG yet"
-                    .to_string(),
-            ));
-        }
         let format = HiveCatalogFormat::from_format(&format)?;
         let partition_columns: Vec<String> = options
             .partition_by
@@ -1063,6 +1057,19 @@ impl CatalogProvider for HmsCatalogProvider {
 
         self.create_hms_table(database, table, hms_table, options.if_not_exists)
             .await
+    }
+
+    fn create_table_metadata_requirement(
+        &self,
+        options: &CreateTableOptions,
+    ) -> CreateTableMetadataRequirement {
+        if options.format.eq_ignore_ascii_case("iceberg") && !options.is_write_precondition {
+            CreateTableMetadataRequirement::TableFormat {
+                catalog_managed: true,
+            }
+        } else {
+            plain_lakehouse_create_table_metadata_requirement(options)
+        }
     }
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
@@ -1248,7 +1255,8 @@ mod tests {
     use pilota::{AHashMap, FastStr};
     use sail_catalog::error::{CatalogError, CatalogObject};
     use sail_catalog::provider::{
-        AlterTableOptions, CatalogProvider, CreateTableColumnOptions, CreateTableOptions, Namespace,
+        AlterTableOptions, CatalogProvider, CreateTableColumnOptions,
+        CreateTableMetadataRequirement, CreateTableOptions,
     };
     use sail_common::runtime::RuntimeHandle;
 
@@ -1256,7 +1264,7 @@ mod tests {
     use crate::hms::Table;
 
     #[tokio::test]
-    async fn test_create_table_requires_write_precondition_for_iceberg_format() {
+    async fn test_create_table_metadata_requirement_for_lakehouse_formats() {
         let runtime = RuntimeHandle::new(
             tokio::runtime::Handle::current(),
             tokio::runtime::Handle::current(),
@@ -1275,69 +1283,59 @@ mod tests {
         )
         .unwrap();
 
-        let error = provider
-            .create_table(
-                &Namespace::try_from(vec!["default"]).unwrap(),
-                "items",
-                CreateTableOptions {
-                    columns: vec![CreateTableColumnOptions {
-                        name: "id".to_string(),
-                        data_type: DataType::Int64,
-                        nullable: false,
-                        comment: None,
-                        default: None,
-                        generated_always_as: None,
-                        identity: None,
-                    }],
-                    comment: None,
-                    constraints: vec![],
-                    location: None,
-                    format: "iceberg".to_string(),
-                    partition_by: vec![],
-                    sort_by: vec![],
-                    bucket_by: None,
-                    if_not_exists: false,
-                    replace: false,
-                    properties: vec![],
-                    is_external: true,
-                    is_write_precondition: false,
-                },
-            )
-            .await
-            .unwrap_err();
-        assert!(matches!(error, CatalogError::NotSupported(_)));
+        let base = CreateTableOptions {
+            columns: vec![CreateTableColumnOptions {
+                name: "id".to_string(),
+                data_type: DataType::Int64,
+                nullable: false,
+                comment: None,
+                default: None,
+                generated_always_as: None,
+                identity: None,
+            }],
+            comment: None,
+            constraints: vec![],
+            location: None,
+            format: "iceberg".to_string(),
+            partition_by: vec![],
+            sort_by: vec![],
+            bucket_by: None,
+            if_not_exists: false,
+            replace: false,
+            properties: vec![],
+            is_external: true,
+            is_write_precondition: false,
+        };
 
-        let error = provider
-            .create_table(
-                &Namespace::try_from(vec!["default"]).unwrap(),
-                "items",
-                CreateTableOptions {
-                    columns: vec![CreateTableColumnOptions {
-                        name: "id".to_string(),
-                        data_type: DataType::Int64,
-                        nullable: false,
-                        comment: None,
-                        default: None,
-                        generated_always_as: None,
-                        identity: None,
-                    }],
-                    comment: None,
-                    constraints: vec![],
-                    location: None,
-                    format: "iceberg".to_string(),
-                    partition_by: vec![],
-                    sort_by: vec![],
-                    bucket_by: None,
-                    if_not_exists: false,
-                    replace: false,
-                    properties: vec![],
-                    is_external: true,
-                    is_write_precondition: true,
-                },
-            )
-            .await
-            .unwrap_err();
-        assert!(!matches!(error, CatalogError::NotSupported(_)));
+        assert_eq!(
+            provider.create_table_metadata_requirement(&base),
+            CreateTableMetadataRequirement::TableFormat {
+                catalog_managed: true,
+            }
+        );
+
+        let mut write_precondition = base.clone();
+        write_precondition.is_write_precondition = true;
+        assert_eq!(
+            provider.create_table_metadata_requirement(&write_precondition),
+            CreateTableMetadataRequirement::None
+        );
+
+        let mut delta = base.clone();
+        delta.format = "delta".to_string();
+        assert_eq!(
+            provider.create_table_metadata_requirement(&delta),
+            CreateTableMetadataRequirement::TableFormat {
+                catalog_managed: false,
+            }
+        );
+
+        let mut parquet = base;
+        parquet.format = "parquet".to_string();
+        assert_eq!(
+            provider.create_table_metadata_requirement(&parquet),
+            CreateTableMetadataRequirement::None
+        );
     }
 
     #[test]

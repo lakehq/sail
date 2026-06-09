@@ -2,19 +2,20 @@ use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use sail_common_datafusion::array::serde::ArrowSerializer;
 use sail_common_datafusion::datasource::{
-    is_lakehouse_format, TableFormatAlterTableOperation, TableFormatRegistry,
+    is_lakehouse_format, TableFormatAlterTableOperation, TableFormatCreateTableColumn,
+    TableFormatCreateTableInfo, TableFormatRegistry,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use serde::{Deserialize, Serialize};
 
-use crate::error::{CatalogError, CatalogResult};
+use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId};
 use crate::manager::CatalogManager;
 use crate::provider::{
-    AlterTableOptions, CreateDatabaseOptions, CreateTableOptions, CreateTemporaryViewOptions,
-    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropTemporaryViewOptions,
-    DropViewOptions,
+    AlterTableOptions, CreateDatabaseOptions, CreateTableMetadataRequirement, CreateTableOptions,
+    CreateTemporaryViewOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions,
+    DropTemporaryViewOptions, DropViewOptions,
 };
 use crate::utils::{quote_names_if_needed, quote_namespace_if_needed};
 
@@ -301,6 +302,11 @@ impl CatalogCommand {
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::CreateTable { table, options } => {
+                let Some(options) =
+                    prepare_create_table_storage_metadata(ctx, manager, &table, options).await?
+                else {
+                    return Ok(display.bools().to_record_batch(vec![true])?);
+                };
                 manager.create_table(&table, options).await?;
                 display.bools().to_record_batch(vec![true])?
             }
@@ -614,6 +620,77 @@ impl CatalogCommand {
         };
         Ok(batch)
     }
+}
+
+async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
+    ctx: &C,
+    manager: &CatalogManager,
+    table: &[String],
+    mut options: CreateTableOptions,
+) -> CatalogResult<Option<CreateTableOptions>> {
+    let requirement = manager.create_table_metadata_requirement(table, &options)?;
+    let CreateTableMetadataRequirement::TableFormat { catalog_managed } = requirement else {
+        return Ok(Some(options));
+    };
+
+    match manager.get_table_or_view(table).await {
+        Ok(_) if options.if_not_exists => return Ok(None),
+        Ok(_) => {
+            return Err(CatalogError::AlreadyExists(
+                CatalogObject::Table,
+                table.join("."),
+            ));
+        }
+        Err(CatalogError::NotFound(_, _)) => {}
+        Err(err) => return Err(err),
+    }
+
+    let location = options.location.clone().ok_or_else(|| {
+        CatalogError::InvalidArgument(format!(
+            "Location is required to create storage metadata for {} tables",
+            options.format
+        ))
+    })?;
+    let registry = ctx.extension::<TableFormatRegistry>().map_err(|e| {
+        CatalogError::External(format!(
+            "missing TableFormatRegistry for CREATE TABLE on format '{}': {e}",
+            options.format
+        ))
+    })?;
+    let table_format = registry.get(&options.format).map_err(|e| {
+        CatalogError::External(format!(
+            "unknown table format '{}' for CREATE TABLE: {e}",
+            options.format
+        ))
+    })?;
+
+    let metadata = table_format
+        .create_table_metadata(
+            ctx.runtime_env(),
+            TableFormatCreateTableInfo {
+                path: location,
+                columns: options
+                    .columns
+                    .iter()
+                    .map(|column| TableFormatCreateTableColumn {
+                        name: column.name.clone(),
+                        data_type: column.data_type.clone(),
+                        nullable: column.nullable,
+                        comment: column.comment.clone(),
+                        default: column.default.clone(),
+                        generated_always_as: column.generated_always_as.clone(),
+                        identity: column.identity.clone(),
+                    })
+                    .collect(),
+                partition_by: options.partition_by.clone(),
+                properties: options.properties.clone(),
+                catalog_table: catalog_managed.then(|| table.to_vec()),
+            },
+        )
+        .await
+        .map_err(CatalogError::DataFusionError)?;
+    options.properties.extend(metadata.properties);
+    Ok(Some(options))
 }
 
 fn table_format_alter_operation(options: &AlterTableOptions) -> TableFormatAlterTableOperation {

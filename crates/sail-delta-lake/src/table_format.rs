@@ -2,18 +2,22 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use chrono::Utc;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
 use datafusion::datasource::listing::ListingTableUrl;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
+use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
 use sail_common_datafusion::column_features::{
     ColumnFeatureKey, ColumnFeatures, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
 use sail_common_datafusion::datasource::{
     find_path_in_options, MergeStrategy, OptionLayer, PhysicalSinkMode, RowLevelCommand,
     RowLevelWriteInfo, SinkInfo, SourceInfo, TableFormat, TableFormatAlterTableOperation,
+    TableFormatCreateTableColumn, TableFormatCreateTableInfo, TableFormatCreateTableResult,
     TableFormatMetadata, TableFormatRegistry, CATALOG_TABLE_OPTION,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
@@ -21,7 +25,8 @@ use sail_data_source::options::ResolveOptions;
 use sail_data_source::resolve_listing_urls;
 use url::Url;
 
-use crate::kernel::DeltaSnapshotConfig;
+use crate::kernel::transaction::CommitBuilder;
+use crate::kernel::{DeltaSnapshotConfig, SaveMode};
 use crate::options::gen::{DeltaReadOptions, DeltaWriteOptions};
 use crate::physical_plan::planner::{
     plan_delete, plan_delete_mor, plan_merge, plan_merge_mor, DeltaPhysicalPlanner,
@@ -29,17 +34,21 @@ use crate::physical_plan::planner::{
 };
 use crate::schema::type_widening::alter_column_type as alter_delta_column_type;
 use crate::schema::{
-    add_type_widening_metadata, collect_type_changes, evolve_schema, format_type_change_path,
-    is_supported_type_change_for_write, protocol_can_write_type_widening,
+    add_type_widening_metadata, annotate_for_column_mapping, collect_type_changes,
+    compute_max_column_id, evolve_schema, format_type_change_path,
+    is_supported_type_change_for_write, metadata_for_create_with_struct_type,
+    normalize_delta_schema, protocol_can_write_type_widening, protocol_for_create,
+    schema_has_column_defaults, schema_has_generated_columns, schema_has_identity_columns,
 };
 use crate::spec::{
-    canonicalize_and_validate_table_properties, route_table_property_key, ColumnMetadataKey,
+    canonicalize_and_validate_table_properties, contains_timestampntz_arrow,
+    contains_variant_arrow, route_table_property_key, ColumnMappingMode, ColumnMetadataKey,
     CommitAction, DataType as DeltaDataType, DeltaOperation, MetadataValue, Protocol, StructField,
-    StructType, TableFeature,
+    StructType, TableFeature, TableProperties,
 };
 use crate::table::{
-    infer_delta_logical_metadata, infer_delta_logical_schema, open_table_with_object_store,
-    open_table_with_object_store_and_table_config,
+    create_delta_table_with_object_store, infer_delta_logical_metadata, infer_delta_logical_schema,
+    open_table_with_object_store, open_table_with_object_store_and_table_config,
 };
 use crate::{create_delta_source, DeltaTableError};
 
@@ -116,6 +125,175 @@ impl TableFormat for DeltaTableFormat {
         let (schema, properties) =
             infer_delta_logical_metadata(ctx, table_url, schema, options, catalog_table).await?;
         Ok(TableFormatMetadata { schema, properties })
+    }
+
+    async fn create_table_metadata(
+        &self,
+        runtime_env: Arc<RuntimeEnv>,
+        info: TableFormatCreateTableInfo,
+    ) -> Result<TableFormatCreateTableResult> {
+        let TableFormatCreateTableInfo {
+            path,
+            columns,
+            partition_by,
+            properties,
+            catalog_table,
+        } = info;
+
+        if catalog_table.is_some() {
+            return not_impl_err!(
+                "catalog-managed Delta CREATE TABLE requires a catalog-specific staging flow"
+            );
+        }
+
+        if partition_by.iter().any(|field| field.transform.is_some()) {
+            return not_impl_err!("partition transforms for Delta CREATE TABLE");
+        }
+
+        let table_url = parse_location_to_url(&path)?;
+        let object_store = runtime_env
+            .object_store_registry
+            .get_store(&table_url)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let existing_table = match open_table_with_object_store_and_table_config(
+            table_url.clone(),
+            object_store.clone(),
+            Default::default(),
+            DeltaSnapshotConfig {
+                require_files: false,
+                ..Default::default()
+            },
+        )
+        .await
+        {
+            Ok(table) => Some(table),
+            Err(DeltaTableError::InvalidTableLocation(_))
+            | Err(DeltaTableError::FileNotFound(_)) => None,
+            Err(err) => return Err(DataFusionError::External(Box::new(err))),
+        };
+
+        let declared_schema = delta_create_table_arrow_schema(&columns)?;
+        if let Some(table) = existing_table {
+            if !declared_schema.fields().is_empty() {
+                let snapshot = table
+                    .snapshot()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let existing_schema = snapshot
+                    .arrow_schema()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                validate_existing_delta_create_table_schema(
+                    existing_schema.as_ref(),
+                    declared_schema.as_ref(),
+                    &path,
+                )?;
+                let declared_partitions = partition_by
+                    .iter()
+                    .map(|field| field.column.clone())
+                    .collect::<Vec<_>>();
+                let existing_partitions = snapshot.metadata().partition_columns();
+                if existing_partitions.as_slice() != declared_partitions.as_slice() {
+                    return plan_err!(
+                        "Delta table already exists at {path} with different partition columns: \
+                         existing {existing_partitions:?}, declared {declared_partitions:?}"
+                    );
+                }
+            }
+            return Ok(TableFormatCreateTableResult::default());
+        }
+
+        if declared_schema.fields().is_empty() {
+            return plan_err!(
+                "Delta CREATE TABLE requires at least one column when no existing Delta metadata is present"
+            );
+        }
+
+        let metadata_configuration = delta_create_table_metadata_configuration(properties)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let normalized_schema = normalize_delta_schema(&declared_schema);
+        let mut kernel_schema = StructType::try_from(normalized_schema.as_ref())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        kernel_schema = inject_generation_expressions(
+            kernel_schema,
+            &delta_create_table_generation_expressions(&columns),
+        );
+        kernel_schema = inject_default_expressions(
+            kernel_schema,
+            &delta_create_table_default_expressions(&columns),
+        );
+        kernel_schema = inject_identity_columns(
+            kernel_schema,
+            &delta_create_table_identity_columns(&columns),
+        );
+
+        let effective_mode = metadata_configuration
+            .get("delta.columnMapping.mode")
+            .and_then(|v| ColumnMappingMode::try_from(v.as_str()).ok())
+            .unwrap_or_default();
+
+        let mut configuration = metadata_configuration;
+        let metadata_schema = if !matches!(effective_mode, ColumnMappingMode::None) {
+            let annotated = annotate_for_column_mapping(&kernel_schema);
+            configuration.insert(
+                "delta.columnMapping.mode".to_string(),
+                effective_mode.as_ref().to_string(),
+            );
+            configuration.insert(
+                "delta.columnMapping.maxColumnId".to_string(),
+                compute_max_column_id(&annotated).to_string(),
+            );
+            annotated
+        } else {
+            kernel_schema
+        };
+
+        let protocol = protocol_for_create(
+            !matches!(effective_mode, ColumnMappingMode::None),
+            contains_timestampntz_arrow(normalized_schema.as_ref()),
+            TableProperties::from(configuration.iter()).enable_in_commit_timestamps(),
+            schema_has_generated_columns(&metadata_schema),
+            schema_has_column_defaults(&metadata_schema),
+            schema_has_identity_columns(&metadata_schema),
+            contains_variant_arrow(normalized_schema.as_ref()),
+            &configuration,
+        )
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let partition_columns = partition_by
+            .iter()
+            .map(|field| field.column.clone())
+            .collect::<Vec<_>>();
+        let metadata = metadata_for_create_with_struct_type(
+            metadata_schema,
+            partition_columns,
+            Utc::now().timestamp_millis(),
+            configuration,
+        )
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let table = create_delta_table_with_object_store(
+            table_url.clone(),
+            object_store,
+            Default::default(),
+        )
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let operation = DeltaOperation::Create {
+            mode: SaveMode::ErrorIfExists,
+            location: table_url.to_string(),
+            protocol: Box::new(protocol.clone()),
+            metadata: Box::new(metadata.clone()),
+        };
+
+        CommitBuilder::default()
+            .with_actions(vec![
+                CommitAction::Protocol(protocol),
+                CommitAction::Metadata(metadata),
+            ])
+            .build(None, table.log_store(), operation)
+            .await
+            .map(|_| TableFormatCreateTableResult::default())
+            .map_err(|e| DataFusionError::External(Box::new(e)))
     }
 
     async fn create_writer(
@@ -1171,6 +1349,111 @@ impl DeltaTableFormat {
     }
 }
 
+fn delta_create_table_arrow_schema(columns: &[TableFormatCreateTableColumn]) -> Result<SchemaRef> {
+    let fields = columns
+        .iter()
+        .map(|column| {
+            let mut metadata = HashMap::new();
+            if let Some(comment) = &column.comment {
+                metadata.insert("comment".to_string(), comment.clone());
+            }
+            let mut field = Field::new(
+                column.name.clone(),
+                column.data_type.clone(),
+                column.nullable,
+            );
+            if !metadata.is_empty() {
+                field = field.with_metadata(metadata);
+            }
+            Ok(field)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Arc::new(Schema::new(fields)))
+}
+
+fn delta_create_table_generation_expressions(
+    columns: &[TableFormatCreateTableColumn],
+) -> HashMap<String, String> {
+    columns
+        .iter()
+        .filter_map(|column| {
+            column
+                .generated_always_as
+                .as_ref()
+                .map(|expr| (column.name.clone(), expr.clone()))
+        })
+        .collect()
+}
+
+fn delta_create_table_default_expressions(
+    columns: &[TableFormatCreateTableColumn],
+) -> HashMap<String, String> {
+    columns
+        .iter()
+        .filter_map(|column| {
+            column
+                .default
+                .as_ref()
+                .map(|expr| (column.name.clone(), expr.clone()))
+        })
+        .collect()
+}
+
+fn delta_create_table_identity_columns(
+    columns: &[TableFormatCreateTableColumn],
+) -> HashMap<String, CatalogTableColumnIdentity> {
+    columns
+        .iter()
+        .filter_map(|column| {
+            column
+                .identity
+                .as_ref()
+                .map(|identity| (column.name.clone(), identity.clone()))
+        })
+        .collect()
+}
+
+fn delta_create_table_metadata_configuration(
+    properties: Vec<(String, String)>,
+) -> crate::spec::DeltaResult<HashMap<String, String>> {
+    let table_properties = properties
+        .into_iter()
+        .filter(|(key, _)| !key.starts_with("option."))
+        .collect::<HashMap<_, _>>();
+    resolve_delta_metadata_configuration(&table_properties)
+}
+
+fn validate_existing_delta_create_table_schema(
+    existing: &Schema,
+    declared: &Schema,
+    path: &str,
+) -> Result<()> {
+    let existing_fields = existing.fields();
+    let declared_fields = declared.fields();
+    if existing_fields.len() != declared_fields.len() {
+        return plan_err!(
+            "Delta table already exists at {path} with a different schema: \
+             existing has {} fields, declared has {} fields",
+            existing_fields.len(),
+            declared_fields.len()
+        );
+    }
+    for (existing_field, declared_field) in existing_fields.iter().zip(declared_fields.iter()) {
+        if existing_field.name() != declared_field.name()
+            || existing_field.data_type() != declared_field.data_type()
+        {
+            return plan_err!(
+                "Delta table already exists at {path} with a different schema for field '{}': \
+                 existing {:?}, declared {:?}",
+                declared_field.name(),
+                existing_field.data_type(),
+                declared_field.data_type()
+            );
+        }
+    }
+    Ok(())
+}
+
 fn extract_generation_expressions(logical_schema: Option<&DFSchema>) -> HashMap<String, String> {
     let Some(schema) = logical_schema else {
         return HashMap::new();
@@ -1258,6 +1541,133 @@ fn extract_identity_columns(
                 .map(|identity| (field.name().clone(), identity))
         })
         .collect()
+}
+
+fn inject_generation_expressions(
+    schema: StructType,
+    generation_expressions: &HashMap<String, String>,
+) -> StructType {
+    let fields = schema.into_fields().map(|field| {
+        if let Some(expr) = generation_expressions.get(&field.name) {
+            let existing_expr = field
+                .metadata
+                .get(ColumnMetadataKey::GenerationExpression.as_ref())
+                .and_then(|v| match v {
+                    MetadataValue::String(s) => Some(s.clone()),
+                    _ => None,
+                });
+            if existing_expr.as_deref() == Some(expr.as_str()) {
+                field
+            } else {
+                let StructField {
+                    name,
+                    data_type,
+                    nullable,
+                    mut metadata,
+                } = field;
+                metadata.insert(
+                    ColumnMetadataKey::GenerationExpression.as_ref().to_string(),
+                    MetadataValue::String(expr.clone()),
+                );
+                StructField {
+                    name,
+                    data_type,
+                    nullable,
+                    metadata,
+                }
+            }
+        } else {
+            field
+        }
+    });
+    StructType::new_unchecked(fields)
+}
+
+fn inject_default_expressions(
+    schema: StructType,
+    default_expressions: &HashMap<String, String>,
+) -> StructType {
+    let fields = schema.into_fields().map(|field| {
+        if let Some(expr) = default_expressions.get(&field.name) {
+            let existing_expr = field
+                .metadata
+                .get(ColumnMetadataKey::CurrentDefault.as_ref())
+                .and_then(|v| match v {
+                    MetadataValue::String(s) => Some(s.clone()),
+                    _ => None,
+                });
+            if existing_expr.as_deref() == Some(expr.as_str()) {
+                field
+            } else {
+                let StructField {
+                    name,
+                    data_type,
+                    nullable,
+                    mut metadata,
+                } = field;
+                metadata.insert(
+                    ColumnMetadataKey::CurrentDefault.as_ref().to_string(),
+                    MetadataValue::String(expr.clone()),
+                );
+                StructField {
+                    name,
+                    data_type,
+                    nullable,
+                    metadata,
+                }
+            }
+        } else {
+            field
+        }
+    });
+    StructType::new_unchecked(fields)
+}
+
+fn inject_identity_columns(
+    schema: StructType,
+    identity_columns: &HashMap<String, CatalogTableColumnIdentity>,
+) -> StructType {
+    let fields = schema.into_fields().map(|field| {
+        if let Some(identity) = identity_columns.get(&field.name) {
+            let StructField {
+                name,
+                data_type,
+                nullable,
+                mut metadata,
+            } = field;
+            metadata.insert(
+                ColumnMetadataKey::IdentityStart.as_ref().to_string(),
+                MetadataValue::Number(identity.start),
+            );
+            metadata.insert(
+                ColumnMetadataKey::IdentityStep.as_ref().to_string(),
+                MetadataValue::Number(identity.step),
+            );
+            metadata.insert(
+                ColumnMetadataKey::IdentityAllowExplicitInsert
+                    .as_ref()
+                    .to_string(),
+                MetadataValue::Boolean(identity.allow_explicit_insert),
+            );
+            if let Some(high_water_mark) = identity.high_water_mark {
+                metadata.insert(
+                    ColumnMetadataKey::IdentityHighWaterMark
+                        .as_ref()
+                        .to_string(),
+                    MetadataValue::Number(high_water_mark),
+                );
+            }
+            StructField {
+                name,
+                data_type,
+                nullable,
+                metadata,
+            }
+        } else {
+            field
+        }
+    });
+    StructType::new_unchecked(fields)
 }
 
 /// Detect the merge strategy for a Delta table by inspecting its snapshot properties.

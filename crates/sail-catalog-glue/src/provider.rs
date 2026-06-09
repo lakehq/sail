@@ -9,9 +9,9 @@ use aws_sdk_glue::Client;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::hive_format::HiveDetectedFormat;
 use sail_catalog::provider::{
-    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
-    CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions,
-    DropViewOptions, Namespace,
+    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
+    CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
+    DropTableOptions, DropViewOptions, Namespace,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
@@ -533,6 +533,26 @@ impl CatalogProvider for GlueCatalogProvider {
         }
     }
 
+    fn create_table_metadata_requirement(
+        &self,
+        options: &CreateTableOptions,
+    ) -> CreateTableMetadataRequirement {
+        if self.has_custom_endpoint()
+            && options.format.eq_ignore_ascii_case("iceberg")
+            && !options.is_write_precondition
+        {
+            CreateTableMetadataRequirement::TableFormat {
+                catalog_managed: true,
+            }
+        } else if options.format.eq_ignore_ascii_case("delta") && !options.is_write_precondition {
+            CreateTableMetadataRequirement::TableFormat {
+                catalog_managed: false,
+            }
+        } else {
+            CreateTableMetadataRequirement::None
+        }
+    }
+
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
         let client = self.get_client().await?;
         let database_name = Self::database_name(database)?;
@@ -886,5 +906,75 @@ impl CatalogProvider for GlueCatalogProvider {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arrow::datatypes::DataType;
+    use sail_catalog::provider::{
+        CatalogProvider, CreateTableColumnOptions, CreateTableMetadataRequirement,
+        CreateTableOptions,
+    };
+
+    use super::{GlueCatalogConfig, GlueCatalogProvider};
+
+    fn create_options(format: &str, is_write_precondition: bool) -> CreateTableOptions {
+        CreateTableOptions {
+            columns: vec![CreateTableColumnOptions {
+                name: "id".to_string(),
+                data_type: DataType::Int64,
+                nullable: false,
+                comment: None,
+                default: None,
+                generated_always_as: None,
+                identity: None,
+            }],
+            comment: None,
+            constraints: vec![],
+            location: None,
+            format: format.to_string(),
+            partition_by: vec![],
+            sort_by: vec![],
+            bucket_by: None,
+            if_not_exists: false,
+            replace: false,
+            properties: vec![],
+            is_external: true,
+            is_write_precondition,
+        }
+    }
+
+    #[test]
+    fn create_table_metadata_requirement_preserves_glue_iceberg_api() {
+        let real_glue = GlueCatalogProvider::new("glue".to_string(), GlueCatalogConfig::default());
+        assert_eq!(
+            real_glue.create_table_metadata_requirement(&create_options("iceberg", false)),
+            CreateTableMetadataRequirement::None
+        );
+        assert_eq!(
+            real_glue.create_table_metadata_requirement(&create_options("delta", false)),
+            CreateTableMetadataRequirement::TableFormat {
+                catalog_managed: false,
+            }
+        );
+        assert_eq!(
+            real_glue.create_table_metadata_requirement(&create_options("delta", true)),
+            CreateTableMetadataRequirement::None
+        );
+
+        let custom_endpoint = GlueCatalogProvider::new(
+            "glue".to_string(),
+            GlueCatalogConfig {
+                endpoint_url: Some("http://127.0.0.1:4566".to_string()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            custom_endpoint.create_table_metadata_requirement(&create_options("iceberg", false)),
+            CreateTableMetadataRequirement::TableFormat {
+                catalog_managed: true,
+            }
+        );
     }
 }

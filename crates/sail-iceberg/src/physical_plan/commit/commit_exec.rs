@@ -34,7 +34,8 @@ use sail_catalog::error::CatalogError;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{AlterTableOptions, CommitTableOptions};
 use sail_common_datafusion::catalog::managed::{
-    existing_metadata_location_key, METADATA_LOCATION_KEY, PREVIOUS_METADATA_LOCATION_KEY,
+    existing_metadata_location_key, METADATA_LOCATION_UNDERSCORE_KEY,
+    PREVIOUS_METADATA_LOCATION_KEY,
 };
 use sail_common_datafusion::catalog::{TableKind, TableStatus};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -425,7 +426,7 @@ impl IcebergCommitExec {
         let manager = context.extension::<CatalogManager>()?;
         let metadata_location_key = existing_metadata_location_key(existing_properties)
             .map(ToString::to_string)
-            .unwrap_or_else(|| METADATA_LOCATION_KEY.to_string());
+            .unwrap_or_else(|| METADATA_LOCATION_UNDERSCORE_KEY.to_string());
         let mut properties = vec![(metadata_location_key, new_metadata_location.to_string())];
         if let Some(previous_metadata_location) = previous_metadata_location {
             properties.push((

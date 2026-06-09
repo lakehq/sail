@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use datafusion::arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::plan_datafusion_err;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::physical_expr::{
     create_physical_sort_exprs, LexOrdering, LexRequirement, PhysicalSortRequirement,
 };
@@ -205,6 +206,36 @@ pub struct TableFormatMetadata {
     pub properties: Vec<(String, String)>,
 }
 
+/// A column definition used when a catalog DDL statement asks a table format
+/// to create storage metadata before registering the catalog object.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableFormatCreateTableColumn {
+    pub name: String,
+    pub data_type: DataType,
+    pub nullable: bool,
+    pub comment: Option<String>,
+    pub default: Option<String>,
+    pub generated_always_as: Option<String>,
+    pub identity: Option<crate::catalog::CatalogTableColumnIdentity>,
+}
+
+/// Information needed by a table format to initialize storage metadata for a
+/// plain catalog `CREATE TABLE`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableFormatCreateTableInfo {
+    pub path: String,
+    pub columns: Vec<TableFormatCreateTableColumn>,
+    pub partition_by: Vec<CatalogPartitionField>,
+    pub properties: Vec<(String, String)>,
+    pub catalog_table: Option<Vec<String>>,
+}
+
+/// Storage metadata created by a table format before catalog registration.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TableFormatCreateTableResult {
+    pub properties: Vec<(String, String)>,
+}
+
 /// Information required to create a data writer.
 #[derive(Debug, Clone)]
 pub struct SinkInfo {
@@ -381,6 +412,18 @@ pub trait TableFormat: Send + Sync {
         ctx: &dyn Session,
         info: SinkInfo,
     ) -> Result<Arc<dyn ExecutionPlan>>;
+
+    /// Creates storage metadata for a plain catalog `CREATE TABLE` before the
+    /// catalog object is registered. Formats that do not need storage metadata
+    /// at DDL time can keep the default no-op.
+    async fn create_table_metadata(
+        &self,
+        runtime_env: Arc<RuntimeEnv>,
+        info: TableFormatCreateTableInfo,
+    ) -> Result<TableFormatCreateTableResult> {
+        let _ = (runtime_env, info);
+        Ok(TableFormatCreateTableResult::default())
+    }
 
     /// Creates an `ExecutionPlan` for row-level operations (DELETE, UPDATE, MERGE).
     async fn create_row_level_writer(

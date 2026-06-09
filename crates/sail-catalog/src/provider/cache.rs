@@ -10,8 +10,8 @@ use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 use crate::error::{CatalogError, CatalogResult};
 use crate::provider::{
     AlterTableOptions, CatalogProvider, CommitTableOptions, CreateDatabaseOptions,
-    CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
-    GetTableCommitsOptions, GetTableCommitsResponse, Namespace,
+    CreateTableMetadataRequirement, CreateTableOptions, CreateViewOptions, DropDatabaseOptions,
+    DropTableOptions, DropViewOptions, GetTableCommitsOptions, GetTableCommitsResponse, Namespace,
 };
 
 #[derive(Clone)]
@@ -270,6 +270,13 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
             c.invalidate(database).await;
         }
         Ok(status)
+    }
+
+    fn create_table_metadata_requirement(
+        &self,
+        options: &CreateTableOptions,
+    ) -> CreateTableMetadataRequirement {
+        self.inner.create_table_metadata_requirement(options)
     }
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {

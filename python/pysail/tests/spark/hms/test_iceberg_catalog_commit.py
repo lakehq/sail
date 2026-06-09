@@ -155,23 +155,35 @@ def test_hms_rejects_stale_iceberg_metadata_location_update(
     assert _metadata_location(reference_spark_s3, hms_s3_database, table) == current_location
 
 
-def test_hms_rejects_plain_iceberg_create_without_metadata_location(
+def test_hms_plain_iceberg_create_records_metadata_location(
     hms_s3_spark: SparkSession,
+    reference_spark_s3: SparkSession,
     hms_s3_database: str,
 ) -> None:
     table = "iceberg_plain_create"
     table_fqn = f"{hms_s3_database}.{table}"
 
-    with pytest.raises(Exception, match="plain CREATE TABLE USING ICEBERG"):
-        hms_s3_spark.sql(
-            f"""
-            CREATE TABLE {table_fqn} (
-              id INT,
-              name STRING
-            )
-            USING ICEBERG
-            """
+    hms_s3_spark.sql(
+        f"""
+        CREATE TABLE {table_fqn} (
+          id INT,
+          name STRING
         )
+        USING ICEBERG
+        """
+    )
+    first_location = _metadata_location(reference_spark_s3, hms_s3_database, table)
+    assert not _metadata_filename(first_location).startswith("v")
 
-    rows = hms_s3_spark.sql(f"SHOW TABLES IN {hms_s3_database} LIKE '{table}'").collect()
+    rows = hms_s3_spark.sql(f"SELECT id, name FROM {table_fqn}").collect()
     assert rows == []
+    rows = reference_spark_s3.sql(f"SELECT id, name FROM {table_fqn}").collect()
+    assert rows == []
+
+    hms_s3_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a')")
+    second_location = _metadata_location(reference_spark_s3, hms_s3_database, table)
+    assert second_location != first_location
+    assert not _metadata_filename(second_location).startswith("v")
+
+    rows = reference_spark_s3.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
+    assert [(row.id, row.name) for row in rows] == [(1, "a")]

@@ -34,6 +34,7 @@ use datafusion::logical_expr::{
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
+use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -71,7 +72,7 @@ pub struct IcebergTableProvider {
     /// The current schema of the table
     schema: Schema,
     /// The current snapshot of the table
-    snapshot: Snapshot,
+    snapshot: Option<Snapshot>,
     /// All partition specs referenced by the table
     partition_specs: Vec<PartitionSpec>,
     /// Default partition spec id (for schema ordering / partition metadata)
@@ -114,7 +115,40 @@ impl IcebergTableProvider {
         Ok(Self {
             table_uri: table_uri_str,
             schema,
-            snapshot,
+            snapshot: Some(snapshot),
+            partition_specs,
+            default_spec_id,
+            arrow_schema,
+            metadata_as_data_read: false,
+        })
+    }
+
+    /// Create a provider for an Iceberg table that has metadata but no current
+    /// snapshot yet, such as a table created by plain `CREATE TABLE`.
+    pub fn new_empty(
+        table_uri: impl ToString,
+        schema: Schema,
+        partition_specs: Vec<PartitionSpec>,
+        default_spec_id: i32,
+    ) -> Result<Self> {
+        let table_uri_str = table_uri.to_string();
+        log::trace!("Creating empty table provider for: {}", table_uri_str);
+
+        let arrow_schema = iceberg_schema_to_arrow(&schema).map_err(|e| {
+            log::trace!("Failed to convert schema to Arrow: {:?}", e);
+            e
+        })?;
+        let arrow_schema = Arc::new(Self::reorder_arrow_schema_for_identity_partitions(
+            &schema,
+            &partition_specs,
+            default_spec_id,
+            &arrow_schema,
+        ));
+
+        Ok(Self {
+            table_uri: table_uri_str,
+            schema,
+            snapshot: None,
             partition_specs,
             default_spec_id,
             arrow_schema,
@@ -194,13 +228,31 @@ impl IcebergTableProvider {
     }
 
     /// Get the current snapshot
-    pub fn current_snapshot(&self) -> &Snapshot {
-        &self.snapshot
+    pub fn current_snapshot(&self) -> Option<&Snapshot> {
+        self.snapshot.as_ref()
+    }
+
+    fn projected_arrow_schema(&self, projection: Option<&Vec<usize>>) -> Result<Arc<ArrowSchema>> {
+        match projection {
+            Some(projection) => {
+                let fields = projection
+                    .iter()
+                    .map(|idx| self.arrow_schema.field(*idx).clone())
+                    .collect::<Vec<_>>();
+                Ok(Arc::new(ArrowSchema::new(fields)))
+            }
+            None => Ok(self.arrow_schema.clone()),
+        }
     }
 
     /// Load manifest list from snapshot
     async fn load_manifest_list(&self, store_ctx: &StoreContext) -> Result<ManifestList> {
-        let manifest_list_str = self.snapshot.manifest_list();
+        let snapshot = self.snapshot.as_ref().ok_or_else(|| {
+            datafusion::common::DataFusionError::Plan(
+                "Iceberg table has no current snapshot".to_string(),
+            )
+        })?;
+        let manifest_list_str = snapshot.manifest_list();
         log::trace!("Manifest list path: {}", manifest_list_str);
         let ml = io_load_manifest_list(store_ctx, manifest_list_str).await?;
         Ok(ml)
@@ -658,6 +710,12 @@ impl TableProvider for IcebergTableProvider {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         log::trace!("Starting scan for table: {}", self.table_uri);
 
+        let Some(snapshot) = self.snapshot.as_ref() else {
+            return Ok(Arc::new(EmptyExec::new(
+                self.projected_arrow_schema(projection)?,
+            )));
+        };
+
         if self.metadata_as_data_read {
             return self
                 .scan_metadata_as_data(session, projection, filters, limit)
@@ -670,10 +728,7 @@ impl TableProvider for IcebergTableProvider {
         let store_ctx = StoreContext::new(base_store.clone(), &table_url)?;
         log::trace!("Got object store");
 
-        log::trace!(
-            "Loading manifest list from: {}",
-            self.snapshot.manifest_list()
-        );
+        log::trace!("Loading manifest list from: {}", snapshot.manifest_list());
         let manifest_list = self.load_manifest_list(&store_ctx).await?;
         log::trace!("Loaded {} manifest files", manifest_list.entries().len());
 
@@ -1135,15 +1190,20 @@ impl IcebergTableProvider {
         }
 
         // TODO: Apply transform-aware partition pruning here
+        let snapshot = self.snapshot.as_ref().ok_or_else(|| {
+            datafusion::common::DataFusionError::Plan(
+                "Iceberg table has no current snapshot".to_string(),
+            )
+        })?;
         let manifest_scan: Arc<dyn ExecutionPlan> = Arc::new(IcebergManifestScanExec::new(
             self.table_uri.clone(),
-            self.snapshot.clone(),
+            snapshot.clone(),
         ));
 
         let discovery: Arc<dyn ExecutionPlan> = Arc::new(IcebergDiscoveryExec::new(
             manifest_scan,
             self.table_uri.clone(),
-            self.snapshot.snapshot_id(),
+            snapshot.snapshot_id(),
             false, // full data file scan, not partition-only
         )?);
 

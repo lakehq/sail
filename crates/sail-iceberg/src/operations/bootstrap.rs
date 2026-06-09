@@ -15,6 +15,7 @@
 /// This module provides utilities for bootstrapping Iceberg tables when:
 /// 1. The table metadata file doesn't exist (new table)
 /// 2. The table metadata exists but has no current snapshot (e.g., after CREATE TABLE)
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -290,6 +291,85 @@ pub async fn bootstrap_new_table_with_style(
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     // Write version-hint
+    let hint_path = object_store::path::Path::from("metadata/version-hint.text");
+    store_ctx
+        .prefixed
+        .put(
+            &hint_path,
+            object_store::PutPayload::from(Bytes::from(hint.into_bytes())),
+        )
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    Ok(BootstrapResult {
+        table_metadata: table_meta,
+        metadata_file: new_meta_rel,
+    })
+}
+
+pub async fn bootstrap_empty_table_metadata(
+    table_url: &Url,
+    store_ctx: &StoreContext,
+    iceberg_schema: IcebergSchema,
+    partition_spec: PartitionSpec,
+    table_properties: &[(String, String)],
+    metadata_style: NewTableMetadataStyle,
+) -> Result<BootstrapResult> {
+    let (format_version, table_properties) =
+        crate::properties::metadata_properties_from_table_properties(table_properties)?;
+    let format_version = format_version.max(format_version_for_schema(&iceberg_schema));
+    let commit_timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
+
+    let mut table_meta = TableMetadata {
+        format_version,
+        table_uuid: None,
+        location: table_url.to_string(),
+        last_sequence_number: 0,
+        last_updated_ms: commit_timestamp_ms,
+        last_column_id: iceberg_schema.highest_field_id(),
+        schemas: vec![iceberg_schema.clone()],
+        current_schema_id: iceberg_schema.schema_id(),
+        partition_specs: vec![partition_spec.clone()],
+        default_spec_id: partition_spec.spec_id(),
+        last_partition_id: partition_spec.highest_field_id().unwrap_or(0),
+        properties: table_properties,
+        current_snapshot_id: None,
+        next_row_id: (format_version >= FormatVersion::V3).then_some(0),
+        encryption_keys: vec![],
+        snapshots: vec![],
+        snapshot_log: vec![],
+        metadata_log: vec![],
+        sort_orders: vec![],
+        default_sort_order_id: None,
+        refs: HashMap::new(),
+        statistics: vec![],
+        partition_statistics: vec![],
+    };
+    table_meta.ensure_required_format_fields();
+
+    let new_meta_json = table_meta
+        .to_json()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let file_extension = metadata_file_extension_from_properties(&table_meta.properties)?;
+    let (new_meta_rel, hint) = match metadata_style {
+        NewTableMetadataStyle::Hadoop => (format!("metadata/v1{file_extension}"), "1".to_string()),
+        NewTableMetadataStyle::Uuid => {
+            let file = format!("00000-{}{}", uuid::Uuid::new_v4(), file_extension);
+            (format!("metadata/{file}"), file)
+        }
+    };
+    let new_meta_bytes = encode_metadata_file(&new_meta_rel, &new_meta_json)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let meta_path = object_store::path::Path::from(new_meta_rel.as_str());
+    store_ctx
+        .prefixed
+        .put(
+            &meta_path,
+            object_store::PutPayload::from(Bytes::from(new_meta_bytes)),
+        )
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
     let hint_path = object_store::path::Path::from("metadata/version-hint.text");
     store_ctx
         .prefixed

@@ -55,6 +55,16 @@ pub trait CatalogProvider: Send + Sync {
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus>;
 
+    /// Whether catalog `CREATE TABLE` needs the table format to create storage
+    /// metadata before registering the catalog object.
+    fn create_table_metadata_requirement(
+        &self,
+        options: &CreateTableOptions,
+    ) -> CreateTableMetadataRequirement {
+        let _ = options;
+        CreateTableMetadataRequirement::None
+    }
+
     /// Gets the status of a table in the catalog.
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus>;
 

@@ -91,6 +91,36 @@ def test_iceberg_io_read_with_sql(spark, iceberg_test_data, expected_pandas_df, 
         sql_catalog.drop_table(f"default.{table_name}")
 
 
+def test_iceberg_io_create_table_materializes_empty_metadata(spark, tmp_path):
+    table_path = tmp_path / "iceberg_empty_table"
+    table_name = "iceberg_empty_materialized_test"
+
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (
+              id BIGINT,
+              name STRING
+            )
+            USING ICEBERG
+            LOCATION '{escape_sql_string_literal(str(table_path))}'
+            """
+        )
+
+        metadata_dir = table_path / "metadata"
+        assert metadata_dir.exists()
+        assert (metadata_dir / "version-hint.text").exists()
+        assert list(metadata_dir.glob("*.metadata.json"))
+        assert spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect() == []
+
+        spark.sql(f"INSERT INTO {table_name} VALUES (1, 'one')")
+        rows = spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect()
+        assert [(row.id, row.name) for row in rows] == [(1, "one")]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
 def test_iceberg_io_multiple_files(spark, sql_catalog):
     table_name = "test_table_multiple"
 

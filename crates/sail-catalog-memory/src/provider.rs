@@ -3,7 +3,8 @@ use std::collections::HashMap;
 use dashmap::{DashMap, Entry};
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
-    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions,
+    plain_lakehouse_create_table_metadata_requirement, AlterTableOptions, CatalogProvider,
+    CreateDatabaseOptions, CreateTableColumnOptions, CreateTableMetadataRequirement,
     CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
     DropTableOptions, DropViewOptions, Namespace,
 };
@@ -246,6 +247,13 @@ impl CatalogProvider for MemoryCatalogProvider {
         };
         db.tables.insert(table.to_string(), status.clone());
         Ok(status)
+    }
+
+    fn create_table_metadata_requirement(
+        &self,
+        options: &CreateTableOptions,
+    ) -> CreateTableMetadataRequirement {
+        plain_lakehouse_create_table_metadata_requirement(options)
     }
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {

@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, date, datetime
 
 import pandas as pd
@@ -72,6 +73,38 @@ class TestDeltaIO:
             )
         finally:
             spark.sql("DROP TABLE IF EXISTS my_delta")
+
+    def test_delta_io_create_table_materializes_empty_log(self, spark, tmp_path):
+        delta_path = tmp_path / "delta_empty_table"
+        table_name = "delta_empty_materialized_test"
+
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+        try:
+            spark.sql(
+                f"""
+                CREATE TABLE {table_name} (
+                  id INT,
+                  name STRING
+                )
+                USING DELTA
+                LOCATION '{escape_sql_string_literal(str(delta_path))}'
+                """
+            )
+
+            commit0 = delta_path / "_delta_log" / "00000000000000000000.json"
+            assert commit0.exists()
+            actions = [json.loads(line) for line in commit0.read_text(encoding="utf-8").splitlines()]
+            assert any("protocol" in action for action in actions)
+            assert any("metaData" in action for action in actions)
+            assert not any("add" in action for action in actions)
+            assert spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect() == []
+
+            spark.sql(f"INSERT INTO {table_name} VALUES (1, 'one')")
+            commit1 = delta_path / "_delta_log" / "00000000000000000001.json"
+            assert commit1.exists()
+            assert spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect() == [Row(id=1, name="one")]
+        finally:
+            spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
     def test_delta_io_append_mode(self, spark, delta_test_data, tmp_path):
         """Test Delta Lake append mode"""
