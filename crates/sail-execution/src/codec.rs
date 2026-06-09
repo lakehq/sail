@@ -2800,10 +2800,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 .inner()
                 .downcast_ref::<CountMinSketchFunction>()
                 .is_some()
-            || node
-                .inner()
-                .downcast_ref::<GroupingIdFunction>()
-                .is_some()
+            || node.inner().downcast_ref::<GroupingIdFunction>().is_some()
             || node
                 .inner()
                 .downcast_ref::<HistogramNumericFunction>()
@@ -2812,10 +2809,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 .inner()
                 .downcast_ref::<HllSketchAggFunction>()
                 .is_some()
-            || node
-                .inner()
-                .downcast_ref::<HllUnionAggFunction>()
-                .is_some()
+            || node.inner().downcast_ref::<HllUnionAggFunction>().is_some()
             || node.inner().downcast_ref::<KurtosisFunction>().is_some()
             || node.inner().downcast_ref::<MaxByFunction>().is_some()
             || node.inner().downcast_ref::<MinByFunction>().is_some()
@@ -2955,9 +2949,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_encode_expr(&self, node: &Arc<dyn PhysicalExpr>, buf: &mut Vec<u8>) -> Result<()> {
-        let expr_kind = if let Some(cast) = node
-            .downcast_ref::<SchemaEvolutionCastColumnExpr>()
-        {
+        let expr_kind = if let Some(cast) = node.downcast_ref::<SchemaEvolutionCastColumnExpr>() {
             let node = self.try_encode_cast_column_expr(
                 cast.input_field().as_ref(),
                 cast.target_field().as_ref(),

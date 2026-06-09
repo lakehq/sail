@@ -153,7 +153,7 @@ prost-types = "0.14"
 # The `axum` version must match the one used in `tonic` (replace `RELEASE` with the release we are using):
 #   https://github.com/hyperium/tonic/blob/vRELEASE/tonic/Cargo.toml
 axum = "0.8.9"
-datafusion = { git = "https://github.com/apache/datafusion", rev = "b508f1f9d4ec5d65795ec58cf85100c7b0dce6d6", default-features = false, features = [
+datafusion = { version = "54.0.0", default-features = false, features = [
     "nested_expressions",
     "crypto_expressions",
     "datetime_expressions",
@@ -167,18 +167,18 @@ datafusion = { git = "https://github.com/apache/datafusion", rev = "b508f1f9d4ec
     "avro",
     "recursive_protection",
 ] }
-datafusion-common = { git = "https://github.com/apache/datafusion", rev = "b508f1f9d4ec5d65795ec58cf85100c7b0dce6d6", features = ["object_store"] }
-datafusion-datasource = { git = "https://github.com/apache/datafusion", rev = "b508f1f9d4ec5d65795ec58cf85100c7b0dce6d6" }
-datafusion-datasource-avro = { git = "https://github.com/apache/datafusion", rev = "b508f1f9d4ec5d65795ec58cf85100c7b0dce6d6" }
-datafusion-datasource-json = { git = "https://github.com/apache/datafusion", rev = "b508f1f9d4ec5d65795ec58cf85100c7b0dce6d6" }
-datafusion-expr = { git = "https://github.com/apache/datafusion", rev = "b508f1f9d4ec5d65795ec58cf85100c7b0dce6d6", default-features = false }
-datafusion-expr-common = { git = "https://github.com/apache/datafusion", rev = "b508f1f9d4ec5d65795ec58cf85100c7b0dce6d6" }
-datafusion-proto = { git = "https://github.com/apache/datafusion", rev = "b508f1f9d4ec5d65795ec58cf85100c7b0dce6d6" }
-datafusion-functions = { git = "https://github.com/apache/datafusion", rev = "b508f1f9d4ec5d65795ec58cf85100c7b0dce6d6" }
-datafusion-functions-nested = { git = "https://github.com/apache/datafusion", rev = "b508f1f9d4ec5d65795ec58cf85100c7b0dce6d6", default-features = false }
-datafusion-physical-expr = { git = "https://github.com/apache/datafusion", rev = "b508f1f9d4ec5d65795ec58cf85100c7b0dce6d6" }
-datafusion-session = { git = "https://github.com/apache/datafusion", rev = "b508f1f9d4ec5d65795ec58cf85100c7b0dce6d6" }
-datafusion-spark = { git = "https://github.com/apache/datafusion", rev = "b508f1f9d4ec5d65795ec58cf85100c7b0dce6d6", features = ["core"] }
+datafusion-common = { version = "54.0.0", features = ["object_store"] }
+datafusion-datasource = { version = "54.0.0" }
+datafusion-datasource-avro = { version = "54.0.0" }
+datafusion-datasource-json = { version = "54.0.0" }
+datafusion-expr = { version = "54.0.0", default-features = false }
+datafusion-expr-common = { version = "54.0.0" }
+datafusion-proto = { version = "54.0.0" }
+datafusion-functions = { version = "54.0.0" }
+datafusion-functions-nested = { version = "54.0.0", default-features = false }
+datafusion-physical-expr = { version = "54.0.0" }
+datafusion-session = { version = "54.0.0" }
+datafusion-spark = { version = "54.0.0", features = ["core"] }
 # The `pyo3` version must match the one used in `arrow-pyarrow` (replace `RELEASE` with the release we are using):
 #   https://github.com/apache/arrow-rs/blob/RELEASE/arrow-pyarrow/Cargo.toml
 pyo3 = { version = "0.28.3", features = ["serde"] }

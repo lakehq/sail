@@ -139,11 +139,7 @@ fn theta_union(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         }
         3 => {
             let (first, second, lg_nom_entries) = arguments.three()?;
-            vec![
-                first,
-                second,
-                cast(lg_nom_entries, DataType::Int32),
-            ]
+            vec![first, second, cast(lg_nom_entries, DataType::Int32)]
         }
         count => {
             return Err(PlanError::invalid(format!(
