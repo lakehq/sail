@@ -296,6 +296,19 @@ impl ScalarUDFImpl for SparkToChar {
                             .collect();
                         return Ok(ColumnarValue::Array(Arc::new(result)));
                     }
+                    // UInt64 can exceed i64::MAX; arrow's default (safe) cast to
+                    // i64 would silently NULL those values. Read the u64 natively
+                    // and widen to i128 — exact, matching the scalar path.
+                    if matches!(arr.data_type(), DataType::UInt64) {
+                        let u64_arr = arr.as_primitive::<datatypes::UInt64Type>();
+                        let result: StringArray = u64_arr
+                            .iter()
+                            .map(|opt: Option<u64>| {
+                                opt.map(|v| format_spark_integer(v as i128, &spec, &components))
+                            })
+                            .collect();
+                        return Ok(ColumnarValue::Array(Arc::new(result)));
+                    }
                     let i64_arr = cast_to_i64(arr)?;
                     let result: StringArray = i64_arr
                         .iter()
@@ -893,4 +906,86 @@ fn binary_to_hex(bytes: &[u8]) -> Result<String> {
     // All bytes written are ASCII (`0-9`, `A-F`), so UTF-8 validity is
     // guaranteed by construction.
     Ok(String::from_utf8(out).unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::array::UInt64Array;
+    use datafusion::arrow::datatypes::Field;
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_common::internal_err;
+
+    use super::*;
+
+    fn invoke(args: Vec<ColumnarValue>) -> Result<ColumnarValue> {
+        let number_rows = args
+            .iter()
+            .find_map(|arg| match arg {
+                ColumnarValue::Array(a) => Some(a.len()),
+                _ => None,
+            })
+            .unwrap_or(1);
+        let arg_fields = args
+            .iter()
+            .enumerate()
+            .map(|(idx, arg)| Arc::new(Field::new(format!("arg_{idx}"), arg.data_type(), true)))
+            .collect::<Vec<_>>();
+        let return_field = Arc::new(Field::new("f", DataType::Utf8, true));
+        SparkToChar::new().invoke_with_args(ScalarFunctionArgs {
+            args,
+            arg_fields,
+            number_rows,
+            return_field,
+            config_options: Arc::new(ConfigOptions::default()),
+        })
+    }
+
+    /// Regression: `to_char` formats a `UInt64` above `i64::MAX` identically in
+    /// the scalar and array paths.
+    ///
+    /// `2^63` is `i64::MAX + 1`: representable as `u64`, NOT as `i64`. The array
+    /// integer path reads the `u64` natively and widens to `i128`; a previous
+    /// version cast to `i64` with arrow's default *safe* cast, which silently
+    /// nulled such values (diverging from the scalar path).
+    #[test]
+    fn to_char_uint64_above_i64_max_matches_in_scalar_and_array() -> Result<()> {
+        let v: u64 = 9_223_372_036_854_775_808; // 2^63 = i64::MAX + 1
+        let fmt = "9999999999999999999"; // 19 digit slots
+
+        // Scalar path: exact via i128.
+        let scalar_out = invoke(vec![
+            ColumnarValue::Scalar(ScalarValue::UInt64(Some(v))),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(fmt.to_string()))),
+        ])?;
+        let scalar_str = match scalar_out {
+            ColumnarValue::Scalar(ScalarValue::Utf8(s)) => s,
+            other => return internal_err!("expected Utf8 scalar, got {other:?}"),
+        };
+        assert_eq!(
+            scalar_str.as_deref(),
+            Some("9223372036854775808"),
+            "scalar path should format the full u64 value exactly"
+        );
+
+        // Array path: same value, same format.
+        let array_out = invoke(vec![
+            ColumnarValue::Array(Arc::new(UInt64Array::from(vec![Some(v)]))),
+            ColumnarValue::Scalar(ScalarValue::Utf8(Some(fmt.to_string()))),
+        ])?;
+        let array_arr = match array_out {
+            ColumnarValue::Array(a) => a,
+            other => return internal_err!("expected array, got {other:?}"),
+        };
+        let array_str = array_arr.as_string::<i32>();
+
+        // Array path must format the value, not null it, and agree with scalar.
+        assert!(
+            array_str.is_valid(0),
+            "array path nulled the UInt64 value instead of formatting it"
+        );
+        assert_eq!(array_str.value(0), "9223372036854775808");
+        assert_eq!(scalar_str.as_deref(), Some(array_str.value(0)));
+
+        Ok(())
+    }
 }
