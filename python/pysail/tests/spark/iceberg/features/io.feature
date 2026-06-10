@@ -46,7 +46,7 @@ Feature: Iceberg Basic IO
         """
         DESCRIBE EXTENDED iceberg_catalog_ctas_table
         """
-      Then query result row where "col_name" is "Table Properties" has "data_type" containing "metadata-location="
+      Then query result row where "col_name" is "Table Properties" has "data_type" containing "metadata_location="
       When query
         """
         SELECT * FROM iceberg_catalog_ctas_table

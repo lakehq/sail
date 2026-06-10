@@ -132,13 +132,14 @@ def _data_parquet_files(table_location: Path) -> list[Path]:
 
 
 def _first_add_stats(table_location: Path) -> dict:
-    log_file = table_location / "_delta_log" / "00000000000000000000.json"
-    with log_file.open("r", encoding="utf-8") as f:
-        for line in f:
-            action = json.loads(line)
-            if "add" in action:
-                return json.loads(action["add"]["stats"])
-    msg = f"add action not found in {log_file}"
+    log_files = sorted((table_location / "_delta_log").glob("*.json"))
+    for log_file in log_files:
+        with log_file.open("r", encoding="utf-8") as f:
+            for line in f:
+                action = json.loads(line)
+                if "add" in action:
+                    return json.loads(action["add"]["stats"])
+    msg = f"add action not found in {table_location / '_delta_log'}"
     raise AssertionError(msg)
 
 

@@ -29,6 +29,7 @@ use sail_common_datafusion::datasource::{
     TableFormatAlterTableOperation, TableFormatCreateTableColumn, TableFormatCreateTableInfo,
     TableFormatCreateTableResult, TableFormatRegistry,
 };
+use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 use sail_data_source::options::ResolveOptions;
 use url::Url;
 
@@ -238,18 +239,29 @@ impl TableFormat for IcebergTableFormat {
             catalog_table,
         } = info;
 
-        if columns.is_empty() {
-            return plan_err!("Iceberg CREATE TABLE requires at least one column");
-        }
-
         let table_url = Self::parse_table_url(vec![path]).await?;
         let object_store = runtime_env
             .object_store_registry
             .get_store(&table_url)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         match find_latest_metadata_file(&object_store, &table_url).await {
+            Ok(metadata_file) if columns.is_empty() => {
+                let metadata_location = table_metadata_location(&table_url, &metadata_file)?;
+                return Ok(TableFormatCreateTableResult {
+                    properties: vec![(
+                        sail_common_datafusion::catalog::managed::METADATA_LOCATION_UNDERSCORE_KEY
+                            .to_string(),
+                        metadata_location,
+                    )],
+                });
+            }
             Ok(_) => {
                 return plan_err!("Iceberg table metadata already exists at path: {table_url}");
+            }
+            Err(err)
+                if err.to_string().contains("No metadata files found") && columns.is_empty() =>
+            {
+                return plan_err!("Iceberg CREATE TABLE requires at least one column");
             }
             Err(err) if err.to_string().contains("No metadata files found") => {}
             Err(err) => return Err(err),
@@ -623,11 +635,30 @@ fn create_table_arrow_schema(columns: Vec<TableFormatCreateTableColumn>) -> Resu
                         comment,
                     )]));
                 }
+                field = with_variant_extension_if_marked_storage(field);
                 Ok(field)
             },
         )
         .collect::<Result<Vec<_>>>()?;
     Ok(ArrowSchema::new(fields))
+}
+
+fn table_metadata_location(table_url: &Url, metadata_file: &str) -> Result<String> {
+    if Url::parse(metadata_file).is_ok() {
+        return Ok(metadata_file.to_string());
+    }
+
+    let base_path = crate::utils::url_to_object_path(table_url)?.to_string();
+    let metadata_file = metadata_file.trim_start_matches('/');
+    let relative_metadata_file = metadata_file
+        .strip_prefix(&base_path)
+        .and_then(|path| path.strip_prefix('/'))
+        .unwrap_or(metadata_file);
+
+    Ok(table_url
+        .join(relative_metadata_file)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?
+        .to_string())
 }
 
 fn iceberg_table_properties_from_catalog_create(

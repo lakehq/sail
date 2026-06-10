@@ -23,7 +23,7 @@ Feature: Iceberg Variant support
       """
     Then iceberg metadata matches snapshot
     Then iceberg latest metadata file is v1.metadata.json
-    Then iceberg version hint is 1
+    Then iceberg version hint is v1.metadata.json
     Then iceberg current manifest list matches snapshot
     When query
       """

@@ -24,6 +24,7 @@ use sail_common_datafusion::datasource::{
     TableFormatMetadata, TableFormatRegistry, CATALOG_TABLE_OPTION,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
+use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 use sail_data_source::options::ResolveOptions;
 use sail_data_source::resolve_listing_urls;
 use url::Url;
@@ -1396,6 +1397,7 @@ fn delta_create_table_arrow_schema(columns: &[TableFormatCreateTableColumn]) -> 
             if !metadata.is_empty() {
                 field = field.with_metadata(metadata);
             }
+            field = with_variant_extension_if_marked_storage(field);
             Ok(field)
         })
         .collect::<Result<Vec<_>>>()?;
