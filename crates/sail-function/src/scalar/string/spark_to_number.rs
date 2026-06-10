@@ -100,7 +100,10 @@ impl ScalarUDFImpl for SparkToNumber {
         //       so a true per-row format would silently use the first row's
         //       format. Spark rejects non-foldable formats at analysis time
         //       (DATATYPE_MISMATCH.NON_FOLDABLE_INPUT); Sail currently does not
-        //       — tracked as a known divergence.
+        //       — tracked as a known divergence. NB: a non-folded `CAST(NULL AS
+        //       STRING)` also arrives here as `Some(None)`, indistinguishable
+        //       from a column ref, so this CANNOT be rejected at planning time
+        //       without breaking the valid null-format case.
         let format_opt: Option<&str> = match scalar_arguments.get(1) {
             Some(Some(ScalarValue::Utf8(Some(s))))
             | Some(Some(ScalarValue::LargeUtf8(Some(s))))
