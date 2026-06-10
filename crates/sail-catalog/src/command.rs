@@ -1,6 +1,9 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use sail_common_datafusion::array::serde::ArrowSerializer;
+use sail_common_datafusion::catalog::delta::{
+    DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
+};
 use sail_common_datafusion::datasource::{
     is_lakehouse_format, TableFormatAlterTableOperation, TableFormatCreateTableColumn,
     TableFormatCreateTableInfo, TableFormatRegistry,
@@ -302,12 +305,24 @@ impl CatalogCommand {
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::CreateTable { table, options } => {
+                let existed_before = if options.if_not_exists {
+                    match manager.get_table_or_view(&table).await {
+                        Ok(_) => true,
+                        Err(CatalogError::NotFound(_, _)) => false,
+                        Err(e) => return Err(e),
+                    }
+                } else {
+                    false
+                };
                 let Some(options) =
                     prepare_create_table_storage_metadata(ctx, manager, &table, options).await?
                 else {
                     return Ok(display.bools().to_record_batch(vec![true])?);
                 };
-                manager.create_table(&table, options).await?;
+                let status = manager.create_table(&table, options).await?;
+                if !existed_before {
+                    prepare_created_table_storage_metadata(ctx, &table, &status).await?;
+                }
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::TableExists { table } => {
@@ -682,6 +697,7 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
                         identity: column.identity.clone(),
                     })
                     .collect(),
+                comment: options.comment.clone(),
                 partition_by: options.partition_by.clone(),
                 properties: options.properties.clone(),
                 catalog_table: catalog_managed.then(|| table.to_vec()),
@@ -691,6 +707,77 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
         .map_err(CatalogError::DataFusionError)?;
     options.properties.extend(metadata.properties);
     Ok(Some(options))
+}
+
+async fn prepare_created_table_storage_metadata<C: SessionExtensionAccessor>(
+    ctx: &C,
+    table: &[String],
+    status: &sail_common_datafusion::catalog::TableStatus,
+) -> CatalogResult<()> {
+    let sail_common_datafusion::catalog::TableKind::Table {
+        columns,
+        comment,
+        location: Some(location),
+        format,
+        partition_by,
+        properties,
+        is_external,
+        ..
+    } = &status.kind
+    else {
+        return Ok(());
+    };
+
+    if *is_external || !format.eq_ignore_ascii_case("delta") {
+        return Ok(());
+    }
+    let is_unity_managed_delta = properties.iter().any(|(key, value)| {
+        key.eq_ignore_ascii_case("table_type") && value.eq_ignore_ascii_case("MANAGED")
+    }) && properties.iter().any(|(key, _)| {
+        key.eq_ignore_ascii_case(DELTA_UNITY_TABLE_ID_KEY)
+            || key.eq_ignore_ascii_case(DELTA_UNITY_TABLE_ID_LEGACY_KEY)
+    });
+    if !is_unity_managed_delta {
+        return Ok(());
+    }
+
+    let registry = ctx.extension::<TableFormatRegistry>().map_err(|e| {
+        CatalogError::External(format!(
+            "missing TableFormatRegistry for catalog-managed CREATE TABLE on format '{format}': {e}"
+        ))
+    })?;
+    let table_format = registry.get(format).map_err(|e| {
+        CatalogError::External(format!(
+            "unknown table format '{format}' for catalog-managed CREATE TABLE: {e}"
+        ))
+    })?;
+
+    table_format
+        .create_table_metadata(
+            ctx.runtime_env(),
+            TableFormatCreateTableInfo {
+                path: location.clone(),
+                columns: columns
+                    .iter()
+                    .map(|column| TableFormatCreateTableColumn {
+                        name: column.name.clone(),
+                        data_type: column.data_type.clone(),
+                        nullable: column.nullable,
+                        comment: column.comment.clone(),
+                        default: column.default.clone(),
+                        generated_always_as: column.generated_always_as.clone(),
+                        identity: column.identity.clone(),
+                    })
+                    .collect(),
+                comment: comment.clone(),
+                partition_by: partition_by.clone(),
+                properties: properties.clone(),
+                catalog_table: Some(table.to_vec()),
+            },
+        )
+        .await
+        .map(|_| ())
+        .map_err(CatalogError::DataFusionError)
 }
 
 fn table_format_alter_operation(options: &AlterTableOptions) -> TableFormatAlterTableOperation {

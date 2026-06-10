@@ -232,6 +232,7 @@ impl TableFormat for IcebergTableFormat {
         let TableFormatCreateTableInfo {
             path,
             columns,
+            comment: _,
             partition_by,
             properties,
             catalog_table,

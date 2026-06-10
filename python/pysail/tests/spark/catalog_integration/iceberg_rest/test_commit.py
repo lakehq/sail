@@ -74,6 +74,9 @@ def test_insert_advances_rest_catalog_metadata_location(
 
     before = _load_table(iceberg_rest_endpoint, table_name)
     before_location = before["metadata-location"]
+    assert before["metadata"].get("current-snapshot-id") in (None, -1)
+    rows = iceberg_spark.sql(f"SELECT id, name FROM {NAMESPACE}.{table_name}").collect()  # noqa: S608
+    assert rows == []
 
     iceberg_spark.sql(f"INSERT INTO {NAMESPACE}.{table_name} VALUES (1, 'a'), (2, 'b')")  # noqa: S608
 
@@ -91,3 +94,20 @@ def test_insert_advances_rest_catalog_metadata_location(
 
     rows = iceberg_spark.sql(f"SELECT id, name FROM {NAMESPACE}.{table_name} ORDER BY id").collect()  # noqa: S608
     assert [(row["id"], row["name"]) for row in rows] == [(1, "a"), (2, "b"), (3, "c")]
+
+
+def test_rest_catalog_rejects_non_iceberg_create_format(
+    iceberg_spark: SparkSession,
+) -> None:
+    table_name = "delta_bad_t"
+    iceberg_spark.sql(f"DROP TABLE IF EXISTS {NAMESPACE}.{table_name}")
+
+    with pytest.raises(Exception, match="(?i)Iceberg REST catalog cannot create 'delta' tables"):
+        iceberg_spark.sql(
+            f"""
+            CREATE TABLE {NAMESPACE}.{table_name} (
+              id INT
+            )
+            USING DELTA
+            """
+        )

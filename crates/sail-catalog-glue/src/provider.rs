@@ -116,6 +116,8 @@ impl GlueCatalogProvider {
 
         let format = if iceberg::is_iceberg_parameters(table.parameters()) {
             "iceberg".to_string()
+        } else if let Some(provider) = table_provider_format(table.parameters()) {
+            provider
         } else {
             HiveDetectedFormat::detect(
                 storage
@@ -347,6 +349,17 @@ impl GlueCatalogProvider {
             .build()
             .map_err(|e| CatalogError::InvalidArgument(format!("Failed to build view input: {e}")))
     }
+}
+
+fn table_provider_format(parameters: Option<&HashMap<String, String>>) -> Option<String> {
+    let provider = parameters?
+        .get(hive::SPARK_DATASOURCE_PROVIDER_KEY)?
+        .trim()
+        .to_ascii_lowercase();
+    Some(match provider.as_str() {
+        "deltalake" => "delta".to_string(),
+        _ => provider,
+    })
 }
 
 #[async_trait::async_trait]
@@ -911,13 +924,20 @@ impl CatalogProvider for GlueCatalogProvider {
 
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::panic, clippy::unwrap_used)]
+
+    use std::collections::HashMap;
+
     use arrow::datatypes::DataType;
+    use aws_sdk_glue::types::{SerDeInfo, StorageDescriptor, Table};
     use sail_catalog::provider::{
         CatalogProvider, CreateTableColumnOptions, CreateTableMetadataRequirement,
         CreateTableOptions,
     };
+    use sail_common_datafusion::catalog::TableKind;
 
     use super::{GlueCatalogConfig, GlueCatalogProvider};
+    use crate::hive;
 
     fn create_options(format: &str, is_write_precondition: bool) -> CreateTableOptions {
         CreateTableOptions {
@@ -976,5 +996,39 @@ mod tests {
                 catalog_managed: true,
             }
         );
+    }
+
+    #[test]
+    fn table_to_status_prefers_delta_provider_over_parquet_storage() {
+        let provider = GlueCatalogProvider::new("glue".to_string(), GlueCatalogConfig::default());
+        let storage = StorageDescriptor::builder()
+            .input_format("org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat")
+            .output_format("org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat")
+            .serde_info(
+                SerDeInfo::builder()
+                    .serialization_library(
+                        "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe",
+                    )
+                    .build(),
+            )
+            .location("s3://bucket/delta_t")
+            .build();
+        let table = Table::builder()
+            .name("delta_t")
+            .storage_descriptor(storage)
+            .set_parameters(Some(HashMap::from([(
+                hive::SPARK_DATASOURCE_PROVIDER_KEY.to_string(),
+                "deltalake".to_string(),
+            )])))
+            .build()
+            .unwrap();
+
+        let status = provider
+            .table_to_status(&vec!["db".to_string()].try_into().unwrap(), &table)
+            .unwrap();
+        let TableKind::Table { format, .. } = status.kind else {
+            panic!("expected table");
+        };
+        assert_eq!(format, "delta");
     }
 }

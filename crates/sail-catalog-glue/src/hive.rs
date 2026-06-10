@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use aws_sdk_glue::types::{SerDeInfo, StorageDescriptor, TableInput};
 use aws_sdk_glue::Client;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
-use sail_catalog::hive_format::HiveStorageFormat;
+use sail_catalog::hive_format::{HiveCatalogFormat, HiveStorageFormat};
 use sail_catalog::provider::{
     CatalogProvider, CreateTableColumnOptions, CreateTableOptions, Namespace, PartitionTransform,
 };
@@ -12,6 +12,8 @@ use sail_common_datafusion::catalog::TableStatus;
 
 use crate::data_type::arrow_to_glue_type;
 use crate::GlueCatalogProvider;
+
+pub(crate) const SPARK_DATASOURCE_PROVIDER_KEY: &str = "spark.sql.sources.provider";
 
 /// Validated options for Hive table creation.
 pub(crate) struct ValidatedHiveOptions {
@@ -44,12 +46,15 @@ pub(crate) async fn create_hive_table(
         properties,
     } = validate_hive_options(options)?;
 
-    let format_info = HiveStorageFormat::from_format(&format)?;
+    let format_info = HiveCatalogFormat::from_format(&format)?;
 
     let (regular_columns, partition_columns) = build_glue_columns(columns, &partition_by)?;
 
-    let storage_descriptor =
-        build_storage_descriptor(regular_columns, &format_info, location.as_deref());
+    let storage_descriptor = build_storage_descriptor(
+        regular_columns,
+        &format_info.storage_format,
+        location.as_deref(),
+    );
 
     let table_input = build_table_input(
         table,
@@ -57,6 +62,7 @@ pub(crate) async fn create_hive_table(
         partition_columns,
         comment.as_deref(),
         properties,
+        format_info.logical_format,
     )?;
 
     let result = client
@@ -214,12 +220,15 @@ fn build_table_input(
     partition_columns: Vec<aws_sdk_glue::types::Column>,
     comment: Option<&str>,
     properties: Vec<(String, String)>,
+    logical_format: &str,
 ) -> CatalogResult<TableInput> {
-    let parameters: Option<HashMap<String, String>> = if properties.is_empty() {
-        None
-    } else {
-        Some(properties.into_iter().collect())
-    };
+    let mut parameters: HashMap<String, String> = properties.into_iter().collect();
+    if logical_format.eq_ignore_ascii_case("delta") {
+        parameters.insert(
+            SPARK_DATASOURCE_PROVIDER_KEY.to_string(),
+            "delta".to_string(),
+        );
+    }
 
     let mut builder = TableInput::builder()
         .name(table_name)
@@ -233,11 +242,49 @@ fn build_table_input(
         builder = builder.set_partition_keys(Some(partition_columns));
     }
 
-    if let Some(params) = parameters {
-        builder = builder.set_parameters(Some(params));
+    if !parameters.is_empty() {
+        builder = builder.set_parameters(Some(parameters));
     }
 
     builder
         .build()
         .map_err(|e| CatalogError::InvalidArgument(format!("Failed to build table input: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::unwrap_used)]
+
+    use super::*;
+
+    #[test]
+    fn build_table_input_marks_delta_logical_provider() {
+        let format = HiveCatalogFormat::from_format("delta").unwrap();
+        let storage = build_storage_descriptor(
+            Vec::new(),
+            &format.storage_format,
+            Some("s3://bucket/delta"),
+        );
+        let input = build_table_input(
+            "delta_t",
+            storage,
+            Vec::new(),
+            None,
+            Vec::new(),
+            format.logical_format,
+        )
+        .unwrap();
+
+        assert_eq!(
+            input
+                .parameters()
+                .and_then(|p| p.get(SPARK_DATASOURCE_PROVIDER_KEY)),
+            Some(&"delta".to_string())
+        );
+        let storage = input.storage_descriptor().unwrap();
+        assert_eq!(
+            storage.input_format(),
+            Some(HiveStorageFormat::parquet().input_format)
+        );
+    }
 }

@@ -225,6 +225,7 @@ pub struct TableFormatCreateTableColumn {
 pub struct TableFormatCreateTableInfo {
     pub path: String,
     pub columns: Vec<TableFormatCreateTableColumn>,
+    pub comment: Option<String>,
     pub partition_by: Vec<CatalogPartitionField>,
     pub properties: Vec<(String, String)>,
     pub catalog_table: Option<Vec<String>>,

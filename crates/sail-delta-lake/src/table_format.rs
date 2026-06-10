@@ -10,6 +10,9 @@ use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::TableSource;
 use datafusion::physical_plan::ExecutionPlan;
+use sail_common_datafusion::catalog::delta::{
+    unity_table_id_value, DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
+};
 use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
 use sail_common_datafusion::column_features::{
     ColumnFeatureKey, ColumnFeatures, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
@@ -25,6 +28,7 @@ use sail_data_source::options::ResolveOptions;
 use sail_data_source::resolve_listing_urls;
 use url::Url;
 
+use crate::catalog_managed::{metadata_with_catalog_managed, protocol_with_catalog_managed};
 use crate::kernel::transaction::CommitBuilder;
 use crate::kernel::{DeltaSnapshotConfig, SaveMode};
 use crate::options::gen::{DeltaReadOptions, DeltaWriteOptions};
@@ -135,16 +139,29 @@ impl TableFormat for DeltaTableFormat {
         let TableFormatCreateTableInfo {
             path,
             columns,
+            comment,
             partition_by,
             properties,
             catalog_table,
         } = info;
 
-        if catalog_table.is_some() {
-            return not_impl_err!(
-                "catalog-managed Delta CREATE TABLE requires a catalog-specific staging flow"
-            );
-        }
+        let catalog_managed_table_id = if catalog_table.is_some() {
+            Some(
+                unity_table_id_value(
+                    properties
+                        .iter()
+                        .map(|(key, value)| (key.as_str(), value.as_str())),
+                )
+                .ok_or_else(|| {
+                    DataFusionError::Plan(
+                        "catalog-managed Delta CREATE TABLE requires a Unity table id".to_string(),
+                    )
+                })?
+                .to_string(),
+            )
+        } else {
+            None
+        };
 
         if partition_by.iter().any(|field| field.transform.is_some()) {
             return not_impl_err!("partition transforms for Delta CREATE TABLE");
@@ -208,6 +225,11 @@ impl TableFormat for DeltaTableFormat {
             );
         }
 
+        let properties = if catalog_managed_table_id.is_some() {
+            delta_catalog_managed_create_table_properties(properties)
+        } else {
+            properties
+        };
         let metadata_configuration = delta_create_table_metadata_configuration(properties)
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         let normalized_schema = normalize_delta_schema(&declared_schema);
@@ -247,7 +269,7 @@ impl TableFormat for DeltaTableFormat {
             kernel_schema
         };
 
-        let protocol = protocol_for_create(
+        let mut protocol = protocol_for_create(
             !matches!(effective_mode, ColumnMappingMode::None),
             contains_timestampntz_arrow(normalized_schema.as_ref()),
             TableProperties::from(configuration.iter()).enable_in_commit_timestamps(),
@@ -258,18 +280,27 @@ impl TableFormat for DeltaTableFormat {
             &configuration,
         )
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        if catalog_managed_table_id.is_some() {
+            protocol = protocol_with_catalog_managed(&protocol);
+        }
 
         let partition_columns = partition_by
             .iter()
             .map(|field| field.column.clone())
             .collect::<Vec<_>>();
-        let metadata = metadata_for_create_with_struct_type(
+        let mut metadata = metadata_for_create_with_struct_type(
             metadata_schema,
             partition_columns,
             Utc::now().timestamp_millis(),
             configuration,
         )
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        if let Some(comment) = comment {
+            metadata = metadata.with_description(comment);
+        }
+        if let Some(table_id) = &catalog_managed_table_id {
+            metadata = metadata_with_catalog_managed(metadata, table_id);
+        }
 
         let table = create_delta_table_with_object_store(
             table_url.clone(),
@@ -1421,6 +1452,28 @@ fn delta_create_table_metadata_configuration(
         .filter(|(key, _)| !key.starts_with("option."))
         .collect::<HashMap<_, _>>();
     resolve_delta_metadata_configuration(&table_properties)
+}
+
+fn delta_catalog_managed_create_table_properties(
+    properties: Vec<(String, String)>,
+) -> Vec<(String, String)> {
+    properties
+        .into_iter()
+        .filter(|(key, _)| {
+            let lower = key.to_ascii_lowercase();
+            !matches!(
+                lower.as_str(),
+                "comment"
+                    | "created_at"
+                    | "created_by"
+                    | "owner"
+                    | "table_type"
+                    | "updated_at"
+                    | "updated_by"
+            ) && !key.eq_ignore_ascii_case(DELTA_UNITY_TABLE_ID_KEY)
+                && !key.eq_ignore_ascii_case(DELTA_UNITY_TABLE_ID_LEGACY_KEY)
+        })
+        .collect()
 }
 
 fn validate_existing_delta_create_table_schema(
