@@ -17,12 +17,12 @@ use sail_common_datafusion::datasource::{
     TableFormatMetadata, TableFormatRegistry, CATALOG_TABLE_OPTION,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
-use sail_data_source::options::gen::{DeltaReadOptions, DeltaWriteOptions};
 use sail_data_source::options::ResolveOptions;
 use sail_data_source::resolve_listing_urls;
 use url::Url;
 
 use crate::kernel::DeltaSnapshotConfig;
+use crate::options::gen::{DeltaReadOptions, DeltaWriteOptions};
 use crate::physical_plan::planner::{
     plan_delete, plan_delete_mor, plan_merge, plan_merge_mor, DeltaPhysicalPlanner,
     DeltaPlannerConfig, PlannerContext,
@@ -76,8 +76,7 @@ impl TableFormat for DeltaTableFormat {
             options,
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
-        let options = DeltaReadOptions::resolve(ctx, options)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let options = DeltaReadOptions::resolve(ctx, options)?;
         create_delta_source(ctx, table_url, schema, options, catalog_table).await
     }
 
@@ -93,8 +92,7 @@ impl TableFormat for DeltaTableFormat {
             options,
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
-        let options = DeltaReadOptions::resolve(ctx, options)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let options = DeltaReadOptions::resolve(ctx, options)?;
         infer_delta_logical_schema(ctx, table_url, schema, options, catalog_table).await
     }
 
@@ -114,8 +112,7 @@ impl TableFormat for DeltaTableFormat {
             options,
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
-        let options = DeltaReadOptions::resolve(ctx, options)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let options = DeltaReadOptions::resolve(ctx, options)?;
         let (schema, properties) =
             infer_delta_logical_metadata(ctx, table_url, schema, options, catalog_table).await?;
         Ok(TableFormatMetadata { schema, properties })
@@ -156,8 +153,7 @@ impl TableFormat for DeltaTableFormat {
 
         let table_url = Self::parse_table_url(ctx, vec![path]).await?;
         let (options, table_properties) = split_delta_write_options_and_table_properties(options)?;
-        let delta_options = DeltaWriteOptions::resolve(ctx, options)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let delta_options = DeltaWriteOptions::resolve(ctx, options)?;
 
         let object_store = ctx
             .runtime_env()

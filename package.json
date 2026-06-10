@@ -17,11 +17,11 @@
     "@types/node": "^24.12.2",
     "@typescript-eslint/eslint-plugin": "^8.60.1",
     "@typescript-eslint/parser": "^8.60.1",
-    "@viz-js/viz": "^3.27.0",
+    "@viz-js/viz": "^3.28.0",
     "autoprefixer": "^10.5.0",
     "eslint": "^10.4.1",
     "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-vue": "^10.9.1",
+    "eslint-plugin-vue": "^10.9.2",
     "fast-glob": "^3.3.3",
     "gray-matter": "^4.0.3",
     "js-yaml": "^4.2.0",
@@ -31,7 +31,7 @@
     "prettier": "^3.8.3",
     "prettier-plugin-tailwindcss": "^0.8.0",
     "prettier-plugin-vitepress": "^0.0.10",
-    "sql-formatter": "^15.8.0",
+    "sql-formatter": "^15.8.1",
     "svgo": "^4.0.1",
     "tailwindcss": "^4.3.0",
     "typescript": "^6.0.3",
@@ -41,7 +41,7 @@
     "vitepress": "^1.6.4",
     "vue": "^3.5.35",
     "vue-eslint-parser": "^10.4.1",
-    "vue-tsc": "^3.3.3"
+    "vue-tsc": "^3.3.4"
   },
   "prettier": {
     "plugins": [

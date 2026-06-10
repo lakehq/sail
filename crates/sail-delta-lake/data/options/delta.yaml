@@ -582,9 +582,9 @@
     Strategy for Delta log replay in the metadata-as-data path. Values: "auto", "sort", "hash".
   default:
     value: "auto"
-    parser: crate::options::types::delta::parse_delta_log_replay_strategy
+    parser: crate::options::parsers::parse_delta_log_replay_strategy
   supported: true
-  rust_type: crate::options::types::delta::DeltaLogReplayStrategy
+  rust_type: crate::options::DeltaLogReplayStrategy
   scopes:
     - read
     - write
@@ -593,7 +593,7 @@
       keys:
         - delta_log_replay_strategy
         - deltaLogReplayStrategy
-      parser: crate::options::types::delta::parse_delta_log_replay_strategy
+      parser: crate::options::parsers::parse_delta_log_replay_strategy
 
 - key: delta_log_replay_hash_threshold
   description: |

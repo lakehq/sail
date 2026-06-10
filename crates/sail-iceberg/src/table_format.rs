@@ -26,13 +26,13 @@ use sail_common_datafusion::datasource::{
     find_path_in_options, OptionLayer, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat,
     TableFormatAlterTableOperation, TableFormatRegistry,
 };
-use sail_data_source::options::gen::{IcebergReadOptions, IcebergWriteOptions};
 use sail_data_source::options::ResolveOptions;
 use url::Url;
 
 use crate::datasource::provider::IcebergTableProvider;
 use crate::io::StoreContext;
 use crate::logical::IcebergTableSource;
+use crate::options::gen::{IcebergReadOptions, IcebergWriteOptions};
 use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
 use crate::physical_plan::IcebergWriterExecOptions;
 use crate::spec::{MetadataLog, PartitionSpec, Schema, Snapshot, TableMetadata};
@@ -105,8 +105,7 @@ impl TableFormat for IcebergTableFormat {
             split_iceberg_write_options_and_table_properties(options)?;
         let variant_shredding_option_presence =
             IcebergWriterExecOptions::variant_shredding_option_presence(&options);
-        let iceberg_options = IcebergWriteOptions::resolve(ctx, options)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let iceberg_options = IcebergWriteOptions::resolve(ctx, options)?;
 
         let store = ctx
             .runtime_env()
@@ -412,8 +411,7 @@ async fn build_iceberg_provider(
     let table_url = IcebergTableFormat::parse_table_url(paths).await?;
     let metadata_location = metadata_location_from_options(&options);
     let catalog_managed_table = catalog_managed_iceberg_from_options(&options);
-    let iceberg_options = IcebergReadOptions::resolve(ctx, options)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let iceberg_options = IcebergReadOptions::resolve(ctx, options)?;
     create_iceberg_provider_concrete(
         ctx,
         table_url,
