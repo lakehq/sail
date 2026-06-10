@@ -63,13 +63,13 @@
             lockFile = ./Cargo.lock;
           };
 
-          nativeBuildInputs = with pkgs; [
+          nativeBuildInputs = (with pkgs; [
             rustPlatform.cargoSetupHook
             rustPlatform.maturinBuildHook
             rustForBuild
             pkg-config
             protobuf3
-          ];
+          ]) ++ lib.optionals isLinux [ pkgs.gcc ];
 
           buildInputs = lib.optionals isLinux [ pkgs.stdenv.cc.cc.lib ];
 
@@ -130,7 +130,7 @@
               sccache
             ])
             ++ [ py protobuf3 ]
-            ++ lib.optionals isLinux [ pkgs.stdenv.cc.cc.lib ];
+            ++ lib.optionals isLinux [ pkgs.stdenv.cc.cc.lib pkgs.gcc ];
 
           env = [
             { name = "RUST_BACKTRACE"; value = "1"; }
@@ -217,8 +217,16 @@
             {
               category = "test";
               name = "sail-test-ibis";
-              help = "Run Ibis tests against Sail server on :50051";
-              command = ''export SPARK_REMOTE="sc://localhost:50051" && hatch run test-ibis:bash scripts/spark-tests/run-tests.sh "$@"'';
+              help = "Run Ibis tests against Sail server on :50051 (auto-clones ibis-testing-data)";
+              command = ''
+                _data_dir="$PRJ_ROOT/opt/ibis-testing-data"
+                if [ ! -d "$_data_dir/.git" ]; then
+                  echo "⛵ Cloning ibis-testing-data (shallow)..."
+                  git clone --depth 1 https://github.com/ibis-project/testing-data.git "$_data_dir"
+                fi
+                export SPARK_REMOTE="sc://localhost:50051"
+                hatch run test-ibis:bash scripts/spark-tests/run-tests.sh "$@"
+              '';
             }
             {
               category = "test";
