@@ -106,6 +106,61 @@ class TestDeltaIO:
         finally:
             spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
+    def test_delta_io_create_table_if_not_exists_does_not_materialize_new_location(self, spark, tmp_path):
+        delta_path = tmp_path / "delta_if_not_exists_table"
+        alternate_path = tmp_path / "delta_if_not_exists_alternate"
+        table_name = "delta_if_not_exists_materialized_test"
+
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+        try:
+            spark.sql(
+                f"""
+                CREATE TABLE {table_name} (
+                  id INT,
+                  name STRING
+                )
+                USING DELTA
+                LOCATION '{escape_sql_string_literal(str(delta_path))}'
+                """
+            )
+            assert (delta_path / "_delta_log" / "00000000000000000000.json").exists()
+
+            spark.sql(
+                f"""
+                CREATE TABLE IF NOT EXISTS {table_name} (
+                  id INT,
+                  name STRING
+                )
+                USING DELTA
+                LOCATION '{escape_sql_string_literal(str(alternate_path))}'
+                """
+            )
+
+            assert not (alternate_path / "_delta_log").exists()
+        finally:
+            spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+    def test_delta_io_create_table_rejects_mismatched_existing_log_schema(self, spark, tmp_path):
+        delta_path = tmp_path / "delta_existing_schema"
+        table_name = "delta_existing_schema_mismatch_test"
+
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+        spark.createDataFrame([Row(id=1, name="one")]).write.format("delta").save(str(delta_path))
+        try:
+            with pytest.raises(Exception, match="different schema"):
+                spark.sql(
+                    f"""
+                    CREATE TABLE {table_name} (
+                      id STRING,
+                      name STRING
+                    )
+                    USING DELTA
+                    LOCATION '{escape_sql_string_literal(str(delta_path))}'
+                    """
+                )
+        finally:
+            spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
     def test_delta_io_append_mode(self, spark, delta_test_data, tmp_path):
         """Test Delta Lake append mode"""
         delta_path = tmp_path / "delta_table"

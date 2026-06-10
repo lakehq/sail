@@ -83,6 +83,51 @@ def test_create_table_materializes_delta_log_and_marks_glue_provider(
         glue_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
 
 
+def test_create_table_if_not_exists_does_not_materialize_new_delta_location(
+    glue_spark: SparkSession,
+    moto_endpoint: str,
+    tmp_path: Path,
+) -> None:
+    database = "glue_delta_if_not_exists_db"
+    table = "delta_t"
+    table_fqn = f"{database}.{table}"
+    location_path = tmp_path / "delta_t"
+    alternate_path = tmp_path / "delta_t_alternate"
+
+    glue_spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
+    try:
+        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        glue_spark.sql(
+            f"""
+            CREATE TABLE {table_fqn} (
+              id INT,
+              name STRING
+            )
+            USING DELTA
+            LOCATION '{escape_sql_string_literal(location_path.as_uri())}'
+            """
+        )
+        assert (location_path / "_delta_log" / "00000000000000000000.json").exists()
+
+        glue_spark.sql(
+            f"""
+            CREATE TABLE IF NOT EXISTS {table_fqn} (
+              id INT,
+              name STRING
+            )
+            USING DELTA
+            LOCATION '{escape_sql_string_literal(alternate_path.as_uri())}'
+            """
+        )
+
+        assert not (alternate_path / "_delta_log").exists()
+        parameters = _glue_parameters(moto_endpoint, database, table)
+        assert parameters["spark.sql.sources.provider"] == "delta"
+    finally:
+        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        glue_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+
+
 def test_ctas_materializes_delta_log_and_marks_glue_provider(
     glue_spark: SparkSession,
     moto_endpoint: str,

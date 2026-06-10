@@ -121,6 +121,76 @@ def test_iceberg_io_create_table_materializes_empty_metadata(spark, tmp_path):
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
 
+def test_iceberg_io_create_table_if_not_exists_does_not_materialize_new_location(spark, tmp_path):
+    table_path = tmp_path / "iceberg_if_not_exists_table"
+    alternate_path = tmp_path / "iceberg_if_not_exists_alternate"
+    table_name = "iceberg_if_not_exists_materialized_test"
+
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (
+              id BIGINT,
+              name STRING
+            )
+            USING ICEBERG
+            LOCATION '{escape_sql_string_literal(str(table_path))}'
+            """
+        )
+        assert (table_path / "metadata" / "version-hint.text").exists()
+
+        spark.sql(
+            f"""
+            CREATE TABLE IF NOT EXISTS {table_name} (
+              id BIGINT,
+              name STRING
+            )
+            USING ICEBERG
+            LOCATION '{escape_sql_string_literal(str(alternate_path))}'
+            """
+        )
+
+        assert not (alternate_path / "metadata").exists()
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def test_iceberg_io_create_table_rejects_existing_metadata_location(spark, tmp_path):
+    table_path = tmp_path / "iceberg_existing_metadata"
+    first_table = "iceberg_existing_metadata_first_test"
+    second_table = "iceberg_existing_metadata_second_test"
+
+    spark.sql(f"DROP TABLE IF EXISTS {first_table}")
+    spark.sql(f"DROP TABLE IF EXISTS {second_table}")
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {first_table} (
+              id BIGINT,
+              name STRING
+            )
+            USING ICEBERG
+            LOCATION '{escape_sql_string_literal(str(table_path))}'
+            """
+        )
+
+        with pytest.raises(Exception, match="metadata already exists"):
+            spark.sql(
+                f"""
+                CREATE TABLE {second_table} (
+                  id BIGINT,
+                  name STRING
+                )
+                USING ICEBERG
+                LOCATION '{escape_sql_string_literal(str(table_path))}'
+                """
+            )
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {second_table}")
+        spark.sql(f"DROP TABLE IF EXISTS {first_table}")
+
+
 def test_iceberg_io_multiple_files(spark, sql_catalog):
     table_name = "test_table_multiple"
 
