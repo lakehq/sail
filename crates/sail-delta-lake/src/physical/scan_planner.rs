@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use datafusion::catalog::Session;
-use datafusion::common::{DataFusionError, Result, ToDFSchema};
+use datafusion::common::{Result, ToDFSchema};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::Expr;
@@ -13,13 +13,13 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
-use sail_data_source::options::gen::DeltaWritePartialOptions;
-use sail_data_source::options::PartialOptions;
+use sail_data_source::options::ResolveOptions;
 
 use crate::datasource::scan::{
     build_file_scan_config, file_scan_projection_for_schema, FileScanParams, TableStatsMode,
 };
 use crate::datasource::{df_logical_schema, simplify_expr, DeltaScanConfig};
+use crate::options::gen::DeltaWriteOptions;
 use crate::physical_plan::planner::metadata_predicate::{
     build_metadata_filter, predicate_requires_stats,
 };
@@ -290,16 +290,11 @@ pub(crate) async fn plan_delta_scan(
     // construction of write options (DeltaWritePartialOptions) just to drive the
     // log-replay strategy for a read scan. The replay strategy and hash threshold
     // should ideally come from read options or a dedicated configuration.
-    let mut partial = DeltaWritePartialOptions::initialize();
-    partial.delta_log_replay_strategy = Some(config.delta_log_replay_strategy);
-    // NonZeroUsize::new returns None for zero, causing finalize() to use the YAML default (100).
-    // A zero threshold is invalid and should not occur in practice since the option is now
-    // parsed with parse_non_zero_usize; falling back to the default is safe behavior.
-    partial.delta_log_replay_hash_threshold =
-        std::num::NonZeroUsize::new(config.delta_log_replay_hash_threshold);
-    let planner_options = partial
-        .finalize()
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let mut planner_options = DeltaWriteOptions::resolve(session, Vec::new())?;
+    planner_options.delta_log_replay_strategy = config.delta_log_replay_strategy;
+    if let Some(threshold) = std::num::NonZeroUsize::new(config.delta_log_replay_hash_threshold) {
+        planner_options.delta_log_replay_hash_threshold = threshold;
+    }
 
     let planner_ctx = PlannerContext::new(
         session,
