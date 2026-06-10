@@ -9,10 +9,10 @@ use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use crate::physical_plan::SystemTableExec;
 use crate::table_source::SystemTableSource;
 
-pub struct SystemPhysicalPlanner;
+pub struct SystemTablePhysicalPlanner;
 
 #[async_trait::async_trait]
-impl ExtensionPlanner for SystemPhysicalPlanner {
+impl ExtensionPlanner for SystemTablePhysicalPlanner {
     async fn plan_extension(
         &self,
         _planner: &dyn PhysicalPlanner,

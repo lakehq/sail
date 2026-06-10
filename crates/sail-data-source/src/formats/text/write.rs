@@ -36,7 +36,7 @@ impl WriteFormat for TextWriteFormat {
         let file_compression_type = FileCompressionType::from(options.compression);
         input.sink.file_extension = format!(
             "{}{}",
-            DEFAULT_TEXT_EXTENSION[1..].to_string(),
+            &DEFAULT_TEXT_EXTENSION[1..],
             file_compression_type.get_ext()
         );
         let writer_options = TextWriterOptions::try_from(&options)?;

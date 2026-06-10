@@ -97,7 +97,7 @@ impl TableFormat for IcebergTableFormat {
         })
     }
 
-    async fn create_writer(&self, ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
+    async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
         let Some(path) = find_path_in_options(&info.options) else {
             return plan_err!("missing path in Iceberg table options");
         };
@@ -110,22 +110,8 @@ impl TableFormat for IcebergTableFormat {
             options,
             catalog_table,
         } = info;
-        let metadata_location = metadata_location_from_options(&options);
-        let catalog_managed_table = catalog_managed_iceberg_from_options(&options);
-        let (clean_options, table_properties) =
-            split_iceberg_write_options_and_table_properties(options)?;
-        let variant_shredding_option_presence =
-            IcebergWriterExecOptions::variant_shredding_option_presence(&clean_options);
-        let options = IcebergWriteOptions::resolve(ctx, clean_options)?;
-
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for Iceberg format");
-        }
-        if matches!(
-            mode,
-            SinkMode::OverwriteIf { .. } | SinkMode::OverwritePartitions
-        ) {
-            return not_impl_err!("predicate or partition overwrite for Iceberg");
         }
 
         Ok(LogicalPlan::Extension(Extension {
@@ -138,10 +124,6 @@ impl TableFormat for IcebergTableFormat {
                     bucket_by,
                     sort_order,
                     options,
-                    table_properties,
-                    metadata_location,
-                    catalog_managed_table,
-                    variant_shredding_option_presence,
                     catalog_table,
                 },
             )),
@@ -172,12 +154,7 @@ pub struct IcebergWriteNodeOptions {
     pub partition_by: Vec<CatalogPartitionField>,
     pub bucket_by: Option<BucketBy>,
     pub sort_order: Vec<Sort>,
-    #[educe(PartialEq(ignore), Hash(ignore), PartialOrd(ignore))]
-    pub options: IcebergWriteOptions,
-    pub table_properties: Vec<(String, String)>,
-    pub metadata_location: Option<String>,
-    pub catalog_managed_table: bool,
-    pub variant_shredding_option_presence: crate::physical_plan::VariantShreddingOptionPresence,
+    pub options: Vec<OptionLayer>,
     pub catalog_table: Option<Vec<String>>,
 }
 
@@ -250,10 +227,6 @@ pub(crate) async fn plan_iceberg_write(
         bucket_by: _,
         sort_order,
         options,
-        table_properties,
-        metadata_location,
-        catalog_managed_table,
-        variant_shredding_option_presence,
         catalog_table,
     } = node.options().clone();
 
@@ -266,6 +239,14 @@ pub(crate) async fn plan_iceberg_write(
             return not_impl_err!("predicate or partition overwrite for Iceberg");
         }
     };
+    let metadata_location = metadata_location_from_options(&options);
+    let catalog_managed_table = catalog_managed_iceberg_from_options(&options);
+    let (clean_options, table_properties) =
+        split_iceberg_write_options_and_table_properties(options)?;
+    let variant_shredding_option_presence =
+        IcebergWriterExecOptions::variant_shredding_option_presence(&clean_options);
+    let iceberg_options = IcebergWriteOptions::resolve(ctx, clean_options)?;
+
     let sort_order = create_sort_order(ctx, sort_order, logical_input.schema())?;
     let physical_sort = sort_order.map(|req| {
         req.into_iter()
@@ -277,7 +258,6 @@ pub(crate) async fn plan_iceberg_write(
     });
 
     let table_url = IcebergTableFormat::parse_table_url(vec![path]).await?;
-    let iceberg_options = options;
 
     let store = ctx
         .runtime_env()

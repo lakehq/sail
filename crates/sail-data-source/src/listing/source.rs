@@ -21,7 +21,6 @@ use sail_common_datafusion::datasource::{
     find_path_in_options, get_partition_columns_and_file_schema, OptionLayer, SinkInfo, SourceInfo,
     TableFormat,
 };
-use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
 use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
 use crate::listing::utils::{
@@ -234,9 +233,6 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             options,
             catalog_table: _,
         } = info;
-        if is_flow_event_schema(input.schema().as_arrow()) {
-            return plan_err!("cannot write streaming data to listing table");
-        }
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for writing listing table format");
         }
@@ -249,13 +245,11 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
                 Arc::new(input),
                 FileWriteOptions {
                     format: Arc::new(write_format),
+                    path,
                     mode,
                     partition_by,
-                    sort_order,
+                    sort_by: sort_order,
                     bucket_by,
-                    options: vec![OptionLayer::OptionList {
-                        items: vec![("path".to_string(), path)],
-                    }],
                 },
             )),
         }))

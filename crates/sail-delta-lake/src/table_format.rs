@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
+use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::{LogicalPlan, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
@@ -24,6 +25,7 @@ use sail_common_datafusion::datasource::{
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_data_source::options::ResolveOptions;
+use sail_data_source::resolve_listing_urls;
 use url::Url;
 
 use crate::kernel::DeltaSnapshotConfig;
@@ -42,7 +44,6 @@ use crate::spec::{
     CommitAction, DataType as DeltaDataType, DeltaOperation, MetadataValue, Protocol, StructField,
     StructType, TableFeature,
 };
-use crate::storage::{directory_path, directory_url};
 use crate::table::{
     infer_delta_logical_metadata, infer_delta_logical_schema, open_table_with_object_store,
     open_table_with_object_store_and_table_config,
@@ -124,7 +125,7 @@ impl TableFormat for DeltaTableFormat {
         Ok(TableFormatMetadata { schema, properties })
     }
 
-    async fn create_writer(&self, ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
+    async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
         let Some(path) = find_path_in_options(&info.options) else {
             return plan_err!("missing path in Delta table options");
         };
@@ -137,34 +138,22 @@ impl TableFormat for DeltaTableFormat {
             options,
             catalog_table,
         } = info;
-        let (options, table_properties) = split_delta_write_options_and_table_properties(options)?;
-        let mut table_properties = table_properties.into_iter().collect::<Vec<_>>();
-        table_properties.sort_by(|a, b| a.0.cmp(&b.0));
-
-        if is_flow_event_schema(input.schema().as_arrow()) {
-            return not_impl_err!("writing streaming data to Delta table");
-        }
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for Delta format");
         }
         if partition_by.iter().any(|field| field.transform.is_some()) {
             return not_impl_err!("partition transforms for Delta format");
         }
-        if matches!(mode, SinkMode::OverwritePartitions) {
-            return not_impl_err!("unsupported sink mode for Delta: {mode:?}");
-        }
-
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(DeltaWriteNode::new(
                 Arc::new(input),
                 DeltaWriteNodeOptions {
-                    path: directory_path(path),
+                    path,
                     mode,
                     partition_by,
                     bucket_by,
                     sort_order,
-                    options: DeltaWriteOptions::resolve(ctx, options)?,
-                    table_properties,
+                    options,
                     catalog_table,
                 },
             )),
@@ -318,8 +307,7 @@ pub struct DeltaWriteNodeOptions {
     pub bucket_by: Option<BucketBy>,
     pub sort_order: Vec<Sort>,
     #[educe(PartialEq(ignore), Hash(ignore), PartialOrd(ignore))]
-    pub options: DeltaWriteOptions,
-    pub table_properties: Vec<(String, String)>,
+    pub options: Vec<OptionLayer>,
     pub catalog_table: Option<Vec<String>>,
 }
 
@@ -390,9 +378,12 @@ pub(crate) async fn plan_delta_write(
         bucket_by: _,
         sort_order,
         options,
-        table_properties,
         catalog_table,
     } = node.options().clone();
+
+    if is_flow_event_schema(logical_input.schema().as_arrow()) {
+        return not_impl_err!("writing streaming data to Delta table");
+    }
 
     let mode = match mode {
         SinkMode::ErrorIfExists => PhysicalSinkMode::ErrorIfExists,
@@ -416,8 +407,9 @@ pub(crate) async fn plan_delta_write(
         .map(|field| field.column)
         .collect::<Vec<_>>();
 
-    let table_url = DeltaTableFormat::parse_table_url(ctx, vec![directory_path(path)]).await?;
-    let delta_options = options;
+    let table_url = DeltaTableFormat::parse_table_url(ctx, vec![path]).await?;
+    let (options, table_properties) = split_delta_write_options_and_table_properties(options)?;
+    let delta_options = DeltaWriteOptions::resolve(ctx, options)?;
 
     let object_store = ctx
         .runtime_env()
@@ -428,6 +420,8 @@ pub(crate) async fn plan_delta_write(
         table_url.clone(),
         object_store,
         Default::default(),
+        // Only partition columns and table existence are needed at planning time;
+        // skip replaying Add/Remove file actions which are not used here.
         DeltaSnapshotConfig {
             require_files: false,
             ..Default::default()
@@ -1266,11 +1260,11 @@ pub(crate) fn parse_location_to_url(path: &str) -> Result<Url> {
         // Reject "scheme-like" strings on Windows such as `c:/foo` that `Url::parse`
         // accepts as opaque URLs.
         if url.scheme().len() > 1 {
-            return Ok(directory_url(url));
+            return Ok(url);
         }
     }
     if std::path::Path::new(path).is_absolute() {
-        return Url::from_file_path(directory_path(path.to_string()))
+        return Url::from_file_path(path)
             .map_err(|_| DataFusionError::Plan(format!("invalid file path: {path}")));
     }
     Err(DataFusionError::Plan(format!(
@@ -1279,9 +1273,10 @@ pub(crate) fn parse_location_to_url(path: &str) -> Result<Url> {
 }
 
 impl DeltaTableFormat {
-    pub async fn parse_table_url(_ctx: &dyn Session, paths: Vec<String>) -> Result<Url> {
-        match paths.as_slice() {
-            [path] => parse_location_to_url(path),
+    pub async fn parse_table_url(ctx: &dyn Session, paths: Vec<String>) -> Result<Url> {
+        let mut urls = resolve_listing_urls(ctx, paths.clone()).await?;
+        match (urls.pop(), urls.is_empty()) {
+            (Some(path), true) => Ok(<ListingTableUrl as AsRef<Url>>::as_ref(&path).clone()),
             _ => plan_err!("expected a single path for Delta table sink: {paths:?}"),
         }
     }
@@ -1384,8 +1379,9 @@ async fn detect_merge_strategy(
     ctx: &dyn Session,
     info: &RowLevelWriteInfo,
 ) -> Result<MergeStrategy> {
-    let table_url = match parse_location_to_url(&info.target.path) {
-        Ok(url) => url,
+    let mut urls = resolve_listing_urls(ctx, vec![info.target.path.clone()]).await?;
+    let table_url = match (urls.pop(), urls.is_empty()) {
+        (Some(path), true) => <ListingTableUrl as AsRef<Url>>::as_ref(&path).clone(),
         _ => return Ok(MergeStrategy::Eager),
     };
     let object_store = ctx

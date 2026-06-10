@@ -6,11 +6,10 @@ use datafusion::execution::SessionState;
 use datafusion::logical_expr::{Extension, LogicalPlan, TableSource, UserDefinedLogicalNode};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use datafusion_common::{internal_err, not_impl_err, plan_err, DFSchema, DFSchemaRef, Result};
+use datafusion_common::{internal_err, not_impl_err, DFSchema, DFSchemaRef, Result};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
-use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::formats::noop::writer::NoopSinkExec;
@@ -43,10 +42,6 @@ impl TableFormat for NoopTableFormat {
             ..
         } = info;
 
-        if is_flow_event_schema(input.schema().as_arrow()) {
-            return plan_err!("cannot write streaming data to noop format");
-        }
-
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for noop write format");
         }
@@ -76,11 +71,15 @@ impl NoopWriteNode {
             schema: Arc::new(DFSchema::empty()),
         }
     }
+
+    pub fn name(&self) -> &str {
+        "NoopWrite"
+    }
 }
 
 impl UserDefinedLogicalNodeCore for NoopWriteNode {
     fn name(&self) -> &str {
-        "NoopWrite"
+        self.name()
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
@@ -96,7 +95,7 @@ impl UserDefinedLogicalNodeCore for NoopWriteNode {
     }
 
     fn fmt_for_explain(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "NoopWrite")
+        write!(f, "{}", self.name())
     }
 
     fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {

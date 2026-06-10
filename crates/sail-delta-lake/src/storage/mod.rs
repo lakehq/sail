@@ -45,22 +45,6 @@ pub use config::StorageConfig;
 pub type ObjectStoreRef = Arc<dyn ObjectStore>;
 pub type LogStoreRef = Arc<dyn LogStore>;
 
-pub(crate) fn directory_path(path: String) -> String {
-    if path.ends_with(object_store::path::DELIMITER) {
-        path
-    } else {
-        format!("{path}{}", object_store::path::DELIMITER)
-    }
-}
-
-pub(crate) fn directory_url(mut url: Url) -> Url {
-    if !url.path().ends_with(object_store::path::DELIMITER) {
-        let path = directory_path(url.path().to_string());
-        url.set_path(&path);
-    }
-    url
-}
-
 /// Retrieve an object store for the provided table URL from the given TaskContext.
 pub fn get_object_store_from_context(
     context: &Arc<TaskContext>,

@@ -79,11 +79,15 @@ impl ConsoleWriteNode {
             schema: Arc::new(DFSchema::empty()),
         }
     }
+
+    pub fn name(&self) -> &str {
+        "ConsoleWrite"
+    }
 }
 
 impl UserDefinedLogicalNodeCore for ConsoleWriteNode {
     fn name(&self) -> &str {
-        "ConsoleWrite"
+        self.name()
     }
 
     fn inputs(&self) -> Vec<&LogicalPlan> {
@@ -99,7 +103,7 @@ impl UserDefinedLogicalNodeCore for ConsoleWriteNode {
     }
 
     fn fmt_for_explain(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "ConsoleWrite")
+        write!(f, "{}", self.name())
     }
 
     fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {

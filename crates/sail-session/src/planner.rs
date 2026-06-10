@@ -11,7 +11,7 @@ use datafusion_common::{internal_datafusion_err, internal_err, DFSchema, ToDFSch
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
 use datafusion_physical_expr::{create_physical_sort_exprs, Partitioning};
 use sail_catalog::manager::CatalogManager;
-use sail_catalog_system::planner::SystemPhysicalPlanner;
+use sail_catalog_system::planner::SystemTablePhysicalPlanner;
 use sail_common_datafusion::catalog::TableKind;
 use sail_common_datafusion::datasource::{SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -80,7 +80,7 @@ impl QueryPlanner for ExtensionQueryPlanner {
             Arc::new(DeltaPhysicalPlanner),
             Arc::new(IcebergPhysicalPlanner),
             Arc::new(DeltaExtensionPlanner),
-            Arc::new(SystemPhysicalPlanner),
+            Arc::new(SystemTablePhysicalPlanner),
             Arc::new(ListingPhysicalPlanner),
             Arc::new(ConsolePhysicalPlanner),
             Arc::new(NoopPhysicalPlanner),

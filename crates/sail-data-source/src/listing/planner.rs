@@ -26,7 +26,8 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::source::DataSourceExec;
 use futures::{future, stream, Stream, StreamExt};
 use object_store::ObjectStore;
-use sail_common_datafusion::datasource::{create_sort_order, find_path_in_options};
+use sail_common_datafusion::datasource::create_sort_order;
+use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
@@ -194,9 +195,10 @@ async fn plan_file_write(
     physical_input: Arc<dyn ExecutionPlan>,
     node: &FileWriteNode,
 ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-    let Some(path) = find_path_in_options(&node.options().options) else {
-        return plan_err!("missing path in listing table options");
-    };
+    if is_flow_event_schema(logical_input.schema().as_arrow()) {
+        return plan_err!("cannot write streaming data to listing table");
+    }
+    let path = node.options().path.clone();
     // always write multi-file output
     let path = if path.ends_with(object_store::path::DELIMITER) {
         path
@@ -231,7 +233,7 @@ async fn plan_file_write(
     };
     let sort_order = create_sort_order(
         session_state,
-        node.options().sort_order.clone(),
+        node.options().sort_by.clone(),
         logical_input.schema(),
     )?;
     node.options()
