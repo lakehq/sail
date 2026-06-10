@@ -29,7 +29,7 @@ const VARIANT_INFERENCE_BUFFER_SIZE_OPTION_KEYS: &[&str] = &[
     "variantInferenceBufferSize",
 ];
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Hash)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct VariantShreddingOptionPresence {
     shred_variants: bool,
     variant_inference_buffer_size: bool,
