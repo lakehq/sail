@@ -252,7 +252,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
                 return plan_err!("listing table path already exists: {path}");
             }
             SinkMode::IgnoreIfExists if target_exists => {
-                return Ok(LogicalPlanBuilder::empty(false).build()?);
+                return LogicalPlanBuilder::empty(false).build();
             }
             SinkMode::ErrorIfExists | SinkMode::IgnoreIfExists | SinkMode::Append => false,
             SinkMode::Overwrite => true,
