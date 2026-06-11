@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -157,13 +158,104 @@ fn schema_of_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     Ok(Arc::new(StringArray::from(vec![type_ddl])))
 }
 
-fn infer_json_schema_type(
-    json_string: &str,
-    _options: &SparkSchemaOfJsonOptions,
-) -> Result<String> {
-    let value = serde_json::from_str::<serde_json::Value>(json_string)
+fn infer_json_schema_type(json_string: &str, options: &SparkSchemaOfJsonOptions) -> Result<String> {
+    let json_string: Cow<str> = if options.allow_unquoted_field_names {
+        Cow::Owned(quote_unquoted_field_names(json_string))
+    } else {
+        Cow::Borrowed(json_string)
+    };
+    let value = serde_json::from_str::<serde_json::Value>(&json_string)
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
     value_to_ddl_type(&value)
+}
+
+/// Wraps unquoted object field names in double quotes so that the string can
+/// be parsed by `serde_json`, mirroring the Jackson `ALLOW_UNQUOTED_FIELD_NAMES`
+/// feature that Spark enables for the `allowUnquotedFieldNames` option.
+/// Field names are restricted to alphanumeric characters, `_`, and `$`;
+/// anything else is left untouched so that invalid JSON still fails to parse.
+fn quote_unquoted_field_names(json: &str) -> String {
+    enum Frame {
+        Object { expecting_key: bool },
+        Array,
+    }
+
+    fn is_unquoted_name_char(c: char) -> bool {
+        c.is_alphanumeric() || c == '_' || c == '$'
+    }
+
+    let mut output = String::with_capacity(json.len());
+    let mut stack: Vec<Frame> = Vec::new();
+    let mut chars = json.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                // Copy quoted strings verbatim, accounting for escapes.
+                output.push(c);
+                let mut escaped = false;
+                for s in chars.by_ref() {
+                    output.push(s);
+                    if escaped {
+                        escaped = false;
+                    } else if s == '\\' {
+                        escaped = true;
+                    } else if s == '"' {
+                        break;
+                    }
+                }
+            }
+            '{' => {
+                output.push(c);
+                stack.push(Frame::Object {
+                    expecting_key: true,
+                });
+            }
+            '[' => {
+                output.push(c);
+                stack.push(Frame::Array);
+            }
+            '}' | ']' => {
+                output.push(c);
+                stack.pop();
+            }
+            ',' => {
+                output.push(c);
+                if let Some(Frame::Object { expecting_key }) = stack.last_mut() {
+                    *expecting_key = true;
+                }
+            }
+            ':' => {
+                output.push(c);
+                if let Some(Frame::Object { expecting_key }) = stack.last_mut() {
+                    *expecting_key = false;
+                }
+            }
+            _ => {
+                let in_key_position = matches!(
+                    stack.last(),
+                    Some(Frame::Object {
+                        expecting_key: true
+                    })
+                );
+                if in_key_position && is_unquoted_name_char(c) {
+                    output.push('"');
+                    output.push(c);
+                    while let Some(next) = chars.peek() {
+                        if is_unquoted_name_char(*next) {
+                            output.push(*next);
+                            chars.next();
+                        } else {
+                            break;
+                        }
+                    }
+                    output.push('"');
+                } else {
+                    output.push(c);
+                }
+            }
+        }
+    }
+    output
 }
 
 fn value_to_ddl_type(value: &Value) -> Result<String> {
@@ -221,6 +313,7 @@ impl ModeOptions {
 #[derive(Debug, Default)]
 struct SparkSchemaOfJsonOptions {
     mode: ModeOptions,
+    allow_unquoted_field_names: bool,
     _allow_numeric_leading_zeros: bool,
 }
 
@@ -232,21 +325,38 @@ impl SparkSchemaOfJsonOptions {
         // match each k v pair
         for (key, value) in keys.iter().zip(values.iter()) {
             let (key, value) = Self::unwrap_or_key_value(key, value)?;
-            match key {
+            // Spark reads JSON options through a case-insensitive map.
+            match key.to_lowercase().as_str() {
                 "mode" => self.mode = ModeOptions::from_str(value.to_string())?,
-                "allowNumericLeadingZeros" => {
+                "allowunquotedfieldnames" => {
+                    self.allow_unquoted_field_names = Self::parse_boolean_option(key, value)?;
+                }
+                "allownumericleadingzeros" => {
                     // TODO: extend serde/serde_json5 to support leading 0s
-                    return Err(DataFusionError::NotImplemented(format!(
-                        "`{}` currently doesn't support option allowNumericLeadingZeros",
-                        SparkSchemaOfJson::SCHEMA_OF_JSON_NAME,
-                    )));
+                    if Self::parse_boolean_option(key, value)? {
+                        return Err(DataFusionError::NotImplemented(format!(
+                            "`{}` currently doesn't support option allowNumericLeadingZeros",
+                            SparkSchemaOfJson::SCHEMA_OF_JSON_NAME,
+                        )));
+                    }
                 }
-                other => {
-                    return plan_err!("Found unsupported option type when parsing options: {other}")
-                }
+                _ => return plan_err!("Found unsupported option type when parsing options: {key}"),
             }
         }
         Ok(self)
+    }
+
+    fn parse_boolean_option(key: &str, value: &str) -> Result<bool> {
+        // Spark parses boolean options with Scala's `toBoolean`, which is
+        // case-insensitive and rejects anything other than "true"/"false".
+        match value.to_lowercase().as_str() {
+            "true" => Ok(true),
+            "false" => Ok(false),
+            _ => plan_err!(
+                "Invalid boolean value `{value}` for option `{key}` in `{}`",
+                SparkSchemaOfJson::SCHEMA_OF_JSON_NAME
+            ),
+        }
     }
 
     fn get_keys_values_from_map(inner_struct: StructArray) -> Result<(StringArray, StringArray)> {
