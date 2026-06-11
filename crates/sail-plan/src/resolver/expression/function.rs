@@ -71,7 +71,7 @@ impl PlanResolver<'_> {
         let canonical_function_name = function_name.to_ascii_lowercase();
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
         if let Some(udf) = catalog_manager.get_function(&canonical_function_name)? {
-            if udf.inner().as_any().is::<PySparkUnresolvedUDF>() {
+            if udf.inner().downcast_ref::<PySparkUnresolvedUDF>().is_some() {
                 state.config_mut().arrow_allow_large_var_types = true;
             }
         }
@@ -95,7 +95,7 @@ impl PlanResolver<'_> {
             if ignore_nulls.is_some() || filter.is_some() || order_by.is_some() {
                 return Err(PlanError::invalid("invalid scalar function clause"));
             }
-            if let Some(f) = udf.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>() {
+            if let Some(f) = udf.inner().downcast_ref::<PySparkUnresolvedUDF>() {
                 if f.eval_type().is_table_function() {
                     return Err(PlanError::AnalysisError(format!(
                         "user-defined table function cannot be used as a scalar function: {function_name}"
@@ -321,7 +321,7 @@ impl PlanResolver<'_> {
                 // Nested-field wildcard expansion can produce a MultiExpr.
                 // Flatten it so `struct(a.*)` can become `struct(a.x, a.y, ...)`.
                 Expr::ScalarFunction(ScalarFunction { func, args })
-                    if func.inner().as_any().is::<MultiExpr>() =>
+                    if func.inner().downcast_ref::<MultiExpr>().is_some() =>
                 {
                     if name.len() == args.len() {
                         for (n, arg) in name.into_iter().zip(args) {

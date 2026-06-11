@@ -18,12 +18,14 @@ edition = { workspace = true }
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-catalog = { path = "../sail-catalog" }
 sail-data-source = { path = "../sail-data-source" }
 sail-physical-plan = { path = "../sail-physical-plan" }
 
 # DataFusion dependencies
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 datafusion-functions-nested = { workspace = true }
 
@@ -34,7 +36,6 @@ parquet-variant-compute = { workspace = true }
 
 # Essential utilities
 async-trait = { workspace = true }
-educe = { workspace = true }
 object_store = { workspace = true }
 thiserror = { workspace = true }
 chrono = { workspace = true }
@@ -56,9 +57,13 @@ moka = { workspace = true }
 once_cell = { workspace = true }
 roaring = { workspace = true }
 crc32fast = { workspace = true }
+educe = { workspace = true }
 
 [dev-dependencies]
 parquet-variant-json = { workspace = true }
+
+[build-dependencies]
+sail-build-scripts = { path = "../sail-build-scripts" }
 
 [lints]
 workspace = true

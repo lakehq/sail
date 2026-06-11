@@ -104,6 +104,7 @@ message ExtendedScalarUdf {
     SparkToCsvUdf spark_to_csv = 23;
     SparkPmodUdf spark_pmod = 24;
     SparkParseJsonUdf spark_parse_json = 25;
+    SparkStructRenameUdf spark_struct_rename = 26;
   }
 }
 
@@ -212,6 +213,12 @@ message SparkPmodUdf {
 
 message SparkFromCsvUdf {
   string session_timezone = 1;
+}
+
+message SparkStructRenameUdf {
+  // The target data type (struct or container-of-struct), encoded as Arrow
+  // ArrowType protobuf bytes.
+  bytes target_type = 1;
 }
 
 message SparkToCsvUdf {
@@ -575,6 +582,7 @@ message DeltaWriterExecNode {
   PhysicalSinkMode sink_mode = 7;
   map<string, string> metadata_configuration = 8;
   DeltaWriteContext write_context = 9;
+  repeated string catalog_table = 10;
 }
 
 message DeltaCommitExecNode {
@@ -586,6 +594,7 @@ message DeltaCommitExecNode {
   PhysicalSinkMode sink_mode = 6;
   optional string user_metadata = 7;
   DeltaCommitContext commit_context = 8;
+  repeated string catalog_table = 9;
 }
 
 message DeltaScanByAddsExecNode {
@@ -599,6 +608,7 @@ message DeltaScanByAddsExecNode {
   optional bytes pushdown_filter = 8;
   int64 version = 9;
   optional bytes statistics = 10;
+  repeated string catalog_table = 11;
   // TODO: Consider snapshot hints (partition columns, kernel schema) to avoid worker log reads.
 }
 

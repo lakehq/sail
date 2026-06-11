@@ -22,6 +22,24 @@
 ///
 /// Controls how the log-replay reads the `_delta_log`.
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogManagedCommitFile {
+    pub version: i64,
+    pub file_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogManagedCommitSet {
+    pub latest_table_version: i64,
+    pub commits: Vec<CatalogManagedCommitFile>,
+}
+
+impl CatalogManagedCommitSet {
+    pub fn latest_replay_version(&self) -> Option<i64> {
+        (self.latest_table_version >= 0).then_some(self.latest_table_version)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeltaSnapshotConfig {
     /// Whether snapshots should eagerly load file level metadata.
     pub require_files: bool,
@@ -29,6 +47,8 @@ pub struct DeltaSnapshotConfig {
     pub log_buffer_size: usize,
     /// Number of log entries pulled per batch when materializing logs.
     pub log_batch_size: usize,
+    /// Catalog-ratified commits for a catalog-managed Delta snapshot.
+    pub catalog_managed_commits: Option<CatalogManagedCommitSet>,
 }
 
 impl Default for DeltaSnapshotConfig {
@@ -37,6 +57,7 @@ impl Default for DeltaSnapshotConfig {
             require_files: true,
             log_buffer_size: default_parallelism() * 4,
             log_batch_size: 1024,
+            catalog_managed_commits: None,
         }
     }
 }

@@ -5,7 +5,7 @@ use arrow::datatypes::DataType;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
 use datafusion_expr::expr::WindowFunctionParams;
-use datafusion_expr::simplify::SimplifyContext;
+use datafusion_expr::simplify::SimplifyContextBuilder;
 use datafusion_expr::{
     expr, AggregateUDF, ExprSchemable, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
@@ -97,7 +97,6 @@ impl PlanResolver<'_> {
                     .get_function(&canonical_function_name)?;
                 let registered_udaf = catalog_function.as_ref().and_then(|udf| {
                     udf.inner()
-                        .as_any()
                         .downcast_ref::<PySparkUnresolvedUDF>()
                         .filter(|f| {
                             matches!(
@@ -381,7 +380,9 @@ impl PlanResolver<'_> {
         }
         // Apply type coercion so that expressions like `CAST(0 AS INTERVAL SECOND)`
         // have compatible types before physical evaluation.
-        let context = SimplifyContext::default().with_schema(schema.clone());
+        let context = SimplifyContextBuilder::default()
+            .with_schema(schema.clone())
+            .build();
         let simplifier = ExprSimplifier::new(context);
         let coerced = simplifier.coerce(resolved, schema).map_err(|e| {
             PlanError::invalid(format!(

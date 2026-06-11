@@ -45,7 +45,7 @@ impl RuntimeEnvFactory {
     {
         let registry = DynamicObjectStoreRegistry::new(self.runtime.clone());
         let cache_config = CacheManagerConfig::default()
-            .with_files_statistics_cache(Some(self.create_file_statistics_cache()))
+            .with_file_statistics_cache(Some(self.create_file_statistics_cache()))
             .with_list_files_cache(Some(self.create_file_listing_cache()))
             .with_file_metadata_cache(Some(self.create_file_metadata_cache()));
         let builder = RuntimeEnvBuilder::default()

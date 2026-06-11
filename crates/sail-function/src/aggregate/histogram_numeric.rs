@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -184,10 +183,6 @@ impl HistogramNumericFunction {
 }
 
 impl AggregateUDFImpl for HistogramNumericFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "histogram_numeric"
     }

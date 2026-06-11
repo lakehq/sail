@@ -1,21 +1,18 @@
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, Field, SchemaRef};
 use datafusion::catalog::Session;
-use datafusion::datasource::file_format::FileFormat;
-use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
+use datafusion::datasource::physical_plan::FileSinkConfig;
 use datafusion::execution::object_store::ObjectStoreUrl;
-use datafusion::logical_expr::dml::InsertOp;
-use datafusion::logical_expr::TableSource;
+use datafusion::logical_expr::{Extension, LogicalPlan, TableSource};
+use datafusion::physical_expr::LexRequirement;
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{internal_err, not_impl_err, plan_err, GetExt, Result, Statistics};
-use datafusion_datasource::file_compression_type::FileCompressionType;
+use datafusion_common::{not_impl_err, plan_err, Result, Statistics};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::{ListingTableUrl, TableSchema};
@@ -24,14 +21,13 @@ use sail_common_datafusion::datasource::{
     find_path_in_options, get_partition_columns_and_file_schema, OptionLayer, SinkInfo, SourceInfo,
     TableFormat,
 };
-use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 
 use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
 use crate::listing::utils::{
     infer_partitions, rewrite_utf8view_fields, sample_listing_files, validate_partitions,
 };
+use crate::listing::write::{FileWriteNode, FileWriteOptions};
 use crate::resolve_listing_urls;
-use crate::utils::split_parquet_compression_string;
 
 /// A trait for creating format instances when reading and writing listing files.
 pub trait FormatFactory: Debug + Send + Sync + 'static {
@@ -114,9 +110,21 @@ pub struct ListingScanInput {
     pub compression: CompressionTypeVariant,
 }
 
+/// Configuration for creating a listing-file sink execution plan.
+pub struct ListingSinkInput {
+    pub input: Arc<dyn ExecutionPlan>,
+    pub sink: FileSinkConfig,
+    pub sort_order: Option<LexRequirement>,
+}
+
 /// A trait for format-specific logic for writing listing files.
+#[async_trait]
 pub trait WriteFormat: Debug + Send + Sync + 'static {
-    fn create_write_format(&self) -> Result<(Arc<dyn FileFormat>, Option<String>)>;
+    async fn sink(
+        &self,
+        ctx: &dyn Session,
+        input: ListingSinkInput,
+    ) -> Result<Arc<dyn ExecutionPlan>>;
 }
 
 #[derive(Debug, Default)]
@@ -137,6 +145,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
     ) -> Result<Arc<dyn TableSource>> {
         let SourceInfo {
             paths,
+            catalog_table: _,
             schema,
             constraints,
             partition_by,
@@ -211,97 +220,38 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         Ok(Arc::new(source))
     }
 
-    async fn create_writer(
-        &self,
-        ctx: &dyn Session,
-        info: SinkInfo,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
+    async fn create_writer(&self, ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
         let Some(path) = find_path_in_options(&info.options) else {
             return plan_err!("missing path in listing table options");
         };
         let SinkInfo {
             input,
-            // TODO: sink mode is ignored since the file formats only support append operation
-            mode: _,
+            mode,
             partition_by,
             bucket_by,
             sort_order,
             options,
-            logical_schema: _,
+            catalog_table: _,
         } = info;
-        if is_flow_event_schema(&input.schema()) {
-            return plan_err!("cannot write streaming data to listing table");
-        }
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for writing listing table format");
         }
         if partition_by.iter().any(|field| field.transform.is_some()) {
             return not_impl_err!("partition transforms for writing listing table format");
         }
-        // always write multi-file output
-        let path = if path.ends_with(object_store::path::DELIMITER) {
-            path
-        } else {
-            format!("{path}{}", object_store::path::DELIMITER)
-        };
-        let table_paths = crate::url::resolve_listing_urls(ctx, vec![path.clone()]).await?;
-        let object_store_url = if let Some(path) = table_paths.first() {
-            path.object_store()
-        } else {
-            return internal_err!("empty listing table path: {path}");
-        };
-        // We do not need to specify the exact data type for partition columns,
-        // since the type is inferred from the record batch during writing.
-        // This is how DataFusion handles physical planning for `LogicalPlan::Copy`.
-        let table_partition_cols = partition_by
-            .iter()
-            .map(|field| (field.column.clone(), DataType::Null))
-            .collect::<Vec<_>>();
         let write_format = T::write(ctx, options)?;
-        let (format, compression) = write_format.create_write_format()?;
-        let file_extension = if let Some(file_compression_type) = format.compression_type() {
-            match format.get_ext_with_compression(&file_compression_type) {
-                Ok(ext) => ext,
-                Err(_) => format.get_ext(),
-            }
-        } else {
-            let ext = format.get_ext();
-            if let Some(compression) = compression {
-                if matches!(ext.as_str(), ".parquet" | "parquet") {
-                    let ext = ext.strip_prefix('.').unwrap_or(&ext);
-                    let compression = compression.strip_prefix('.').unwrap_or(&compression);
-                    let (compression, _level) =
-                        split_parquet_compression_string(&compression.to_lowercase())?;
-                    let file_compression_type = FileCompressionType::from_str(compression.as_str());
-                    let compression = match file_compression_type {
-                        // Parquet has compression types not supported by FileCompressionType
-                        Ok(compression) => compression.get_ext(),
-                        Err(_) => compression,
-                    };
-                    let compression = compression.strip_prefix('.').unwrap_or(&compression);
-                    let result = format!("{compression}.{ext}");
-                    result
-                } else {
-                    ext
-                }
-            } else {
-                ext
-            }
-        };
-        let conf = FileSinkConfig {
-            original_url: path,
-            object_store_url,
-            file_group: Default::default(),
-            table_paths,
-            output_schema: input.schema(),
-            table_partition_cols,
-            insert_op: InsertOp::Append,
-            keep_partition_by_columns: false,
-            file_extension,
-            file_output_mode: FileOutputMode::Automatic,
-        };
-        format
-            .create_writer_physical_plan(input, ctx, conf, sort_order)
-            .await
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(FileWriteNode::new(
+                Arc::new(input),
+                FileWriteOptions {
+                    format: Arc::new(write_format),
+                    path,
+                    mode,
+                    partition_by,
+                    sort_by: sort_order,
+                    bucket_by,
+                },
+            )),
+        }))
     }
 }

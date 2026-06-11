@@ -450,7 +450,6 @@ impl PlanResolver<'_> {
                     if agg
                         .func
                         .inner()
-                        .as_any()
                         .downcast_ref::<PySparkGroupAggregateUDF>()
                         .is_some()
                     {

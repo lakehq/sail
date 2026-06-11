@@ -1,7 +1,6 @@
 // [CREDIT]: https://github.com/apache/datafusion/blob/4a41173ba3df9b5d47638599c819a1e6e46ad92b/datafusion/functions-nested/src/set_ops.rs
 // Adapted from DataFusion's set operation implementation with Spark-compatible empty array handling for array intersections.
 
-use std::any::Any;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -46,10 +45,6 @@ impl ArrayIntersect {
 }
 
 impl ScalarUDFImpl for ArrayIntersect {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "array_intersect"
     }

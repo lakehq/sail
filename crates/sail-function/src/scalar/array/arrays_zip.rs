@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::ops::BitAnd;
 use std::sync::Arc;
 
@@ -54,10 +53,6 @@ impl ArraysZip {
 }
 
 impl ScalarUDFImpl for ArraysZip {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "arrays_zip"
     }

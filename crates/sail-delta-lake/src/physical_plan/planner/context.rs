@@ -19,18 +19,18 @@ use datafusion::common::{DataFusionError, Result};
 use object_store::ObjectStore;
 use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
-use sail_data_source::options::gen::DeltaWriteOptions;
 use url::Url;
 
 use super::log_segment::LogSegmentFiles;
 use crate::kernel::DeltaSnapshotConfig;
+use crate::options::gen::DeltaWriteOptions;
 use crate::physical_plan::{
     prepare_delta_write_context, DeltaCommitContext, DeltaWriteContext, DeltaWriterExecOptions,
 };
 use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
 use crate::table::{
-    create_delta_table_with_object_store, open_table_with_object_store_and_table_config,
-    DeltaSnapshot, DeltaTable,
+    create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot, DeltaSnapshot,
+    DeltaTable,
 };
 
 /// Configuration shared by all Delta planners.
@@ -59,6 +59,7 @@ pub struct DeltaPlannerConfig {
     pub metadata_schema: Option<SchemaRef>,
     pub identity_columns: HashMap<String, CatalogTableColumnIdentity>,
     pub table_snapshot: Option<Arc<DeltaSnapshot>>,
+    pub catalog_table: Option<Vec<String>>,
 }
 
 impl DeltaPlannerConfig {
@@ -83,6 +84,7 @@ impl DeltaPlannerConfig {
             metadata_schema: None,
             identity_columns: HashMap::new(),
             table_snapshot: None,
+            catalog_table: None,
         }
     }
 
@@ -122,6 +124,11 @@ impl DeltaPlannerConfig {
 
     pub fn with_table_snapshot(mut self, table_snapshot: Option<Arc<DeltaSnapshot>>) -> Self {
         self.table_snapshot = table_snapshot;
+        self
+    }
+
+    pub fn with_catalog_table(mut self, catalog_table: Option<Vec<String>>) -> Self {
+        self.catalog_table = catalog_table;
         self
     }
 }
@@ -198,6 +205,10 @@ impl<'a> PlannerContext<'a> {
 
     pub fn table_snapshot(&self) -> Option<&Arc<DeltaSnapshot>> {
         self.config.table_snapshot.as_ref()
+    }
+
+    pub fn catalog_table(&self) -> Option<&Vec<String>> {
+        self.config.catalog_table.as_ref()
     }
 
     pub fn commit_context(&self) -> DeltaCommitContext {
@@ -291,14 +302,24 @@ impl<'a> PlannerContext<'a> {
             table.state = Some(Arc::clone(snapshot));
             Ok(table)
         } else {
-            open_table_with_object_store_and_table_config(
-                self.config.table_url.clone(),
-                object_store,
-                StorageConfig,
-                table_config,
-            )
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))
+            let log_store = self.log_store()?;
+            let mut table_config = table_config;
+            if let Some(catalog_table) = &self.config.catalog_table {
+                table_config.catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
+                    &self.session,
+                    catalog_table,
+                    &self.config.table_url,
+                    log_store.clone(),
+                    None,
+                )
+                .await?;
+            }
+            let mut table = DeltaTable::new(log_store, table_config);
+            table
+                .load()
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            Ok(table)
         }
     }
 }

@@ -115,7 +115,7 @@ hatch run test.spark-3.5.7:pytest --pyargs pysail
 
 You can also run the tests against a JVM-based Spark Connect server
 by specifying a `local` Spark remote URL.
-This is useful to ensure that the tests are written correctly to reflect the Spark behavior.
+This is useful to confirm the tests are written correctly to reflect the Spark behavior.
 Note that tests written for extended features of Sail will be skipped in this case.
 
 ```bash
