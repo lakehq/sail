@@ -104,6 +104,7 @@ message ExtendedScalarUdf {
     SparkToCsvUdf spark_to_csv = 23;
     SparkPmodUdf spark_pmod = 24;
     SparkParseJsonUdf spark_parse_json = 25;
+    SparkStructRenameUdf spark_struct_rename = 26;
   }
 }
 
@@ -212,6 +213,12 @@ message SparkPmodUdf {
 
 message SparkFromCsvUdf {
   string session_timezone = 1;
+}
+
+message SparkStructRenameUdf {
+  // The target data type (struct or container-of-struct), encoded as Arrow
+  // ArrowType protobuf bytes.
+  bytes target_type = 1;
 }
 
 message SparkToCsvUdf {

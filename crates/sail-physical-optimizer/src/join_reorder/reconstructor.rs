@@ -939,7 +939,7 @@ impl<'a> PlanReconstructor<'a> {
         };
 
         let retargeted = combined_filter.transform(|expr| {
-            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+            if let Some(col) = expr.downcast_ref::<Column>() {
                 let (side, base_idx) = find_side_and_index(col)?;
                 let new_pos = index_of(side, base_idx)?;
                 let new_col = Column::new(col.name(), new_pos);
@@ -1021,7 +1021,7 @@ impl<'a> PlanReconstructor<'a> {
 
         let expr_arc = Arc::clone(expr);
         let transformed = expr_arc.transform(|node| {
-            if let Some(col) = node.as_any().downcast_ref::<Column>() {
+            if let Some(col) = node.downcast_ref::<Column>() {
                 // Prefer stable name mapping first
                 if let Some((rel, cidx)) = StableColumn::parse_stable_name(col.name()) {
                     if let Some(pos) = output_map.iter().position(|e| {
@@ -1069,7 +1069,7 @@ impl<'a> PlanReconstructor<'a> {
 
     fn decompose_conjuncts(expr: &Arc<dyn PhysicalExpr>) -> Vec<Arc<dyn PhysicalExpr>> {
         let mut result = Vec::new();
-        if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
+        if let Some(binary) = expr.downcast_ref::<BinaryExpr>() {
             match binary.op() {
                 Operator::And => {
                     result.extend(Self::decompose_conjuncts(binary.left()));
@@ -1206,7 +1206,7 @@ impl<'a> PlanReconstructor<'a> {
     ) -> Result<Option<Arc<dyn PhysicalExpr>>> {
         use datafusion::physical_expr::expressions::BinaryExpr;
 
-        if let Some(binary_expr) = expr.as_any().downcast_ref::<BinaryExpr>() {
+        if let Some(binary_expr) = expr.downcast_ref::<BinaryExpr>() {
             match binary_expr.op() {
                 Operator::And => {
                     // For AND expressions, recursively process left and right sides
@@ -1258,8 +1258,8 @@ impl<'a> PlanReconstructor<'a> {
         use datafusion::physical_expr::expressions::Column;
 
         // Extract column references from both sides of the equality
-        let left_col = binary_expr.left().as_any().downcast_ref::<Column>();
-        let right_col = binary_expr.right().as_any().downcast_ref::<Column>();
+        let left_col = binary_expr.left().downcast_ref::<Column>();
+        let right_col = binary_expr.right().downcast_ref::<Column>();
 
         if let (Some(left), Some(right)) = (left_col, right_col) {
             // Check if this column pair matches any equi-join pair
@@ -1549,7 +1549,6 @@ mod tests {
         let (plan, _map) = reconstructor.reconstruct(&root)?;
         #[expect(clippy::expect_used)]
         let hj = plan
-            .as_any()
             .downcast_ref::<HashJoinExec>()
             .expect("expected HashJoinExec");
 
@@ -1627,7 +1626,6 @@ mod tests {
         let (plan, _map) = reconstructor.reconstruct(&root)?;
         #[expect(clippy::expect_used)]
         let hj = plan
-            .as_any()
             .downcast_ref::<HashJoinExec>()
             .expect("expected HashJoinExec");
 
@@ -1706,7 +1704,6 @@ mod tests {
         let (plan, _) = reconstructor.reconstruct(&root)?;
         #[expect(clippy::expect_used)]
         let hj = plan
-            .as_any()
             .downcast_ref::<HashJoinExec>()
             .expect("expected HashJoinExec");
 

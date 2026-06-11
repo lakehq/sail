@@ -168,10 +168,6 @@ fn append_json_strict(builder: &mut VariantArrayBuilder, json_str: &str) -> Resu
 }
 
 impl ScalarUDFImpl for SparkParseJson {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         if self.safe {
             "try_parse_json"
