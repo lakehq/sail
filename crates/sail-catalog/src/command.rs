@@ -712,10 +712,9 @@ mod tests {
     use async_trait::async_trait;
     use datafusion::catalog::Session;
     use datafusion::execution::context::SessionConfig;
-    use datafusion::physical_plan::ExecutionPlan;
     use datafusion::prelude::SessionContext;
     use datafusion_common::not_impl_err;
-    use datafusion_expr::TableSource;
+    use datafusion_expr::{LogicalPlan, TableSource};
     use sail_common_datafusion::catalog::display::{CatalogObjectDisplay, DefaultCatalogDisplay};
     use sail_common_datafusion::catalog::{
         DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
@@ -934,7 +933,7 @@ mod tests {
             &self,
             _ctx: &dyn Session,
             _info: SinkInfo,
-        ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        ) -> datafusion_common::Result<LogicalPlan> {
             not_impl_err!("unused in test")
         }
 
