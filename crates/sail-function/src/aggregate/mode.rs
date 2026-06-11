@@ -2,10 +2,13 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::sync::Arc;
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/mode.rs>
 use datafusion::arrow;
-use datafusion::arrow::array::{ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray};
+use datafusion::arrow::array::{
+    Array, ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray,
+};
 use datafusion::arrow::datatypes::{
     DataType, Date32Type, Date64Type, Field, FieldRef, Float16Type, Float32Type, Float64Type,
     Int16Type, Int32Type, Int64Type, Int8Type, Time32MillisecondType, Time32SecondType,
@@ -13,7 +16,7 @@ use datafusion::arrow::datatypes::{
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type,
     UInt64Type, UInt8Type,
 };
-use datafusion::common::cast::{as_primitive_array, as_string_array};
+use datafusion::common::cast::{as_list_array, as_primitive_array, as_string_array};
 use datafusion::common::not_impl_err;
 use datafusion::error::Result;
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -70,11 +73,28 @@ impl AggregateUDFImpl for ModeFunction {
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        let value_type = args.input_fields[0].data_type().clone();
+        // The accumulators emit their state as lists in `state()`, so the state fields
+        // must be declared as list types for the partial aggregation output schema to
+        // match. `BytesModeAccumulator` stores its state values as `Utf8` regardless of
+        // the input string type, and all accumulators emit `Int64` frequencies.
+        let value_type = match args.input_fields[0].data_type() {
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => DataType::Utf8,
+            other => other.clone(),
+        };
 
         Ok(vec![
-            Field::new("values", value_type, true).into(),
-            Field::new("frequencies", DataType::UInt64, true).into(),
+            Field::new(
+                "values",
+                DataType::List(Arc::new(Field::new_list_field(value_type, true))),
+                true,
+            )
+            .into(),
+            Field::new(
+                "frequencies",
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
+                true,
+            )
+            .into(),
         ])
     }
 
@@ -204,14 +224,24 @@ where
             return Ok(());
         }
 
-        let values_array = as_primitive_array::<T>(&states[0])?;
-        let counts_array = as_primitive_array::<arrow::datatypes::Int64Type>(&states[1])?;
+        let values_list = as_list_array(&states[0])?;
+        let counts_list = as_list_array(&states[1])?;
 
-        for i in 0..values_array.len() {
-            let value = values_array.value(i);
-            let count = counts_array.value(i);
-            let entry = self.value_counts.entry(value).or_insert(0);
-            *entry += count;
+        for i in 0..values_list.len() {
+            if values_list.is_null(i) || counts_list.is_null(i) {
+                continue;
+            }
+            let values = values_list.value(i);
+            let counts = counts_list.value(i);
+            let values_array = as_primitive_array::<T>(&values)?;
+            let counts_array = as_primitive_array::<arrow::datatypes::Int64Type>(&counts)?;
+
+            for j in 0..values_array.len() {
+                let value = values_array.value(j);
+                let count = counts_array.value(j);
+                let entry = self.value_counts.entry(value).or_insert(0);
+                *entry += count;
+            }
         }
 
         Ok(())
@@ -318,16 +348,26 @@ where
             return Ok(());
         }
 
-        let values_array = as_primitive_array::<T>(&states[0])?;
-        let counts_array = as_primitive_array::<arrow::datatypes::Int64Type>(&states[1])?;
+        let values_list = as_list_array(&states[0])?;
+        let counts_list = as_list_array(&states[1])?;
 
-        for i in 0..values_array.len() {
-            let count = counts_array.value(i);
-            let entry = self
-                .value_counts
-                .entry(Hashable(values_array.value(i)))
-                .or_insert(0);
-            *entry += count;
+        for i in 0..values_list.len() {
+            if values_list.is_null(i) || counts_list.is_null(i) {
+                continue;
+            }
+            let values = values_list.value(i);
+            let counts = counts_list.value(i);
+            let values_array = as_primitive_array::<T>(&values)?;
+            let counts_array = as_primitive_array::<arrow::datatypes::Int64Type>(&counts)?;
+
+            for j in 0..values_array.len() {
+                let count = counts_array.value(j);
+                let entry = self
+                    .value_counts
+                    .entry(Hashable(values_array.value(j)))
+                    .or_insert(0);
+                *entry += count;
+            }
         }
 
         Ok(())
@@ -443,14 +483,24 @@ impl Accumulator for BytesModeAccumulator {
             return Ok(());
         }
 
-        let values_array = as_string_array(&states[0])?;
-        let counts_array = as_primitive_array::<arrow::datatypes::Int64Type>(&states[1])?;
+        let values_list = as_list_array(&states[0])?;
+        let counts_list = as_list_array(&states[1])?;
 
-        for (i, value_option) in values_array.iter().enumerate() {
-            if let Some(value) = value_option {
-                let count = counts_array.value(i);
-                let entry = self.value_counts.entry(value.to_string()).or_insert(0);
-                *entry += count;
+        for i in 0..values_list.len() {
+            if values_list.is_null(i) || counts_list.is_null(i) {
+                continue;
+            }
+            let values = values_list.value(i);
+            let counts = counts_list.value(i);
+            let values_array = as_string_array(&values)?;
+            let counts_array = as_primitive_array::<arrow::datatypes::Int64Type>(&counts)?;
+
+            for (j, value_option) in values_array.iter().enumerate() {
+                if let Some(value) = value_option {
+                    let count = counts_array.value(j);
+                    let entry = self.value_counts.entry(value.to_string()).or_insert(0);
+                    *entry += count;
+                }
             }
         }
 
