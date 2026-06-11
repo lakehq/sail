@@ -210,7 +210,8 @@ impl PlanEnumerator {
     pub fn new(query_graph: QueryGraph, options: JoinReorderOptions) -> Self {
         let (anchor_relations, enable_fact_anchor_heuristic) =
             Self::derive_anchor_relations(&query_graph, &options);
-        let cardinality_estimator = CardinalityEstimator::new(query_graph.clone());
+        let cardinality_estimator =
+            CardinalityEstimator::new(query_graph.clone(), options.null_fraction_absent_default);
         let cost_model = CostModel::new(&options);
 
         Self {
