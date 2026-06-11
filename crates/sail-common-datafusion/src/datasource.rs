@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use datafusion::arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::plan_datafusion_err;
+use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_expr::{
     create_physical_sort_exprs, LexOrdering, LexRequirement, PhysicalSortRequirement,
 };
@@ -208,11 +209,11 @@ pub struct TableFormatMetadata {
 /// Information required to create a data writer.
 #[derive(Debug, Clone)]
 pub struct SinkInfo {
-    pub input: Arc<dyn ExecutionPlan>,
-    pub mode: PhysicalSinkMode,
+    pub input: LogicalPlan,
+    pub mode: SinkMode,
     pub partition_by: Vec<CatalogPartitionField>,
     pub bucket_by: Option<BucketBy>,
-    pub sort_order: Option<LexRequirement>,
+    pub sort_order: Vec<Sort>,
     /// The sets of options for the data sink.
     /// A later set of options can override earlier ones.
     /// The path for the sink is stored under the `"path"` key in options.
@@ -222,11 +223,6 @@ pub struct SinkInfo {
     /// This is injected by the planner and must not be accepted from user-facing
     /// data source options.
     pub catalog_table: Option<Vec<String>>,
-    /// The logical schema of the writer's input, if available. This schema can
-    /// preserve arrow field metadata that the physical planner may strip (e.g.
-    /// metadata attached via `Expr::Alias::with_metadata`). Table formats can use
-    /// this to recover column-level metadata such as `delta.generationExpression`.
-    pub logical_schema: Option<datafusion_common::DFSchemaRef>,
 }
 
 /// Returns the path from options, or `None` if not set.
@@ -375,12 +371,8 @@ pub trait TableFormat: Send + Sync {
         })
     }
 
-    /// Creates a `ExecutionPlan` for write.
-    async fn create_writer(
-        &self,
-        ctx: &dyn Session,
-        info: SinkInfo,
-    ) -> Result<Arc<dyn ExecutionPlan>>;
+    /// Creates a logical plan for write.
+    async fn create_writer(&self, ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan>;
 
     /// Creates an `ExecutionPlan` for row-level operations (DELETE, UPDATE, MERGE).
     async fn create_row_level_writer(

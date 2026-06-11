@@ -9,22 +9,38 @@ use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 
 use crate::logical::table_source::DeltaTableSource;
 use crate::physical::scan_planner::plan_delta_scan;
+use crate::table_format::{plan_delta_write, DeltaWriteNode};
 
 /// Physical planner for logical Delta table scans.
 /// Plans `DeltaTableSource` table scans directly without an intermediate extension node.
-pub struct DeltaTablePhysicalPlanner;
+pub struct DeltaPhysicalPlanner;
 
 #[async_trait::async_trait]
-impl ExtensionPlanner for DeltaTablePhysicalPlanner {
+impl ExtensionPlanner for DeltaPhysicalPlanner {
     async fn plan_extension(
         &self,
         _planner: &dyn PhysicalPlanner,
-        _node: &dyn UserDefinedLogicalNode,
-        _logical_inputs: &[&LogicalPlan],
-        _physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &SessionState,
+        node: &dyn UserDefinedLogicalNode,
+        logical_inputs: &[&LogicalPlan],
+        physical_inputs: &[Arc<dyn ExecutionPlan>],
+        session_state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        Ok(None)
+        let Some(node) = node.as_any().downcast_ref::<DeltaWriteNode>() else {
+            return Ok(None);
+        };
+        let [logical_input] = logical_inputs else {
+            return datafusion_common::internal_err!(
+                "DeltaWriteNode requires exactly one logical input"
+            );
+        };
+        let [physical_input] = physical_inputs else {
+            return datafusion_common::internal_err!(
+                "DeltaWriteNode requires exactly one physical input"
+            );
+        };
+        plan_delta_write(session_state, logical_input, physical_input.clone(), node)
+            .await
+            .map(Some)
     }
 
     async fn plan_table_scan(

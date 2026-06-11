@@ -47,6 +47,6 @@ pub use exec::PythonDataSourceExec;
 pub use executor::{InProcessExecutor, InputPartition, PythonExecutor};
 pub use filter::{exprs_to_python_filters, ColumnPath, FilterValue, PythonFilter};
 pub use stream::{PythonDataSourceStream, RowBatchCollector, DEFAULT_BATCH_SIZE};
-pub use table_format::PythonTableFormat;
+pub use table_format::{PythonPhysicalPlanner, PythonTableFormat};
 pub use table_provider::PythonTableProvider;
 pub use write_exec::PythonDataSourceWriteExec;

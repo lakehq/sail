@@ -14,7 +14,7 @@ use sail_common::spec;
 use sail_common_datafusion::catalog::{TableColumnStatus, TableKind};
 use sail_common_datafusion::column_features::ColumnFeatures;
 use sail_common_datafusion::datasource::{
-    find_path_in_options, OptionLayer, SourceInfo, TableFormatRegistry,
+    find_path_in_options, OptionLayer, SinkInfo, SourceInfo, TableFormatRegistry,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_function::scalar::misc::raise_error::RaiseError;
@@ -22,7 +22,6 @@ use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::check_constraints::{
     apply_delta_check_constraint_filter, DeltaCheckConstraintExpr, DeltaConstraintViolation,
 };
-use sail_logical_plan::file_write::FileWriteOptions;
 
 use super::merge::merge_disambiguate_unqualified_plan_ids;
 use super::write::{TableInfo, WriteColumnMatch};
@@ -98,13 +97,14 @@ impl PlanResolver<'_> {
     pub(super) async fn rewrite_data_source_delta_table_features(
         &self,
         input: LogicalPlan,
-        options: &FileWriteOptions,
+        format: &str,
+        info: &SinkInfo,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        if !is_delta_format(&options.format) {
+        if !is_delta_format(format) {
             return Ok(input);
         }
-        let Some(path) = find_path_in_options(&options.options) else {
+        let Some(path) = find_path_in_options(&info.options) else {
             return Ok(input);
         };
 
@@ -113,13 +113,13 @@ impl PlanResolver<'_> {
                 "failed to access table format registry for Delta path `{path}`: {e}",
             ))
         })?;
-        let table_format = registry.get(&options.format).map_err(|e| {
+        let table_format = registry.get(format).map_err(|e| {
             PlanError::invalid(format!(
                 "failed to resolve table format `{}` for Delta path `{path}`: {e}",
-                options.format
+                format
             ))
         })?;
-        let info = SourceInfo {
+        let source_info = SourceInfo {
             paths: vec![path.clone()],
             catalog_table: None,
             schema: None,
@@ -129,7 +129,10 @@ impl PlanResolver<'_> {
             sort_order: vec![],
             options: vec![],
         };
-        let metadata = match table_format.infer_metadata(&self.ctx.state(), info).await {
+        let metadata = match table_format
+            .infer_metadata(&self.ctx.state(), source_info)
+            .await
+        {
             Ok(metadata) => metadata,
             Err(e) => {
                 log::debug!(
@@ -176,10 +179,10 @@ impl PlanResolver<'_> {
         }
 
         let info = TableInfo {
-            catalog_table: options.catalog_table.clone(),
+            catalog_table: info.catalog_table.clone(),
             columns,
             location: Some(path),
-            format: options.format.clone(),
+            format: format.to_string(),
             partition_by: vec![],
             sort_by: vec![],
             bucket_by: None,
@@ -316,13 +319,14 @@ impl PlanResolver<'_> {
     pub(super) async fn rewrite_delta_check_constraints_from_options(
         &self,
         input: LogicalPlan,
-        options: &FileWriteOptions,
+        format: &str,
+        info: &SinkInfo,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        if !is_delta_format(&options.format) {
+        if !is_delta_format(format) {
             return Ok(input);
         }
-        let constraints = delta_check_constraints_from_option_layers(&options.options);
+        let constraints = delta_check_constraints_from_option_layers(&info.options);
         self.apply_delta_check_constraints(input, constraints, state)
             .await
     }
