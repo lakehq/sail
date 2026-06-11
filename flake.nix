@@ -110,6 +110,8 @@
               which
               procps
               ripgrep
+              curl
+              unzip
 
               nodejs_22
               pnpm
@@ -201,6 +203,39 @@
               help = "Run Sail Spark Connect server on :50051";
               command = ''env RUST_LOG="''${RUST_LOG:-sail=debug}" SAIL_EXECUTION__DEFAULT_PARALLELISM=''${SAIL_EXECUTION__DEFAULT_PARALLELISM:-4} cargo run -p sail-cli -- spark server --port 50051 "$@"'';
             }
+            {
+              category = "server";
+              name = "sail-server-spark-3.5.7";
+              help = "Run the test server for the spark-3.5.7 suite (catalog + UDF env)";
+              command = ''
+                bash "$PRJ_ROOT/scripts/spark-tests/ensure-venv.sh" "$PRJ_ROOT/.venvs/test-spark.spark-3.5.7"
+                bash "$PRJ_ROOT/scripts/spark-tests/fetch-pyspark.sh" 3.5.7
+                hatch run test-spark.spark-3.5.7:python -c 'import pyspark' 2>/dev/null \
+                  || hatch run test-spark.spark-3.5.7:install-pyspark
+                hatch run test-spark.spark-3.5.7:bash scripts/spark-tests/run-server.sh
+              '';
+            }
+            {
+              category = "server";
+              name = "sail-server-spark";
+              help = "Run the test server for the spark-4.1.1 suite (catalog + UDF env)";
+              command = ''
+                bash "$PRJ_ROOT/scripts/spark-tests/ensure-venv.sh" "$PRJ_ROOT/.venvs/test-spark.spark-4.1.1"
+                bash "$PRJ_ROOT/scripts/spark-tests/fetch-pyspark.sh" 4.1.1
+                hatch run test-spark.spark-4.1.1:python -c 'import pyspark' 2>/dev/null \
+                  || hatch run test-spark.spark-4.1.1:install-pyspark
+                hatch run test-spark.spark-4.1.1:bash scripts/spark-tests/run-server.sh
+              '';
+            }
+            {
+              category = "server";
+              name = "sail-server-ibis";
+              help = "Run the test server for the Ibis suite (catalog + UDF env)";
+              command = ''
+                bash "$PRJ_ROOT/scripts/spark-tests/ensure-venv.sh" "$PRJ_ROOT/.venvs/test-ibis"
+                hatch run test-ibis:bash scripts/spark-tests/run-server.sh
+              '';
+            }
 
             {
               category = "test";
@@ -224,6 +259,7 @@
                   echo "⛵ Cloning ibis-testing-data (shallow)..."
                   git clone --depth 1 https://github.com/ibis-project/testing-data.git "$_data_dir"
                 fi
+                bash "$PRJ_ROOT/scripts/spark-tests/ensure-venv.sh" "$PRJ_ROOT/.venvs/test-ibis"
                 export SPARK_REMOTE="sc://localhost:50051"
                 hatch run test-ibis:bash scripts/spark-tests/run-tests.sh "$@"
               '';
@@ -236,9 +272,33 @@
             }
             {
               category = "test";
+              name = "sail-fetch-pyspark";
+              help = "Download patched PySpark packages (3.5.7 + 4.1.1) if missing (anonymous, no gh)";
+              command = ''bash "$PRJ_ROOT/scripts/spark-tests/fetch-pyspark.sh" "$@"'';
+            }
+            {
+              category = "test";
               name = "sail-test-spark";
-              help = "Run Spark patched tests (spark-4.1.1)";
-              command = ''hatch run test-spark.spark-4.1.1:bash scripts/spark-tests/run-tests.sh "$@"'';
+              help = "Run Spark patched tests (spark-4.1.1, auto-fetches + installs PySpark)";
+              command = ''
+                bash "$PRJ_ROOT/scripts/spark-tests/ensure-venv.sh" "$PRJ_ROOT/.venvs/test-spark.spark-4.1.1"
+                bash "$PRJ_ROOT/scripts/spark-tests/fetch-pyspark.sh" 4.1.1
+                hatch run test-spark.spark-4.1.1:python -c 'import pyspark' 2>/dev/null \
+                  || hatch run test-spark.spark-4.1.1:install-pyspark
+                hatch run test-spark.spark-4.1.1:bash scripts/spark-tests/run-tests.sh "$@"
+              '';
+            }
+            {
+              category = "test";
+              name = "sail-test-spark-3.5.7";
+              help = "Run Spark patched tests (spark-3.5.7, auto-fetches + installs PySpark)";
+              command = ''
+                bash "$PRJ_ROOT/scripts/spark-tests/ensure-venv.sh" "$PRJ_ROOT/.venvs/test-spark.spark-3.5.7"
+                bash "$PRJ_ROOT/scripts/spark-tests/fetch-pyspark.sh" 3.5.7
+                hatch run test-spark.spark-3.5.7:python -c 'import pyspark' 2>/dev/null \
+                  || hatch run test-spark.spark-3.5.7:install-pyspark
+                hatch run test-spark.spark-3.5.7:bash scripts/spark-tests/run-tests.sh "$@"
+              '';
             }
             {
               category = "test";
