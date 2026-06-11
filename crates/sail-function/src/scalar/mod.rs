@@ -6,6 +6,7 @@ pub mod datetime;
 pub mod drop_struct_field;
 pub mod explode;
 pub mod geo;
+pub mod get_struct_field;
 pub mod hash;
 pub mod json;
 pub mod map;

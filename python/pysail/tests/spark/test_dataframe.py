@@ -3,6 +3,7 @@ import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql import Row
 from pyspark.sql.functions import col, lit, row_number
+from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 from pyspark.sql.window import Window
 
 
@@ -119,6 +120,43 @@ def test_with_metadata(spark):
     assert df.withMetadata("a", {"m": "x"}).schema["a"].metadata == {"m": "x"}
     assert df.withMetadata("a", {"m": "x"}).withMetadata("a", {"n": "y"}).schema["a"].metadata == {"n": "y"}
     assert df.withMetadata("a", {"m": "x"}).withMetadata("a", {}).schema["a"].metadata == {}
+
+
+def test_struct_field_from_null_struct_preserves_metadata(spark):
+    schema = StructType(
+        [
+            StructField(
+                "s",
+                StructType(
+                    [
+                        StructField("id", IntegerType(), True, metadata={"comment": "the id"}),
+                        StructField("name", StringType(), True),
+                        StructField(
+                            "inner",
+                            StructType([StructField("val", IntegerType(), True, metadata={"m": "v"})]),
+                            True,
+                        ),
+                    ]
+                ),
+                True,
+            ),
+        ]
+    )
+    df = spark.createDataFrame(
+        [({"id": 1, "name": "alice", "inner": {"val": 10}},), (None,)],
+        schema,
+    )
+    result = df.select(
+        df.s.id.alias("id"),
+        df.s["name"].alias("name"),
+        df.s.inner.val.alias("val"),
+    )
+    assert result.collect() == [
+        Row(id=1, name="alice", val=10),
+        Row(id=None, name=None, val=None),
+    ]
+    assert result.schema["id"].metadata == {"comment": "the id"}
+    assert result.schema["val"].metadata == {"m": "v"}
 
 
 def reverse_sorted_map_in_pandas(df):

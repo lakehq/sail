@@ -156,6 +156,7 @@ use sail_function::scalar::explode::{explode_name_to_kind, Explode};
 use sail_function::scalar::geo::st_asbinary::StAsBinary;
 use sail_function::scalar::geo::st_geogfromwkb::StGeogFromWKB;
 use sail_function::scalar::geo::st_geomfromwkb::StGeomFromWKB;
+use sail_function::scalar::get_struct_field::GetStructField;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_function::scalar::hash::spark_xxhash64::SparkXxhash64;
 use sail_function::scalar::json::{SparkFromJson, SparkSchemaOfJson, SparkToJson};
@@ -2241,6 +2242,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(ArrayItemWithPosition::new())))
             }
             "array_struct_field" => Ok(Arc::new(ScalarUDF::from(ArrayStructField::new()))),
+            "get_struct_field" => Ok(Arc::new(ScalarUDF::from(GetStructField::new()))),
             "array_min" => Ok(Arc::new(ScalarUDF::from(ArrayMin::new()))),
             "array_max" => Ok(Arc::new(ScalarUDF::from(ArrayMax::new()))),
             "array_intersect" | "list_intersect" => {
@@ -2420,6 +2422,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         let node_inner = node.inner().as_any();
         let udf_kind: UdfKind = if node_inner.is::<ArrayItemWithPosition>()
             || node_inner.is::<ArrayStructField>()
+            || node_inner.is::<GetStructField>()
             || node_inner.is::<ArrayMax>()
             || node_inner.is::<ArrayMin>()
             || node_inner.is::<ArrayIntersect>()
