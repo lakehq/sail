@@ -1,0 +1,54 @@
+>>> from pyspark.sql.functions import lit, schema_of_json
+
+>>> df = spark.range(1)
+>>> df.select(schema_of_json(lit('{"a": 0}')).alias("json")).collect()
+[Row(json='STRUCT<a: BIGINT>')]
+
+The `allowUnquotedFieldNames` option allows parsing JSON strings with
+unquoted field names.
+
+>>> schema = schema_of_json('{a: 1}', {'allowUnquotedFieldNames': 'true'})
+>>> df.select(schema.alias("json")).collect()
+[Row(json='STRUCT<a: BIGINT>')]
+
+Option keys and boolean option values are case-insensitive.
+
+>>> schema = schema_of_json('{a: 1}', {'ALLOWUNQUOTEDFIELDNAMES': 'True'})
+>>> df.select(schema.alias("json")).collect()
+[Row(json='STRUCT<a: BIGINT>')]
+
+Quoted field names and string values are left untouched, including in
+nested structures.
+
+>>> schema = schema_of_json(
+...     '{a: {"b": [1.5], c: "x: {y: 1}"}}',
+...     {'allowUnquotedFieldNames': 'true'},
+... )
+>>> df.select(schema.alias("json")).collect()
+[Row(json='STRUCT<a: STRUCT<b: ARRAY<DOUBLE>, c: STRING>>')]
+
+The options are excluded from the default column name, which only contains
+the JSON string argument.
+
+>>> df.select(schema_of_json('{a: 1}', {'allowUnquotedFieldNames': 'true'})).columns
+['schema_of_json({a: 1})']
+
+The option can be explicitly disabled.
+
+>>> schema = schema_of_json('{"a": 2}', {'allowUnquotedFieldNames': 'false'})
+>>> df.select(schema.alias("json")).collect()
+[Row(json='STRUCT<a: BIGINT>')]
+
+Invalid boolean option values are rejected. Both Sail and JVM Spark raise an
+error here, but with different exception classes (Sail raises an
+`AnalysisException`, while JVM Spark fails to parse the value with Scala's
+`.toBoolean` and raises an `IllegalArgumentException`). Since a doctest
+cannot match multiple exception classes, we catch the error explicitly so
+that the test passes against both engines.
+
+>>> schema = schema_of_json('{"a": 1}', {'allowUnquotedFieldNames': 'yes'})
+>>> try:
+...     df.select(schema.alias("json")).collect()
+... except Exception:
+...     print("error")
+error

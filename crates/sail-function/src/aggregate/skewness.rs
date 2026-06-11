@@ -72,14 +72,11 @@ impl AggregateUDFImpl for SkewnessFunc {
         &self.signature
     }
 
-    fn return_type(&self, _arg_types: &[DataType]) -> datafusion::common::Result<DataType> {
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Float64)
     }
 
-    fn accumulator(
-        &self,
-        _acc_args: AccumulatorArgs,
-    ) -> datafusion::common::Result<Box<dyn Accumulator>> {
+    fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         Ok(Box::new(SkewnessAccumulator::new()))
     }
 
@@ -111,19 +108,19 @@ impl SkewnessAccumulator {
         }
     }
 
-    pub fn update_one(&mut self, value: f64) -> (f64, f64, f64, f64) {
-        self.n += 1.0;
-        let delta = value - self.avg;
-        let delta_n = delta / self.n;
-        self.avg += delta_n;
-        self.m2 += delta * (delta - delta_n);
-
-        let delta2 = delta * delta;
-        let delta_n2 = delta_n * delta_n;
-        self.m3 = self.m3 - 3.0 * delta_n * self.m2 + delta * (delta2 - delta_n2);
-        (delta, delta_n, delta2, delta_n2)
+    /// Updates the accumulator with a single value by merging the singleton
+    /// state `(n=1, avg=value, m2=0, m3=0)`. This keeps a single arithmetic
+    /// path for updates and merges, and reproduces the exact floating-point
+    /// results Spark produces when rows are spread across partitions (e.g.
+    /// the `local[4]` runs that generated the PySpark doctest outputs).
+    pub fn update_one(&mut self, value: f64) -> (f64, f64) {
+        self.merge_one(1.0, value, 0.0, 0.0)
     }
 
+    /// Merges the moments of another group of values into this accumulator,
+    /// replicating the floating-point operation order of Spark's
+    /// `CentralMomentAgg.mergeExpressions` so that results match Spark bit
+    /// for bit.
     pub fn merge_one(
         &mut self,
         n_right: f64,
@@ -131,19 +128,22 @@ impl SkewnessAccumulator {
         m2_right: f64,
         m3_right: f64,
     ) -> (f64, f64) {
-        self.n += n_right;
+        let n_left = self.n;
+        let m2_left = self.m2;
 
+        self.n = n_left + n_right;
         let delta = avg_right - self.avg;
         let delta_n = if self.n == 0.0 { 0.0 } else { delta / self.n };
         self.avg += delta_n * n_right;
 
         // higher order moments computed according to:
         // https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Higher-order_statistics
-        self.m2 += m2_right + delta * delta_n * self.n * n_right;
+        self.m2 = m2_left + m2_right + delta * delta_n * n_left * n_right;
 
-        self.m3 += m3_right
-            + delta_n * delta_n * delta * self.n * n_right * (self.n - n_right)
-            + 3.0 * delta_n * (self.n * m2_right - n_right * self.m2);
+        self.m3 = self.m3
+            + m3_right
+            + delta_n * delta_n * delta * n_left * n_right * (n_left - n_right)
+            + 3.0 * delta_n * (n_left * m2_right - n_right * m2_left);
 
         (delta, delta_n)
     }
@@ -161,22 +161,26 @@ impl SkewnessAccumulator {
         self.m3
     }
 
-    /// Returns NULL when fewer than 2 values have been accumulated,
+    /// Returns NULL when no values have been accumulated or when m2 is zero,
     /// matching Spark's behavior for skewness and kurtosis.
-    /// With n=1, m2 (variance) is zero, causing division by zero in the
+    /// With n=1 (and also with n >= 2 when all values are equal), m2
+    /// (variance) is zero, causing division by zero in the
     /// skewness formula `sqrt(n) * m3 / m2^(3/2)`, which produces NaN.
-    /// Spark returns NULL for n < 2 and computes from n >= 2 onward.
+    /// Spark returns NULL in both cases by default (`nullOnDivideByZero`)
+    /// and computes a value otherwise.
     pub fn null_or_value(&self, value: f64) -> Result<ScalarValue> {
-        Ok(ScalarValue::Float64(if self.n() < 2.0 {
-            None
-        } else {
-            Some(value)
-        }))
+        Ok(ScalarValue::Float64(
+            if self.n() == 0.0 || self.m2() == 0.0 {
+                None
+            } else {
+                Some(value)
+            },
+        ))
     }
 }
 
 impl Accumulator for SkewnessAccumulator {
-    fn update_batch(&mut self, values: &[ArrayRef]) -> datafusion::common::Result<()> {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array = values[0].as_primitive::<Float64Type>();
         for value in array.iter().flatten() {
             self.update_one(value);
@@ -184,15 +188,15 @@ impl Accumulator for SkewnessAccumulator {
         Ok(())
     }
 
-    fn evaluate(&mut self) -> datafusion::common::Result<ScalarValue> {
-        self.null_or_value(self.n.sqrt() * self.m3 / (self.m2.powi(3)).sqrt())
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        self.null_or_value(self.n.sqrt() * self.m3 / (self.m2 * self.m2 * self.m2).sqrt())
     }
 
     fn size(&self) -> usize {
-        std::mem::size_of_val(self)
+        size_of_val(self)
     }
 
-    fn state(&mut self) -> datafusion::common::Result<Vec<ScalarValue>> {
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
         Ok(vec![
             ScalarValue::from(self.n),
             ScalarValue::from(self.avg),
@@ -201,7 +205,7 @@ impl Accumulator for SkewnessAccumulator {
         ])
     }
 
-    fn merge_batch(&mut self, states: &[ArrayRef]) -> datafusion::common::Result<()> {
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
         let ns = downcast_value!(states[0], Float64Array);
         let avgs = downcast_value!(states[1], Float64Array);
         let m2s = downcast_value!(states[2], Float64Array);

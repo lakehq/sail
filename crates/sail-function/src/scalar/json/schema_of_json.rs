@@ -107,6 +107,13 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
         Ok(DataType::Utf8)
     }
 
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        Self::validate_args_len(&args.args)?;
+        Self::validate_args_are_literal(&args.args)?;
+        let hints = vec![Hint::AcceptsSingular, Hint::AcceptsSingular];
+        make_scalar_function(schema_of_json_inner, hints)(&args.args)
+    }
+
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         Self::validate_args_len(arg_types)?;
         Self::validate_arg_types(arg_types)?;
@@ -127,13 +134,6 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
         }
         // utf8, optional<map>
         Ok(coerce_to)
-    }
-
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        Self::validate_args_len(&args.args)?;
-        Self::validate_args_are_literal(&args.args)?;
-        let hints = vec![Hint::AcceptsSingular, Hint::AcceptsSingular];
-        make_scalar_function(schema_of_json_inner, hints)(&args.args)
     }
 }
 
@@ -164,7 +164,7 @@ fn infer_json_schema_type(json_string: &str, options: &SparkSchemaOfJsonOptions)
     } else {
         Cow::Borrowed(json_string)
     };
-    let value = serde_json::from_str::<serde_json::Value>(&json_string)
+    let value = serde_json::from_str::<Value>(&json_string)
         .map_err(|e| DataFusionError::Execution(e.to_string()))?;
     value_to_ddl_type(&value)
 }

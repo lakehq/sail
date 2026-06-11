@@ -111,6 +111,7 @@ use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::percentile::PercentileFunction;
 use sail_function::aggregate::percentile_disc::PercentileDisc;
 use sail_function::aggregate::product::ProductFunction;
+use sail_function::aggregate::regr::{Regr, RegrType};
 use sail_function::aggregate::schema_of_variant_agg::SchemaOfVariantAggFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::theta_sketch::{
@@ -2328,9 +2329,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkSchemaOfJson::new())))
             }
             "schema_of_csv" => Ok(Arc::new(ScalarUDF::from(SparkSchemaOfCsv::new()))),
-            "xpath" => Ok(Arc::new(ScalarUDF::from(
-                sail_function::scalar::xml::xpath::Xpath::new(),
-            ))),
+            "xpath" => Ok(Arc::new(ScalarUDF::from(Xpath::new()))),
             "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
             "spark_bround" | "bround" => Ok(Arc::new(ScalarUDF::from(SparkBRound::new()))),
             "spark_interval_div" => Ok(Arc::new(ScalarUDF::from(SparkIntervalDiv::new()))),
@@ -2712,6 +2711,42 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "percentile" => Ok(Arc::new(AggregateUDF::from(PercentileFunction::new()))),
                 "percentile_disc" => Ok(Arc::new(AggregateUDF::from(PercentileDisc::new()))),
                 "product" => Ok(Arc::new(AggregateUDF::from(ProductFunction::new()))),
+                "regr_avgx" => Ok(Arc::new(AggregateUDF::from(Regr::new(
+                    RegrType::AvgX,
+                    "regr_avgx",
+                )))),
+                "regr_avgy" => Ok(Arc::new(AggregateUDF::from(Regr::new(
+                    RegrType::AvgY,
+                    "regr_avgy",
+                )))),
+                "regr_count" => Ok(Arc::new(AggregateUDF::from(Regr::new(
+                    RegrType::Count,
+                    "regr_count",
+                )))),
+                "regr_intercept" => Ok(Arc::new(AggregateUDF::from(Regr::new(
+                    RegrType::Intercept,
+                    "regr_intercept",
+                )))),
+                "regr_r2" => Ok(Arc::new(AggregateUDF::from(Regr::new(
+                    RegrType::R2,
+                    "regr_r2",
+                )))),
+                "regr_slope" => Ok(Arc::new(AggregateUDF::from(Regr::new(
+                    RegrType::Slope,
+                    "regr_slope",
+                )))),
+                "regr_sxx" => Ok(Arc::new(AggregateUDF::from(Regr::new(
+                    RegrType::Sxx,
+                    "regr_sxx",
+                )))),
+                "regr_sxy" => Ok(Arc::new(AggregateUDF::from(Regr::new(
+                    RegrType::Sxy,
+                    "regr_sxy",
+                )))),
+                "regr_syy" => Ok(Arc::new(AggregateUDF::from(Regr::new(
+                    RegrType::Syy,
+                    "regr_syy",
+                )))),
                 "schema_of_variant_agg" => Ok(Arc::new(AggregateUDF::from(
                     SchemaOfVariantAggFunction::new(),
                 ))),
@@ -2827,6 +2862,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().as_any().is::<PercentileFunction>()
             || node.inner().as_any().is::<PercentileDisc>()
             || node.inner().as_any().is::<ProductFunction>()
+            || node.inner().as_any().is::<Regr>()
             || node.inner().as_any().is::<SchemaOfVariantAggFunction>()
             || node.inner().as_any().is::<SkewnessFunc>()
             || node.inner().as_any().is::<ThetaIntersectionAggFunction>()

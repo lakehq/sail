@@ -508,6 +508,17 @@ impl PlanFormatter for SparkPlanFormatter {
                 let (arg, _) = arguments.at_least_one()?;
                 Ok(format!("{name}({arg})"))
             }
+            "mode" => {
+                let name = name.to_lowercase();
+                // Spark hides the optional `deterministic` flag in the column name:
+                // `mode(col)` when it is false or absent, and the WITHIN GROUP form
+                // when it is true.
+                let (arg, rest) = arguments.at_least_one()?;
+                match rest.first() {
+                    Some(&"true") => Ok(format!("{name}() WITHIN GROUP (ORDER BY {arg} DESC)")),
+                    _ => Ok(format!("{name}({arg})")),
+                }
+            }
             "from_json" => {
                 let (arg, rest) = arguments.at_least_one()?;
                 // In Spark, from_json with a MAP schema uses "entries" as the display name.
@@ -527,7 +538,8 @@ impl PlanFormatter for SparkPlanFormatter {
                 }
                 Ok(format!("{name}({arg})"))
             }
-            "from_csv" | "to_csv" | "any_value" | "first_value" | "last_value" => {
+            "from_csv" | "schema_of_csv" | "schema_of_json" | "to_csv" | "to_json"
+            | "any_value" | "first_value" | "last_value" => {
                 let (arg, _) = arguments.at_least_one()?;
                 Ok(format!("{name}({arg})"))
             }

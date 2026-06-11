@@ -108,22 +108,54 @@ impl KurtosisAccumulator {
             m4: 0.0,
         }
     }
+
+    /// Merges the moments of another group of values into this accumulator,
+    /// replicating the floating-point operation order of Spark's
+    /// `CentralMomentAgg.mergeExpressions` so that results match Spark bit
+    /// for bit. A single value is merged as the singleton state
+    /// `(n=1, avg=value, m2=0, m3=0, m4=0)`.
+    fn merge_one(
+        &mut self,
+        n_right: f64,
+        avg_right: f64,
+        m2_right: f64,
+        m3_right: f64,
+        m4_right: f64,
+    ) {
+        let n_left = self.s.n();
+        let m2_left = self.s.m2();
+        let m3_left = self.s.m3();
+
+        let (delta, delta_n) = self.s.merge_one(n_right, avg_right, m2_right, m3_right);
+
+        // higher order moments computed according to:
+        // https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Higher-order_statistics
+        self.m4 = self.m4
+            + m4_right
+            + delta_n
+                * delta_n
+                * delta_n
+                * delta
+                * n_left
+                * n_right
+                * (n_left * n_left - n_left * n_right + n_right * n_right)
+            + 6.0 * delta_n * delta_n * (n_left * n_left * m2_right + n_right * n_right * m2_left)
+            + 4.0 * delta_n * (n_left * m3_right - n_right * m3_left);
+    }
 }
 
 impl Accumulator for KurtosisAccumulator {
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
         let array = as_float64_array(&values[0])?;
         for value in array.iter().flatten() {
-            let (delta, delta_n, delta2, delta_n2) = self.s.update_one(value);
-            self.m4 += -4.0 * delta_n * self.s.m3() - 6.0 * delta_n2 * self.s.m2()
-                + delta * (delta * delta2 - delta_n * delta_n2);
+            self.merge_one(1.0, value, 0.0, 0.0, 0.0);
         }
         Ok(())
     }
 
     fn evaluate(&mut self) -> Result<ScalarValue> {
         self.s
-            .null_or_value(self.s.n() * self.m4 / self.s.m2().powi(2) - 3.0)
+            .null_or_value(self.s.n() * self.m4 / (self.s.m2() * self.s.m2()) - 3.0)
     }
 
     fn size(&self) -> usize {
@@ -147,23 +179,7 @@ impl Accumulator for KurtosisAccumulator {
                 continue;
             }
 
-            let n1 = self.s.n();
-            let m2_left = self.s.m2();
-            let m3_left = self.s.m3();
-
-            let avg_right = avgs.value(i);
-            let m2_right = m2s.value(i);
-            let m3_right = m3s.value(i);
-            let m4_right = m4s.value(i);
-
-            let (delta, delta_n) = self.s.merge_one(n2, avg_right, m2_right, m3_right);
-
-            // higher order moments computed according to:
-            // https://en.wikipedia.org/wiki/Algorithms_for_calculating_variance#Higher-order_statistics
-            self.m4 += m4_right
-                + delta_n * delta_n * delta_n * delta * n1 * n2 * (n1 * n1 - n1 * n2 + n2 * n2)
-                + 6.0 * delta_n * delta_n * (n1 * n1 * m2_right + n2 * n2 * m2_left)
-                + 4.0 * delta_n * (n1 * m3_right - n2 * m3_left);
+            self.merge_one(n2, avgs.value(i), m2s.value(i), m3s.value(i), m4s.value(i));
         }
 
         Ok(())
