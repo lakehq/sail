@@ -102,7 +102,7 @@ def test_rest_catalog_rejects_non_iceberg_create_format(
     table_name = "delta_bad_t"
     iceberg_spark.sql(f"DROP TABLE IF EXISTS {NAMESPACE}.{table_name}")
 
-    with pytest.raises(Exception, match="(?i)Iceberg REST catalog cannot create 'delta' tables"):
+    with pytest.raises(Exception, match=r"(?i)Iceberg REST catalog cannot create 'delta' tables"):
         iceberg_spark.sql(
             f"""
             CREATE TABLE {NAMESPACE}.{table_name} (

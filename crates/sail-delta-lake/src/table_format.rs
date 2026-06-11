@@ -8,22 +8,28 @@ use datafusion::catalog::Session;
 use datafusion::common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::execution::runtime_env::RuntimeEnv;
-use datafusion::logical_expr::TableSource;
+use datafusion::execution::SessionState;
+use datafusion::logical_expr::{LogicalPlan, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion_expr::expr::Sort;
+use datafusion_expr::{Expr, Extension, UserDefinedLogicalNodeCore};
+use educe::Educe;
 use sail_common_datafusion::catalog::delta::{
     unity_table_id_value, DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
 };
-use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
+use sail_common_datafusion::catalog::{CatalogPartitionField, CatalogTableColumnIdentity};
 use sail_common_datafusion::column_features::{
     ColumnFeatureKey, ColumnFeatures, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
 use sail_common_datafusion::datasource::{
-    find_path_in_options, MergeStrategy, OptionLayer, PhysicalSinkMode, RowLevelCommand,
-    RowLevelWriteInfo, SinkInfo, SourceInfo, TableFormat, TableFormatAlterTableOperation,
-    TableFormatCreateTableColumn, TableFormatCreateTableInfo, TableFormatCreateTableResult,
-    TableFormatMetadata, TableFormatRegistry, CATALOG_TABLE_OPTION,
+    create_sort_order, find_path_in_options, BucketBy, MergeStrategy, OptionLayer,
+    PhysicalSinkMode, RowLevelCommand, RowLevelWriteInfo, SinkInfo, SinkMode, SourceInfo,
+    TableFormat, TableFormatAlterTableOperation, TableFormatCreateTableColumn,
+    TableFormatCreateTableInfo, TableFormatCreateTableResult, TableFormatMetadata,
+    TableFormatRegistry, CATALOG_TABLE_OPTION,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
+use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 use sail_data_source::options::ResolveOptions;
 use sail_data_source::resolve_listing_urls;
@@ -328,11 +334,7 @@ impl TableFormat for DeltaTableFormat {
             .map_err(|e| DataFusionError::External(Box::new(e)))
     }
 
-    async fn create_writer(
-        &self,
-        ctx: &dyn Session,
-        info: SinkInfo,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
+    async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
         let Some(path) = find_path_in_options(&info.options) else {
             return plan_err!("missing path in Delta table options");
         };
@@ -344,157 +346,27 @@ impl TableFormat for DeltaTableFormat {
             sort_order,
             options,
             catalog_table,
-            logical_schema,
         } = info;
-
-        if is_flow_event_schema(&input.schema()) {
-            return not_impl_err!("writing streaming data to Delta table");
-        }
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for Delta format");
         }
         if partition_by.iter().any(|field| field.transform.is_some()) {
             return not_impl_err!("partition transforms for Delta format");
         }
-        let partition_by = partition_by
-            .into_iter()
-            .map(|field| field.column)
-            .collect::<Vec<_>>();
-
-        let table_url = Self::parse_table_url(ctx, vec![path]).await?;
-        let (options, table_properties) = split_delta_write_options_and_table_properties(options)?;
-        let delta_options = DeltaWriteOptions::resolve(ctx, options)?;
-
-        let object_store = ctx
-            .runtime_env()
-            .object_store_registry
-            .get_store(&table_url)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let table = match open_table_with_object_store_and_table_config(
-            table_url.clone(),
-            object_store,
-            Default::default(),
-            // Only partition columns and table existence are needed at planning time;
-            // skip replaying Add/Remove file actions which are not used here.
-            DeltaSnapshotConfig {
-                require_files: false,
-                ..Default::default()
-            },
-        )
-        .await
-        {
-            Ok(table) => Some(table),
-            Err(DeltaTableError::InvalidTableLocation(_))
-            | Err(DeltaTableError::FileNotFound(_)) => None,
-            Err(err) => return Err(DataFusionError::External(Box::new(err))),
-        };
-        let table_exists = table.is_some();
-        let table_snapshot = table
-            .as_ref()
-            .map(|table| {
-                table
-                    .snapshot()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))
-                    .cloned()
-            })
-            .transpose()?;
-        let metadata_configuration = resolve_delta_metadata_configuration(&table_properties)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        match mode {
-            PhysicalSinkMode::ErrorIfExists if table_exists => {
-                return plan_err!("Delta table already exists at path: {table_url}");
-            }
-            PhysicalSinkMode::IgnoreIfExists if table_exists => {
-                return Ok(Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
-                    input.schema(),
-                )));
-            }
-            PhysicalSinkMode::OverwritePartitions => {
-                return not_impl_err!("unsupported sink mode for Delta: {mode:?}")
-            }
-            _ => {}
-        }
-
-        let unified_mode = mode;
-        let table_schema_for_cond = None;
-
-        // Get existing partition columns from table metadata if available
-        let existing_partition_columns = table_snapshot
-            .as_ref()
-            .map(|snapshot| snapshot.metadata().partition_columns().clone());
-
-        // Validate partition column mismatch for append/overwrite operations
-        if let Some(existing_partitions) = &existing_partition_columns {
-            if !partition_by.is_empty() && partition_by != *existing_partitions {
-                // Allow partition column changes only for full-table overwrite with schema changes.
-                // Append and overwrite-if leave some existing files active, so changing table-wide
-                // partition metadata would make those active files inconsistent with the snapshot.
-                match unified_mode {
-                    PhysicalSinkMode::Append => {
-                        return plan_err!(
-                            "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
-                            Cannot change partitioning on append.",
-                            existing_partitions,
-                            partition_by
-                        );
-                    }
-                    PhysicalSinkMode::OverwriteIf { .. } => {
-                        return plan_err!(
-                            "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
-                            Cannot change partitioning with replaceWhere or conditional overwrite.",
-                            existing_partitions,
-                            partition_by
-                        );
-                    }
-                    PhysicalSinkMode::Overwrite
-                        // For overwrite mode, check if schema overwrite is allowed
-                        if !delta_options.overwrite_schema => {
-                            return plan_err!(
-                                "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
-                                Set overwriteSchema=true to change partitioning.",
-                                existing_partitions,
-                                partition_by
-                            );
-                        }
-                    _ => {}
-                }
-            }
-        }
-
-        let partition_columns = match (&existing_partition_columns, &unified_mode) {
-            (
-                Some(existing_partitions),
-                PhysicalSinkMode::Append | PhysicalSinkMode::OverwriteIf { .. },
-            ) if partition_by.is_empty() => existing_partitions.clone(),
-            (Some(existing_partitions), PhysicalSinkMode::Overwrite)
-                if partition_by.is_empty() && !delta_options.overwrite_schema =>
-            {
-                existing_partitions.clone()
-            }
-            _ => partition_by,
-        };
-
-        let table_config = DeltaPlannerConfig::new(
-            table_url,
-            delta_options,
-            metadata_configuration,
-            partition_columns,
-            table_schema_for_cond,
-            table_exists,
-        )
-        .with_generation_expressions(extract_generation_expressions(logical_schema.as_deref()))
-        .with_default_expressions(extract_default_expressions(logical_schema.as_deref()))
-        .with_target_nullability(extract_target_nullability(logical_schema.as_deref()))
-        .with_metadata_schema(extract_metadata_schema(logical_schema.as_deref()))
-        .with_identity_columns(extract_identity_columns(logical_schema.as_deref()))
-        .with_table_snapshot(table_snapshot)
-        .with_catalog_table(catalog_table);
-        let planner_ctx = PlannerContext::new(ctx, table_config);
-        let planner = DeltaPhysicalPlanner::new(planner_ctx);
-        let sink_exec = planner.create_plan(input, unified_mode, sort_order).await?;
-
-        Ok(sink_exec)
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(DeltaWriteNode::new(
+                Arc::new(input),
+                DeltaWriteNodeOptions {
+                    path,
+                    mode,
+                    partition_by,
+                    bucket_by,
+                    sort_order,
+                    options,
+                    catalog_table,
+                },
+            )),
+        }))
     }
 
     async fn create_row_level_writer(
@@ -633,6 +505,244 @@ impl TableFormat for DeltaTableFormat {
             }
         }
     }
+}
+
+#[derive(Clone, Debug, Educe)]
+#[educe(PartialEq, Eq, Hash, PartialOrd)]
+pub struct DeltaWriteNodeOptions {
+    pub path: String,
+    pub mode: SinkMode,
+    pub partition_by: Vec<CatalogPartitionField>,
+    pub bucket_by: Option<BucketBy>,
+    pub sort_order: Vec<Sort>,
+    #[educe(PartialEq(ignore), Hash(ignore), PartialOrd(ignore))]
+    pub options: Vec<OptionLayer>,
+    pub catalog_table: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Educe)]
+#[educe(PartialEq, Eq, Hash, PartialOrd)]
+pub struct DeltaWriteNode {
+    input: Arc<LogicalPlan>,
+    options: DeltaWriteNodeOptions,
+    #[educe(PartialOrd(ignore))]
+    schema: datafusion_common::DFSchemaRef,
+}
+
+impl DeltaWriteNode {
+    pub fn new(input: Arc<LogicalPlan>, options: DeltaWriteNodeOptions) -> Self {
+        Self {
+            input,
+            options,
+            schema: Arc::new(DFSchema::empty()),
+        }
+    }
+
+    pub fn options(&self) -> &DeltaWriteNodeOptions {
+        &self.options
+    }
+}
+
+impl UserDefinedLogicalNodeCore for DeltaWriteNode {
+    fn name(&self) -> &str {
+        "DeltaWrite"
+    }
+
+    fn inputs(&self) -> Vec<&LogicalPlan> {
+        vec![self.input.as_ref()]
+    }
+
+    fn schema(&self) -> &datafusion_common::DFSchemaRef {
+        &self.schema
+    }
+
+    fn expressions(&self) -> Vec<Expr> {
+        vec![]
+    }
+
+    fn fmt_for_explain(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "DeltaWrite: options={:?}", self.options)
+    }
+
+    fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
+        exprs.zero()?;
+        Ok(Self {
+            input: Arc::new(inputs.one()?),
+            options: self.options.clone(),
+            schema: self.schema.clone(),
+        })
+    }
+}
+
+pub(crate) async fn plan_delta_write(
+    ctx: &SessionState,
+    logical_input: &LogicalPlan,
+    physical_input: Arc<dyn ExecutionPlan>,
+    node: &DeltaWriteNode,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let DeltaWriteNodeOptions {
+        path,
+        mode,
+        partition_by,
+        bucket_by: _,
+        sort_order,
+        options,
+        catalog_table,
+    } = node.options().clone();
+
+    if is_flow_event_schema(logical_input.schema().as_arrow()) {
+        return not_impl_err!("writing streaming data to Delta table");
+    }
+
+    let mode = match mode {
+        SinkMode::ErrorIfExists => PhysicalSinkMode::ErrorIfExists,
+        SinkMode::IgnoreIfExists => PhysicalSinkMode::IgnoreIfExists,
+        SinkMode::Append => PhysicalSinkMode::Append,
+        SinkMode::Overwrite => PhysicalSinkMode::Overwrite,
+        SinkMode::OverwriteIf { condition } => {
+            let source = condition.source.clone();
+            PhysicalSinkMode::OverwriteIf {
+                condition: Some(condition),
+                source,
+            }
+        }
+        SinkMode::OverwritePartitions => {
+            return not_impl_err!("unsupported sink mode for Delta: OverwritePartitions");
+        }
+    };
+    let physical_sort = create_sort_order(ctx, sort_order, logical_input.schema())?;
+    let partition_by = partition_by
+        .into_iter()
+        .map(|field| field.column)
+        .collect::<Vec<_>>();
+
+    let table_url = DeltaTableFormat::parse_table_url(ctx, vec![path]).await?;
+    let (options, table_properties) = split_delta_write_options_and_table_properties(options)?;
+    let delta_options = DeltaWriteOptions::resolve(ctx, options)?;
+
+    let object_store = ctx
+        .runtime_env()
+        .object_store_registry
+        .get_store(&table_url)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let table = match open_table_with_object_store_and_table_config(
+        table_url.clone(),
+        object_store,
+        Default::default(),
+        // Only partition columns and table existence are needed at planning time;
+        // skip replaying Add/Remove file actions which are not used here.
+        DeltaSnapshotConfig {
+            require_files: false,
+            ..Default::default()
+        },
+    )
+    .await
+    {
+        Ok(table) => Some(table),
+        Err(DeltaTableError::InvalidTableLocation(_)) | Err(DeltaTableError::FileNotFound(_)) => {
+            None
+        }
+        Err(err) => return Err(DataFusionError::External(Box::new(err))),
+    };
+    let table_exists = table.is_some();
+    let table_snapshot = table
+        .as_ref()
+        .map(|table| {
+            table
+                .snapshot()
+                .map_err(|e| DataFusionError::External(Box::new(e)))
+                .cloned()
+        })
+        .transpose()?;
+    let table_properties = table_properties.into_iter().collect::<HashMap<_, _>>();
+    let metadata_configuration = resolve_delta_metadata_configuration(&table_properties)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    match mode {
+        PhysicalSinkMode::ErrorIfExists if table_exists => {
+            return plan_err!("Delta table already exists at path: {table_url}");
+        }
+        PhysicalSinkMode::IgnoreIfExists if table_exists => {
+            return Ok(Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
+                physical_input.schema(),
+            )));
+        }
+        PhysicalSinkMode::OverwritePartitions => {
+            return not_impl_err!("unsupported sink mode for Delta: {mode:?}");
+        }
+        _ => {}
+    }
+
+    let existing_partition_columns = table_snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.metadata().partition_columns().clone());
+
+    if let Some(existing_partitions) = &existing_partition_columns {
+        if !partition_by.is_empty() && partition_by != *existing_partitions {
+            match mode {
+                PhysicalSinkMode::Append => {
+                    return plan_err!(
+                        "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
+                        Cannot change partitioning on append.",
+                        existing_partitions,
+                        partition_by
+                    );
+                }
+                PhysicalSinkMode::OverwriteIf { .. } => {
+                    return plan_err!(
+                        "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
+                        Cannot change partitioning with replaceWhere or conditional overwrite.",
+                        existing_partitions,
+                        partition_by
+                    );
+                }
+                PhysicalSinkMode::Overwrite if !delta_options.overwrite_schema => {
+                    return plan_err!(
+                        "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
+                        Set overwriteSchema=true to change partitioning.",
+                        existing_partitions,
+                        partition_by
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let partition_columns = match (&existing_partition_columns, &mode) {
+        (
+            Some(existing_partitions),
+            PhysicalSinkMode::Append | PhysicalSinkMode::OverwriteIf { .. },
+        ) if partition_by.is_empty() => existing_partitions.clone(),
+        (Some(existing_partitions), PhysicalSinkMode::Overwrite)
+            if partition_by.is_empty() && !delta_options.overwrite_schema =>
+        {
+            existing_partitions.clone()
+        }
+        _ => partition_by,
+    };
+
+    let logical_schema = logical_input.schema();
+    let table_config = DeltaPlannerConfig::new(
+        table_url,
+        delta_options,
+        metadata_configuration,
+        partition_columns,
+        None,
+        table_exists,
+    )
+    .with_generation_expressions(extract_generation_expressions(Some(logical_schema)))
+    .with_default_expressions(extract_default_expressions(Some(logical_schema)))
+    .with_target_nullability(extract_target_nullability(Some(logical_schema)))
+    .with_metadata_schema(extract_metadata_schema(Some(logical_schema)))
+    .with_identity_columns(extract_identity_columns(Some(logical_schema)))
+    .with_table_snapshot(table_snapshot)
+    .with_catalog_table(catalog_table);
+    let planner_ctx = PlannerContext::new(ctx, table_config);
+    let planner = DeltaPhysicalPlanner::new(planner_ctx);
+    planner
+        .create_plan(physical_input, mode, physical_sort)
+        .await
 }
 
 impl DeltaTableFormat {
@@ -1372,7 +1482,7 @@ pub(crate) fn parse_location_to_url(path: &str) -> Result<Url> {
 }
 
 impl DeltaTableFormat {
-    async fn parse_table_url(ctx: &dyn Session, paths: Vec<String>) -> Result<Url> {
+    pub async fn parse_table_url(ctx: &dyn Session, paths: Vec<String>) -> Result<Url> {
         let mut urls = resolve_listing_urls(ctx, paths.clone()).await?;
         match (urls.pop(), urls.is_empty()) {
             (Some(path), true) => Ok(<ListingTableUrl as AsRef<Url>>::as_ref(&path).clone()),
@@ -1776,7 +1886,7 @@ fn is_delta_constraint_property(key: &str) -> bool {
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("delta.constraints."))
 }
 
-fn split_delta_write_options_and_table_properties(
+pub fn split_delta_write_options_and_table_properties(
     options: Vec<OptionLayer>,
 ) -> Result<(Vec<OptionLayer>, HashMap<String, String>)> {
     let mut table_properties = HashMap::new();
@@ -1809,7 +1919,7 @@ fn split_delta_write_options_and_table_properties(
                         table_properties.insert(property_key, value);
                     } else if key.starts_with("option.") {
                         // Write option from the OPTIONS clause; keep in clean items
-                        // so that DeltaWriteOptions::resolve_options can process it.
+                        // so the caller can resolve it as a data-source write option.
                         clean_items.push((key, value));
                     } else {
                         // Custom user table property (e.g. from TBLPROPERTIES); include

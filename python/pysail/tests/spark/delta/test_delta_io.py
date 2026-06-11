@@ -97,12 +97,14 @@ class TestDeltaIO:
             assert any("protocol" in action for action in actions)
             assert any("metaData" in action for action in actions)
             assert not any("add" in action for action in actions)
-            assert spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect() == []
+            assert spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect() == []  # noqa: S608
 
-            spark.sql(f"INSERT INTO {table_name} VALUES (1, 'one')")
+            spark.sql(f"INSERT INTO {table_name} VALUES (1, 'one')")  # noqa: S608
             commit1 = delta_path / "_delta_log" / "00000000000000000001.json"
             assert commit1.exists()
-            assert spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect() == [Row(id=1, name="one")]
+            assert spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect() == [  # noqa: S608
+                Row(id=1, name="one")
+            ]
         finally:
             spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 

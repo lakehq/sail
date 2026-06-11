@@ -35,7 +35,7 @@ pub use operations::write::base_writer::*;
 pub use operations::write::file_writer::*;
 pub use operations::write::{IcebergWriter, WriteOutcome};
 pub use operations::Transaction;
-pub use physical::IcebergTablePhysicalPlanner;
+pub use physical::IcebergPhysicalPlanner;
 pub use physical_plan::discovery_exec::IcebergDiscoveryExec;
 pub use physical_plan::manifest_scan_exec::{manifest_scan_schema, IcebergManifestScanExec};
 pub use physical_plan::scan_by_data_files_exec::IcebergScanByDataFilesExec;

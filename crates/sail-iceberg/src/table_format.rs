@@ -18,17 +18,23 @@ use bytes::Bytes;
 use datafusion::arrow::datatypes::{Field as ArrowField, Schema as ArrowSchema};
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
-use datafusion::logical_expr::TableSource;
+use datafusion::execution::SessionState;
+use datafusion::logical_expr::{LogicalPlan, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion_expr::expr::Sort;
+use datafusion_expr::{Expr, Extension, UserDefinedLogicalNodeCore};
+use educe::Educe;
 use object_store::ObjectStoreExt;
 use sail_common_datafusion::catalog::iceberg::is_iceberg_table_marker;
 use sail_common_datafusion::catalog::managed::metadata_location_value;
 use sail_common_datafusion::catalog::CatalogPartitionField;
 use sail_common_datafusion::datasource::{
-    find_path_in_options, OptionLayer, PhysicalSinkMode, SinkInfo, SourceInfo, TableFormat,
-    TableFormatAlterTableOperation, TableFormatCreateTableColumn, TableFormatCreateTableInfo,
-    TableFormatCreateTableResult, TableFormatRegistry,
+    create_sort_order, find_path_in_options, BucketBy, OptionLayer, PhysicalSinkMode, SinkInfo,
+    SinkMode, SourceInfo, TableFormat, TableFormatAlterTableOperation,
+    TableFormatCreateTableColumn, TableFormatCreateTableInfo, TableFormatCreateTableResult,
+    TableFormatRegistry,
 };
+use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 use sail_data_source::options::ResolveOptions;
 use url::Url;
@@ -81,13 +87,26 @@ impl TableFormat for IcebergTableFormat {
         Ok(Arc::new(IcebergTableSource::new(provider)))
     }
 
-    async fn create_writer(
+    async fn infer_schema(
         &self,
         ctx: &dyn Session,
-        info: SinkInfo,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        use datafusion::physical_plan::empty::EmptyExec;
+        info: SourceInfo,
+    ) -> Result<datafusion::arrow::datatypes::SchemaRef> {
+        Ok(self.create_source(ctx, info).await?.schema())
+    }
 
+    async fn infer_metadata(
+        &self,
+        ctx: &dyn Session,
+        info: SourceInfo,
+    ) -> Result<sail_common_datafusion::datasource::TableFormatMetadata> {
+        Ok(sail_common_datafusion::datasource::TableFormatMetadata {
+            schema: self.infer_schema(ctx, info).await?,
+            properties: vec![],
+        })
+    }
+
+    async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
         let Some(path) = find_path_in_options(&info.options) else {
             return plan_err!("missing path in Iceberg table options");
         };
@@ -99,130 +118,25 @@ impl TableFormat for IcebergTableFormat {
             sort_order,
             options,
             catalog_table,
-            logical_schema,
         } = info;
-
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for Iceberg format");
         }
 
-        let table_url = Self::parse_table_url(vec![path]).await?;
-        let metadata_location = metadata_location_from_options(&options);
-        let catalog_managed_table = catalog_managed_iceberg_from_options(&options);
-        let (options, table_properties) =
-            split_iceberg_write_options_and_table_properties(options)?;
-        let variant_shredding_option_presence =
-            IcebergWriterExecOptions::variant_shredding_option_presence(&options);
-        let iceberg_options = IcebergWriteOptions::resolve(ctx, options)?;
-
-        let store = ctx
-            .runtime_env()
-            .object_store_registry
-            .get_store(&table_url)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let exists_res = match metadata_location.as_deref() {
-            Some(location) if catalog_managed_table => {
-                metadata_location_to_object_path_string(location)
-            }
-            _ => find_latest_metadata_file(&store, &table_url).await,
-        };
-        let table_exists = exists_res.is_ok();
-
-        match mode {
-            PhysicalSinkMode::ErrorIfExists if table_exists => {
-                return plan_err!("Iceberg table already exists at path: {table_url}");
-            }
-            PhysicalSinkMode::IgnoreIfExists if table_exists => {
-                return Ok(Arc::new(EmptyExec::new(input.schema())));
-            }
-            PhysicalSinkMode::OverwriteIf { .. } | PhysicalSinkMode::OverwritePartitions => {
-                return not_impl_err!("predicate or partition overwrite for Iceberg");
-            }
-            _ => {}
-        }
-
-        // Get existing partition spec (encoded as partition expressions) if table exists
-        let existing_partition_columns = if table_exists {
-            let metadata_location = catalog_managed_table.then_some(metadata_location).flatten();
-            let table =
-                Table::load_with_metadata_location(ctx, table_url.clone(), metadata_location)
-                    .await?;
-            Some(Self::partition_columns_from_metadata(&table)?)
-        } else {
-            None
-        };
-
-        // Validate partition column mismatch for append/overwrite operations
-        if let Some(existing_partitions) = &existing_partition_columns {
-            if !partition_by.is_empty() && partition_by != *existing_partitions {
-                // For append mode, partition column changes are not allowed
-                match mode {
-                    PhysicalSinkMode::Append => {
-                        return plan_err!(
-                            "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
-                            Cannot change partitioning on append.",
-                            format_partition_exprs(existing_partitions),
-                            format_partition_exprs(&partition_by)
-                        );
-                    }
-                    PhysicalSinkMode::Overwrite
-                        // For overwrite mode, check if schema overwrite is allowed
-                        if !iceberg_options.overwrite_schema => {
-                            return plan_err!(
-                                "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
-                                Set overwriteSchema=true to change partitioning.",
-                                format_partition_exprs(existing_partitions),
-                                format_partition_exprs(&partition_by)
-                            );
-                        }
-                    _ => {}
-                }
-            }
-        }
-
-        let resolved_partition_columns = if !partition_by.is_empty() {
-            partition_by
-        } else {
-            existing_partition_columns.unwrap_or_default()
-        };
-
-        let mut options = IcebergWriterExecOptions::from(iceberg_options);
-        options.apply_variant_shredding_option_presence(variant_shredding_option_presence);
-        options.table_properties = table_properties;
-        if let Some(catalog_table) = catalog_table {
-            options.table_properties.push((
-                sail_common_datafusion::datasource::CATALOG_TABLE_OPTION.to_string(),
-                serde_json::to_string(&catalog_table)
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?,
-            ));
-        }
-        let table_config = IcebergTableConfig {
-            table_url,
-            partition_columns: resolved_partition_columns,
-            table_exists,
-            options,
-        };
-
-        let physical_sort = sort_order.map(|req| {
-            req.into_iter()
-                .map(|r| datafusion::physical_expr::PhysicalSortExpr {
-                    expr: r.expr,
-                    options: r.options.unwrap_or_default(),
-                })
-                .collect::<Vec<_>>()
-        });
-
-        let logical_input_schema = logical_schema.map(|schema| Arc::new(schema.as_arrow().clone()));
-        let builder = IcebergPlanBuilder::new(
-            input,
-            table_config,
-            mode,
-            physical_sort,
-            logical_input_schema,
-            ctx,
-        );
-        let exec = builder.build().await?;
-        Ok(exec)
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(IcebergWriteNode::new(
+                Arc::new(input),
+                IcebergWriteNodeOptions {
+                    path,
+                    mode,
+                    partition_by,
+                    bucket_by,
+                    sort_order,
+                    options,
+                    catalog_table,
+                },
+            )),
+        }))
     }
 
     async fn create_table_metadata(
@@ -332,17 +246,216 @@ impl TableFormat for IcebergTableFormat {
                 self.alter_table_properties(runtime_env, path, changes, if_exists)
                     .await
             }
-            TableFormatAlterTableOperation::AlterColumnType { .. } => {
-                not_impl_err!("Column type alteration not supported for Iceberg format")
-            }
-            TableFormatAlterTableOperation::AlterColumnDefault { .. } => {
-                not_impl_err!("Column default alteration not supported for Iceberg format")
-            }
-            TableFormatAlterTableOperation::AddCheckConstraint { .. } => {
-                not_impl_err!("CHECK constraints not supported for Iceberg format")
+            op => not_impl_err!("unsupported Iceberg ALTER TABLE operation: {op:?}"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Educe)]
+#[educe(PartialEq, Eq, Hash, PartialOrd)]
+pub struct IcebergWriteNodeOptions {
+    pub path: String,
+    pub mode: SinkMode,
+    pub partition_by: Vec<CatalogPartitionField>,
+    pub bucket_by: Option<BucketBy>,
+    pub sort_order: Vec<Sort>,
+    pub options: Vec<OptionLayer>,
+    pub catalog_table: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Educe)]
+#[educe(PartialEq, Eq, Hash, PartialOrd)]
+pub struct IcebergWriteNode {
+    input: Arc<LogicalPlan>,
+    options: IcebergWriteNodeOptions,
+    #[educe(PartialOrd(ignore))]
+    schema: datafusion_common::DFSchemaRef,
+}
+
+impl IcebergWriteNode {
+    pub fn new(input: Arc<LogicalPlan>, options: IcebergWriteNodeOptions) -> Self {
+        Self {
+            input,
+            options,
+            schema: Arc::new(datafusion_common::DFSchema::empty()),
+        }
+    }
+
+    pub fn options(&self) -> &IcebergWriteNodeOptions {
+        &self.options
+    }
+}
+
+impl UserDefinedLogicalNodeCore for IcebergWriteNode {
+    fn name(&self) -> &str {
+        "IcebergWrite"
+    }
+
+    fn inputs(&self) -> Vec<&LogicalPlan> {
+        vec![self.input.as_ref()]
+    }
+
+    fn schema(&self) -> &datafusion_common::DFSchemaRef {
+        &self.schema
+    }
+
+    fn expressions(&self) -> Vec<Expr> {
+        vec![]
+    }
+
+    fn fmt_for_explain(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "IcebergWrite: options={:?}", self.options)
+    }
+
+    fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
+        exprs.zero()?;
+        Ok(Self {
+            input: Arc::new(inputs.one()?),
+            options: self.options.clone(),
+            schema: self.schema.clone(),
+        })
+    }
+}
+
+pub(crate) async fn plan_iceberg_write(
+    ctx: &SessionState,
+    logical_input: &LogicalPlan,
+    physical_input: Arc<dyn ExecutionPlan>,
+    node: &IcebergWriteNode,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    use datafusion::physical_plan::empty::EmptyExec;
+
+    let IcebergWriteNodeOptions {
+        path,
+        mode,
+        partition_by,
+        bucket_by: _,
+        sort_order,
+        options,
+        catalog_table,
+    } = node.options().clone();
+
+    let mode = match mode {
+        SinkMode::ErrorIfExists => PhysicalSinkMode::ErrorIfExists,
+        SinkMode::IgnoreIfExists => PhysicalSinkMode::IgnoreIfExists,
+        SinkMode::Append => PhysicalSinkMode::Append,
+        SinkMode::Overwrite => PhysicalSinkMode::Overwrite,
+        SinkMode::OverwriteIf { .. } | SinkMode::OverwritePartitions => {
+            return not_impl_err!("predicate or partition overwrite for Iceberg");
+        }
+    };
+    let metadata_location = metadata_location_from_options(&options);
+    let catalog_managed_table = catalog_managed_iceberg_from_options(&options);
+    let (clean_options, table_properties) =
+        split_iceberg_write_options_and_table_properties(options)?;
+    let variant_shredding_option_presence =
+        IcebergWriterExecOptions::variant_shredding_option_presence(&clean_options);
+    let iceberg_options = IcebergWriteOptions::resolve(ctx, clean_options)?;
+
+    let sort_order = create_sort_order(ctx, sort_order, logical_input.schema())?;
+    let physical_sort = sort_order.map(|req| {
+        req.into_iter()
+            .map(|r| datafusion::physical_expr::PhysicalSortExpr {
+                expr: r.expr,
+                options: r.options.unwrap_or_default(),
+            })
+            .collect::<Vec<_>>()
+    });
+
+    let table_url = IcebergTableFormat::parse_table_url(vec![path]).await?;
+
+    let store = ctx
+        .runtime_env()
+        .object_store_registry
+        .get_store(&table_url)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let exists_res = match metadata_location.as_deref() {
+        Some(location) if catalog_managed_table => {
+            metadata_location_to_object_path_string(location)
+        }
+        _ => find_latest_metadata_file(&store, &table_url).await,
+    };
+    let table_exists = exists_res.is_ok();
+
+    match mode {
+        PhysicalSinkMode::ErrorIfExists if table_exists => {
+            return plan_err!("Iceberg table already exists at path: {table_url}");
+        }
+        PhysicalSinkMode::IgnoreIfExists if table_exists => {
+            return Ok(Arc::new(EmptyExec::new(physical_input.schema())));
+        }
+        PhysicalSinkMode::OverwriteIf { .. } | PhysicalSinkMode::OverwritePartitions => {
+            return not_impl_err!("predicate or partition overwrite for Iceberg");
+        }
+        _ => {}
+    }
+
+    let existing_partition_columns = if table_exists {
+        let metadata_location = catalog_managed_table.then_some(metadata_location).flatten();
+        let table =
+            Table::load_with_metadata_location(ctx, table_url.clone(), metadata_location).await?;
+        Some(IcebergTableFormat::partition_columns_from_metadata(&table)?)
+    } else {
+        None
+    };
+
+    if let Some(existing_partitions) = &existing_partition_columns {
+        if !partition_by.is_empty() && partition_by != *existing_partitions {
+            match mode {
+                PhysicalSinkMode::Append => {
+                    return plan_err!(
+                        "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
+                        Cannot change partitioning on append.",
+                        format_partition_exprs(existing_partitions),
+                        format_partition_exprs(&partition_by)
+                    );
+                }
+                PhysicalSinkMode::Overwrite if !iceberg_options.overwrite_schema => {
+                    return plan_err!(
+                        "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
+                        Set overwriteSchema=true to change partitioning.",
+                        format_partition_exprs(existing_partitions),
+                        format_partition_exprs(&partition_by)
+                    );
+                }
+                _ => {}
             }
         }
     }
+
+    let resolved_partition_columns = if !partition_by.is_empty() {
+        partition_by
+    } else {
+        existing_partition_columns.unwrap_or_default()
+    };
+
+    let mut options = IcebergWriterExecOptions::from(iceberg_options);
+    options.apply_variant_shredding_option_presence(variant_shredding_option_presence);
+    options.table_properties = table_properties;
+    if let Some(catalog_table) = catalog_table {
+        options.table_properties.push((
+            sail_common_datafusion::datasource::CATALOG_TABLE_OPTION.to_string(),
+            serde_json::to_string(&catalog_table)
+                .map_err(|e| DataFusionError::External(Box::new(e)))?,
+        ));
+    }
+    let table_config = IcebergTableConfig {
+        table_url,
+        partition_columns: resolved_partition_columns,
+        table_exists,
+        options,
+    };
+
+    let logical_input_schema = Arc::new(logical_input.schema().as_arrow().clone());
+    let builder = IcebergPlanBuilder::new(
+        physical_input,
+        table_config,
+        mode,
+        physical_sort,
+        Some(logical_input_schema),
+        ctx,
+    );
+    builder.build().await
 }
 
 impl IcebergTableFormat {
@@ -484,7 +597,7 @@ pub async fn create_iceberg_provider(
     Ok(create_iceberg_provider_concrete(ctx, table_url, options, None, false).await?)
 }
 
-pub(crate) async fn create_iceberg_provider_concrete(
+pub async fn create_iceberg_provider_concrete(
     ctx: &dyn Session,
     table_url: Url,
     options: IcebergReadOptions,
@@ -543,7 +656,7 @@ pub(crate) async fn load_table_metadata_with_options(
 }
 
 impl IcebergTableFormat {
-    async fn parse_table_url(paths: Vec<String>) -> Result<Url> {
+    pub async fn parse_table_url(paths: Vec<String>) -> Result<Url> {
         if paths.len() != 1 {
             return plan_err!(
                 "Iceberg table requires exactly one path, got {}",
@@ -688,7 +801,7 @@ pub(crate) fn metadata_location_from_properties(properties: &[(String, String)])
     .map(ToString::to_string)
 }
 
-pub(crate) fn metadata_location_from_options(options: &[OptionLayer]) -> Option<String> {
+pub fn metadata_location_from_options(options: &[OptionLayer]) -> Option<String> {
     options.iter().rev().find_map(|layer| match layer {
         OptionLayer::TablePropertyList { items } | OptionLayer::OptionList { items } => {
             metadata_location_from_properties(items)
@@ -704,7 +817,7 @@ pub(crate) fn catalog_managed_iceberg_from_properties(properties: &[(String, Str
     })
 }
 
-pub(crate) fn catalog_managed_iceberg_from_options(options: &[OptionLayer]) -> bool {
+pub fn catalog_managed_iceberg_from_options(options: &[OptionLayer]) -> bool {
     options.iter().any(|layer| match layer {
         OptionLayer::TablePropertyList { items } | OptionLayer::OptionList { items } => {
             catalog_managed_iceberg_from_properties(items)
@@ -730,7 +843,7 @@ pub(crate) fn catalog_table_from_properties(
 }
 
 #[expect(clippy::type_complexity)]
-fn split_iceberg_write_options_and_table_properties(
+pub fn split_iceberg_write_options_and_table_properties(
     options: Vec<OptionLayer>,
 ) -> Result<(Vec<OptionLayer>, Vec<(String, String)>)> {
     let catalog_table_option = sail_common_datafusion::datasource::CATALOG_TABLE_OPTION;

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import boto3
@@ -13,6 +12,8 @@ import pytest
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from pyspark.sql import SparkSession
 
 

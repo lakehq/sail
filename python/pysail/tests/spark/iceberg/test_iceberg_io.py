@@ -112,10 +112,10 @@ def test_iceberg_io_create_table_materializes_empty_metadata(spark, tmp_path):
         assert metadata_dir.exists()
         assert (metadata_dir / "version-hint.text").exists()
         assert list(metadata_dir.glob("*.metadata.json"))
-        assert spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect() == []
+        assert spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect() == []  # noqa: S608
 
-        spark.sql(f"INSERT INTO {table_name} VALUES (1, 'one')")
-        rows = spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect()
+        spark.sql(f"INSERT INTO {table_name} VALUES (1, 'one')")  # noqa: S608
+        rows = spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect()  # noqa: S608
         assert [(row.id, row.name) for row in rows] == [(1, "one")]
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
