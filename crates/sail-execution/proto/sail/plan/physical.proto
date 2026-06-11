@@ -63,6 +63,7 @@ message ExtendedPhysicalPlanNode {
     DeletionVectorWriterExecNode deletion_vector_writer = 48;
     DeletionVectorRowsWriterExecNode deletion_vector_rows_writer = 49;
     CoalesceExecNode coalesce = 50;
+    FileDeleteExecNode file_delete = 51;
   }
 }
 
@@ -652,6 +653,11 @@ message TextSinkExecNode {
   bytes line_sep = 4;
   CompressionTypeVariant compression_type_variant = 5;
   optional PhysicalSortExprNodeCollection sort_order = 6;
+}
+
+message FileDeleteExecNode {
+  string object_store_url = 1;
+  string path = 2;
 }
 
 message StreamCollectorExecNode {

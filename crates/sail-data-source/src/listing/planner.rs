@@ -28,11 +28,13 @@ use futures::{future, stream, Stream, StreamExt};
 use object_store::ObjectStore;
 use sail_common_datafusion::datasource::create_sort_order;
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
+use sail_physical_plan::barrier::BarrierExec;
 
+use crate::listing::delete::FileDeleteExec;
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::can_be_evaluated_for_partition_pruning;
-use crate::listing::write::FileWriteNode;
+use crate::listing::write::{FileWriteNode, FileWriteOptions};
 
 /// Result of a file listing operation for listing table scans.
 #[derive(Debug)]
@@ -198,7 +200,18 @@ async fn plan_file_write(
     if is_flow_event_schema(logical_input.schema().as_arrow()) {
         return plan_err!("cannot write streaming data to listing table");
     }
-    let path = node.options().path.clone();
+    let FileWriteOptions {
+        format,
+        path,
+        overwrite,
+        partition_by,
+        sort_by,
+        bucket_by,
+    } = node.options();
+    if bucket_by.is_some() {
+        return internal_err!("bucketing should have been rejected for listing table writes");
+    }
+    let path = path.clone();
     // always write multi-file output
     let path = if path.ends_with(object_store::path::DELIMITER) {
         path
@@ -211,17 +224,20 @@ async fn plan_file_write(
     } else {
         return internal_err!("empty listing table path: {path}");
     };
+    let delete_path = if let Some(path) = table_paths.first() {
+        path.prefix().clone()
+    } else {
+        return internal_err!("empty listing table path: {path}");
+    };
     // We do not need to specify the exact data type for partition columns,
     // since the type is inferred from the record batch during writing.
-    let table_partition_cols = node
-        .options()
-        .partition_by
+    let table_partition_cols = partition_by
         .iter()
         .map(|field| (field.column.clone(), DataType::Null))
         .collect::<Vec<_>>();
     let conf = FileSinkConfig {
         original_url: path,
-        object_store_url,
+        object_store_url: object_store_url.clone(),
         file_group: Default::default(),
         table_paths,
         output_schema: physical_input.schema(),
@@ -231,13 +247,8 @@ async fn plan_file_write(
         file_extension: String::new(),
         file_output_mode: FileOutputMode::Automatic,
     };
-    let sort_order = create_sort_order(
-        session_state,
-        node.options().sort_by.clone(),
-        logical_input.schema(),
-    )?;
-    node.options()
-        .format
+    let sort_order = create_sort_order(session_state, sort_by.clone(), logical_input.schema())?;
+    let plan = format
         .sink(
             session_state,
             ListingSinkInput {
@@ -246,7 +257,13 @@ async fn plan_file_write(
                 sort_order,
             },
         )
-        .await
+        .await?;
+    if *overwrite {
+        let delete = Arc::new(FileDeleteExec::new(object_store_url, delete_path));
+        Ok(Arc::new(BarrierExec::new(vec![delete], plan)))
+    } else {
+        Ok(plan)
+    }
 }
 
 fn try_create_output_ordering(

@@ -6,7 +6,7 @@ use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::catalog::CatalogPartitionField;
-use sail_common_datafusion::datasource::{BucketBy, SinkMode};
+use sail_common_datafusion::datasource::BucketBy;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::listing::source::WriteFormat;
@@ -17,7 +17,7 @@ pub struct FileWriteOptions {
     #[educe(PartialEq(ignore), Hash(ignore), PartialOrd(ignore))]
     pub format: Arc<dyn WriteFormat>,
     pub path: String,
-    pub mode: SinkMode,
+    pub overwrite: bool,
     pub partition_by: Vec<CatalogPartitionField>,
     pub sort_by: Vec<Sort>,
     pub bucket_by: Option<BucketBy>,

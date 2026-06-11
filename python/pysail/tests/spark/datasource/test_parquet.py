@@ -24,6 +24,27 @@ def test_parquet_read_write_basic(spark, sample_df, tmp_path):
     assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
 
 
+def test_parquet_write_modes(spark, tmp_path):
+    path = str(tmp_path / "parquet_write_modes")
+
+    spark.createDataFrame([(1, "old")], schema="id INT, value STRING").write.parquet(path)
+
+    with pytest.raises(Exception, match="already exists"):
+        spark.createDataFrame([(2, "error")], schema="id INT, value STRING").write.parquet(path)
+
+    spark.createDataFrame([(3, "ignored")], schema="id INT, value STRING").write.mode("ignore").parquet(path)
+    assert spark.read.parquet(path).orderBy("id").collect() == [Row(id=1, value="old")]
+
+    spark.createDataFrame([(4, "appended")], schema="id INT, value STRING").write.mode("append").parquet(path)
+    assert spark.read.parquet(path).orderBy("id").collect() == [
+        Row(id=1, value="old"),
+        Row(id=4, value="appended"),
+    ]
+
+    spark.createDataFrame([(5, "new")], schema="id INT, value STRING").write.mode("overwrite").parquet(path)
+    assert spark.read.parquet(path).orderBy("id").collect() == [Row(id=5, value="new")]
+
+
 def test_parquet_read_write_compressed(spark, sample_df, sample_pandas_df, tmp_path):
     # Test reading a compressed Parquet file written by Sail
     path = str(tmp_path / "parquet_compressed_zstd")

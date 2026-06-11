@@ -7,7 +7,7 @@ use datafusion::arrow::datatypes::{DataType, Field, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::physical_plan::FileSinkConfig;
 use datafusion::execution::object_store::ObjectStoreUrl;
-use datafusion::logical_expr::{Extension, LogicalPlan, TableSource};
+use datafusion::logical_expr::{Extension, LogicalPlan, LogicalPlanBuilder, TableSource};
 use datafusion::physical_expr::LexRequirement;
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::ExecutionPlan;
@@ -16,10 +16,11 @@ use datafusion_common::{not_impl_err, plan_err, Result, Statistics};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::{ListingTableUrl, TableSchema};
+use futures::TryStreamExt;
 use object_store::{ObjectMeta, ObjectStore};
 use sail_common_datafusion::datasource::{
-    find_path_in_options, get_partition_columns_and_file_schema, OptionLayer, SinkInfo, SourceInfo,
-    TableFormat,
+    find_path_in_options, get_partition_columns_and_file_schema, OptionLayer, SinkInfo, SinkMode,
+    SourceInfo, TableFormat,
 };
 
 use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
@@ -239,6 +240,24 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         if partition_by.iter().any(|field| field.transform.is_some()) {
             return not_impl_err!("partition transforms for writing listing table format");
         }
+        let target_exists = match mode {
+            SinkMode::ErrorIfExists | SinkMode::IgnoreIfExists => {
+                listing_target_exists(ctx, &path).await?
+            }
+            SinkMode::Append | SinkMode::Overwrite => false,
+            mode => return not_impl_err!("unsupported sink mode for listing table: {mode:?}"),
+        };
+        let overwrite = match mode {
+            SinkMode::ErrorIfExists if target_exists => {
+                return plan_err!("listing table path already exists: {path}");
+            }
+            SinkMode::IgnoreIfExists if target_exists => {
+                return Ok(LogicalPlanBuilder::empty(false).build()?);
+            }
+            SinkMode::ErrorIfExists | SinkMode::IgnoreIfExists | SinkMode::Append => false,
+            SinkMode::Overwrite => true,
+            mode => return not_impl_err!("unsupported sink mode for listing table: {mode:?}"),
+        };
         let write_format = T::write(ctx, options)?;
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(FileWriteNode::new(
@@ -246,7 +265,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
                 FileWriteOptions {
                     format: Arc::new(write_format),
                     path,
-                    mode,
+                    overwrite,
                     partition_by,
                     sort_by: sort_order,
                     bucket_by,
@@ -254,4 +273,20 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             )),
         }))
     }
+}
+
+async fn listing_target_exists(ctx: &dyn Session, path: &str) -> Result<bool> {
+    let path = if path.ends_with(object_store::path::DELIMITER) {
+        path.to_string()
+    } else {
+        format!("{path}{}", object_store::path::DELIMITER)
+    };
+    let urls = resolve_listing_urls(ctx, vec![path]).await?;
+    for url in urls {
+        let store = ctx.runtime_env().object_store(&url)?;
+        if store.list(Some(url.prefix())).try_next().await?.is_some() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }

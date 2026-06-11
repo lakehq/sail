@@ -90,6 +90,7 @@ use sail_data_source::formats::rate::RateSourceExec;
 use sail_data_source::formats::socket::{SocketReadOptions, SocketSourceExec};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
+use sail_data_source::listing::delete::FileDeleteExec;
 use sail_data_source::options::gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
     DeletionVectorRowsWriterExec, DeletionVectorWriterExec, DeltaCommitContext, DeltaCommitExec,
@@ -989,6 +990,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Arc::new(data_sink),
                     sort_order,
                 )))
+            }
+            NodeKind::FileDelete(gen::FileDeleteExecNode {
+                object_store_url,
+                path,
+            }) => {
+                let object_store_url =
+                    datafusion::execution::object_store::ObjectStoreUrl::parse(object_store_url)?;
+                let path = object_store::path::Path::parse(path)
+                    .map_err(|e| plan_datafusion_err!("invalid file delete path: {e}"))?;
+                Ok(Arc::new(FileDeleteExec::new(object_store_url, path)))
             }
             NodeKind::StreamCollector(gen::StreamCollectorExecNode { input }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
@@ -2064,6 +2075,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let command = serde_json::to_string(catalog_command_exec.command())
                 .map_err(|e| plan_datafusion_err!("failed to encode CatalogCommand: {e}"))?;
             NodeKind::CatalogCommand(gen::CatalogCommandExecNode { schema, command })
+        } else if let Some(file_delete_exec) = node.as_any().downcast_ref::<FileDeleteExec>() {
+            NodeKind::FileDelete(gen::FileDeleteExecNode {
+                object_store_url: file_delete_exec.object_store_url().as_str().to_string(),
+                path: file_delete_exec.path().to_string(),
+            })
         } else if let Some(barrier_exec) = node.as_any().downcast_ref::<BarrierExec>() {
             let preconditions = barrier_exec
                 .preconditions()
