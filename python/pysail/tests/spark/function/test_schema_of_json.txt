@@ -52,3 +52,272 @@ that the test passes against both engines.
 ... except Exception:
 ...     print("error")
 error
+
+All expected values below were captured from JVM Spark (verified identical on
+3.5.7 and 4.1.1).
+
+>>> def check(json_str, opts=None):
+...     col = schema_of_json(json_str) if opts is None else schema_of_json(json_str, opts)
+...     return df.select(col.alias("r")).collect()[0]["r"]
+
+Unknown options are silently ignored, matching Spark.
+
+>>> check('{"a": 1}', {'myImaginaryOption': 'banana'})
+'STRUCT<a: BIGINT>'
+
+Single quotes are allowed by default (`allowSingleQuotes` defaults to true in
+Spark) and can be disabled explicitly.
+
+>>> check('{"a": \'x\'}')
+'STRUCT<a: STRING>'
+>>> check("{'a': 1}")
+'STRUCT<a: BIGINT>'
+>>> check(r"{'a': 'it\'s'}")
+'STRUCT<a: STRING>'
+>>> check('{\'a\': \'say "hi"\'}')
+'STRUCT<a: STRING>'
+>>> check('{"a": "it\'s"}')
+'STRUCT<a: STRING>'
+>>> try:
+...     check("{'a': 1}", {'allowSingleQuotes': 'false'})
+... except Exception:
+...     print("error")
+error
+
+Field names that are not valid identifiers are quoted with backticks in the
+DDL output, with embedded backticks doubled.
+
+>>> check('{"x y": 1}')
+'STRUCT<`x y`: BIGINT>'
+>>> check('{"x-y": 1}')
+'STRUCT<`x-y`: BIGINT>'
+>>> check('{"x.y": 1}')
+'STRUCT<`x.y`: BIGINT>'
+>>> check('{"1a": 1}')
+'STRUCT<`1a`: BIGINT>'
+>>> check('{"_a": 1}')
+'STRUCT<_a: BIGINT>'
+>>> check('{"ab1_": 1}')
+'STRUCT<ab1_: BIGINT>'
+>>> check('{"x`y": 1}')
+'STRUCT<`x``y`: BIGINT>'
+>>> check('{"café": 1}')
+'STRUCT<`café`: BIGINT>'
+>>> check('{"": 1}')
+'STRUCT<>'
+
+Booleans and nulls.
+
+>>> check('{"a": true}')
+'STRUCT<a: BOOLEAN>'
+>>> check('{"a": false}')
+'STRUCT<a: BOOLEAN>'
+>>> check('{"a": null}')
+'STRUCT<a: STRING>'
+>>> check('null')
+'STRING'
+>>> check('{"a": {"b": null}}')
+'STRUCT<a: STRUCT<b: STRING>>'
+>>> check('{"a": [null]}')
+'STRUCT<a: ARRAY<STRING>>'
+>>> check('{"a": [null, 1]}')
+'STRUCT<a: ARRAY<BIGINT>>'
+
+Array element types are merged to the most specific common type.
+
+>>> check('{"a": [1, "x"]}')
+'STRUCT<a: ARRAY<STRING>>'
+>>> check('{"a": [1, 2.5]}')
+'STRUCT<a: ARRAY<DOUBLE>>'
+>>> check('{"a": [1, 2.5, "x"]}')
+'STRUCT<a: ARRAY<STRING>>'
+>>> check('{"a": [1, true]}')
+'STRUCT<a: ARRAY<STRING>>'
+>>> check('{"a": [{"b": 1}, {"c": 2}]}')
+'STRUCT<a: ARRAY<STRUCT<b: BIGINT, c: BIGINT>>>'
+>>> check('{"a": [{"b": 1}, {"b": "x"}]}')
+'STRUCT<a: ARRAY<STRUCT<b: STRING>>>'
+>>> check('{"a": [{"b": 1}, 2]}')
+'STRUCT<a: ARRAY<STRING>>'
+>>> check('{"a": [[1], [2.5]]}')
+'STRUCT<a: ARRAY<ARRAY<DOUBLE>>>'
+
+Empty structs are dropped during canonicalization.
+
+>>> check('{"a": {}}')
+'STRUCT<>'
+>>> check('{}')
+'STRUCT<>'
+
+Numbers: integers that fit in a long are BIGINT, wider integral values are
+DECIMAL(p,0) up to the maximum precision of 38, and everything else is
+DOUBLE. `prefersDecimal` infers floating-point values as decimals.
+
+>>> check('{"a": 9223372036854775807}')
+'STRUCT<a: BIGINT>'
+>>> check('{"a": 9223372036854775808}')
+'STRUCT<a: DECIMAL(19,0)>'
+>>> check('{"a": 99999999999999999999999999}')
+'STRUCT<a: DECIMAL(26,0)>'
+>>> check('{"a": -99999999999999999999999999}')
+'STRUCT<a: DECIMAL(26,0)>'
+>>> check('{"a": ' + '9' * 39 + '}')
+'STRUCT<a: DOUBLE>'
+>>> check('{"a": 1.7976931348623157E308}')
+'STRUCT<a: DOUBLE>'
+>>> check('{"a": 1E309}')
+'STRUCT<a: DOUBLE>'
+>>> check('{"a": 12.345678901234567890123}')
+'STRUCT<a: DOUBLE>'
+>>> check('{"a": 1.5}', {'prefersDecimal': 'true'})
+'STRUCT<a: DECIMAL(2,1)>'
+>>> check('{"a": 99999999999999999999999999}', {'prefersDecimal': 'true'})
+'STRUCT<a: DECIMAL(26,0)>'
+
+With `prefersDecimal`, a value with an exponent follows Java `BigDecimal`
+semantics: the scale is the number of fraction digits minus the exponent,
+and the precision counts the unscaled digits, floored at the scale. A
+negative scale is an error on both engines.
+
+>>> PD = {'prefersDecimal': 'true'}
+>>> check('{"a": 1.55E1}', PD)
+'STRUCT<a: DECIMAL(3,1)>'
+>>> check('{"a": 1.5E-2}', PD)
+'STRUCT<a: DECIMAL(3,3)>'
+>>> check('{"a": 1E-2}', PD)
+'STRUCT<a: DECIMAL(2,2)>'
+>>> check('{"a": 15E-1}', PD)
+'STRUCT<a: DECIMAL(2,1)>'
+>>> check('{"a": 1.500E1}', PD)
+'STRUCT<a: DECIMAL(4,2)>'
+>>> check('{"a": 1.5E0}', PD)
+'STRUCT<a: DECIMAL(2,1)>'
+>>> check('{"a": 1.5E2}', PD)
+Traceback (most recent call last):
+...
+pyspark.errors.exceptions.connect.AnalysisException: Negative scale is not allowed: '-1'
+>>> check('{"a": 1E2}', PD)
+Traceback (most recent call last):
+...
+pyspark.errors.exceptions.connect.AnalysisException: Negative scale is not allowed: '-2'
+>>> check('{"a": 15E2}', PD)
+Traceback (most recent call last):
+...
+pyspark.errors.exceptions.connect.AnalysisException: Negative scale is not allowed: '-2'
+>>> check('{"a": 1.5E2}')
+'STRUCT<a: DOUBLE>'
+
+Non-numeric numbers are allowed by default (`allowNonNumericNumbers`
+defaults to true in Spark).
+
+>>> check('{"a": NaN}')
+'STRUCT<a: DOUBLE>'
+>>> check('{"a": Infinity}')
+'STRUCT<a: DOUBLE>'
+
+`allowNumericLeadingZeros` allows leading zeros in integral numbers, which
+are rejected by default. Leading zeros do not count toward the decimal
+precision.
+
+>>> LZ = {'allowNumericLeadingZeros': 'true'}
+>>> check('{"a": 01}', LZ)
+'STRUCT<a: BIGINT>'
+>>> check('{"a": 0001}', LZ)
+'STRUCT<a: BIGINT>'
+>>> check('{"a": -01}', LZ)
+'STRUCT<a: BIGINT>'
+>>> check('{"a": 007}', LZ)
+'STRUCT<a: BIGINT>'
+>>> check('{"a": 0}', LZ)
+'STRUCT<a: BIGINT>'
+>>> check('{"a": 00}', LZ)
+'STRUCT<a: BIGINT>'
+>>> check('{"a": -00}', LZ)
+'STRUCT<a: BIGINT>'
+>>> check('{"a": 01.5}', LZ)
+'STRUCT<a: DOUBLE>'
+>>> check('{"a": 00.5}', LZ)
+'STRUCT<a: DOUBLE>'
+>>> check('{"a": 01e2}', LZ)
+'STRUCT<a: DOUBLE>'
+>>> check('{"a": 009223372036854775808}', LZ)
+'STRUCT<a: DECIMAL(19,0)>'
+>>> check('{"a": 00' + '9' * 38 + '}', LZ)
+'STRUCT<a: DECIMAL(38,0)>'
+>>> check('{"a": 00' + '9' * 39 + '}', LZ)
+'STRUCT<a: DOUBLE>'
+>>> check('{"01b": 01, "b": "01"}', LZ)
+'STRUCT<`01b`: BIGINT, b: STRING>'
+
+Leading zeros in the exponent part are always valid, regardless of the
+option.
+
+>>> check('{"a": 1e02}', LZ)
+'STRUCT<a: DOUBLE>'
+>>> check('{"a": 1e02}')
+'STRUCT<a: DOUBLE>'
+
+`allowNumericLeadingZeros` combines with `prefersDecimal`.
+
+>>> check('{"a": 00.50}', {'allowNumericLeadingZeros': 'true', 'prefersDecimal': 'true'})
+'STRUCT<a: DECIMAL(2,2)>'
+>>> check('{"a": 01.5}', {'allowNumericLeadingZeros': 'true', 'prefersDecimal': 'true'})
+'STRUCT<a: DECIMAL(2,1)>'
+
+Leading zeros are rejected by default and when the option is explicitly
+disabled. Both engines raise an error, with different exception classes.
+
+>>> try:
+...     check('{"a": 01}')
+... except Exception:
+...     print("error")
+error
+>>> try:
+...     check('{"a": 01}', {'allowNumericLeadingZeros': 'false'})
+... except Exception:
+...     print("error")
+error
+
+The unquoted field name character set matches Jackson: ASCII alphanumeric
+characters, `_$@#*+-`, and all non-ASCII characters. A `.` is not a valid
+name character.
+
+>>> UQ = {'allowUnquotedFieldNames': 'true'}
+>>> check('{+a: 1}', UQ)
+'STRUCT<`+a`: BIGINT>'
+>>> check('{a@b: 1}', UQ)
+'STRUCT<`a@b`: BIGINT>'
+>>> check('{a#b: 1}', UQ)
+'STRUCT<`a#b`: BIGINT>'
+>>> check('{a*b: 1}', UQ)
+'STRUCT<`a*b`: BIGINT>'
+>>> check('{a$b: 1}', UQ)
+'STRUCT<`a$b`: BIGINT>'
+>>> check('{$a: 1}', UQ)
+'STRUCT<`$a`: BIGINT>'
+>>> check('{_a: 1}', UQ)
+'STRUCT<_a: BIGINT>'
+>>> check('{9a: 1}', UQ)
+'STRUCT<`9a`: BIGINT>'
+>>> check('{a9: 1}', UQ)
+'STRUCT<a9: BIGINT>'
+>>> check('{ключ: 1}', UQ)
+'STRUCT<`ключ`: BIGINT>'
+>>> check('{aé: 1}', UQ)
+'STRUCT<`aé`: BIGINT>'
+>>> try:
+...     check('{.a: 1}', UQ)
+... except Exception:
+...     print("error")
+error
+>>> for s in ['{`a: 1}', '{a`b: 1}', '{<a: 1}', '{a<b: 1}', '{>a: 1}', '{\\a: 1}']:
+...     try:
+...         check(s, UQ)
+...     except Exception:
+...         print("error")
+error
+error
+error
+error
+error
+error
