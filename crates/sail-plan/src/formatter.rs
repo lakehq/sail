@@ -513,9 +513,17 @@ impl PlanFormatter for SparkPlanFormatter {
                 // Spark hides the optional `deterministic` flag in the column name:
                 // `mode(col)` when it is false or absent, and the WITHIN GROUP form
                 // when it is true.
+                // The "lowest"/"highest" sentinels come from the plan resolver rewrite
+                // of `mode() WITHIN GROUP (ORDER BY col)`. Spark displays its internal
+                // reverse flag rather than the original sort direction, so an ascending
+                // query is named DESC and a descending query is named without a
+                // direction.
                 let (arg, rest) = arguments.at_least_one()?;
                 match rest.first() {
-                    Some(&"true") => Ok(format!("{name}() WITHIN GROUP (ORDER BY {arg} DESC)")),
+                    Some(&"true") | Some(&"lowest") => {
+                        Ok(format!("{name}() WITHIN GROUP (ORDER BY {arg} DESC)"))
+                    }
+                    Some(&"highest") => Ok(format!("{name}() WITHIN GROUP (ORDER BY {arg})")),
                     _ => Ok(format!("{name}({arg})")),
                 }
             }

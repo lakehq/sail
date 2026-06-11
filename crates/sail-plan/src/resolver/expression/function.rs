@@ -81,6 +81,13 @@ impl PlanResolver<'_> {
         // to a string literal before resolution.
         let arguments = Self::convert_date_part_argument(&canonical_function_name, arguments);
 
+        // For `mode() WITHIN GROUP (ORDER BY col)`, move the sort expression and a
+        // tie-break sentinel into the argument list before resolution, so that the
+        // aggregate function receives the column and the output column name can be
+        // derived from the argument display names.
+        let (arguments, order_by) =
+            Self::convert_mode_within_group(&canonical_function_name, arguments, order_by)?;
+
         let (argument_display_names, arguments) = if canonical_function_name == "struct" {
             self.resolve_struct_expressions_and_names(arguments, schema, state)
                 .await?
@@ -350,6 +357,48 @@ impl PlanResolver<'_> {
         }
 
         Ok((names, exprs))
+    }
+
+    /// For `mode() WITHIN GROUP (ORDER BY col)`, move the sort expression into the
+    /// argument list along with a tie-break sentinel literal derived from the sort
+    /// direction. Spark returns the lowest value among equally frequent values for
+    /// ascending order and the highest for descending order, so this canonicalizes
+    /// the WITHIN GROUP syntax to the same argument form as `mode(col, deterministic)`
+    /// for both the aggregate function and the output column name formatter.
+    fn convert_mode_within_group(
+        function_name: &str,
+        arguments: Vec<spec::Expr>,
+        order_by: Option<Vec<spec::SortOrder>>,
+    ) -> PlanResult<(Vec<spec::Expr>, Option<Vec<spec::SortOrder>>)> {
+        if function_name.trim().to_lowercase() != "mode" {
+            return Ok((arguments, order_by));
+        }
+        let Some(sorts) = order_by else {
+            return Ok((arguments, None));
+        };
+        if !arguments.is_empty() {
+            return Err(PlanError::invalid(
+                "mode() with WITHIN GROUP does not take arguments",
+            ));
+        }
+        let spec::SortOrder {
+            child,
+            direction,
+            null_ordering: _,
+        } = sorts.one()?;
+        let tie_break = match direction {
+            spec::SortDirection::Descending => "highest",
+            spec::SortDirection::Ascending | spec::SortDirection::Unspecified => "lowest",
+        };
+        Ok((
+            vec![
+                *child,
+                spec::Expr::Literal(spec::Literal::Utf8 {
+                    value: Some(tie_break.to_string()),
+                }),
+            ],
+            None,
+        ))
     }
 
     /// For functions that accept a date-part keyword as their first argument

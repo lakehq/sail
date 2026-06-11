@@ -1961,7 +1961,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: expected at least one value, but got an empty vector"
+        "success": "ok"
       }
     },
     {
@@ -1983,7 +1983,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: expected at least one value, but got an empty vector"
+        "success": "ok"
       }
     },
     {
@@ -2005,7 +2005,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: expected at least one value, but got an empty vector"
+        "success": "ok"
       }
     },
     {

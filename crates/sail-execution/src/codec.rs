@@ -206,6 +206,7 @@ use sail_function::scalar::string::spark_regexp_extract_all::SparkRegexpExtractA
 use sail_function::scalar::string::spark_sentences::SparkSentences;
 use sail_function::scalar::string::spark_split::SparkSplit;
 use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
+use sail_function::scalar::string::spark_to_char::SparkToChar;
 use sail_function::scalar::string::spark_to_number::SparkToNumber;
 use sail_function::scalar::struct_function::StructFunction;
 use sail_function::scalar::update_struct_field::UpdateStructField;
@@ -2237,6 +2238,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkToNumber(gen::SparkToNumberUdf { safe }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkToNumber::new(safe))));
             }
+            UdfKind::SparkToChar(gen::SparkToCharUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkToChar::new(ansi_mode))));
+            }
             UdfKind::SparkAbs(gen::SparkAbsUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkAbs::new(ansi_mode))));
             }
@@ -2658,6 +2662,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkToNumber>() {
             let safe = func.safe();
             UdfKind::SparkToNumber(gen::SparkToNumberUdf { safe })
+        } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkToChar>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkToChar(gen::SparkToCharUdf { ansi_mode })
         } else if let Some(func) = node.inner().as_any().downcast_ref::<SparkAbs>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkAbs(gen::SparkAbsUdf { ansi_mode })

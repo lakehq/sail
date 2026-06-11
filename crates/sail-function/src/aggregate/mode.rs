@@ -31,6 +31,9 @@ use super::utils::get_scalar_value;
 /// - If multiple values have the same frequency, the MAX value with the highest frequency is returned.
 /// - If the optional second argument `deterministic` is true (Spark's `mode(col, deterministic)`),
 ///   the LOWEST value among the most frequent values is returned instead.
+/// - Spark's `mode() WITHIN GROUP (ORDER BY col)` SQL syntax is rewritten by the plan
+///   resolver into the `"lowest"` (ascending) / `"highest"` (descending) tie-break
+///   sentinels as the second argument; see [`TieBreak`].
 #[derive(PartialEq, Eq, Hash)]
 pub struct ModeFunction {
     signature: Signature,
@@ -77,106 +80,91 @@ impl AggregateUDFImpl for ModeFunction {
 
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let data_type = &acc_args.exprs[0].data_type(acc_args.schema)?;
-        let deterministic = resolve_deterministic(&acc_args)?;
+        let tie_break = resolve_tie_break(&acc_args)?;
 
         let accumulator: Box<dyn Accumulator> = match data_type {
             DataType::Int8 => Box::new(PrimitiveModeAccumulator::<Int8Type>::new(
-                data_type,
-                deterministic,
+                data_type, tie_break,
             )),
             DataType::Int16 => Box::new(PrimitiveModeAccumulator::<Int16Type>::new(
-                data_type,
-                deterministic,
+                data_type, tie_break,
             )),
             DataType::Int32 => Box::new(PrimitiveModeAccumulator::<Int32Type>::new(
-                data_type,
-                deterministic,
+                data_type, tie_break,
             )),
             DataType::Int64 => Box::new(PrimitiveModeAccumulator::<Int64Type>::new(
-                data_type,
-                deterministic,
+                data_type, tie_break,
             )),
             DataType::UInt8 => Box::new(PrimitiveModeAccumulator::<UInt8Type>::new(
-                data_type,
-                deterministic,
+                data_type, tie_break,
             )),
             DataType::UInt16 => Box::new(PrimitiveModeAccumulator::<UInt16Type>::new(
-                data_type,
-                deterministic,
+                data_type, tie_break,
             )),
             DataType::UInt32 => Box::new(PrimitiveModeAccumulator::<UInt32Type>::new(
-                data_type,
-                deterministic,
+                data_type, tie_break,
             )),
             DataType::UInt64 => Box::new(PrimitiveModeAccumulator::<UInt64Type>::new(
-                data_type,
-                deterministic,
+                data_type, tie_break,
             )),
 
             DataType::Date32 => Box::new(PrimitiveModeAccumulator::<Date32Type>::new(
-                data_type,
-                deterministic,
+                data_type, tie_break,
             )),
             DataType::Date64 => Box::new(PrimitiveModeAccumulator::<Date64Type>::new(
-                data_type,
-                deterministic,
+                data_type, tie_break,
             )),
-            DataType::Time32(TimeUnit::Millisecond) => Box::new(PrimitiveModeAccumulator::<
-                Time32MillisecondType,
-            >::new(
-                data_type, deterministic
-            )),
+            DataType::Time32(TimeUnit::Millisecond) => {
+                Box::new(PrimitiveModeAccumulator::<Time32MillisecondType>::new(
+                    data_type, tie_break,
+                ))
+            }
             DataType::Time32(TimeUnit::Second) => Box::new(PrimitiveModeAccumulator::<
                 Time32SecondType,
-            >::new(
-                data_type, deterministic
-            )),
-            DataType::Time64(TimeUnit::Microsecond) => Box::new(PrimitiveModeAccumulator::<
-                Time64MicrosecondType,
-            >::new(
-                data_type, deterministic
-            )),
-            DataType::Time64(TimeUnit::Nanosecond) => Box::new(PrimitiveModeAccumulator::<
-                Time64NanosecondType,
-            >::new(
-                data_type, deterministic
-            )),
-            DataType::Timestamp(TimeUnit::Microsecond, _) => Box::new(PrimitiveModeAccumulator::<
-                TimestampMicrosecondType,
-            >::new(
-                data_type, deterministic
-            )),
-            DataType::Timestamp(TimeUnit::Millisecond, _) => Box::new(PrimitiveModeAccumulator::<
-                TimestampMillisecondType,
-            >::new(
-                data_type, deterministic
-            )),
-            DataType::Timestamp(TimeUnit::Nanosecond, _) => Box::new(PrimitiveModeAccumulator::<
-                TimestampNanosecondType,
-            >::new(
-                data_type, deterministic
-            )),
-            DataType::Timestamp(TimeUnit::Second, _) => Box::new(PrimitiveModeAccumulator::<
-                TimestampSecondType,
-            >::new(
-                data_type, deterministic
-            )),
+            >::new(data_type, tie_break)),
+            DataType::Time64(TimeUnit::Microsecond) => {
+                Box::new(PrimitiveModeAccumulator::<Time64MicrosecondType>::new(
+                    data_type, tie_break,
+                ))
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                Box::new(PrimitiveModeAccumulator::<Time64NanosecondType>::new(
+                    data_type, tie_break,
+                ))
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                Box::new(PrimitiveModeAccumulator::<TimestampMicrosecondType>::new(
+                    data_type, tie_break,
+                ))
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                Box::new(PrimitiveModeAccumulator::<TimestampMillisecondType>::new(
+                    data_type, tie_break,
+                ))
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                Box::new(PrimitiveModeAccumulator::<TimestampNanosecondType>::new(
+                    data_type, tie_break,
+                ))
+            }
+            DataType::Timestamp(TimeUnit::Second, _) => {
+                Box::new(PrimitiveModeAccumulator::<TimestampSecondType>::new(
+                    data_type, tie_break,
+                ))
+            }
 
             DataType::Float16 => Box::new(FloatModeAccumulator::<Float16Type>::new(
-                data_type,
-                deterministic,
+                data_type, tie_break,
             )),
             DataType::Float32 => Box::new(FloatModeAccumulator::<Float32Type>::new(
-                data_type,
-                deterministic,
+                data_type, tie_break,
             )),
             DataType::Float64 => Box::new(FloatModeAccumulator::<Float64Type>::new(
-                data_type,
-                deterministic,
+                data_type, tie_break,
             )),
 
             DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {
-                Box::new(BytesModeAccumulator::new(data_type))
+                Box::new(BytesModeAccumulator::new(data_type, tie_break))
             }
             _ => {
                 return not_impl_err!("Unsupported data type: {:?} for mode function", data_type);
@@ -213,18 +201,40 @@ impl AggregateUDFImpl for ModeFunction {
     }
 }
 
-/// Resolves the optional `deterministic` flag, which Spark passes as the second
-/// argument of `mode(col, deterministic)`. When true, ties are broken by
-/// returning the lowest value among the most frequent values.
-fn resolve_deterministic(args: &AccumulatorArgs) -> Result<bool> {
+/// How ties between equally frequent values are broken.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TieBreak {
+    /// No particular value is required among the most frequent values.
+    Any,
+    /// Return the lowest of the most frequent values.
+    Lowest,
+    /// Return the highest of the most frequent values.
+    Highest,
+}
+
+/// Resolves the tie-breaking strategy from the optional second argument.
+///
+/// Spark passes `mode(col, deterministic)` with a boolean literal, where true means
+/// the lowest value among the most frequent values is returned. The plan resolver
+/// rewrites `mode() WITHIN GROUP (ORDER BY col)` to the string sentinels `"lowest"`
+/// (ascending order) and `"highest"` (descending order).
+fn resolve_tie_break(args: &AccumulatorArgs) -> Result<TieBreak> {
     let Some(expr) = args.exprs.get(1) else {
-        return Ok(false);
+        return Ok(TieBreak::Any);
     };
     let value = get_scalar_value(expr).map_err(|_| {
         DataFusionError::Plan("mode requires deterministic to be a constant boolean".to_string())
     })?;
     match value {
-        ScalarValue::Boolean(Some(value)) => Ok(value),
+        ScalarValue::Boolean(Some(false)) => Ok(TieBreak::Any),
+        ScalarValue::Boolean(Some(true)) => Ok(TieBreak::Lowest),
+        ScalarValue::Utf8(Some(value))
+        | ScalarValue::LargeUtf8(Some(value))
+        | ScalarValue::Utf8View(Some(value)) => match value.as_str() {
+            "lowest" => Ok(TieBreak::Lowest),
+            "highest" => Ok(TieBreak::Highest),
+            value => exec_err!("invalid tie-break strategy for mode: {value}"),
+        },
         value => exec_err!(
             "mode requires deterministic to be a non-null boolean literal, got {}",
             value.data_type()
@@ -241,7 +251,7 @@ where
 {
     value_counts: HashMap<T::Native, i64>,
     data_type: DataType,
-    deterministic: bool,
+    tie_break: TieBreak,
 }
 
 impl<T> PrimitiveModeAccumulator<T>
@@ -249,11 +259,11 @@ where
     T: ArrowPrimitiveType + Send,
     T::Native: Eq + Hash + Clone,
 {
-    pub fn new(data_type: &DataType, deterministic: bool) -> Self {
+    pub fn new(data_type: &DataType, tie_break: TieBreak) -> Self {
         Self {
             value_counts: HashMap::default(),
             data_type: data_type.clone(),
-            deterministic,
+            tie_break,
         }
     }
 }
@@ -290,12 +300,12 @@ where
                 std::cmp::Ordering::Equal => {
                     max_value = match max_value {
                         Some(ref current_max_value)
-                            if self.deterministic && value < current_max_value =>
+                            if self.tie_break == TieBreak::Lowest && value < current_max_value =>
                         {
                             Some(*value)
                         }
                         Some(ref current_max_value)
-                            if !self.deterministic && value > current_max_value =>
+                            if self.tie_break != TieBreak::Lowest && value > current_max_value =>
                         {
                             Some(*value)
                         }
@@ -375,18 +385,18 @@ where
 {
     value_counts: HashMap<Hashable<T::Native>, i64>,
     data_type: DataType,
-    deterministic: bool,
+    tie_break: TieBreak,
 }
 
 impl<T> FloatModeAccumulator<T>
 where
     T: ArrowPrimitiveType,
 {
-    pub fn new(data_type: &DataType, deterministic: bool) -> Self {
+    pub fn new(data_type: &DataType, tie_break: TieBreak) -> Self {
         Self {
             value_counts: HashMap::default(),
             data_type: data_type.clone(),
-            deterministic,
+            tie_break,
         }
     }
 }
@@ -424,12 +434,14 @@ where
                 std::cmp::Ordering::Equal => {
                     max_value = match max_value {
                         Some(current_max_value)
-                            if self.deterministic && value.0 < current_max_value =>
+                            if self.tie_break == TieBreak::Lowest
+                                && value.0 < current_max_value =>
                         {
                             Some(value.0)
                         }
                         Some(current_max_value)
-                            if !self.deterministic && value.0 > current_max_value =>
+                            if self.tie_break != TieBreak::Lowest
+                                && value.0 > current_max_value =>
                         {
                             Some(value.0)
                         }
@@ -510,13 +522,15 @@ where
 pub struct BytesModeAccumulator {
     value_counts: HashMap<String, i64>,
     data_type: DataType,
+    tie_break: TieBreak,
 }
 
 impl BytesModeAccumulator {
-    pub fn new(data_type: &DataType) -> Self {
+    pub fn new(data_type: &DataType, tie_break: TieBreak) -> Self {
         Self {
             value_counts: HashMap::new(),
             data_type: data_type.clone(),
+            tie_break,
         }
     }
 
@@ -568,9 +582,11 @@ impl Accumulator for BytesModeAccumulator {
             .iter()
             .max_by(|a, b| {
                 // First compare counts
-                a.1.cmp(b.1)
+                a.1.cmp(b.1).then_with(|| match self.tie_break {
+                    TieBreak::Highest => a.0.cmp(b.0),
                     // If counts are equal, compare keys in reverse order to get the maximum string
-                    .then_with(|| b.0.cmp(a.0))
+                    TieBreak::Any | TieBreak::Lowest => b.0.cmp(a.0),
+                })
             })
             .map(|(value, _)| value.to_string());
 
@@ -652,7 +668,7 @@ mod tests {
 
     #[test]
     fn test_mode_accumulator_single_mode_utf8() -> Result<()> {
-        let mut acc = BytesModeAccumulator::new(&DataType::Utf8);
+        let mut acc = BytesModeAccumulator::new(&DataType::Utf8, TieBreak::Any);
         let values: ArrayRef = Arc::new(StringArray::from(vec![
             Some("apple"),
             Some("banana"),
@@ -671,7 +687,7 @@ mod tests {
 
     #[test]
     fn test_mode_accumulator_tie_utf8() -> Result<()> {
-        let mut acc = BytesModeAccumulator::new(&DataType::Utf8);
+        let mut acc = BytesModeAccumulator::new(&DataType::Utf8, TieBreak::Any);
         let values: ArrayRef = Arc::new(StringArray::from(vec![
             Some("apple"),
             Some("banana"),
@@ -689,7 +705,7 @@ mod tests {
 
     #[test]
     fn test_mode_accumulator_all_nulls_utf8() -> Result<()> {
-        let mut acc = BytesModeAccumulator::new(&DataType::Utf8);
+        let mut acc = BytesModeAccumulator::new(&DataType::Utf8, TieBreak::Any);
         let values: ArrayRef = Arc::new(StringArray::from(vec![None as Option<&str>, None, None]));
 
         acc.update_batch(&[values])?;
@@ -701,7 +717,7 @@ mod tests {
 
     #[test]
     fn test_mode_accumulator_with_nulls_utf8() -> Result<()> {
-        let mut acc = BytesModeAccumulator::new(&DataType::Utf8);
+        let mut acc = BytesModeAccumulator::new(&DataType::Utf8, TieBreak::Any);
         let values: ArrayRef = Arc::new(StringArray::from(vec![
             Some("apple"),
             None,
@@ -722,7 +738,7 @@ mod tests {
 
     #[test]
     fn test_mode_accumulator_single_mode_utf8view() -> Result<()> {
-        let mut acc = BytesModeAccumulator::new(&DataType::Utf8View);
+        let mut acc = BytesModeAccumulator::new(&DataType::Utf8View, TieBreak::Any);
         let values: ArrayRef = Arc::new(GenericByteViewArray::from(vec![
             Some("apple"),
             Some("banana"),
@@ -741,7 +757,7 @@ mod tests {
 
     #[test]
     fn test_mode_accumulator_tie_utf8view() -> Result<()> {
-        let mut acc = BytesModeAccumulator::new(&DataType::Utf8View);
+        let mut acc = BytesModeAccumulator::new(&DataType::Utf8View, TieBreak::Any);
         let values: ArrayRef = Arc::new(GenericByteViewArray::from(vec![
             Some("apple"),
             Some("banana"),
@@ -759,7 +775,7 @@ mod tests {
 
     #[test]
     fn test_mode_accumulator_all_nulls_utf8view() -> Result<()> {
-        let mut acc = BytesModeAccumulator::new(&DataType::Utf8View);
+        let mut acc = BytesModeAccumulator::new(&DataType::Utf8View, TieBreak::Any);
         let values: ArrayRef = Arc::new(GenericByteViewArray::from(vec![
             None as Option<&str>,
             None,
@@ -775,7 +791,7 @@ mod tests {
 
     #[test]
     fn test_mode_accumulator_with_nulls_utf8view() -> Result<()> {
-        let mut acc = BytesModeAccumulator::new(&DataType::Utf8View);
+        let mut acc = BytesModeAccumulator::new(&DataType::Utf8View, TieBreak::Any);
         let values: ArrayRef = Arc::new(GenericByteViewArray::from(vec![
             Some("apple"),
             None,
