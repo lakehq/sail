@@ -142,10 +142,19 @@ pub(crate) async fn handle_analyze_ddl_parse(
 }
 
 pub(crate) async fn handle_analyze_same_semantics(
-    _ctx: &SessionContext,
-    _request: SameSemanticsRequest,
+    ctx: &SessionContext,
+    request: SameSemanticsRequest,
 ) -> SparkResult<SameSemanticsResponse> {
-    Ok(SameSemanticsResponse { result: true })
+    let spark = ctx.extension::<SparkSession>()?;
+    let SameSemanticsRequest {target_plan, other_plan} = request;
+    let target_plan = target_plan.required("target_plan")?;
+    let other_plan = other_plan.required("other_plan")?;
+    let resolver = PlanResolver::new(ctx, spark.plan_config()?);
+    let result = resolver.resolve_same_semantics(
+        target_plan.try_into()?,
+        other_plan.try_into()?
+    ).await?;
+    Ok(SameSemanticsResponse { result })
     // Err(SparkError::todo("handle analyze same semantics"))
 }
 
