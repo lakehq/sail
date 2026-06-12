@@ -3040,15 +3040,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let index = var.index() as u64;
             let field = self.try_encode_schema(&Schema::new(vec![var.field().as_ref().clone()]))?;
             ExprKind::LambdaVariable(LambdaVariableExprNode { index, field })
-        } else if node.downcast_ref::<HigherOrderFunctionExpr>().is_some() {
+        } else if let Some(hof) = node.downcast_ref::<HigherOrderFunctionExpr>() {
             // An unwrapped higher-order function reached serialization, which means
             // it appeared in a plan node that `WrapHigherOrderFunctions` does not
             // cover (it handles `ProjectionExec`, `FilterExec` and `SortExec`).
-            // Fail with a clear message instead of the generic "unsupported
-            // extension" error.
+            // Fail with a clear message (naming the function) instead of the
+            // generic "unsupported extension" error.
             return plan_err!(
-                "higher-order function in an unsupported plan node cannot be serialized \
-                 for distributed execution"
+                "higher-order function `{}` in an unsupported plan node cannot be \
+                 serialized for distributed execution (covered nodes: projection, \
+                 filter, sort)",
+                hof.name()
             );
         } else {
             return plan_err!("unsupported physical expr extension");

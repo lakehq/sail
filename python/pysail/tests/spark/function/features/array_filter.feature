@@ -589,6 +589,26 @@ Feature: array filter with lambda
         | result |
         | [1, 2] |
 
+  Rule: Filter with an erroring predicate and null array rows
+
+    # Regression: a NULL array row must yield NULL WITHOUT evaluating the
+    # (potentially erroring) lambda over the row's elements. `clear_null_values()`
+    # (default true on the HOF) clears null sublists before invoke, so a div-by-zero
+    # predicate cannot fire on a null row. No non-null row has a 0, so there is no
+    # legitimate error either.
+    Scenario: Erroring predicate with a null array row under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT filter(arr, x -> 10 / x > 4) AS result
+        FROM VALUES (array(2, 5)), (CAST(NULL AS ARRAY<INT>)), (array(1)) AS t(arr)
+        """
+      Then query result
+        | result |
+        | [2]    |
+        | NULL   |
+        | [1]    |
+
   Rule: Filter inside WHERE and ORDER BY clauses
 
     Scenario: Filter in a WHERE predicate keeps matching rows
