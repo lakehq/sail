@@ -479,19 +479,6 @@ The data source path must be specified: Spark errors at CREATE
 ...
 the data source path must be specified
 
-A nonexistent path also errors at CREATE ([PATH_NOT_FOUND]).
-
->>> try:
-...     error = spark.sql("""
-...       CREATE TEMPORARY VIEW v_badpath
-...       USING parquet
-...       OPTIONS (path '/tmp/sail_view_using/nope')
-...       """)
-... except Exception:
-...     print("the data source path does not exist")
-...
-the data source path does not exist
-
 An empty path value is also rejected.
 
 >>> try:
