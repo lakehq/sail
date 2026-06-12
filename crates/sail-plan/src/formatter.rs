@@ -492,6 +492,8 @@ impl PlanFormatter for SparkPlanFormatter {
                 Ok(result)
             }
             "timestamp" | "date" => Ok(arguments.one()?.to_string()),
+            // Spark always names the time window column `window`.
+            "window" => Ok("window".to_string()),
             "to_unix_timestamp" => {
                 let mut argv = arguments.clone();
                 if argv.len() == 1 {

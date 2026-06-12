@@ -39,7 +39,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: attribute ObjectName([Identifier(\"session_window\"), Identifier(\"start\")]) is missing from the schema: cannot resolve attribute"
+        "failure": "not implemented: function: session_window"
       }
     },
     {
@@ -82,7 +82,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: attribute ObjectName([Identifier(\"session_window\"), Identifier(\"start\")]) is missing from the schema: cannot resolve attribute"
+        "failure": "not implemented: function: session_window"
       }
     },
     {
@@ -174,7 +174,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: attribute ObjectName([Identifier(\"window\"), Identifier(\"start\")]) is missing from the schema: cannot resolve attribute"
+        "success": "ok"
       }
     },
     {
@@ -216,7 +216,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: attribute ObjectName([Identifier(\"window\"), Identifier(\"start\")]) is missing from the schema: cannot resolve attribute"
+        "success": "ok"
       }
     },
     {

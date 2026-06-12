@@ -90,6 +90,8 @@ pub(super) struct PlanResolverState {
     /// function, along with the parameter field when the enclosing
     /// higher-order function provides it.
     lambda_param_scopes: Vec<Vec<(String, Option<FieldRef>)>>,
+    /// The named windows defined in the current query, keyed by window name.
+    windows: HashMap<String, spec::Window>,
 }
 
 impl Default for PlanResolverState {
@@ -111,6 +113,7 @@ impl PlanResolverState {
             param_values: HashMap::new(),
             positional_param_values: Vec::new(),
             lambda_param_scopes: Vec::new(),
+            windows: HashMap::new(),
         }
     }
 
@@ -142,6 +145,14 @@ impl PlanResolverState {
     /// This is similar to [`Self::register_field_name`] but the field is marked as hidden.
     pub fn register_hidden_field_name(&mut self, name: impl Into<String>) -> String {
         self.register_field_info(name, true)
+    }
+
+    /// Sets the display name of an already-registered field. Used to give a
+    /// materialized column (e.g. an unnested `window` column) a referenceable name.
+    pub fn set_field_name(&mut self, field_id: &str, name: impl Into<String>) {
+        if let Some(info) = self.fields.get_mut(field_id) {
+            info.name = name.into();
+        }
     }
 
     pub fn register_field(&mut self, field: impl AsRef<Field>) -> String {
@@ -250,6 +261,17 @@ impl PlanResolverState {
 
     pub fn enter_config_scope(&mut self) -> ConfigScope<'_> {
         ConfigScope::new(self)
+    }
+
+    pub fn set_windows(
+        &mut self,
+        windows: HashMap<String, spec::Window>,
+    ) -> HashMap<String, spec::Window> {
+        std::mem::replace(&mut self.windows, windows)
+    }
+
+    pub fn get_window(&self, name: &str) -> Option<&spec::Window> {
+        self.windows.get(name)
     }
 
     // TODO:
