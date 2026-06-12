@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 
     from pyspark.sql import SparkSession
 
-_HMS_IMAGE = "apache/hive:3.1.3"
+_HMS_IMAGE = "apache/hive:4.0.1"
 _HMS_METASTORE_PORT = 9083
 _HMS_STARTUP_TIMEOUT = 180  # seconds
 # Use 127.0.0.1 explicitly instead of 'localhost' to avoid IPv6 resolution
@@ -123,7 +123,9 @@ def _wait_for_hms_catalog(remote: str, timeout: float) -> None:
     ping. This verifies the full harness path (Sail Spark Connect server,
     catalog wiring, and HMS) rather than just metastore socket readiness.
     The metastore Thrift port opens before its embedded Derby schema is
-    initialized, so this probe absorbs the remaining startup window.
+    initialized, so this probe absorbs the remaining startup window. The
+    window is generous because the metastore image is amd64-only and Derby
+    schema initialization is slow under emulation on arm64 hosts.
     """
     deadline = time.monotonic() + timeout
     last_error: Exception | None = None
@@ -234,8 +236,9 @@ def hms_container(
     hms_core_site_path: Path,
 ) -> Generator[DockerContainer, None, None]:
     """Start a Hive Metastore container with S3A wiring for s3:// locations."""
-    hadoop_tools_lib = "/opt/hadoop/share/hadoop/tools/lib"
-    s3a_classpath = f"{hadoop_tools_lib}/hadoop-aws-3.1.0.jar:{hadoop_tools_lib}/aws-java-sdk-bundle-1.11.271.jar"
+    # Use a wildcard so the S3A jars are found regardless of the Hadoop
+    # version bundled in the image.
+    s3a_classpath = "/opt/hadoop/share/hadoop/tools/lib/*"
     container = (
         DockerContainer(_HMS_IMAGE)
         .with_exposed_ports(_HMS_METASTORE_PORT)
@@ -297,7 +300,7 @@ def hms_spark(
             **hms_s3_env,
         },
     )
-    _wait_for_hms_catalog(remote, 60)
+    _wait_for_hms_catalog(remote, 300)
     spark = create_spark_session(remote, "hms_catalog_test")
     yield spark
     with contextlib.suppress(Exception):

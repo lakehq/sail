@@ -16,7 +16,9 @@ use sail_common_datafusion::catalog::iceberg::{
 use sail_common_datafusion::catalog::{
     identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
 };
-use sail_common_datafusion::column_features::{ColumnFeatures, ColumnFeaturesBuilder};
+use sail_common_datafusion::column_features::{
+    ColumnFeatureKey, ColumnFeatures, ColumnFeaturesBuilder,
+};
 
 use crate::data_type::{
     arrow_to_hive_type, hive_type_to_arrow, spark_struct_json_from_fields,
@@ -342,24 +344,46 @@ pub(crate) fn alter_spark_column_default(
             "Hive Metastore catalog does not support altering nested column defaults".to_string(),
         ));
     };
-    let Some(mut columns) = columns_from_spark_properties(table.parameters.as_ref())? else {
+    let Some(schema) = read_large_table_prop(table.parameters.as_ref(), SPARK_SCHEMA_KEY)? else {
         return Ok(());
     };
-    let Some(column) = columns
-        .iter_mut()
-        .find(|column| column.name.eq_ignore_ascii_case(column_name))
-    else {
+    // Edit the stored schema JSON surgically instead of rebuilding it, so
+    // that the metadata of all other columns (including keys written by
+    // foreign engines, such as `EXISTS_DEFAULT`) is preserved verbatim.
+    let mut schema_value: serde_json::Value = serde_json::from_str(&schema)
+        .map_err(|e| CatalogError::External(format!("Failed to parse Spark schema JSON: {e}")))?;
+    let fields = schema_value
+        .get_mut("fields")
+        .and_then(serde_json::Value::as_array_mut)
+        .ok_or_else(|| CatalogError::External("Spark schema JSON is missing fields".to_string()))?;
+    let Some(field) = fields.iter_mut().find(|field| {
+        field
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|name| name.eq_ignore_ascii_case(column_name))
+    }) else {
         return Err(CatalogError::InvalidArgument(format!(
             "Column '{column_name}' does not exist"
         )));
     };
-    column.default = default;
-
-    let fields = columns
-        .iter()
-        .map(TableColumnStatus::field)
-        .collect::<Vec<_>>();
-    let schema_value = spark_struct_json_from_fields(&fields)?;
+    let metadata = field
+        .as_object_mut()
+        .ok_or_else(|| CatalogError::External("Spark schema field must be an object".to_string()))?
+        .entry("metadata")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| {
+            CatalogError::External("Spark schema field metadata must be an object".to_string())
+        })?;
+    let key = ColumnFeatureKey::CurrentDefault.as_str();
+    match default {
+        Some(default) => {
+            metadata.insert(key.to_string(), serde_json::Value::String(default));
+        }
+        None => {
+            metadata.remove(key);
+        }
+    }
     let schema_json = serde_json::to_string(&schema_value).map_err(|e| {
         CatalogError::External(format!("Failed to serialize Spark schema JSON: {e}"))
     })?;
@@ -1275,6 +1299,53 @@ mod tests {
             .expect("expected Spark schema metadata");
         assert_eq!(columns[0].default, None);
         assert_eq!(columns[1].generated_always_as.as_deref(), Some("id + 1"));
+    }
+
+    #[test]
+    fn test_alter_spark_column_default_preserves_foreign_metadata() {
+        let schema_json = concat!(
+            r#"{"type":"struct","fields":["#,
+            r#"{"name":"a","type":"string","nullable":true,"#,
+            r#""metadata":{"CURRENT_DEFAULT":"'old'","EXISTS_DEFAULT":"'old'"}},"#,
+            r#"{"name":"b","type":"string","nullable":true,"#,
+            r#""metadata":{"CURRENT_DEFAULT":"\"hello\"","EXISTS_DEFAULT":"\"hello\""}}]}"#,
+        );
+        let mut table = Table {
+            parameters: Some(
+                [(
+                    FastStr::from_static_str(SPARK_SCHEMA_KEY),
+                    FastStr::from_string(schema_json.to_string()),
+                )]
+                .into_iter()
+                .collect(),
+            ),
+            ..Default::default()
+        };
+
+        super::alter_spark_column_default(
+            &mut table,
+            &["a".to_string()],
+            Some("'new'".to_string()),
+        )
+        .unwrap();
+
+        let schema = super::read_large_table_prop(table.parameters.as_ref(), SPARK_SCHEMA_KEY)
+            .unwrap()
+            .expect("expected Spark schema metadata");
+        let value: serde_json::Value = serde_json::from_str(&schema).unwrap();
+        let fields = value.get("fields").unwrap().as_array().unwrap();
+        // The altered column gets the new default and keeps its existence
+        // default.
+        assert_eq!(
+            fields[0].get("metadata").unwrap(),
+            &serde_json::json!({"CURRENT_DEFAULT": "'new'", "EXISTS_DEFAULT": "'old'"})
+        );
+        // The other column's metadata is preserved verbatim, including the
+        // JSON-encoded default representation.
+        assert_eq!(
+            fields[1].get("metadata").unwrap(),
+            &serde_json::json!({"CURRENT_DEFAULT": "\"hello\"", "EXISTS_DEFAULT": "\"hello\""})
+        );
     }
 
     #[test]
