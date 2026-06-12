@@ -16,6 +16,7 @@ pub mod predicate;
 pub mod spark_struct_rename;
 pub mod spark_to_string;
 pub mod string;
+pub mod struct_field;
 pub mod struct_function;
 pub mod table_input;
 pub mod update_struct_field;

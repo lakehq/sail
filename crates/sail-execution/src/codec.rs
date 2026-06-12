@@ -208,6 +208,7 @@ use sail_function::scalar::string::spark_sentences::SparkSentences;
 use sail_function::scalar::string::spark_split::SparkSplit;
 use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use sail_function::scalar::string::spark_to_number::SparkToNumber;
+use sail_function::scalar::struct_field::StructField;
 use sail_function::scalar::struct_function::StructFunction;
 use sail_function::scalar::update_struct_field::UpdateStructField;
 use sail_function::scalar::url::parse_url::ParseUrl;
@@ -2235,6 +2236,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(ArrayItemWithPosition::new())))
             }
             "array_struct_field" => Ok(Arc::new(ScalarUDF::from(ArrayStructField::new()))),
+            "struct_field" => Ok(Arc::new(ScalarUDF::from(StructField::new()))),
             "array_min" => Ok(Arc::new(ScalarUDF::from(ArrayMin::new()))),
             "array_max" => Ok(Arc::new(ScalarUDF::from(ArrayMax::new()))),
             "array_intersect" | "list_intersect" => {
@@ -2414,6 +2416,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         let node_inner = node.inner();
         let udf_kind: UdfKind = if node_inner.is::<ArrayItemWithPosition>()
             || node_inner.is::<ArrayStructField>()
+            || node_inner.is::<StructField>()
             || node_inner.is::<ArrayMax>()
             || node_inner.is::<ArrayMin>()
             || node_inner.is::<ArrayIntersect>()

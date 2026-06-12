@@ -128,3 +128,107 @@ def test_array_struct_field(spark):
         Row(id="2", d=[None, None, None]),
         Row(id="3", d=None),
     ]
+
+
+def test_struct_field_null_parent(spark):
+    # A field accessed on a NULL struct must yield NULL, not the child type's
+    # default value. This only surfaces via the Arrow ingestion path, where a
+    # null parent struct keeps non-null child slots underneath.
+    df = spark.createDataFrame(
+        data=[
+            ("0", {"a": 1.0, "b": "x", "c": 2}),
+            ("1", {"a": None, "b": "y", "c": 3}),
+            ("2", None),
+            ("3", {"a": 3.0, "b": "z", "c": None}),
+        ],
+        schema="id: string, abc: struct<a: double, b: string, c: int>",
+    )
+    actual = df.select("id", F.col("abc.a"), F.col("abc.b"), F.col("abc.c")).collect()
+    assert sorted(actual, key=lambda row: row.id) == [
+        Row(id="0", a=1.0, b="x", c=2),
+        Row(id="1", a=None, b="y", c=3),
+        Row(id="2", a=None, b=None, c=None),
+        Row(id="3", a=3.0, b="z", c=None),
+    ]
+
+
+def test_struct_field_null_parent_nested(spark):
+    df = spark.createDataFrame(
+        data=[
+            ("0", {"inner": {"a": 1.0}}),
+            ("1", {"inner": None}),
+            ("2", None),
+        ],
+        schema="id: string, outer: struct<inner: struct<a: double>>",
+    )
+    actual = df.select("id", F.col("outer.inner.a")).collect()
+    assert sorted(actual, key=lambda row: row.id) == [
+        Row(id="0", a=1.0),
+        Row(id="1", a=None),
+        Row(id="2", a=None),
+    ]
+
+
+def test_struct_field_null_parent_from_map_value(spark):
+    # The struct comes from a map-value access, so field extraction runs on an
+    # arbitrary expression rather than a column. A NULL map value must yield NULL.
+    df = spark.createDataFrame(
+        data=[("0", {"k": {"a": 1}}), ("1", {"k": None}), ("2", None)],
+        schema="id: string, m: map<string, struct<a: int>>",
+    )
+    actual = df.select("id", F.col("m")["k"]["a"].alias("a")).collect()
+    assert sorted(actual, key=lambda row: row.id) == [
+        Row(id="0", a=1),
+        Row(id="1", a=None),
+        Row(id="2", a=None),
+    ]
+
+
+def test_struct_field_wildcard_null_parent(spark):
+    # `struct.*` expansion must propagate a NULL parent to every expanded field.
+    df = spark.createDataFrame(
+        data=[("0", {"a": 1.0, "b": "x"}), ("1", None)],
+        schema="id: string, abc: struct<a: double, b: string>",
+    )
+    df.createOrReplaceTempView("t_struct_wildcard")
+    actual = spark.sql("SELECT id, abc.* FROM t_struct_wildcard").collect()
+    assert sorted(actual, key=lambda row: row.id) == [
+        Row(id="0", a=1.0, b="x"),
+        Row(id="1", a=None, b=None),
+    ]
+
+
+def test_struct_field_null_parent_access_syntaxes(spark):
+    # The three field-access syntaxes route through different resolver paths
+    # (dot-path vs UnresolvedExtractValue). All must yield NULL on a NULL parent.
+    df = spark.createDataFrame(
+        data=[("0", {"a": 1.0}), ("1", None)],
+        schema="id: string, s: struct<a: double>",
+    )
+    actual = df.select(
+        "id",
+        F.col("s.a").alias("dot"),
+        F.col("s").getField("a").alias("get_field"),
+        F.col("s")["a"].alias("subscript"),
+    ).collect()
+    assert sorted(actual, key=lambda row: row.id) == [
+        Row(id="0", dot=1.0, get_field=1.0, subscript=1.0),
+        Row(id="1", dot=None, get_field=None, subscript=None),
+    ]
+
+
+def test_struct_field_null_parent_complex_child(spark):
+    # A NULL parent struct must yield NULL for fields that are themselves
+    # complex types (array, map, struct), not an empty/default container.
+    df = spark.createDataFrame(
+        data=[
+            ("0", {"arr": [1, 2], "m": {"k": 1}, "sub": {"x": 9}}),
+            ("1", None),
+        ],
+        schema="id: string, s: struct<arr: array<int>, m: map<string, int>, sub: struct<x: int>>",
+    )
+    actual = df.select("id", F.col("s.arr"), F.col("s.m"), F.col("s.sub")).collect()
+    assert sorted(actual, key=lambda row: row.id) == [
+        Row(id="0", arr=[1, 2], m={"k": 1}, sub=Row(x=9)),
+        Row(id="1", arr=None, m=None, sub=None),
+    ]

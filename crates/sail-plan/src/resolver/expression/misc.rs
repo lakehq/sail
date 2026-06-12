@@ -7,7 +7,6 @@ use datafusion_common::{plan_datafusion_err, Column, DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::FieldMetadata;
 use datafusion_expr::{expr, lit, BinaryExpr, ExprSchemable, ScalarUDF};
 use datafusion_expr_common::operator::Operator;
-use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_functions_nested::expr_fn::{array_element, map_extract};
 use sail_common::spec::{self, DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -15,6 +14,7 @@ use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::drop_struct_field::DropStructField;
+use sail_function::scalar::struct_field::StructField;
 use sail_function::scalar::table_input::TableInput;
 use sail_function::scalar::update_struct_field::UpdateStructField;
 
@@ -332,7 +332,10 @@ impl PlanResolver<'_> {
                         "missing or ambiguous field: {name}"
                     )));
                 };
-                expr.field(name)
+                expr::Expr::ScalarFunction(expr::ScalarFunction::new_udf(
+                    Arc::new(ScalarUDF::from(StructField::new())),
+                    vec![expr, lit(name)],
+                ))
             }
             _ => {
                 return Err(PlanError::AnalysisError(format!(
