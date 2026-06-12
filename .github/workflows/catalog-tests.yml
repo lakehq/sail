@@ -10,8 +10,21 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            pytest-args: "--pyargs pysail.tests.spark"
+          - # Run the HMS tests against an HMS 3.x metastore as well, since the
+            # default fixture image is HMS 4.x, which serves a different set of
+            # Thrift methods.
+            name: hms-3x
+            hms-image: "apache/hive:3.1.3"
+            pytest-args: "--pyargs pysail.tests.spark.catalog_integration.hms"
     env:
       HATCH_ENV: "test.spark-4.1.1"
+      SAIL_TEST_HMS_IMAGE: ${{ matrix.hms-image }}
       # Coverage environment variables
       RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
       LLVM_PROFILE_FILE: ${{ github.workspace }}/target/sail-catalog-it-%p-%m.profraw

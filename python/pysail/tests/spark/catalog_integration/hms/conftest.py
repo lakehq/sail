@@ -33,8 +33,10 @@ if TYPE_CHECKING:
     from pyspark.sql import SparkSession
 
 # The default image is multi-arch; `apache/hive:3.1.3` (amd64-only) can be
-# selected on amd64 hosts to exercise the legacy HMS 3.x Thrift methods.
-_HMS_IMAGE = os.environ.get("SAIL_TEST_HMS_IMAGE", "apache/hive:4.0.1")
+# selected on amd64 hosts to exercise an HMS 3.x server end-to-end, including
+# pyiceberg's legacy Thrift interop. (Sail itself uses `get_table_req` against
+# both versions; only a pre-2.1 metastore would exercise its legacy fallback.)
+_HMS_IMAGE = os.environ.get("SAIL_TEST_HMS_IMAGE") or "apache/hive:4.0.1"
 _HMS_METASTORE_PORT = 9083
 _HMS_STARTUP_TIMEOUT = 180  # seconds
 # Use 127.0.0.1 explicitly instead of 'localhost' to avoid IPv6 resolution
@@ -42,9 +44,9 @@ _HMS_STARTUP_TIMEOUT = 180  # seconds
 _HMS_HOST = "127.0.0.1"
 _MINIO_IMAGE = "minio/minio:RELEASE.2025-05-24T17-08-30Z"
 _MINIO_PORT = 9000
-_MINIO_USER = "admin"
-_MINIO_PASSWORD = "password"  # noqa: S105
-_HMS_S3_BUCKET = "hms-warehouse"
+MINIO_USER = "admin"
+MINIO_PASSWORD = "password"  # noqa: S105
+HMS_S3_BUCKET = "hms-warehouse"
 
 
 def hms_test_database_name(request: pytest.FixtureRequest, prefix: str = "hms_", max_name_len: int = 100) -> str:
@@ -92,11 +94,11 @@ def _hms_core_site_xml(endpoint: str) -> str:
   </property>
   <property>
     <name>fs.s3a.access.key</name>
-    <value>{_MINIO_USER}</value>
+    <value>{MINIO_USER}</value>
   </property>
   <property>
     <name>fs.s3a.secret.key</name>
-    <value>{_MINIO_PASSWORD}</value>
+    <value>{MINIO_PASSWORD}</value>
   </property>
   <property>
     <name>fs.s3a.aws.credentials.provider</name>
@@ -167,8 +169,8 @@ def minio_container(hms_docker_network: Network) -> Generator[DockerContainer, N
     container = (
         DockerContainer(_MINIO_IMAGE)
         .with_exposed_ports(_MINIO_PORT)
-        .with_env("MINIO_ROOT_USER", _MINIO_USER)
-        .with_env("MINIO_ROOT_PASSWORD", _MINIO_PASSWORD)
+        .with_env("MINIO_ROOT_USER", MINIO_USER)
+        .with_env("MINIO_ROOT_PASSWORD", MINIO_PASSWORD)
         .with_network(hms_docker_network)
         .with_network_aliases("minio")
         .with_command(["server", "/data", "--console-address", ":9001"])
@@ -194,24 +196,42 @@ def minio_internal_endpoint() -> str:
 
 
 @pytest.fixture(scope="session")
-def _create_warehouse_bucket(minio_host_endpoint: str) -> None:
-    """Create the warehouse bucket on MinIO using boto3."""
+def minio_s3_client(minio_host_endpoint: str):
+    """A boto3 S3 client for the MinIO warehouse."""
     import boto3
     from botocore.config import Config
 
-    s3 = boto3.client(
+    return boto3.client(
         "s3",
         endpoint_url=minio_host_endpoint,
-        aws_access_key_id=_MINIO_USER,
-        aws_secret_access_key=_MINIO_PASSWORD,
+        aws_access_key_id=MINIO_USER,
+        aws_secret_access_key=MINIO_PASSWORD,
         region_name="us-east-1",
         config=Config(signature_version="s3v4"),
     )
+
+
+@pytest.fixture(scope="session")
+def pyiceberg_s3_properties(minio_host_endpoint: str) -> dict[str, str]:
+    """pyiceberg FileIO properties for the MinIO warehouse."""
+    return {
+        "s3.endpoint": minio_host_endpoint,
+        "s3.access-key-id": MINIO_USER,
+        "s3.secret-access-key": MINIO_PASSWORD,
+        "s3.path-style-access": "true",
+        "s3.region": "us-east-1",
+    }
+
+
+@pytest.fixture(scope="session")
+def _create_warehouse_bucket(minio_s3_client) -> None:
+    """Create the warehouse bucket on MinIO."""
+    s3 = minio_s3_client
     # Retry bucket creation a few times to allow MinIO to fully start
     max_retries = 10
     for attempt in range(max_retries):
         try:
-            s3.create_bucket(Bucket=_HMS_S3_BUCKET)
+            s3.create_bucket(Bucket=HMS_S3_BUCKET)
         except Exception:
             if attempt == max_retries - 1:
                 raise
@@ -275,8 +295,8 @@ def hms_metastore_endpoint(hms_container: DockerContainer) -> str:
 def hms_s3_env(minio_host_endpoint: str) -> dict[str, str]:
     """AWS-compatible environment for Sail's S3 object-store client."""
     return {
-        "AWS_ACCESS_KEY_ID": _MINIO_USER,
-        "AWS_SECRET_ACCESS_KEY": _MINIO_PASSWORD,
+        "AWS_ACCESS_KEY_ID": MINIO_USER,
+        "AWS_SECRET_ACCESS_KEY": MINIO_PASSWORD,
         "AWS_REGION": "us-east-1",
         "AWS_ENDPOINT": minio_host_endpoint,
         "AWS_VIRTUAL_HOSTED_STYLE_REQUEST": "false",
@@ -303,8 +323,14 @@ def hms_spark(
             **hms_s3_env,
         },
     )
-    _wait_for_hms_catalog(remote, 300)
-    spark = create_spark_session(remote, "hms_catalog_test")
+    try:
+        _wait_for_hms_catalog(remote, 300)
+        spark = create_spark_session(remote, "hms_catalog_test")
+    except Exception:
+        # Stop the server and restore the environment even when readiness
+        # fails, so the mutated environment does not leak into other suites.
+        stop_sail_server(server, saved_env)
+        raise
     yield spark
     with contextlib.suppress(Exception):
         spark.stop()
@@ -315,7 +341,7 @@ def hms_spark(
 def hms_database(request: pytest.FixtureRequest, hms_spark: SparkSession) -> Generator[str, None, None]:
     """Create a unique HMS database whose managed table root is on S3."""
     database = hms_test_database_name(request)
-    location = f"s3://{_HMS_S3_BUCKET}/{database}"
+    location = f"s3://{HMS_S3_BUCKET}/{database}"
     hms_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
     hms_spark.sql(f"CREATE DATABASE {database} LOCATION '{location}'")
     yield database
@@ -327,7 +353,7 @@ def hms_database(request: pytest.FixtureRequest, hms_spark: SparkSession) -> Gen
 def pyiceberg_hive_catalog(
     hms_container: DockerContainer,  # noqa: ARG001
     hms_metastore_endpoint: str,
-    minio_host_endpoint: str,
+    pyiceberg_s3_properties: dict[str, str],
 ):
     """A pyiceberg Hive catalog acting as a foreign engine against the same HMS.
 
@@ -341,10 +367,6 @@ def pyiceberg_hive_catalog(
         **{
             "type": "hive",
             "uri": f"thrift://{hms_metastore_endpoint}",
-            "s3.endpoint": minio_host_endpoint,
-            "s3.access-key-id": _MINIO_USER,
-            "s3.secret-access-key": _MINIO_PASSWORD,
-            "s3.path-style-access": "true",
-            "s3.region": "us-east-1",
+            **pyiceberg_s3_properties,
         },
     )

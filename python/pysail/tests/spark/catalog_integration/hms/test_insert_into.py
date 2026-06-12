@@ -35,6 +35,19 @@ def test_insert_into_values_lakehouse(hms_spark: SparkSession, hms_database: str
     assert [(row.id, row.text) for row in rows] == [(0, "init"), (1, "hello"), (2, "world")]
 
 
+@pytest.mark.xfail(
+    reason="Hive Metastore catalog does not support plain CREATE TABLE USING ICEBERG yet",
+    strict=True,
+)
+def test_plain_create_table_insert_iceberg(hms_spark: SparkSession, hms_database: str) -> None:
+    table_fqn = f"{hms_database}.plain_create_iceberg"
+    hms_spark.sql(f"CREATE TABLE {table_fqn} (id INT, text STRING) USING iceberg")
+
+    hms_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'hello')")
+    rows = hms_spark.sql(f"SELECT id, text FROM {table_fqn} ORDER BY id").collect()
+    assert [(row.id, row.text) for row in rows] == [(1, "hello")]
+
+
 def test_insert_into_values_parquet(hms_spark: SparkSession, hms_database: str) -> None:
     table_fqn = f"{hms_database}.insert_parquet"
     hms_spark.sql(f"CREATE TABLE {table_fqn} (id INT, text STRING) USING parquet")

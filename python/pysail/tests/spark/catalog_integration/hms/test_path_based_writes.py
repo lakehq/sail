@@ -14,15 +14,15 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from pysail.tests.spark.catalog_integration.hms.conftest import HMS_S3_BUCKET
+
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
-
-_HMS_S3_BUCKET = "hms-warehouse"
 
 
 @pytest.mark.parametrize("format_", ["parquet", "iceberg", "delta"])
 def test_write_save_path_create(hms_spark: SparkSession, format_: str) -> None:
-    path = f"s3://{_HMS_S3_BUCKET}/path_writes/{format_}_{uuid.uuid4().hex}"
+    path = f"s3://{HMS_S3_BUCKET}/path_writes/{format_}_{uuid.uuid4().hex}"
 
     df = hms_spark.sql("SELECT 1 AS id, 'hello' AS text")
     df.write.format(format_).save(path)
@@ -32,7 +32,7 @@ def test_write_save_path_create(hms_spark: SparkSession, format_: str) -> None:
 
 @pytest.mark.parametrize("format_", ["parquet", "iceberg", "delta"])
 def test_write_save_path(hms_spark: SparkSession, format_: str) -> None:
-    path = f"s3://{_HMS_S3_BUCKET}/path_writes/{format_}_{uuid.uuid4().hex}"
+    path = f"s3://{HMS_S3_BUCKET}/path_writes/{format_}_{uuid.uuid4().hex}"
 
     df = hms_spark.sql("SELECT 1 AS id, 'hello' AS text")
     df.write.format(format_).save(path)
