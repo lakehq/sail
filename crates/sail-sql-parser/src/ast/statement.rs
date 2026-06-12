@@ -166,7 +166,7 @@ pub enum Statement {
             Sequence<ViewColumn, Comma>,
             RightParenthesis,
         )>,
-        using: Option<(Using, Ident, Option<(Options, PropertyList)>)>,
+        using: Option<ViewUsingClause>,
         clauses: Vec<CreateViewClause>,
         #[parser(function = |(_, q, _, _), o| compose(q, o))]
         r#as: Option<AsQueryClause>,
@@ -411,6 +411,13 @@ pub struct AsQueryClause {
     pub r#as: Option<As>,
     #[parser(function = |q, _| q)]
     pub query: Query,
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub struct ViewUsingClause {
+    pub using: Using,
+    pub format: Ident,
+    pub options: Option<(Options, PropertyList)>,
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]

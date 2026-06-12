@@ -19,6 +19,7 @@ use sail_sql_parser::ast::statement::{
     PropertyKeyList, PropertyKeyValue, PropertyList, PropertyValue, RowFormat,
     RowFormatDelimitedClause, SetClause, SortColumn, SortColumnClause, SortColumnList, Statement,
     TableColumnIdentityOption, TableColumnIdentityOptions, UpdateTableAlias, ViewColumn,
+    ViewUsingClause,
 };
 use sail_sql_parser::tree::TreeText;
 
@@ -361,7 +362,12 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 }
             };
             let global_temporary = global_temporary.map(|(global, _)| global.is_some());
-            let node = if let Some((_, format, options)) = using {
+            let node = if let Some(ViewUsingClause {
+                using: _,
+                format,
+                options,
+            }) = using
+            {
                 let Some(is_global) = global_temporary else {
                     return Err(SqlError::unsupported(
                         "CREATE VIEW ... USING is only supported for temporary views",
@@ -392,7 +398,9 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 // map semantics in Spark.
                 let paths = options
                     .iter()
-                    .rfind(|(key, _)| key.eq_ignore_ascii_case("path") || key.eq_ignore_ascii_case("location"))
+                    .rfind(|(key, _)| {
+                        key.eq_ignore_ascii_case("path") || key.eq_ignore_ascii_case("location")
+                    })
                     .map(|(_, value)| vec![value.clone()])
                     .unwrap_or_default();
                 let input = spec::QueryPlan::new(spec::QueryNode::Read {
