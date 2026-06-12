@@ -150,6 +150,7 @@ use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
 use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
+use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
 use sail_function::scalar::drop_struct_field::DropStructField;
@@ -2203,6 +2204,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkNextDay(gen::SparkNextDayUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkNextDay::new(ansi_mode))));
             }
+            UdfKind::SparkWindowBuckets(gen::SparkWindowBucketsUdf {
+                window_duration,
+                slide_duration,
+                start_time,
+            }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkWindowBuckets::new(
+                    window_duration,
+                    slide_duration,
+                    start_time,
+                ))));
+            }
             UdfKind::SparkToNumber(gen::SparkToNumberUdf { safe }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkToNumber::new(safe))));
             }
@@ -2632,6 +2644,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkNextDay>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkNextDay(gen::SparkNextDayUdf { ansi_mode })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkWindowBuckets>() {
+            UdfKind::SparkWindowBuckets(gen::SparkWindowBucketsUdf {
+                window_duration: func.window_duration(),
+                slide_duration: func.slide_duration(),
+                start_time: func.start_time(),
+            })
         } else if let Some(func) = node.inner().downcast_ref::<SparkToNumber>() {
             let safe = func.safe();
             UdfKind::SparkToNumber(gen::SparkToNumberUdf { safe })

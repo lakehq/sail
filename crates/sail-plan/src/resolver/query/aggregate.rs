@@ -1,5 +1,7 @@
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, DataFusionError, Result as DataFusionResult, ScalarValue};
+use datafusion_common::{
+    Column, DFSchemaRef, DataFusionError, Result as DataFusionResult, ScalarValue,
+};
 use datafusion_expr::utils::{expr_as_column_expr, find_aggregate_exprs};
 use datafusion_expr::{
     bitwise_and, bitwise_shift_right, cast, Aggregate, Expr, LogicalPlan, LogicalPlanBuilder,
@@ -7,6 +9,7 @@ use datafusion_expr::{
 };
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::explode::Explode;
 use sail_python_udf::get_udf_display_name;
 use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 
@@ -18,6 +21,13 @@ use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 use crate::resolver::PlanResolver;
+
+/// Projections resolved by index (a `None` marks a projection deferred until the
+/// grouping is materialized), paired with the indices of the deferred projections.
+type ResolvedProjections = (Vec<Option<NamedExpr>>, Vec<usize>);
+
+/// A map from a grouping generator expression to the column that materializes it.
+type GeneratorReplacements = Vec<(Expr, Expr)>;
 
 /// Returns the name of a volatile (non-deterministic) scalar expression found
 /// in an aggregate context. Catches two Spark CheckAnalysis violations:
@@ -55,8 +65,38 @@ impl PlanResolver<'_> {
             .resolve_query_plan_with_hidden_fields(*input, state)
             .await?;
         let schema = input.schema();
+
+        // Resolve the projections, deferring any that reference a grouping output
+        // until the grouping is materialized below.
+        let (resolved_projections, deferred_projections) = self
+            .resolve_projections_deferring(&projections, schema, state)
+            .await?;
+
+        let grouping = {
+            let projections = resolved_projections.iter().flatten().cloned().collect();
+            let mut scope = state.enter_aggregate_scope(AggregateState::Grouping { projections });
+            let state = scope.state();
+            self.resolve_named_expressions(grouping, schema, state)
+                .await?
+        };
+
+        // Expand a generator (e.g. window's `explode`) in the grouping into a named
+        // column; a no-op for ordinary aggregates.
+        let (input, grouping, generator_replacements) =
+            self.expand_grouping_generators(input, grouping, state)?;
+        let schema = input.schema();
+
+        // Resolve the deferred projections (grouping columns are now in scope) and
+        // inline any re-used generator expressions.
         let projections = self
-            .resolve_named_expressions(projections, schema, state)
+            .finish_projections(
+                resolved_projections,
+                deferred_projections,
+                &projections,
+                &generator_replacements,
+                schema,
+                state,
+            )
             .await?;
 
         // Spark CheckAnalysis: reject non-deterministic expressions in aggregate context
@@ -72,14 +112,6 @@ impl PlanResolver<'_> {
         // (non-UDF) aggregate functions in the same .agg() call.
         Self::check_no_mixed_grouped_agg_udf(&projections)?;
 
-        let grouping = {
-            let mut scope = state.enter_aggregate_scope(AggregateState::Grouping {
-                projections: projections.clone(),
-            });
-            let state = scope.state();
-            self.resolve_named_expressions(grouping, schema, state)
-                .await?
-        };
         let having = {
             let mut scope = state.enter_aggregate_scope(AggregateState::Having {
                 projections: projections.clone(),
@@ -87,7 +119,10 @@ impl PlanResolver<'_> {
             });
             let state = scope.state();
             match having {
-                Some(having) => Some(self.resolve_expression(having, schema, state).await?),
+                Some(having) => Some(Self::replace_generator_expressions(
+                    self.resolve_expression(having, schema, state).await?,
+                    &generator_replacements,
+                )?),
                 None => None,
             }
         };
@@ -258,6 +293,75 @@ impl PlanResolver<'_> {
             .collect()
     }
 
+    /// Resolves the projections against the input. If that fails, resolves each one
+    /// individually and defers (by index) those that cannot resolve yet because they
+    /// reference a grouping output not in scope until the grouping is materialized.
+    async fn resolve_projections_deferring(
+        &self,
+        projections: &[spec::Expr],
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<ResolvedProjections> {
+        if let Ok(resolved) = self
+            .resolve_named_expressions(projections.to_vec(), schema, state)
+            .await
+        {
+            return Ok((resolved.into_iter().map(Some).collect(), vec![]));
+        }
+        let mut resolved = Vec::with_capacity(projections.len());
+        let mut deferred = vec![];
+        for (index, projection) in projections.iter().enumerate() {
+            match self
+                .resolve_named_expression(projection.clone(), schema, state)
+                .await
+            {
+                Ok(named) => resolved.push(Some(named)),
+                Err(_) => {
+                    resolved.push(None);
+                    deferred.push(index);
+                }
+            }
+        }
+        Ok((resolved, deferred))
+    }
+
+    /// Resolves the deferred projections (the grouping columns are now in scope) and
+    /// inlines re-used generator expressions, producing the final projection list.
+    async fn finish_projections(
+        &self,
+        mut resolved: Vec<Option<NamedExpr>>,
+        deferred: Vec<usize>,
+        projections: &[spec::Expr],
+        generator_replacements: &[(Expr, Expr)],
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Vec<NamedExpr>> {
+        for index in deferred {
+            resolved[index] = Some(
+                self.resolve_named_expression(projections[index].clone(), schema, state)
+                    .await?,
+            );
+        }
+        resolved
+            .into_iter()
+            .enumerate()
+            .map(|(index, named)| {
+                let NamedExpr {
+                    name,
+                    expr,
+                    metadata,
+                } = named.ok_or_else(|| {
+                    PlanError::internal(format!("projection {index} was not resolved"))
+                })?;
+                Ok(NamedExpr {
+                    name,
+                    expr: Self::replace_generator_expressions(expr, generator_replacements)?,
+                    metadata,
+                })
+            })
+            .collect()
+    }
+
     fn rewrite_grouping_functions(
         named_expr: NamedExpr,
         grouping_exprs: &[Expr],
@@ -420,6 +524,71 @@ impl PlanResolver<'_> {
             Self::grouping_id_column(),
             datafusion_common::arrow::datatypes::DataType::Int64,
         ))
+    }
+
+    /// Expands a generator in the grouping into rows, naming the unnested column
+    /// after the grouping output. Returns a map from each generator to its column.
+    /// A no-op when the grouping has no generator.
+    fn expand_grouping_generators(
+        &self,
+        input: LogicalPlan,
+        grouping: Vec<NamedExpr>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(LogicalPlan, Vec<NamedExpr>, GeneratorReplacements)> {
+        if !grouping.iter().any(Self::grouping_has_generator) {
+            return Ok((input, grouping, vec![]));
+        }
+        let generators = grouping.iter().map(|x| x.expr.clone()).collect::<Vec<_>>();
+        let (input, mut grouping) =
+            self.rewrite_projection::<ExplodeRewriter>(input, grouping, state)?;
+        let mut replacements = vec![];
+        for (group, generator) in grouping.iter_mut().zip(generators) {
+            // The rewriter returns the unnested column wrapped in an alias. Rename
+            // that column to the grouping's output name and use it directly.
+            let column = match (&group.expr, group.name.as_slice()) {
+                (Expr::Alias(alias), [name]) => match alias.expr.as_ref() {
+                    Expr::Column(column) => {
+                        state.set_field_name(column.name(), name);
+                        Some(Expr::Column(column.clone()))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(column) = column {
+                replacements.push((generator, column.clone()));
+                group.expr = column;
+            }
+        }
+        Ok((input, grouping, replacements))
+    }
+
+    /// Whether a grouping expression contains a generator (e.g. `explode`) and so
+    /// must expand the input rows before grouping.
+    fn grouping_has_generator(group: &NamedExpr) -> bool {
+        group
+            .expr
+            .exists(|e| {
+                Ok(matches!(e, Expr::ScalarFunction(f) if f.func.inner().downcast_ref::<Explode>().is_some()))
+            })
+            .unwrap_or(false)
+    }
+
+    /// Replaces each generator expression with a reference to its materialized
+    /// grouping column, so a re-used generator resolves to the same column.
+    fn replace_generator_expressions(
+        expr: Expr,
+        replacements: &[(Expr, Expr)],
+    ) -> PlanResult<Expr> {
+        if replacements.is_empty() {
+            return Ok(expr);
+        }
+        Ok(expr
+            .transform_down(|e| match replacements.iter().find(|(from, _)| *from == e) {
+                Some((_, to)) => Ok(Transformed::yes(to.clone())),
+                None => Ok(Transformed::no(e)),
+            })
+            .data()?)
     }
 
     /// Reference: [datafusion_sql::utils::rebase_expr]
