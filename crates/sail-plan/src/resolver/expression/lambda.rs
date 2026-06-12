@@ -151,9 +151,13 @@ impl PlanResolver<'_> {
             .resolve_lambda_parameter(&name)
             .map(|(param, field)| (param.to_string(), field.cloned()))
             .ok_or_else(|| {
-                PlanError::AnalysisError(format!(
-                    "cannot resolve lambda variable `{name}` outside of a lambda function"
-                ))
+                if state.in_lambda_scope() {
+                    PlanError::AnalysisError(format!("unknown lambda parameter `{name}`"))
+                } else {
+                    PlanError::AnalysisError(format!(
+                        "cannot resolve lambda variable `{name}` outside of a lambda function"
+                    ))
+                }
             })?;
         Ok(NamedExpr::new(
             vec![declared.clone()],

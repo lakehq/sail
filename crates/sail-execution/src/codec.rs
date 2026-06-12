@@ -9,6 +9,7 @@ use datafusion::common::{
     plan_datafusion_err, plan_err, Constraint, Constraints, JoinSide, Result, ScalarValue,
     Statistics,
 };
+use datafusion::config::ConfigOptions;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::{
@@ -22,12 +23,13 @@ use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{
-    AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF,
+    AggregateUDF, AggregateUDFImpl, HigherOrderUDF, ScalarUDF, ScalarUDFImpl, WindowUDF,
 };
 use datafusion::physical_expr::equivalence::{EquivalenceClass, EquivalenceGroup};
+use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable};
 use datafusion::physical_expr::{
-    AcrossPartitions, ConstExpr, EquivalenceProperties, LexOrdering, LexRequirement, Partitioning,
-    PhysicalExpr, PhysicalSortExpr,
+    AcrossPartitions, ConstExpr, EquivalenceProperties, HigherOrderFunctionExpr, LexOrdering,
+    LexRequirement, Partitioning, PhysicalExpr, PhysicalSortExpr,
 };
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
@@ -122,6 +124,7 @@ use sail_function::scalar::array::array_intersect::ArrayIntersect;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
+use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
 use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_function::scalar::array::spark_sequence::SparkSequence;
@@ -233,6 +236,7 @@ use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
+use sail_physical_plan::higher_order::DistributedHigherOrderExpr;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
@@ -262,9 +266,11 @@ use crate::plan::gen::extended_physical_plan_node::NodeKind;
 use crate::plan::gen::extended_scalar_udf::UdfKind;
 use crate::plan::gen::extended_stream_udf::StreamUdfKind;
 use crate::plan::gen::extended_window_udf::UdwfKind;
+use crate::plan::gen::higher_order_udf::UdfKind as HigherOrderUdfKind;
 use crate::plan::gen::{
     CastColumnExprNode, ExtendedAggregateUdf, ExtendedPhysicalExprNode, ExtendedPhysicalPlanNode,
-    ExtendedScalarUdf, ExtendedStreamUdf, ExtendedWindowUdf,
+    ExtendedScalarUdf, ExtendedStreamUdf, ExtendedWindowUdf, HigherOrderFunctionExprNode,
+    LambdaExprNode, LambdaVariableExprNode,
 };
 use crate::plan::{gen, StageInputExec};
 
@@ -2056,7 +2062,27 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_decode_udf(&self, name: &str, buf: &[u8]) -> Result<Arc<ScalarUDF>> {
-        // TODO: Implement custom registry to avoid codec for built-in functions
+        // TODO: Implement custom registry to avoid codec for built-in functions.
+        // The `match name` below has no session-registry fallback, so every
+        // scalar UDF needs an explicit arm or distributed decode fails with
+        // "could not find scalar function". DataFusion built-ins without an arm
+        // (e.g. `array_length`, `cardinality` — what Spark `size` lowers to) thus
+        // break ANY cluster query that uses them, including
+        // `filter(arr, x -> size(filter(x, ...)) > 0)`. A registry fallback for
+        // DF built-ins would fix this class at once (Spark* custom UDFs + HOFs
+        // would still need their oneof/arm). This is the prerequisite for
+        // distributing HOFs in aggregate/window nodes (see the TODO in
+        // `WrapHigherOrderFunctions`).
+        //
+        // The fix needs NO proto change. datafusion-proto's from_proto.rs already
+        // resolves a scalar UDF from the session registry FIRST when the encoded
+        // extension buffer is empty: `ctx.udf(name).or_else(|_| codec.try_decode_udf(name, &[]))`.
+        // Today `try_encode_udf` writes an `ExtendedScalarUdf` (UdfKind::Standard {})
+        // for built-ins too, so the non-empty buffer forces this codec path instead.
+        // Fix: in `try_encode_udf`, DON'T write a buffer for plain DataFusion
+        // built-ins (leave it empty), so decode falls through to `ctx.udf(name)`
+        // from the session registry (which already has array_length/cardinality/...).
+        // Keep the explicit oneof/buffer only for Sail's Spark* custom UDFs and HOFs.
         let udf = ExtendedScalarUdf::decode(buf)
             .map_err(|e| plan_datafusion_err!("failed to decode udf: {e}"))?;
         let ExtendedScalarUdf { udf_kind } = udf;
@@ -2945,6 +2971,43 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     None,
                 )))
             }
+            ExprKind::HigherOrderFunction(node) => {
+                let fun = Self::try_decode_higher_order_udf(node.udf)?;
+                let input_schema = self.try_decode_schema(&node.input_schema)?;
+                // The planner's `ConfigOptions` are not serialized. This is safe
+                // because `filter` does not read config (its lambda parameters and
+                // result type are config-independent). Revisit when adding a
+                // higher-order function whose behavior depends on `ConfigOptions`
+                // (e.g. ANSI mode) — that config would need to be carried here.
+                let inner = HigherOrderFunctionExpr::try_new_with_schema(
+                    fun,
+                    inputs.to_vec(),
+                    &input_schema,
+                    Arc::new(ConfigOptions::default()),
+                )?;
+                Ok(Arc::new(DistributedHigherOrderExpr::new(
+                    Arc::new(inner),
+                    Arc::new(input_schema),
+                )))
+            }
+            ExprKind::Lambda(node) => {
+                if inputs.len() != 1 {
+                    return plan_err!("LambdaExpr expects exactly one input, got {}", inputs.len());
+                }
+                Ok(Arc::new(LambdaExpr::try_new(
+                    node.params,
+                    Arc::clone(&inputs[0]),
+                )?))
+            }
+            ExprKind::LambdaVariable(node) => {
+                let schema = self.try_decode_schema(&node.field)?;
+                let field = schema
+                    .fields()
+                    .first()
+                    .ok_or_else(|| plan_datafusion_err!("LambdaVariable missing field"))?
+                    .clone();
+                Ok(Arc::new(LambdaVariable::new(node.index as usize, field)))
+            }
         }
     }
 
@@ -2955,6 +3018,38 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 cast.target_field().as_ref(),
             )?;
             ExprKind::SchemaEvolutionCast(node)
+        } else if let Some(w) = node.downcast_ref::<DistributedHigherOrderExpr>() {
+            let hof = w
+                .inner()
+                .downcast_ref::<HigherOrderFunctionExpr>()
+                .ok_or_else(|| {
+                    plan_datafusion_err!(
+                        "DistributedHigherOrderExpr inner is not a HigherOrderFunctionExpr"
+                    )
+                })?;
+            let input_schema = self.try_encode_schema(w.input_schema().as_ref())?;
+            ExprKind::HigherOrderFunction(HigherOrderFunctionExprNode {
+                input_schema,
+                udf: Some(Self::try_encode_higher_order_udf(hof)?),
+            })
+        } else if let Some(lambda) = node.downcast_ref::<LambdaExpr>() {
+            ExprKind::Lambda(LambdaExprNode {
+                params: lambda.params().to_vec(),
+            })
+        } else if let Some(var) = node.downcast_ref::<LambdaVariable>() {
+            let index = var.index() as u64;
+            let field = self.try_encode_schema(&Schema::new(vec![var.field().as_ref().clone()]))?;
+            ExprKind::LambdaVariable(LambdaVariableExprNode { index, field })
+        } else if node.downcast_ref::<HigherOrderFunctionExpr>().is_some() {
+            // An unwrapped higher-order function reached serialization, which means
+            // it appeared in a plan node that `WrapHigherOrderFunctions` does not
+            // cover (it handles `ProjectionExec`, `FilterExec` and `SortExec`).
+            // Fail with a clear message instead of the generic "unsupported
+            // extension" error.
+            return plan_err!(
+                "higher-order function in an unsupported plan node cannot be serialized \
+                 for distributed execution"
+            );
         } else {
             return plan_err!("unsupported physical expr extension");
         };
@@ -2968,6 +3063,44 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
 }
 
 impl RemoteExecutionCodec {
+    /// Encodes the concrete higher-order UDF of `hof` using a one-variant-per-function
+    /// `oneof` (the same pattern as `ExtendedScalarUdf`). Add a branch here for each
+    /// new higher-order function (`transform`, `exists`, `forall`, ...).
+    fn try_encode_higher_order_udf(hof: &HigherOrderFunctionExpr) -> Result<gen::HigherOrderUdf> {
+        let udf_inner = hof.fun().inner().as_ref() as &dyn std::any::Any;
+        let udf_kind = if let Some(filter) = udf_inner.downcast_ref::<SparkArrayFilter>() {
+            HigherOrderUdfKind::Filter(gen::SparkArrayFilterUdf {
+                index_first: filter.is_index_first(),
+            })
+        } else {
+            return plan_err!("unsupported higher-order function: {}", hof.name());
+        };
+        Ok(gen::HigherOrderUdf {
+            udf_kind: Some(udf_kind),
+        })
+    }
+
+    /// Rebuilds the higher-order UDF from its `oneof` encoding. The inverse of
+    /// [`Self::try_encode_higher_order_udf`].
+    fn try_decode_higher_order_udf(
+        udf: Option<gen::HigherOrderUdf>,
+    ) -> Result<Arc<HigherOrderUDF>> {
+        let udf_kind = udf
+            .and_then(|udf| udf.udf_kind)
+            .ok_or_else(|| plan_datafusion_err!("missing higher-order function UDF"))?;
+        Ok(match udf_kind {
+            HigherOrderUdfKind::Filter(gen::SparkArrayFilterUdf { index_first }) => {
+                if index_first {
+                    Arc::new(HigherOrderUDF::new_from_impl(
+                        SparkArrayFilter::new_index_first(),
+                    ))
+                } else {
+                    Arc::new(HigherOrderUDF::new_from_impl(SparkArrayFilter::new()))
+                }
+            }
+        })
+    }
+
     #[expect(clippy::type_complexity)]
     fn try_decode_cast_column_expr(
         &self,
@@ -4007,6 +4140,531 @@ mod tests {
             .downcast_ref::<SparkVariantExplodeUdf>()
             .is_some());
         assert_eq!(decoded.name(), "spark_variant_explode");
+
+        Ok(())
+    }
+
+    /// Builds a wrapped `filter(arr, v -> v > 2)` physical expression over a
+    /// single `List<Int32>` column "arr", plus the input schema and a sample
+    /// `[[1, 2, 3]]` list array for evaluation. Shared by the expr- and
+    /// plan-level distributed roundtrip tests.
+    fn build_wrapped_filter() -> Result<(
+        Arc<dyn PhysicalExpr>,
+        datafusion::arrow::datatypes::SchemaRef,
+        datafusion::arrow::array::ListArray,
+    )> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Array, Int32Array, ListArray};
+        use datafusion::arrow::buffer::OffsetBuffer;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{col, lambda, lit, Expr, HigherOrderUDF};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
+        use sail_physical_plan::higher_order::wrap_distributed_higher_order;
+
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let list = ListArray::new(
+            list_field,
+            OffsetBuffer::<i32>::from_lengths(vec![3]),
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            None,
+        );
+
+        let schema = Schema::new(vec![Field::new("arr", list.data_type().clone(), true)]);
+        let dfschema = DFSchema::from_unqualified_fields(
+            vec![Field::new("arr", list.data_type().clone(), true)].into(),
+            HashMap::new(),
+        )?;
+
+        let body = Expr::LambdaVariable(LambdaVariable::new(
+            "v".to_string(),
+            Some(Arc::new(Field::new("v", DataType::Int32, true))),
+        ))
+        .gt(lit(2i32));
+
+        let func = Arc::new(HigherOrderUDF::new_from_impl(SparkArrayFilter::new()));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            func,
+            vec![col("arr"), lambda(["v"], body)],
+        ));
+        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+
+        let schema_ref: SchemaRef = Arc::new(schema);
+        let wrapped = wrap_distributed_higher_order(physical, &schema_ref)?;
+        Ok((wrapped, schema_ref, list))
+    }
+
+    #[test]
+    fn test_round_trip_distributed_filter_higher_order_expr() -> Result<()> {
+        use datafusion::arrow::array::RecordBatch;
+
+        let (wrapped, schema_ref, list) = build_wrapped_filter()?;
+        assert!(wrapped
+            .downcast_ref::<DistributedHigherOrderExpr>()
+            .is_some());
+
+        // Serialize -> encode bytes -> decode bytes (prove the wire path).
+        let codec = RemoteExecutionCodec;
+        let proto = serialize_physical_expr(&wrapped, &codec)?;
+        let bytes = proto.encode_to_vec();
+        let proto2 = datafusion_proto::protobuf::PhysicalExprNode::decode(bytes.as_slice())
+            .map_err(|e| plan_datafusion_err!("failed to decode PhysicalExprNode: {e}"))?;
+
+        // Parse back into a physical expr; must be a DistributedHigherOrderExpr.
+        let ctx = TaskContext::default();
+        let decoded = parse_physical_expr(&proto2, &ctx, &schema_ref, &codec)?;
+        assert!(decoded
+            .downcast_ref::<DistributedHigherOrderExpr>()
+            .is_some());
+
+        // Both exprs must evaluate identically.
+        let batch = RecordBatch::try_new(Arc::clone(&schema_ref), vec![Arc::new(list)])?;
+        let original_result = wrapped.evaluate(&batch)?.into_array(1)?;
+        let decoded_result = decoded.evaluate(&batch)?.into_array(1)?;
+        assert_eq!(&original_result, &decoded_result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_distributed_filter_in_projection_plan() -> Result<()> {
+        use datafusion::arrow::array::RecordBatch;
+        use datafusion::physical_expr::projection::ProjectionExpr;
+        use datafusion::physical_plan::empty::EmptyExec;
+        use datafusion::physical_plan::projection::ProjectionExec;
+
+        // End-to-end at the PLAN level: a ProjectionExec carrying the wrapped
+        // higher-order function must survive try_encode_plan -> bytes ->
+        // try_decode_plan and still evaluate correctly. This exercises the path
+        // datafusion-proto uses to serialize a real plan node (not just the
+        // bare expression).
+        let (wrapped, schema_ref, list) = build_wrapped_filter()?;
+        let original_result = Arc::clone(&wrapped)
+            .evaluate(&RecordBatch::try_new(
+                Arc::clone(&schema_ref),
+                vec![Arc::new(list.clone())],
+            )?)?
+            .into_array(1)?;
+
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema_ref)));
+        let projection = ProjectionExec::try_new(
+            vec![ProjectionExpr {
+                expr: wrapped,
+                alias: "result".to_string(),
+            }],
+            input,
+        )?;
+
+        let codec = RemoteExecutionCodec;
+        let bytes = codec.try_encode_plan(Arc::new(projection))?;
+        let ctx = TaskContext::default();
+        let decoded = codec.try_decode_plan(&bytes, &ctx)?;
+
+        let decoded_proj = decoded
+            .downcast_ref::<ProjectionExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan is not a ProjectionExec"))?;
+        let decoded_expr = &decoded_proj.expr()[0].expr;
+        assert!(decoded_expr
+            .downcast_ref::<DistributedHigherOrderExpr>()
+            .is_some());
+
+        // The wrapped HOF inside the decoded plan still evaluates to [[3]].
+        let batch = RecordBatch::try_new(schema_ref, vec![Arc::new(list)])?;
+        let decoded_result = decoded_expr.evaluate(&batch)?.into_array(1)?;
+        assert_eq!(&original_result, &decoded_result);
+
+        Ok(())
+    }
+
+    /// `filter(arr, v -> v > threshold)` where the lambda captures an OUTER
+    /// column (`threshold`). Proves the captured `Column(threshold)` and the
+    /// two-column input schema survive encode/decode.
+    #[test]
+    fn test_round_trip_distributed_filter_with_capture() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Array, Int32Array, ListArray, RecordBatch};
+        use datafusion::arrow::buffer::OffsetBuffer;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{col, lambda, Expr, HigherOrderUDF};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
+        use sail_physical_plan::higher_order::wrap_distributed_higher_order;
+
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let list = ListArray::new(
+            list_field,
+            OffsetBuffer::<i32>::from_lengths(vec![5]),
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+            None,
+        );
+        let threshold = Int32Array::from(vec![2]);
+
+        let fields = vec![
+            Field::new("arr", list.data_type().clone(), true),
+            Field::new("threshold", DataType::Int32, true),
+        ];
+        let schema = Schema::new(fields.clone());
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+
+        let v_var = Expr::LambdaVariable(LambdaVariable::new(
+            "v".to_string(),
+            Some(Arc::new(Field::new("v", DataType::Int32, true))),
+        ));
+        let body = v_var.gt(col("threshold"));
+        let func = Arc::new(HigherOrderUDF::new_from_impl(SparkArrayFilter::new()));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            func,
+            vec![col("arr"), lambda(["v"], body)],
+        ));
+        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+
+        let schema_ref: SchemaRef = Arc::new(schema);
+        let wrapped = wrap_distributed_higher_order(physical, &schema_ref)?;
+        assert!(wrapped
+            .downcast_ref::<DistributedHigherOrderExpr>()
+            .is_some());
+
+        let codec = RemoteExecutionCodec;
+        let proto = serialize_physical_expr(&wrapped, &codec)?;
+        let bytes = proto.encode_to_vec();
+        let proto2 = datafusion_proto::protobuf::PhysicalExprNode::decode(bytes.as_slice())
+            .map_err(|e| plan_datafusion_err!("failed to decode PhysicalExprNode: {e}"))?;
+
+        let ctx = TaskContext::default();
+        let decoded = parse_physical_expr(&proto2, &ctx, &schema_ref, &codec)?;
+        assert!(decoded
+            .downcast_ref::<DistributedHigherOrderExpr>()
+            .is_some());
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema_ref),
+            vec![Arc::new(list), Arc::new(threshold)],
+        )?;
+        let original_result = wrapped.evaluate(&batch)?.into_array(1)?;
+        let decoded_result = decoded.evaluate(&batch)?.into_array(1)?;
+        assert_eq!(&original_result, &decoded_result);
+
+        Ok(())
+    }
+
+    /// Index-first `filter(arr, i -> i = 0)` built directly from
+    /// `SparkArrayFilter::new_index_first()`, mirroring the planner rewrite.
+    /// Proves the `index_first` flag survives encode/decode (otherwise the
+    /// decoded UDF would rebuild the non-index-first variant).
+    #[test]
+    fn test_round_trip_distributed_filter_index_first() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Array, Int32Array, ListArray, RecordBatch};
+        use datafusion::arrow::buffer::OffsetBuffer;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{col, lambda, lit, Expr, HigherOrderUDF};
+        use datafusion::physical_expr::{create_physical_expr, HigherOrderFunctionExpr};
+        use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
+        use sail_physical_plan::higher_order::wrap_distributed_higher_order;
+
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let list = ListArray::new(
+            list_field,
+            OffsetBuffer::<i32>::from_lengths(vec![3]),
+            Arc::new(Int32Array::from(vec![10, 20, 30])),
+            None,
+        );
+
+        let fields = vec![Field::new("arr", list.data_type().clone(), true)];
+        let schema = Schema::new(fields.clone());
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+
+        let i_var = Expr::LambdaVariable(LambdaVariable::new(
+            "i".to_string(),
+            Some(Arc::new(Field::new("i", DataType::Int32, false))),
+        ));
+        // (i) -> i = 0, the rewritten index-first predicate.
+        let body = i_var.eq(lit(0i32));
+        let func = Arc::new(HigherOrderUDF::new_from_impl(
+            SparkArrayFilter::new_index_first(),
+        ));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            func,
+            vec![col("arr"), lambda(["i"], body)],
+        ));
+        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+
+        let schema_ref: SchemaRef = Arc::new(schema);
+        let wrapped = wrap_distributed_higher_order(physical, &schema_ref)?;
+        assert!(wrapped
+            .downcast_ref::<DistributedHigherOrderExpr>()
+            .is_some());
+
+        let codec = RemoteExecutionCodec;
+        let proto = serialize_physical_expr(&wrapped, &codec)?;
+        let bytes = proto.encode_to_vec();
+        let proto2 = datafusion_proto::protobuf::PhysicalExprNode::decode(bytes.as_slice())
+            .map_err(|e| plan_datafusion_err!("failed to decode PhysicalExprNode: {e}"))?;
+
+        let ctx = TaskContext::default();
+        let decoded = parse_physical_expr(&proto2, &ctx, &schema_ref, &codec)?;
+        let decoded_hof = decoded
+            .downcast_ref::<DistributedHigherOrderExpr>()
+            .ok_or_else(|| plan_datafusion_err!("decoded is not a DistributedHigherOrderExpr"))?;
+
+        // Strongest check: the decoded inner UDF is still index-first.
+        let inner_hof = decoded_hof
+            .inner()
+            .downcast_ref::<HigherOrderFunctionExpr>()
+            .ok_or_else(|| plan_datafusion_err!("inner is not a HigherOrderFunctionExpr"))?;
+        let udf_any = inner_hof.fun().inner().as_ref() as &dyn std::any::Any;
+        let filter = udf_any
+            .downcast_ref::<SparkArrayFilter>()
+            .ok_or_else(|| plan_datafusion_err!("inner UDF is not a SparkArrayFilter"))?;
+        assert!(filter.is_index_first());
+
+        let batch = RecordBatch::try_new(Arc::clone(&schema_ref), vec![Arc::new(list)])?;
+        let original_result = wrapped.evaluate(&batch)?.into_array(1)?;
+        let decoded_result = decoded.evaluate(&batch)?.into_array(1)?;
+        assert_eq!(&original_result, &decoded_result);
+
+        Ok(())
+    }
+
+    /// Two nested `filter` HOFs: the inner filter sits in the OUTER filter's
+    /// ARRAY-ARGUMENT position, i.e. `filter(filter(arr, x -> x > 1), v -> v >
+    /// 2)` over a `List<Int32>` column. Because the inner filter is a non-lambda
+    /// argument of the outer filter, this exercises the BASE-schema recursion
+    /// branch in `wrap_distributed_higher_order` (the `else` arm that recurses
+    /// with the same schema), NOT the extended-schema branch. The
+    /// extended-schema (lambda-body) branch is covered by
+    /// `test_round_trip_distributed_filter_nested_in_lambda_body`. The decoded
+    /// tree must contain TWO nested `DistributedHigherOrderExpr` wrappers and
+    /// evaluate identically.
+    ///
+    /// Note: the original "nested inside a lambda body via `cardinality(...)`"
+    /// formulation could not be used because `cardinality` (a
+    /// `datafusion-functions-nested` scalar UDF) is not registered in the Sail
+    /// codec's scalar-function deserialization table, so it fails to round-trip
+    /// with `ExtendedScalarUdf: no UDF found for cardinality`. That is a
+    /// pre-existing scalar-UDF registration gap, unrelated to the higher-order
+    /// roundtrip under test, so we nest two `filter`s directly instead.
+    #[test]
+    fn test_round_trip_distributed_filter_nested() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Array, Int32Array, ListArray, RecordBatch};
+        use datafusion::arrow::buffer::OffsetBuffer;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+        use datafusion::common::tree_node::TreeNode;
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{col, lambda, lit, Expr, HigherOrderUDF};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
+        use sail_physical_plan::higher_order::wrap_distributed_higher_order;
+
+        // arr = [[1, 2, 3, 4, 5]] : one row, a single int array.
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let list = ListArray::new(
+            list_field,
+            OffsetBuffer::<i32>::from_lengths(vec![5]),
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
+            None,
+        );
+
+        let fields = vec![Field::new("arr", list.data_type().clone(), true)];
+        let schema = Schema::new(fields.clone());
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+
+        let x_var = Expr::LambdaVariable(LambdaVariable::new(
+            "x".to_string(),
+            Some(Arc::new(Field::new("x", DataType::Int32, true))),
+        ));
+        let v_var = Expr::LambdaVariable(LambdaVariable::new(
+            "v".to_string(),
+            Some(Arc::new(Field::new("v", DataType::Int32, true))),
+        ));
+
+        // Inner filter sits in the OUTER filter's array-argument position.
+        let inner_filter = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(SparkArrayFilter::new())),
+            vec![col("arr"), lambda(["x"], x_var.gt(lit(1i32)))],
+        ));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(SparkArrayFilter::new())),
+            vec![inner_filter, lambda(["v"], v_var.gt(lit(2i32)))],
+        ));
+        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+
+        let schema_ref: SchemaRef = Arc::new(schema);
+        let wrapped = wrap_distributed_higher_order(physical, &schema_ref)?;
+        assert!(wrapped
+            .downcast_ref::<DistributedHigherOrderExpr>()
+            .is_some());
+
+        let codec = RemoteExecutionCodec;
+        let proto = serialize_physical_expr(&wrapped, &codec)?;
+        let bytes = proto.encode_to_vec();
+        let proto2 = datafusion_proto::protobuf::PhysicalExprNode::decode(bytes.as_slice())
+            .map_err(|e| plan_datafusion_err!("failed to decode PhysicalExprNode: {e}"))?;
+
+        let ctx = TaskContext::default();
+        let decoded = parse_physical_expr(&proto2, &ctx, &schema_ref, &codec)?;
+        assert!(decoded
+            .downcast_ref::<DistributedHigherOrderExpr>()
+            .is_some());
+
+        // The decoded tree must contain a NESTED wrapper inside the lambda body.
+        let nested_count = std::cell::Cell::new(0usize);
+        Arc::clone(&decoded).apply(|node| {
+            if node.is::<DistributedHigherOrderExpr>() {
+                nested_count.set(nested_count.get() + 1);
+            }
+            Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
+        })?;
+        assert!(
+            nested_count.get() >= 2,
+            "expected at least 2 DistributedHigherOrderExpr nodes, found {}",
+            nested_count.get()
+        );
+
+        let batch = RecordBatch::try_new(Arc::clone(&schema_ref), vec![Arc::new(list)])?;
+        let original_result = wrapped.evaluate(&batch)?.into_array(1)?;
+        let decoded_result = decoded.evaluate(&batch)?.into_array(1)?;
+        assert_eq!(&original_result, &decoded_result);
+
+        Ok(())
+    }
+
+    /// A `filter` HOF nested INSIDE the outer lambda's BODY:
+    /// `filter(arr2d, a -> filter(a, y -> y > 1) IS NOT NULL)` over a single
+    /// `List<List<Int32>>` column. Because the inner filter appears in the
+    /// outer lambda's body (not in an array-argument position), this exercises
+    /// the EXTENDED-schema branch of `wrap_distributed_higher_order`: the inner
+    /// wrapper must serialize `input_schema = base_schema + the outer lambda's
+    /// `a` parameter field`, and its lambda variables carry indices beyond the
+    /// base schema width. The base-schema branch is covered by
+    /// `test_round_trip_distributed_filter_nested`.
+    ///
+    /// The outer lambda body uses only natively-serialized exprs (`IS NOT NULL`
+    /// over the inner filter's list result) so no unregistered scalar UDF is
+    /// needed.
+    #[test]
+    fn test_round_trip_distributed_filter_nested_in_lambda_body() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Array, Int32Array, ListArray, RecordBatch};
+        use datafusion::arrow::buffer::OffsetBuffer;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+        use datafusion::common::tree_node::TreeNode;
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{col, lambda, lit, Expr, HigherOrderUDF};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
+        use sail_physical_plan::higher_order::wrap_distributed_higher_order;
+
+        // arr2d = [ [[1, 2], [3]] ] : one outer row holding two inner int
+        // arrays, [1, 2] and [3].
+        let inner_int_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let inner_lists = ListArray::new(
+            Arc::clone(&inner_int_field),
+            OffsetBuffer::<i32>::from_lengths(vec![2, 1]),
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            None,
+        );
+        let inner_list_dt = inner_lists.data_type().clone();
+        let outer_field = Arc::new(Field::new_list_field(inner_list_dt.clone(), true));
+        let arr2d = ListArray::new(
+            outer_field,
+            OffsetBuffer::<i32>::from_lengths(vec![2]),
+            Arc::new(inner_lists),
+            None,
+        );
+
+        let fields = vec![Field::new("arr2d", arr2d.data_type().clone(), true)];
+        let schema = Schema::new(fields.clone());
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+
+        let filter_udf = || Arc::new(HigherOrderUDF::new_from_impl(SparkArrayFilter::new()));
+
+        // Outer lambda element param `a` is one inner array: List<Int32>.
+        let a_var = Expr::LambdaVariable(LambdaVariable::new(
+            "a".to_string(),
+            Some(Arc::new(Field::new("a", inner_list_dt, true))),
+        ));
+        // Inner lambda variable `y` ranges over the Int32 elements of `a`.
+        let y_var = Expr::LambdaVariable(LambdaVariable::new(
+            "y".to_string(),
+            Some(Arc::new(Field::new("y", DataType::Int32, true))),
+        ));
+        // Inner HOF lives inside the outer lambda body.
+        let inner = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            filter_udf(),
+            vec![a_var, lambda(["y"], y_var.gt(lit(1i32)))],
+        ));
+        let outer = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            filter_udf(),
+            vec![col("arr2d"), lambda(["a"], inner.is_not_null())],
+        ));
+        let physical = create_physical_expr(&outer, &dfschema, &ExecutionProps::new())?;
+
+        let schema_ref: SchemaRef = Arc::new(schema);
+        let wrapped = wrap_distributed_higher_order(physical, &schema_ref)?;
+        assert!(wrapped
+            .downcast_ref::<DistributedHigherOrderExpr>()
+            .is_some());
+
+        let codec = RemoteExecutionCodec;
+        let proto = serialize_physical_expr(&wrapped, &codec)?;
+        let bytes = proto.encode_to_vec();
+        let proto2 = datafusion_proto::protobuf::PhysicalExprNode::decode(bytes.as_slice())
+            .map_err(|e| plan_datafusion_err!("failed to decode PhysicalExprNode: {e}"))?;
+
+        let ctx = TaskContext::default();
+        let decoded = parse_physical_expr(&proto2, &ctx, &schema_ref, &codec)?;
+        assert!(decoded
+            .downcast_ref::<DistributedHigherOrderExpr>()
+            .is_some());
+
+        // Extended-schema proof: collect every wrapper's carried input-schema
+        // width. The inner wrapper carries base + the `a` param, so its field
+        // count must exceed the outer (base-schema) wrapper's.
+        let widths = std::cell::RefCell::new(Vec::<usize>::new());
+        Arc::clone(&decoded).apply(|node| {
+            if let Some(hof) = node.downcast_ref::<DistributedHigherOrderExpr>() {
+                widths.borrow_mut().push(hof.input_schema().fields().len());
+            }
+            Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
+        })?;
+        let widths = widths.into_inner();
+        assert!(
+            widths.len() >= 2,
+            "expected at least 2 DistributedHigherOrderExpr nodes, found {}",
+            widths.len()
+        );
+        let min = widths.iter().min().copied().unwrap_or_default();
+        let max = widths.iter().max().copied().unwrap_or_default();
+        assert!(
+            max > min,
+            "expected an inner wrapper with an EXTENDED schema (wider than the \
+             base schema); wrapper schema widths were {widths:?}"
+        );
+
+        let batch = RecordBatch::try_new(Arc::clone(&schema_ref), vec![Arc::new(arr2d)])?;
+        let original_result = wrapped.evaluate(&batch)?.into_array(1)?;
+        let decoded_result = decoded.evaluate(&batch)?.into_array(1)?;
+        assert_eq!(&original_result, &decoded_result);
 
         Ok(())
     }

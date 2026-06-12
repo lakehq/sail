@@ -448,3 +448,329 @@ Feature: array filter with lambda
       Then query result
         | result                   |
         | [[1, 2], [3, 4], [5, 6]] |
+
+  Rule: Filter with constant predicates
+
+    Scenario: Constant true predicate keeps all elements
+      When query
+        """
+        SELECT filter(array(1, 2, 3), x -> true) AS result
+        """
+      Then query result
+        | result    |
+        | [1, 2, 3] |
+
+    Scenario: Constant false predicate empties the array
+      When query
+        """
+        SELECT filter(array(1, 2, 3), x -> false) AS result
+        """
+      Then query result
+        | result |
+        | []     |
+
+    Scenario: Constant NULL predicate empties the array
+      When query
+        """
+        SELECT filter(array(1, 2, 3), x -> CAST(NULL AS BOOLEAN)) AS result
+        """
+      Then query result
+        | result |
+        | []     |
+
+    Scenario: Constant true predicate keeps null array row as NULL
+      When query
+        """
+        SELECT filter(arr, x -> true) AS result
+        FROM VALUES (array(1, 2)), (CAST(NULL AS ARRAY<INT>)) AS t(arr)
+        """
+      Then query result
+        | result |
+        | [1, 2] |
+        | NULL   |
+
+  Rule: Filter with predicate using only outer columns
+
+    Scenario: Predicate references only an external boolean column
+      When query
+        """
+        SELECT filter(arr, x -> flag) AS result
+        FROM VALUES (array(1, 2), true), (array(3, 4), false) AS t(arr, flag)
+        """
+      Then query result
+        | result |
+        | [1, 2] |
+        | []     |
+
+  Rule: Filter with struct elements
+
+    Scenario: Filter array of structs by field access
+      When query
+        """
+        SELECT filter(array(named_struct('a', 1), named_struct('a', 5)), x -> x.a > 2) AS result
+        """
+      Then query result
+        | result |
+        | [{5}]  |
+
+  Rule: Nested filter calls
+
+    Scenario: Filter applied to the result of another filter
+      When query
+        """
+        SELECT filter(filter(array(1, 2, 3, 4), x -> x > 1), y -> y < 4) AS result
+        """
+      Then query result
+        | result |
+        | [2, 3] |
+
+    Scenario: Filter inside the lambda body of another filter
+      When query
+        """
+        SELECT filter(array(array(1, 2), array(3)), x -> size(filter(x, y -> y > 2)) > 0) AS result
+        """
+      Then query result
+        | result |
+        | [[3]]  |
+
+    Scenario: Nested lambda parameter shadows the outer parameter
+      When query
+        """
+        SELECT filter(array(array(1, 2), array(3, 4)), x -> size(filter(x, x -> x > 3)) > 0) AS result
+        """
+      Then query result
+        | result   |
+        | [[3, 4]] |
+
+  Rule: Lambda parameter name resolution
+
+    Scenario: Lambda parameter reference is case-insensitive
+      When query
+        """
+        SELECT filter(array(1, 2, 3), x -> X > 1) AS result
+        """
+      Then query result
+        | result |
+        | [2, 3] |
+
+    Scenario: Lambda parameter shadows a column with the same name
+      # Both `x` references must resolve to the lambda parameter, not the
+      # column `x = 2`; mixing them up would yield [3, 4, 5] instead of [].
+      When query
+        """
+        SELECT filter(arr, x -> x > x) AS result
+        FROM (SELECT array(1, 2, 3, 4, 5) AS arr, 2 AS x)
+        """
+      Then query result
+        | result |
+        | []     |
+
+  Rule: Lambda body honors ANSI mode
+
+    # `filter` itself has no ANSI-specific semantics (Spark's ArrayFilter in
+    # higherOrderFunctions.scala has no ansiEnabled branch), but expressions
+    # inside the lambda body inherit the ANSI mode of the session.
+
+    Scenario: Division by zero inside the lambda errors under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT filter(array(1, 0, 2), x -> 10 / x > 4) AS result
+        """
+      Then query error (?i)by zero
+
+    Scenario: Division by zero inside the lambda yields NULL predicate under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT filter(array(1, 0, 2), x -> 10 / x > 4) AS result
+        """
+      Then query result
+        | result |
+        | [1, 2] |
+
+  Rule: Filter inside WHERE and ORDER BY clauses
+
+    Scenario: Filter in a WHERE predicate keeps matching rows
+      When query
+        """
+        SELECT arr AS result
+        FROM VALUES (array(1, 2, 3)), (array(1, 1)) AS t(arr)
+        WHERE size(filter(arr, x -> x > 2)) > 0
+        """
+      Then query result
+        | result    |
+        | [1, 2, 3] |
+
+    Scenario: Filter in an ORDER BY sorts rows
+      When query
+        """
+        SELECT arr AS result
+        FROM VALUES (array(5, 6)), (array(1)), (array(9, 9, 9)) AS t(arr)
+        ORDER BY size(filter(arr, x -> x > 0)) DESC
+        """
+      Then query result ordered
+        | result    |
+        | [9, 9, 9] |
+        | [5, 6]    |
+        | [1]       |
+
+  Rule: Filter with constant predicate preserves null elements
+
+    Scenario: Constant true predicate keeps null elements
+      When query
+        """
+        SELECT filter(array(1, NULL, 3), x -> true) AS result
+        """
+      Then query result
+        | result       |
+        | [1, NULL, 3] |
+
+    Scenario: Constant false predicate drops null elements
+      When query
+        """
+        SELECT filter(array(1, NULL, 3), x -> false) AS result
+        """
+      Then query result
+        | result |
+        | []     |
+
+  Rule: Filter with additional predicate forms
+
+    Scenario: Filter with IN predicate
+      When query
+        """
+        SELECT filter(array(1, 2, 3, 4, 5), x -> x IN (1, 3, 5)) AS result
+        """
+      Then query result
+        | result    |
+        | [1, 3, 5] |
+
+    Scenario: Filter with CASE WHEN in the predicate
+      When query
+        """
+        SELECT filter(array(1, 2, 3, 4), x -> CASE WHEN x % 2 = 0 THEN true ELSE false END) AS result
+        """
+      Then query result
+        | result |
+        | [2, 4] |
+
+    Scenario: Filter with coalesce in the predicate over null elements
+      When query
+        """
+        SELECT filter(array(1, NULL, 3), x -> coalesce(x, 0) > 1) AS result
+        """
+      Then query result
+        | result |
+        | [3]    |
+
+  Rule: Filter with bigint arrays
+
+    Scenario: Filter bigint array with arithmetic in the predicate
+      When query
+        """
+        SELECT filter(array(1L, 2L, 3L, 4L), x -> x * 2 > 4) AS result
+        """
+      Then query result
+        | result |
+        | [3, 4] |
+
+  Rule: Filter with a declared but unused index parameter
+
+    Scenario: Two-param lambda that uses only the element
+      When query
+        """
+        SELECT filter(array(1, 2, 3, 4, 5), (x, i) -> x > 2) AS result
+        """
+      Then query result
+        | result    |
+        | [3, 4, 5] |
+
+  Rule: Filter with decimal and date arrays
+
+    Scenario: Filter decimal array
+      When query
+        """
+        SELECT filter(array(1.5BD, 2.7BD, 3.2BD), x -> x > 2.0BD) AS result
+        """
+      Then query result
+        | result     |
+        | [2.7, 3.2] |
+
+    Scenario: Filter date array
+      When query
+        """
+        SELECT filter(array(DATE '2020-01-01', DATE '2021-06-15', DATE '2019-03-03'), x -> x > DATE '2020-01-01') AS result
+        """
+      Then query result
+        | result         |
+        | [2021-06-15]   |
+
+  Rule: Filter with index and a nested higher-order function
+
+    Scenario: Index parameter used inside a nested filter
+      When query
+        """
+        SELECT filter(array(array(1, 2, 3), array(0), array(5, 6)), (x, i) -> size(filter(x, y -> y > i)) > 1) AS result
+        """
+      Then query result
+        | result             |
+        | [[1, 2, 3], [5, 6]] |
+
+  Rule: Filter inside a join condition
+
+    # @sail-bug: a lambda that captures a column from the OTHER join side hits
+    # DataFusion's `join_proj_push_down` rule, which cannot rewrite through
+    # `LambdaExpr` ("unable to unwrap lambda from filter"). Fails in all modes;
+    # Spark returns the row. Likely an upstream DataFusion fix, not a Sail one.
+    # If the lambda does not capture the other side, the HOF is pushed below the
+    # join and works.
+    @sail-bug
+    Scenario: Lambda capturing a column from the other join side
+      When query
+        """
+        SELECT b.id AS result
+        FROM (SELECT array(1, 2) AS arr) a
+        JOIN (SELECT 1 AS id) b
+        ON size(filter(a.arr, x -> x > b.id)) > 0
+        """
+      Then query result
+        | result |
+        | 1      |
+
+  Rule: Invalid lambda functions
+
+    Scenario: Lambda with three parameters is rejected
+      When query
+        """
+        SELECT filter(array(1, 2, 3), (x, i, z) -> true) AS result
+        """
+      Then query error .*
+
+    Scenario: Lambda with non-boolean result is rejected
+      When query
+        """
+        SELECT filter(array(1, 2, 3), x -> x + 1) AS result
+        """
+      Then query error .*
+
+    Scenario: Lambda with duplicate parameter names is rejected
+      When query
+        """
+        SELECT filter(array(1, 2, 3), (x, x) -> x > 1) AS result
+        """
+      Then query error .*
+
+    Scenario: Filter over a non-array first argument is rejected
+      When query
+        """
+        SELECT filter(42, x -> x > 0) AS result
+        """
+      Then query error .*
+
+    Scenario: Filter over a map first argument is rejected
+      When query
+        """
+        SELECT filter(map('a', 1), x -> x > 0) AS result
+        """
+      Then query error .*

@@ -5,6 +5,13 @@
 /// with one Spark-specific extension: the lambda receives an optional second
 /// parameter holding the 0-based element index (`filter(arr, (x, i) -> ...)`),
 /// typed as `Int32` to match Spark's `IntegerType`.
+///
+/// Spark semantics: see `ArrayFilter` in
+/// `sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/higherOrderFunctions.scala`
+/// — `dataType` is the argument type unchanged, the lambda must return
+/// `BooleanType`, `bindInternal` provides `(elementType, containsNull)` plus
+/// `(IntegerType, false)` for two-parameter lambdas, and `nullSafeEval` keeps
+/// an element only when the predicate evaluates to `true` (NULL is falsy).
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -63,6 +70,13 @@ impl SparkArrayFilter {
             ),
             index_first: true,
         }
+    }
+
+    /// Whether this instance expects the lambda parameters in `[index, element]`
+    /// order (an index-only lambda rewritten by the planner). Used by the
+    /// serialization codec to reconstruct the correct variant.
+    pub fn is_index_first(&self) -> bool {
+        self.index_first
     }
 }
 
