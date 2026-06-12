@@ -549,20 +549,25 @@ impl CatalogProvider for GlueCatalogProvider {
     fn create_table_metadata_requirement(
         &self,
         options: &CreateTableOptions,
-    ) -> CreateTableMetadataRequirement {
+    ) -> CatalogResult<CreateTableMetadataRequirement> {
+        if options.format.eq_ignore_ascii_case("iceberg") {
+            iceberg::validate_iceberg_create_table_options(options)?;
+        } else {
+            hive::validate_hive_create_table_options(options)?;
+        }
         if self.has_custom_endpoint()
             && options.format.eq_ignore_ascii_case("iceberg")
             && !options.is_write_precondition
         {
-            CreateTableMetadataRequirement::TableFormat {
+            Ok(CreateTableMetadataRequirement::TableFormat {
                 catalog_managed: true,
-            }
+            })
         } else if options.format.eq_ignore_ascii_case("delta") && !options.is_write_precondition {
-            CreateTableMetadataRequirement::TableFormat {
+            Ok(CreateTableMetadataRequirement::TableFormat {
                 catalog_managed: false,
-            }
+            })
         } else {
-            CreateTableMetadataRequirement::None
+            Ok(CreateTableMetadataRequirement::None)
         }
     }
 
@@ -952,7 +957,7 @@ mod tests {
             }],
             comment: None,
             constraints: vec![],
-            location: None,
+            location: Some("file:///tmp/sail_glue_create_options".to_string()),
             format: format.to_string(),
             partition_by: vec![],
             sort_by: vec![],
@@ -969,17 +974,23 @@ mod tests {
     fn create_table_metadata_requirement_preserves_glue_iceberg_api() {
         let real_glue = GlueCatalogProvider::new("glue".to_string(), GlueCatalogConfig::default());
         assert_eq!(
-            real_glue.create_table_metadata_requirement(&create_options("iceberg", false)),
+            real_glue
+                .create_table_metadata_requirement(&create_options("iceberg", false))
+                .unwrap(),
             CreateTableMetadataRequirement::None
         );
         assert_eq!(
-            real_glue.create_table_metadata_requirement(&create_options("delta", false)),
+            real_glue
+                .create_table_metadata_requirement(&create_options("delta", false))
+                .unwrap(),
             CreateTableMetadataRequirement::TableFormat {
                 catalog_managed: false,
             }
         );
         assert_eq!(
-            real_glue.create_table_metadata_requirement(&create_options("delta", true)),
+            real_glue
+                .create_table_metadata_requirement(&create_options("delta", true))
+                .unwrap(),
             CreateTableMetadataRequirement::None
         );
 
@@ -991,7 +1002,9 @@ mod tests {
             },
         );
         assert_eq!(
-            custom_endpoint.create_table_metadata_requirement(&create_options("iceberg", false)),
+            custom_endpoint
+                .create_table_metadata_requirement(&create_options("iceberg", false))
+                .unwrap(),
             CreateTableMetadataRequirement::TableFormat {
                 catalog_managed: true,
             }

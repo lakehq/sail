@@ -135,6 +135,41 @@ def test_iceberg_io_create_table_materializes_empty_metadata(spark, tmp_path):
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
 
+def test_iceberg_io_create_or_replace_existing_table_adopts_metadata_location(spark, tmp_path):
+    table_path = tmp_path / "iceberg_replace_existing"
+    table_name = "iceberg_create_or_replace_existing_test"
+
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (
+              id BIGINT,
+              name STRING
+            )
+            USING ICEBERG
+            LOCATION '{escape_sql_string_literal(str(table_path))}'
+            """
+        )
+        spark.sql(f"INSERT INTO {table_name} VALUES (1, 'one')")  # noqa: S608
+
+        spark.sql(
+            f"""
+            CREATE OR REPLACE TABLE {table_name} (
+              id BIGINT,
+              name STRING
+            )
+            USING ICEBERG
+            LOCATION '{escape_sql_string_literal(str(table_path))}'
+            """
+        )
+
+        rows = spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect()  # noqa: S608
+        assert [(row.id, row.name) for row in rows] == [(1, "one")]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
 def test_iceberg_io_create_table_if_not_exists_does_not_materialize_new_location(spark, tmp_path):
     table_path = tmp_path / "iceberg_if_not_exists_table"
     alternate_path = tmp_path / "iceberg_if_not_exists_alternate"

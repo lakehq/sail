@@ -832,6 +832,37 @@ impl HmsCatalogProvider {
     }
 }
 
+fn validate_create_table_options(options: &CreateTableOptions) -> CatalogResult<()> {
+    if options.replace {
+        return Err(CatalogError::NotSupported(
+            "Hive Metastore catalog does not support REPLACE".to_string(),
+        ));
+    }
+    if !options.constraints.is_empty() {
+        return Err(CatalogError::NotSupported(
+            "Hive Metastore catalog does not support constraints for generic tables".to_string(),
+        ));
+    }
+    if !options.sort_by.is_empty() {
+        return Err(CatalogError::NotSupported(
+            "Hive Metastore catalog does not support SORT BY for generic tables".to_string(),
+        ));
+    }
+    if options.bucket_by.is_some() {
+        return Err(CatalogError::NotSupported(
+            "Hive Metastore catalog does not support BUCKET BY for generic tables".to_string(),
+        ));
+    }
+    if options.partition_by.iter().any(|field| {
+        field.transform.is_some() && field.transform != Some(PartitionTransform::Identity)
+    }) {
+        return Err(CatalogError::NotSupported(
+            "Hive Metastore catalog only supports identity partition columns".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 #[async_trait::async_trait]
 impl CatalogProvider for HmsCatalogProvider {
     fn get_name(&self) -> &str {
@@ -998,34 +1029,7 @@ impl CatalogProvider for HmsCatalogProvider {
     ) -> CatalogResult<TableStatus> {
         let format = options.format.trim().to_lowercase();
 
-        if options.replace {
-            return Err(CatalogError::NotSupported(
-                "Hive Metastore catalog does not support REPLACE".to_string(),
-            ));
-        }
-        if !options.constraints.is_empty() {
-            return Err(CatalogError::NotSupported(
-                "Hive Metastore catalog does not support constraints for generic tables"
-                    .to_string(),
-            ));
-        }
-        if !options.sort_by.is_empty() {
-            return Err(CatalogError::NotSupported(
-                "Hive Metastore catalog does not support SORT BY for generic tables".to_string(),
-            ));
-        }
-        if options.bucket_by.is_some() {
-            return Err(CatalogError::NotSupported(
-                "Hive Metastore catalog does not support BUCKET BY for generic tables".to_string(),
-            ));
-        }
-        if options.partition_by.iter().any(|field| {
-            field.transform.is_some() && field.transform != Some(PartitionTransform::Identity)
-        }) {
-            return Err(CatalogError::NotSupported(
-                "Hive Metastore catalog only supports identity partition columns".to_string(),
-            ));
-        }
+        validate_create_table_options(&options)?;
         let db_name = validate_namespace(database)?;
         let format = HiveCatalogFormat::from_format(&format)?;
         let partition_columns: Vec<String> = options
@@ -1062,13 +1066,14 @@ impl CatalogProvider for HmsCatalogProvider {
     fn create_table_metadata_requirement(
         &self,
         options: &CreateTableOptions,
-    ) -> CreateTableMetadataRequirement {
+    ) -> CatalogResult<CreateTableMetadataRequirement> {
+        validate_create_table_options(options)?;
         if options.format.eq_ignore_ascii_case("iceberg") && !options.is_write_precondition {
-            CreateTableMetadataRequirement::TableFormat {
+            Ok(CreateTableMetadataRequirement::TableFormat {
                 catalog_managed: true,
-            }
+            })
         } else {
-            plain_lakehouse_create_table_metadata_requirement(options)
+            Ok(plain_lakehouse_create_table_metadata_requirement(options))
         }
     }
 
@@ -1308,7 +1313,7 @@ mod tests {
         };
 
         assert_eq!(
-            provider.create_table_metadata_requirement(&base),
+            provider.create_table_metadata_requirement(&base).unwrap(),
             CreateTableMetadataRequirement::TableFormat {
                 catalog_managed: true,
             }
@@ -1317,14 +1322,16 @@ mod tests {
         let mut write_precondition = base.clone();
         write_precondition.is_write_precondition = true;
         assert_eq!(
-            provider.create_table_metadata_requirement(&write_precondition),
+            provider
+                .create_table_metadata_requirement(&write_precondition)
+                .unwrap(),
             CreateTableMetadataRequirement::None
         );
 
         let mut delta = base.clone();
         delta.format = "delta".to_string();
         assert_eq!(
-            provider.create_table_metadata_requirement(&delta),
+            provider.create_table_metadata_requirement(&delta).unwrap(),
             CreateTableMetadataRequirement::TableFormat {
                 catalog_managed: false,
             }
@@ -1333,7 +1340,9 @@ mod tests {
         let mut parquet = base;
         parquet.format = "parquet".to_string();
         assert_eq!(
-            provider.create_table_metadata_requirement(&parquet),
+            provider
+                .create_table_metadata_requirement(&parquet)
+                .unwrap(),
             CreateTableMetadataRequirement::None
         );
     }

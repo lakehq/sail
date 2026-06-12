@@ -10,8 +10,8 @@ use sail_catalog::provider::{
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
-    alter_column_default, alter_column_type, DatabaseStatus, TableColumnStatus, TableKind,
-    TableStatus,
+    alter_column_default, alter_column_type, CatalogPartitionField, DatabaseStatus,
+    TableColumnStatus, TableKind, TableStatus,
 };
 
 use crate::managed_table;
@@ -51,6 +51,19 @@ impl MemoryCatalogProvider {
         );
         Self { name, databases }
     }
+}
+
+fn validate_create_table_options(
+    format: &str,
+    partition_by: &[CatalogPartitionField],
+) -> CatalogResult<()> {
+    if !format.eq_ignore_ascii_case("iceberg") && partition_by.iter().any(|f| f.transform.is_some())
+    {
+        return Err(CatalogError::NotSupported(
+            "partition transforms are not supported by memory catalog".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 #[async_trait::async_trait]
@@ -174,13 +187,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             is_external,
             is_write_precondition: _,
         } = options;
-        if !format.eq_ignore_ascii_case("iceberg")
-            && partition_by.iter().any(|f| f.transform.is_some())
-        {
-            return Err(CatalogError::NotSupported(
-                "partition transforms are not supported by memory catalog".to_string(),
-            ));
-        }
+        validate_create_table_options(&format, &partition_by)?;
         let mut db = self.databases.get_mut(database).ok_or_else(|| {
             CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
         })?;
@@ -252,8 +259,9 @@ impl CatalogProvider for MemoryCatalogProvider {
     fn create_table_metadata_requirement(
         &self,
         options: &CreateTableOptions,
-    ) -> CreateTableMetadataRequirement {
-        plain_lakehouse_create_table_metadata_requirement(options)
+    ) -> CatalogResult<CreateTableMetadataRequirement> {
+        validate_create_table_options(&options.format, &options.partition_by)?;
+        Ok(plain_lakehouse_create_table_metadata_requirement(options))
     }
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {

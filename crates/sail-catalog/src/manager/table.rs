@@ -24,7 +24,7 @@ impl CatalogManager {
         options: &CreateTableOptions,
     ) -> CatalogResult<CreateTableMetadataRequirement> {
         let (provider, _, _) = self.resolve_object(table)?;
-        Ok(provider.create_table_metadata_requirement(options))
+        provider.create_table_metadata_requirement(options)
     }
 
     pub async fn get_table<T: AsRef<str>>(&self, table: &[T]) -> CatalogResult<TableStatus> {

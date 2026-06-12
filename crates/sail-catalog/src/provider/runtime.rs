@@ -99,7 +99,7 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
     fn create_table_metadata_requirement(
         &self,
         options: &CreateTableOptions,
-    ) -> CreateTableMetadataRequirement {
+    ) -> CatalogResult<CreateTableMetadataRequirement> {
         self.inner.create_table_metadata_requirement(options)
     }
 

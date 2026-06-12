@@ -95,46 +95,32 @@ pub(crate) async fn create_hive_table(
 }
 
 /// Validates CreateTableOptions for Hive-style tables.
-fn validate_hive_options(options: CreateTableOptions) -> CatalogResult<ValidatedHiveOptions> {
-    let CreateTableOptions {
-        columns,
-        comment,
-        constraints,
-        location,
-        format,
-        partition_by,
-        sort_by,
-        bucket_by,
-        if_not_exists,
-        replace,
-        properties,
-        is_external: _,
-        is_write_precondition: _,
-    } = options;
-
-    if replace {
+pub(crate) fn validate_hive_create_table_options(
+    options: &CreateTableOptions,
+) -> CatalogResult<()> {
+    if options.replace {
         return Err(CatalogError::NotSupported(
             "AWS Glue catalog does not support REPLACE".to_string(),
         ));
     }
-    if !constraints.is_empty() {
+    if !options.constraints.is_empty() {
         return Err(CatalogError::NotSupported(
             "AWS Glue catalog does not support CONSTRAINT".to_string(),
         ));
     }
-    if !sort_by.is_empty() {
+    if !options.sort_by.is_empty() {
         return Err(CatalogError::NotSupported(
             "AWS Glue catalog does not support SORT BY".to_string(),
         ));
     }
-    if bucket_by.is_some() {
+    if options.bucket_by.is_some() {
         return Err(CatalogError::NotSupported(
             "AWS Glue catalog does not support BUCKET BY".to_string(),
         ));
     }
 
-    // Hive-style tables only support identity partitions
-    if partition_by
+    if options
+        .partition_by
         .iter()
         .any(|f| f.transform.is_some() && f.transform != Some(PartitionTransform::Identity))
     {
@@ -143,6 +129,27 @@ fn validate_hive_options(options: CreateTableOptions) -> CatalogResult<Validated
                 .to_string(),
         ));
     }
+
+    Ok(())
+}
+
+fn validate_hive_options(options: CreateTableOptions) -> CatalogResult<ValidatedHiveOptions> {
+    validate_hive_create_table_options(&options)?;
+    let CreateTableOptions {
+        columns,
+        comment,
+        constraints: _,
+        location,
+        format,
+        partition_by,
+        sort_by: _,
+        bucket_by: _,
+        if_not_exists,
+        replace: _,
+        properties,
+        is_external: _,
+        is_write_precondition: _,
+    } = options;
 
     // Extract just the column names for partitioning
     let partition_columns: Vec<String> = partition_by.iter().map(|f| f.column.clone()).collect();

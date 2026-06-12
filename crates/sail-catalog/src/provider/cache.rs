@@ -275,7 +275,7 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
     fn create_table_metadata_requirement(
         &self,
         options: &CreateTableOptions,
-    ) -> CreateTableMetadataRequirement {
+    ) -> CatalogResult<CreateTableMetadataRequirement> {
         self.inner.create_table_metadata_requirement(options)
     }
 

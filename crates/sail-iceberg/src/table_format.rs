@@ -40,7 +40,9 @@ use sail_data_source::options::ResolveOptions;
 use url::Url;
 
 use crate::datasource::provider::IcebergTableProvider;
-use crate::datasource::type_converter::{arrow_schema_to_iceberg, ICEBERG_ARROW_FIELD_DOC_KEY};
+use crate::datasource::type_converter::{
+    arrow_schema_to_iceberg, iceberg_schema_to_arrow, ICEBERG_ARROW_FIELD_DOC_KEY,
+};
 use crate::io::StoreContext;
 use crate::logical::IcebergTableSource;
 use crate::operations::bootstrap::{bootstrap_empty_table_metadata, NewTableMetadataStyle};
@@ -150,6 +152,7 @@ impl TableFormat for IcebergTableFormat {
             comment: _,
             partition_by,
             properties,
+            replace,
             catalog_table,
         } = info;
 
@@ -160,6 +163,26 @@ impl TableFormat for IcebergTableFormat {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         match find_latest_metadata_file(&object_store, &table_url).await {
             Ok(metadata_file) if columns.is_empty() => {
+                let metadata_location = table_metadata_location(&table_url, &metadata_file)?;
+                return Ok(TableFormatCreateTableResult {
+                    properties: vec![(
+                        sail_common_datafusion::catalog::managed::METADATA_LOCATION_UNDERSCORE_KEY
+                            .to_string(),
+                        metadata_location,
+                    )],
+                });
+            }
+            Ok(metadata_file) if replace => {
+                let declared_schema = create_table_arrow_schema(columns)?;
+                let metadata_data = load_metadata_file_bytes(&object_store, &metadata_file).await?;
+                let metadata = TableMetadata::from_json(&metadata_data)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                validate_existing_iceberg_create_table_metadata(
+                    &metadata,
+                    &declared_schema,
+                    &partition_by,
+                    table_url.as_str(),
+                )?;
                 let metadata_location = table_metadata_location(&table_url, &metadata_file)?;
                 return Ok(TableFormatCreateTableResult {
                     properties: vec![(
@@ -685,38 +708,43 @@ impl IcebergTableFormat {
     }
 
     fn partition_columns_from_metadata(table: &Table) -> Result<Vec<CatalogPartitionField>> {
-        let metadata = table.metadata();
-        let spec = match metadata.default_partition_spec() {
-            Some(spec) => spec,
-            None => return Ok(vec![]),
-        };
-        if spec.is_unpartitioned() {
-            return Ok(vec![]);
-        }
-
-        let schema = metadata.current_schema().ok_or_else(|| {
-            DataFusionError::Plan("Iceberg table metadata is missing current schema".to_string())
-        })?;
-
-        let mut columns = Vec::with_capacity(spec.fields().len());
-        for field in spec.fields() {
-            let col_name = schema
-                .field_by_id(field.source_id)
-                .map(|f| f.name.clone())
-                .ok_or_else(|| {
-                    DataFusionError::Plan(format!(
-                        "Partition field references unknown source column id {}",
-                        field.source_id
-                    ))
-                })?;
-            columns.push(
-                catalog_partition_field_from_iceberg(col_name, field.transform)
-                    .map_err(DataFusionError::Plan)?,
-            );
-        }
-
-        Ok(columns)
+        partition_columns_from_table_metadata(table.metadata())
     }
+}
+
+fn partition_columns_from_table_metadata(
+    metadata: &TableMetadata,
+) -> Result<Vec<CatalogPartitionField>> {
+    let spec = match metadata.default_partition_spec() {
+        Some(spec) => spec,
+        None => return Ok(vec![]),
+    };
+    if spec.is_unpartitioned() {
+        return Ok(vec![]);
+    }
+
+    let schema = metadata.current_schema().ok_or_else(|| {
+        DataFusionError::Plan("Iceberg table metadata is missing current schema".to_string())
+    })?;
+
+    let mut columns = Vec::with_capacity(spec.fields().len());
+    for field in spec.fields() {
+        let col_name = schema
+            .field_by_id(field.source_id)
+            .map(|f| f.name.clone())
+            .ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "Partition field references unknown source column id {}",
+                    field.source_id
+                ))
+            })?;
+        columns.push(
+            catalog_partition_field_from_iceberg(col_name, field.transform)
+                .map_err(DataFusionError::Plan)?,
+        );
+    }
+
+    Ok(columns)
 }
 
 fn create_table_arrow_schema(columns: Vec<TableFormatCreateTableColumn>) -> Result<ArrowSchema> {
@@ -754,6 +782,53 @@ fn create_table_arrow_schema(columns: Vec<TableFormatCreateTableColumn>) -> Resu
         )
         .collect::<Result<Vec<_>>>()?;
     Ok(ArrowSchema::new(fields))
+}
+
+fn validate_existing_iceberg_create_table_metadata(
+    metadata: &TableMetadata,
+    declared: &ArrowSchema,
+    partition_by: &[CatalogPartitionField],
+    path: &str,
+) -> Result<()> {
+    let existing = metadata.current_schema().ok_or_else(|| {
+        DataFusionError::Plan("Iceberg table metadata is missing current schema".to_string())
+    })?;
+    let existing = iceberg_schema_to_arrow(existing)?;
+    if existing.fields().len() != declared.fields().len() {
+        return plan_err!(
+            "Iceberg table already exists at {path} with a different schema: \
+             existing has {} fields, declared has {} fields",
+            existing.fields().len(),
+            declared.fields().len()
+        );
+    }
+    for (existing_field, declared_field) in existing.fields().iter().zip(declared.fields().iter()) {
+        if existing_field.name() != declared_field.name()
+            || existing_field.data_type() != declared_field.data_type()
+            || existing_field.is_nullable() != declared_field.is_nullable()
+        {
+            return plan_err!(
+                "Iceberg table already exists at {path} with a different schema for field '{}': \
+                 existing {:?} nullable={}, declared {:?} nullable={}",
+                declared_field.name(),
+                existing_field.data_type(),
+                existing_field.is_nullable(),
+                declared_field.data_type(),
+                declared_field.is_nullable()
+            );
+        }
+    }
+
+    let existing_partitions = partition_columns_from_table_metadata(metadata)?;
+    if !partition_by.is_empty() && partition_by != existing_partitions.as_slice() {
+        return plan_err!(
+            "Iceberg table already exists at {path} with different partition columns: \
+             existing {:?}, declared {:?}",
+            format_partition_exprs(&existing_partitions),
+            format_partition_exprs(partition_by)
+        );
+    }
+    Ok(())
 }
 
 fn table_metadata_location(table_url: &Url, metadata_file: &str) -> Result<String> {

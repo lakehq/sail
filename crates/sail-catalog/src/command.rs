@@ -643,22 +643,23 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
     table: &[String],
     mut options: CreateTableOptions,
 ) -> CatalogResult<Option<CreateTableOptions>> {
-    let requirement = manager.create_table_metadata_requirement(table, &options)?;
-    let CreateTableMetadataRequirement::TableFormat { catalog_managed } = requirement else {
-        return Ok(Some(options));
-    };
-
     match manager.get_table_or_view(table).await {
         Ok(_) if options.if_not_exists => return Ok(None),
-        Ok(_) => {
+        Ok(_) if !options.replace => {
             return Err(CatalogError::AlreadyExists(
                 CatalogObject::Table,
                 table.join("."),
             ));
         }
+        Ok(_) => {}
         Err(CatalogError::NotFound(_, _)) => {}
         Err(err) => return Err(err),
     }
+
+    let requirement = manager.create_table_metadata_requirement(table, &options)?;
+    let CreateTableMetadataRequirement::TableFormat { catalog_managed } = requirement else {
+        return Ok(Some(options));
+    };
 
     let location = options.location.clone().ok_or_else(|| {
         CatalogError::InvalidArgument(format!(
@@ -700,6 +701,7 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
                 comment: options.comment.clone(),
                 partition_by: options.partition_by.clone(),
                 properties: options.properties.clone(),
+                replace: options.replace,
                 catalog_table: catalog_managed.then(|| table.to_vec()),
             },
         )
@@ -772,6 +774,7 @@ async fn prepare_created_table_storage_metadata<C: SessionExtensionAccessor>(
                 comment: comment.clone(),
                 partition_by: partition_by.clone(),
                 properties: properties.clone(),
+                replace: false,
                 catalog_table: Some(table.to_vec()),
             },
         )

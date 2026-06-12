@@ -165,6 +165,36 @@ def test_insert_advances_glue_iceberg_metadata_location(
         glue_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
 
 
+def test_create_table_validation_runs_before_glue_iceberg_metadata_materialization(
+    glue_spark: SparkSession,
+    tmp_path: Path,
+) -> None:
+    database = "glue_iceberg_rejected_create_db"
+    table = "bucket_t"
+    table_fqn = f"{database}.{table}"
+    table_path = tmp_path / table
+
+    glue_spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
+    try:
+        with pytest.raises(Exception, match="BUCKET BY"):
+            glue_spark.sql(
+                f"""
+                CREATE TABLE {table_fqn} (
+                  id INT,
+                  name STRING
+                )
+                USING ICEBERG
+                LOCATION '{table_path.as_uri()}'
+                CLUSTERED BY (id) INTO 4 BUCKETS
+                """
+            )
+
+        assert not (table_path / "metadata").exists()
+    finally:
+        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        glue_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+
+
 def test_sail_reads_and_appends_glue_iceberg_table_with_jvm_style_marker(
     glue_spark: SparkSession,
     moto_endpoint: str,

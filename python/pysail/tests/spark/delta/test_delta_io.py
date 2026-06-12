@@ -163,6 +163,61 @@ class TestDeltaIO:
         finally:
             spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
+    def test_delta_io_create_table_rejects_mismatched_existing_log_nullability(self, spark, tmp_path):
+        delta_path = tmp_path / "delta_existing_nullability"
+        table_name = "delta_existing_nullability_mismatch_test"
+
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+        spark.createDataFrame([Row(id=1, name="one")]).write.format("delta").save(str(delta_path))
+        try:
+            with pytest.raises(Exception, match=r"different schema.*nullable"):
+                spark.sql(
+                    f"""
+                    CREATE TABLE {table_name} (
+                      id BIGINT NOT NULL,
+                      name STRING
+                    )
+                    USING DELTA
+                    LOCATION '{escape_sql_string_literal(str(delta_path))}'
+                    """
+                )
+        finally:
+            spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+    def test_delta_io_create_or_replace_existing_table_reaches_catalog_provider(self, spark, tmp_path):
+        delta_path = tmp_path / "delta_replace_existing"
+        table_name = "delta_create_or_replace_existing_test"
+
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+        try:
+            spark.sql(
+                f"""
+                CREATE TABLE {table_name} (
+                  id BIGINT,
+                  name STRING
+                )
+                USING DELTA
+                LOCATION '{escape_sql_string_literal(str(delta_path))}'
+                """
+            )
+            spark.sql(f"INSERT INTO {table_name} VALUES (1, 'one')")  # noqa: S608
+
+            spark.sql(
+                f"""
+                CREATE OR REPLACE TABLE {table_name} (
+                  id BIGINT,
+                  name STRING
+                )
+                USING DELTA
+                LOCATION '{escape_sql_string_literal(str(delta_path))}'
+                """
+            )
+
+            rows = spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect()  # noqa: S608
+            assert rows == [Row(id=1, name="one")]
+        finally:
+            spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
     def test_delta_io_append_mode(self, spark, delta_test_data, tmp_path):
         """Test Delta Lake append mode"""
         delta_path = tmp_path / "delta_table"

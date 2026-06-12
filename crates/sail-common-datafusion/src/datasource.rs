@@ -229,6 +229,7 @@ pub struct TableFormatCreateTableInfo {
     pub comment: Option<String>,
     pub partition_by: Vec<CatalogPartitionField>,
     pub properties: Vec<(String, String)>,
+    pub replace: bool,
     pub catalog_table: Option<Vec<String>>,
 }
 

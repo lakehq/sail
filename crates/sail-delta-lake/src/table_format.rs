@@ -149,6 +149,7 @@ impl TableFormat for DeltaTableFormat {
             comment,
             partition_by,
             properties,
+            replace: _,
             catalog_table,
         } = info;
 
@@ -1606,13 +1607,16 @@ fn validate_existing_delta_create_table_schema(
     for (existing_field, declared_field) in existing_fields.iter().zip(declared_fields.iter()) {
         if existing_field.name() != declared_field.name()
             || existing_field.data_type() != declared_field.data_type()
+            || existing_field.is_nullable() != declared_field.is_nullable()
         {
             return plan_err!(
                 "Delta table already exists at {path} with a different schema for field '{}': \
-                 existing {:?}, declared {:?}",
+                 existing {:?} nullable={}, declared {:?} nullable={}",
                 declared_field.name(),
                 existing_field.data_type(),
-                declared_field.data_type()
+                existing_field.is_nullable(),
+                declared_field.data_type(),
+                declared_field.is_nullable()
             );
         }
     }
