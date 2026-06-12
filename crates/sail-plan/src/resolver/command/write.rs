@@ -486,6 +486,11 @@ impl PlanResolver<'_> {
                     .await?;
             }
         };
+        if Self::plan_has_default_column_value(&input)? {
+            return Err(PlanError::invalid(
+                "DEFAULT is only supported when writing to an existing table",
+            ));
+        }
         input = self
             .rewrite_delta_check_constraints_from_options(input, &write_format, &sink_info, state)
             .await?;
@@ -510,8 +515,14 @@ impl PlanResolver<'_> {
     pub(super) async fn resolve_write_input(
         &self,
         input: spec::QueryPlan,
+        allow_default_column_values: bool,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        let input = if allow_default_column_values {
+            rewrite_default_column_values_in_write_query(input)
+        } else {
+            input
+        };
         let input = self.resolve_query_plan(input, state).await?;
         let fields = Self::get_field_names(input.schema(), state)?;
         Ok(rename_logical_plan(input, &fields)?)
@@ -1557,6 +1568,180 @@ impl PlanResolver<'_> {
             }
             _ => false,
         })
+    }
+}
+
+fn rewrite_default_column_values_in_write_query(plan: spec::QueryPlan) -> spec::QueryPlan {
+    let spec::QueryPlan { node, plan_id } = plan;
+    let node = match node {
+        spec::QueryNode::Values(rows) => spec::QueryNode::Values(
+            rows.into_iter()
+                .map(|row| {
+                    row.into_iter()
+                        .map(rewrite_default_column_value_expr)
+                        .collect()
+                })
+                .collect(),
+        ),
+        other => other,
+    };
+    spec::QueryPlan { node, plan_id }
+}
+
+pub(super) fn rewrite_default_column_value_expr(expr: spec::Expr) -> spec::Expr {
+    match expr {
+        spec::Expr::UnresolvedAttribute {
+            name,
+            plan_id,
+            is_metadata_column,
+        } if plan_id.is_none()
+            && !is_metadata_column
+            && matches!(name.parts(), [part] if part.as_ref().eq_ignore_ascii_case("DEFAULT")) =>
+        {
+            spec::Expr::DefaultColumnValue
+        }
+        spec::Expr::UnresolvedAttribute {
+            name,
+            plan_id,
+            is_metadata_column,
+        } => spec::Expr::UnresolvedAttribute {
+            name,
+            plan_id,
+            is_metadata_column,
+        },
+        spec::Expr::UnresolvedFunction(mut function) => {
+            function.arguments = function
+                .arguments
+                .into_iter()
+                .map(rewrite_default_column_value_expr)
+                .collect();
+            function.named_arguments = function
+                .named_arguments
+                .into_iter()
+                .map(|(name, expr)| (name, rewrite_default_column_value_expr(expr)))
+                .collect();
+            function.filter = function
+                .filter
+                .map(|expr| Box::new(rewrite_default_column_value_expr(*expr)));
+            function.order_by = function.order_by.map(|order_by| {
+                order_by
+                    .into_iter()
+                    .map(rewrite_default_column_value_sort_order)
+                    .collect()
+            });
+            spec::Expr::UnresolvedFunction(function)
+        }
+        spec::Expr::Alias {
+            expr,
+            name,
+            metadata,
+        } => spec::Expr::Alias {
+            expr: Box::new(rewrite_default_column_value_expr(*expr)),
+            name,
+            metadata,
+        },
+        spec::Expr::Cast {
+            expr,
+            cast_to_type,
+            rename,
+            is_try,
+        } => spec::Expr::Cast {
+            expr: Box::new(rewrite_default_column_value_expr(*expr)),
+            cast_to_type,
+            rename,
+            is_try,
+        },
+        spec::Expr::SortOrder(sort) => {
+            spec::Expr::SortOrder(rewrite_default_column_value_sort_order(sort))
+        }
+        spec::Expr::LambdaFunction {
+            function,
+            arguments,
+        } => spec::Expr::LambdaFunction {
+            function: Box::new(rewrite_default_column_value_expr(*function)),
+            arguments,
+        },
+        spec::Expr::Window {
+            window_function,
+            window,
+        } => spec::Expr::Window {
+            window_function: Box::new(rewrite_default_column_value_expr(*window_function)),
+            window,
+        },
+        spec::Expr::UnresolvedExtractValue { child, extraction } => {
+            spec::Expr::UnresolvedExtractValue {
+                child: Box::new(rewrite_default_column_value_expr(*child)),
+                extraction: Box::new(rewrite_default_column_value_expr(*extraction)),
+            }
+        }
+        spec::Expr::UpdateFields {
+            struct_expression,
+            field_name,
+            value_expression,
+        } => spec::Expr::UpdateFields {
+            struct_expression: Box::new(rewrite_default_column_value_expr(*struct_expression)),
+            field_name,
+            value_expression: value_expression
+                .map(|expr| Box::new(rewrite_default_column_value_expr(*expr))),
+        },
+        spec::Expr::CallFunction {
+            function_name,
+            arguments,
+        } => spec::Expr::CallFunction {
+            function_name,
+            arguments: arguments
+                .into_iter()
+                .map(rewrite_default_column_value_expr)
+                .collect(),
+        },
+        spec::Expr::NamedArgument { key, value } => spec::Expr::NamedArgument {
+            key,
+            value: Box::new(rewrite_default_column_value_expr(*value)),
+        },
+        spec::Expr::Rollup(exprs) => spec::Expr::Rollup(
+            exprs
+                .into_iter()
+                .map(rewrite_default_column_value_expr)
+                .collect(),
+        ),
+        spec::Expr::Cube(exprs) => spec::Expr::Cube(
+            exprs
+                .into_iter()
+                .map(rewrite_default_column_value_expr)
+                .collect(),
+        ),
+        spec::Expr::GroupingSets(sets) => spec::Expr::GroupingSets(
+            sets.into_iter()
+                .map(|set| {
+                    set.into_iter()
+                        .map(rewrite_default_column_value_expr)
+                        .collect()
+                })
+                .collect(),
+        ),
+        spec::Expr::InSubquery {
+            expr,
+            subquery,
+            negated,
+        } => spec::Expr::InSubquery {
+            expr: Box::new(rewrite_default_column_value_expr(*expr)),
+            subquery,
+            negated,
+        },
+        other => other,
+    }
+}
+
+fn rewrite_default_column_value_sort_order(sort: spec::SortOrder) -> spec::SortOrder {
+    let spec::SortOrder {
+        child,
+        direction,
+        null_ordering,
+    } = sort;
+    spec::SortOrder {
+        child: Box::new(rewrite_default_column_value_expr(*child)),
+        direction,
+        null_ordering,
     }
 }
 

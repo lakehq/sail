@@ -35,7 +35,10 @@ impl PlanResolver<'_> {
             }
         });
 
-        let input = self.resolve_write_input(*input, state).await?;
+        let allow_default_column_values = matches!(&save_type, SaveType::Table { .. });
+        let input = self
+            .resolve_write_input(*input, allow_default_column_values, state)
+            .await?;
         let clustering_columns = self.resolve_write_cluster_by_columns(clustering_columns)?;
 
         let partition_by = self.resolve_write_partition_by_expressions(partitioning_columns)?;
