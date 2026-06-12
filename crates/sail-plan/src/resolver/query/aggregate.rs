@@ -73,10 +73,8 @@ impl PlanResolver<'_> {
             .await?;
 
         let grouping = {
-            let grouping_scope = resolved_projections.iter().flatten().cloned().collect();
-            let mut scope = state.enter_aggregate_scope(AggregateState::Grouping {
-                projections: grouping_scope,
-            });
+            let projections = resolved_projections.iter().flatten().cloned().collect();
+            let mut scope = state.enter_aggregate_scope(AggregateState::Grouping { projections });
             let state = scope.state();
             self.resolve_named_expressions(grouping, schema, state)
                 .await?
@@ -571,7 +569,7 @@ impl PlanResolver<'_> {
         group
             .expr
             .exists(|e| {
-                Ok(matches!(e, Expr::ScalarFunction(f) if f.func.inner().as_any().is::<Explode>()))
+                Ok(matches!(e, Expr::ScalarFunction(f) if f.func.inner().downcast_ref::<Explode>().is_some()))
             })
             .unwrap_or(false)
     }
