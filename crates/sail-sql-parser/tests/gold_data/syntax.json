@@ -7134,6 +7134,14 @@
               }
             },
             {
+              "name": "Option(DataType)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "DataType"
+                }
+              }
+            },
+            {
               "name": "Option(DeleteTableAlias)",
               "node": {
                 "optional": {
@@ -7774,14 +7782,6 @@
               }
             },
             {
-              "name": "Option(Tuple(Operator(LeftParenthesis), Sequence(ViewColumn, Operator(Comma)), Operator(RightParenthesis)))",
-              "node": {
-                "optional": {
-                  "nonTerminal": "Tuple(Operator(LeftParenthesis), Sequence(ViewColumn, Operator(Comma)), Operator(RightParenthesis))"
-                }
-              }
-            },
-            {
               "name": "Option(Tuple(Option(Keyword(As)), Either(Identifier, IdentList)))",
               "node": {
                 "optional": {
@@ -7842,6 +7842,14 @@
               "node": {
                 "optional": {
                   "nonTerminal": "UpdateTableAlias"
+                }
+              }
+            },
+            {
+              "name": "Option(ViewColumnList)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "ViewColumnList"
                 }
               }
             },
@@ -9572,7 +9580,7 @@
                         "nonTerminal": "ObjectName"
                       },
                       {
-                        "nonTerminal": "Option(Tuple(Operator(LeftParenthesis), Sequence(ViewColumn, Operator(Comma)), Operator(RightParenthesis)))"
+                        "nonTerminal": "Option(ViewColumnList)"
                       },
                       {
                         "nonTerminal": "Option(ViewUsingClause)"
@@ -11371,22 +11379,6 @@
               }
             },
             {
-              "name": "Tuple(Operator(LeftParenthesis), Sequence(ViewColumn, Operator(Comma)), Operator(RightParenthesis))",
-              "node": {
-                "sequence": [
-                  {
-                    "nonTerminal": "Operator(LeftParenthesis)"
-                  },
-                  {
-                    "nonTerminal": "Sequence(ViewColumn, Operator(Comma))"
-                  },
-                  {
-                    "nonTerminal": "Operator(RightParenthesis)"
-                  }
-                ]
-              }
-            },
-            {
               "name": "Tuple(Option(Keyword(As)), Either(Identifier, IdentList))",
               "node": {
                 "sequence": [
@@ -11794,7 +11786,29 @@
                     "nonTerminal": "Identifier"
                   },
                   {
+                    "nonTerminal": "Option(DataType)"
+                  },
+                  {
+                    "nonTerminal": "Option(Tuple(Keyword(Not), Keyword(Null)))"
+                  },
+                  {
                     "nonTerminal": "Option(Tuple(Keyword(Comment), StringLiteral))"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "ViewColumnList",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Operator(LeftParenthesis)"
+                  },
+                  {
+                    "nonTerminal": "Sequence(ViewColumn, Operator(Comma))"
+                  },
+                  {
+                    "nonTerminal": "Operator(RightParenthesis)"
                   }
                 ]
               }

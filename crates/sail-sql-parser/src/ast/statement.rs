@@ -161,11 +161,8 @@ pub enum Statement {
         view: View,
         if_not_exists: Option<(If, Not, Exists)>,
         name: ObjectName,
-        columns: Option<(
-            LeftParenthesis,
-            Sequence<ViewColumn, Comma>,
-            RightParenthesis,
-        )>,
+        #[parser(function = |(_, _, _, d), o| compose(d, o))]
+        columns: Option<ViewColumnList>,
         using: Option<ViewUsingClause>,
         clauses: Vec<CreateViewClause>,
         #[parser(function = |(_, q, _, _), o| compose(q, o))]
@@ -662,8 +659,25 @@ pub enum CreateViewClause {
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "DataType")]
+pub struct ViewColumnList {
+    pub left: LeftParenthesis,
+    #[parser(function = |d, o| sequence(compose(d, o), unit(o)))]
+    pub columns: Sequence<ViewColumn, Comma>,
+    pub right: RightParenthesis,
+}
+
+/// A column in a view definition.
+/// The data type and `NOT NULL` are only valid for data source temporary views
+/// (`CREATE TEMPORARY VIEW ... USING`), following the `colTypeList` rule in the
+/// Spark grammar, while the AS-query form only allows the name and comment.
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "DataType")]
 pub struct ViewColumn {
     pub name: Ident,
+    #[parser(function = |d, o| compose(d, o))]
+    pub data_type: Option<DataType>,
+    pub not_null: Option<(Not, Null)>,
     pub comment: Option<(Comment, StringLiteral)>,
 }
 

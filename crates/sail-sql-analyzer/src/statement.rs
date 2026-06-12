@@ -19,7 +19,7 @@ use sail_sql_parser::ast::statement::{
     PropertyKeyList, PropertyKeyValue, PropertyList, PropertyValue, RowFormat,
     RowFormatDelimitedClause, SetClause, SortColumn, SortColumnClause, SortColumnList, Statement,
     TableColumnIdentityOption, TableColumnIdentityOptions, UpdateTableAlias, ViewColumn,
-    ViewUsingClause,
+    ViewColumnList, ViewUsingClause,
 };
 use sail_sql_parser::tree::TreeText;
 
@@ -326,22 +326,13 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             clauses,
             r#as,
         } => {
-            let columns = if let Some((_, columns, _)) = columns {
-                Some(
-                    columns
-                        .into_items()
-                        .map(|ViewColumn { name, comment }| {
-                            let comment = comment.map(|(_, s)| from_ast_string(s)).transpose()?;
-                            Ok(spec::ViewColumnDefinition {
-                                name: name.value,
-                                comment,
-                            })
-                        })
-                        .collect::<SqlResult<Vec<_>>>()?,
-                )
-            } else {
-                None
-            };
+            let columns = columns.map(
+                |ViewColumnList {
+                     left: _,
+                     columns,
+                     right: _,
+                 }| columns.into_items().collect::<Vec<_>>(),
+            );
             let name = from_ast_object_name(name)?;
             let CreateViewClauses {
                 comment,
@@ -378,11 +369,9 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                         "CREATE TEMPORARY VIEW ... USING cannot be defined with an AS query",
                     ));
                 }
-                if columns.is_some() {
-                    return Err(SqlError::todo(
-                        "column list in CREATE TEMPORARY VIEW ... USING",
-                    ));
-                }
+                // The typed column list is the user-specified schema of the data
+                // source, following the `colTypeList` rule in the Spark grammar.
+                let schema = columns.map(from_ast_view_using_columns).transpose()?;
                 if comment.is_some() || !properties.is_empty() {
                     return Err(SqlError::invalid(
                         "COMMENT or TBLPROPERTIES cannot be used with CREATE TEMPORARY VIEW ... USING",
@@ -394,19 +383,19 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     .unwrap_or_default();
                 // The path is also kept in the options, since data sources such as
                 // Python data sources read the path from the options.
+                // Only the `path` option is a path source; `location` is forwarded
+                // as an ordinary option and never used as the path in Spark.
                 // The last occurrence wins, following the case-insensitive option
                 // map semantics in Spark.
                 let paths = options
                     .iter()
-                    .rfind(|(key, _)| {
-                        key.eq_ignore_ascii_case("path") || key.eq_ignore_ascii_case("location")
-                    })
+                    .rfind(|(key, _)| key.eq_ignore_ascii_case("path"))
                     .map(|(_, value)| vec![value.clone()])
                     .unwrap_or_default();
                 let input = spec::QueryPlan::new(spec::QueryNode::Read {
                     read_type: spec::ReadType::DataSource(Box::new(spec::ReadDataSource {
                         format: Some(format.value),
-                        schema: None,
+                        schema,
                         options,
                         paths,
                         predicates: vec![],
@@ -433,6 +422,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 else {
                     return Err(SqlError::invalid("expected AS query in CREATE VIEW"));
                 };
+                let columns = columns.map(from_ast_view_columns).transpose()?;
                 let query_text = query.text();
                 let query = from_ast_query(query)?;
                 match global_temporary {
@@ -1393,6 +1383,66 @@ fn from_ast_table_columns(
         output.push(column);
     }
     Ok(output)
+}
+
+/// Converts the column list of the AS-query form of `CREATE VIEW`, where
+/// columns may only have a name and a comment.
+fn from_ast_view_columns(columns: Vec<ViewColumn>) -> SqlResult<Vec<spec::ViewColumnDefinition>> {
+    columns
+        .into_iter()
+        .map(|column| {
+            let ViewColumn {
+                name,
+                data_type,
+                not_null,
+                comment,
+            } = column;
+            if data_type.is_some() || not_null.is_some() {
+                return Err(SqlError::invalid(
+                    "a typed column list can only be used in CREATE TEMPORARY VIEW ... USING",
+                ));
+            }
+            let comment = comment.map(|(_, s)| from_ast_string(s)).transpose()?;
+            Ok(spec::ViewColumnDefinition {
+                name: name.value,
+                comment,
+            })
+        })
+        .collect::<SqlResult<Vec<_>>>()
+}
+
+/// Converts the typed column list of `CREATE TEMPORARY VIEW ... USING` into
+/// the user-specified schema of the data source.
+fn from_ast_view_using_columns(columns: Vec<ViewColumn>) -> SqlResult<spec::Schema> {
+    let fields = columns
+        .into_iter()
+        .map(|column| {
+            let ViewColumn {
+                name,
+                data_type,
+                not_null,
+                comment,
+            } = column;
+            let Some(data_type) = data_type else {
+                return Err(SqlError::invalid(
+                    "expected a data type for each column in CREATE TEMPORARY VIEW ... USING",
+                ));
+            };
+            let mut metadata = vec![];
+            if let Some((_, comment)) = comment {
+                metadata.push(("comment".to_string(), from_ast_string(comment)?));
+            }
+            Ok(spec::Field {
+                name: name.value,
+                data_type: from_ast_data_type(data_type)?,
+                nullable: not_null.is_none(),
+                metadata,
+            })
+        })
+        .collect::<SqlResult<Vec<_>>>()?;
+    Ok(spec::Schema {
+        fields: fields.into(),
+    })
 }
 
 fn from_ast_row_format(format: RowFormat) -> SqlResult<spec::TableRowFormat> {

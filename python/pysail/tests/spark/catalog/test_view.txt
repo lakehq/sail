@@ -68,6 +68,32 @@ DataFrame[...]
 ... """)
 DataFrame[...]
 
+The AS-query form takes an untyped column list that renames the query output;
+the columns may have comments.
+
+>>> spark.sql("""
+... CREATE TEMPORARY VIEW v_as_cols (id COMMENT 'Unique identification number', name COMMENT 'Some name')
+... AS SELECT 1, 'a'
+... """)
+DataFrame[...]
+>>> spark.sql("SELECT * FROM v_as_cols").show()
++---+----+
+| id|name|
++---+----+
+|  1|   a|
++---+----+
+>>> spark.sql("""
+... CREATE TEMPORARY VIEW v_as_cols_named (id COMMENT 'Unique identification number', name COMMENT 'Some name')
+... AS SELECT 1 AS id, 'a' AS name
+... """)
+DataFrame[...]
+>>> spark.sql("SELECT * FROM v_as_cols_named").show()
++---+----+
+| id|name|
++---+----+
+|  1|   a|
++---+----+
+
 Global temporary views are readable via the `global_temp` database.
 
 >>> spark.sql("""
@@ -535,4 +561,262 @@ DataFrame[...]
 >>> spark.sql("DROP VIEW IF EXISTS v_dotted")
 DataFrame[...]
 >>> spark.sql("DROP VIEW IF EXISTS using")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_tmp_comment")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_global_tmp_comment")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_as_cols")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_as_cols_named")
+DataFrame[...]
+
+Additional data source view cases: schema projection and DESCRIBE output,
+option value forms, glob and partitioned paths, other formats, view
+replacement across forms, refresh semantics, and more error cases.
+
+>>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_desc USING parquet OPTIONS (path '/tmp/sail_view_using/parquet_data')")
+DataFrame[...]
+>>> spark.sql("DESCRIBE TABLE v_desc").show()
++--------+---------+-------+
+|col_name|data_type|comment|
++--------+---------+-------+
+|      id|      int|   NULL|
+|    name|   string|   NULL|
++--------+---------+-------+
+
+>>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_desc_typed (id INT COMMENT 'c1', name STRING COMMENT 'c2') USING parquet OPTIONS (path '/tmp/sail_view_using/parquet_data')")
+DataFrame[...]
+>>> spark.sql("DESCRIBE TABLE v_desc_typed").show()
++--------+---------+-------+
+|col_name|data_type|comment|
++--------+---------+-------+
+|      id|      int|     c1|
+|    name|   string|     c2|
++--------+---------+-------+
+
+>>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_nn (id INT NOT NULL, name STRING) USING parquet OPTIONS (path '/tmp/sail_view_using/parquet_data')")
+DataFrame[...]
+>>> spark.sql("SELECT * FROM v_nn ORDER BY id").show()
++---+----+
+| id|name|
++---+----+
+|  1|   a|
+|  2|   b|
+|  3|   c|
++---+----+
+
+>>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_reorder (name STRING, id INT) USING parquet OPTIONS (path '/tmp/sail_view_using/parquet_data')")
+DataFrame[...]
+>>> spark.sql("SELECT * FROM v_reorder ORDER BY id").show()
++----+---+
+|name| id|
++----+---+
+|   a|  1|
+|   b|  2|
+|   c|  3|
++----+---+
+
+>>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_subset (id INT) USING parquet OPTIONS (path '/tmp/sail_view_using/parquet_data')")
+DataFrame[...]
+>>> spark.sql("SELECT * FROM v_subset ORDER BY id").show()
++---+
+| id|
++---+
+|  1|
+|  2|
+|  3|
++---+
+
+>>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_case_cols (ID INT, NAME STRING) USING parquet OPTIONS (path '/tmp/sail_view_using/parquet_data')")
+DataFrame[...]
+>>> spark.sql("SELECT * FROM v_case_cols ORDER BY ID").show()
++---+----+
+| ID|NAME|
++---+----+
+|  1|   a|
+|  2|   b|
+|  3|   c|
++---+----+
+
+>>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_extra (id INT, name STRING, missing DOUBLE) USING parquet OPTIONS (path '/tmp/sail_view_using/parquet_data')")
+DataFrame[...]
+>>> spark.sql("SELECT * FROM v_extra ORDER BY id").show()
++---+----+-------+
+| id|name|missing|
++---+----+-------+
+|  1|   a|   NULL|
+|  2|   b|   NULL|
+|  3|   c|   NULL|
++---+----+-------+
+
+>>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_pq_upper USING PARQUET OPTIONS (path '/tmp/sail_view_using/parquet_data')")
+DataFrame[...]
+>>> spark.sql("SELECT count(*) AS cnt FROM v_pq_upper").show()
++---+
+|cnt|
++---+
+|  3|
++---+
+
+>>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_csv_bool USING csv OPTIONS (path '/tmp/sail_view_using/csv_data', header true)")
+DataFrame[...]
+>>> spark.sql("SELECT id, name FROM v_csv_bool ORDER BY id").show()
++---+----+
+| id|name|
++---+----+
+|  1|   a|
+|  2|   b|
++---+----+
+
+>>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_csv_infer USING csv OPTIONS (path '/tmp/sail_view_using/csv_data', header 'true', inferSchema 'true')")
+DataFrame[...]
+>>> spark.sql("DESCRIBE TABLE v_csv_infer").show()
++--------+---------+-------+
+|col_name|data_type|comment|
++--------+---------+-------+
+|      id|      int|   NULL|
+|    name|   string|   NULL|
++--------+---------+-------+
+
+>>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_opt_dotted USING csv OPTIONS (path '/tmp/sail_view_using/csv_data', custom.option 'x', header 'true')")
+DataFrame[...]
+>>> spark.sql("SELECT count(*) AS cnt FROM v_opt_dotted").show()
++---+
+|cnt|
++---+
+|  2|
++---+
+
+>>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_glob USING parquet OPTIONS (path '/tmp/sail_view_using/parquet_data/*.parquet')")
+DataFrame[...]
+>>> spark.sql("SELECT count(*) AS cnt FROM v_glob").show()
++---+
+|cnt|
++---+
+|  3|
++---+
+
+>>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW `v-dash` USING parquet OPTIONS (path '/tmp/sail_view_using/parquet_data')")
+DataFrame[...]
+>>> spark.sql("SELECT count(*) AS cnt FROM `v-dash`").show()
++---+
+|cnt|
++---+
+|  3|
++---+
+
+>>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_swap AS SELECT 42 AS answer")
+DataFrame[...]
+>>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_swap USING parquet OPTIONS (path '/tmp/sail_view_using/parquet_data')")
+DataFrame[...]
+>>> spark.sql("SELECT count(*) AS cnt FROM v_swap").show()
++---+
+|cnt|
++---+
+|  3|
++---+
+
+>>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_swap AS SELECT 42 AS answer")
+DataFrame[...]
+>>> spark.sql("SELECT * FROM v_swap").show()
++------+
+|answer|
++------+
+|    42|
++------+
+
+>>> spark.sql("CREATE TABLE part_src (id INT, p STRING) USING parquet PARTITIONED BY (p) LOCATION '/tmp/sail_view_using/part_data'")
+DataFrame[...]
+>>> spark.sql("INSERT INTO part_src VALUES (1, 'x'), (2, 'y')")
+DataFrame[...]
+>>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_part USING parquet OPTIONS (path '/tmp/sail_view_using/part_data')")
+DataFrame[...]
+>>> spark.sql("DESCRIBE TABLE v_part").show()
++--------+---------+-------+
+|col_name|data_type|comment|
++--------+---------+-------+
+|      id|      int|   NULL|
+|       p|   string|   NULL|
++--------+---------+-------+
+
+>>> spark.sql("SELECT id, p FROM v_part ORDER BY id").show()
++---+---+
+| id|  p|
++---+---+
+|  1|  x|
+|  1|  x|
+|  2|  y|
+|  2|  y|
++---+---+
+
+>>> spark.sql("DROP TABLE IF EXISTS part_src")
+DataFrame[...]
+>>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_refresh USING parquet OPTIONS (path '/tmp/sail_view_using/parquet_data')")
+DataFrame[...]
+>>> spark.sql("SELECT count(*) AS cnt FROM v_refresh").show()
++---+
+|cnt|
++---+
+|  3|
++---+
+
+>>> spark.sql("INSERT OVERWRITE DIRECTORY '/tmp/sail_view_using/parquet_data' USING parquet SELECT * FROM VALUES (1, 'a'), (2, 'b'), (3, 'c') AS t(id, name)")
+DataFrame[...]
+
+>>> spark.sql("INSERT OVERWRITE DIRECTORY '/tmp/sail_view_using/parquet_data' USING parquet SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(id, name)")
+DataFrame[...]
+
+>>> spark.sql("CREATE TEMPORARY VIEW v_show_create USING parquet OPTIONS (path '/tmp/sail_view_using/parquet_data')")
+DataFrame[...]
+>>> spark.sql("SHOW VIEWS LIKE 'v_show_create'").show()
++---------+-------------+-----------+
+|namespace|     viewName|isTemporary|
++---------+-------------+-----------+
+|         |v_show_create|       true|
++---------+-------------+-----------+
+
+>>> spark.sql("INSERT INTO v_show_create VALUES (3, 'c')")
+DataFrame[...]
+
+>>> spark.sql("CREATE OR REPLACE GLOBAL TEMPORARY VIEW v_gtv USING parquet OPTIONS (path '/tmp/sail_view_using/parquet_data')")
+DataFrame[...]
+
+>>> spark.sql("DROP VIEW IF EXISTS v_desc")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_desc_typed")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_nn")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_reorder")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_subset")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_case_cols")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_extra")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_pq_upper")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_csv_bool")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_csv_infer")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_opt_dotted")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_glob")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS `v-dash`")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_orc")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_swap")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_part")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_refresh")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_show_create")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS global_temp.v_gtv")
 DataFrame[...]
