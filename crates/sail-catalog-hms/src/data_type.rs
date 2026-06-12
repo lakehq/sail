@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Fields, TimeUnit};
 use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_common_datafusion::column_features::ColumnFeatureKey;
 use serde_json::{json, Value};
 
 pub fn arrow_to_hive_type(data_type: &DataType) -> CatalogResult<String> {
@@ -170,14 +171,18 @@ fn spark_struct_json_value_to_fields(value: &Value) -> CatalogResult<Vec<Field>>
             let data_type_value = field.get("type").ok_or_else(|| {
                 CatalogError::External(format!("Spark schema field {name} is missing type"))
             })?;
+            // Restore the full metadata map. String values are taken verbatim;
+            // other JSON values (e.g. numbers or booleans written by foreign
+            // engines) are kept as their JSON text.
             let mut metadata = std::collections::HashMap::new();
-            if let Some(comment) = field
-                .get("metadata")
-                .and_then(Value::as_object)
-                .and_then(|m| m.get("comment"))
-                .and_then(Value::as_str)
-            {
-                metadata.insert("comment".to_string(), comment.to_string());
+            if let Some(object) = field.get("metadata").and_then(Value::as_object) {
+                for (key, value) in object {
+                    let value = match value {
+                        Value::String(s) => s.clone(),
+                        other => other.to_string(),
+                    };
+                    metadata.insert(key.clone(), value);
+                }
             }
             Ok(Field::new(
                 name,
@@ -195,10 +200,40 @@ pub fn spark_struct_json_to_fields(schema: &str) -> CatalogResult<Vec<Field>> {
     spark_struct_json_value_to_fields(&value)
 }
 
+/// The column feature keys that are serialized into the Spark schema JSON
+/// so that they round-trip through the HMS table properties. This matches
+/// the metadata produced by [`TableColumnStatus::field`] and excludes
+/// sail-internal pipeline markers.
+///
+/// [`TableColumnStatus::field`]: sail_common_datafusion::catalog::TableColumnStatus::field
+const SERIALIZED_COLUMN_FEATURE_KEYS: [ColumnFeatureKey; 6] = [
+    ColumnFeatureKey::CurrentDefault,
+    ColumnFeatureKey::GenerationExpression,
+    ColumnFeatureKey::IdentityStart,
+    ColumnFeatureKey::IdentityStep,
+    ColumnFeatureKey::IdentityHighWaterMark,
+    ColumnFeatureKey::IdentityAllowExplicitInsert,
+];
+
 fn spark_field_json(field: &Field) -> CatalogResult<Value> {
+    // Serialize the comment and the column features (default values,
+    // generation expressions, identity columns); other metadata keys are
+    // not part of the catalog contract and are omitted. Entries are sorted
+    // for deterministic output.
     let mut metadata = serde_json::Map::new();
-    if let Some(comment) = field.metadata().get("comment") {
-        metadata.insert("comment".to_string(), Value::String(comment.clone()));
+    let mut entries: Vec<_> = field
+        .metadata()
+        .iter()
+        .filter(|(key, _)| {
+            *key == "comment"
+                || SERIALIZED_COLUMN_FEATURE_KEYS
+                    .iter()
+                    .any(|k| k.as_str() == *key)
+        })
+        .collect();
+    entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+    for (key, value) in entries {
+        metadata.insert(key.clone(), Value::String(value.clone()));
     }
     Ok(json!({
         "name": field.name(),
@@ -751,6 +786,88 @@ mod tests {
 
         // Only "comment" is serialized; default and generated_always_as are omitted
         assert_eq!(meta, &serde_json::json!({"comment": "a description"}));
+    }
+
+    #[test]
+    fn test_spark_json_preserves_column_feature_metadata() {
+        let mut metadata = std::collections::HashMap::new();
+        metadata.insert("CURRENT_DEFAULT".to_string(), "42".to_string());
+        metadata.insert(
+            "delta.generationExpression".to_string(),
+            "id + 1".to_string(),
+        );
+        metadata.insert("comment".to_string(), "a description".to_string());
+
+        let field = Field::new("col", DataType::Int32, true).with_metadata(metadata);
+        let schema = spark_struct_json_from_fields(&[field]).unwrap();
+        let fields = schema.get("fields").unwrap().as_array().unwrap();
+        let field_json = &fields[0];
+        let meta = field_json.get("metadata").unwrap();
+
+        // Column features (defaults, generation expressions, identity columns)
+        // are serialized so that they round-trip through the HMS Spark schema
+        // properties.
+        assert_eq!(
+            meta,
+            &serde_json::json!({
+                "CURRENT_DEFAULT": "42",
+                "comment": "a description",
+                "delta.generationExpression": "id + 1",
+            })
+        );
+    }
+
+    #[test]
+    fn test_spark_json_round_trip_field_metadata() {
+        let nested = Field::new("inner", DataType::Utf8, true).with_metadata(
+            std::collections::HashMap::from([("comment".to_string(), "inner comment".to_string())]),
+        );
+        let fields = vec![
+            Field::new("id", DataType::Int64, false).with_metadata(
+                std::collections::HashMap::from([
+                    ("CURRENT_DEFAULT".to_string(), "42".to_string()),
+                    ("delta.identity.start".to_string(), "1".to_string()),
+                ]),
+            ),
+            Field::new("nested", DataType::Struct(Fields::from(vec![nested])), true),
+        ];
+
+        let json = spark_struct_json_from_fields(&fields).unwrap();
+        let json_str = serde_json::to_string(&json).unwrap();
+        let parsed = super::spark_struct_json_to_fields(&json_str).unwrap();
+
+        assert_eq!(
+            parsed[0].metadata().get("CURRENT_DEFAULT"),
+            Some(&"42".to_string())
+        );
+        assert_eq!(
+            parsed[0].metadata().get("delta.identity.start"),
+            Some(&"1".to_string())
+        );
+        let DataType::Struct(nested_fields) = parsed[1].data_type() else {
+            panic!("expected struct data type");
+        };
+        assert_eq!(
+            nested_fields[0].metadata().get("comment"),
+            Some(&"inner comment".to_string())
+        );
+    }
+
+    #[test]
+    fn test_spark_json_foreign_metadata_values_to_strings() {
+        // Metadata written by foreign engines may contain non-string JSON
+        // values; they are restored as their JSON text.
+        let json_str = concat!(
+            r#"{"type":"struct","fields":[{"name":"id","type":"long","nullable":true,"#,
+            r#""metadata":{"CURRENT_DEFAULT":"'hello'","count":1,"flag":true}}]}"#,
+        );
+        let parsed = super::spark_struct_json_to_fields(json_str).unwrap();
+        assert_eq!(
+            parsed[0].metadata().get("CURRENT_DEFAULT"),
+            Some(&"'hello'".to_string())
+        );
+        assert_eq!(parsed[0].metadata().get("count"), Some(&"1".to_string()));
+        assert_eq!(parsed[0].metadata().get("flag"), Some(&"true".to_string()));
     }
 
     #[test]

@@ -1132,6 +1132,152 @@ mod tests {
     }
 
     #[test]
+    fn test_spark_metadata_round_trips_column_features() {
+        let columns = vec![
+            CreateTableColumnOptions {
+                name: "id".to_string(),
+                data_type: DataType::Int64,
+                nullable: false,
+                comment: Some("pk".to_string()),
+                default: Some("42".to_string()),
+                generated_always_as: None,
+                identity: None,
+            },
+            CreateTableColumnOptions {
+                name: "text".to_string(),
+                data_type: DataType::Utf8,
+                nullable: true,
+                comment: None,
+                default: Some("'hello'".to_string()),
+                generated_always_as: None,
+                identity: None,
+            },
+            CreateTableColumnOptions {
+                name: "gen".to_string(),
+                data_type: DataType::Int64,
+                nullable: true,
+                comment: None,
+                default: None,
+                generated_always_as: Some("id + 1".to_string()),
+                identity: None,
+            },
+        ];
+        let mut table = build_generic_table(
+            "default",
+            "items",
+            columns.clone(),
+            vec![],
+            Some("s3://warehouse/items".to_string()),
+            GenericTableFormat {
+                logical_format: "parquet",
+                storage: &HiveStorageFormat::parquet(),
+            },
+            None,
+            vec![],
+        )
+        .unwrap();
+        inject_spark_metadata(&mut table, &columns, &[], "parquet").unwrap();
+
+        let columns = columns_from_spark_properties(table.parameters.as_ref())
+            .unwrap()
+            .expect("expected Spark schema metadata");
+        assert_eq!(columns[0].name, "id");
+        assert_eq!(columns[0].comment.as_deref(), Some("pk"));
+        assert_eq!(columns[0].default.as_deref(), Some("42"));
+        assert_eq!(columns[1].name, "text");
+        assert_eq!(columns[1].default.as_deref(), Some("'hello'"));
+        assert_eq!(columns[2].name, "gen");
+        assert_eq!(columns[2].generated_always_as.as_deref(), Some("id + 1"));
+    }
+
+    #[test]
+    fn test_columns_from_spark_properties_reads_foreign_spark_defaults() {
+        // Spark serializes the full `StructField.metadata` object, so a table
+        // created by Spark with column defaults carries `CURRENT_DEFAULT` (and
+        // `EXISTS_DEFAULT`) in the schema JSON. The default may be SQL text
+        // (`'hello'`) or a JSON-encoded string (`"hello"`), which is decoded.
+        let schema_json = concat!(
+            r#"{"type":"struct","fields":["#,
+            r#"{"name":"a","type":"string","nullable":true,"#,
+            r#""metadata":{"CURRENT_DEFAULT":"'hello'","EXISTS_DEFAULT":"'hello'"}},"#,
+            r#"{"name":"b","type":"string","nullable":true,"#,
+            r#""metadata":{"CURRENT_DEFAULT":"\"hello\""}}]}"#,
+        );
+        let parameters: AHashMap<FastStr, FastStr> = [(
+            FastStr::from_static_str(SPARK_SCHEMA_KEY),
+            FastStr::from_string(schema_json.to_string()),
+        )]
+        .into_iter()
+        .collect();
+
+        let columns = columns_from_spark_properties(Some(&parameters))
+            .unwrap()
+            .expect("expected Spark schema metadata");
+        assert_eq!(columns[0].name, "a");
+        assert_eq!(columns[0].default.as_deref(), Some("'hello'"));
+        assert_eq!(columns[1].name, "b");
+        // The JSON-encoded string is decoded; the write path interprets the
+        // bare word as a string literal value rather than a column reference.
+        assert_eq!(columns[1].default.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn test_alter_spark_column_default_preserves_other_features() {
+        let columns = vec![
+            CreateTableColumnOptions {
+                name: "id".to_string(),
+                data_type: DataType::Int64,
+                nullable: false,
+                comment: Some("pk".to_string()),
+                default: None,
+                generated_always_as: None,
+                identity: None,
+            },
+            CreateTableColumnOptions {
+                name: "gen".to_string(),
+                data_type: DataType::Int64,
+                nullable: true,
+                comment: None,
+                default: None,
+                generated_always_as: Some("id + 1".to_string()),
+                identity: None,
+            },
+        ];
+        let mut table = build_generic_table(
+            "default",
+            "items",
+            columns.clone(),
+            vec![],
+            Some("s3://warehouse/items".to_string()),
+            GenericTableFormat {
+                logical_format: "parquet",
+                storage: &HiveStorageFormat::parquet(),
+            },
+            None,
+            vec![],
+        )
+        .unwrap();
+        inject_spark_metadata(&mut table, &columns, &[], "parquet").unwrap();
+
+        super::alter_spark_column_default(&mut table, &["id".to_string()], Some("42".to_string()))
+            .unwrap();
+
+        let columns = columns_from_spark_properties(table.parameters.as_ref())
+            .unwrap()
+            .expect("expected Spark schema metadata");
+        assert_eq!(columns[0].default.as_deref(), Some("42"));
+        assert_eq!(columns[0].comment.as_deref(), Some("pk"));
+        assert_eq!(columns[1].generated_always_as.as_deref(), Some("id + 1"));
+
+        super::alter_spark_column_default(&mut table, &["id".to_string()], None).unwrap();
+        let columns = columns_from_spark_properties(table.parameters.as_ref())
+            .unwrap()
+            .expect("expected Spark schema metadata");
+        assert_eq!(columns[0].default, None);
+        assert_eq!(columns[1].generated_always_as.as_deref(), Some("id + 1"));
+    }
+
+    #[test]
     fn test_table_to_status_uses_spark_schema_and_hides_internal_properties() {
         let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
         let mut table = build_generic_table(
