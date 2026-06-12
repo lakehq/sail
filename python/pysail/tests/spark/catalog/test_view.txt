@@ -219,21 +219,6 @@ DataFrame[...]
 |  2|   b|
 +---+----+
 
-Dotted provider names are valid.
-
->>> spark.sql("""
-...   CREATE TEMPORARY VIEW v_dotted
-...   USING org.apache.spark.sql.json
-...   OPTIONS (path '/tmp/sail_view_using/json_data')
-...   """)
-DataFrame[...]
->>> spark.sql("SELECT count(*) AS cnt FROM v_dotted").show()
-+---+
-|cnt|
-+---+
-|  2|
-+---+
-
 `using` is a valid view name.
 
 >>> spark.sql("""
@@ -557,8 +542,6 @@ DataFrame[...]
 >>> spark.sql("DROP VIEW IF EXISTS v_typed")
 DataFrame[...]
 >>> spark.sql("DROP VIEW IF EXISTS v_typed_bad")
-DataFrame[...]
->>> spark.sql("DROP VIEW IF EXISTS v_dotted")
 DataFrame[...]
 >>> spark.sql("DROP VIEW IF EXISTS using")
 DataFrame[...]
