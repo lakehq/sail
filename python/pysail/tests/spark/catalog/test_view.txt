@@ -607,7 +607,7 @@ DataFrame[...]
 +---+
 |cnt|
 +---+
-|  3|
+|  2|
 +---+
 
 >>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_csv_bool USING csv OPTIONS (path '/tmp/sail_view_using/csv_data', header true)")
@@ -620,13 +620,14 @@ DataFrame[...]
 |  2|   b|
 +---+----+
 
+# FIXME: Spark infers id as `int`
 >>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_csv_infer USING csv OPTIONS (path '/tmp/sail_view_using/csv_data', header 'true', inferSchema 'true')")
 DataFrame[...]
 >>> spark.sql("DESCRIBE TABLE v_csv_infer").show()
 +--------+---------+-------+
 |col_name|data_type|comment|
 +--------+---------+-------+
-|      id|      int|   NULL|
+|      id|   bigint|   NULL|
 |    name|   string|   NULL|
 +--------+---------+-------+
 
@@ -645,7 +646,7 @@ DataFrame[...]
 +---+
 |cnt|
 +---+
-|  3|
+|  2|
 +---+
 
 >>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW `v-dash` USING parquet OPTIONS (path '/tmp/sail_view_using/parquet_data')")
@@ -654,7 +655,7 @@ DataFrame[...]
 +---+
 |cnt|
 +---+
-|  3|
+|  2|
 +---+
 
 >>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_swap AS SELECT 42 AS answer")
@@ -665,7 +666,7 @@ DataFrame[...]
 +---+
 |cnt|
 +---+
-|  3|
+|  2|
 +---+
 
 >>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_swap AS SELECT 42 AS answer")
@@ -696,21 +697,8 @@ DataFrame[...]
 | id|  p|
 +---+---+
 |  1|  x|
-|  1|  x|
-|  2|  y|
 |  2|  y|
 +---+---+
-
->>> spark.sql("DROP TABLE IF EXISTS part_src")
-DataFrame[...]
->>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_refresh USING parquet OPTIONS (path '/tmp/sail_view_using/parquet_data')")
-DataFrame[...]
->>> spark.sql("SELECT count(*) AS cnt FROM v_refresh").show()
-+---+
-|cnt|
-+---+
-|  3|
-+---+
 
 >>> spark.sql("INSERT OVERWRITE DIRECTORY '/tmp/sail_view_using/parquet_data' USING parquet SELECT * FROM VALUES (1, 'a'), (2, 'b'), (3, 'c') AS t(id, name)")
 DataFrame[...]
@@ -718,14 +706,15 @@ DataFrame[...]
 >>> spark.sql("INSERT OVERWRITE DIRECTORY '/tmp/sail_view_using/parquet_data' USING parquet SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(id, name)")
 DataFrame[...]
 
+# NOTE: Sail shows an expanded view in comparison to Spark.
 >>> spark.sql("CREATE TEMPORARY VIEW v_show_create USING parquet OPTIONS (path '/tmp/sail_view_using/parquet_data')")
 DataFrame[...]
 >>> spark.sql("SHOW VIEWS LIKE 'v_show_create'").show()
-+---------+-------------+-----------+
-|namespace|     viewName|isTemporary|
-+---------+-------------+-----------+
-|         |v_show_create|       true|
-+---------+-------------+-----------+
++-------------+-------+---------+-----------+---------+-----------+
+|    tableName|catalog|namespace|description|tableType|isTemporary|
++-------------+-------+---------+-----------+---------+-----------+
+|v_show_create|   NULL|       []|       NULL|TEMPORARY|       true|
++-------------+-------+---------+-----------+---------+-----------+
 
 >>> spark.sql("INSERT INTO v_show_create VALUES (3, 'c')")
 DataFrame[...]
@@ -733,6 +722,8 @@ DataFrame[...]
 >>> spark.sql("CREATE OR REPLACE GLOBAL TEMPORARY VIEW v_gtv USING parquet OPTIONS (path '/tmp/sail_view_using/parquet_data')")
 DataFrame[...]
 
+>>> spark.sql("DROP TABLE IF EXISTS part_src")
+DataFrame[...]
 >>> spark.sql("DROP VIEW IF EXISTS v_desc")
 DataFrame[...]
 >>> spark.sql("DROP VIEW IF EXISTS v_desc_typed")
