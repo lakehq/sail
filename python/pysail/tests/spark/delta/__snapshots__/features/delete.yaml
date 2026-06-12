@@ -97,6 +97,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+  
     logical_plan after expand_row_level_op:
     SAME TEXT AS ABOVE
   
@@ -173,6 +176,9 @@ data:
     SAME TEXT AS ABOVE
   
     logical_plan after optimize_projections:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after resolve_lambda_variables:
     SAME TEXT AS ABOVE
   
     logical_plan:
@@ -448,6 +454,9 @@ data:
     SAME TEXT AS ABOVE
   
     physical_plan after EnforceBarrierPartitioning:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after wrap_higher_order_functions:
     SAME TEXT AS ABOVE
   
     physical_plan after SanityCheckPlan:
