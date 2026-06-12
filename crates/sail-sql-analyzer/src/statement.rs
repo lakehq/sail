@@ -396,7 +396,11 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     .iter()
                     .rfind(|(key, _)| key.eq_ignore_ascii_case("path"))
                     .map(|(_, value)| vec![value.clone()])
-                    .unwrap_or_default();
+                    .ok_or_else(|| {
+                        SqlError::invalid(
+                            "the data source path must be specified for CREATE TEMPORARY VIEW ... USING",
+                        )
+                    })?;
                 let input = spec::QueryPlan::new(spec::QueryNode::Read {
                     read_type: spec::ReadType::DataSource(Box::new(spec::ReadDataSource {
                         format: Some(format.value),
