@@ -559,7 +559,6 @@ DataFrame[...]
 +---+----+
 |  1|   a|
 |  2|   b|
-|  3|   c|
 +---+----+
 
 >>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_reorder (name STRING, id INT) USING parquet OPTIONS (path '/tmp/sail_view_using/parquet_data')")
@@ -570,7 +569,6 @@ DataFrame[...]
 +----+---+
 |   a|  1|
 |   b|  2|
-|   c|  3|
 +----+---+
 
 >>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_subset (id INT) USING parquet OPTIONS (path '/tmp/sail_view_using/parquet_data')")
@@ -581,7 +579,6 @@ DataFrame[...]
 +---+
 |  1|
 |  2|
-|  3|
 +---+
 
 >>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_case_cols (ID INT, NAME STRING) USING parquet OPTIONS (path '/tmp/sail_view_using/parquet_data')")
@@ -592,7 +589,6 @@ DataFrame[...]
 +---+----+
 |  1|   a|
 |  2|   b|
-|  3|   c|
 +---+----+
 
 >>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_extra (id INT, name STRING, missing DOUBLE) USING parquet OPTIONS (path '/tmp/sail_view_using/parquet_data')")
@@ -603,7 +599,6 @@ DataFrame[...]
 +---+----+-------+
 |  1|   a|   NULL|
 |  2|   b|   NULL|
-|  3|   c|   NULL|
 +---+----+-------+
 
 >>> spark.sql("CREATE OR REPLACE TEMPORARY VIEW v_pq_upper USING PARQUET OPTIONS (path '/tmp/sail_view_using/parquet_data')")

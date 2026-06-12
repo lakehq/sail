@@ -376,7 +376,11 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 }
                 // The typed column list is the user-specified schema of the data
                 // source, following the `colTypeList` rule in the Spark grammar.
-                let schema = columns.map(from_ast_view_using_columns).transpose()?;
+                let (schema, columns) = columns
+                    .map(from_ast_view_using_columns)
+                    .transpose()?
+                    .map(|(schema, columns)| (Some(schema), Some(columns)))
+                    .unwrap_or((None, None));
                 if comment.is_some() || !properties.is_empty() {
                     return Err(SqlError::invalid(
                         "COMMENT or TBLPROPERTIES cannot be used with CREATE TEMPORARY VIEW ... USING",
@@ -416,7 +420,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     is_global,
                     definition: spec::TemporaryViewDefinition {
                         input: Box::new(input),
-                        columns: None,
+                        columns,
                         if_not_exists: if_not_exists.is_some(),
                         replace: or_replace.is_some(),
                         comment: None,
@@ -1421,9 +1425,11 @@ fn from_ast_view_columns(columns: Vec<ViewColumn>) -> SqlResult<Vec<spec::ViewCo
 }
 
 /// Converts the typed column list of `CREATE TEMPORARY VIEW ... USING` into
-/// the user-specified schema of the data source.
-fn from_ast_view_using_columns(columns: Vec<ViewColumn>) -> SqlResult<spec::Schema> {
-    let fields = columns
+/// the user-specified data source schema and catalog column definitions.
+fn from_ast_view_using_columns(
+    columns: Vec<ViewColumn>,
+) -> SqlResult<(spec::Schema, Vec<spec::ViewColumnDefinition>)> {
+    let columns = columns
         .into_iter()
         .map(|column| {
             let ViewColumn {
@@ -1437,21 +1443,30 @@ fn from_ast_view_using_columns(columns: Vec<ViewColumn>) -> SqlResult<spec::Sche
                     "expected a data type for each column in CREATE TEMPORARY VIEW ... USING",
                 ));
             };
+            let comment = comment.map(|(_, comment)| from_ast_string(comment)).transpose()?;
             let mut metadata = vec![];
-            if let Some((_, comment)) = comment {
-                metadata.push(("comment".to_string(), from_ast_string(comment)?));
+            if let Some(comment) = comment.clone() {
+                metadata.push(("comment".to_string(), comment));
             }
-            Ok(spec::Field {
-                name: name.value,
-                data_type: from_ast_data_type(data_type)?,
-                nullable: not_null.is_none(),
-                metadata,
-            })
+            let name = name.value;
+            Ok((
+                spec::Field {
+                    name: name.clone(),
+                    data_type: from_ast_data_type(data_type)?,
+                    nullable: not_null.is_none(),
+                    metadata,
+                },
+                spec::ViewColumnDefinition { name, comment },
+            ))
         })
         .collect::<SqlResult<Vec<_>>>()?;
-    Ok(spec::Schema {
-        fields: fields.into(),
-    })
+    let (fields, columns): (Vec<_>, Vec<_>) = columns.into_iter().unzip();
+    Ok((
+        spec::Schema {
+            fields: fields.into(),
+        },
+        columns,
+    ))
 }
 
 fn from_ast_row_format(format: RowFormat) -> SqlResult<spec::TableRowFormat> {
