@@ -32,15 +32,21 @@ DataFrame[...]
 [Row(id='1', name='a'), Row(id='2', name='b')]
 
 The `USING` clause is only supported for temporary views and cannot be combined with an `AS` query.
+Spark and Sail raise different error classes for these (Spark fails at parse time,
+Sail in the analyzer), so we only assert that each statement raises.
 
->>> spark.sql(f"CREATE VIEW v_persistent USING parquet OPTIONS (path '{path}')")  # doctest: +SAIL_ONLY
-Traceback (most recent call last):
+>>> try:
+...     error = spark.sql(f"CREATE VIEW v_persistent USING parquet OPTIONS (path '{path}')")
+... except Exception:
+...     print("USING is not allowed for persistent views")
 ...
-pyspark.errors.exceptions.connect.UnsupportedOperationException: ...
->>> spark.sql(f"CREATE TEMPORARY VIEW v_bad USING parquet OPTIONS (path '{path}') AS SELECT 1")  # doctest: +SAIL_ONLY
-Traceback (most recent call last):
+USING is not allowed for persistent views
+>>> try:
+...     error = spark.sql(f"CREATE TEMPORARY VIEW v_bad USING parquet OPTIONS (path '{path}') AS SELECT 1")
+... except Exception:
+...     print("USING cannot be combined with an AS query")
 ...
-pyspark.errors.exceptions.connect.IllegalArgumentException: ...
+USING cannot be combined with an AS query
 
 >>> spark.catalog.dropTempView("v_using")
 True

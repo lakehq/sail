@@ -1,0 +1,523 @@
+Temporary views backed by a data source, and related grammar pins.
+All statements are plain SQL so the examples can be pasted into a Python shell.
+
+The test data is written with pure SQL.
+
+>>> spark.sql("""
+...   INSERT OVERWRITE DIRECTORY '/tmp/sail_view_using/parquet_data'
+...   USING parquet
+...   SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(id, name)
+...   """)
+DataFrame[...]
+>>> spark.sql("""
+...   INSERT OVERWRITE DIRECTORY '/tmp/sail_view_using/csv_data'
+...   USING csv OPTIONS (header 'true')
+...   SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(id, name)
+...   """)
+DataFrame[...]
+>>> spark.sql("""
+...   INSERT OVERWRITE DIRECTORY '/tmp/sail_view_using/json_data'
+...   USING json
+...   SELECT * FROM VALUES (1, 'a'), (2, 'b') AS t(id, name)
+...   """)
+DataFrame[...]
+
+A temporary view backed by a parquet path.
+
+>>> spark.sql("""
+...   CREATE TEMPORARY VIEW v_parquet
+...   USING parquet
+...   OPTIONS (path '/tmp/sail_view_using/parquet_data')
+...   """)
+DataFrame[...]
+>>> spark.sql("SELECT * FROM v_parquet ORDER BY id").show()
++---+----+
+| id|name|
++---+----+
+|  1|   a|
+|  2|   b|
++---+----+
+
+The view can be replaced.
+
+>>> spark.sql("""
+...   CREATE OR REPLACE TEMPORARY VIEW v_parquet
+...   USING parquet
+...   OPTIONS (path '/tmp/sail_view_using/parquet_data')
+...   """)
+DataFrame[...]
+>>> spark.sql("SELECT count(*) AS cnt FROM v_parquet").show()
++---+
+|cnt|
++---+
+|  2|
++---+
+
+Global temporary views are readable via the `global_temp` database.
+
+>>> spark.sql("""
+...   CREATE GLOBAL TEMPORARY VIEW v_global
+...   USING parquet
+...   OPTIONS (path '/tmp/sail_view_using/parquet_data')
+...   """)
+DataFrame[...]
+>>> spark.sql("SELECT id FROM global_temp.v_global ORDER BY id").show()
++---+
+| id|
++---+
+|  1|
+|  2|
++---+
+>>> spark.sql("""
+...   CREATE OR REPLACE GLOBAL TEMPORARY VIEW v_global
+...   USING parquet
+...   OPTIONS (path '/tmp/sail_view_using/parquet_data')
+...   """)
+DataFrame[...]
+
+Options other than the path are forwarded to the data source.
+
+>>> spark.sql("""
+...   CREATE TEMPORARY VIEW v_csv
+...   USING csv
+...   OPTIONS (path '/tmp/sail_view_using/csv_data', header 'true')
+...   """)
+DataFrame[...]
+>>> spark.sql("SELECT id, name FROM v_csv ORDER BY id").show()
++---+----+
+| id|name|
++---+----+
+|  1|   a|
+|  2|   b|
++---+----+
+>>> spark.sql("""
+...   CREATE TEMPORARY VIEW v_json
+...   USING json
+...   OPTIONS (path '/tmp/sail_view_using/json_data')
+...   """)
+DataFrame[...]
+>>> spark.sql("SELECT id, name FROM v_json ORDER BY id").show()
++---+----+
+| id|name|
++---+----+
+|  1|   a|
+|  2|   b|
++---+----+
+
+Option keys are case-insensitive, so `PATH` works as the path option.
+
+>>> spark.sql("""
+...   CREATE TEMPORARY VIEW v_upper
+...   USING parquet
+...   OPTIONS (PATH '/tmp/sail_view_using/parquet_data')
+...   """)
+DataFrame[...]
+>>> spark.sql("SELECT count(*) AS cnt FROM v_upper").show()
++---+
+|cnt|
++---+
+|  2|
++---+
+
+The `=` separator between an option key and value is optional.
+
+>>> spark.sql("""
+...   CREATE TEMPORARY VIEW v_eq
+...   USING parquet
+...   OPTIONS (path = '/tmp/sail_view_using/parquet_data')
+...   """)
+DataFrame[...]
+>>> spark.sql("SELECT count(*) AS cnt FROM v_eq").show()
++---+
+|cnt|
++---+
+|  2|
++---+
+
+Only the `path` option is a path source; `location` is forwarded as an
+ordinary option and never used as the path, regardless of position.
+
+>>> spark.sql("""
+...   CREATE TEMPORARY VIEW v_path_loc
+...   USING parquet
+...   OPTIONS (path '/tmp/sail_view_using/parquet_data', location '/tmp/sail_view_using/does_not_exist')
+...   """)
+DataFrame[...]
+>>> spark.sql("SELECT count(*) AS cnt FROM v_path_loc").show()
++---+
+|cnt|
++---+
+|  2|
++---+
+>>> spark.sql("""
+...   CREATE TEMPORARY VIEW v_loc_path
+...   USING parquet
+...   OPTIONS (location '/tmp/sail_view_using/does_not_exist', path '/tmp/sail_view_using/parquet_data')
+...   """)
+DataFrame[...]
+>>> spark.sql("SELECT count(*) AS cnt FROM v_loc_path").show()
++---+
+|cnt|
++---+
+|  2|
++---+
+
+A typed column list is valid for data source temporary views.
+
+>>> spark.sql("""
+...   CREATE TEMPORARY VIEW v_typed (id INT, name STRING)
+...   USING parquet
+...   OPTIONS (path '/tmp/sail_view_using/parquet_data')
+...   """)
+DataFrame[...]
+>>> spark.sql("SELECT * FROM v_typed ORDER BY id").show()
++---+----+
+| id|name|
++---+----+
+|  1|   a|
+|  2|   b|
++---+----+
+
+Dotted provider names are valid.
+
+>>> spark.sql("""
+...   CREATE TEMPORARY VIEW v_dotted
+...   USING org.apache.spark.sql.json
+...   OPTIONS (path '/tmp/sail_view_using/json_data')
+...   """)
+DataFrame[...]
+>>> spark.sql("SELECT count(*) AS cnt FROM v_dotted").show()
++---+
+|cnt|
++---+
+|  2|
++---+
+
+`using` is a valid view name.
+
+>>> spark.sql("""
+...   CREATE TEMPORARY VIEW using
+...   USING parquet
+...   OPTIONS (path '/tmp/sail_view_using/parquet_data')
+...   """)
+DataFrame[...]
+>>> spark.sql("SELECT count(*) AS cnt FROM using").show()
++---+
+|cnt|
++---+
+|  2|
++---+
+
+The `AS` keyword is optional for `CREATE TABLE ... AS SELECT`, unlike views.
+
+>>> spark.sql("""
+...   CREATE TABLE t_ctas USING parquet LOCATION '/tmp/sail_view_using/t_ctas'
+...   AS SELECT 1 AS a
+...   """)
+DataFrame[...]
+>>> spark.sql("""
+...   CREATE TABLE t_ctas2 USING parquet LOCATION '/tmp/sail_view_using/t_ctas2'
+...   SELECT 1 AS a
+...   """)
+DataFrame[...]
+>>> spark.sql("DROP TABLE IF EXISTS t_ctas")
+DataFrame[...]
+>>> spark.sql("DROP TABLE IF EXISTS t_ctas2")
+DataFrame[...]
+
+Duplicate option keys that differ only in case are allowed, and the last
+occurrence wins in the case-insensitive option map.
+
+>>> spark.sql("""
+...   CREATE TEMPORARY VIEW v_dup_case
+...   USING parquet
+...   OPTIONS (path '/tmp/sail_view_using/does_not_exist', PATH '/tmp/sail_view_using/parquet_data')
+...   """)
+DataFrame[...]
+>>> spark.sql("SELECT count(*) AS cnt FROM v_dup_case").show()
++---+
+|cnt|
++---+
+|  2|
++---+
+
+The user-specified schema takes precedence over the physical file schema.
+
+>>> spark.sql("""
+...   CREATE TEMPORARY VIEW v_typed_bad (id BIGINT)
+...   USING parquet
+...   OPTIONS (path '/tmp/sail_view_using/parquet_data')
+...   """)
+DataFrame[...]
+>>> spark.sql("SELECT * FROM v_typed_bad ORDER BY id").show()
++---+
+| id|
++---+
+|  1|
+|  2|
++---+
+
+`1m` lexes as an identifier (not a number literal with a suffix), so
+`foo.1m` is a valid qualified table name.
+
+>>> spark.sql("CREATE DATABASE IF NOT EXISTS foo")
+DataFrame[...]
+>>> spark.sql("CREATE TABLE foo.1m(a INT)")
+DataFrame[...]
+>>> spark.sql("DESCRIBE TABLE foo.1m").show()
++--------+---------+-------+
+|col_name|data_type|comment|
++--------+---------+-------+
+|       a|      int|   NULL|
++--------+---------+-------+
+>>> spark.sql("INSERT INTO foo.1m VALUES (1), (2)")
+DataFrame[...]
+>>> spark.sql("SELECT a FROM foo.1m ORDER BY a").show()
++---+
+|  a|
++---+
+|  1|
+|  2|
++---+
+>>> spark.sql("DROP TABLE IF EXISTS foo.1m")
+DataFrame[...]
+>>> spark.sql("CREATE TABLE foo.2m(a INT) USING parquet")
+DataFrame[...]
+>>> spark.sql("DESCRIBE TABLE foo.2m").show()
++--------+---------+-------+
+|col_name|data_type|comment|
++--------+---------+-------+
+|       a|      int|   NULL|
++--------+---------+-------+
+>>> spark.sql("INSERT INTO foo.2m VALUES (1), (2)")
+DataFrame[...]
+>>> spark.sql("SELECT a FROM foo.2m ORDER BY a").show()
++---+
+|  a|
++---+
+|  1|
+|  2|
++---+
+>>> spark.sql("DROP TABLE IF EXISTS foo.2m")
+DataFrame[...]
+>>> spark.sql("DROP DATABASE IF EXISTS foo CASCADE")
+DataFrame[...]
+
+`y` is a number literal suffix, so `1y` is a TINYINT literal, not an identifier.
+
+>>> spark.sql("SELECT 1y").show()
++---+
+|  1|
++---+
+|  1|
++---+
+
+`1m` is an identifier, not a literal. Spark and Sail have different errors
+so we catch the exception.
+
+>>> try:
+...     error = spark.sql("SELECT 1m").collect()
+... except Exception:
+...     print("A column, variable, or function parameter with name `1m` cannot be resolved")
+...
+A column, variable, or function parameter with name `1m` cannot be resolved
+
+Exceptions. Spark and Sail raise different error classes and messages for
+these (Spark mostly fails at parse time, Sail in the analyzer), so we only
+assert that each statement raises.
+
+Spark rejects duplicate option keys at parse time with [DUPLICATE_KEY];
+there is no last-occurrence-wins for same-case duplicates.
+
+>>> try:
+...     error = spark.sql("""
+...       CREATE TEMPORARY VIEW v_dup
+...       USING parquet
+...       OPTIONS (path '/tmp/sail_view_using/does_not_exist', path '/tmp/sail_view_using/parquet_data')
+...       """)
+... except Exception:
+...     print("duplicate `path` options are not allowed")
+...
+duplicate `path` options are not allowed
+
+Persistent views cannot be defined with USING.
+
+>>> try:
+...     error = spark.sql("""
+...       CREATE VIEW v_persistent
+...       USING parquet
+...       OPTIONS (path '/tmp/sail_view_using/parquet_data')
+...       """)
+... except Exception:
+...     print("USING is not allowed for persistent views")
+...
+USING is not allowed for persistent views
+
+IF NOT EXISTS is not allowed for data source temporary views.
+
+>>> try:
+...     error = spark.sql("""
+...       CREATE TEMPORARY VIEW IF NOT EXISTS v_ine
+...       USING parquet
+...       OPTIONS (path '/tmp/sail_view_using/parquet_data')
+...       """)
+... except Exception:
+...     print("IF NOT EXISTS is not allowed for data source temporary views")
+...
+IF NOT EXISTS is not allowed for data source temporary views
+
+A data source temporary view cannot be combined with an AS query.
+
+>>> try:
+...     error = spark.sql("""
+...       CREATE TEMPORARY VIEW v_as
+...       USING parquet
+...       OPTIONS (path '/tmp/sail_view_using/parquet_data')
+...       AS SELECT 1
+...       """)
+... except Exception:
+...     print("USING cannot be combined with an AS query")
+...
+USING cannot be combined with an AS query
+
+The same holds without the AS keyword.
+
+>>> try:
+...     error = spark.sql("""
+...       CREATE TEMPORARY VIEW v_sel
+...       USING parquet
+...       OPTIONS (path '/tmp/sail_view_using/parquet_data')
+...       SELECT 1
+...       """)
+... except Exception:
+...     print("USING cannot be combined with a query")
+...
+USING cannot be combined with a query
+
+TBLPROPERTIES is not allowed for data source temporary views.
+
+>>> try:
+...     error = spark.sql("""
+...       CREATE TEMPORARY VIEW v_props
+...       USING parquet
+...       OPTIONS (path '/tmp/sail_view_using/parquet_data')
+...       TBLPROPERTIES ('k'='v')
+...       """)
+... except Exception:
+...     print("TBLPROPERTIES is not allowed for data source temporary views")
+...
+TBLPROPERTIES is not allowed for data source temporary views
+
+COMMENT is not allowed for data source temporary views.
+
+>>> try:
+...     error = spark.sql("""
+...       CREATE TEMPORARY VIEW v_comment
+...       USING parquet
+...       OPTIONS (path '/tmp/sail_view_using/parquet_data')
+...       COMMENT 'c'
+...       """)
+... except Exception:
+...     print("COMMENT is not allowed for data source temporary views")
+...
+COMMENT is not allowed for data source temporary views
+
+An UNTYPED column list is invalid for data source temporary views
+(the typed form is valid, as pinned above).
+
+>>> try:
+...     error = spark.sql("""
+...       CREATE TEMPORARY VIEW v_cols (a, b)
+...       USING parquet
+...       OPTIONS (path '/tmp/sail_view_using/parquet_data')
+...       """)
+... except Exception:
+...     print("an untyped column list is not allowed for data source temporary views")
+...
+an untyped column list is not allowed for data source temporary views
+
+AS is mandatory for the query form of CREATE VIEW.
+
+>>> try:
+...     error = spark.sql("CREATE VIEW v_noas SELECT 1")
+... except Exception:
+...     print("expected AS query in CREATE VIEW")
+...
+expected AS query in CREATE VIEW
+
+A parenthesized query without AS is also rejected.
+
+>>> try:
+...     error = spark.sql("CREATE VIEW v_paren (SELECT 1)")
+... except Exception:
+...     print("expected AS query in CREATE VIEW")
+...
+expected AS query in CREATE VIEW
+
+The data source path must be specified: Spark errors at CREATE
+([UNABLE_TO_INFER_SCHEMA]), not at the first query.
+
+>>> try:
+...     error = spark.sql("""
+...       CREATE TEMPORARY VIEW v_nopath
+...       USING parquet
+...       """)
+... except Exception:
+...     print("the data source path must be specified")
+...
+the data source path must be specified
+
+A nonexistent path also errors at CREATE ([PATH_NOT_FOUND]).
+
+>>> try:
+...     error = spark.sql("""
+...       CREATE TEMPORARY VIEW v_badpath
+...       USING parquet
+...       OPTIONS (path '/tmp/sail_view_using/nope')
+...       """)
+... except Exception:
+...     print("the data source path does not exist")
+...
+the data source path does not exist
+
+An empty path value is also rejected.
+
+>>> try:
+...     error = spark.sql("""
+...       CREATE TEMPORARY VIEW v_emptypath
+...       USING parquet
+...       OPTIONS (path '')
+...       """)
+... except Exception:
+...     print("the data source path must not be empty")
+...
+the data source path must not be empty
+
+Clean up the temporary views.
+
+>>> spark.sql("DROP VIEW IF EXISTS v_parquet")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS global_temp.v_global")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_csv")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_json")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_upper")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_eq")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_dup_case")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_path_loc")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_loc_path")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_typed")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_typed_bad")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS v_dotted")
+DataFrame[...]
+>>> spark.sql("DROP VIEW IF EXISTS using")
+DataFrame[...]
