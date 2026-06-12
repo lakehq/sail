@@ -2136,7 +2136,3 @@ fn from_ast_alter_view_operation(
 ) -> SqlResult<spec::AlterViewOperation> {
     Ok(spec::AlterViewOperation::Unknown)
 }
-
-// TODO: add the following test cases as gold tests:
-//   `CREATE TABLE foo.1m(a INT)`
-//   `CREATE TABLE foo.1m(a INT) USING parquet`

@@ -7718,6 +7718,14 @@
               }
             },
             {
+              "name": "Option(Tuple(Keyword(Using), Identifier, Option(Tuple(Keyword(Options), PropertyList))))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Tuple(Keyword(Using), Identifier, Option(Tuple(Keyword(Options), PropertyList)))"
+                }
+              }
+            },
+            {
               "name": "Option(Tuple(Keyword(With), Keyword(Schema), Keyword(Evolution)))",
               "node": {
                 "optional": {
@@ -9567,13 +9575,13 @@
                         "nonTerminal": "Option(Tuple(Operator(LeftParenthesis), Sequence(ViewColumn, Operator(Comma)), Operator(RightParenthesis)))"
                       },
                       {
+                        "nonTerminal": "Option(Tuple(Keyword(Using), Identifier, Option(Tuple(Keyword(Options), PropertyList))))"
+                      },
+                      {
                         "nonTerminal": "Vector(CreateViewClause)"
                       },
                       {
-                        "nonTerminal": "Keyword(As)"
-                      },
-                      {
-                        "nonTerminal": "Query"
+                        "nonTerminal": "Option(AsQueryClause)"
                       }
                     ]
                   },
@@ -11226,6 +11234,22 @@
                   },
                   {
                     "nonTerminal": "Identifier"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "Tuple(Keyword(Using), Identifier, Option(Tuple(Keyword(Options), PropertyList)))",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Keyword(Using)"
+                  },
+                  {
+                    "nonTerminal": "Identifier"
+                  },
+                  {
+                    "nonTerminal": "Option(Tuple(Keyword(Options), PropertyList))"
                   }
                 ]
               }
