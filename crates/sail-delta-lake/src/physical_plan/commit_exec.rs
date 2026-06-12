@@ -55,8 +55,8 @@ use crate::schema::{
 };
 use crate::spec::{
     commit_path, contains_timestampntz_arrow, contains_variant_arrow, ColumnMetadataKey,
-    CommitAction, DataType as DeltaDataType, Metadata, MetadataValue, PrimitiveType, StatValue,
-    Stats, StructField, StructType, TableFeature,
+    CommitAction, DataType as DeltaDataType, DeltaError, Metadata, MetadataValue, PrimitiveType,
+    StatValue, Stats, StructField, StructType, TableFeature,
 };
 use crate::storage::{get_object_store_from_context, LogStoreRef, StorageConfig};
 use crate::table::{
@@ -530,6 +530,71 @@ impl DeltaCommitExec {
         }
     }
 
+    async fn existing_create_bootstrap_snapshot(
+        log_store: &LogStoreRef,
+        actions: &[CommitAction],
+    ) -> Result<Option<Arc<crate::table::DeltaSnapshot>>> {
+        let latest_version = match log_store.get_latest_version(-1).await {
+            Ok(version) => version,
+            Err(DeltaError::MissingVersion) => return Ok(None),
+            Err(err) => return Err(DataFusionError::External(Box::new(err))),
+        };
+        let snapshot = crate::table::DeltaSnapshot::try_new(
+            log_store.as_ref(),
+            DeltaSnapshotConfig {
+                require_files: false,
+                ..Default::default()
+            },
+            Some(latest_version),
+            None,
+        )
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        if let Some(protocol) = actions.iter().find_map(|action| match action {
+            CommitAction::Protocol(protocol) => Some(protocol),
+            _ => None,
+        }) {
+            if protocol != snapshot.protocol() {
+                return Err(DataFusionError::Plan(
+                    "Delta table already exists with a different protocol".to_string(),
+                ));
+            }
+        }
+
+        if let Some(metadata) = actions.iter().find_map(|action| match action {
+            CommitAction::Metadata(metadata) => Some(metadata),
+            _ => None,
+        }) {
+            let create_schema = metadata
+                .parse_schema()
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let existing_schema = snapshot
+                .metadata()
+                .parse_schema()
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let metadata_matches = create_schema == existing_schema
+                && metadata.partition_columns() == snapshot.metadata().partition_columns()
+                && metadata.configuration() == snapshot.metadata().configuration();
+            if !metadata_matches {
+                return Err(DataFusionError::Plan(
+                    "Delta table already exists with different metadata".to_string(),
+                ));
+            }
+        }
+
+        Ok(Some(Arc::new(snapshot)))
+    }
+
+    async fn existing_create_bootstrap_commit_matches(
+        log_store: &LogStoreRef,
+        actions: &[CommitAction],
+    ) -> Result<bool> {
+        Self::existing_create_bootstrap_snapshot(log_store, actions)
+            .await
+            .map(|snapshot| snapshot.is_some())
+    }
+
     async fn commit_catalog_managed_table(
         context: &Arc<TaskContext>,
         catalog_table: &[String],
@@ -832,13 +897,7 @@ impl ExecutionPlan for DeltaCommitExec {
                 &kinds
             );
 
-            if final_actions.is_empty() && !table_exists {
-                // For new tables, add protocol and metadata even if no data
-                let array = Arc::new(UInt64Array::from(vec![0]));
-                let batch = RecordBatch::try_new(schema, vec![array])?;
-                return Ok(batch);
-            } else if final_actions.is_empty() {
-                // For existing tables, no actions means no changes
+            if !has_commit_payload_actions(&final_actions) {
                 let array = Arc::new(UInt64Array::from(vec![0]));
                 let batch = RecordBatch::try_new(schema, vec![array])?;
                 return Ok(batch);
@@ -954,6 +1013,16 @@ impl ExecutionPlan for DeltaCommitExec {
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
             let log_store = table.log_store();
 
+            if !table_exists
+                && is_create_bootstrap_only_commit(&final_actions)
+                && Self::existing_create_bootstrap_commit_matches(&log_store, &final_actions)
+                    .await?
+            {
+                let array = Arc::new(UInt64Array::from(vec![0]));
+                let batch = RecordBatch::try_new(schema, vec![array])?;
+                return Ok(batch);
+            }
+
             let reference = if table_exists {
                 if needs_full_snapshot {
                     let table = full_snapshot_task
@@ -1060,6 +1129,18 @@ impl ExecutionPlan for DeltaCommitExec {
                         (
                             reference.clone(),
                             bootstrap_actions,
+                            operation,
+                            operation_metrics,
+                        )
+                    } else if let Some(bootstrap_reference) =
+                        Self::existing_create_bootstrap_snapshot(&log_store, &bootstrap_actions)
+                            .await?
+                    {
+                        let operation =
+                            Self::write_operation_for_sink_mode(&partition_columns, &sink_mode);
+                        (
+                            Some(bootstrap_reference),
+                            commit_actions,
                             operation,
                             operation_metrics,
                         )
@@ -1254,6 +1335,26 @@ fn apply_identity_high_water_marks(
         actions.insert(0, CommitAction::Metadata(updated_metadata));
     }
     Ok(actions)
+}
+
+fn has_commit_payload_actions(actions: &[CommitAction]) -> bool {
+    actions
+        .iter()
+        .any(|action| !matches!(action, CommitAction::CommitInfo(_)))
+}
+
+fn is_create_bootstrap_only_commit(actions: &[CommitAction]) -> bool {
+    actions.iter().any(|action| {
+        matches!(
+            action,
+            CommitAction::Protocol(_) | CommitAction::Metadata(_)
+        )
+    }) && actions.iter().all(|action| {
+        matches!(
+            action,
+            CommitAction::Protocol(_) | CommitAction::Metadata(_) | CommitAction::CommitInfo(_)
+        )
+    })
 }
 
 fn collect_identity_columns_for_commit(
