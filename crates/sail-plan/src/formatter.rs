@@ -345,6 +345,14 @@ impl PlanFormatter for SparkPlanFormatter {
                 let values = values.iter().collect::<Vec<_>>().one()?;
                 literal_list_to_string("array", values.as_deref())
             }
+            ScalarValue::ListView(values) => {
+                let values = values.iter().collect::<Vec<_>>().one()?;
+                literal_list_to_string("array", values.as_deref())
+            }
+            ScalarValue::LargeListView(values) => {
+                let values = values.iter().collect::<Vec<_>>().one()?;
+                literal_list_to_string("array", values.as_deref())
+            }
             ScalarValue::Struct(values) => {
                 let fields = values
                     .fields()

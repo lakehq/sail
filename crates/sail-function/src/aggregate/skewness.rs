@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::Debug;
 
 use datafusion::arrow::array::{ArrayRef, AsArray, Float64Array};
@@ -61,9 +60,6 @@ impl SkewnessFunc {
 }
 
 impl AggregateUDFImpl for SkewnessFunc {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         &self.name
     }

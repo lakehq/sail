@@ -1,6 +1,5 @@
 //! Physical execution node for Merge-on-Read deletion vector writing.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -364,10 +363,6 @@ impl ExecutionPlan for DeletionVectorRowsWriterExec {
         "DeletionVectorRowsWriterExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -640,10 +635,6 @@ impl DisplayAs for DeletionVectorWriterExec {
 impl ExecutionPlan for DeletionVectorWriterExec {
     fn name(&self) -> &'static str {
         "DeletionVectorWriterExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
