@@ -1,0 +1,48 @@
+Temporary views backed by a data source: `CREATE TEMPORARY VIEW ... USING <format> OPTIONS (...)`.
+
+>>> import tempfile
+>>> path = tempfile.mkdtemp() + "/products"
+>>> spark.createDataFrame([(1, "a"), (2, "b")], ["id", "name"]).write.parquet(path)
+
+>>> spark.sql(f"CREATE TEMPORARY VIEW v_using USING parquet OPTIONS (path '{path}')")
+DataFrame[...]
+>>> spark.sql("SELECT id, name FROM v_using ORDER BY id").collect()
+[Row(id=1, name='a'), Row(id=2, name='b')]
+
+>>> spark.sql(f"CREATE OR REPLACE TEMPORARY VIEW v_using USING parquet OPTIONS (path '{path}')")
+DataFrame[...]
+>>> spark.sql("SELECT count(*) AS cnt FROM v_using").collect()
+[Row(cnt=2)]
+
+>>> spark.sql(f"CREATE GLOBAL TEMPORARY VIEW v_using_global USING parquet OPTIONS (path '{path}')")
+DataFrame[...]
+>>> spark.sql("SELECT id FROM global_temp.v_using_global ORDER BY id").collect()
+[Row(id=1), Row(id=2)]
+
+Other options are forwarded to the data source along with the path.
+
+>>> csv_dir = tempfile.mkdtemp()
+>>> with open(f"{csv_dir}/data.csv", "w") as f:
+...     _ = f.write("id,name\n1,a\n2,b\n")
+>>> spark.sql(f"CREATE TEMPORARY VIEW v_using_csv USING csv OPTIONS (path '{csv_dir}', header 'true')")
+DataFrame[...]
+>>> spark.sql("SELECT id, name FROM v_using_csv ORDER BY id").collect()
+[Row(id='1', name='a'), Row(id='2', name='b')]
+
+The `USING` clause is only supported for temporary views and cannot be combined with an `AS` query.
+
+>>> spark.sql(f"CREATE VIEW v_persistent USING parquet OPTIONS (path '{path}')")  # doctest: +SAIL_ONLY
+Traceback (most recent call last):
+...
+pyspark.errors.exceptions.connect.UnsupportedOperationException: ...
+>>> spark.sql(f"CREATE TEMPORARY VIEW v_bad USING parquet OPTIONS (path '{path}') AS SELECT 1")  # doctest: +SAIL_ONLY
+Traceback (most recent call last):
+...
+pyspark.errors.exceptions.connect.IllegalArgumentException: ...
+
+>>> spark.catalog.dropTempView("v_using")
+True
+>>> spark.catalog.dropGlobalTempView("v_using_global")
+True
+>>> spark.catalog.dropTempView("v_using_csv")
+True

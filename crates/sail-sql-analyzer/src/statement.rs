@@ -418,7 +418,11 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     },
                 }
             } else {
-                let Some(AsQueryClause { r#as: _, query }) = r#as else {
+                let Some(AsQueryClause {
+                    r#as: Some(_),
+                    query,
+                }) = r#as
+                else {
                     return Err(SqlError::invalid("expected AS query in CREATE VIEW"));
                 };
                 let query_text = query.text();
