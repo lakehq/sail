@@ -183,9 +183,11 @@ Feature: array filter with lambda
   Rule: Filter with different data types
 
     Scenario: Filter empty array
+      # Explicitly typed so the test asserts filter behavior on an empty array,
+      # not engine-specific inference of the untyped `array()` literal.
       When query
         """
-        SELECT filter(array(), x -> x > 0) AS result
+        SELECT filter(CAST(array() AS ARRAY<INT>), x -> x > 0) AS result
         """
       Then query result
         | result |
@@ -778,6 +780,13 @@ Feature: array filter with lambda
       When query
         """
         SELECT filter(array(1, 2, 3), (x, x) -> x > 1) AS result
+        """
+      Then query error .*
+
+    Scenario: Lambda with case-insensitive duplicate parameter names is rejected
+      When query
+        """
+        SELECT filter(array(1, 2, 3), (x, X) -> x > 1) AS result
         """
       Then query error .*
 

@@ -3024,7 +3024,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .first()
                     .ok_or_else(|| plan_datafusion_err!("LambdaVariable missing field"))?
                     .clone();
-                Ok(Arc::new(LambdaVariable::new(node.index as usize, field)))
+                let index = usize::try_from(node.index).map_err(|_| {
+                    plan_datafusion_err!(
+                        "LambdaVariable index {} does not fit in usize",
+                        node.index
+                    )
+                })?;
+                Ok(Arc::new(LambdaVariable::new(index, field)))
             }
         }
     }

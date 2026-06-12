@@ -234,7 +234,7 @@ fn coerce_single_list_arg(name: &str, arg_types: &[DataType]) -> Result<Vec<Data
         &arg_types[0]
     } else {
         return plan_err!(
-            "{name} function requires 1 value arguments, got {}",
+            "{name} function requires 1 value argument, got {}",
             arg_types.len()
         );
     };
