@@ -3,7 +3,7 @@ use sail_common::spec;
 use sail_common::spec::QueryPlan;
 use sail_sql_parser::ast::expression::{BooleanLiteral, Expr, OrderDirection};
 use sail_sql_parser::ast::identifier::{Ident, ObjectName};
-use sail_sql_parser::ast::keywords::{Cascade, Global, Overwrite, Restrict, Temp, Temporary};
+use sail_sql_parser::ast::keywords::{Cascade, Overwrite, Restrict};
 use sail_sql_parser::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use sail_sql_parser::ast::operator::{Minus, Plus};
 use sail_sql_parser::ast::query::{IdentList, WhereClause};
@@ -321,9 +321,9 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             if_not_exists,
             name,
             columns,
+            using,
             clauses,
-            r#as: _,
-            query,
+            r#as,
         } => {
             let columns = if let Some((_, columns, _)) = columns {
                 Some(
@@ -341,8 +341,6 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             } else {
                 None
             };
-            let query_text = query.text();
-            let query = from_ast_query(query)?;
             let name = from_ast_object_name(name)?;
             let CreateViewClauses {
                 comment,
@@ -362,26 +360,73 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     )),
                 }
             };
-            let node = match global_temporary {
-                Some((
-                    Some(Global { .. }),
-                    Either::Left(Temp { .. }) | Either::Right(Temporary { .. }),
-                )) => spec::CommandNode::CreateTemporaryView {
+            let global_temporary = global_temporary.map(|(global, _)| global.is_some());
+            let node = if let Some((_, format, options)) = using {
+                let Some(is_global) = global_temporary else {
+                    return Err(SqlError::unsupported(
+                        "CREATE VIEW ... USING is only supported for temporary views",
+                    ));
+                };
+                if r#as.is_some() {
+                    return Err(SqlError::invalid(
+                        "CREATE TEMPORARY VIEW ... USING cannot be defined with an AS query",
+                    ));
+                }
+                if columns.is_some() {
+                    return Err(SqlError::todo(
+                        "column list in CREATE TEMPORARY VIEW ... USING",
+                    ));
+                }
+                if comment.is_some() || !properties.is_empty() {
+                    return Err(SqlError::invalid(
+                        "COMMENT or TBLPROPERTIES cannot be used with CREATE TEMPORARY VIEW ... USING",
+                    ));
+                }
+                let mut options = options
+                    .map(|(_, x)| from_ast_property_list(x))
+                    .transpose()?
+                    .unwrap_or_default();
+                let mut paths = vec![];
+                options.retain(|(key, value)| {
+                    if key.eq_ignore_ascii_case("path") {
+                        paths.push(value.clone());
+                        false
+                    } else {
+                        true
+                    }
+                });
+                let input = spec::QueryPlan::new(spec::QueryNode::Read {
+                    read_type: spec::ReadType::DataSource(Box::new(spec::ReadDataSource {
+                        format: Some(format.value),
+                        schema: None,
+                        options,
+                        paths,
+                        predicates: vec![],
+                    })),
+                    is_streaming: false,
+                });
+                spec::CommandNode::CreateTemporaryView {
                     view: temporary_view_name(name)?,
-                    is_global: true,
+                    is_global,
                     definition: spec::TemporaryViewDefinition {
-                        input: Box::new(query),
-                        columns,
+                        input: Box::new(input),
+                        columns: None,
                         if_not_exists: if_not_exists.is_some(),
                         replace: or_replace.is_some(),
-                        comment,
-                        properties,
+                        comment: None,
+                        properties: vec![],
                     },
-                },
-                Some((None, Either::Left(Temp { .. }) | Either::Right(Temporary { .. }))) => {
-                    spec::CommandNode::CreateTemporaryView {
+                }
+            } else {
+                let Some(AsQueryClause { r#as: _, query }) = r#as else {
+                    return Err(SqlError::invalid("expected AS query in CREATE VIEW"));
+                };
+                let query_text = query.text();
+                let query = from_ast_query(query)?;
+                match global_temporary {
+                    Some(is_global) => spec::CommandNode::CreateTemporaryView {
                         view: temporary_view_name(name)?,
-                        is_global: false,
+                        is_global,
                         definition: spec::TemporaryViewDefinition {
                             input: Box::new(query),
                             columns,
@@ -390,20 +435,20 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                             comment,
                             properties,
                         },
-                    }
-                }
-                None => spec::CommandNode::CreateView {
-                    view: name,
-                    definition: spec::ViewDefinition {
-                        definition: query_text,
-                        input: Box::new(query),
-                        columns,
-                        if_not_exists: if_not_exists.is_some(),
-                        replace: or_replace.is_some(),
-                        comment,
-                        properties,
                     },
-                },
+                    None => spec::CommandNode::CreateView {
+                        view: name,
+                        definition: spec::ViewDefinition {
+                            definition: query_text,
+                            input: Box::new(query),
+                            columns,
+                            if_not_exists: if_not_exists.is_some(),
+                            replace: or_replace.is_some(),
+                            comment,
+                            properties,
+                        },
+                    },
+                }
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }

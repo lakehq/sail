@@ -166,10 +166,10 @@ pub enum Statement {
             Sequence<ViewColumn, Comma>,
             RightParenthesis,
         )>,
+        using: Option<(Using, Ident, Option<(Options, PropertyList)>)>,
         clauses: Vec<CreateViewClause>,
-        r#as: As,
-        #[parser(function = |(_, q, _, _), _| q)]
-        query: Query,
+        #[parser(function = |(_, q, _, _), o| compose(q, o))]
+        r#as: Option<AsQueryClause>,
     },
     AlterView {
         alter: Alter,
