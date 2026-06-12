@@ -74,7 +74,7 @@ def test_insert_advances_rest_catalog_metadata_location(
 
     before = _load_table(iceberg_rest_endpoint, table_name)
     before_location = before["metadata-location"]
-    assert before["metadata"].get("current-snapshot-id") in (None, -1)
+    assert before["metadata"]["current-snapshot-id"] == -1
     rows = iceberg_spark.sql(f"SELECT id, name FROM {NAMESPACE}.{table_name}").collect()  # noqa: S608
     assert rows == []
 

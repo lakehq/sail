@@ -58,7 +58,7 @@ data:
   last-updated-ms: <timestamp>
   location: file://<root>/iceberg_variant_schema_evolution/
   metadata-log:
-  - metadata-file: <tmp>/iceberg_variant_schema_evolution/metadata/v1.metadata.json
+  - metadata-file: <tmp>/iceberg_variant_schema_evolution/metadata/v2.metadata.json
     timestamp-ms: <timestamp>
   next-row-id: 2
   partition-specs:

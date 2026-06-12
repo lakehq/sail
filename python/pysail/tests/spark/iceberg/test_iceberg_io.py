@@ -1,3 +1,5 @@
+import json
+
 import pandas as pd
 import pyarrow as pa
 import pytest
@@ -110,11 +112,21 @@ def test_iceberg_io_create_table_materializes_empty_metadata(spark, tmp_path):
 
         metadata_dir = table_path / "metadata"
         assert metadata_dir.exists()
-        assert (metadata_dir / "version-hint.text").exists()
-        assert list(metadata_dir.glob("*.metadata.json"))
+        assert (metadata_dir / "version-hint.text").read_text(encoding="utf-8").strip() == "1"
+        metadata_v1 = metadata_dir / "v1.metadata.json"
+        assert metadata_v1.exists()
+        create_metadata = json.loads(metadata_v1.read_text(encoding="utf-8"))
+        assert create_metadata["current-snapshot-id"] == -1
+        assert create_metadata["snapshots"] == []
         assert spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect() == []  # noqa: S608
 
         spark.sql(f"INSERT INTO {table_name} VALUES (1, 'one')")  # noqa: S608
+        assert (metadata_dir / "version-hint.text").read_text(encoding="utf-8").strip() == "2"
+        metadata_v2 = metadata_dir / "v2.metadata.json"
+        assert metadata_v2.exists()
+        insert_metadata = json.loads(metadata_v2.read_text(encoding="utf-8"))
+        assert insert_metadata["current-snapshot-id"] != -1
+        assert len(insert_metadata["snapshots"]) == 1
         rows = spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect()  # noqa: S608
         assert [(row.id, row.name) for row in rows] == [(1, "one")]
     finally:

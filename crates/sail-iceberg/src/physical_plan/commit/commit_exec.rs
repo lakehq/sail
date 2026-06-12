@@ -729,8 +729,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 let row_lineage_start_row_id = table_meta.row_lineage_start_row_id();
 
                 // If metadata exists but there is no current snapshot (e.g. from a CREATE TABLE),
-                // bootstrap the first snapshot into the existing metadata using InPlace strategy
-                // (per user preference to keep external SQL catalogs in sync).
+                // bootstrap the first snapshot as a normal metadata version.
                 if maybe_snapshot.is_none()
                     && (matches!(commit_info.operation, crate::spec::Operation::Overwrite)
                         || matches!(commit_info.operation, crate::spec::Operation::Append))
@@ -784,7 +783,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     let persist_strategy = if catalog_fallback_table.is_some() {
                         PersistStrategy::NewUuidVersion
                     } else {
-                        PersistStrategy::InPlace
+                        PersistStrategy::NewVersion
                     };
                     let bootstrap_result = bootstrap_first_snapshot(
                         &table_url,
@@ -807,6 +806,21 @@ impl ExecutionPlan for IcebergCommitExec {
                             catalog_table,
                             &commit_info.table_properties,
                             Some(previous_metadata_location),
+                            &new_metadata_location,
+                        )
+                        .await?;
+                    } else if let Some(catalog_table) =
+                        catalog_table.as_ref().filter(|_| !catalog_managed_table)
+                    {
+                        let new_metadata_location = Self::table_metadata_location(
+                            &table_url,
+                            &bootstrap_result.metadata_file,
+                        )?;
+                        Self::update_catalog_metadata_location(
+                            &context,
+                            catalog_table,
+                            &commit_info.table_properties,
+                            catalog_recorded_metadata_location.as_deref(),
                             &new_metadata_location,
                         )
                         .await?;

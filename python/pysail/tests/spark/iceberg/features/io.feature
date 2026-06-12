@@ -97,8 +97,8 @@ Feature: Iceberg Basic IO
         """
         INSERT INTO test_table VALUES (2, 'second')
         """
-      Then iceberg latest metadata file is v2.metadata.json
-      Then iceberg version hint is 2
+      Then iceberg latest metadata file is v3.metadata.json
+      Then iceberg version hint is 3
       When query
         """
         SELECT * FROM test_table ORDER BY id
@@ -124,8 +124,8 @@ Feature: Iceberg Basic IO
         """
         INSERT INTO test_table VALUES (2, 'second')
         """
-      Then iceberg latest metadata file is v2.metadata.json
-      Then iceberg version hint is 2
+      Then iceberg latest metadata file is v3.metadata.json
+      Then iceberg version hint is 3
       When query
         """
         SELECT * FROM test_table ORDER BY id
@@ -159,6 +159,7 @@ Feature: Iceberg Basic IO
         📂 data
           📄 *.parquet
         📂 metadata
+          📄 *.metadata.json
           📄 *.metadata.json
           📄 snap-*.avro
         """

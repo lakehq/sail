@@ -40,8 +40,6 @@ use crate::utils::WritePathMode;
 /// Strategy for persisting metadata during bootstrap
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PersistStrategy {
-    /// Overwrite the existing metadata file in place (for syncing with external catalogs)
-    InPlace,
     /// Generate and write a new version of the metadata file (standard Iceberg approach)
     NewVersion,
     /// Generate and write a new UUID-style metadata file for catalog-backed tables.
@@ -333,7 +331,7 @@ pub async fn bootstrap_empty_table_metadata(
         default_spec_id: partition_spec.spec_id(),
         last_partition_id: partition_spec.highest_field_id().unwrap_or(0),
         properties: table_properties,
-        current_snapshot_id: None,
+        current_snapshot_id: Some(-1),
         next_row_id: (format_version >= FormatVersion::V3).then_some(0),
         encryption_keys: vec![],
         snapshots: vec![],
@@ -390,7 +388,6 @@ pub async fn bootstrap_empty_table_metadata(
 ///
 /// This is used when a table was created via CREATE TABLE but has no data yet.
 /// The persist_strategy determines how the metadata is written:
-/// - InPlace: Overwrites the existing metadata file (for external catalog sync)
 /// - NewVersion: Creates a new metadata version (standard Iceberg)
 /// - NewUuidVersion: Creates a new UUID-style metadata version for catalog-backed tables
 pub async fn bootstrap_first_snapshot(
@@ -460,51 +457,6 @@ pub async fn bootstrap_first_snapshot(
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let metadata_file = match persist_strategy {
-        PersistStrategy::InPlace => {
-            // Overwrite the existing metadata file in place
-            let rel_name = if latest_meta_path.starts_with(&table_url.to_string()) {
-                latest_meta_path
-                    .strip_prefix(&table_url.to_string())
-                    .unwrap_or("metadata/00000.metadata.json")
-                    .to_string()
-            } else if let Some(fname) = latest_meta_path.rsplit('/').next() {
-                format!("metadata/{}", fname)
-            } else {
-                "metadata/00000.metadata.json".to_string()
-            };
-            let new_meta_bytes = encode_metadata_file(&rel_name, &new_meta_json)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let rel_path = object_store::path::Path::from(rel_name.as_str());
-            store_ctx
-                .prefixed
-                .put(
-                    &rel_path,
-                    object_store::PutPayload::from(Bytes::from(new_meta_bytes)),
-                )
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-            // Extract metadata filename for version-hint
-            let metadata_filename = if let Some(fname) = rel_name.rsplit('/').next() {
-                fname.to_string()
-            } else {
-                rel_name.clone()
-            };
-
-            // Write version-hint
-            let hint_path = object_store::path::Path::from("metadata/version-hint.text");
-            store_ctx
-                .prefixed
-                .put(
-                    &hint_path,
-                    object_store::PutPayload::from(Bytes::from(
-                        metadata_filename.as_bytes().to_vec(),
-                    )),
-                )
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            rel_name
-        }
         PersistStrategy::NewVersion | PersistStrategy::NewUuidVersion => {
             // Create a new metadata version
             let version = metadata_file_version_from_path(latest_meta_path)
@@ -520,7 +472,6 @@ pub async fn bootstrap_first_snapshot(
                     let file = format!("{version:05}-{}{}", uuid::Uuid::new_v4(), file_extension);
                     (format!("metadata/{file}"), file)
                 }
-                PersistStrategy::InPlace => unreachable!(),
             };
             let new_meta_bytes = encode_metadata_file(&new_meta_rel, &new_meta_json)
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
