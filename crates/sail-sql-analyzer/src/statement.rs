@@ -369,6 +369,11 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                         "CREATE TEMPORARY VIEW ... USING cannot be defined with an AS query",
                     ));
                 }
+                if if_not_exists.is_some() {
+                    return Err(SqlError::invalid(
+                        "IF NOT EXISTS cannot be used with CREATE TEMPORARY VIEW ... USING",
+                    ));
+                }
                 // The typed column list is the user-specified schema of the data
                 // source, following the `colTypeList` rule in the Spark grammar.
                 let schema = columns.map(from_ast_view_using_columns).transpose()?;

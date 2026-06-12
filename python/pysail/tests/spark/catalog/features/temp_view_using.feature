@@ -108,23 +108,23 @@ Feature: Data source temporary views
       | 1  | Alice |
       | 2  | Bob   |
 
-  @sail-only
+  # The error regexes match either engine: Sail rejects these in the analyzer,
+  # while Spark rejects them at parse time with PARSE_SYNTAX_ERROR.
+
   Scenario: USING is rejected for persistent views
-    Given statement template with error only supported for temporary views
+    Given statement template with error (only supported for temporary views|PARSE_SYNTAX_ERROR)
       """
       CREATE VIEW persistent_view_using USING parquet OPTIONS (path {{ location.sql }})
       """
 
-  @sail-only
   Scenario: USING cannot be combined with an AS query
-    Given statement template with error cannot be defined with an AS query
+    Given statement template with error (cannot be defined with an AS query|PARSE_SYNTAX_ERROR)
       """
       CREATE TEMPORARY VIEW temp_view_using_bad USING parquet OPTIONS (path {{ location.sql }}) AS SELECT 1
       """
 
-  @sail-only
   Scenario: COMMENT and TBLPROPERTIES are rejected for data source temporary views
-    Given statement template with error cannot be used with CREATE TEMPORARY VIEW
+    Given statement template with error (cannot be used with CREATE TEMPORARY VIEW|PARSE_SYNTAX_ERROR)
       """
       CREATE TEMPORARY VIEW temp_view_using_props
       USING parquet OPTIONS (path {{ location.sql }})
