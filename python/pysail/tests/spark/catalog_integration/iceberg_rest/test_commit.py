@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import urllib.parse
 import urllib.request
 from pathlib import PurePosixPath
@@ -15,6 +16,9 @@ if TYPE_CHECKING:
 
 
 NAMESPACE = "iceberg_commit_test"
+UUID_METADATA_FILE_PATTERN = re.compile(
+    r"^\d{5}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.metadata\.json$"
+)
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -30,6 +34,13 @@ def _load_table(iceberg_rest_endpoint: str, table_name: str) -> dict:
     url = f"{iceberg_rest_endpoint}/v1/namespaces/{namespace}/tables/{table}"
     with urllib.request.urlopen(url, timeout=30) as response:  # noqa: S310
         return json.load(response)
+
+
+def _assert_uuid_metadata_location(metadata_location: str, expected_version: int | None = None) -> None:
+    filename = PurePosixPath(metadata_location).name
+    assert UUID_METADATA_FILE_PATTERN.match(filename), filename
+    if expected_version is not None:
+        assert filename.startswith(f"{expected_version:05}-"), filename
 
 
 def test_ctas_records_rest_catalog_metadata_location(
@@ -49,7 +60,7 @@ def test_ctas_records_rest_catalog_metadata_location(
     table = _load_table(iceberg_rest_endpoint, table_name)
     metadata_location = table["metadata-location"]
     assert metadata_location
-    assert not PurePosixPath(metadata_location).name.startswith("v")
+    _assert_uuid_metadata_location(metadata_location)
     assert table["metadata"]["current-snapshot-id"] is not None
 
     rows = iceberg_spark.sql(f"SELECT id, name FROM {NAMESPACE}.{table_name}").collect()  # noqa: S608
@@ -74,7 +85,9 @@ def test_insert_advances_rest_catalog_metadata_location(
 
     before = _load_table(iceberg_rest_endpoint, table_name)
     before_location = before["metadata-location"]
+    _assert_uuid_metadata_location(before_location, 0)
     assert before["metadata"]["current-snapshot-id"] == -1
+    assert before["metadata"]["snapshots"] == []
     rows = iceberg_spark.sql(f"SELECT id, name FROM {NAMESPACE}.{table_name}").collect()  # noqa: S608
     assert rows == []
 
@@ -84,13 +97,19 @@ def test_insert_advances_rest_catalog_metadata_location(
     after_location = after["metadata-location"]
 
     assert after_location != before_location
-    assert not PurePosixPath(after_location).name.startswith("v")
+    _assert_uuid_metadata_location(after_location, 1)
     assert after["metadata"]["current-snapshot-id"] is not None
+    assert len(after["metadata"]["metadata-log"]) == 1
+    assert after["metadata"]["metadata-log"][0]["metadata-file"] == before_location
 
     iceberg_spark.sql(f"INSERT INTO {NAMESPACE}.{table_name} VALUES (3, 'c')")  # noqa: S608
     appended = _load_table(iceberg_rest_endpoint, table_name)
     assert appended["metadata-location"] != after_location
-    assert not PurePosixPath(appended["metadata-location"]).name.startswith("v")
+    _assert_uuid_metadata_location(appended["metadata-location"], 2)
+    assert [entry["metadata-file"] for entry in appended["metadata"]["metadata-log"]] == [
+        before_location,
+        after_location,
+    ]
 
     rows = iceberg_spark.sql(f"SELECT id, name FROM {NAMESPACE}.{table_name} ORDER BY id").collect()  # noqa: S608
     assert [(row["id"], row["name"]) for row in rows] == [(1, "a"), (2, "b"), (3, "c")]

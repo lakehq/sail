@@ -127,6 +127,8 @@ def test_iceberg_io_create_table_materializes_empty_metadata(spark, tmp_path):
         insert_metadata = json.loads(metadata_v2.read_text(encoding="utf-8"))
         assert insert_metadata["current-snapshot-id"] != -1
         assert len(insert_metadata["snapshots"]) == 1
+        assert len(insert_metadata["metadata-log"]) == 1
+        assert insert_metadata["metadata-log"][0]["metadata-file"].endswith("/metadata/v1.metadata.json")
         rows = spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect()  # noqa: S608
         assert [(row.id, row.name) for row in rows] == [(1, "one")]
     finally:

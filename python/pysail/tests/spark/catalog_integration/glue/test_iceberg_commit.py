@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 import urllib.parse
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
@@ -15,6 +17,9 @@ if TYPE_CHECKING:
 
 
 pytestmark = pytest.mark.catalog_integration
+UUID_METADATA_FILE_PATTERN = re.compile(
+    r"^\d{5}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.metadata\.json$"
+)
 
 
 def _glue_parameters(moto_endpoint: str, database: str, table: str) -> dict[str, str]:
@@ -55,6 +60,19 @@ def _metadata_filename(location: str) -> str:
     return PurePosixPath(urllib.parse.urlparse(location).path).name
 
 
+def _assert_uuid_metadata_location(location: str, expected_version: int | None = None) -> None:
+    filename = _metadata_filename(location)
+    assert UUID_METADATA_FILE_PATTERN.match(filename), filename
+    if expected_version is not None:
+        assert filename.startswith(f"{expected_version:05}-"), filename
+
+
+def _load_metadata_json(location: str) -> dict:
+    parsed = urllib.parse.urlparse(location)
+    assert parsed.scheme == "file", location
+    return json.loads(Path(urllib.parse.unquote(parsed.path)).read_text(encoding="utf-8"))
+
+
 def test_ctas_records_glue_iceberg_metadata_location(
     glue_spark: SparkSession,
     moto_endpoint: str,
@@ -79,7 +97,7 @@ def test_ctas_records_glue_iceberg_metadata_location(
 
         metadata_location = _metadata_location(moto_endpoint, database, table)
         assert metadata_location.startswith(location)
-        assert not _metadata_filename(metadata_location).startswith("v")
+        _assert_uuid_metadata_location(metadata_location)
 
         rows = glue_spark.sql(f"SELECT id, name FROM {table_fqn}").collect()
         assert [(row.id, row.name) for row in rows] == [(1, "a")]
@@ -113,7 +131,10 @@ def test_insert_advances_glue_iceberg_metadata_location(
         )
         created_location = _metadata_location(moto_endpoint, database, table)
         assert created_location.startswith(location)
-        assert not _metadata_filename(created_location).startswith("v")
+        _assert_uuid_metadata_location(created_location, 0)
+        created_metadata = _load_metadata_json(created_location)
+        assert created_metadata["current-snapshot-id"] == -1
+        assert created_metadata["snapshots"] == []
         rows = glue_spark.sql(f"SELECT id, name FROM {table_fqn}").collect()
         assert rows == []
 
@@ -121,13 +142,21 @@ def test_insert_advances_glue_iceberg_metadata_location(
         first_location = _metadata_location(moto_endpoint, database, table)
         assert first_location != created_location
         assert first_location.startswith(location)
-        assert not _metadata_filename(first_location).startswith("v")
+        _assert_uuid_metadata_location(first_location, 1)
+        first_metadata = _load_metadata_json(first_location)
+        assert len(first_metadata["metadata-log"]) == 1
+        assert first_metadata["metadata-log"][0]["metadata-file"] == created_location
 
         glue_spark.sql(f"INSERT INTO {table_fqn} VALUES (3, 'c')")
         second_location = _metadata_location(moto_endpoint, database, table)
         assert second_location != first_location
         assert second_location.startswith(location)
-        assert not _metadata_filename(second_location).startswith("v")
+        _assert_uuid_metadata_location(second_location, 2)
+        second_metadata = _load_metadata_json(second_location)
+        assert [entry["metadata-file"] for entry in second_metadata["metadata-log"]] == [
+            created_location,
+            first_location,
+        ]
 
         rows = glue_spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
         assert [(row.id, row.name) for row in rows] == [(1, "a"), (2, "b"), (3, "c")]
@@ -177,7 +206,9 @@ def test_sail_reads_and_appends_glue_iceberg_table_with_jvm_style_marker(
         glue_spark.sql(f"INSERT INTO {table_fqn} VALUES (2, 'b')")
         second_location = _metadata_location(moto_endpoint, database, table)
         assert second_location != first_location
-        assert not _metadata_filename(second_location).startswith("v")
+        _assert_uuid_metadata_location(second_location)
+        second_metadata = _load_metadata_json(second_location)
+        assert second_metadata["metadata-log"][-1]["metadata-file"] == first_location
 
         rows = glue_spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
         assert [(row.id, row.name) for row in rows] == [(1, "a"), (2, "b")]

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import urllib.parse
 from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
@@ -16,6 +17,9 @@ if TYPE_CHECKING:
 
 
 pytestmark = pytest.mark.catalog_integration
+UUID_METADATA_FILE_PATTERN = re.compile(
+    r"^\d{5}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.metadata\.json$"
+)
 
 
 def _catalog_properties(reference_spark: SparkSession, database: str, table: str) -> dict[str, str]:
@@ -58,6 +62,13 @@ def _metadata_filename(location: str) -> str:
     return PurePosixPath(urllib.parse.urlparse(location).path).name
 
 
+def _assert_uuid_metadata_location(location: str, expected_version: int | None = None) -> None:
+    filename = _metadata_filename(location)
+    assert UUID_METADATA_FILE_PATTERN.match(filename), filename
+    if expected_version is not None:
+        assert filename.startswith(f"{expected_version:05}-"), filename
+
+
 def test_sail_insert_advances_hms_iceberg_metadata_location(
     hms_s3_spark: SparkSession,
     reference_spark_s3: SparkSession,
@@ -74,12 +85,12 @@ def test_sail_insert_advances_hms_iceberg_metadata_location(
         """
     )
     first_location = _metadata_location(reference_spark_s3, hms_s3_database, table)
-    assert not _metadata_filename(first_location).startswith("v")
+    _assert_uuid_metadata_location(first_location, 0)
 
     hms_s3_spark.sql(f"INSERT INTO {table_fqn} VALUES (2, 'b'), (3, 'c')")
     second_location = _metadata_location(reference_spark_s3, hms_s3_database, table)
     assert second_location != first_location
-    assert not _metadata_filename(second_location).startswith("v")
+    _assert_uuid_metadata_location(second_location, 1)
 
     rows = hms_s3_spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
     assert [(row.id, row.name) for row in rows] == [(1, "a"), (2, "b"), (3, "c")]
@@ -118,7 +129,7 @@ def test_sail_reads_and_appends_hms_iceberg_table_with_jvm_style_marker(
     hms_s3_spark.sql(f"INSERT INTO {table_fqn} VALUES (2, 'b')")
     second_location = _metadata_location(reference_spark_s3, hms_s3_database, table)
     assert second_location != first_location
-    assert not _metadata_filename(second_location).startswith("v")
+    _assert_uuid_metadata_location(second_location)
 
     rows = hms_s3_spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
     assert [(row.id, row.name) for row in rows] == [(1, "a"), (2, "b")]
@@ -173,7 +184,7 @@ def test_hms_plain_iceberg_create_records_metadata_location(
         """
     )
     first_location = _metadata_location(reference_spark_s3, hms_s3_database, table)
-    assert not _metadata_filename(first_location).startswith("v")
+    _assert_uuid_metadata_location(first_location, 0)
 
     rows = hms_s3_spark.sql(f"SELECT id, name FROM {table_fqn}").collect()
     assert rows == []
@@ -183,7 +194,7 @@ def test_hms_plain_iceberg_create_records_metadata_location(
     hms_s3_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a')")
     second_location = _metadata_location(reference_spark_s3, hms_s3_database, table)
     assert second_location != first_location
-    assert not _metadata_filename(second_location).startswith("v")
+    _assert_uuid_metadata_location(second_location, 1)
 
     rows = reference_spark_s3.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
     assert [(row.id, row.name) for row in rows] == [(1, "a")]

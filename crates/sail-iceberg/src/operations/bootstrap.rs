@@ -396,6 +396,7 @@ pub async fn bootstrap_first_snapshot(
     commit_info: &IcebergCommitInfo,
     mut table_meta: TableMetadata,
     latest_meta_path: &str,
+    previous_metadata_file: Option<&str>,
     persist_strategy: PersistStrategy,
 ) -> Result<BootstrapResult> {
     let schema_iceberg = table_meta
@@ -427,6 +428,14 @@ pub async fn bootstrap_first_snapshot(
         timestamp_ms: commit_timestamp_ms,
         snapshot_id: snapshot.snapshot_id(),
     });
+    table_meta
+        .metadata_log
+        .push(crate::spec::metadata::table_metadata::MetadataLog {
+            timestamp_ms: commit_timestamp_ms,
+            metadata_file: previous_metadata_file
+                .unwrap_or(latest_meta_path)
+                .to_string(),
+        });
     table_meta.last_sequence_number = 1;
     table_meta.last_updated_ms = commit_timestamp_ms;
     if let Some(added_rows) = snapshot.added_rows {

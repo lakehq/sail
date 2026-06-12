@@ -785,12 +785,17 @@ impl ExecutionPlan for IcebergCommitExec {
                     } else {
                         PersistStrategy::NewVersion
                     };
+                    let previous_metadata_file = catalog_fallback_table
+                        .is_some()
+                        .then_some(catalog_metadata_location.as_deref())
+                        .flatten();
                     let bootstrap_result = bootstrap_first_snapshot(
                         &table_url,
                         &store_ctx,
                         &commit_info,
                         table_meta,
                         &latest_meta,
+                        previous_metadata_file,
                         persist_strategy,
                     )
                     .await?;
