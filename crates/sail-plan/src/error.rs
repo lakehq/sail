@@ -67,6 +67,10 @@ impl PlanError {
     pub fn internal(message: impl Into<String>) -> Self {
         PlanError::InternalError(message.into())
     }
+
+    pub fn analysis(message: impl Into<String>) -> Self {
+        PlanError::AnalysisError(message.into())
+    }
 }
 
 impl From<CommonError> for PlanError {
