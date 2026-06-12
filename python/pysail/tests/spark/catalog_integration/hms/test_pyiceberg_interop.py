@@ -71,9 +71,7 @@ def _foreign_rows(minio_host_endpoint: str, database: str, table: str) -> list[t
         config=Config(signature_version="s3v4"),
     )
     response = s3.list_objects_v2(Bucket=_HMS_S3_BUCKET, Prefix=f"{database}/{table}/metadata/")
-    metadata_keys = sorted(
-        obj["Key"] for obj in response.get("Contents", []) if obj["Key"].endswith(".metadata.json")
-    )
+    metadata_keys = sorted(obj["Key"] for obj in response.get("Contents", []) if obj["Key"].endswith(".metadata.json"))
     assert metadata_keys, f"no Iceberg metadata files found for {database}.{table}"
     static_table = StaticTable.from_metadata(
         f"s3://{_HMS_S3_BUCKET}/{metadata_keys[-1]}",
