@@ -53,6 +53,21 @@ DataFrame[...]
 |  2|
 +---+
 
+The view can be created with a comment
+
+>>> spark.sql("""
+... CREATE TEMPORARY VIEW v_tmp_comment (id INT COMMENT 'Unique identification number', name STRING COMMENT 'Some name')
+... USING parquet
+... OPTIONS (path '/tmp/sail_view_using/parquet_data')
+... """)
+DataFrame[...]
+>>> spark.sql("""
+... CREATE TEMPORARY VIEW v_global_tmp_comment (id INT COMMENT 'Unique identification number', name STRING COMMENT 'Some name')
+... USING parquet
+... OPTIONS (path '/tmp/sail_view_using/parquet_data')
+... """)
+DataFrame[...]
+
 Global temporary views are readable via the `global_temp` database.
 
 >>> spark.sql("""
