@@ -382,19 +382,19 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                         "COMMENT or TBLPROPERTIES cannot be used with CREATE TEMPORARY VIEW ... USING",
                     ));
                 }
-                let mut options = options
+                let options = options
                     .map(|(_, x)| from_ast_property_list(x))
                     .transpose()?
                     .unwrap_or_default();
-                let mut paths = vec![];
-                options.retain(|(key, value)| {
-                    if key.eq_ignore_ascii_case("path") {
-                        paths.push(value.clone());
-                        false
-                    } else {
-                        true
-                    }
-                });
+                // The path is also kept in the options, since data sources such as
+                // Python data sources read the path from the options.
+                // The last occurrence wins, following the case-insensitive option
+                // map semantics in Spark.
+                let paths = options
+                    .iter()
+                    .rfind(|(key, _)| key.eq_ignore_ascii_case("path") || key.eq_ignore_ascii_case("location"))
+                    .map(|(_, value)| vec![value.clone()])
+                    .unwrap_or_default();
                 let input = spec::QueryPlan::new(spec::QueryNode::Read {
                     read_type: spec::ReadType::DataSource(Box::new(spec::ReadDataSource {
                         format: Some(format.value),

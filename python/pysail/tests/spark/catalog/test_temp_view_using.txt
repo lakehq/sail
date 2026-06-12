@@ -14,6 +14,8 @@ DataFrame[...]
 >>> spark.sql("SELECT count(*) AS cnt FROM v_using").collect()
 [Row(cnt=2)]
 
+>>> spark.sql("DROP VIEW IF EXISTS global_temp.v_using_global")
+DataFrame[...]
 >>> spark.sql(f"CREATE GLOBAL TEMPORARY VIEW v_using_global USING parquet OPTIONS (path '{path}')")
 DataFrame[...]
 >>> spark.sql("SELECT id FROM global_temp.v_using_global ORDER BY id").collect()

@@ -59,6 +59,10 @@ Feature: Data source temporary views
       """
       DROP VIEW IF EXISTS global_temp.parquet_global_temp_view
       """
+    Given statement
+      """
+      DROP VIEW IF EXISTS global_temp.parquet_global_temp_view
+      """
     Given statement template
       """
       CREATE GLOBAL TEMPORARY VIEW parquet_global_temp_view USING parquet OPTIONS (path {{ location.sql }})
