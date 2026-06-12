@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
+import os
 import re
 import socket
 import time
@@ -31,7 +32,9 @@ if TYPE_CHECKING:
 
     from pyspark.sql import SparkSession
 
-_HMS_IMAGE = "apache/hive:4.0.1"
+# The default image is multi-arch; `apache/hive:3.1.3` (amd64-only) can be
+# selected on amd64 hosts to exercise the legacy HMS 3.x Thrift methods.
+_HMS_IMAGE = os.environ.get("SAIL_TEST_HMS_IMAGE", "apache/hive:4.0.1")
 _HMS_METASTORE_PORT = 9083
 _HMS_STARTUP_TIMEOUT = 180  # seconds
 # Use 127.0.0.1 explicitly instead of 'localhost' to avoid IPv6 resolution

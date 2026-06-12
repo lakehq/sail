@@ -304,9 +304,7 @@ pub(crate) fn inject_spark_metadata(
     let schema_json = serde_json::to_string(&schema_value).map_err(|e| {
         CatalogError::External(format!("Failed to serialize Spark schema JSON: {e}"))
     })?;
-    for (key, value) in split_large_table_prop(SPARK_SCHEMA_KEY, &schema_json, 4000) {
-        parameters.insert(FastStr::from_string(key), FastStr::from_string(value));
-    }
+    write_large_table_prop(parameters, SPARK_SCHEMA_KEY, &schema_json);
 
     if !partition_columns.is_empty() {
         parameters.insert(
@@ -388,18 +386,24 @@ pub(crate) fn alter_spark_column_default(
         CatalogError::External(format!("Failed to serialize Spark schema JSON: {e}"))
     })?;
     let parameters = table.parameters.get_or_insert_with(AHashMap::new);
-    let num_parts_prefix = format!("{SPARK_SCHEMA_KEY}.numParts");
-    let part_prefix = format!("{SPARK_SCHEMA_KEY}.part.");
-    parameters.retain(|key, _| {
-        let key = key.as_str();
-        key != SPARK_SCHEMA_KEY
-            && !key.starts_with(&num_parts_prefix)
-            && !key.starts_with(&part_prefix)
-    });
-    for (key, value) in split_large_table_prop(SPARK_SCHEMA_KEY, &schema_json, 4000) {
-        parameters.insert(FastStr::from_string(key), FastStr::from_string(value));
-    }
+    write_large_table_prop(parameters, SPARK_SCHEMA_KEY, &schema_json);
     Ok(())
+}
+
+/// Writes a potentially large table property, replacing any existing plain
+/// or chunked values for the key. Removing stale keys matters for
+/// correctness since `read_large_table_prop` prefers the plain key, which
+/// would otherwise shadow rewritten chunks.
+fn write_large_table_prop(parameters: &mut AHashMap<FastStr, FastStr>, key: &str, value: &str) {
+    let num_parts_prefix = format!("{key}.numParts");
+    let part_prefix = format!("{key}.part.");
+    parameters.retain(|k, _| {
+        let k = k.as_str();
+        k != key && !k.starts_with(&num_parts_prefix) && !k.starts_with(&part_prefix)
+    });
+    for (k, v) in split_large_table_prop(key, value, 4000) {
+        parameters.insert(FastStr::from_string(k), FastStr::from_string(v));
+    }
 }
 
 pub(crate) fn build_view(

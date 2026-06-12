@@ -17,6 +17,8 @@ if TYPE_CHECKING:
     from pyspark.sql import SparkSession
 
 _HMS_S3_BUCKET = "hms-warehouse"
+_MINIO_USER = "admin"
+_MINIO_PASSWORD = "password"  # noqa: S105
 
 
 def _create_pyiceberg_table(catalog, database: str, table: str, **kwargs) -> None:
@@ -38,18 +40,60 @@ def _create_pyiceberg_table(catalog, database: str, table: str, **kwargs) -> Non
             location=f"s3://{_HMS_S3_BUCKET}/{database}/{table}",
             **kwargs,
         )
-    except TApplicationException:
+    except TApplicationException as exc:
         # The thrift bindings bundled with pyiceberg predate HMS 4.x, which
         # removed legacy methods such as `get_table`. Table creation itself
-        # succeeds; only the trailing table load fails, so the error is
-        # ignored here. Reads through pyiceberg are not possible against
-        # HMS 4.x, so the tests verify the written data through Sail.
-        pass
+        # succeeds; only the trailing table load fails, so that error is
+        # ignored here. Reads through the pyiceberg Hive catalog are not
+        # possible against HMS 4.x, so the tests read back through
+        # `StaticTable` instead.
+        if exc.type != TApplicationException.UNKNOWN_METHOD:
+            raise
+
+
+def _foreign_rows(minio_host_endpoint: str, database: str, table: str) -> list[tuple[int, str]]:
+    """Read the table as a foreign engine would, without HMS thrift access.
+
+    The latest Iceberg metadata file under the table location is loaded with
+    pyiceberg's ``StaticTable``, verifying that Sail's commit is readable by
+    foreign engines.
+    """
+    import boto3
+    from botocore.config import Config
+    from pyiceberg.table import StaticTable
+
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=minio_host_endpoint,
+        aws_access_key_id=_MINIO_USER,
+        aws_secret_access_key=_MINIO_PASSWORD,
+        region_name="us-east-1",
+        config=Config(signature_version="s3v4"),
+    )
+    response = s3.list_objects_v2(Bucket=_HMS_S3_BUCKET, Prefix=f"{database}/{table}/metadata/")
+    metadata_keys = sorted(
+        obj["Key"] for obj in response.get("Contents", []) if obj["Key"].endswith(".metadata.json")
+    )
+    assert metadata_keys, f"no Iceberg metadata files found for {database}.{table}"
+    static_table = StaticTable.from_metadata(
+        f"s3://{_HMS_S3_BUCKET}/{metadata_keys[-1]}",
+        properties={
+            "s3.endpoint": minio_host_endpoint,
+            "s3.access-key-id": _MINIO_USER,
+            "s3.secret-access-key": _MINIO_PASSWORD,
+            "s3.path-style-access": "true",
+            "s3.region": "us-east-1",
+        },
+    )
+    data = static_table.scan().to_arrow()
+    rows = sorted(zip(data["id"].to_pylist(), data["text"].to_pylist(), strict=False))
+    return [(int(i), t) for i, t in rows]
 
 
 def test_insert_into_pyiceberg_created_table(
     hms_spark: SparkSession,
     pyiceberg_hive_catalog,
+    minio_host_endpoint: str,
     hms_database: str,
 ) -> None:
     table = "foreign_insert"
@@ -59,11 +103,15 @@ def test_insert_into_pyiceberg_created_table(
 
     rows = hms_spark.sql(f"SELECT id, text FROM {hms_database}.{table} ORDER BY id").collect()
     assert [(row.id, row.text) for row in rows] == [(1, "hello")]
+    # Verify through pyiceberg as well so we know the commit is visible to
+    # foreign engines, not just to Sail.
+    assert _foreign_rows(minio_host_endpoint, hms_database, table) == [(1, "hello")]
 
 
 def test_write_to_append_pyiceberg_created_table(
     hms_spark: SparkSession,
     pyiceberg_hive_catalog,
+    minio_host_endpoint: str,
     hms_database: str,
 ) -> None:
     table = "foreign_append"
@@ -74,6 +122,7 @@ def test_write_to_append_pyiceberg_created_table(
 
     rows = hms_spark.sql(f"SELECT id, text FROM {hms_database}.{table} ORDER BY id").collect()
     assert [(row.id, row.text) for row in rows] == [(1, "hello")]
+    assert _foreign_rows(minio_host_endpoint, hms_database, table) == [(1, "hello")]
 
 
 def test_insert_into_pyiceberg_table_with_string_default(

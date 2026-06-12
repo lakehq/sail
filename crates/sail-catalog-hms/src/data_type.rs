@@ -231,7 +231,7 @@ fn spark_field_json(field: &Field) -> CatalogResult<Value> {
                     .any(|k| k.as_str() == *key)
         })
         .collect();
-    entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+    entries.sort_by_key(|(a, _)| *a);
     for (key, value) in entries {
         metadata.insert(key.clone(), Value::String(value.clone()));
     }

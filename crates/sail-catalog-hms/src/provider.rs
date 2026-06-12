@@ -529,39 +529,45 @@ impl HmsCatalogProvider {
         table_name: &str,
         context: &str,
     ) -> CatalogResult<Table> {
+        // `get_table_req` is available since Hive 2.1 and is the only variant
+        // served by HMS 4.x, which removed the legacy `get_table` method. The
+        // legacy method is kept as a fallback for older metastores.
         match client
-            .get_table(db_name.to_string().into(), table_name.to_string().into())
+            .get_table_req(GetTableRequest {
+                db_name: db_name.to_string().into(),
+                tbl_name: table_name.to_string().into(),
+                capabilities: None,
+            })
             .await
         {
-            Ok(MaybeException::Ok(table)) => Ok(table),
-            Ok(MaybeException::Exception(ThriftHiveMetastoreGetTableException::O2(_))) => Err(
+            Ok(MaybeException::Ok(result)) => Ok(result.table),
+            Ok(MaybeException::Exception(ThriftHiveMetastoreGetTableReqException::O2(_))) => Err(
                 CatalogError::NotFound(CatalogObject::Table, format!("{db_name}.{table_name}")),
             ),
             Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
                 "{context} '{db_name}.{table_name}': {err:?}"
             ))),
-            Err(err) if err.to_string().contains("Invalid method name: 'get_table'") => {
-                // HMS 4.x removed the legacy `get_table` method.
+            Err(err)
+                if err
+                    .to_string()
+                    .contains("Invalid method name: 'get_table_req'") =>
+            {
                 match client
-                    .get_table_req(GetTableRequest {
-                        db_name: db_name.to_string().into(),
-                        tbl_name: table_name.to_string().into(),
-                        capabilities: None,
-                    })
+                    .get_table(db_name.to_string().into(), table_name.to_string().into())
                     .await
                 {
-                    Ok(MaybeException::Ok(result)) => Ok(result.table),
-                    Ok(MaybeException::Exception(ThriftHiveMetastoreGetTableReqException::O2(
-                        _,
-                    ))) => Err(CatalogError::NotFound(
-                        CatalogObject::Table,
-                        format!("{db_name}.{table_name}"),
-                    )),
+                    Ok(MaybeException::Ok(table)) => Ok(table),
+                    Ok(MaybeException::Exception(ThriftHiveMetastoreGetTableException::O2(_))) => {
+                        Err(CatalogError::NotFound(
+                            CatalogObject::Table,
+                            format!("{db_name}.{table_name}"),
+                        ))
+                    }
                     Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
-                        "{context} '{db_name}.{table_name}' via get_table_req: {err:?}"
+                        "{context} '{db_name}.{table_name}' via legacy get_table: {err:?}"
                     ))),
                     Err(err) => Err(Self::hms_client_error(
-                        &format!("{context} '{db_name}.{table_name}' via get_table_req"),
+                        &format!("{context} '{db_name}.{table_name}' via legacy get_table"),
                         err,
                     )),
                 }
