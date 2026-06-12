@@ -70,7 +70,11 @@ impl ScalarUDFImpl for StructField {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         if arg_types.len() != 2 {
-            return Err(invalid_arg_count_exec_err(self.name(), (2, 2), arg_types.len()));
+            return Err(invalid_arg_count_exec_err(
+                self.name(),
+                (2, 2),
+                arg_types.len(),
+            ));
         }
         if !matches!(arg_types[0], DataType::Struct(_)) {
             return plan_err!(
