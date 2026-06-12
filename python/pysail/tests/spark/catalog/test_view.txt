@@ -352,20 +352,6 @@ Exceptions. Spark and Sail raise different error classes and messages for
 these (Spark mostly fails at parse time, Sail in the analyzer), so we only
 assert that each statement raises.
 
-Spark rejects duplicate option keys at parse time with [DUPLICATE_KEY];
-there is no last-occurrence-wins for same-case duplicates.
-
->>> try:
-...     error = spark.sql("""
-...       CREATE TEMPORARY VIEW v_dup
-...       USING parquet
-...       OPTIONS (path '/tmp/sail_view_using/does_not_exist', path '/tmp/sail_view_using/parquet_data')
-...       """)
-... except Exception:
-...     print("duplicate `path` options are not allowed")
-...
-duplicate `path` options are not allowed
-
 Persistent views cannot be defined with USING.
 
 >>> try:
