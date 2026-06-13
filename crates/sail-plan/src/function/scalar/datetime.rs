@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{
-    DataType, IntervalDayTimeType, IntervalUnit, IntervalYearMonthType, TimeUnit,
+    DataType, IntervalDayTimeType, IntervalMonthDayNano, IntervalUnit, IntervalYearMonthType,
+    TimeUnit,
 };
 use datafusion::functions::expr_fn;
 use datafusion_common::{DFSchemaRef, ScalarValue};
@@ -17,11 +18,13 @@ use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
+use sail_function::scalar::datetime::spark_interval::SparkCalendarInterval;
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
 use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp_ntz::SparkMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
+use sail_function::scalar::datetime::spark_session_window::SparkSessionWindow;
 use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
@@ -1156,6 +1159,97 @@ fn window_time(input: ScalarFunctionInput) -> PlanResult<Expr> {
     ))
 }
 
+/// Normalizes a `session_window` gap argument into an `Interval(MonthDayNano)`
+/// expression. The aggregate resolver later computes `end = ts + gap` per row, so
+/// the gap must end up as an interval the timestamp can be added to.
+fn session_window_gap(gap: Expr, schema: &DFSchemaRef) -> PlanResult<Expr> {
+    // A literal gap folds to a constant interval at plan time. Month-bearing
+    // strings are valid (like Spark); a year-month *typed* interval is rejected
+    // (like Spark); a non-positive literal is NOT an error — the `end > ts` row
+    // filter then drops every row, matching Spark.
+    if let Expr::Literal(value, _) = &gap {
+        if let Some(s) = value.try_as_str().flatten() {
+            let (months, days, nanos) = match parse_interval(s)
+                .map_err(|e| PlanError::invalid(format!("invalid session_window gap {s:?}: {e}")))?
+            {
+                IntervalValue::YearMonth { months } => (months, 0, 0),
+                IntervalValue::Microsecond { microseconds } => (0, 0, microseconds * 1_000),
+                IntervalValue::MonthDayNanosecond {
+                    months,
+                    days,
+                    nanoseconds,
+                } => (months, days, nanoseconds),
+            };
+            return Ok(lit(ScalarValue::IntervalMonthDayNano(Some(
+                IntervalMonthDayNano::new(months, days, nanos),
+            ))));
+        }
+        if let ScalarValue::IntervalYearMonth(_) = value {
+            return Err(PlanError::invalid(
+                "gap duration expression used in session window must be an interval string, \
+                 a calendar interval, or a day-time interval, but got a year-month interval",
+            ));
+        }
+        if let ScalarValue::IntervalMonthDayNano(Some(v)) = value {
+            return Ok(lit(ScalarValue::IntervalMonthDayNano(Some(*v))));
+        }
+        let micros = window_interval_micros(&gap)?;
+        return Ok(lit(ScalarValue::IntervalMonthDayNano(Some(
+            IntervalMonthDayNano::new(0, 0, micros * 1_000),
+        ))));
+    }
+    // Otherwise the gap is a per-row (dynamic) expression. Year-month *typed*
+    // intervals are rejected statically, matching Spark; day-time typed
+    // intervals are accepted (Spark rejects them, but they are unambiguous).
+    match gap.get_type(schema)? {
+        // Spark interval strings are parsed per row at run time by this UDF.
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+            Ok(ScalarUDF::new_from_impl(SparkCalendarInterval::new()).call(vec![gap]))
+        }
+        DataType::Interval(IntervalUnit::YearMonth) => Err(PlanError::invalid(
+            "gap duration expression used in session window must be an interval string, \
+             a calendar interval, or a day-time interval, but got a year-month interval",
+        )),
+        // Already a calendar interval: nothing to do.
+        DataType::Interval(IntervalUnit::MonthDayNano) => Ok(gap),
+        // Day-time interval or a duration: purely time-based (no month component),
+        // so normalize to MonthDayNano for a single, predictable `ts + gap` type.
+        DataType::Interval(IntervalUnit::DayTime) | DataType::Duration(_) => {
+            Ok(cast(gap, DataType::Interval(IntervalUnit::MonthDayNano)))
+        }
+        other => Err(PlanError::invalid(format!(
+            "session_window gap must be an interval or interval-string expression, got {other:?}"
+        ))),
+    }
+}
+
+/// The Spark `session_window(timeColumn, gapDuration)` time function. Sessions
+/// merge across rows, so this cannot be a per-row expansion: it emits a
+/// `SparkSessionWindow` marker (cast time column + normalized gap) that the
+/// aggregate resolver rewrites into a `SessionWindowNode`.
+fn session_window(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let schema = input.function_context.schema;
+    let session_tz = input.function_context.plan_config.session_timezone.clone();
+    let args = input.arguments;
+    if args.len() != 2 {
+        return Err(PlanError::invalid(format!(
+            "session_window requires exactly 2 arguments (time column, gap duration), got {}",
+            args.len()
+        )));
+    }
+    let mut args = args.into_iter();
+    let (Some(time), Some(gap)) = (args.next(), args.next()) else {
+        return Err(PlanError::internal(
+            "session_window arguments missing after length check",
+        ));
+    };
+    // Cast the time column to a microsecond timestamp (same rule as `window`).
+    let field_type = window_field_type(&time.get_type(schema)?, &session_tz)?;
+    let time_ts = cast(time, field_type);
+    let gap_interval = session_window_gap(gap, schema)?;
+    Ok(ScalarUDF::new_from_impl(SparkSessionWindow::new()).call(vec![time_ts, gap_interval]))
+}
+
 pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -1254,7 +1348,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("now", F::custom(current_timestamp_microseconds)),
         ("quarter", F::unary(|arg| integer_part(arg, "QUARTER"))),
         ("second", F::unary(|arg| integer_part(arg, "SECOND"))),
-        ("session_window", F::unknown("session_window")),
+        ("session_window", F::custom(session_window)),
         ("time_bucket", F::unknown("time_bucket")),
         ("time_from_micros", F::unknown("time_from_micros")),
         ("time_from_millis", F::unknown("time_from_millis")),

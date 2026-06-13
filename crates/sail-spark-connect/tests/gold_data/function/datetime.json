@@ -39,7 +39,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: session_window"
+        "success": "ok"
       }
     },
     {
@@ -82,7 +82,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: session_window"
+        "success": "ok"
       }
     },
     {

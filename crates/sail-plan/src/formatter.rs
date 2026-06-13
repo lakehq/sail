@@ -494,6 +494,9 @@ impl PlanFormatter for SparkPlanFormatter {
             "timestamp" | "date" => Ok(arguments.one()?.to_string()),
             // Spark always names the time window column `window`.
             "window" => Ok("window".to_string()),
+            // Likewise, the session window grouping column is always named
+            // `session_window`, so `session_window.start` / `.end` resolve.
+            "session_window" => Ok("session_window".to_string()),
             "to_unix_timestamp" => {
                 let mut argv = arguments.clone();
                 if argv.len() == 1 {

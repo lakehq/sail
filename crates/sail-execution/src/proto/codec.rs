@@ -21,7 +21,7 @@ use datafusion::datasource::physical_plan::{
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
-use datafusion::execution::TaskContext;
+use datafusion::execution::{FunctionRegistry, TaskContext};
 use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
@@ -34,6 +34,7 @@ use datafusion::logical_expr::{
     AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF,
 };
 use datafusion::parquet::arrow::PARQUET_FIELD_ID_META_KEY;
+use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_expr::equivalence::{EquivalenceClass, EquivalenceGroup};
 use datafusion::physical_expr::expressions::{Column, LambdaExpr, LambdaVariable};
 use datafusion::physical_expr::{
@@ -50,14 +51,19 @@ use datafusion::physical_plan::work_table::WorkTableExec;
 use datafusion::physical_plan::{ExecutionPlan, PlanProperties};
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
 use datafusion_proto::physical_plan::from_proto::{
-    parse_physical_sort_exprs, parse_protobuf_file_scan_config, parse_protobuf_file_scan_schema,
-    parse_protobuf_partitioning, parse_table_schema_from_proto,
+    parse_physical_exprs, parse_physical_sort_exprs, parse_protobuf_file_scan_config,
+    parse_protobuf_file_scan_schema, parse_protobuf_partitioning, parse_table_schema_from_proto,
 };
 use datafusion_proto::physical_plan::to_proto::{
-    serialize_file_scan_config, serialize_partitioning, serialize_physical_sort_exprs,
+    serialize_file_scan_config, serialize_partitioning, serialize_physical_aggr_expr,
+    serialize_physical_sort_exprs,
 };
 use datafusion_proto::physical_plan::{PhysicalExtensionCodec, PhysicalPlanDecodeContext};
-use datafusion_proto::protobuf::{JoinType as ProtoJoinType, PhysicalSortExprNode};
+use datafusion_proto::protobuf::physical_aggregate_expr_node::AggregateFunction as ProtoAggregateFunction;
+use datafusion_proto::protobuf::physical_expr_node::ExprType as PhysicalExprType;
+use datafusion_proto::protobuf::{
+    JoinType as ProtoJoinType, PhysicalExprNode, PhysicalSortExprNode,
+};
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use datafusion_spark::function::array::shuffle::SparkShuffle;
 use datafusion_spark::function::bitmap::bitmap_count::BitmapCount;
@@ -276,6 +282,8 @@ use sail_physical_plan::remote_checkpoint::{
     CheckpointDataSource, RemoteCheckpointCommitExec, RemoteCheckpointWriteExec,
 };
 use sail_physical_plan::schema_pivot::SchemaPivotExec;
+use sail_physical_plan::session_aggregate::SessionAggregateExec;
+use sail_physical_plan::session_window::SessionWindowExec;
 use sail_physical_plan::show_string::ShowStringExec;
 use sail_physical_plan::spark_partition_id::SparkPartitionIdExec;
 use sail_physical_plan::streaming::collector::StreamCollectorExec;
@@ -1288,6 +1296,107 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Arc::new(schema),
                 )?))
             }
+            NodeKind::SessionWindow(r#gen::SessionWindowExecNode {
+                input,
+                partition_columns,
+                time_column,
+                end_column,
+                output_column,
+                schema,
+            }) => {
+                let schema = try_decode_schema(&schema)?;
+                Ok(Arc::new(SessionWindowExec::try_new(
+                    try_decode_physical_plan(ctx, self, &input)?,
+                    partition_columns,
+                    time_column,
+                    end_column,
+                    output_column,
+                    Arc::new(schema),
+                )?))
+            }
+            NodeKind::SessionAggregate(r#gen::SessionAggregateExecNode {
+                input,
+                partition_columns,
+                time_column,
+                end_column,
+                group_columns,
+                session_output,
+                aggregates,
+                schema,
+            }) => {
+                let input = try_decode_physical_plan(ctx, self, &input)?;
+                let schema = Arc::new(try_decode_schema(&schema)?);
+                let input_schema = input.schema();
+                let decode_ctx = PhysicalPlanDecodeContext::new(ctx, self);
+                let converter = RemotePhysicalProtoConverter {};
+                // Each aggregate: a serialized `AggregateExpr`, its output
+                // alias, and an optional `FILTER (WHERE ...)` predicate applied
+                // by this operator.
+                let mut decoded_aggregates = Vec::with_capacity(aggregates.len());
+                let mut filters = Vec::with_capacity(aggregates.len());
+                for agg in aggregates {
+                    let node = try_decode_message::<PhysicalExprNode>(&agg.expr)?;
+                    let Some(PhysicalExprType::AggregateExpr(agg_node)) = node.expr_type else {
+                        return Err(plan_datafusion_err!(
+                            "SessionAggregate expected a serialized AggregateExpr"
+                        ));
+                    };
+                    let Some(ProtoAggregateFunction::UserDefinedAggrFunction(udaf_name)) =
+                        &agg_node.aggregate_function
+                    else {
+                        return Err(plan_datafusion_err!(
+                            "SessionAggregate expected a user-defined aggregate function"
+                        ));
+                    };
+                    let args = parse_physical_exprs(
+                        &agg_node.expr,
+                        &decode_ctx,
+                        input_schema.as_ref(),
+                        &converter,
+                    )?;
+                    let order_bys = parse_physical_sort_exprs(
+                        &agg_node.ordering_req,
+                        &decode_ctx,
+                        input_schema.as_ref(),
+                        &converter,
+                    )?;
+                    // Prefer the serialized UDAF definition, falling back to
+                    // the registry by name (as datafusion's decode does).
+                    let udaf = match &agg_node.fun_definition {
+                        Some(buf) => self.try_decode_udaf(udaf_name, buf)?,
+                        None => ctx
+                            .udaf(udaf_name)
+                            .or_else(|_| self.try_decode_udaf(udaf_name, &[]))?,
+                    };
+                    let aggregate = AggregateExprBuilder::new(udaf, args)
+                        .schema(input_schema.clone())
+                        .alias(agg.output_name)
+                        .with_ignore_nulls(agg_node.ignore_nulls)
+                        .with_distinct(agg_node.distinct)
+                        .order_by(order_bys)
+                        .build()?;
+                    let filter = agg
+                        .filter
+                        .as_ref()
+                        .map(|bytes| {
+                            try_decode_physical_expr(ctx, self, bytes, input_schema.as_ref())
+                        })
+                        .transpose()?;
+                    decoded_aggregates.push(Arc::new(aggregate));
+                    filters.push(filter);
+                }
+                Ok(Arc::new(SessionAggregateExec::try_new(
+                    input,
+                    partition_columns,
+                    time_column,
+                    end_column,
+                    group_columns,
+                    session_output,
+                    decoded_aggregates,
+                    filters,
+                    schema,
+                )?))
+            }
             NodeKind::Coalesce(r#gen::CoalesceExecNode {
                 input,
                 output_partitions,
@@ -2295,6 +2404,55 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::SparkPartitionId(r#gen::SparkPartitionIdExecNode {
                 input,
                 column_name: spark_partition_id.column_name().to_string(),
+                schema,
+            })
+        } else if let Some(session_window) = node.downcast_ref::<SessionWindowExec>() {
+            let input = try_encode_physical_plan(self, session_window.input().clone())?;
+            let schema = try_encode_schema(session_window.schema().as_ref())?;
+            NodeKind::SessionWindow(r#gen::SessionWindowExecNode {
+                input,
+                partition_columns: session_window.partition_columns().to_vec(),
+                time_column: session_window.time_column().to_string(),
+                end_column: session_window.end_column().to_string(),
+                output_column: session_window.output_column().to_string(),
+                schema,
+            })
+        } else if let Some(session_aggregate) = node.downcast_ref::<SessionAggregateExec>() {
+            let input = try_encode_physical_plan(self, session_aggregate.input().clone())?;
+            let schema = try_encode_schema(session_aggregate.schema().as_ref())?;
+            // Use datafusion's physical-aggregate round-trip so the full UDAF
+            // definition is carried; the alias and optional filter predicate
+            // live alongside it.
+            let aggregates = session_aggregate
+                .aggregates()
+                .iter()
+                .zip(session_aggregate.filters().iter())
+                .map(|(agg, filter)| {
+                    let expr = serialize_physical_aggr_expr(
+                        Arc::clone(agg),
+                        self,
+                        &RemotePhysicalProtoConverter {},
+                    )?
+                    .encode_to_vec();
+                    let filter = match filter {
+                        Some(f) => Some(try_encode_physical_expr(self, f)?),
+                        None => None,
+                    };
+                    Ok(r#gen::SessionAggregateFunctionNode {
+                        expr,
+                        output_name: agg.name().to_string(),
+                        filter,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            NodeKind::SessionAggregate(r#gen::SessionAggregateExecNode {
+                input,
+                partition_columns: session_aggregate.partition_columns().to_vec(),
+                time_column: session_aggregate.time_column().to_string(),
+                end_column: session_aggregate.end_column().to_string(),
+                group_columns: session_aggregate.group_columns().to_vec(),
+                session_output: session_aggregate.session_output().to_string(),
+                aggregates,
                 schema,
             })
         } else if let Some(coalesce) = node.downcast_ref::<CoalesceExec>() {
@@ -6489,6 +6647,103 @@ mod tests {
 
         assert!(decoded.inner().downcast_ref::<SparkDatePart>().is_some());
         assert_eq!(decoded.name(), "date_part");
+
+        Ok(())
+    }
+
+    /// Round-trips a `SessionAggregateExec` (plain + `FILTER (WHERE ...)`
+    /// aggregates) through the codec and checks every field survives.
+    #[test]
+    fn test_round_trip_session_aggregate_exec() -> Result<()> {
+        use datafusion::arrow::datatypes::{DataType, Field, Fields, Schema, TimeUnit};
+        use datafusion::functions_aggregate::count::count_udaf;
+        use datafusion::functions_aggregate::sum::sum_udaf;
+        use datafusion::logical_expr::Operator;
+        use datafusion::physical_expr::expressions::{BinaryExpr, Column, lit};
+        use datafusion::physical_plan::empty::EmptyExec;
+        use datafusion::prelude::SessionContext;
+
+        let ts = DataType::Timestamp(TimeUnit::Microsecond, None);
+        // Input to the fused operator: the key, the projected time/end columns,
+        // and an aggregate input column.
+        let input_schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Utf8, true),
+            Field::new("#t", ts.clone(), true),
+            Field::new("#e0", ts.clone(), true),
+            Field::new("v", DataType::Int64, true),
+        ]));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(input_schema.clone()));
+
+        // Output schema: group columns (key, then the `{start, end}` session
+        // struct), then the two aggregate outputs.
+        let struct_type = DataType::Struct(Fields::from(vec![
+            Field::new("start", ts.clone(), true),
+            Field::new("end", ts.clone(), true),
+        ]));
+        let output_schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Utf8, true),
+            Field::new("#w", struct_type, true),
+            Field::new("total", DataType::Int64, true),
+            Field::new("cnt", DataType::Int64, true),
+        ]));
+
+        let v_col = || Arc::new(Column::new("v", 3)) as Arc<dyn PhysicalExpr>;
+        let total = AggregateExprBuilder::new(sum_udaf(), vec![v_col()])
+            .schema(input_schema.clone())
+            .alias("total")
+            .build()?;
+        let cnt = AggregateExprBuilder::new(count_udaf(), vec![v_col()])
+            .schema(input_schema.clone())
+            .alias("cnt")
+            .build()?;
+        // `count(v) FILTER (WHERE v > 0)` exercises the per-aggregate filter path.
+        let filter: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            v_col(),
+            Operator::Gt,
+            lit(ScalarValue::Int64(Some(0))),
+        ));
+
+        let exec = SessionAggregateExec::try_new(
+            input,
+            vec!["k".to_string()],
+            "#t".to_string(),
+            "#e0".to_string(),
+            vec!["k".to_string(), "#w".to_string()],
+            "#w".to_string(),
+            vec![Arc::new(total), Arc::new(cnt)],
+            vec![None, Some(filter.clone())],
+            output_schema.clone(),
+        )?;
+
+        let codec = RemoteExecutionCodec;
+        let mut buf = vec![];
+        codec.try_encode(Arc::new(exec) as Arc<dyn ExecutionPlan>, &mut buf)?;
+
+        let ctx = SessionContext::new().task_ctx();
+        let decoded = codec.try_decode(&buf, &[], &ctx)?;
+        let decoded = decoded
+            .downcast_ref::<SessionAggregateExec>()
+            .ok_or_else(|| plan_datafusion_err!("decoded plan should be a SessionAggregateExec"))?;
+
+        assert_eq!(decoded.partition_columns(), ["k".to_string()]);
+        assert_eq!(decoded.time_column(), "#t");
+        assert_eq!(decoded.end_column(), "#e0");
+        assert_eq!(decoded.group_columns(), ["k".to_string(), "#w".to_string()]);
+        assert_eq!(decoded.session_output(), "#w");
+        assert_eq!(decoded.schema(), output_schema);
+
+        assert_eq!(decoded.aggregates().len(), 2);
+        assert_eq!(decoded.aggregates()[0].name(), "total");
+        assert_eq!(decoded.aggregates()[0].fun().name(), "sum");
+        assert_eq!(decoded.aggregates()[1].name(), "cnt");
+        assert_eq!(decoded.aggregates()[1].fun().name(), "count");
+
+        assert_eq!(decoded.filters().len(), 2);
+        assert!(decoded.filters()[0].is_none());
+        assert_eq!(
+            decoded.filters()[1].as_ref().map(|f| f.to_string()),
+            Some(filter.to_string())
+        );
 
         Ok(())
     }
