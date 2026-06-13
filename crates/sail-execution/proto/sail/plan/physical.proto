@@ -105,6 +105,9 @@ message ExtendedScalarUdf {
     SparkToCsvUdf spark_to_csv = 23;
     SparkPmodUdf spark_pmod = 24;
     SparkParseJsonUdf spark_parse_json = 25;
+    SparkStructRenameUdf spark_struct_rename = 26;
+    SparkWindowBucketsUdf spark_window_buckets = 27;
+    SparkToCharUdf spark_to_char = 28;
   }
 }
 
@@ -199,6 +202,12 @@ message SparkNextDayUdf {
   bool ansi_mode = 1;
 }
 
+message SparkWindowBucketsUdf {
+  int64 window_duration = 1;
+  int64 slide_duration = 2;
+  int64 start_time = 3;
+}
+
 message SparkAbsUdf {
   bool ansi_mode = 1;
 }
@@ -215,6 +224,12 @@ message SparkFromCsvUdf {
   string session_timezone = 1;
 }
 
+message SparkStructRenameUdf {
+  // The target data type (struct or container-of-struct), encoded as Arrow
+  // ArrowType protobuf bytes.
+  bytes target_type = 1;
+}
+
 message SparkToCsvUdf {
   string session_timezone = 1;
 }
@@ -229,6 +244,10 @@ message SparkFromJsonUdf {
 
 message SparkToNumberUdf {
   bool safe = 1;
+}
+
+message SparkToCharUdf {
+  bool ansi_mode = 1;
 }
 
 message SparkMakeTimestampNtzUdf {

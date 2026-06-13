@@ -31,6 +31,9 @@ data:
     logical_plan after optimize_unions:
     SAME TEXT AS ABOVE
   
+    logical_plan after unions_to_filter:
+    SAME TEXT AS ABOVE
+  
     logical_plan after simplify_expressions:
     SAME TEXT AS ABOVE
   
@@ -104,6 +107,9 @@ data:
     SAME TEXT AS ABOVE
   
     logical_plan after optimize_unions:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after unions_to_filter:
     SAME TEXT AS ABOVE
   
     logical_plan after simplify_expressions:
@@ -373,6 +379,9 @@ data:
     physical_plan after OptimizeAggregateOrder:
     SAME TEXT AS ABOVE
   
+    physical_plan after WindowTopN:
+    SAME TEXT AS ABOVE
+  
     physical_plan after ProjectionPushdown:
     SAME TEXT AS ABOVE
   
@@ -411,7 +420,13 @@ data:
     physical_plan after LimitPushPastWindows:
     SAME TEXT AS ABOVE
   
+    physical_plan after HashJoinBuffering:
+    SAME TEXT AS ABOVE
+  
     physical_plan after LimitPushdown:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after TopKRepartition:
     SAME TEXT AS ABOVE
   
     physical_plan after ProjectionPushdown:
@@ -508,7 +523,7 @@ data:
                 FilterExec: NOT year@3 = 2024 AND value@2 > 650
                   DeltaScanByAddsExec(table_path=file://<tmp>/x/, version=1, projection=None, limit=None, pushdown=false)
                     DeltaDiscoveryExec(table_path=file://<tmp>/x/)
-                      FilterExec: year@5 = CAST(2024 AS Utf8) AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
+                      FilterExec: CAST(year@5 AS Int32) = 2024 AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
                         DeltaMetadataStatsExec(output=stats_parsed, columns=[id, name, value])
                           DeltaLogReplayExec(table_path=file://<tmp>/x/, version=1)
                             SortExec: expr=[__sail_delta_replay_path@9 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@10 ASC NULLS LAST], preserve_partitioning=[true]
@@ -519,7 +534,7 @@ data:
           DeltaRemoveActionsExec
             CoalescePartitionsExec
               DeltaDiscoveryExec(table_path=file://<tmp>/x/)
-                FilterExec: year@5 = CAST(2024 AS Utf8) AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
+                FilterExec: CAST(year@5 AS Int32) = 2024 AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
                   DeltaMetadataStatsExec(output=stats_parsed, columns=[id, name, value])
                     DeltaLogReplayExec(table_path=file://<tmp>/x/, version=1)
                       SortExec: expr=[__sail_delta_replay_path@9 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@10 ASC NULLS LAST], preserve_partitioning=[true]
@@ -541,7 +556,7 @@ data:
                 FilterExec: NOT year@3 = 2024 AND value@2 > 650
                   DeltaScanByAddsExec(table_path=file://<tmp>/x/, version=2, projection=None, limit=None, pushdown=false)
                     DeltaDiscoveryExec(table_path=file://<tmp>/x/)
-                      FilterExec: year@5 = CAST(2024 AS Utf8) AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
+                      FilterExec: CAST(year@5 AS Int32) = 2024 AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
                         DeltaMetadataStatsExec(output=stats_parsed, columns=[id, name, value])
                           DeltaLogReplayExec(table_path=file://<tmp>/x/, version=2)
                             SortExec: expr=[__sail_delta_replay_path@9 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@10 ASC NULLS LAST], preserve_partitioning=[true]
@@ -552,7 +567,7 @@ data:
           DeltaRemoveActionsExec
             CoalescePartitionsExec
               DeltaDiscoveryExec(table_path=file://<tmp>/x/)
-                FilterExec: year@5 = CAST(2024 AS Utf8) AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
+                FilterExec: CAST(year@5 AS Int32) = 2024 AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
                   DeltaMetadataStatsExec(output=stats_parsed, columns=[id, name, value])
                     DeltaLogReplayExec(table_path=file://<tmp>/x/, version=2)
                       SortExec: expr=[__sail_delta_replay_path@9 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@10 ASC NULLS LAST], preserve_partitioning=[true]
@@ -574,7 +589,7 @@ data:
                 FilterExec: NOT year@3 = 2024 AND value@2 > 650
                   DeltaScanByAddsExec(table_path=file://<tmp>/x/, version=0, projection=None, limit=None, pushdown=false)
                     DeltaDiscoveryExec(table_path=file://<tmp>/x/)
-                      FilterExec: year@5 = CAST(2024 AS Utf8) AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
+                      FilterExec: CAST(year@5 AS Int32) = 2024 AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
                         DeltaMetadataStatsExec(output=stats_parsed, columns=[id, name, value])
                           DeltaLogReplayExec(table_path=file://<tmp>/x/, version=0)
                             SortExec: expr=[__sail_delta_replay_path@9 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@10 ASC NULLS LAST], preserve_partitioning=[true]
@@ -585,7 +600,7 @@ data:
           DeltaRemoveActionsExec
             CoalescePartitionsExec
               DeltaDiscoveryExec(table_path=file://<tmp>/x/)
-                FilterExec: year@5 = CAST(2024 AS Utf8) AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
+                FilterExec: CAST(year@5 AS Int32) = 2024 AND (get_field(stats_parsed@9, maxValues, value) IS NULL OR get_field(stats_parsed@9, maxValues, value) > 650)
                   DeltaMetadataStatsExec(output=stats_parsed, columns=[id, name, value])
                     DeltaLogReplayExec(table_path=file://<tmp>/x/, version=0)
                       SortExec: expr=[__sail_delta_replay_path@9 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@10 ASC NULLS LAST], preserve_partitioning=[true]
@@ -607,7 +622,7 @@ data:
                 FilterExec: NOT year@3 = 2023
                   DeltaScanByAddsExec(table_path=file://<tmp>/x/, version=0, projection=None, limit=None, pushdown=false)
                     DeltaDiscoveryExec(table_path=file://<tmp>/x/)
-                      FilterExec: year@5 = CAST(2023 AS Utf8)
+                      FilterExec: CAST(year@5 AS Int32) = 2023
                         DeltaLogReplayExec(table_path=file://<tmp>/x/, version=0)
                           SortExec: expr=[__sail_delta_replay_path@8 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@9 ASC NULLS LAST], preserve_partitioning=[true]
                             RepartitionExec: partitioning=Hash([__sail_delta_replay_path@8], 4), input_partitions=4
@@ -617,7 +632,7 @@ data:
           DeltaRemoveActionsExec
             CoalescePartitionsExec
               DeltaDiscoveryExec(table_path=file://<tmp>/x/)
-                FilterExec: year@5 = CAST(2023 AS Utf8)
+                FilterExec: CAST(year@5 AS Int32) = 2023
                   DeltaLogReplayExec(table_path=file://<tmp>/x/, version=0)
                     SortExec: expr=[__sail_delta_replay_path@8 ASC NULLS LAST, _commit_version@3 DESC NULLS LAST, __sail_delta_is_remove@9 ASC NULLS LAST], preserve_partitioning=[true]
                       RepartitionExec: partitioning=Hash([__sail_delta_replay_path@8], 4), input_partitions=4

@@ -64,14 +64,33 @@ pub async fn build_delete_plan(
         ..Default::default()
     };
 
-    let meta_scan: Arc<dyn ExecutionPlan> =
-        build_log_replay_pipeline_with_options(ctx, snapshot_state, log_replay_options).await?;
-    let meta_scan: Arc<dyn ExecutionPlan> =
-        build_metadata_filter(ctx.session(), meta_scan, snapshot_state, condition_expr)?;
+    // Independent pipeline per branch: a shared Arc subtree starves the remove
+    // branch (zero rows) under distributed execution.
+    let meta_scan_w: Arc<dyn ExecutionPlan> =
+        build_log_replay_pipeline_with_options(ctx, snapshot_state, log_replay_options.clone())
+            .await?;
+    let meta_scan_w: Arc<dyn ExecutionPlan> = build_metadata_filter(
+        ctx.session(),
+        meta_scan_w,
+        snapshot_state,
+        condition_expr.clone(),
+    )?;
+    let find_files_writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
+        meta_scan_w,
+        ctx.table_url().clone(),
+        None,
+        None,
+        version,
+        partition_columns.clone(),
+        partition_only,
+    )?);
 
-    // Always wrap with DeltaDiscoveryExec so EXPLAIN shows the metadata pipeline.
-    let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
-        meta_scan,
+    let meta_scan_r: Arc<dyn ExecutionPlan> =
+        build_log_replay_pipeline_with_options(ctx, snapshot_state, log_replay_options).await?;
+    let meta_scan_r: Arc<dyn ExecutionPlan> =
+        build_metadata_filter(ctx.session(), meta_scan_r, snapshot_state, condition_expr)?;
+    let find_files_remove: Arc<dyn ExecutionPlan> = Arc::new(DeltaDiscoveryExec::with_input(
+        meta_scan_r,
         ctx.table_url().clone(),
         None,
         None,
@@ -82,16 +101,18 @@ pub async fn build_delete_plan(
 
     // Spread Add actions across partitions so `DeltaScanByAddsExec` can scan files in parallel.
     // TODO(adaptive-partitioning): Keep this aligned with `scan_planner.rs`.
-    // Plan: switch from fixed `target_partitions` + round-robin to size-driven partition count
-    // first, then size-aware distribution to avoid oversharding and worker skew.
     let target_partitions = ctx.session().config().target_partitions().max(1);
-    let find_files_exec: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
-        find_files_exec,
+    let find_files_writer: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+        find_files_writer,
+        Partitioning::RoundRobinBatch(target_partitions),
+    )?);
+    let find_files_remove: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+        find_files_remove,
         Partitioning::RoundRobinBatch(target_partitions),
     )?);
 
     let scan_exec = Arc::new(DeltaScanByAddsExec::new(
-        Arc::clone(&find_files_exec),
+        find_files_writer,
         ctx.table_url().clone(),
         version,
         table_schema.clone(),
@@ -135,7 +156,7 @@ pub async fn build_delete_plan(
 
     assemble_commit_plan(
         filter_exec,
-        Some(find_files_exec),
+        Some(find_files_remove),
         Some(snapshot_state.physical_partition_columns()),
         ctx.table_url().clone(),
         writer_options,

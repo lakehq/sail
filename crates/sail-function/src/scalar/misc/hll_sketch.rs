@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
@@ -39,10 +38,6 @@ impl HllSketchEstimateFunction {
 }
 
 impl ScalarUDFImpl for HllSketchEstimateFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "hll_sketch_estimate"
     }
@@ -101,10 +96,6 @@ impl HllUnionFunction {
 }
 
 impl ScalarUDFImpl for HllUnionFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "hll_union"
     }

@@ -125,7 +125,6 @@ impl CommonErrorCause {
             return match e {
                 DataFusionError::ArrowError(e, _) => Self::build::<Py>(e, seen),
                 DataFusionError::ParquetError(e) => Self::FormatParquet(e.to_string()),
-                DataFusionError::AvroError(e) => Self::FormatAvro(e.to_string()),
                 DataFusionError::ObjectStore(e) => Self::Io(e.to_string()),
                 DataFusionError::IoError(e) => Self::Io(e.to_string()),
                 DataFusionError::NotImplemented(x) => Self::NotImplemented(x.clone()),

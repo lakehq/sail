@@ -10,7 +10,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -636,10 +635,6 @@ struct DeltaCatalogManagedTable {
 impl ExecutionPlan for DeltaCommitExec {
     fn name(&self) -> &'static str {
         "DeltaCommitExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

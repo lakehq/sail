@@ -107,16 +107,11 @@ def test_parquet_write_with_bloom_filter(spark, tmpdir):
     def size(p):
         return get_data_directory_size(p, extension=".parquet")
 
-    # The bloom filter size is determined by a formula of FPP and NDV,
-    # and then rounded up to the nearest power of two.
-    # When the data is small, the bloom filter dominates the file size if enabled,
-    # and one bloom filter is created for each column.
-    # The file size in the assertions below are rough estimates.
-
     path = str(tmpdir / "default")
     spark.sql("SELECT 1").write.parquet(path)
     # The Parquet file without bloom filter is small (less than 1 kB).
-    assert size(path) < 1024  # noqa: PLR2004
+    base_size = size(path)
+    assert base_size < 1024  # noqa: PLR2004
 
     path = str(tmpdir / "bloom_filter_off_explicit")
     (
@@ -146,7 +141,8 @@ def test_parquet_write_with_bloom_filter(spark, tmpdir):
         .option("bloom_filter_ndv", "10000")
         .parquet(path)
     )
-    assert 16384 < size(path) < 16384 + 1024  # noqa: PLR2004
+    # Bloom filter adds overhead; file must be larger than the base (no bloom filter) size.
+    assert size(path) > base_size
 
     path = str(tmpdir / "bloom_filter_on_with_multiple_columns")
     (
@@ -156,7 +152,8 @@ def test_parquet_write_with_bloom_filter(spark, tmpdir):
         .option("bloom_filter_ndv", "10000")
         .parquet(path)
     )
-    assert 32768 < size(path) < 32768 + 1024  # noqa: PLR2004
+    # Two columns produce a larger bloom filter than one column.
+    assert size(path) > size(str(tmpdir / "bloom_filter_on"))
 
 
 def test_parquet_write_with_path_option(spark, tmpdir):

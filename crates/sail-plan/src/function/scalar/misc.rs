@@ -3,7 +3,7 @@ use std::sync::Arc;
 use arrow::datatypes::DataType;
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, lit, when, ExprSchemable, Operator, ScalarUDF};
+use datafusion_expr::{cast, expr, lit, when, ExprSchemable, Operator, ScalarUDF};
 use datafusion_spark::function::bitmap::expr_fn as bitmap_fn;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::utils::quote_namespace_if_needed;
@@ -139,14 +139,7 @@ fn theta_union(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         }
         3 => {
             let (first, second, lg_nom_entries) = arguments.three()?;
-            vec![
-                first,
-                second,
-                expr::Expr::Cast(expr::Cast {
-                    expr: Box::new(lg_nom_entries),
-                    data_type: DataType::Int32,
-                }),
-            ]
+            vec![first, second, cast(lg_nom_entries, DataType::Int32)]
         }
         count => {
             return Err(PlanError::invalid(format!(
@@ -169,10 +162,7 @@ fn hll_union(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             vec![
                 first,
                 second,
-                expr::Expr::Cast(expr::Cast {
-                    expr: Box::new(allow_different_lg_config_k),
-                    data_type: DataType::Boolean,
-                }),
+                cast(allow_different_lg_config_k, DataType::Boolean),
             ]
         }
         count => {
