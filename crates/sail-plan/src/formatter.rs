@@ -345,6 +345,14 @@ impl PlanFormatter for SparkPlanFormatter {
                 let values = values.iter().collect::<Vec<_>>().one()?;
                 literal_list_to_string("array", values.as_deref())
             }
+            ScalarValue::ListView(values) => {
+                let values = values.iter().collect::<Vec<_>>().one()?;
+                literal_list_to_string("array", values.as_deref())
+            }
+            ScalarValue::LargeListView(values) => {
+                let values = values.iter().collect::<Vec<_>>().one()?;
+                literal_list_to_string("array", values.as_deref())
+            }
             ScalarValue::Struct(values) => {
                 let fields = values
                     .fields()
@@ -484,6 +492,8 @@ impl PlanFormatter for SparkPlanFormatter {
                 Ok(result)
             }
             "timestamp" | "date" => Ok(arguments.one()?.to_string()),
+            // Spark always names the time window column `window`.
+            "window" => Ok("window".to_string()),
             "to_unix_timestamp" => {
                 let mut argv = arguments.clone();
                 if argv.len() == 1 {

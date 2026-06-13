@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -70,10 +69,6 @@ impl ExecutionPlan for CoalesceExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
@@ -131,11 +126,11 @@ impl ExecutionPlan for CoalesceExec {
         }))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if partition.is_none() {
             self.input.partition_statistics(None)
         } else {
-            Ok(Statistics::new_unknown(&self.schema()))
+            Ok(Arc::new(Statistics::new_unknown(&self.schema())))
         }
     }
 

@@ -10,6 +10,7 @@ use datafusion::catalog::Session;
 use datafusion::datasource::listing::helpers::pruned_partition_list;
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use datafusion::execution::cache::cache_manager::CachedFileMetadata;
+use datafusion::execution::cache::TableScopedPath;
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
@@ -78,7 +79,7 @@ impl ExtensionPlanner for ListingPhysicalPlanner {
         scan: &TableScan,
         session_state: &SessionState,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
-        let Some(source) = scan.source.as_any().downcast_ref::<ListingTableSource>() else {
+        let Some(source) = scan.source.downcast_ref::<ListingTableSource>() else {
             return Ok(None);
         };
 
@@ -428,9 +429,16 @@ async fn do_collect_statistics_and_ordering(
 ) -> datafusion_common::Result<(Arc<Statistics>, Option<LexOrdering>)> {
     let path = &part_file.object_meta.location;
     let meta = &part_file.object_meta;
-    let file_statistic_cache = ctx.runtime_env().cache_manager.get_file_statistic_cache();
+    let collected_statistics = source.collected_statistics();
+    // No table reference is available here, so entries are cached under the global
+    // scope (`table: None`). The cache is size-bounded (`cache_limit`) and per-table
+    // invalidation is not used, so unscoped keys are intentional and safe.
+    let cache_key = TableScopedPath {
+        table: None,
+        path: path.clone(),
+    };
 
-    if let Some(cached) = file_statistic_cache.as_ref().and_then(|x| x.get(path)) {
+    if let Some(cached) = collected_statistics.get(&cache_key) {
         if cached.is_valid_for(meta) {
             return Ok((Arc::clone(&cached.statistics), cached.ordering.clone()));
         }
@@ -449,16 +457,14 @@ async fn do_collect_statistics_and_ordering(
         .await?;
     let statistics = Arc::new(file_meta.statistics);
 
-    file_statistic_cache.as_ref().map(|x| {
-        x.put(
-            path,
-            CachedFileMetadata::new(
-                meta.clone(),
-                Arc::clone(&statistics),
-                file_meta.ordering.clone(),
-            ),
-        )
-    });
+    collected_statistics.put(
+        &cache_key,
+        CachedFileMetadata::new(
+            meta.clone(),
+            Arc::clone(&statistics),
+            file_meta.ordering.clone(),
+        ),
+    );
 
     Ok((statistics, file_meta.ordering))
 }

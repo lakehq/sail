@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -50,10 +49,6 @@ impl Default for SparkToChar {
 }
 
 impl ScalarUDFImpl for SparkToChar {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_to_char"
     }
@@ -64,6 +59,12 @@ impl ScalarUDFImpl for SparkToChar {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Utf8)
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let ansi_mode = self.ansi_mode;
+        let ScalarFunctionArgs { args, .. } = args;
+        make_scalar_function(move |a| spark_to_char_impl(a, ansi_mode), vec![])(&args)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
@@ -109,12 +110,6 @@ impl ScalarUDFImpl for SparkToChar {
             }
         }
         Ok(vec![value_type, DataType::Utf8])
-    }
-
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ansi_mode = self.ansi_mode;
-        let ScalarFunctionArgs { args, .. } = args;
-        make_scalar_function(move |a| spark_to_char_impl(a, ansi_mode), vec![])(&args)
     }
 }
 

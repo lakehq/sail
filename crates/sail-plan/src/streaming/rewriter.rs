@@ -35,7 +35,7 @@ struct StreamingRewriter;
 impl StreamingRewriter {
     fn f_up_extension(&mut self, extension: Extension) -> Result<Transformed<LogicalPlan>> {
         let node = extension.node.as_ref();
-        if node.as_any().is::<RangeNode>() {
+        if node.as_any().downcast_ref::<RangeNode>().is_some() {
             Ok(Transformed::yes(LogicalPlan::Extension(Extension {
                 node: Arc::new(StreamSourceAdapterNode::try_new(Arc::new(
                     LogicalPlan::Extension(extension),
@@ -53,7 +53,7 @@ impl StreamingRewriter {
             || node.as_any().is::<NoopWriteNode>()
         {
             Ok(Transformed::no(LogicalPlan::Extension(extension)))
-        } else if node.as_any().is::<BarrierNode>() {
+        } else if node.as_any().downcast_ref::<BarrierNode>().is_some() {
             // TODO: support BarrierNode for streaming properly.
             Ok(Transformed::no(LogicalPlan::Extension(extension)))
         } else {
@@ -191,9 +191,12 @@ impl TreeNodeRewriter for StreamingRewriter {
 }
 
 fn is_streaming_table_provider(provider: &dyn TableProvider) -> bool {
-    if provider.as_any().is::<StreamSourceTableProvider>() {
+    if provider
+        .downcast_ref::<StreamSourceTableProvider>()
+        .is_some()
+    {
         true
-    } else if let Some(rename) = provider.as_any().downcast_ref::<RenameTableProvider>() {
+    } else if let Some(rename) = provider.downcast_ref::<RenameTableProvider>() {
         is_streaming_table_provider(rename.inner().as_ref())
     } else {
         false
@@ -206,15 +209,12 @@ struct NamedStreamSource {
 }
 
 fn get_stream_source_opt(provider: &dyn TableProvider) -> Option<NamedStreamSource> {
-    if let Some(stream) = provider
-        .as_any()
-        .downcast_ref::<StreamSourceTableProvider>()
-    {
+    if let Some(stream) = provider.downcast_ref::<StreamSourceTableProvider>() {
         Some(NamedStreamSource {
             source: stream.source().clone(),
             names: None,
         })
-    } else if let Some(rename) = provider.as_any().downcast_ref::<RenameTableProvider>() {
+    } else if let Some(rename) = provider.downcast_ref::<RenameTableProvider>() {
         if let Some(stream) = get_stream_source_opt(rename.inner().as_ref()) {
             Some(NamedStreamSource {
                 source: stream.source,

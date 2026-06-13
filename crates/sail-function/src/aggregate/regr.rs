@@ -17,7 +17,6 @@
 //! (e.g. `ck / m2` vs `(ck / n) / (m2 / n)`), so do not "simplify" any of the
 //! update, merge, or evaluate expressions below.
 
-use std::any::Any;
 use std::mem::size_of_val;
 use std::sync::Arc;
 
@@ -92,10 +91,6 @@ pub enum RegrType {
 }
 
 impl AggregateUDFImpl for Regr {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.func_name
     }

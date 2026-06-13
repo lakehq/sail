@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::Debug;
 
 use arrow::array::{
@@ -40,10 +39,6 @@ impl CountMinSketchFunction {
 }
 
 impl AggregateUDFImpl for CountMinSketchFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "count_min_sketch"
     }
