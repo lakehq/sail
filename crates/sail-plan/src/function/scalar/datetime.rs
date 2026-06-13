@@ -320,7 +320,7 @@ fn next_day(input: ScalarFunctionInput) -> PlanResult<Expr> {
     Ok(udf.call(input.arguments))
 }
 
-fn date_format(expr: Expr, format: Expr) -> Expr {
+pub(super) fn date_format(expr: Expr, format: Expr) -> Expr {
     // Handle standalone fractional seconds format (e.g., 'SSS' for milliseconds).
     // Chrono's %.Nf always includes a leading dot (e.g., ".000"), so for standalone
     // S-patterns we strip the dot using substr.
