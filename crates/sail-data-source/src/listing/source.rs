@@ -253,9 +253,8 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             SinkMode::IgnoreIfExists => {
                 if listing_target_exists(ctx, &url).await? {
                     return LogicalPlanBuilder::empty(false).build();
-                } else {
-                    false
                 }
+                false
             }
             SinkMode::Append => false,
             SinkMode::Overwrite => true,
