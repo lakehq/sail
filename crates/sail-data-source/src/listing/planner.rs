@@ -431,7 +431,7 @@ async fn do_collect_statistics_and_ordering(
     let meta = &part_file.object_meta;
     let file_statistic_cache = ctx.runtime_env().cache_manager.get_file_statistic_cache();
     let cache_key = TableScopedPath {
-        table: None,
+        table: part_file.table_reference.clone(),
         path: path.clone(),
     };
 
