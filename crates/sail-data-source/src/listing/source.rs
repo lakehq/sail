@@ -277,7 +277,14 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
 }
 
 async fn listing_target_exists(ctx: &dyn Session, url: &Url) -> Result<bool> {
-    // TODO: treat empty directories as "existing targets" for file systems
+    // For file systems, treat the target as existing even if it is an empty directory.
+    if url.scheme() == "file" {
+        if let Ok(path) = url.to_file_path() {
+            if path.exists() {
+                return Ok(true);
+            }
+        }
+    }
     let path = ListingTableUrl::try_new(url.clone(), None)?;
     let store = ctx.runtime_env().object_store(&path)?;
     Ok(store.list(Some(path.prefix())).try_next().await?.is_some())

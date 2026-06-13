@@ -45,6 +45,18 @@ def test_parquet_write_modes(spark, tmp_path):
     assert spark.read.parquet(path).orderBy("id").collect() == [Row(id=5, value="new")]
 
 
+def test_parquet_write_modes_with_empty_existing_path(spark, tmp_path):
+    path = tmp_path / "parquet_write_modes_empty_existing_path"
+    path.mkdir()
+
+    with pytest.raises(Exception, match="already exists"):
+        spark.createDataFrame([(1, "error")], schema="id INT, value STRING").write.parquet(str(path))
+    assert list(path.iterdir()) == []
+
+    spark.createDataFrame([(2, "ignored")], schema="id INT, value STRING").write.mode("ignore").parquet(str(path))
+    assert list(path.iterdir()) == []
+
+
 def test_parquet_read_write_compressed(spark, sample_df, sample_pandas_df, tmp_path):
     # Test reading a compressed Parquet file written by Sail
     path = str(tmp_path / "parquet_compressed_zstd")

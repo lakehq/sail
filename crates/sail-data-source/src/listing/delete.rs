@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -90,10 +91,11 @@ impl ExecutionPlan for FileDeleteExec {
         let stream = futures::stream::once(async move {
             let store = context.runtime_env().object_store(&object_store_url)?;
             let files = store.list(Some(&path)).map_ok(|meta| meta.location).boxed();
-            store.delete_stream(files).try_collect::<Vec<_>>().await?;
-            Ok(datafusion::arrow::record_batch::RecordBatch::new_empty(
-                Arc::new(Schema::empty()),
-            ))
+            store
+                .delete_stream(files)
+                .try_for_each(|_| futures::future::ready(Ok(())))
+                .await?;
+            Ok(RecordBatch::new_empty(Arc::new(Schema::empty())))
         });
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
