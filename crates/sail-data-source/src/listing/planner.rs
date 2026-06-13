@@ -25,6 +25,7 @@ use datafusion_common::{internal_err, plan_err, project_schema, Statistics};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::source::DataSourceExec;
+use datafusion_datasource::ListingTableUrl;
 use futures::{future, stream, Stream, StreamExt};
 use object_store::ObjectStore;
 use sail_common_datafusion::datasource::create_sort_order;
@@ -203,33 +204,13 @@ async fn plan_file_write(
     }
     let FileWriteOptions {
         format,
-        path,
+        url,
         overwrite,
         partition_by,
         sort_by,
-        bucket_by,
     } = node.options();
-    if bucket_by.is_some() {
-        return internal_err!("bucketing should have been rejected for listing table writes");
-    }
-    let path = path.clone();
-    // always write multi-file output
-    let path = if path.ends_with(object_store::path::DELIMITER) {
-        path
-    } else {
-        format!("{path}{}", object_store::path::DELIMITER)
-    };
-    let table_paths = crate::url::resolve_listing_urls(session_state, vec![path.clone()]).await?;
-    let object_store_url = if let Some(path) = table_paths.first() {
-        path.object_store()
-    } else {
-        return internal_err!("empty listing table path: {path}");
-    };
-    let delete_path = if let Some(path) = table_paths.first() {
-        path.prefix().clone()
-    } else {
-        return internal_err!("empty listing table path: {path}");
-    };
+    let table_path = ListingTableUrl::try_new(url.clone(), None)?;
+    let object_store_url = table_path.object_store();
     // We do not need to specify the exact data type for partition columns,
     // since the type is inferred from the record batch during writing.
     let table_partition_cols = partition_by
@@ -237,10 +218,10 @@ async fn plan_file_write(
         .map(|field| (field.column.clone(), DataType::Null))
         .collect::<Vec<_>>();
     let conf = FileSinkConfig {
-        original_url: path,
+        original_url: url.to_string(),
         object_store_url: object_store_url.clone(),
         file_group: Default::default(),
-        table_paths,
+        table_paths: vec![table_path.clone()],
         output_schema: physical_input.schema(),
         table_partition_cols,
         insert_op: InsertOp::Append,
@@ -260,7 +241,10 @@ async fn plan_file_write(
         )
         .await?;
     if *overwrite {
-        let delete = Arc::new(FileDeleteExec::new(object_store_url, delete_path));
+        let delete = Arc::new(FileDeleteExec::new(
+            object_store_url,
+            table_path.prefix().clone(),
+        ));
         Ok(Arc::new(BarrierExec::new(vec![delete], plan)))
     } else {
         Ok(plan)

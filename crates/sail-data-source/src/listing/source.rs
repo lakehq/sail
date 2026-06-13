@@ -22,6 +22,7 @@ use sail_common_datafusion::datasource::{
     find_path_in_options, get_partition_columns_and_file_schema, OptionLayer, SinkInfo, SinkMode,
     SourceInfo, TableFormat,
 };
+use url::Url;
 
 use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
 use crate::listing::utils::{
@@ -29,6 +30,7 @@ use crate::listing::utils::{
 };
 use crate::listing::write::{FileWriteNode, FileWriteOptions};
 use crate::resolve_listing_urls;
+use crate::url::resolve_listing_writer_url;
 
 /// A trait for creating format instances when reading and writing listing files.
 pub trait FormatFactory: Debug + Send + Sync + 'static {
@@ -240,21 +242,22 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         if partition_by.iter().any(|field| field.transform.is_some()) {
             return not_impl_err!("partition transforms for writing listing table format");
         }
-        let target_exists = match mode {
-            SinkMode::ErrorIfExists | SinkMode::IgnoreIfExists => {
-                listing_target_exists(ctx, &path).await?
-            }
-            SinkMode::Append | SinkMode::Overwrite => false,
-            mode => return not_impl_err!("unsupported sink mode for listing table: {mode:?}"),
-        };
+        let url = resolve_listing_writer_url(path.clone())?;
         let overwrite = match mode {
-            SinkMode::ErrorIfExists if target_exists => {
-                return plan_err!("listing table path already exists: {path}");
+            SinkMode::ErrorIfExists => {
+                if listing_target_exists(ctx, &url).await? {
+                    return plan_err!("listing table path already exists: {path}");
+                }
+                false
             }
-            SinkMode::IgnoreIfExists if target_exists => {
-                return LogicalPlanBuilder::empty(false).build();
+            SinkMode::IgnoreIfExists => {
+                if listing_target_exists(ctx, &url).await? {
+                    return LogicalPlanBuilder::empty(false).build();
+                } else {
+                    false
+                }
             }
-            SinkMode::ErrorIfExists | SinkMode::IgnoreIfExists | SinkMode::Append => false,
+            SinkMode::Append => false,
             SinkMode::Overwrite => true,
             mode => return not_impl_err!("unsupported sink mode for listing table: {mode:?}"),
         };
@@ -264,29 +267,19 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
                 Arc::new(input),
                 FileWriteOptions {
                     format: Arc::new(write_format),
-                    path,
+                    url,
                     overwrite,
                     partition_by,
                     sort_by: sort_order,
-                    bucket_by,
                 },
             )),
         }))
     }
 }
 
-async fn listing_target_exists(ctx: &dyn Session, path: &str) -> Result<bool> {
-    let path = if path.ends_with(object_store::path::DELIMITER) {
-        path.to_string()
-    } else {
-        format!("{path}{}", object_store::path::DELIMITER)
-    };
-    let urls = resolve_listing_urls(ctx, vec![path]).await?;
-    for url in urls {
-        let store = ctx.runtime_env().object_store(&url)?;
-        if store.list(Some(url.prefix())).try_next().await?.is_some() {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+async fn listing_target_exists(ctx: &dyn Session, url: &Url) -> Result<bool> {
+    // TODO: treat empty directories as "existing targets" for file systems
+    let path = ListingTableUrl::try_new(url.clone(), None)?;
+    let store = ctx.runtime_env().object_store(&path)?;
+    Ok(store.list(Some(path.prefix())).try_next().await?.is_some())
 }

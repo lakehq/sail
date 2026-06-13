@@ -8,9 +8,8 @@ use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use datafusion_common::{exec_err, internal_err, Result};
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
-use object_store::ObjectStoreExt;
 
 /// Deletes all object-store files under a listing table output path.
 #[derive(Debug, Clone)]
@@ -90,14 +89,8 @@ impl ExecutionPlan for FileDeleteExec {
         let path = self.path.clone();
         let stream = futures::stream::once(async move {
             let store = context.runtime_env().object_store(&object_store_url)?;
-            let files = store
-                .list(Some(&path))
-                .map_ok(|meta| meta.location)
-                .try_collect::<Vec<_>>()
-                .await?;
-            for file in files {
-                store.delete(&file).await?;
-            }
+            let files = store.list(Some(&path)).map_ok(|meta| meta.location).boxed();
+            store.delete_stream(files).try_collect::<Vec<_>>().await?;
             Ok(datafusion::arrow::record_batch::RecordBatch::new_empty(
                 Arc::new(Schema::empty()),
             ))
