@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::{DataType, Field, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::physical_plan::FileSinkConfig;
 use datafusion::execution::object_store::ObjectStoreUrl;
@@ -152,6 +152,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             bucket_by: _,
             sort_order,
             options,
+            read_case_sensitive,
         } = info;
 
         let read_format = T::read(ctx, options)?;
@@ -161,6 +162,21 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
 
         let (schema, partition_fields) = match schema {
             Some(schema) if !schema.fields().is_empty() => {
+                // Spark matches a user-specified schema against the physical file
+                // columns case-insensitively by default
+                // (`spark.sql.caseSensitive=false`). Reconcile the user column
+                // names to the physical names up front so that both the file
+                // statistics and the reader — which resolve columns by exact name —
+                // find the data. The view's column list restores the
+                // user-specified casing for the output.
+                let schema = if read_case_sensitive {
+                    schema
+                } else {
+                    let physical = read_format
+                        .infer_schema(ctx, &sampled_files, compression)
+                        .await?;
+                    reconcile_schema_case_insensitive(schema, &physical)?
+                };
                 // When the partition columns are not specified, auto-discover
                 // them from `key=value` segments in the listing paths.
                 // Without this, columns that exist only in the directory tree
@@ -254,4 +270,43 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             )),
         }))
     }
+}
+
+/// Reconciles a user-specified schema's field names with the physical file
+/// schema case-insensitively, matching Spark's default
+/// `spark.sql.caseSensitive=false`. Each user field whose name matches a physical
+/// field only by case is renamed to the physical name (keeping the user type,
+/// nullability, and metadata) so that downstream statistics and reads — which
+/// resolve columns by exact name — find the data. A user field with no
+/// case-insensitive match is kept as is (it reads as null). Spark errors on an
+/// ambiguous case-insensitive match, so we do too.
+fn reconcile_schema_case_insensitive(schema: Schema, physical: &Schema) -> Result<Schema> {
+    let mut fields = Vec::with_capacity(schema.fields().len());
+    for field in schema.fields() {
+        let name = field.name();
+        let mut matches = physical
+            .fields()
+            .iter()
+            .filter(|f| f.name().eq_ignore_ascii_case(name));
+        let reconciled = match matches.next() {
+            None => Arc::clone(field),
+            Some(first) => {
+                if let Some(second) = matches.next() {
+                    let mut names = vec![first.name().as_str(), second.name().as_str()];
+                    names.extend(matches.map(|f| f.name().as_str()));
+                    return plan_err!(
+                        "Ambiguous case-insensitive column match for `{name}`: [{}]",
+                        names.join(", ")
+                    );
+                }
+                if first.name() == name {
+                    Arc::clone(field)
+                } else {
+                    Arc::new(field.as_ref().clone().with_name(first.name().as_str()))
+                }
+            }
+        };
+        fields.push(reconciled);
+    }
+    Ok(Schema::new_with_metadata(fields, schema.metadata().clone()))
 }

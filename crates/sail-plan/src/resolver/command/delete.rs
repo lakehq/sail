@@ -117,6 +117,7 @@ impl PlanResolver<'_> {
                 bucket_by: None,
                 sort_order: vec![],
                 options: vec![],
+                read_case_sensitive: self.config.case_sensitive,
             };
             let registry = self.ctx.extension::<TableFormatRegistry>()?;
             let table_format = registry.get(&format)?;

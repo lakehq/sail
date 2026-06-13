@@ -1443,7 +1443,9 @@ fn from_ast_view_using_columns(
                     "expected a data type for each column in CREATE TEMPORARY VIEW ... USING",
                 ));
             };
-            let comment = comment.map(|(_, comment)| from_ast_string(comment)).transpose()?;
+            let comment = comment
+                .map(|(_, comment)| from_ast_string(comment))
+                .transpose()?;
             let mut metadata = vec![];
             if let Some(comment) = comment.clone() {
                 metadata.push(("comment".to_string(), comment));

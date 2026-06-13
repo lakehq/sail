@@ -213,6 +213,9 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                         bucket_by: None,
                         sort_order: vec![],
                         options: vec![],
+                        // Inert for Delta, which resolves its schema from metadata
+                        // rather than matching a requested schema against files.
+                        read_case_sensitive: false,
                     };
                     let registry = session_state.extension::<TableFormatRegistry>()?;
                     let source = registry

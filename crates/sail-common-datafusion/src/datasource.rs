@@ -197,6 +197,12 @@ pub struct SourceInfo {
     /// The layers of options for the data source.
     /// A later layer can override earlier ones.
     pub options: Vec<OptionLayer>,
+    /// Whether reads match the requested columns case-sensitively against the
+    /// physical file schema. Spark defaults to case-insensitive matching
+    /// (`spark.sql.caseSensitive=false`). This only affects formats that
+    /// reconcile a requested schema against files on read (e.g. Parquet); it is
+    /// inert for formats that resolve their schema from metadata.
+    pub read_case_sensitive: bool,
 }
 
 /// Metadata about an existing table format instance needed during logical planning.

@@ -1,8 +1,14 @@
 use datafusion_expr::LogicalPlan;
+use sail_catalog::error::CatalogError;
+use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
+use sail_common_datafusion::catalog::{TableColumnStatus, TableKind, TemporaryViewSource};
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::command::write::{WriteColumnMatch, WriteMode, WritePlanBuilder, WriteTarget};
+use crate::resolver::command::write::{
+    TableInfo, WriteColumnMatch, WriteMode, WritePlanBuilder, WriteTarget,
+};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
@@ -75,57 +81,118 @@ impl PlanResolver<'_> {
         if !partition.is_empty() {
             return Err(PlanError::todo("PARTITION for write"));
         }
-        let mut builder = WritePlanBuilder::new();
-        match mode {
-            InsertMode::InsertByPosition { overwrite } => {
-                let mode = if overwrite {
-                    WriteMode::Truncate
-                } else {
-                    WriteMode::Append {
-                        error_if_absent: true,
-                    }
-                };
-                builder = builder.with_mode(mode).with_target(WriteTarget::Table {
-                    table,
-                    column_match: WriteColumnMatch::ByPosition,
-                });
-            }
+
+        let (mode, column_match) = match mode {
+            InsertMode::InsertByPosition { overwrite } => (
+                Self::insert_write_mode(overwrite),
+                WriteColumnMatch::ByPosition,
+            ),
             InsertMode::InsertByName { overwrite } => {
-                let mode = if overwrite {
-                    WriteMode::Truncate
-                } else {
-                    WriteMode::Append {
-                        error_if_absent: true,
-                    }
-                };
-                builder = builder.with_mode(mode).with_target(WriteTarget::Table {
-                    table,
-                    column_match: WriteColumnMatch::ByName,
-                });
+                (Self::insert_write_mode(overwrite), WriteColumnMatch::ByName)
             }
-            InsertMode::InsertByColumns { columns, overwrite } => {
-                let mode = if overwrite {
-                    WriteMode::Truncate
-                } else {
-                    WriteMode::Append {
-                        error_if_absent: true,
-                    }
-                };
-                builder = builder.with_mode(mode).with_target(WriteTarget::Table {
-                    table,
-                    column_match: WriteColumnMatch::ByColumns { columns },
-                });
-            }
-            InsertMode::Replace { condition } => {
-                builder = builder
-                    .with_mode(WriteMode::TruncateIf { condition })
-                    .with_target(WriteTarget::Table {
-                        table,
-                        column_match: WriteColumnMatch::ByPosition,
-                    });
-            }
+            InsertMode::InsertByColumns { columns, overwrite } => (
+                Self::insert_write_mode(overwrite),
+                WriteColumnMatch::ByColumns { columns },
+            ),
+            InsertMode::Replace { condition } => (
+                WriteMode::TruncateIf { condition },
+                WriteColumnMatch::ByPosition,
+            ),
         };
 
+        // A temporary view created with `USING` is backed by a data source.
+        // `INSERT INTO`/`INSERT OVERWRITE` writes to the same location, just
+        // as Spark treats such a view as a table.
+        if let Some((source, columns)) = self.resolve_temporary_view_insert_target(&table).await? {
+            return self
+                .resolve_insert_into_temporary_view(
+                    input,
+                    source,
+                    columns,
+                    mode,
+                    column_match,
+                    state,
+                )
+                .await;
+        }
+
+        let builder = WritePlanBuilder::new()
+            .with_mode(mode)
+            .with_target(WriteTarget::Table {
+                table,
+                column_match,
+            });
+        self.resolve_write_with_builder(input, builder, state).await
+    }
+
+    /// Maps the `OVERWRITE` flag of an `INSERT` statement to the write mode for
+    /// a target that is required to already exist.
+    fn insert_write_mode(overwrite: bool) -> WriteMode {
+        if overwrite {
+            WriteMode::Truncate
+        } else {
+            WriteMode::Append {
+                error_if_absent: true,
+            }
+        }
+    }
+
+    /// Resolves the data source backing an `INSERT` target when the target is a
+    /// (global) temporary view created with `USING`. Returns `None` when the
+    /// target is not such a view, so the caller falls back to the table path.
+    async fn resolve_temporary_view_insert_target(
+        &self,
+        table: &spec::ObjectName,
+    ) -> PlanResult<Option<(TemporaryViewSource, Vec<TableColumnStatus>)>> {
+        let manager = self.ctx.extension::<CatalogManager>()?;
+        let status = match manager.get_table_or_view(table.parts()).await {
+            Ok(status) => status,
+            Err(CatalogError::NotFound(_, _)) => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        match status.kind {
+            TableKind::TemporaryView {
+                source, columns, ..
+            }
+            | TableKind::GlobalTemporaryView {
+                source, columns, ..
+            } => Ok(source.map(|source| (source, columns))),
+            _ => Ok(None),
+        }
+    }
+
+    /// Builds the write plan for `INSERT` into a data source temporary view.
+    /// The input columns are first conformed to the view schema (so the written
+    /// files carry the view's column names and types), then written to the data
+    /// source location carried in the view options.
+    async fn resolve_insert_into_temporary_view(
+        &self,
+        input: LogicalPlan,
+        source: TemporaryViewSource,
+        columns: Vec<TableColumnStatus>,
+        mode: WriteMode,
+        column_match: WriteColumnMatch,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let TemporaryViewSource { format, options } = source;
+        let info = TableInfo {
+            catalog_table: None,
+            columns,
+            location: None,
+            format: format.clone(),
+            partition_by: vec![],
+            sort_by: vec![],
+            bucket_by: None,
+            properties: vec![],
+        };
+        let input = self
+            .rewrite_write_input(input, column_match, &info, state)
+            .await?;
+        let builder = WritePlanBuilder::new()
+            .with_mode(mode)
+            .with_target(WriteTarget::DataSource)
+            .with_format(format)
+            .with_options(options);
         self.resolve_write_with_builder(input, builder, state).await
     }
 }

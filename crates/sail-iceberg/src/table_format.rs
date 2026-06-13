@@ -518,6 +518,7 @@ async fn build_iceberg_provider(
         bucket_by: _,
         sort_order: _,
         options,
+        read_case_sensitive: _,
     } = info;
 
     let table_url = IcebergTableFormat::parse_table_url(paths).await?;
