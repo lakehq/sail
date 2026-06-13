@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::sync::Arc;
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-functions-extra/blob/5fa184df2589f09e90035c5e6a0d2c88c57c298a/src/mode.rs>
-use datafusion::arrow;
-use datafusion::arrow::array::{ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray};
+use datafusion::arrow::array::{
+    Array, ArrayAccessor, ArrayIter, ArrayRef, ArrowPrimitiveType, AsArray,
+};
 use datafusion::arrow::datatypes::{
     DataType, Date32Type, Date64Type, Field, FieldRef, Float16Type, Float32Type, Float64Type,
     Int16Type, Int32Type, Int64Type, Int8Type, Time32MillisecondType, Time32SecondType,
@@ -12,18 +14,25 @@ use datafusion::arrow::datatypes::{
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type,
     UInt64Type, UInt8Type,
 };
-use datafusion::common::cast::{as_primitive_array, as_string_array};
-use datafusion::common::not_impl_err;
-use datafusion::error::Result;
+use datafusion::common::cast::{as_list_array, as_primitive_array, as_string_array};
+use datafusion::common::{exec_err, not_impl_err};
+use datafusion::error::{DataFusionError, Result};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use datafusion::physical_expr::aggregate::utils::Hashable;
 use datafusion::scalar::ScalarValue;
 
+use super::utils::get_scalar_value;
+
 /// The `ModeFunction` calculates the mode (most frequent value) from a set of values.
 ///
 /// - Null values are ignored during the calculation.
 /// - If multiple values have the same frequency, the MAX value with the highest frequency is returned.
+/// - If the optional second argument `deterministic` is true (Spark's `mode(col, deterministic)`),
+///   the LOWEST value among the most frequent values is returned instead.
+/// - Spark's `mode() WITHIN GROUP (ORDER BY col)` SQL syntax is rewritten by the plan
+///   resolver into the `"lowest"` (ascending) / `"highest"` (descending) tie-break
+///   sentinels as the second argument; see [`TieBreak`].
 #[derive(PartialEq, Eq, Hash)]
 pub struct ModeFunction {
     signature: Signature,
@@ -64,61 +73,93 @@ impl AggregateUDFImpl for ModeFunction {
         Ok(arg_types[0].clone())
     }
 
-    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
-        let value_type = args.input_fields[0].data_type().clone();
-
-        Ok(vec![
-            Field::new("values", value_type, true).into(),
-            Field::new("frequencies", DataType::UInt64, true).into(),
-        ])
-    }
-
     fn accumulator(&self, acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let data_type = &acc_args.exprs[0].data_type(acc_args.schema)?;
+        let tie_break = resolve_tie_break(&acc_args)?;
 
         let accumulator: Box<dyn Accumulator> = match data_type {
-            DataType::Int8 => Box::new(PrimitiveModeAccumulator::<Int8Type>::new(data_type)),
-            DataType::Int16 => Box::new(PrimitiveModeAccumulator::<Int16Type>::new(data_type)),
-            DataType::Int32 => Box::new(PrimitiveModeAccumulator::<Int32Type>::new(data_type)),
-            DataType::Int64 => Box::new(PrimitiveModeAccumulator::<Int64Type>::new(data_type)),
-            DataType::UInt8 => Box::new(PrimitiveModeAccumulator::<UInt8Type>::new(data_type)),
-            DataType::UInt16 => Box::new(PrimitiveModeAccumulator::<UInt16Type>::new(data_type)),
-            DataType::UInt32 => Box::new(PrimitiveModeAccumulator::<UInt32Type>::new(data_type)),
-            DataType::UInt64 => Box::new(PrimitiveModeAccumulator::<UInt64Type>::new(data_type)),
+            DataType::Int8 => Box::new(PrimitiveModeAccumulator::<Int8Type>::new(
+                data_type, tie_break,
+            )),
+            DataType::Int16 => Box::new(PrimitiveModeAccumulator::<Int16Type>::new(
+                data_type, tie_break,
+            )),
+            DataType::Int32 => Box::new(PrimitiveModeAccumulator::<Int32Type>::new(
+                data_type, tie_break,
+            )),
+            DataType::Int64 => Box::new(PrimitiveModeAccumulator::<Int64Type>::new(
+                data_type, tie_break,
+            )),
+            DataType::UInt8 => Box::new(PrimitiveModeAccumulator::<UInt8Type>::new(
+                data_type, tie_break,
+            )),
+            DataType::UInt16 => Box::new(PrimitiveModeAccumulator::<UInt16Type>::new(
+                data_type, tie_break,
+            )),
+            DataType::UInt32 => Box::new(PrimitiveModeAccumulator::<UInt32Type>::new(
+                data_type, tie_break,
+            )),
+            DataType::UInt64 => Box::new(PrimitiveModeAccumulator::<UInt64Type>::new(
+                data_type, tie_break,
+            )),
 
-            DataType::Date32 => Box::new(PrimitiveModeAccumulator::<Date32Type>::new(data_type)),
-            DataType::Date64 => Box::new(PrimitiveModeAccumulator::<Date64Type>::new(data_type)),
-            DataType::Time32(TimeUnit::Millisecond) => Box::new(PrimitiveModeAccumulator::<
-                Time32MillisecondType,
-            >::new(data_type)),
-            DataType::Time32(TimeUnit::Second) => {
-                Box::new(PrimitiveModeAccumulator::<Time32SecondType>::new(data_type))
+            DataType::Date32 => Box::new(PrimitiveModeAccumulator::<Date32Type>::new(
+                data_type, tie_break,
+            )),
+            DataType::Date64 => Box::new(PrimitiveModeAccumulator::<Date64Type>::new(
+                data_type, tie_break,
+            )),
+            DataType::Time32(TimeUnit::Millisecond) => {
+                Box::new(PrimitiveModeAccumulator::<Time32MillisecondType>::new(
+                    data_type, tie_break,
+                ))
             }
-            DataType::Time64(TimeUnit::Microsecond) => Box::new(PrimitiveModeAccumulator::<
-                Time64MicrosecondType,
-            >::new(data_type)),
-            DataType::Time64(TimeUnit::Nanosecond) => Box::new(PrimitiveModeAccumulator::<
-                Time64NanosecondType,
-            >::new(data_type)),
-            DataType::Timestamp(TimeUnit::Microsecond, _) => Box::new(PrimitiveModeAccumulator::<
-                TimestampMicrosecondType,
-            >::new(data_type)),
-            DataType::Timestamp(TimeUnit::Millisecond, _) => Box::new(PrimitiveModeAccumulator::<
-                TimestampMillisecondType,
-            >::new(data_type)),
-            DataType::Timestamp(TimeUnit::Nanosecond, _) => Box::new(PrimitiveModeAccumulator::<
-                TimestampNanosecondType,
-            >::new(data_type)),
-            DataType::Timestamp(TimeUnit::Second, _) => Box::new(PrimitiveModeAccumulator::<
-                TimestampSecondType,
-            >::new(data_type)),
+            DataType::Time32(TimeUnit::Second) => Box::new(PrimitiveModeAccumulator::<
+                Time32SecondType,
+            >::new(data_type, tie_break)),
+            DataType::Time64(TimeUnit::Microsecond) => {
+                Box::new(PrimitiveModeAccumulator::<Time64MicrosecondType>::new(
+                    data_type, tie_break,
+                ))
+            }
+            DataType::Time64(TimeUnit::Nanosecond) => {
+                Box::new(PrimitiveModeAccumulator::<Time64NanosecondType>::new(
+                    data_type, tie_break,
+                ))
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, _) => {
+                Box::new(PrimitiveModeAccumulator::<TimestampMicrosecondType>::new(
+                    data_type, tie_break,
+                ))
+            }
+            DataType::Timestamp(TimeUnit::Millisecond, _) => {
+                Box::new(PrimitiveModeAccumulator::<TimestampMillisecondType>::new(
+                    data_type, tie_break,
+                ))
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
+                Box::new(PrimitiveModeAccumulator::<TimestampNanosecondType>::new(
+                    data_type, tie_break,
+                ))
+            }
+            DataType::Timestamp(TimeUnit::Second, _) => {
+                Box::new(PrimitiveModeAccumulator::<TimestampSecondType>::new(
+                    data_type, tie_break,
+                ))
+            }
 
-            DataType::Float16 => Box::new(FloatModeAccumulator::<Float16Type>::new(data_type)),
-            DataType::Float32 => Box::new(FloatModeAccumulator::<Float32Type>::new(data_type)),
-            DataType::Float64 => Box::new(FloatModeAccumulator::<Float64Type>::new(data_type)),
+            DataType::Float16 => Box::new(FloatModeAccumulator::<Float16Type>::new(
+                data_type, tie_break,
+            )),
+            DataType::Float32 => Box::new(FloatModeAccumulator::<Float32Type>::new(
+                data_type, tie_break,
+            )),
+            DataType::Float64 => Box::new(FloatModeAccumulator::<Float64Type>::new(
+                data_type, tie_break,
+            )),
 
             DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {
-                Box::new(BytesModeAccumulator::new(data_type))
+                Box::new(BytesModeAccumulator::new(data_type, tie_break))
             }
             _ => {
                 return not_impl_err!("Unsupported data type: {:?} for mode function", data_type);
@@ -126,6 +167,73 @@ impl AggregateUDFImpl for ModeFunction {
         };
 
         Ok(accumulator)
+    }
+
+    fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+        // The accumulators emit their state as lists in `state()`, so the state fields
+        // must be declared as list types for the partial aggregation output schema to
+        // match. `BytesModeAccumulator` stores its state values as `Utf8` regardless of
+        // the input string type, and all accumulators emit `Int64` frequencies.
+        let value_type = match args.input_fields[0].data_type() {
+            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => DataType::Utf8,
+            other => other.clone(),
+        };
+
+        Ok(vec![
+            Field::new(
+                "values",
+                DataType::List(Arc::new(Field::new_list_field(value_type, true))),
+                true,
+            )
+            .into(),
+            Field::new(
+                "frequencies",
+                DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
+                true,
+            )
+            .into(),
+        ])
+    }
+}
+
+/// How ties between equally frequent values are broken.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TieBreak {
+    /// No particular value is required among the most frequent values.
+    Any,
+    /// Return the lowest of the most frequent values.
+    Lowest,
+    /// Return the highest of the most frequent values.
+    Highest,
+}
+
+/// Resolves the tie-breaking strategy from the optional second argument.
+///
+/// Spark passes `mode(col, deterministic)` with a boolean literal, where true means
+/// the lowest value among the most frequent values is returned. The plan resolver
+/// rewrites `mode() WITHIN GROUP (ORDER BY col)` to the string sentinels `"lowest"`
+/// (ascending order) and `"highest"` (descending order).
+fn resolve_tie_break(args: &AccumulatorArgs) -> Result<TieBreak> {
+    let Some(expr) = args.exprs.get(1) else {
+        return Ok(TieBreak::Any);
+    };
+    let value = get_scalar_value(expr).map_err(|_| {
+        DataFusionError::Plan("mode requires deterministic to be a constant boolean".to_string())
+    })?;
+    match value {
+        ScalarValue::Boolean(Some(false)) => Ok(TieBreak::Any),
+        ScalarValue::Boolean(Some(true)) => Ok(TieBreak::Lowest),
+        ScalarValue::Utf8(Some(value))
+        | ScalarValue::LargeUtf8(Some(value))
+        | ScalarValue::Utf8View(Some(value)) => match value.as_str() {
+            "lowest" => Ok(TieBreak::Lowest),
+            "highest" => Ok(TieBreak::Highest),
+            value => exec_err!("invalid tie-break strategy for mode: {value}"),
+        },
+        value => exec_err!(
+            "mode requires deterministic to be a non-null boolean literal, got {}",
+            value.data_type()
+        ),
     }
 }
 
@@ -138,6 +246,7 @@ where
 {
     value_counts: HashMap<T::Native, i64>,
     data_type: DataType,
+    tie_break: TieBreak,
 }
 
 impl<T> PrimitiveModeAccumulator<T>
@@ -145,10 +254,11 @@ where
     T: ArrowPrimitiveType + Send,
     T::Native: Eq + Hash + Clone,
 {
-    pub fn new(data_type: &DataType) -> Self {
+    pub fn new(data_type: &DataType, tie_break: TieBreak) -> Self {
         Self {
             value_counts: HashMap::default(),
             data_type: data_type.clone(),
+            tie_break,
         }
     }
 }
@@ -170,6 +280,46 @@ where
         }
 
         Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        let mut max_value: Option<T::Native> = None;
+        let mut max_count: i64 = 0;
+
+        self.value_counts.iter().for_each(|(value, &count)| {
+            match count.cmp(&max_count) {
+                std::cmp::Ordering::Greater => {
+                    max_value = Some(*value);
+                    max_count = count;
+                }
+                std::cmp::Ordering::Equal => {
+                    max_value = match max_value {
+                        Some(ref current_max_value)
+                            if self.tie_break == TieBreak::Lowest && value < current_max_value =>
+                        {
+                            Some(*value)
+                        }
+                        Some(ref current_max_value)
+                            if self.tie_break != TieBreak::Lowest && value > current_max_value =>
+                        {
+                            Some(*value)
+                        }
+                        Some(ref current_max_value) => Some(*current_max_value),
+                        None => Some(*value),
+                    };
+                }
+                _ => {} // Do nothing if count is less than max_count
+            }
+        });
+
+        match max_value {
+            Some(val) => ScalarValue::new_primitive::<T>(Some(val), &self.data_type),
+            None => ScalarValue::new_primitive::<T>(None, &self.data_type),
+        }
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(&self.value_counts) + self.value_counts.len() * size_of::<(T::Native, i64)>()
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -199,49 +349,27 @@ where
             return Ok(());
         }
 
-        let values_array = as_primitive_array::<T>(&states[0])?;
-        let counts_array = as_primitive_array::<arrow::datatypes::Int64Type>(&states[1])?;
+        let values_list = as_list_array(&states[0])?;
+        let counts_list = as_list_array(&states[1])?;
 
-        for i in 0..values_array.len() {
-            let value = values_array.value(i);
-            let count = counts_array.value(i);
-            let entry = self.value_counts.entry(value).or_insert(0);
-            *entry += count;
+        for i in 0..values_list.len() {
+            if values_list.is_null(i) || counts_list.is_null(i) {
+                continue;
+            }
+            let values = values_list.value(i);
+            let counts = counts_list.value(i);
+            let values_array = as_primitive_array::<T>(&values)?;
+            let counts_array = as_primitive_array::<Int64Type>(&counts)?;
+
+            for j in 0..values_array.len() {
+                let value = values_array.value(j);
+                let count = counts_array.value(j);
+                let entry = self.value_counts.entry(value).or_insert(0);
+                *entry += count;
+            }
         }
 
         Ok(())
-    }
-
-    fn evaluate(&mut self) -> Result<ScalarValue> {
-        let mut max_value: Option<T::Native> = None;
-        let mut max_count: i64 = 0;
-
-        self.value_counts.iter().for_each(|(value, &count)| {
-            match count.cmp(&max_count) {
-                std::cmp::Ordering::Greater => {
-                    max_value = Some(*value);
-                    max_count = count;
-                }
-                std::cmp::Ordering::Equal => {
-                    max_value = match max_value {
-                        Some(ref current_max_value) if value > current_max_value => Some(*value),
-                        Some(ref current_max_value) => Some(*current_max_value),
-                        None => Some(*value),
-                    };
-                }
-                _ => {} // Do nothing if count is less than max_count
-            }
-        });
-
-        match max_value {
-            Some(val) => ScalarValue::new_primitive::<T>(Some(val), &self.data_type),
-            None => ScalarValue::new_primitive::<T>(None, &self.data_type),
-        }
-    }
-
-    fn size(&self) -> usize {
-        std::mem::size_of_val(&self.value_counts)
-            + self.value_counts.len() * std::mem::size_of::<(T::Native, i64)>()
     }
 }
 
@@ -252,16 +380,18 @@ where
 {
     value_counts: HashMap<Hashable<T::Native>, i64>,
     data_type: DataType,
+    tie_break: TieBreak,
 }
 
 impl<T> FloatModeAccumulator<T>
 where
     T: ArrowPrimitiveType,
 {
-    pub fn new(data_type: &DataType) -> Self {
+    pub fn new(data_type: &DataType, tie_break: TieBreak) -> Self {
         Self {
             value_counts: HashMap::default(),
             data_type: data_type.clone(),
+            tie_break,
         }
     }
 }
@@ -284,6 +414,49 @@ where
         }
 
         Ok(())
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        let mut max_value: Option<T::Native> = None;
+        let mut max_count: i64 = 0;
+
+        self.value_counts.iter().for_each(|(value, &count)| {
+            match count.cmp(&max_count) {
+                std::cmp::Ordering::Greater => {
+                    max_value = Some(value.0);
+                    max_count = count;
+                }
+                std::cmp::Ordering::Equal => {
+                    max_value = match max_value {
+                        Some(current_max_value)
+                            if self.tie_break == TieBreak::Lowest
+                                && value.0 < current_max_value =>
+                        {
+                            Some(value.0)
+                        }
+                        Some(current_max_value)
+                            if self.tie_break != TieBreak::Lowest
+                                && value.0 > current_max_value =>
+                        {
+                            Some(value.0)
+                        }
+                        Some(current_max_value) => Some(current_max_value),
+                        None => Some(value.0),
+                    };
+                }
+                _ => {} // Do nothing if count is less than max_count
+            }
+        });
+
+        match max_value {
+            Some(val) => ScalarValue::new_primitive::<T>(Some(val), &self.data_type),
+            None => ScalarValue::new_primitive::<T>(None, &self.data_type),
+        }
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(&self.value_counts)
+            + self.value_counts.len() * size_of::<(Hashable<T::Native>, i64)>()
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -313,51 +486,29 @@ where
             return Ok(());
         }
 
-        let values_array = as_primitive_array::<T>(&states[0])?;
-        let counts_array = as_primitive_array::<arrow::datatypes::Int64Type>(&states[1])?;
+        let values_list = as_list_array(&states[0])?;
+        let counts_list = as_list_array(&states[1])?;
 
-        for i in 0..values_array.len() {
-            let count = counts_array.value(i);
-            let entry = self
-                .value_counts
-                .entry(Hashable(values_array.value(i)))
-                .or_insert(0);
-            *entry += count;
+        for i in 0..values_list.len() {
+            if values_list.is_null(i) || counts_list.is_null(i) {
+                continue;
+            }
+            let values = values_list.value(i);
+            let counts = counts_list.value(i);
+            let values_array = as_primitive_array::<T>(&values)?;
+            let counts_array = as_primitive_array::<Int64Type>(&counts)?;
+
+            for j in 0..values_array.len() {
+                let count = counts_array.value(j);
+                let entry = self
+                    .value_counts
+                    .entry(Hashable(values_array.value(j)))
+                    .or_insert(0);
+                *entry += count;
+            }
         }
 
         Ok(())
-    }
-
-    fn evaluate(&mut self) -> Result<ScalarValue> {
-        let mut max_value: Option<T::Native> = None;
-        let mut max_count: i64 = 0;
-
-        self.value_counts.iter().for_each(|(value, &count)| {
-            match count.cmp(&max_count) {
-                std::cmp::Ordering::Greater => {
-                    max_value = Some(value.0);
-                    max_count = count;
-                }
-                std::cmp::Ordering::Equal => {
-                    max_value = match max_value {
-                        Some(current_max_value) if value.0 > current_max_value => Some(value.0),
-                        Some(current_max_value) => Some(current_max_value),
-                        None => Some(value.0),
-                    };
-                }
-                _ => {} // Do nothing if count is less than max_count
-            }
-        });
-
-        match max_value {
-            Some(val) => ScalarValue::new_primitive::<T>(Some(val), &self.data_type),
-            None => ScalarValue::new_primitive::<T>(None, &self.data_type),
-        }
-    }
-
-    fn size(&self) -> usize {
-        std::mem::size_of_val(&self.value_counts)
-            + self.value_counts.len() * std::mem::size_of::<(Hashable<T::Native>, i64)>()
     }
 }
 
@@ -366,13 +517,15 @@ where
 pub struct BytesModeAccumulator {
     value_counts: HashMap<String, i64>,
     data_type: DataType,
+    tie_break: TieBreak,
 }
 
 impl BytesModeAccumulator {
-    pub fn new(data_type: &DataType) -> Self {
+    pub fn new(data_type: &DataType, tie_break: TieBreak) -> Self {
         Self {
             value_counts: HashMap::new(),
             data_type: data_type.clone(),
+            tie_break,
         }
     }
 
@@ -411,6 +564,43 @@ impl Accumulator for BytesModeAccumulator {
         Ok(())
     }
 
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        if self.value_counts.is_empty() {
+            return match &self.data_type {
+                DataType::Utf8View => Ok(ScalarValue::Utf8View(None)),
+                _ => Ok(ScalarValue::Utf8(None)),
+            };
+        }
+
+        let mode = self
+            .value_counts
+            .iter()
+            .max_by(|a, b| {
+                // First compare counts
+                a.1.cmp(b.1).then_with(|| match self.tie_break {
+                    TieBreak::Highest => a.0.cmp(b.0),
+                    // If counts are equal, compare keys in reverse order to get the maximum string
+                    TieBreak::Any | TieBreak::Lowest => b.0.cmp(a.0),
+                })
+            })
+            .map(|(value, _)| value.to_string());
+
+        match mode {
+            Some(result) => match &self.data_type {
+                DataType::Utf8View => Ok(ScalarValue::Utf8View(Some(result))),
+                _ => Ok(ScalarValue::Utf8(Some(result))),
+            },
+            None => match &self.data_type {
+                DataType::Utf8View => Ok(ScalarValue::Utf8View(None)),
+                _ => Ok(ScalarValue::Utf8(None)),
+            },
+        }
+    }
+
+    fn size(&self) -> usize {
+        self.value_counts.capacity() * size_of::<(String, i64)>() + size_of_val(&self.data_type)
+    }
+
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
         let values: Vec<ScalarValue> = self
             .value_counts
@@ -438,54 +628,28 @@ impl Accumulator for BytesModeAccumulator {
             return Ok(());
         }
 
-        let values_array = as_string_array(&states[0])?;
-        let counts_array = as_primitive_array::<arrow::datatypes::Int64Type>(&states[1])?;
+        let values_list = as_list_array(&states[0])?;
+        let counts_list = as_list_array(&states[1])?;
 
-        for (i, value_option) in values_array.iter().enumerate() {
-            if let Some(value) = value_option {
-                let count = counts_array.value(i);
-                let entry = self.value_counts.entry(value.to_string()).or_insert(0);
-                *entry += count;
+        for i in 0..values_list.len() {
+            if values_list.is_null(i) || counts_list.is_null(i) {
+                continue;
+            }
+            let values = values_list.value(i);
+            let counts = counts_list.value(i);
+            let values_array = as_string_array(&values)?;
+            let counts_array = as_primitive_array::<Int64Type>(&counts)?;
+
+            for (j, value_option) in values_array.iter().enumerate() {
+                if let Some(value) = value_option {
+                    let count = counts_array.value(j);
+                    let entry = self.value_counts.entry(value.to_string()).or_insert(0);
+                    *entry += count;
+                }
             }
         }
 
         Ok(())
-    }
-
-    fn evaluate(&mut self) -> Result<ScalarValue> {
-        if self.value_counts.is_empty() {
-            return match &self.data_type {
-                DataType::Utf8View => Ok(ScalarValue::Utf8View(None)),
-                _ => Ok(ScalarValue::Utf8(None)),
-            };
-        }
-
-        let mode = self
-            .value_counts
-            .iter()
-            .max_by(|a, b| {
-                // First compare counts
-                a.1.cmp(b.1)
-                    // If counts are equal, compare keys in reverse order to get the maximum string
-                    .then_with(|| b.0.cmp(a.0))
-            })
-            .map(|(value, _)| value.to_string());
-
-        match mode {
-            Some(result) => match &self.data_type {
-                DataType::Utf8View => Ok(ScalarValue::Utf8View(Some(result))),
-                _ => Ok(ScalarValue::Utf8(Some(result))),
-            },
-            None => match &self.data_type {
-                DataType::Utf8View => Ok(ScalarValue::Utf8View(None)),
-                _ => Ok(ScalarValue::Utf8(None)),
-            },
-        }
-    }
-
-    fn size(&self) -> usize {
-        self.value_counts.capacity() * std::mem::size_of::<(String, i64)>()
-            + std::mem::size_of_val(&self.data_type)
     }
 }
 
@@ -499,7 +663,7 @@ mod tests {
 
     #[test]
     fn test_mode_accumulator_single_mode_utf8() -> Result<()> {
-        let mut acc = BytesModeAccumulator::new(&DataType::Utf8);
+        let mut acc = BytesModeAccumulator::new(&DataType::Utf8, TieBreak::Any);
         let values: ArrayRef = Arc::new(StringArray::from(vec![
             Some("apple"),
             Some("banana"),
@@ -518,7 +682,7 @@ mod tests {
 
     #[test]
     fn test_mode_accumulator_tie_utf8() -> Result<()> {
-        let mut acc = BytesModeAccumulator::new(&DataType::Utf8);
+        let mut acc = BytesModeAccumulator::new(&DataType::Utf8, TieBreak::Any);
         let values: ArrayRef = Arc::new(StringArray::from(vec![
             Some("apple"),
             Some("banana"),
@@ -536,7 +700,7 @@ mod tests {
 
     #[test]
     fn test_mode_accumulator_all_nulls_utf8() -> Result<()> {
-        let mut acc = BytesModeAccumulator::new(&DataType::Utf8);
+        let mut acc = BytesModeAccumulator::new(&DataType::Utf8, TieBreak::Any);
         let values: ArrayRef = Arc::new(StringArray::from(vec![None as Option<&str>, None, None]));
 
         acc.update_batch(&[values])?;
@@ -548,7 +712,7 @@ mod tests {
 
     #[test]
     fn test_mode_accumulator_with_nulls_utf8() -> Result<()> {
-        let mut acc = BytesModeAccumulator::new(&DataType::Utf8);
+        let mut acc = BytesModeAccumulator::new(&DataType::Utf8, TieBreak::Any);
         let values: ArrayRef = Arc::new(StringArray::from(vec![
             Some("apple"),
             None,
@@ -569,7 +733,7 @@ mod tests {
 
     #[test]
     fn test_mode_accumulator_single_mode_utf8view() -> Result<()> {
-        let mut acc = BytesModeAccumulator::new(&DataType::Utf8View);
+        let mut acc = BytesModeAccumulator::new(&DataType::Utf8View, TieBreak::Any);
         let values: ArrayRef = Arc::new(GenericByteViewArray::from(vec![
             Some("apple"),
             Some("banana"),
@@ -588,7 +752,7 @@ mod tests {
 
     #[test]
     fn test_mode_accumulator_tie_utf8view() -> Result<()> {
-        let mut acc = BytesModeAccumulator::new(&DataType::Utf8View);
+        let mut acc = BytesModeAccumulator::new(&DataType::Utf8View, TieBreak::Any);
         let values: ArrayRef = Arc::new(GenericByteViewArray::from(vec![
             Some("apple"),
             Some("banana"),
@@ -606,7 +770,7 @@ mod tests {
 
     #[test]
     fn test_mode_accumulator_all_nulls_utf8view() -> Result<()> {
-        let mut acc = BytesModeAccumulator::new(&DataType::Utf8View);
+        let mut acc = BytesModeAccumulator::new(&DataType::Utf8View, TieBreak::Any);
         let values: ArrayRef = Arc::new(GenericByteViewArray::from(vec![
             None as Option<&str>,
             None,
@@ -622,7 +786,7 @@ mod tests {
 
     #[test]
     fn test_mode_accumulator_with_nulls_utf8view() -> Result<()> {
-        let mut acc = BytesModeAccumulator::new(&DataType::Utf8View);
+        let mut acc = BytesModeAccumulator::new(&DataType::Utf8View, TieBreak::Any);
         let values: ArrayRef = Arc::new(GenericByteViewArray::from(vec![
             Some("apple"),
             None,

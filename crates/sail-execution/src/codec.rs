@@ -114,6 +114,7 @@ use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::percentile::PercentileFunction;
 use sail_function::aggregate::percentile_disc::PercentileDisc;
 use sail_function::aggregate::product::ProductFunction;
+use sail_function::aggregate::regr::{Regr, RegrType};
 use sail_function::aggregate::schema_of_variant_agg::SchemaOfVariantAggFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::theta_sketch::{
@@ -211,6 +212,7 @@ use sail_function::scalar::string::spark_regexp_extract_all::SparkRegexpExtractA
 use sail_function::scalar::string::spark_sentences::SparkSentences;
 use sail_function::scalar::string::spark_split::SparkSplit;
 use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
+use sail_function::scalar::string::spark_to_char::SparkToChar;
 use sail_function::scalar::string::spark_to_number::SparkToNumber;
 use sail_function::scalar::struct_function::StructFunction;
 use sail_function::scalar::update_struct_field::UpdateStructField;
@@ -2244,6 +2246,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkToNumber(gen::SparkToNumberUdf { safe }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkToNumber::new(safe))));
             }
+            UdfKind::SparkToChar(gen::SparkToCharUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkToChar::new(ansi_mode))));
+            }
             UdfKind::SparkAbs(gen::SparkAbsUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkAbs::new(ansi_mode))));
             }
@@ -2679,6 +2684,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkToNumber>() {
             let safe = func.safe();
             UdfKind::SparkToNumber(gen::SparkToNumberUdf { safe })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkToChar>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkToChar(gen::SparkToCharUdf { ansi_mode })
         } else if let Some(func) = node.inner().downcast_ref::<SparkAbs>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkAbs(gen::SparkAbsUdf { ansi_mode })
@@ -2731,6 +2739,42 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "percentile" => Ok(Arc::new(AggregateUDF::from(PercentileFunction::new()))),
                 "percentile_disc" => Ok(Arc::new(AggregateUDF::from(PercentileDisc::new()))),
                 "product" => Ok(Arc::new(AggregateUDF::from(ProductFunction::new()))),
+                "regr_avgx" => Ok(Arc::new(AggregateUDF::from(Regr::new(
+                    RegrType::AvgX,
+                    "regr_avgx",
+                )))),
+                "regr_avgy" => Ok(Arc::new(AggregateUDF::from(Regr::new(
+                    RegrType::AvgY,
+                    "regr_avgy",
+                )))),
+                "regr_count" => Ok(Arc::new(AggregateUDF::from(Regr::new(
+                    RegrType::Count,
+                    "regr_count",
+                )))),
+                "regr_intercept" => Ok(Arc::new(AggregateUDF::from(Regr::new(
+                    RegrType::Intercept,
+                    "regr_intercept",
+                )))),
+                "regr_r2" => Ok(Arc::new(AggregateUDF::from(Regr::new(
+                    RegrType::R2,
+                    "regr_r2",
+                )))),
+                "regr_slope" => Ok(Arc::new(AggregateUDF::from(Regr::new(
+                    RegrType::Slope,
+                    "regr_slope",
+                )))),
+                "regr_sxx" => Ok(Arc::new(AggregateUDF::from(Regr::new(
+                    RegrType::Sxx,
+                    "regr_sxx",
+                )))),
+                "regr_sxy" => Ok(Arc::new(AggregateUDF::from(Regr::new(
+                    RegrType::Sxy,
+                    "regr_sxy",
+                )))),
+                "regr_syy" => Ok(Arc::new(AggregateUDF::from(Regr::new(
+                    RegrType::Syy,
+                    "regr_syy",
+                )))),
                 "schema_of_variant_agg" => Ok(Arc::new(AggregateUDF::from(
                     SchemaOfVariantAggFunction::new(),
                 ))),
@@ -2861,6 +2905,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().downcast_ref::<PercentileFunction>().is_some()
             || node.inner().downcast_ref::<PercentileDisc>().is_some()
             || node.inner().downcast_ref::<ProductFunction>().is_some()
+            || node.inner().downcast_ref::<Regr>().is_some()
             || node
                 .inner()
                 .downcast_ref::<SchemaOfVariantAggFunction>()

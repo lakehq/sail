@@ -154,6 +154,7 @@ message ExtendedScalarUdf {
     SparkParseJsonUdf spark_parse_json = 25;
     SparkStructRenameUdf spark_struct_rename = 26;
     SparkWindowBucketsUdf spark_window_buckets = 27;
+    SparkToCharUdf spark_to_char = 28;
   }
 }
 
@@ -290,6 +291,10 @@ message SparkFromJsonUdf {
 
 message SparkToNumberUdf {
   bool safe = 1;
+}
+
+message SparkToCharUdf {
+  bool ansi_mode = 1;
 }
 
 message SparkMakeTimestampNtzUdf {
