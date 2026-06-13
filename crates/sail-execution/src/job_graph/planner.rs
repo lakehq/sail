@@ -15,6 +15,7 @@ use datafusion::physical_plan::{
 };
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_data_source::listing::delete::FileDeleteExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
@@ -283,7 +284,10 @@ fn build_job_graph(
     } else if let Some(coalesce) = plan.downcast_ref::<CoalesceExec>() {
         let child = plan.children().one()?;
         create_rescale_input(child, coalesce.output_partitions(), graph)?
-    } else if plan.is::<SystemTableExec>() || plan.is::<CatalogCommandExec>() {
+    } else if plan.is::<SystemTableExec>()
+        || plan.is::<CatalogCommandExec>()
+        || plan.is::<FileDeleteExec>()
+    {
         plan.children().zero()?;
         create_driver_stage(&plan, graph)?
     } else {
