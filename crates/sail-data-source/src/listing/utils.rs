@@ -1,13 +1,13 @@
-use std::collections::HashMap;
-use std::str::FromStr;
 use std::sync::Arc;
 
+use arrow_schema::FieldRef;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::datasource::listing::{ListingOptions, ListingTableConfig};
+use datafusion::datasource::listing::helpers::expr_applicable_for_cols;
 use datafusion::execution::cache::cache_manager::CachedFileList;
 use datafusion::execution::cache::TableScopedPath;
+use datafusion::logical_expr::Expr;
 use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{internal_err, plan_err, DataFusionError, GetExt, Result};
+use datafusion_common::{internal_datafusion_err, plan_err, DataFusionError, GetExt, Result};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::ListingTableUrl;
 use datafusion_session::Session;
@@ -16,252 +16,191 @@ use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
-use crate::listing::source::ReadFormat;
+use crate::listing::source::ListingFileSample;
 
-pub async fn resolve_listing_schema<R: ReadFormat>(
-    ctx: &dyn Session,
-    urls: &[ListingTableUrl],
-    options: &mut ListingOptions,
-    extension_with_compression: &Option<String>,
-    read_format: &R,
-) -> Result<Arc<Schema>> {
-    let file_groups = list_sample_files(ctx, urls, extension_with_compression.as_deref()).await?;
-    let empty = file_groups.iter().all(|(_, files)| files.is_empty());
-    if empty {
-        let urls = urls
-            .iter()
-            .map(|url| url.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        return plan_err!("No files found in the specified paths: {urls}")?;
-    }
-
-    apply_inferred_compression(
-        options,
-        &file_groups,
-        extension_with_compression,
-        read_format,
-    )?;
-
-    let mut schemas = vec![];
-    for (store, files) in file_groups.iter() {
-        let schema_inferrer = read_format.schema_inferrer();
-        let schema = schema_inferrer
-            .get_schema(ctx, store, files, options)
-            .await?;
-        schemas.push(schema);
-    }
-    let schema = Schema::try_merge(schemas)?;
-
+pub fn rewrite_utf8view_fields(schema: Arc<Schema>) -> Arc<Schema> {
     // TODO: Spark doesn't support Utf8View
     let new_fields: Vec<Field> = schema
         .fields()
         .iter()
         .map(|field| {
             if matches!(field.data_type(), &DataType::Utf8View) {
-                let mut new_field = field.as_ref().clone();
-                new_field = new_field.with_data_type(DataType::Utf8);
-                new_field
+                field.as_ref().clone().with_data_type(DataType::Utf8)
             } else {
                 field.as_ref().clone()
             }
         })
         .collect();
 
-    Ok(Arc::new(Schema::new_with_metadata(
+    Arc::new(Schema::new_with_metadata(
         new_fields,
         schema.metadata().clone(),
-    )))
+    ))
 }
 
-/// Like [`str::ends_with`], but ignores ASCII case so paths such as
-/// `data.CSV` match the lowercase `.csv` extension that upstream
-/// `FileFormat` implementations report. Spark behaves the same way.
 fn ends_with_ignore_ascii_case(s: &str, suffix: &str) -> bool {
     s.len() >= suffix.len()
         && s.as_bytes()[s.len() - suffix.len()..].eq_ignore_ascii_case(suffix.as_bytes())
 }
 
-/// List up to 10 files per URL into in-memory groups, suitable for schema
-/// inference and compression detection.
+/// Infer file-level compression from file names.
 ///
-/// The base file-extension filter is intentionally cleared (passed as `""`)
-/// so callers see every non-hidden file in the directory — matching Spark's
-/// behavior of reading every file regardless of extension. The hidden-file
-/// glob attached in [`crate::url::resolve_listing_urls`] still excludes
-/// `_*` / `.*` files. `extension_with_compression` is preserved so that an
-/// explicitly requested compressed variant still narrows the listing.
-async fn list_sample_files(
+/// This function returns a concrete compression (including "uncompressed") when *all* sampled files
+/// end with the same compression suffix, or [`None`] if the file sample is empty.
+/// This function returns an error when sampled files contain a mix of compressed and uncompressed
+/// files or multiple compression types.
+pub fn infer_listing_compression(
+    files: &[ListingFileSample<'_>],
+) -> Result<Option<CompressionTypeVariant>> {
+    let mut inferred: Option<CompressionTypeVariant> = None;
+    for group in files {
+        for object in &group.objects {
+            let path = object.location.as_ref();
+            let compression = [
+                CompressionTypeVariant::GZIP,
+                CompressionTypeVariant::BZIP2,
+                CompressionTypeVariant::XZ,
+                CompressionTypeVariant::ZSTD,
+            ]
+            .into_iter()
+            .find(|variant| {
+                let ext = FileCompressionType::from(*variant).get_ext();
+                ends_with_ignore_ascii_case(path, &ext)
+            })
+            .unwrap_or(CompressionTypeVariant::UNCOMPRESSED);
+
+            match inferred {
+                None => inferred = Some(compression),
+                Some(x) if x == compression => {}
+                Some(_) => return plan_err!("found mixed compression types"),
+            }
+        }
+    }
+
+    Ok(inferred)
+}
+
+/// List up to 10 files per URL into in-memory groups, suitable for schema inference, compression
+/// inference, and partition inference.
+///
+/// File extensions are intentionally ignored since `ListingTableUrl` carries the filtering glob
+/// already, and Spark reads every non-hidden file regardless of extension.
+pub async fn sample_listing_files<'a>(
     ctx: &dyn Session,
-    urls: &[ListingTableUrl],
-    extension_with_compression: Option<&str>,
-) -> Result<Vec<(Arc<dyn ObjectStore>, Vec<ObjectMeta>)>> {
-    // The logic is similar to `ListingOptions::infer_schema()`
-    // but here we also check for the existence of files.
-    let mut file_groups = vec![];
+    urls: &'a [ListingTableUrl],
+) -> Result<Vec<ListingFileSample<'a>>> {
+    let mut samples = vec![];
     for url in urls {
         let store = ctx.runtime_env().object_store(url)?;
-        // Pass `""` so the base extension filter accepts every path (Spark parity).
-        let files: Vec<_> = list_all_files(url, ctx, &store, "", extension_with_compression)
+        let objects: Vec<_> = list_all_files(url, ctx, store.as_ref())
             .await?
-            // Here we sample up to 10 files to infer the schema.
-            // The value is hard-coded here since DataFusion uses the same hard-coded value
-            // for operations such as `infer_partitions_from_path`.
-            // We can make it configurable if DataFusion makes those operations configurable
-            // as well in the future.
+            // Empty files can't contribute to schema / partition inference and may error when read.
+            .try_filter(|meta| futures::future::ready(meta.size > 0))
             .take(10)
             .try_collect()
             .await?;
-        file_groups.push((store, files));
+        samples.push(ListingFileSample {
+            url,
+            store,
+            objects,
+        });
     }
-    Ok(file_groups)
+    Ok(samples)
 }
 
-/// Inspect the suffixes in `file_groups` and, if a compressed variant is
-/// observed, rebuild `options.format` with the matching compression and
-/// update `options.file_extension`. Compression is carried by the
-/// `FileFormat` itself (DataFusion consults `format.compression_type()`
-/// when reading bytes), which is why we re-create the format here.
-fn apply_inferred_compression<R: ReadFormat>(
-    options: &mut ListingOptions,
-    file_groups: &[(Arc<dyn ObjectStore>, Vec<ObjectMeta>)],
-    extension_with_compression: &Option<String>,
-    read_format: &R,
+pub fn validate_partitions(
+    files: &[ListingFileSample<'_>],
+    table_partition_fields: &[FieldRef],
 ) -> Result<()> {
-    let file_extension = if let Some(extension_with_compression) = extension_with_compression {
-        resolve_listing_file_extension(
-            file_groups,
-            &options.file_extension,
-            extension_with_compression,
-        )
-    } else {
-        let result = infer_listing_file_extension(file_groups, &options.file_extension);
-        if let Some(result) = result {
-            let (file_extension, compression_type) = result;
-            let file_compression_type = CompressionTypeVariant::from_str(
-                compression_type
-                    .strip_prefix(".")
-                    .unwrap_or(compression_type.as_str()),
-            )?;
-            options.format = read_format.create_read_format(Some(file_compression_type))?;
-            Some(file_extension)
-        } else {
-            None
+    if table_partition_fields.is_empty() {
+        return Ok(());
+    }
+    let inferred = infer_partitions(files)?;
+    if inferred.is_empty() {
+        return Ok(());
+    }
+
+    for group in files {
+        if !group.url.is_collection() {
+            return plan_err!(
+                "Can't create a partitioned table backed by a single file, \
+            perhaps the URL is missing a trailing slash?"
+            );
         }
-    };
-    if let Some(file_extension) = file_extension.clone() {
-        options.file_extension = file_extension;
-    };
+
+        let table_partition_names = table_partition_fields
+            .iter()
+            .map(|f| f.name().clone())
+            .collect::<Vec<_>>();
+
+        if inferred.len() < table_partition_names.len() {
+            return plan_err!(
+                "Inferred partitions to be {:?}, but got {:?}",
+                inferred,
+                table_partition_names
+            );
+        }
+
+        // Match prefix to allow creating tables with partial partitions.
+        for (idx, col) in table_partition_names.iter().enumerate() {
+            if inferred.get(idx) != Some(col) {
+                return plan_err!(
+                    "Inferred partitions to be {:?}, but got {:?}",
+                    inferred,
+                    table_partition_names
+                );
+            }
+        }
+    }
     Ok(())
 }
 
-/// Best-effort compression auto-detection for callers that bypass
-/// [`resolve_listing_schema`] (i.e. an explicit schema was provided).
-/// Lists a sample of files and applies any detected compression to
-/// `options`. Silently no-ops when the listing is empty so the
-/// downstream scan can surface "no files found" with full context.
-pub async fn detect_listing_compression<R: ReadFormat>(
-    ctx: &dyn Session,
-    urls: &[ListingTableUrl],
-    options: &mut ListingOptions,
-    extension_with_compression: &Option<String>,
-    read_format: &R,
-) -> Result<()> {
-    let file_groups = list_sample_files(ctx, urls, extension_with_compression.as_deref()).await?;
-    if file_groups.iter().all(|(_, files)| files.is_empty()) {
-        return Ok(());
-    }
-    apply_inferred_compression(
-        options,
-        &file_groups,
-        extension_with_compression,
-        read_format,
-    )
-}
+pub fn infer_partitions(files: &[ListingFileSample<'_>]) -> Result<Vec<String>> {
+    let mut inferred: Option<Vec<String>> = None;
+    for group in files {
+        for file in &group.objects {
+            let path_parts = group
+                .url
+                .strip_prefix(&file.location)
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "failed to strip listing prefix from object location: {}",
+                        file.location
+                    )
+                })?
+                .collect::<Vec<_>>();
 
-fn resolve_listing_file_extension(
-    file_groups: &[(Arc<dyn ObjectStore>, Vec<ObjectMeta>)],
-    file_extension: &str,
-    extension_with_compression: &str,
-) -> Option<String> {
-    // TODO: compression detection only fires when a file's base extension
-    //  matches the format's canonical one (e.g. `.csv` for CSV). Files like
-    //  `data.tsv.gz` won't get GZIP applied automatically. Spark detects
-    //  compression from any trailing `.gz` / `.bz2` / `.xz` / `.zstd`
-    //  suffix regardless of base.
-    let mut count_with_compression = 0;
-    let mut count_without_compression = 0;
-    for (_, object_metas) in file_groups {
-        for object_meta in object_metas {
-            let path = &object_meta.location;
-            if ends_with_ignore_ascii_case(path.as_ref(), extension_with_compression) {
-                count_with_compression += 1;
-            } else if ends_with_ignore_ascii_case(path.as_ref(), file_extension) {
-                count_without_compression += 1;
-            }
-        }
-    }
-    if count_with_compression > count_without_compression {
-        Some(extension_with_compression.to_string())
-    } else {
-        None
-    }
-}
+            let keys = path_parts
+                .into_iter()
+                .rev()
+                .skip(1) // get parents only and skip the file itself
+                .rev()
+                .filter(|s| s.contains('='))
+                .map(|s| s.split('=').next().unwrap_or("").to_string())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>();
 
-fn infer_listing_file_extension(
-    file_groups: &[(Arc<dyn ObjectStore>, Vec<ObjectMeta>)],
-    file_extension: &str,
-) -> Option<(String, String)> {
-    // TODO: compression detection only fires when a file's base extension
-    //  matches the format's canonical one (e.g. `.csv` for CSV). Files like
-    //  `data.tsv.gz` won't get GZIP applied automatically. Spark detects
-    //  compression from any trailing `.gz` / `.bz2` / `.xz` / `.zstd`
-    //  suffix regardless of base.
-    let mut counts: HashMap<(String, String), usize> = HashMap::new();
-    let mut base_count = 0;
-    for (_, object_metas) in file_groups {
-        for object_meta in object_metas {
-            let path = &object_meta.location;
-            if ends_with_ignore_ascii_case(path.as_ref(), file_extension) {
-                base_count += 1;
-            }
-            for c in [
-                FileCompressionType::from(CompressionTypeVariant::GZIP),
-                FileCompressionType::from(CompressionTypeVariant::BZIP2),
-                FileCompressionType::from(CompressionTypeVariant::XZ),
-                FileCompressionType::from(CompressionTypeVariant::ZSTD),
-            ] {
-                let compression_ext = c.get_ext();
-                let candidate = format!("{file_extension}{compression_ext}");
-                if ends_with_ignore_ascii_case(path.as_ref(), &candidate) {
-                    *counts.entry((candidate, compression_ext)).or_default() += 1;
+            match &mut inferred {
+                None => inferred = Some(keys),
+                Some(x) if x == &keys => {}
+                Some(x) => {
+                    return plan_err!("found mixed partition values {x:?} and {keys:?}");
                 }
             }
         }
     }
 
-    // If ALL files do not end with the plain base extension, pick the most common compressed one.
-    if base_count == 0 && !counts.is_empty() {
-        counts
-            .into_iter()
-            .max_by_key(|(_, count)| *count)
-            .map(|(ext, _)| ext)
-    } else {
-        None
-    }
+    Ok(inferred.unwrap_or_default())
 }
 
-/// List all files identified by this [`ListingTableUrl`] for the provided `file_extension`
 pub async fn list_all_files<'a>(
     url: &'a ListingTableUrl,
     ctx: &'a dyn Session,
     store: &'a dyn ObjectStore,
-    file_extension: &'a str,
-    extension_with_compression: Option<&'a str>,
 ) -> Result<BoxStream<'a, Result<ObjectMeta>>> {
     let exec_options = &ctx.config_options().execution;
     let ignore_subdirectory = exec_options.listing_table_ignore_subdirectory;
-    // If the prefix is a file, use a head request, otherwise list
+    // If the prefix is a file, use a head request, otherwise use a list request.
     let list = match url.is_collection() {
         true => match ctx.runtime_env().cache_manager.get_list_files_cache() {
             None => store.list(Some(url.prefix())),
@@ -286,46 +225,16 @@ pub async fn list_all_files<'a>(
     Ok(list
         .try_filter(move |meta| {
             let path = &meta.location;
-            let extension_with_compression_match = extension_with_compression
-                .is_some_and(|ext| ends_with_ignore_ascii_case(path.as_ref(), ext));
-            let extension_match = ends_with_ignore_ascii_case(path.as_ref(), file_extension)
-                || extension_with_compression_match;
-            let extension_match = if !extension_match && extension_with_compression.is_none() {
-                [
-                    FileCompressionType::from(CompressionTypeVariant::GZIP),
-                    FileCompressionType::from(CompressionTypeVariant::BZIP2),
-                    FileCompressionType::from(CompressionTypeVariant::XZ),
-                    FileCompressionType::from(CompressionTypeVariant::ZSTD),
-                ]
-                .iter()
-                .any(|c| {
-                    let candidate = format!("{file_extension}{}", c.get_ext());
-                    ends_with_ignore_ascii_case(path.as_ref(), &candidate)
-                })
-            } else {
-                extension_match
-            };
             let glob_match = url.contains(path, ignore_subdirectory);
-            futures::future::ready(extension_match && glob_match)
+            futures::future::ready(glob_match)
         })
         .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
         .boxed())
 }
 
-/// The inferred partition columns are of `Dictionary` types by default, which cannot be
-/// understood by the Spark client. So we rewrite the type to be `Utf8`.
-pub fn rewrite_listing_partitions(mut config: ListingTableConfig) -> Result<ListingTableConfig> {
-    let Some(options) = config.options.as_mut() else {
-        return internal_err!("listing options should be present in the config");
-    };
-    options
-        .table_partition_cols
-        .iter_mut()
-        .for_each(|(_col, data_type)| {
-            // FIXME: infer concrete partition types (Int / Float / String) from observed values to match Spark's `partitionColumnTypeInference`.
-            if matches!(data_type, DataType::Dictionary(_, _)) {
-                *data_type = DataType::Utf8;
-            }
-        });
-    Ok(config)
+pub fn can_be_evaluated_for_partition_pruning(
+    partition_column_names: &[&str],
+    expr: &Expr,
+) -> bool {
+    !partition_column_names.is_empty() && expr_applicable_for_cols(partition_column_names, expr)
 }

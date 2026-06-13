@@ -491,14 +491,8 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json(json_col) AS result
         FROM VALUES ('{"name":"Alice"}') AS t(json_col)
         """
-      Then query error .*foldable.*
+      Then query error .*literal value.*
 
-    @sail-bug
-    # Sail currently rejects this option as NotImplemented: jiter does not
-    # accept leading-zero numbers, and silently accepting the option would
-    # produce the wrong schema on JSON with leading zeros. TODO: preprocess
-    # the JSON (or switch to a parser that honours the option) to plumb it
-    # through, then drop the tag.
     Scenario: allowNumericLeadingZeros option is accepted
       When query
         """

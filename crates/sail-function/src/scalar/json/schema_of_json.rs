@@ -1,19 +1,20 @@
-use std::any::Any;
+use std::iter::Peekable;
+use std::str::Chars;
 use std::sync::Arc;
 
 use chrono::{NaiveDate, NaiveDateTime};
-use datafusion::arrow::array::{downcast_array, Array, MapArray, StringArray, StructArray};
+use datafusion::arrow::array::{
+    downcast_array, Array, ArrayRef, MapArray, StringArray, StructArray,
+};
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::{DataFusionError, Result, ScalarValue};
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use jiter::{Jiter, Peek};
+use datafusion_common::{exec_err, plan_err, DataFusionError, Result};
+use datafusion_expr::function::Hint;
+use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
+use datafusion_expr_common::signature::Volatility;
+use datafusion_functions::downcast_arg;
+use datafusion_functions::utils::make_scalar_function;
 
-use crate::error::{generic_exec_err, invalid_arg_count_exec_err, unsupported_data_types_exec_err};
-
-/// Infers the schema of a JSON string and returns it in DDL format.
-///
-/// Example: schema_of_json('[{"col":0}]') returns 'ARRAY<STRUCT<col: BIGINT>>'
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkSchemaOfJson {
     signature: Signature,
 }
@@ -25,24 +26,37 @@ impl Default for SparkSchemaOfJson {
 }
 
 impl SparkSchemaOfJson {
+    pub const SCHEMA_OF_JSON_NAME: &'static str = "schema_of_json";
+
     pub fn new() -> Self {
-        Self {
+        SparkSchemaOfJson {
             signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 
+    fn validate_args_len<T>(args: &[T]) -> Result<()> {
+        if args.is_empty() || args.len() > 2 {
+            return plan_err!(
+                "function `{}` expected 1 to 2 args but got {}",
+                Self::SCHEMA_OF_JSON_NAME,
+                args.len()
+            );
+        };
+        Ok(())
+    }
+
     fn validate_args_are_literal(cols: &[ColumnarValue]) -> Result<()> {
         if let Some(ColumnarValue::Array(_)) = cols.first() {
-            return Err(generic_exec_err(
-                "schema_of_json",
-                "the input `json` should be a foldable string expression, got a column reference",
-            ));
+            return Err(DataFusionError::Execution(format!(
+                "Expected a literal value for the first arg of `{}`, instead got a column",
+                Self::SCHEMA_OF_JSON_NAME,
+            )));
         }
         if let Some(ColumnarValue::Array(_)) = cols.get(1) {
-            return Err(generic_exec_err(
-                "schema_of_json",
-                "the input `options` should be a foldable map expression, got a column reference",
-            ));
+            return Err(DataFusionError::Execution(format!(
+                "Expected a literal value for the second arg of `{}`, instead got a column",
+                Self::SCHEMA_OF_JSON_NAME,
+            )));
         }
         Ok(())
     }
@@ -51,48 +65,35 @@ impl SparkSchemaOfJson {
         match arg_types {
             [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8] => Ok(()),
             [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Map(map_field, _)] => {
-                if let DataType::Struct(fields) = map_field.data_type() {
-                    let key = &fields[0];
-                    let value = &fields[1];
-                    if !key.data_type().is_string() || !value.data_type().is_string() {
-                        return Err(generic_exec_err(
-                            "schema_of_json",
-                            &format!(
-                                "options map keys/values must both be string type, got key: {}, value: {}",
+                match map_field.data_type() {
+                    DataType::Struct(fields) => {
+                        let key = fields[0].clone();
+                        let value = fields[1].clone();
+                        if !key.data_type().is_string() || !value.data_type().is_string() {
+                            return Err(DataFusionError::Plan(format!(
+                                "For function `{}`, the options map keys/values should both be type string. Instead got key: {}, value: {}",
+                                Self::SCHEMA_OF_JSON_NAME,
                                 key.data_type(),
-                                value.data_type()
-                            ),
-                        ));
+                                value.data_type(),
+                            )));
+                        }
+                        Ok(())
                     }
-                    Ok(())
-                } else {
-                    Err(unsupported_data_types_exec_err(
-                        "schema_of_json",
-                        "STRING and MAP<STRING, STRING>",
-                        arg_types,
-                    ))
+                    _ => unreachable!(),
                 }
             }
-            [DataType::Null] => Err(generic_exec_err(
-                "schema_of_json",
-                "the json must not be null",
-            )),
-            _ => Err(unsupported_data_types_exec_err(
-                "schema_of_json",
-                "STRING",
-                arg_types,
-            )),
+            _ => plan_err!(
+                "For function `{:?}` found invalid arg types: {:?}",
+                Self::SCHEMA_OF_JSON_NAME,
+                arg_types
+            ),
         }
     }
 }
 
 impl ScalarUDFImpl for SparkSchemaOfJson {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
-        "schema_of_json"
+        Self::SCHEMA_OF_JSON_NAME
     }
 
     fn signature(&self) -> &Signature {
@@ -103,18 +104,20 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
         Ok(DataType::Utf8)
     }
 
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        Self::validate_args_len(&args.args)?;
+        Self::validate_args_are_literal(&args.args)?;
+        let hints = vec![Hint::AcceptsSingular, Hint::AcceptsSingular];
+        make_scalar_function(schema_of_json_inner, hints)(&args.args)
+    }
+
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.is_empty() || arg_types.len() > 2 {
-            return Err(invalid_arg_count_exec_err(
-                "schema_of_json",
-                (1, 2),
-                arg_types.len(),
-            ));
-        }
+        Self::validate_args_len(arg_types)?;
         Self::validate_arg_types(arg_types)?;
-        let mut coerced = vec![DataType::Utf8];
+        let mut coerce_to = vec![DataType::Utf8];
         if arg_types.len() > 1 {
-            coerced.push(DataType::Map(
+            // Force map<k,v> → map<Utf8, Utf8>
+            coerce_to.push(DataType::Map(
                 Arc::new(Field::new(
                     "entries",
                     DataType::Struct(Fields::from(vec![
@@ -126,350 +129,555 @@ impl ScalarUDFImpl for SparkSchemaOfJson {
                 false,
             ));
         }
-        Ok(coerced)
-    }
-
-    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs { args, .. } = args;
-
-        Self::validate_args_are_literal(&args)?;
-
-        // Parse options from the optional second argument.
-        let opts = if args.len() > 1 {
-            if let ColumnarValue::Scalar(ScalarValue::Map(map_arr)) = &args[1] {
-                SparkSchemaOfJsonOptions::default().map_to_options(map_arr.as_ref())?
-            } else {
-                SparkSchemaOfJsonOptions::default()
-            }
-        } else {
-            SparkSchemaOfJsonOptions::default()
-        };
-
-        match &args[0] {
-            ColumnarValue::Scalar(scalar) => {
-                let json_str = match scalar {
-                    ScalarValue::Utf8(s) | ScalarValue::LargeUtf8(s) | ScalarValue::Utf8View(s) => {
-                        s.as_deref()
-                    }
-                    ScalarValue::Null => {
-                        return Err(generic_exec_err(
-                            "schema_of_json",
-                            "the json must not be null",
-                        ));
-                    }
-                    _ => {
-                        return Err(generic_exec_err(
-                            "schema_of_json",
-                            "first argument must be a string",
-                        ))
-                    }
-                };
-
-                let json_str = json_str.ok_or_else(|| {
-                    generic_exec_err("schema_of_json", "the json must not be null")
-                })?;
-
-                let schema = infer_json_schema(json_str, &opts)?;
-
-                Ok(ColumnarValue::Scalar(ScalarValue::Utf8(Some(schema))))
-            }
-            ColumnarValue::Array(_) => Err(generic_exec_err(
-                "schema_of_json",
-                "the input `json` should be a foldable string expression, got a column reference",
-            )),
-        }
+        // utf8, optional<map>
+        Ok(coerce_to)
     }
 }
 
-/// Internal typed representation of an inferred JSON type.
-///
-/// Using a typed enum (instead of DDL strings) avoids ever re-parsing the
-/// output: `common_supertype` operates on variants, and field names are
-/// stored **raw** in `Struct` so escaping is applied exactly once, at the
-/// final `to_ddl()` serialization step.
-#[derive(Debug, Clone, PartialEq, Eq)]
+fn schema_of_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
+    SparkSchemaOfJson::validate_args_len(args)?;
+    let rows = downcast_arg!(&args[0], StringArray);
+    let options = if let Some(arg) = args.get(1) {
+        let map_array = downcast_arg!(arg, MapArray);
+        SparkSchemaOfJsonOptions::default().map_to_options(map_array)?
+    } else {
+        SparkSchemaOfJsonOptions::default()
+    };
+    let type_ddl = if rows.is_empty() {
+        return Err(DataFusionError::Execution(
+            "No value passed into input".to_string(),
+        ));
+    } else if rows.is_null(0) {
+        // Spark rejects a null `json` argument with a DATATYPE_MISMATCH at
+        // analysis time, since the input must be a foldable, non-null value.
+        return plan_err!(
+            "For function `{}`, the json must not be null",
+            SparkSchemaOfJson::SCHEMA_OF_JSON_NAME
+        );
+    } else if rows.value(0).is_empty() {
+        "STRING".to_string()
+    } else {
+        infer_json_schema_type(rows.value(0), &options)?
+    };
+    Ok(Arc::new(StringArray::from(vec![type_ddl])))
+}
+
+fn infer_json_schema_type(json_string: &str, options: &SparkSchemaOfJsonOptions) -> Result<String> {
+    if json_string.trim().is_empty() {
+        return Ok("STRING".to_string());
+    }
+    let mut parser = JsonSchemaParser::new(json_string, options);
+    // Content after the first JSON value is ignored, matching Spark.
+    let inferred = parser.parse_value()?;
+    // Mirror Spark's `SchemaOfJsonEvaluator.evaluate`: structs and arrays of
+    // structs fall back to an empty struct when fully canonicalized away,
+    // and everything else falls back to a string.
+    let ddl = match inferred {
+        InferredType::Struct(_) => {
+            canonicalize_ddl(&inferred).unwrap_or_else(|| "STRUCT<>".to_string())
+        }
+        InferredType::Array(element) if matches!(*element, InferredType::Struct(_)) => {
+            canonicalize_ddl(&element)
+                .map(|e| format!("ARRAY<{e}>"))
+                .unwrap_or_else(|| "ARRAY<STRUCT<>>".to_string())
+        }
+        other => canonicalize_ddl(&other).unwrap_or_else(|| "STRING".to_string()),
+    };
+    Ok(ddl)
+}
+
+/// The maximum precision of Spark's `DecimalType`.
+const MAX_DECIMAL_PRECISION: usize = 38;
+
+/// A JSON type inferred from a literal JSON string, mirroring the types that
+/// Spark's `JsonInferSchema` can produce for `schema_of_json`.
+#[derive(Debug, Clone, PartialEq)]
 enum InferredType {
     Null,
     Boolean,
-    BigInt,
-    /// Integer wider than i64. Spark uses `DECIMAL(precision, 0)`.
-    Decimal {
-        precision: u32,
-    },
+    Long,
+    /// A number inferred as a decimal with the given precision and scale.
+    Decimal(u8, u8),
     Double,
     String,
+    /// A string inferred as a timestamp when the `inferTimestamp` option is
+    /// enabled and the value matches a recognized timestamp/date pattern.
     Timestamp,
     Array(Box<InferredType>),
+    /// Fields are sorted by name and duplicate names are preserved, matching
+    /// Spark's `JsonInferSchema`.
     Struct(Vec<(String, InferredType)>),
 }
 
-impl InferredType {
-    /// In Spark, a bare JSON `null` surfaces as STRING.
-    fn coerce_bare_null(self) -> Self {
-        if matches!(self, InferredType::Null) {
+/// A parser that infers the Spark type of a literal JSON string, mirroring
+/// the Jackson lexing behavior that Spark relies on for `schema_of_json`,
+/// including features that strict JSON parsers reject: single-quoted strings,
+/// unquoted field names, and non-numeric numbers (`NaN` and `Infinity`).
+struct JsonSchemaParser<'a> {
+    chars: Peekable<Chars<'a>>,
+    options: &'a SparkSchemaOfJsonOptions,
+}
+
+impl<'a> JsonSchemaParser<'a> {
+    fn new(json: &'a str, options: &'a SparkSchemaOfJsonOptions) -> Self {
+        JsonSchemaParser {
+            chars: json.chars().peekable(),
+            options,
+        }
+    }
+
+    fn skip_whitespace(&mut self) {
+        while matches!(self.chars.peek(), Some(' ' | '\t' | '\n' | '\r')) {
+            self.chars.next();
+        }
+    }
+
+    fn expect_char(&mut self, expected: char) -> Result<()> {
+        match self.chars.next() {
+            Some(c) if c == expected => Ok(()),
+            Some(c) => exec_err!("expected `{expected}` but found `{c}`"),
+            None => exec_err!("expected `{expected}` but found end of input"),
+        }
+    }
+
+    fn expect_literal(&mut self, literal: &str) -> Result<()> {
+        for expected in literal.chars() {
+            match self.chars.next() {
+                Some(c) if c == expected => {}
+                Some(c) => return exec_err!("invalid character `{c}` in literal `{literal}`"),
+                None => return exec_err!("unexpected end of input in literal `{literal}`"),
+            }
+        }
+        Ok(())
+    }
+
+    fn parse_value(&mut self) -> Result<InferredType> {
+        self.skip_whitespace();
+        match self.chars.peek().copied() {
+            None => exec_err!("unexpected end of input when parsing a JSON value"),
+            Some('{') => self.parse_object(),
+            Some('[') => self.parse_array(),
+            Some('"') => {
+                let value = self.parse_string('"')?;
+                Ok(self.infer_string_type(&value))
+            }
+            Some('\'') if self.options.allow_single_quotes => {
+                let value = self.parse_string('\'')?;
+                Ok(self.infer_string_type(&value))
+            }
+            Some('t') => {
+                self.expect_literal("true")?;
+                Ok(self.as_primitive(InferredType::Boolean))
+            }
+            Some('f') => {
+                self.expect_literal("false")?;
+                Ok(self.as_primitive(InferredType::Boolean))
+            }
+            Some('n') => {
+                self.expect_literal("null")?;
+                Ok(InferredType::Null)
+            }
+            Some('N') if self.options.allow_non_numeric_numbers => {
+                self.expect_literal("NaN")?;
+                Ok(self.as_primitive(InferredType::Double))
+            }
+            Some('I') if self.options.allow_non_numeric_numbers => {
+                self.expect_literal("Infinity")?;
+                Ok(self.as_primitive(InferredType::Double))
+            }
+            Some(sign @ ('-' | '+')) => {
+                self.chars.next();
+                if self.chars.peek() == Some(&'I') && self.options.allow_non_numeric_numbers {
+                    self.expect_literal("Infinity")?;
+                    Ok(self.as_primitive(InferredType::Double))
+                } else if sign == '-' {
+                    let number = self.parse_number(true)?;
+                    Ok(self.as_primitive(number))
+                } else {
+                    // A `+` sign is only valid before `Infinity`.
+                    exec_err!("unexpected character `+` when parsing a JSON value")
+                }
+            }
+            Some(c) if c.is_ascii_digit() => {
+                let number = self.parse_number(false)?;
+                Ok(self.as_primitive(number))
+            }
+            Some(c) => exec_err!("unexpected character `{c}` when parsing a JSON value"),
+        }
+    }
+
+    /// Coerces a scalar primitive to `STRING` when the `primitivesAsString`
+    /// option is enabled, matching Spark's `JsonInferSchema`. Strings, structs,
+    /// and arrays are unaffected.
+    fn as_primitive(&self, inferred: InferredType) -> InferredType {
+        if self.options.primitives_as_string {
             InferredType::String
         } else {
-            self
+            inferred
         }
     }
 
-    fn to_ddl(&self) -> String {
-        match self {
-            InferredType::Null => "NULL".to_string(),
-            InferredType::Boolean => "BOOLEAN".to_string(),
-            InferredType::BigInt => "BIGINT".to_string(),
-            InferredType::Decimal { precision } => format!("DECIMAL({precision},0)"),
-            InferredType::Double => "DOUBLE".to_string(),
-            InferredType::String => "STRING".to_string(),
-            InferredType::Timestamp => "TIMESTAMP".to_string(),
-            InferredType::Array(elem) => format!("ARRAY<{}>", elem.to_ddl()),
-            InferredType::Struct(fields) if fields.is_empty() => "STRUCT<>".to_string(),
-            InferredType::Struct(fields) => {
-                let rendered: Vec<String> = fields
-                    .iter()
-                    .map(|(name, typ)| format!("{}: {}", escape_field_name(name), typ.to_ddl()))
-                    .collect();
-                format!("STRUCT<{}>", rendered.join(", "))
+    /// Infers the type of a parsed JSON string: `TIMESTAMP` when the
+    /// `inferTimestamp` option is enabled and the value matches a recognized
+    /// timestamp/date pattern, otherwise `STRING`. Spark infers timestamps from
+    /// strings independently of `primitivesAsString`.
+    fn infer_string_type(&self, value: &str) -> InferredType {
+        if self.options.infer_timestamp && is_timestamp_string(value) {
+            InferredType::Timestamp
+        } else {
+            InferredType::String
+        }
+    }
+
+    fn parse_object(&mut self) -> Result<InferredType> {
+        self.expect_char('{')?;
+        let mut fields: Vec<(String, InferredType)> = Vec::new();
+        self.skip_whitespace();
+        if self.chars.peek() == Some(&'}') {
+            self.chars.next();
+            return Ok(InferredType::Struct(fields));
+        }
+        loop {
+            self.skip_whitespace();
+            let name = match self.chars.peek().copied() {
+                Some('"') => self.parse_string('"')?,
+                Some('\'') if self.options.allow_single_quotes => self.parse_string('\'')?,
+                Some(c) if self.options.allow_unquoted_field_names && is_unquoted_name_char(c) => {
+                    self.parse_unquoted_name()
+                }
+                Some(c) => {
+                    return exec_err!("unexpected character `{c}` when parsing a field name")
+                }
+                None => return exec_err!("unexpected end of input when parsing a field name"),
+            };
+            self.skip_whitespace();
+            self.expect_char(':')?;
+            let value = self.parse_value()?;
+            fields.push((name, value));
+            self.skip_whitespace();
+            match self.chars.next() {
+                Some(',') => {}
+                Some('}') => break,
+                Some(c) => return exec_err!("expected `,` or `}}` but found `{c}`"),
+                None => return exec_err!("unexpected end of input when parsing an object"),
+            }
+        }
+        // Spark sorts struct fields by name during inference and keeps
+        // duplicate names.
+        fields.sort_by(|(a, _), (b, _)| a.cmp(b));
+        Ok(InferredType::Struct(fields))
+    }
+
+    fn parse_array(&mut self) -> Result<InferredType> {
+        self.expect_char('[')?;
+        let mut element = InferredType::Null;
+        self.skip_whitespace();
+        if self.chars.peek() == Some(&']') {
+            self.chars.next();
+            return Ok(InferredType::Array(Box::new(element)));
+        }
+        loop {
+            let value = self.parse_value()?;
+            element = merge_types(element, value);
+            self.skip_whitespace();
+            match self.chars.next() {
+                Some(',') => {}
+                Some(']') => break,
+                Some(c) => return exec_err!("expected `,` or `]` but found `{c}`"),
+                None => return exec_err!("unexpected end of input when parsing an array"),
+            }
+        }
+        Ok(InferredType::Array(Box::new(element)))
+    }
+
+    /// Parses a string enclosed in the given quote character and returns its
+    /// decoded value. Single-quoted strings additionally allow the `\'`
+    /// escape, matching Jackson.
+    fn parse_string(&mut self, quote: char) -> Result<String> {
+        self.expect_char(quote)?;
+        let mut value = String::new();
+        loop {
+            match self.chars.next() {
+                None => return exec_err!("unexpected end of input when parsing a string"),
+                Some(c) if c == quote => return Ok(value),
+                Some('\\') => value.push(self.parse_escape(quote)?),
+                Some(c) if (c as u32) < 0x20 => {
+                    return exec_err!("unescaped control character in a string")
+                }
+                Some(c) => value.push(c),
             }
         }
     }
-}
 
-/// Returns the common supertype of two inferred types, following Spark's
-/// JSON schema-inference promotion rules.
-fn common_supertype(a: InferredType, b: InferredType) -> InferredType {
-    use InferredType::*;
-
-    if a == b {
-        return a;
+    fn parse_escape(&mut self, quote: char) -> Result<char> {
+        match self.chars.next() {
+            Some('"') => Ok('"'),
+            Some('\\') => Ok('\\'),
+            Some('/') => Ok('/'),
+            Some('b') => Ok('\u{0008}'),
+            Some('f') => Ok('\u{000C}'),
+            Some('n') => Ok('\n'),
+            Some('r') => Ok('\r'),
+            Some('t') => Ok('\t'),
+            Some('\'') if quote == '\'' => Ok('\''),
+            Some('u') => {
+                let code = self.parse_unicode_escape()?;
+                match code {
+                    0xD800..=0xDBFF => {
+                        // A high surrogate must be followed by a low surrogate.
+                        if self.chars.next() != Some('\\') || self.chars.next() != Some('u') {
+                            return exec_err!("unpaired surrogate in a unicode escape");
+                        }
+                        let low = self.parse_unicode_escape()?;
+                        if !(0xDC00..=0xDFFF).contains(&low) {
+                            return exec_err!("unpaired surrogate in a unicode escape");
+                        }
+                        let c = 0x10000 + ((code - 0xD800) << 10) + (low - 0xDC00);
+                        char::from_u32(c).ok_or_else(|| {
+                            DataFusionError::Execution("invalid unicode escape".to_string())
+                        })
+                    }
+                    0xDC00..=0xDFFF => exec_err!("unpaired surrogate in a unicode escape"),
+                    _ => char::from_u32(code).ok_or_else(|| {
+                        DataFusionError::Execution("invalid unicode escape".to_string())
+                    }),
+                }
+            }
+            Some(c) => exec_err!("invalid escape character `{c}` in a string"),
+            None => exec_err!("unexpected end of input in a string escape"),
+        }
     }
-    match (a, b) {
-        // `null` loses against any concrete type.
-        (Null, other) | (other, Null) => other,
 
-        // Numeric promotion ladder: BigInt < Decimal < Double.
-        (BigInt, Double) | (Double, BigInt) => Double,
-        (Decimal { .. }, Double) | (Double, Decimal { .. }) => Double,
-        (BigInt, Decimal { precision }) | (Decimal { precision }, BigInt) => {
-            // Spark widens BIGINT to DECIMAL(20,0) when merging with DECIMAL,
-            // to accommodate i64::MAX overflow values like 9223372036854775808.
-            Decimal {
-                precision: precision.max(20),
+    fn parse_unicode_escape(&mut self) -> Result<u32> {
+        let mut code = 0;
+        for _ in 0..4 {
+            let digit = self
+                .chars
+                .next()
+                .and_then(|c| c.to_digit(16))
+                .ok_or_else(|| {
+                    DataFusionError::Execution("invalid unicode escape in a string".to_string())
+                })?;
+            code = code * 16 + digit;
+        }
+        Ok(code)
+    }
+
+    fn parse_unquoted_name(&mut self) -> String {
+        let mut name = String::new();
+        while let Some(c) = self.chars.peek().copied() {
+            if is_unquoted_name_char(c) {
+                name.push(c);
+                self.chars.next();
+            } else {
+                break;
             }
         }
-        (Decimal { precision: p1 }, Decimal { precision: p2 }) => Decimal {
-            precision: p1.max(p2),
-        },
-
-        // Timestamp merges with String as STRING.
-        (Timestamp, String) | (String, Timestamp) => String,
-
-        // Arrays recurse on element type.
-        (Array(a), Array(b)) => Array(Box::new(common_supertype(*a, *b))),
-
-        // Structs: union of fields, recurse on shared names.
-        (Struct(fa), Struct(fb)) => Struct(merge_struct_fields(fa, fb)),
-
-        // Any other mix falls back to STRING (matches Spark's behaviour for
-        // e.g. `[1, "foo"]` or `[true, 1]`).
-        _ => String,
+        name
     }
-}
 
-/// Merges two lists of struct fields: shared names are promoted via
-/// `common_supertype`, unique names are kept. Output is sorted by name to
-/// match Spark's deterministic ordering.
-fn merge_struct_fields(
-    a: Vec<(String, InferredType)>,
-    b: Vec<(String, InferredType)>,
-) -> Vec<(String, InferredType)> {
-    use std::collections::BTreeMap;
-    let mut map: BTreeMap<String, InferredType> = a.into_iter().collect();
-    for (name, typ) in b {
-        map.entry(name)
-            .and_modify(|existing| {
-                *existing =
-                    common_supertype(std::mem::replace(existing, InferredType::Null), typ.clone());
-            })
-            .or_insert(typ);
-    }
-    map.into_iter().collect()
-}
-
-/// Spark-compatible field-name escaping.
-///
-/// Unquoted identifiers in Spark DDL must match `[A-Za-z_][A-Za-z0-9_]*`.
-/// Anything else gets backtick-quoted; embedded backticks are doubled.
-fn escape_field_name(name: &str) -> String {
-    let mut chars = name.chars();
-    let is_unquoted = match chars.next() {
-        Some(c) if c.is_ascii_alphabetic() || c == '_' => {
-            chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    /// Parses a number; the leading `-` sign must already be consumed.
+    /// Mirrors Spark's number type inference: integral values that fit in a
+    /// long are `BIGINT`, wider integral values are `DECIMAL(p, 0)` up to the
+    /// maximum precision, and everything else is `DOUBLE`.
+    fn parse_number(&mut self, negative: bool) -> Result<InferredType> {
+        let mut digits = String::new();
+        while let Some(c) = self.chars.peek().copied() {
+            if c.is_ascii_digit() {
+                digits.push(c);
+                self.chars.next();
+            } else {
+                break;
+            }
         }
-        _ => false,
-    };
-    if is_unquoted {
-        name.to_string()
-    } else {
-        format!("`{}`", name.replace('`', "``"))
+        if digits.is_empty() {
+            return exec_err!("a number must contain at least one digit");
+        }
+        if digits.len() > 1 && digits.starts_with('0') && !self.options.allow_numeric_leading_zeros
+        {
+            return exec_err!("leading zeros are not allowed in numbers");
+        }
+        let mut fraction = String::new();
+        let mut exponent: Option<i64> = None;
+        if self.chars.peek() == Some(&'.') {
+            self.chars.next();
+            while matches!(self.chars.peek(), Some(c) if c.is_ascii_digit()) {
+                fraction.push(self.chars.next().unwrap_or_default());
+            }
+            if fraction.is_empty() {
+                return exec_err!("a number cannot end with a decimal point");
+            }
+        }
+        if matches!(self.chars.peek(), Some('e' | 'E')) {
+            self.chars.next();
+            let mut text = String::new();
+            if matches!(self.chars.peek(), Some('-' | '+')) {
+                text.push(self.chars.next().unwrap_or_default());
+            }
+            let mut exponent_digits = 0;
+            while matches!(self.chars.peek(), Some(c) if c.is_ascii_digit()) {
+                text.push(self.chars.next().unwrap_or_default());
+                exponent_digits += 1;
+            }
+            if exponent_digits == 0 {
+                return exec_err!("an exponent must contain at least one digit");
+            }
+            // An exponent too large for `i64` cannot produce a valid decimal
+            // scale anyway.
+            exponent = Some(text.parse::<i64>().unwrap_or(i64::MAX));
+        }
+        if !fraction.is_empty() || exponent.is_some() {
+            // Spark infers a decimal type for floating-point numbers when the
+            // `prefersDecimal` option is set, using the precision and scale
+            // of the value interpreted as a Java `BigDecimal`: the scale is
+            // the number of fraction digits minus the exponent (a negative
+            // scale is an error), and the precision counts the unscaled
+            // digits without leading zeros, floored at the scale.
+            if self.options.prefers_decimal {
+                let mut significant = digits.clone();
+                significant.push_str(&fraction);
+                let significant = significant.trim_start_matches('0');
+                let scale = (fraction.len() as i64).saturating_sub(exponent.unwrap_or(0));
+                if scale < 0 {
+                    return plan_err!("Negative scale is not allowed: '{scale}'");
+                }
+                let precision = (significant.len() as i64).max(1).max(scale);
+                if precision <= MAX_DECIMAL_PRECISION as i64 {
+                    return Ok(InferredType::Decimal(precision as u8, scale as u8));
+                }
+            }
+            return Ok(InferredType::Double);
+        }
+        let value = if negative {
+            format!("-{digits}")
+        } else {
+            digits.clone()
+        };
+        // Leading zeros do not count toward the decimal precision.
+        let digit_count = digits.trim_start_matches('0').len().max(1);
+        if value.parse::<i64>().is_ok() {
+            Ok(InferredType::Long)
+        } else if digit_count <= MAX_DECIMAL_PRECISION {
+            Ok(InferredType::Decimal(digit_count as u8, 0))
+        } else {
+            Ok(InferredType::Double)
+        }
     }
 }
 
-/// Returns true if `s` looks like a timestamp or date literal that Spark's
-/// `inferTimestamp` option would promote to TIMESTAMP.
+/// The characters that Jackson accepts in unquoted field names: ASCII
+/// alphanumeric characters, `_$@#*+-`, and all non-ASCII characters.
+fn is_unquoted_name_char(c: char) -> bool {
+    c.is_ascii_alphanumeric()
+        || matches!(c, '_' | '$' | '@' | '#' | '*' | '+' | '-')
+        || !c.is_ascii()
+}
+
+/// Returns true if the string matches a timestamp or date pattern that Spark's
+/// `inferTimestamp` option would promote to `TIMESTAMP`.
 fn is_timestamp_string(s: &str) -> bool {
     NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S").is_ok()
         || NaiveDateTime::parse_from_str(s, "%Y-%m-%dT%H:%M:%S").is_ok()
         || NaiveDate::parse_from_str(s, "%Y-%m-%d").is_ok()
 }
 
-/// Infer the Spark SQL DDL schema from a JSON string.
-fn infer_json_schema(json: &str, opts: &SparkSchemaOfJsonOptions) -> Result<String> {
-    if json.trim().is_empty() {
-        return Ok(InferredType::String.to_ddl());
+/// Returns the most specific type that both types can be promoted to,
+/// mirroring Spark's `JsonInferSchema.compatibleType`.
+fn merge_types(left: InferredType, right: InferredType) -> InferredType {
+    use InferredType::*;
+    match (left, right) {
+        (Null, t) | (t, Null) => t,
+        (l, r) if l == r => l,
+        (Long, Double) | (Double, Long) => Double,
+        // A long is at most `DECIMAL(20, 0)` when promoted to a decimal.
+        (Long, Decimal(p, s)) | (Decimal(p, s), Long) => merge_decimals(p.max(20), s, 20, 0),
+        (Double, Decimal(_, _)) | (Decimal(_, _), Double) => Double,
+        (Decimal(p1, s1), Decimal(p2, s2)) => merge_decimals(p1, s1, p2, s2),
+        (Array(l), Array(r)) => Array(Box::new(merge_types(*l, *r))),
+        (Struct(l), Struct(r)) => Struct(merge_fields(l, r)),
+        _ => String,
     }
-    let mut jiter = if opts.allow_non_numeric_numbers {
-        Jiter::new(json.as_bytes()).with_allow_inf_nan()
+}
+
+/// Merges two decimal types by keeping enough integer digits and scale to
+/// hold both, falling back to `DOUBLE` when the maximum precision is
+/// exceeded, mirroring Spark's `JsonInferSchema.compatibleType`.
+fn merge_decimals(p1: u8, s1: u8, p2: u8, s2: u8) -> InferredType {
+    let integer_digits = (p1 - s1).max(p2 - s2);
+    let scale = s1.max(s2);
+    if (integer_digits + scale) as usize > MAX_DECIMAL_PRECISION {
+        InferredType::Double
     } else {
-        Jiter::new(json.as_bytes())
-    };
-    let peek = jiter
-        .peek()
-        .map_err(|e| generic_exec_err("schema_of_json", &format!("failed to parse JSON: {e}")))?;
-    let inferred = infer_type_from_peek(&mut jiter, peek, opts)?;
-    Ok(inferred.coerce_bare_null().to_ddl())
+        InferredType::Decimal(integer_digits + scale, scale)
+    }
 }
 
-fn jiter_err(e: impl std::fmt::Display) -> DataFusionError {
-    generic_exec_err("schema_of_json", &format!("failed to parse JSON: {e}"))
-}
-
-fn infer_type_from_peek(
-    jiter: &mut Jiter,
-    peek: Peek,
-    opts: &SparkSchemaOfJsonOptions,
-) -> Result<InferredType> {
-    let inferred = match peek {
-        Peek::Null => {
-            jiter.known_null().map_err(jiter_err)?;
-            InferredType::Null
-        }
-        Peek::True | Peek::False => {
-            jiter.known_bool(peek).map_err(jiter_err)?;
-            if opts.primitives_as_string {
-                InferredType::String
-            } else {
-                InferredType::Boolean
-            }
-        }
-        Peek::String => {
-            let s = jiter.known_str().map_err(jiter_err)?;
-            if opts.infer_timestamp && is_timestamp_string(s) {
-                InferredType::Timestamp
-            } else {
-                InferredType::String
-            }
-        }
-        Peek::Minus => {
-            let t = infer_number_type(jiter)?;
-            if opts.primitives_as_string {
-                InferredType::String
-            } else {
-                t
-            }
-        }
-        Peek::Infinity | Peek::NaN => {
-            jiter.known_float(peek).map_err(jiter_err)?;
-            if opts.primitives_as_string {
-                InferredType::String
-            } else {
-                InferredType::Double
-            }
-        }
-        Peek::Array => infer_array_type(jiter, opts)?,
-        Peek::Object => infer_struct_type(jiter, opts)?,
-        _ => {
-            let t = infer_number_type(jiter)?;
-            if opts.primitives_as_string {
-                InferredType::String
-            } else {
-                t
-            }
-        }
-    };
-    Ok(inferred)
-}
-
-fn infer_number_type(jiter: &mut Jiter) -> Result<InferredType> {
-    let start = jiter.current_index();
-    jiter.next_skip().map_err(jiter_err)?;
-    let slice = jiter.slice_to_current(start);
-    let num_str = std::str::from_utf8(slice)
-        .map_err(|e| generic_exec_err("schema_of_json", &format!("invalid number utf8: {e}")))?;
-
-    if num_str.contains('.') || num_str.contains('e') || num_str.contains('E') {
-        return Ok(InferredType::Double);
-    }
-
-    let digits = num_str.trim_start_matches('-');
-    if digits.len() > 38 {
-        // Overflows DECIMAL(38,0) max precision → Spark falls back to DOUBLE.
-        return Ok(InferredType::Double);
-    }
-    // Integer that doesn't fit in BIGINT widens to DECIMAL(digits, 0).
-    if digits.len() > 18 && num_str.parse::<i64>().is_err() {
-        return Ok(InferredType::Decimal {
-            precision: digits.len() as u32,
-        });
-    }
-    Ok(InferredType::BigInt)
-}
-
-fn infer_array_type(jiter: &mut Jiter, opts: &SparkSchemaOfJsonOptions) -> Result<InferredType> {
-    let first_peek = jiter.known_array().map_err(jiter_err)?;
-
-    let Some(element_peek) = first_peek else {
-        return Ok(InferredType::Array(Box::new(InferredType::String)));
-    };
-
-    let mut element_type = infer_type_from_peek(jiter, element_peek, opts)?;
-
-    while let Some(peek) = jiter.array_step().map_err(jiter_err)? {
-        let next_type = infer_type_from_peek(jiter, peek, opts)?;
-        element_type = common_supertype(element_type, next_type);
-    }
-
-    Ok(InferredType::Array(Box::new(
-        element_type.coerce_bare_null(),
-    )))
-}
-
-fn infer_struct_type(jiter: &mut Jiter, opts: &SparkSchemaOfJsonOptions) -> Result<InferredType> {
-    let first_key = jiter.known_object().map_err(jiter_err)?;
-
-    let Some(mut current_key) = first_key else {
-        return Ok(InferredType::Struct(Vec::new()));
-    };
-
-    let mut fields: Vec<(String, InferredType)> = Vec::new();
-
-    loop {
-        let field_name = current_key.to_string();
-        let peek = jiter.peek().map_err(jiter_err)?;
-        let field_type = infer_type_from_peek(jiter, peek, opts)?.coerce_bare_null();
-        // Spark silently drops fields with empty-string keys.
-        if !field_name.is_empty() {
-            fields.push((field_name, field_type));
-        }
-
-        match jiter.next_key().map_err(jiter_err)? {
-            Some(key) => current_key = key,
-            None => break,
-        }
-    }
-
+/// Merges the fields of two structs by name, mirroring Spark's behavior of
+/// grouping fields by name and reducing each group with `compatibleType`.
+fn merge_fields(
+    left: Vec<(String, InferredType)>,
+    right: Vec<(String, InferredType)>,
+) -> Vec<(String, InferredType)> {
+    let mut fields = left;
+    fields.extend(right);
     fields.sort_by(|(a, _), (b, _)| a.cmp(b));
-    Ok(InferredType::Struct(fields))
+    let mut merged: Vec<(String, InferredType)> = Vec::new();
+    for (name, t) in fields {
+        match merged.last_mut() {
+            Some((last_name, last_type)) if *last_name == name => {
+                *last_type = merge_types(last_type.clone(), t);
+            }
+            _ => merged.push((name, t)),
+        }
+    }
+    merged
+}
+
+/// Writes the type as a Spark DDL string, returning `None` for types that
+/// Spark drops during canonicalization (empty structs, fields with empty
+/// names, and arrays of dropped types). `NULL` types become `STRING`.
+fn canonicalize_ddl(t: &InferredType) -> Option<String> {
+    match t {
+        InferredType::Null => Some("STRING".to_string()),
+        InferredType::Boolean => Some("BOOLEAN".to_string()),
+        InferredType::Long => Some("BIGINT".to_string()),
+        InferredType::Decimal(p, s) => Some(format!("DECIMAL({p},{s})")),
+        InferredType::Double => Some("DOUBLE".to_string()),
+        InferredType::String => Some("STRING".to_string()),
+        InferredType::Timestamp => Some("TIMESTAMP".to_string()),
+        InferredType::Array(element) => canonicalize_ddl(element).map(|e| format!("ARRAY<{e}>")),
+        InferredType::Struct(fields) => {
+            let fields = fields
+                .iter()
+                .filter(|(name, _)| !name.is_empty())
+                .filter_map(|(name, t)| {
+                    canonicalize_ddl(t).map(|d| format!("{}: {d}", quote_if_needed(name)))
+                })
+                .collect::<Vec<_>>();
+            if fields.is_empty() {
+                None
+            } else {
+                Some(format!("STRUCT<{}>", fields.join(", ")))
+            }
+        }
+    }
+}
+
+/// Quotes a field name with backticks unless it is a valid identifier,
+/// mirroring Spark's `quoteIfNeeded`.
+fn quote_if_needed(name: &str) -> String {
+    let mut chars = name.chars();
+    let valid = match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {
+            chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        }
+        _ => false,
+    };
+    if valid {
+        name.to_string()
+    } else {
+        format!("`{}`", name.replace('`', "``"))
+    }
 }
 
 #[derive(Debug, Default)]
@@ -481,59 +689,116 @@ enum ModeOptions {
 }
 
 impl ModeOptions {
-    fn from_str(value: String) -> Result<Self> {
+    fn from_str(value: String) -> Result<Self, DataFusionError> {
         match value.as_str() {
             "PERMISSIVE" => Ok(ModeOptions::Permissive),
             "FAILFAST" => Ok(ModeOptions::FailFast),
             "DROPMALFORMED" => Ok(ModeOptions::DropMalformed),
-            other => Err(generic_exec_err(
-                "schema_of_json",
-                &format!("invalid mode option: {other}"),
-            )),
+            other => plan_err!("Invalid mode option: {other}"),
         }
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct SparkSchemaOfJsonOptions {
     mode: ModeOptions,
+    allow_unquoted_field_names: bool,
+    allow_single_quotes: bool,
+    allow_non_numeric_numbers: bool,
+    prefers_decimal: bool,
+    allow_numeric_leading_zeros: bool,
     primitives_as_string: bool,
     infer_timestamp: bool,
-    allow_non_numeric_numbers: bool,
+}
+
+impl Default for SparkSchemaOfJsonOptions {
+    fn default() -> Self {
+        SparkSchemaOfJsonOptions {
+            mode: ModeOptions::default(),
+            allow_unquoted_field_names: false,
+            // Spark enables `allowSingleQuotes` and `allowNonNumericNumbers`
+            // by default.
+            allow_single_quotes: true,
+            allow_non_numeric_numbers: true,
+            prefers_decimal: false,
+            allow_numeric_leading_zeros: false,
+            primitives_as_string: false,
+            infer_timestamp: false,
+        }
+    }
 }
 
 impl SparkSchemaOfJsonOptions {
     pub fn map_to_options(mut self, map_array: &MapArray) -> Result<Self> {
-        if map_array.is_empty() {
-            return Ok(self);
-        }
         let inner_struct = map_array.value(0);
+        // validate map is of type map<string, string>
         let (keys, values) = Self::get_keys_values_from_map(inner_struct)?;
+        // match each k v pair
         for (key, value) in keys.iter().zip(values.iter()) {
             let (key, value) = Self::unwrap_or_key_value(key, value)?;
-            match key {
+            // Spark reads JSON options through a case-insensitive map.
+            match key.to_lowercase().as_str() {
                 "mode" => self.mode = ModeOptions::from_str(value.to_string())?,
-                "primitivesAsString" => self.primitives_as_string = value == "true",
-                "inferTimestamp" => self.infer_timestamp = value == "true",
-                "allowNonNumericNumbers" => self.allow_non_numeric_numbers = value == "true",
-                "allowNumericLeadingZeros" => {
-                    // Parsing numbers with leading zeros would require either a
-                    // permissive JSON parser or extending jiter. Until that is
-                    // wired in, we refuse the option explicitly rather than
-                    // accepting it as a silent no-op.
+                "allowunquotedfieldnames" => {
+                    self.allow_unquoted_field_names = Self::parse_boolean_option(key, value)?;
+                }
+                "allowsinglequotes" => {
+                    self.allow_single_quotes = Self::parse_boolean_option(key, value)?;
+                }
+                "allownonnumericnumbers" => {
+                    self.allow_non_numeric_numbers = Self::parse_boolean_option(key, value)?;
+                }
+                "prefersdecimal" => {
+                    self.prefers_decimal = Self::parse_boolean_option(key, value)?;
+                }
+                "allownumericleadingzeros" => {
+                    self.allow_numeric_leading_zeros = Self::parse_boolean_option(key, value)?;
+                }
+                "primitivesasstring" => {
+                    self.primitives_as_string = Self::parse_boolean_option(key, value)?;
+                }
+                "infertimestamp" => {
+                    self.infer_timestamp = Self::parse_boolean_option(key, value)?;
+                }
+                // TODO: support the remaining Spark JSON options below
+                //
+                // These options change the inferred schema or the set of
+                // accepted inputs when enabled, so fail instead of silently
+                // producing a result that diverges from Spark. They all
+                // default to false in Spark, so an explicit false is a no-op
+                // and falls through to the ignored-options arm below.
+                "allowcomments"
+                | "allowbackslashescapinganycharacter"
+                | "allowunquotedcontrolchars"
+                | "dropfieldifallnull"
+                    if Self::parse_boolean_option(key, value)? =>
+                {
                     return Err(DataFusionError::NotImplemented(format!(
-                        "`schema_of_json` option `allowNumericLeadingZeros` is not yet supported (value: {value})"
+                        "`{}` does not support the option `{key}`",
+                        SparkSchemaOfJson::SCHEMA_OF_JSON_NAME,
                     )));
                 }
-                other => {
-                    return Err(generic_exec_err(
-                        "schema_of_json",
-                        &format!("unsupported option: {other}"),
-                    ));
+                _ => {
+                    // Unknown options are silently ignored, matching Spark:
+                    // `JSONOptions` only does `parameters.get(...)` lookups on
+                    // the keys it knows and never validates the rest.
                 }
             }
         }
         Ok(self)
+    }
+
+    fn parse_boolean_option(key: &str, value: &str) -> Result<bool> {
+        // Spark parses boolean options with Scala's `toBoolean`, which is
+        // case-insensitive and rejects anything other than "true"/"false".
+        match value.to_lowercase().as_str() {
+            "true" => Ok(true),
+            "false" => Ok(false),
+            _ => plan_err!(
+                "Invalid boolean value `{value}` for option `{key}` in `{}`",
+                SparkSchemaOfJson::SCHEMA_OF_JSON_NAME
+            ),
+        }
     }
 
     fn get_keys_values_from_map(inner_struct: StructArray) -> Result<(StringArray, StringArray)> {
@@ -546,19 +811,18 @@ impl SparkSchemaOfJsonOptions {
                     let values = downcast_array::<StringArray>(inner_struct.column(1));
                     (keys, values)
                 } else {
-                    return Err(generic_exec_err(
-                        "schema_of_json",
-                        &format!(
-                            "options map must be map<string, string>, got key: {key_type:?}, value: {value_type:?}"
-                        ),
-                    ));
+                    return Err(DataFusionError::Plan(format!(
+                        "Expected options to be type map<string, string> but found key type {:?} and value type {:?}",
+                        key_type,
+                        value_type
+                    )))
                 }
-            }
+            },
             other => {
-                return Err(generic_exec_err(
-                    "schema_of_json",
-                    &format!("options must be a map with struct entries, got {other:?}"),
-                ));
+                return Err(DataFusionError::Plan(format!(
+                    "Should be unreachable: options should be a map with an inner struct but instead got {:?}",
+                    other
+                )))
             }
         };
         Ok((keys, values))
@@ -570,10 +834,10 @@ impl SparkSchemaOfJsonOptions {
     ) -> Result<(&'a str, &'a str)> {
         match (key, value) {
             (Some(k), Some(v)) => Ok((k, v)),
-            _ => Err(generic_exec_err(
-                "schema_of_json",
-                &format!("unexpected options key/value pair: {key:?}: {value:?}"),
-            )),
+            _ => Err(DataFusionError::Plan(format!(
+                "Unexpected options key value pair: {:?}: {:?}",
+                key, value
+            ))),
         }
     }
 }

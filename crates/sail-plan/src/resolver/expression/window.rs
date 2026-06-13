@@ -5,12 +5,12 @@ use arrow::datatypes::DataType;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
 use datafusion_expr::expr::WindowFunctionParams;
-use datafusion_expr::simplify::SimplifyContext;
+use datafusion_expr::simplify::SimplifyContextBuilder;
 use datafusion_expr::{
     expr, AggregateUDF, ExprSchemable, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
 use sail_catalog::manager::CatalogManager;
-use sail_common::spec;
+use sail_common::spec::{self};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::session::plan::PlanService;
@@ -35,6 +35,14 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        let window = match window {
+            spec::Window::Named(name) => state
+                .get_window(name.as_ref())
+                .ok_or_else(|| PlanError::analysis(format!("undefined window: {}", name.as_ref())))?
+                .clone(),
+            w => w,
+        };
+
         let spec::Window::Unnamed {
             cluster_by,
             partition_by,
@@ -42,7 +50,7 @@ impl PlanResolver<'_> {
             frame,
         } = window
         else {
-            return Err(PlanError::todo("named window"));
+            return Err(PlanError::analysis("named windows in window expressions"));
         };
         if !cluster_by.is_empty() {
             return Err(PlanError::unsupported(
@@ -97,7 +105,6 @@ impl PlanResolver<'_> {
                     .get_function(&canonical_function_name)?;
                 let registered_udaf = catalog_function.as_ref().and_then(|udf| {
                     udf.inner()
-                        .as_any()
                         .downcast_ref::<PySparkUnresolvedUDF>()
                         .filter(|f| {
                             matches!(
@@ -381,7 +388,9 @@ impl PlanResolver<'_> {
         }
         // Apply type coercion so that expressions like `CAST(0 AS INTERVAL SECOND)`
         // have compatible types before physical evaluation.
-        let context = SimplifyContext::default().with_schema(schema.clone());
+        let context = SimplifyContextBuilder::default()
+            .with_schema(schema.clone())
+            .build();
         let simplifier = ExprSimplifier::new(context);
         let coerced = simplifier.coerce(resolved, schema).map_err(|e| {
             PlanError::invalid(format!(

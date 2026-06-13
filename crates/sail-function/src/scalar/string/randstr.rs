@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::StringArray;
@@ -28,10 +27,6 @@ impl Randstr {
 }
 
 impl ScalarUDFImpl for Randstr {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "randstr"
     }
@@ -145,7 +140,7 @@ impl ScalarUDFImpl for Randstr {
 fn generate_random_string(rng: &mut SparkXorShiftRandom, length: usize) -> String {
     let mut result = String::with_capacity(length);
     for _ in 0..length {
-        let v = ((rng.next_int() as u32) % 62) as u8;
+        let v = (rng.next_int() % 62).unsigned_abs() as u8;
         let ch = if v < 10 {
             b'0' + v
         } else if v < 36 {

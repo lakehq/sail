@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::types::Time64MicrosecondType;
@@ -44,10 +43,6 @@ impl SparkTimeDiff {
 }
 
 impl ScalarUDFImpl for SparkTimeDiff {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_time_diff"
     }

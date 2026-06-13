@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
@@ -128,10 +127,6 @@ impl DisplayAs for IcebergDiscoveryExec {
 impl ExecutionPlan for IcebergDiscoveryExec {
     fn name(&self) -> &str {
         "IcebergDiscoveryExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn schema(&self) -> SchemaRef {

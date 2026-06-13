@@ -94,6 +94,7 @@ pub struct TableProperties {
     pub write_checksum_file_enabled: Option<bool>,
     pub enable_in_commit_timestamps: Option<bool>,
     pub enable_type_widening: Option<bool>,
+    pub enable_variant_shredding: Option<bool>,
     pub in_commit_timestamp_enablement_version: Option<i64>,
     pub in_commit_timestamp_enablement_timestamp: Option<i64>,
     pub column_mapping_mode: Option<ColumnMappingMode>,
@@ -159,6 +160,10 @@ impl TableProperties {
 
     pub fn enable_type_widening(&self) -> bool {
         self.enable_type_widening.unwrap_or(false)
+    }
+
+    pub fn enable_variant_shredding(&self) -> bool {
+        self.enable_variant_shredding.unwrap_or(false)
     }
 
     pub fn in_commit_timestamp_enablement_version(&self) -> Option<i64> {
@@ -230,6 +235,9 @@ fn canonicalize_table_property_key(key: &str) -> Option<&'static str> {
         "delta.enabletypewidening" | "enable_type_widening" | "enabletypewidening" => {
             Some("delta.enableTypeWidening")
         }
+        "delta.enablevariantshredding" | "enable_variant_shredding" | "enablevariantshredding" => {
+            Some("delta.enableVariantShredding")
+        }
         "delta.incommittimestampenablementversion"
         | "in_commit_timestamp_enablement_version"
         | "incommittimestampenablementversion" => Some("delta.inCommitTimestampEnablementVersion"),
@@ -300,6 +308,7 @@ fn validate_table_property(key: &str, value: &str) -> DeltaResult<()> {
         | "delta.writeChecksumFile.enabled"
         | "delta.enableInCommitTimestamps"
         | "delta.enableTypeWidening"
+        | "delta.enableVariantShredding"
         | "delta.enableExpiredLogCleanup" => parse_bool(value).map(|_| ()).ok_or_else(|| {
             DeltaTableError::generic(format!("invalid boolean value for {key}: {value}"))
         }),
@@ -357,6 +366,7 @@ fn try_parse_table_property(props: &mut TableProperties, key: &str, value: &str)
             props.enable_in_commit_timestamps = Some(parse_bool(value)?)
         }
         "delta.enableTypeWidening" => props.enable_type_widening = Some(parse_bool(value)?),
+        "delta.enableVariantShredding" => props.enable_variant_shredding = Some(parse_bool(value)?),
         "delta.inCommitTimestampEnablementVersion" => {
             props.in_commit_timestamp_enablement_version = Some(parse_non_negative_i64(value)?)
         }
@@ -477,6 +487,7 @@ mod tests {
             ("write_checksum_file_enabled", "false"),
             ("enable_in_commit_timestamps", "true"),
             ("enable_type_widening", "true"),
+            ("enable_variant_shredding", "true"),
             ("custom.key", "value"),
         ])?;
 
@@ -498,6 +509,10 @@ mod tests {
         );
         assert_eq!(
             props.get("delta.enableTypeWidening"),
+            Some(&"true".to_string())
+        );
+        assert_eq!(
+            props.get("delta.enableVariantShredding"),
             Some(&"true".to_string())
         );
         assert_eq!(props.get("custom.key"), Some(&"value".to_string()));
@@ -529,6 +544,10 @@ mod tests {
         assert_eq!(
             route_table_property_key("enable_type_widening"),
             Some("delta.enableTypeWidening".to_string())
+        );
+        assert_eq!(
+            route_table_property_key("enable_variant_shredding"),
+            Some("delta.enableVariantShredding".to_string())
         );
         assert_eq!(
             route_table_property_key("write_checksum_file_enabled"),

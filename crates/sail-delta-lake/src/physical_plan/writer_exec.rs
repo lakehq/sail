@@ -17,7 +17,6 @@
 // limitations under the License.
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/execution.rs>
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -55,12 +54,18 @@ use url::Url;
 use crate::conversion::DeltaTypeConverter;
 use crate::kernel::transaction::OperationMetrics;
 use crate::kernel::DeltaOperation;
+use crate::operations::write::variant_shredding::{
+    variant_top_level_columns, VariantShreddingConfig,
+};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
+use crate::physical_plan::catalog_location::resolve_catalog_table_url;
 use crate::physical_plan::writer_options::DeltaWriterExecOptions;
 use crate::physical_plan::{
     delta_action_schema, encode_actions, DeltaWriteContext, ExecCommitMeta,
 };
-use crate::spec::{Action, ColumnMappingMode, StructType};
+use crate::spec::{
+    Action, ColumnMappingMode, Metadata, Protocol, StructType, TableFeature, TableProperties,
+};
 use crate::storage::get_object_store_from_context;
 
 /// Counts internal row intent tags before they are stripped from writer input.
@@ -98,8 +103,7 @@ impl<'a> SourceMetricColumn<'a> {
         match column.data_type() {
             DataType::UInt64 => {
                 let values = column
-                    .as_any()
-                    .downcast_ref::<UInt64Array>()
+                    .as_any().downcast_ref::<UInt64Array>()
                     .ok_or_else(|| {
                         DataFusionError::Internal(format!(
                             "failed to downcast {MERGE_SOURCE_METRIC_COLUMN} as UInt64"
@@ -109,8 +113,7 @@ impl<'a> SourceMetricColumn<'a> {
             }
             DataType::Int64 => {
                 let values = column
-                    .as_any()
-                    .downcast_ref::<Int64Array>()
+                    .as_any().downcast_ref::<Int64Array>()
                     .ok_or_else(|| {
                         DataFusionError::Internal(format!(
                             "failed to downcast {MERGE_SOURCE_METRIC_COLUMN} as Int64"
@@ -285,6 +288,7 @@ pub struct DeltaWriterExec {
     table_exists: bool,
     sink_schema: SchemaRef,
     write_context: DeltaWriteContext,
+    catalog_table: Option<Vec<String>>,
     metrics: ExecutionPlanMetricsSet,
     cache: Arc<PlanProperties>,
 }
@@ -315,6 +319,7 @@ impl DeltaWriterExec {
         table_exists: bool,
         sink_schema: SchemaRef,
         write_context: DeltaWriteContext,
+        catalog_table: Option<Vec<String>>,
     ) -> Result<Self> {
         let schema = delta_action_schema()?;
         let output_partitions = input.output_partitioning().partition_count().max(1);
@@ -329,6 +334,7 @@ impl DeltaWriterExec {
             table_exists,
             sink_schema,
             write_context,
+            catalog_table,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
         })
@@ -378,16 +384,105 @@ impl DeltaWriterExec {
     pub fn write_context(&self) -> &DeltaWriteContext {
         &self.write_context
     }
+
+    pub fn catalog_table(&self) -> Option<&[String]> {
+        self.catalog_table.as_deref()
+    }
+
+    fn effective_protocol_and_metadata(
+        write_context: &DeltaWriteContext,
+    ) -> (Option<&Protocol>, Option<&Metadata>) {
+        let protocol = write_context
+            .schema_actions
+            .iter()
+            .rev()
+            .chain(write_context.initial_actions.iter().rev())
+            .find_map(|action| match action {
+                Action::Protocol(protocol) => Some(protocol),
+                _ => None,
+            })
+            .or_else(|| {
+                write_context
+                    .commit_context
+                    .base_snapshot
+                    .as_ref()
+                    .map(|snapshot| &snapshot.protocol)
+            });
+
+        let metadata = write_context
+            .schema_actions
+            .iter()
+            .rev()
+            .chain(write_context.initial_actions.iter().rev())
+            .find_map(|action| match action {
+                Action::Metadata(metadata) => Some(metadata),
+                _ => None,
+            })
+            .or_else(|| {
+                write_context
+                    .commit_context
+                    .base_snapshot
+                    .as_ref()
+                    .map(|snapshot| &snapshot.metadata)
+            });
+
+        (protocol, metadata)
+    }
+
+    fn protocol_supports_variant_shredding(protocol: &Protocol) -> bool {
+        protocol.min_reader_version() >= 3
+            && protocol.min_writer_version() >= 7
+            && protocol
+                .reader_features()
+                .unwrap_or(&[])
+                .iter()
+                .any(TableFeature::is_variant_shredding_feature)
+            && protocol
+                .writer_features()
+                .unwrap_or(&[])
+                .iter()
+                .any(TableFeature::is_variant_shredding_feature)
+    }
+
+    fn variant_shredding_config(
+        write_context: &DeltaWriteContext,
+        has_top_level_variant_columns: bool,
+    ) -> Result<VariantShreddingConfig> {
+        if !has_top_level_variant_columns {
+            return Ok(VariantShreddingConfig::default());
+        }
+
+        let (protocol, metadata) = Self::effective_protocol_and_metadata(write_context);
+        let Some(metadata) = metadata else {
+            return Ok(VariantShreddingConfig::default());
+        };
+        let table_properties = TableProperties::from(metadata.configuration().iter());
+        if !table_properties.enable_variant_shredding() {
+            return Ok(VariantShreddingConfig::default());
+        }
+
+        let Some(protocol) = protocol else {
+            return Err(DataFusionError::Plan(
+                "Delta variant shredding write requires table protocol".to_string(),
+            ));
+        };
+        if !Self::protocol_supports_variant_shredding(protocol) {
+            return Err(DataFusionError::Plan(
+                "Delta variant shredding write requires the variantShredding reader and writer table features".to_string(),
+            ));
+        }
+
+        Ok(VariantShreddingConfig {
+            enabled: true,
+            ..Default::default()
+        })
+    }
 }
 
 #[async_trait]
 impl ExecutionPlan for DeltaWriterExec {
     fn name(&self) -> &'static str {
         "DeltaWriterExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -475,6 +570,7 @@ impl ExecutionPlan for DeltaWriterExec {
             self.table_exists,
             self.sink_schema.clone(),
             self.write_context.clone(),
+            self.catalog_table.clone(),
         )?))
     }
 
@@ -510,6 +606,7 @@ impl DeltaWriterExec {
         let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(partition);
 
         let table_url = self.table_url.clone();
+        let catalog_table = self.catalog_table.clone();
         let options = self.options.clone();
         let partition_columns = self.partition_columns.clone();
         let sink_mode = self.sink_mode.clone();
@@ -532,6 +629,8 @@ impl DeltaWriterExec {
             } = &options;
             let timezone = session_timezone;
 
+            let table_url =
+                resolve_catalog_table_url(&context, catalog_table.as_deref(), &table_url).await?;
             let object_store = get_object_store_from_context(&context, &table_url)?;
 
             match &sink_mode {
@@ -566,6 +665,9 @@ impl DeltaWriterExec {
             let operation = write_context.operation.clone();
             let kernel_mode = write_context.effective_column_mapping_mode;
             let writer_schema = write_context.writer_schema()?;
+            let stats_excluded_columns = variant_top_level_columns(&writer_schema);
+            let variant_shredding =
+                Self::variant_shredding_config(&write_context, !stats_excluded_columns.is_empty())?;
             let physical_partition_columns = write_context.physical_partition_columns.clone();
             let logical_kernel_for_mapping = write_context.logical_kernel_for_mapping.clone();
 
@@ -578,6 +680,8 @@ impl DeltaWriterExec {
                 write_batch_size.get(),
                 32,
                 None,
+                stats_excluded_columns,
+                variant_shredding,
             );
 
             let writer_path = object_store::path::Path::from(table_url.path());

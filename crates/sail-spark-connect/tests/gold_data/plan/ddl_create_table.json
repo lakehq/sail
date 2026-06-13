@@ -173,7 +173,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 },
                 {
                   "name": "b",
@@ -185,7 +186,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 },
                 {
                   "name": "ts",
@@ -198,7 +200,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -477,7 +480,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -517,7 +521,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -560,7 +565,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 },
                 {
                   "name": "b",
@@ -572,7 +578,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -615,7 +622,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 },
                 {
                   "name": "b",
@@ -627,7 +635,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 },
                 {
                   "name": "ts",
@@ -640,7 +649,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -711,7 +721,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 },
                 {
                   "name": "ts",
@@ -724,7 +735,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -775,7 +787,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -800,7 +813,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "sortBy": [],
@@ -833,7 +847,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -863,7 +878,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "sortBy": [],
@@ -897,7 +913,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -930,7 +947,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "sortBy": [],
@@ -964,7 +982,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -998,7 +1017,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "sortBy": [],
@@ -1031,7 +1051,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -1055,7 +1076,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "sortBy": [],
@@ -1088,7 +1110,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -1122,7 +1145,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "sortBy": [],
@@ -1155,7 +1179,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -1189,7 +1214,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "sortBy": [],
@@ -1222,7 +1248,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -1255,7 +1282,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "sortBy": [],
@@ -1288,7 +1316,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -1322,7 +1351,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "sortBy": [],
@@ -1355,7 +1385,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -1375,7 +1406,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "sortBy": [],
@@ -1415,7 +1447,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -1439,7 +1472,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "sortBy": [],
@@ -1480,7 +1514,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 },
                 {
                   "name": "p1",
@@ -1492,7 +1527,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -1522,7 +1558,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "sortBy": [],
@@ -1556,7 +1593,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 },
                 {
                   "name": "p1",
@@ -1568,7 +1606,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -1588,7 +1627,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 },
                 {
                   "variant": "expression",
@@ -1655,7 +1695,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 },
                 {
                   "name": "part",
@@ -1667,7 +1708,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -1720,7 +1762,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 },
                 {
                   "name": "part",
@@ -1732,7 +1775,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -1798,7 +1842,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "sortBy": [],
@@ -1831,7 +1876,8 @@
                   "nullable": true,
                   "comment": "test",
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 },
                 {
                   "name": "b",
@@ -1843,7 +1889,8 @@
                   "nullable": false,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -1886,7 +1933,8 @@
                   "nullable": true,
                   "comment": "test",
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 },
                 {
                   "name": "b",
@@ -1898,7 +1946,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -1953,7 +2002,7 @@
       "input": "CREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS a + 1) USING PARQUET",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near 'a'. SQLSTATE: 42601 (line 1, pos 53)\n\n== SQL ==\nCREATE TABLE my_tab(a INT, b INT GENERATED ALWAYS AS a + 1) USING PARQUET\n-----------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found a at 53:54 expected '('"
+        "failure": "invalid argument: found a at 53:54 expected 'IDENTITY', or '('"
       }
     },
     {
@@ -1973,7 +2022,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 },
                 {
                   "name": "b",
@@ -1981,7 +2031,8 @@
                   "nullable": false,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": "a + 1"
+                  "generatedAlwaysAs": "a + 1",
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -2038,7 +2089,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 },
                 {
                   "name": "b",
@@ -2049,8 +2101,9 @@
                   },
                   "nullable": false,
                   "comment": null,
-                  "default": null,
-                  "generatedAlwaysAs": null
+                  "default": "'abc'",
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -2101,7 +2154,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 },
                 {
                   "name": "b",
@@ -2112,8 +2166,9 @@
                   },
                   "nullable": false,
                   "comment": null,
-                  "default": null,
-                  "generatedAlwaysAs": null
+                  "default": "\"abc\"",
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -2156,7 +2211,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 },
                 {
                   "name": "b",
@@ -2167,8 +2223,9 @@
                   },
                   "nullable": false,
                   "comment": null,
-                  "default": null,
-                  "generatedAlwaysAs": null
+                  "default": "'abc'",
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -2282,7 +2339,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 },
                 {
                   "name": "b",
@@ -2294,7 +2352,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -2353,7 +2412,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 },
                 {
                   "name": "b",
@@ -2365,7 +2425,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -2417,7 +2478,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 },
                 {
                   "name": "b",
@@ -2429,7 +2491,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -2491,7 +2554,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 },
                 {
                   "name": "b",
@@ -2503,7 +2567,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": "abc",
@@ -2546,7 +2611,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 },
                 {
                   "name": "b",
@@ -2558,7 +2624,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -2601,7 +2668,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 },
                 {
                   "name": "b",
@@ -2613,7 +2681,8 @@
                   "nullable": true,
                   "comment": null,
                   "default": null,
-                  "generatedAlwaysAs": null
+                  "generatedAlwaysAs": null,
+                  "identity": null
                 }
               ],
               "comment": null,
@@ -2654,193 +2723,1825 @@
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 50:58 expected '('"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": false
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (INCREMENT BY -2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 50:58 expected '('"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": null,
+                    "step": -2,
+                    "allowExplicitInsert": false
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (INCREMENT BY 2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 50:58 expected '('"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": null,
+                    "step": 2,
+                    "allowExplicitInsert": false
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH -2 INCREMENT BY -2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 50:58 expected '('"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": -2,
+                    "step": -2,
+                    "allowExplicitInsert": false
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH -2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 50:58 expected '('"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": -2,
+                    "step": null,
+                    "allowExplicitInsert": false
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 2 INCREMENT BY 2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 50:58 expected '('"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": 2,
+                    "step": 2,
+                    "allowExplicitInsert": false
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 50:58 expected '('"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": 2,
+                    "step": null,
+                    "allowExplicitInsert": false
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY , val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 50:58 expected '('"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": false
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 40:42 expected 'ALWAYS'"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": true
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (INCREMENT BY -2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 40:42 expected 'ALWAYS'"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": null,
+                    "step": -2,
+                    "allowExplicitInsert": true
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (INCREMENT BY 2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 40:42 expected 'ALWAYS'"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": null,
+                    "step": 2,
+                    "allowExplicitInsert": true
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (START WITH -2 INCREMENT BY -2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 40:42 expected 'ALWAYS'"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": -2,
+                    "step": -2,
+                    "allowExplicitInsert": true
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (START WITH -2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 40:42 expected 'ALWAYS'"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": -2,
+                    "step": null,
+                    "allowExplicitInsert": true
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (START WITH 2 INCREMENT BY 2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 40:42 expected 'ALWAYS'"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": 2,
+                    "step": 2,
+                    "allowExplicitInsert": true
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY (START WITH 2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 40:42 expected 'ALWAYS'"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": 2,
+                    "step": null,
+                    "allowExplicitInsert": true
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id BIGINT GENERATED BY DEFAULT AS IDENTITY , val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 40:42 expected 'ALWAYS'"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": true
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 47:55 expected '('"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": false
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (INCREMENT BY -2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 47:55 expected '('"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": null,
+                    "step": -2,
+                    "allowExplicitInsert": false
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (INCREMENT BY 2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 47:55 expected '('"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": null,
+                    "step": 2,
+                    "allowExplicitInsert": false
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (START WITH -2 INCREMENT BY -2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 47:55 expected '('"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": -2,
+                    "step": -2,
+                    "allowExplicitInsert": false
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (START WITH -2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 47:55 expected '('"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": -2,
+                    "step": null,
+                    "allowExplicitInsert": false
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (START WITH 2 INCREMENT BY 2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 47:55 expected '('"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": 2,
+                    "step": 2,
+                    "allowExplicitInsert": false
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY (START WITH 2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 47:55 expected '('"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": 2,
+                    "step": null,
+                    "allowExplicitInsert": false
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED ALWAYS AS IDENTITY , val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 47:55 expected '('"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": false
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 37:39 expected 'ALWAYS'"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": true
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (INCREMENT BY -2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 37:39 expected 'ALWAYS'"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": null,
+                    "step": -2,
+                    "allowExplicitInsert": true
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (INCREMENT BY 2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 37:39 expected 'ALWAYS'"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": null,
+                    "step": 2,
+                    "allowExplicitInsert": true
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (START WITH -2 INCREMENT BY -2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 37:39 expected 'ALWAYS'"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": -2,
+                    "step": -2,
+                    "allowExplicitInsert": true
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (START WITH -2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 37:39 expected 'ALWAYS'"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": -2,
+                    "step": null,
+                    "allowExplicitInsert": true
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (START WITH 2 INCREMENT BY 2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 37:39 expected 'ALWAYS'"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": 2,
+                    "step": 2,
+                    "allowExplicitInsert": true
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY (START WITH 2), val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 37:39 expected 'ALWAYS'"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": 2,
+                    "step": null,
+                    "allowExplicitInsert": true
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE my_tab(id INT GENERATED BY DEFAULT AS IDENTITY , val INT) USING parquet",
       "output": {
-        "failure": "invalid argument: found BY at 37:39 expected 'ALWAYS'"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": true
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "parquet"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
@@ -2896,49 +4597,153 @@
       "input": "CREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS 1 GENERATED ALWAYS AS IDENTITY, val INT) USING foo",
       "exception": "\n[PARSE_SYNTAX_ERROR] Syntax error at or near '1'. SQLSTATE: 42601 (line 1, pos 58)\n\n== SQL ==\nCREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS 1 GENERATED ALWAYS AS IDENTITY, val INT) USING foo\n----------------------------------------------------------^^^\n",
       "output": {
-        "failure": "invalid argument: found 1 at 58:59 expected '('"
+        "failure": "invalid argument: found 1 at 58:59 expected 'IDENTITY', or '('"
       }
     },
     {
       "input": "CREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (INCREMENT BY 1 INCREMENT BY 2), val INT) USING foo",
       "exception": "\n[IDENTITY_COLUMNS_DUPLICATED_SEQUENCE_GENERATOR_OPTION] Duplicated IDENTITY column sequence generator option: STEP. SQLSTATE: 42601\n== SQL (line 1, position 29) ==\nCREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (INCREMENT BY 1 INCREMENT BY 2), val INT) USING foo\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 58:66 expected '('"
+        "failure": "invalid argument: duplicate INCREMENT BY clause for identity column"
       }
     },
     {
       "input": "CREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (INCREMENT BY 1 START WITH 0 INCREMENT BY 2), val INT) USING foo",
       "exception": "\n[IDENTITY_COLUMNS_DUPLICATED_SEQUENCE_GENERATOR_OPTION] Duplicated IDENTITY column sequence generator option: STEP. SQLSTATE: 42601\n== SQL (line 1, position 29) ==\nCREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (INCREMENT BY 1 START WITH 0 INCREMENT BY 2), val INT) USING foo\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 58:66 expected '('"
+        "failure": "invalid argument: duplicate INCREMENT BY clause for identity column"
       }
     },
     {
       "input": "CREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 0 INCREMENT BY 1 START WITH 1), val INT) USING foo",
       "exception": "\n[IDENTITY_COLUMNS_DUPLICATED_SEQUENCE_GENERATOR_OPTION] Duplicated IDENTITY column sequence generator option: START. SQLSTATE: 42601\n== SQL (line 1, position 29) ==\nCREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 0 INCREMENT BY 1 START WITH 1), val INT) USING foo\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 58:66 expected '('"
+        "failure": "invalid argument: duplicate START WITH clause for identity column"
       }
     },
     {
       "input": "CREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 0 START WITH 1), val INT) USING foo",
       "exception": "\n[IDENTITY_COLUMNS_DUPLICATED_SEQUENCE_GENERATOR_OPTION] Duplicated IDENTITY column sequence generator option: START. SQLSTATE: 42601\n== SQL (line 1, position 29) ==\nCREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY (START WITH 0 START WITH 1), val INT) USING foo\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 58:66 expected '('"
+        "failure": "invalid argument: duplicate START WITH clause for identity column"
       }
     },
     {
       "input": "CREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY(INCREMENT BY 0), val INT) USING foo",
       "exception": "\n[IDENTITY_COLUMNS_ILLEGAL_STEP] IDENTITY column step cannot be 0. SQLSTATE: 42611\n== SQL (line 1, position 29) ==\nCREATE TABLE testcat.my_tab(id BIGINT GENERATED ALWAYS AS IDENTITY(INCREMENT BY 0), val INT) USING foo\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 58:66 expected '('"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "testcat",
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "int64",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": null,
+                    "step": 0,
+                    "allowExplicitInsert": false
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "foo"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
       "input": "CREATE TABLE testcat.my_tab(id FLOAT GENERATED ALWAYS AS IDENTITY(), val INT) USING foo",
       "exception": "\n[IDENTITY_COLUMNS_UNSUPPORTED_DATA_TYPE] DataType FloatType is not supported for IDENTITY columns. SQLSTATE: 428H2\n== SQL (line 1, position 29) ==\nCREATE TABLE testcat.my_tab(id FLOAT GENERATED ALWAYS AS IDENTITY(), val INT) USING foo\n                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n",
       "output": {
-        "failure": "invalid argument: found IDENTITY at 57:65 expected '('"
+        "success": {
+          "command": {
+            "createTable": {
+              "table": [
+                "testcat",
+                "my_tab"
+              ],
+              "external": false,
+              "columns": [
+                {
+                  "name": "id",
+                  "dataType": "float32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": {
+                    "start": null,
+                    "step": null,
+                    "allowExplicitInsert": false
+                  }
+                },
+                {
+                  "name": "val",
+                  "dataType": "int32",
+                  "nullable": true,
+                  "comment": null,
+                  "default": null,
+                  "generatedAlwaysAs": null,
+                  "identity": null
+                }
+              ],
+              "comment": null,
+              "constraints": [],
+              "location": null,
+              "fileFormat": {
+                "general": {
+                  "format": "foo"
+                }
+              },
+              "rowFormat": null,
+              "partitionBy": [],
+              "sortBy": [],
+              "bucketBy": null,
+              "clusterBy": [],
+              "ifNotExists": false,
+              "replace": false,
+              "options": [],
+              "properties": []
+            },
+            "planId": null
+          }
+        }
       }
     },
     {

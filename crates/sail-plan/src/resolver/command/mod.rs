@@ -12,6 +12,7 @@ use crate::resolver::PlanResolver;
 
 mod catalog;
 mod delete;
+mod delta;
 mod explain;
 mod function;
 mod insert;
@@ -274,7 +275,7 @@ impl PlanResolver<'_> {
                 if_exists,
                 operation,
             } => {
-                self.resolve_catalog_alter_table(table, if_exists, operation, state)
+                self.resolve_delta_alter_table_or_catalog(table, if_exists, operation, state)
                     .await
             }
             CommandNode::AlterView { .. } => Err(PlanError::todo("CommandNode::AlterView")),

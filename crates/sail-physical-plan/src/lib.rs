@@ -1,7 +1,7 @@
 pub mod barrier;
 pub mod catalog_command;
+pub mod coalesce;
 pub mod file_delete;
-pub mod file_write;
 pub mod map_partitions;
 pub mod merge_cardinality_check;
 pub mod monotonic_id;
