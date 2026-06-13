@@ -4,10 +4,6 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::execution::cache::cache_manager::FileStatisticsCache;
-use datafusion::execution::cache::file_statistics_cache::{
-    DefaultFileStatisticsCache, DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
-};
 use datafusion::logical_expr::expr::Sort;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableSource, TableType};
 use datafusion_common::parsers::CompressionTypeVariant;
@@ -36,25 +32,15 @@ pub struct ListingTableSourceConfig {
 #[derive(Clone, Debug)]
 pub struct ListingTableSource {
     config: ListingTableSourceConfig,
-    collected_statistics: Arc<dyn FileStatisticsCache>,
 }
 
 impl ListingTableSource {
     pub fn try_new(config: ListingTableSourceConfig) -> Result<Self> {
-        Ok(Self {
-            config,
-            collected_statistics: Arc::new(DefaultFileStatisticsCache::new(
-                DEFAULT_FILE_STATISTICS_MEMORY_LIMIT,
-            )),
-        })
+        Ok(Self { config })
     }
 
     pub fn config(&self) -> &ListingTableSourceConfig {
         &self.config
-    }
-
-    pub fn collected_statistics(&self) -> Arc<dyn FileStatisticsCache> {
-        Arc::clone(&self.collected_statistics)
     }
 }
 
