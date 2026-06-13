@@ -429,16 +429,16 @@ async fn do_collect_statistics_and_ordering(
 ) -> datafusion_common::Result<(Arc<Statistics>, Option<LexOrdering>)> {
     let path = &part_file.object_meta.location;
     let meta = &part_file.object_meta;
-    let collected_statistics = source.collected_statistics();
-    // No table reference is available here, so entries are cached under the global
-    // scope (`table: None`). The cache is size-bounded (`cache_limit`) and per-table
-    // invalidation is not used, so unscoped keys are intentional and safe.
+    let file_statistic_cache = ctx.runtime_env().cache_manager.get_file_statistic_cache();
     let cache_key = TableScopedPath {
-        table: None,
+        table: part_file.table_reference.clone(),
         path: path.clone(),
     };
 
-    if let Some(cached) = collected_statistics.get(&cache_key) {
+    if let Some(cached) = file_statistic_cache
+        .as_ref()
+        .and_then(|x| x.get(&cache_key))
+    {
         if cached.is_valid_for(meta) {
             return Ok((Arc::clone(&cached.statistics), cached.ordering.clone()));
         }
@@ -457,14 +457,16 @@ async fn do_collect_statistics_and_ordering(
         .await?;
     let statistics = Arc::new(file_meta.statistics);
 
-    collected_statistics.put(
-        &cache_key,
-        CachedFileMetadata::new(
-            meta.clone(),
-            Arc::clone(&statistics),
-            file_meta.ordering.clone(),
-        ),
-    );
+    file_statistic_cache.as_ref().map(|x| {
+        x.put(
+            &cache_key,
+            CachedFileMetadata::new(
+                meta.clone(),
+                Arc::clone(&statistics),
+                file_meta.ordering.clone(),
+            ),
+        )
+    });
 
     Ok((statistics, file_meta.ordering))
 }

@@ -56,8 +56,8 @@ impl ScalarUDFImpl for SparkWindowBuckets {
             [DataType::Timestamp(TimeUnit::Microsecond, tz)] => tz.clone(),
             other => {
                 return plan_err!(
-                "window_buckets expects a single Timestamp(Microsecond, *) argument, got {other:?}"
-            )
+                    "window_buckets expects a single Timestamp(Microsecond, *) argument, got {other:?}"
+                );
             }
         };
         let field_type = DataType::Timestamp(TimeUnit::Microsecond, tz);
