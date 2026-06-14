@@ -234,7 +234,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             bucket_by,
             sort_order,
             options,
-            catalog_table: _,
+            catalog_table,
         } = info;
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for writing listing table format");
@@ -245,7 +245,9 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         let url = resolve_listing_writer_url(path.clone())?;
         let overwrite = match mode {
             SinkMode::ErrorIfExists => {
-                if listing_target_exists(ctx, &url).await? {
+                if (catalog_table.is_none() && listing_target_exists(ctx, &url).await?)
+                    || (catalog_table.is_some() && listing_target_nonempty(ctx, &url).await?)
+                {
                     return plan_err!("listing table path already exists: {path}");
                 }
                 false
@@ -285,6 +287,10 @@ async fn listing_target_exists(ctx: &dyn Session, url: &Url) -> Result<bool> {
             }
         }
     }
+    listing_target_nonempty(ctx, url).await
+}
+
+async fn listing_target_nonempty(ctx: &dyn Session, url: &Url) -> Result<bool> {
     let path = ListingTableUrl::try_new(url.clone(), None)?;
     let store = ctx.runtime_env().object_store(&path)?;
     Ok(store.list(Some(path.prefix())).try_next().await?.is_some())
