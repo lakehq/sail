@@ -42,7 +42,7 @@ impl TreeNodeRewriter for SparkPartitionIdRewriter<'_> {
         };
 
         let inner = func.inner();
-        if inner.downcast_ref::<SparkPartitionId>().is_none() {
+        if !inner.is::<SparkPartitionId>() {
             return Ok(Transformed::no(func.call(args)));
         }
 

@@ -73,7 +73,7 @@ impl PlanResolver<'_> {
         let canonical_function_name = function_name.to_ascii_lowercase();
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
         if let Some(udf) = catalog_manager.get_function(&canonical_function_name)? {
-            if udf.inner().downcast_ref::<PySparkUnresolvedUDF>().is_some() {
+            if udf.inner().is::<PySparkUnresolvedUDF>() {
                 state.config_mut().arrow_allow_large_var_types = true;
             }
         }
@@ -355,7 +355,7 @@ impl PlanResolver<'_> {
                 // Nested-field wildcard expansion can produce a MultiExpr.
                 // Flatten it so `struct(a.*)` can become `struct(a.x, a.y, ...)`.
                 Expr::ScalarFunction(ScalarFunction { func, args })
-                    if func.inner().downcast_ref::<MultiExpr>().is_some() =>
+                    if func.inner().is::<MultiExpr>() =>
                 {
                     if name.len() == args.len() {
                         for (n, arg) in name.into_iter().zip(args) {

@@ -205,7 +205,7 @@ impl PlanResolver<'_> {
             } = e;
             match expr {
                 Expr::ScalarFunction(ScalarFunction { func, args }) => {
-                    if func.inner().downcast_ref::<MultiExpr>().is_some() {
+                    if func.inner().is::<MultiExpr>() {
                         // The metadata from the original expression are ignored.
                         if name.len() == args.len() {
                             for (name, arg) in name.into_iter().zip(args) {

@@ -138,9 +138,9 @@ impl ExecutionPlan for RelaxedTzCastExec {
     }
 
     fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
-        let statistics = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
+        let statistics = self.input.partition_statistics(partition)?;
         if self.input.schema() == self.schema {
-            Ok(Arc::new(statistics))
+            Ok(statistics)
         } else {
             Ok(Arc::new(map_statistics_to_schema(
                 &statistics,

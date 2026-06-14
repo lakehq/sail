@@ -39,7 +39,7 @@ impl PlanResolver<'_> {
         let mut scope = state.enter_config_scope();
         let state = scope.state();
         if let Some(f) = catalog_manager.get_function(&canonical_function_name)? {
-            if f.inner().downcast_ref::<PySparkUnresolvedUDF>().is_some() {
+            if f.inner().is::<PySparkUnresolvedUDF>() {
                 state.config_mut().arrow_allow_large_var_types = true;
             }
         }
