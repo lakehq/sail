@@ -956,6 +956,14 @@ impl CatalogProvider for HmsCatalogProvider {
         options: DropDatabaseOptions,
     ) -> CatalogResult<()> {
         let db_name = validate_namespace(database)?;
+        match self.get_database(database).await {
+            Ok(_) => {}
+            Err(CatalogError::NotFound(_, _)) if options.if_exists => return Ok(()),
+            Err(CatalogError::NotFound(_, _)) => {
+                return Err(CatalogError::NotFound(CatalogObject::Database, db_name));
+            }
+            Err(err) => return Err(err),
+        }
 
         self.with_failover_attempt(|client, attempt| {
             let db_name = db_name.clone();
