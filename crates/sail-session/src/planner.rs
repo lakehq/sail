@@ -262,11 +262,7 @@ Ensure expand_row_level_op is enabled; MERGE is currently only supported for lak
                 session_state,
             )?;
             Arc::new(ExplicitRepartitionExec::new(input.clone(), partitioning))
-        } else if node
-            .as_any()
-            .downcast_ref::<StreamSourceAdapterNode>()
-            .is_some()
-        {
+        } else if node.as_any().is::<StreamSourceAdapterNode>() {
             let [input] = physical_inputs else {
                 return internal_err!("StreamSourceExec requires exactly one physical input");
             };
@@ -311,11 +307,7 @@ Ensure expand_row_level_op is enabled; MERGE is currently only supported for lak
                 session_state,
             )?;
             Arc::new(StreamFilterExec::try_new(input.clone(), predicate)?)
-        } else if node
-            .as_any()
-            .downcast_ref::<StreamCollectorNode>()
-            .is_some()
-        {
+        } else if node.as_any().is::<StreamCollectorNode>() {
             let [input] = physical_inputs else {
                 return internal_err!("StreamCollectorExec requires exactly one physical input");
             };

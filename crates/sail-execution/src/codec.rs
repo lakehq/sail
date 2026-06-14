@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::convert::TryInto;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -91,6 +92,7 @@ use sail_data_source::formats::rate::RateSourceExec;
 use sail_data_source::formats::socket::{SocketReadOptions, SocketSourceExec};
 use sail_data_source::formats::text::source::TextSource;
 use sail_data_source::formats::text::writer::{TextSink, TextWriterOptions};
+use sail_data_source::listing::delete::FileDeleteExec;
 use sail_data_source::options::gen::RateReadOptions;
 use sail_delta_lake::physical_plan::{
     DeletionVectorRowsWriterExec, DeletionVectorWriterExec, DeltaCommitContext, DeltaCommitExec,
@@ -989,6 +991,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     sort_order,
                 )))
             }
+            NodeKind::FileDelete(gen::FileDeleteExecNode {
+                object_store_url,
+                path,
+            }) => {
+                let object_store_url =
+                    datafusion::execution::object_store::ObjectStoreUrl::parse(object_store_url)?;
+                let path = object_store::path::Path::parse(path)
+                    .map_err(|e| plan_datafusion_err!("invalid file delete path: {e}"))?;
+                Ok(Arc::new(FileDeleteExec::new(object_store_url, path)))
+            }
             NodeKind::StreamCollector(gen::StreamCollectorExecNode { input }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 Ok(Arc::new(StreamCollectorExec::try_new(input)?))
@@ -1524,7 +1536,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         base_config,
                         path_glob_filter: binary_source.path_glob_filter().cloned(),
                     })
-                } else if file_source.downcast_ref::<JsonSource>().is_some() {
+                } else if file_source.is::<JsonSource>() {
                     // TODO: Check if we still need to have JsonSource: https://github.com/apache/datafusion/pull/14224
                     let base_config = self.try_encode_message(serialize_file_scan_config(
                         file_scan,
@@ -1537,7 +1549,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         base_config,
                         file_compression_type,
                     })
-                } else if file_source.downcast_ref::<ArrowSource>().is_some() {
+                } else if file_source.is::<ArrowSource>() {
                     // TODO: Check if we still need to have ArrowSource: https://github.com/apache/datafusion/pull/14224
                     let base_config = self.try_encode_message(serialize_file_scan_config(
                         file_scan,
@@ -1545,7 +1557,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         &DefaultPhysicalProtoConverter {},
                     )?)?;
                     NodeKind::Arrow(gen::ArrowExecNode { base_config })
-                } else if file_source.downcast_ref::<AvroSource>().is_some() {
+                } else if file_source.is::<AvroSource>() {
                     let base_config = self.try_encode_message(serialize_file_scan_config(
                         file_scan,
                         self,
@@ -2037,6 +2049,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let command = serde_json::to_string(catalog_command_exec.command())
                 .map_err(|e| plan_datafusion_err!("failed to encode CatalogCommand: {e}"))?;
             NodeKind::CatalogCommand(gen::CatalogCommandExecNode { schema, command })
+        } else if let Some(file_delete_exec) = node.downcast_ref::<FileDeleteExec>() {
+            NodeKind::FileDelete(gen::FileDeleteExecNode {
+                object_store_url: file_delete_exec.object_store_url().as_str().to_string(),
+                path: file_delete_exec.path().to_string(),
+            })
         } else if let Some(barrier_exec) = node.downcast_ref::<BarrierExec>() {
             let preconditions = barrier_exec
                 .preconditions()
@@ -2849,56 +2866,29 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_encode_udaf(&self, node: &AggregateUDF, buf: &mut Vec<u8>) -> Result<()> {
-        let udaf_kind = if node
-            .inner()
-            .downcast_ref::<BitmapAndAggFunction>()
-            .is_some()
-            || node
-                .inner()
-                .downcast_ref::<BitmapConstructAggFunction>()
-                .is_some()
-            || node.inner().downcast_ref::<BitmapOrAggFunction>().is_some()
-            || node
-                .inner()
-                .downcast_ref::<CountMinSketchFunction>()
-                .is_some()
-            || node.inner().downcast_ref::<GroupingIdFunction>().is_some()
-            || node
-                .inner()
-                .downcast_ref::<HistogramNumericFunction>()
-                .is_some()
-            || node
-                .inner()
-                .downcast_ref::<HllSketchAggFunction>()
-                .is_some()
-            || node.inner().downcast_ref::<HllUnionAggFunction>().is_some()
-            || node.inner().downcast_ref::<KurtosisFunction>().is_some()
-            || node.inner().downcast_ref::<MaxByFunction>().is_some()
-            || node.inner().downcast_ref::<MinByFunction>().is_some()
-            || node.inner().downcast_ref::<ModeFunction>().is_some()
-            || node.inner().downcast_ref::<PercentileFunction>().is_some()
-            || node.inner().downcast_ref::<PercentileDisc>().is_some()
-            || node.inner().downcast_ref::<ProductFunction>().is_some()
-            || node.inner().downcast_ref::<Regr>().is_some()
-            || node
-                .inner()
-                .downcast_ref::<SchemaOfVariantAggFunction>()
-                .is_some()
-            || node.inner().downcast_ref::<SkewnessFunc>().is_some()
-            || node
-                .inner()
-                .downcast_ref::<ThetaIntersectionAggFunction>()
-                .is_some()
-            || node
-                .inner()
-                .downcast_ref::<ThetaSketchAggFunction>()
-                .is_some()
-            || node
-                .inner()
-                .downcast_ref::<ThetaUnionAggFunction>()
-                .is_some()
-            || node.inner().downcast_ref::<TryAvgFunction>().is_some()
-            || node.inner().downcast_ref::<SparkTrySum>().is_some()
+        let udaf_kind = if node.inner().is::<BitmapAndAggFunction>()
+            || node.inner().is::<BitmapConstructAggFunction>()
+            || node.inner().is::<BitmapOrAggFunction>()
+            || node.inner().is::<CountMinSketchFunction>()
+            || node.inner().is::<GroupingIdFunction>()
+            || node.inner().is::<HistogramNumericFunction>()
+            || node.inner().is::<HllSketchAggFunction>()
+            || node.inner().is::<HllUnionAggFunction>()
+            || node.inner().is::<KurtosisFunction>()
+            || node.inner().is::<MaxByFunction>()
+            || node.inner().is::<MinByFunction>()
+            || node.inner().is::<ModeFunction>()
+            || node.inner().is::<PercentileFunction>()
+            || node.inner().is::<PercentileDisc>()
+            || node.inner().is::<ProductFunction>()
+            || node.inner().is::<Regr>()
+            || node.inner().is::<SchemaOfVariantAggFunction>()
+            || node.inner().is::<SkewnessFunc>()
+            || node.inner().is::<ThetaIntersectionAggFunction>()
+            || node.inner().is::<ThetaSketchAggFunction>()
+            || node.inner().is::<ThetaUnionAggFunction>()
+            || node.inner().is::<TryAvgFunction>()
+            || node.inner().is::<SparkTrySum>()
         {
             UdafKind::Standard(gen::StandardUdaf {})
         } else if let Some(func) = node.inner().downcast_ref::<PySparkGroupAggregateUDF>() {
@@ -2974,7 +2964,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_encode_udwf(&self, node: &WindowUDF, buf: &mut Vec<u8>) -> Result<()> {
-        if node.inner().downcast_ref::<SparkNtile>().is_none() {
+        if !node.inner().is::<SparkNtile>() {
             return Ok(());
         }
         let node = ExtendedWindowUdf {
@@ -3435,9 +3425,8 @@ impl RemoteExecutionCodec {
     }
 
     fn try_encode_stream_udf(&self, udf: &dyn StreamUDF) -> Result<ExtendedStreamUdf> {
-        let stream_udf_kind = if let Some(func) =
-            udf.dyn_object_as_any().downcast_ref::<PySparkMapIterUDF>()
-        {
+        let udf = udf as &dyn Any;
+        let stream_udf_kind = if let Some(func) = udf.downcast_ref::<PySparkMapIterUDF>() {
             let kind = self.try_encode_pyspark_map_iter_kind(func.kind())?;
             let output_schema = self.try_encode_schema(func.output_schema().as_ref())?;
             let config = self.try_encode_pyspark_udf_config(func.config())?;
@@ -3449,7 +3438,7 @@ impl RemoteExecutionCodec {
                 output_schema,
                 config: Some(config),
             })
-        } else if let Some(func) = udf.dyn_object_as_any().downcast_ref::<PySparkUDTF>() {
+        } else if let Some(func) = udf.downcast_ref::<PySparkUDTF>() {
             let kind = self.try_encode_pyspark_udtf_kind(func.kind())?;
             let input_types = func
                 .input_types()

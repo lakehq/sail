@@ -568,9 +568,7 @@ impl PlanResolver<'_> {
     fn grouping_has_generator(group: &NamedExpr) -> bool {
         group
             .expr
-            .exists(|e| {
-                Ok(matches!(e, Expr::ScalarFunction(f) if f.func.inner().downcast_ref::<Explode>().is_some()))
-            })
+            .exists(|e| Ok(matches!(e, Expr::ScalarFunction(f) if f.func.inner().is::<Explode>())))
             .unwrap_or(false)
     }
 
@@ -616,12 +614,7 @@ impl PlanResolver<'_> {
         for proj in projections {
             let _ = proj.expr.apply(|e| {
                 if let Expr::AggregateFunction(agg) = e {
-                    if agg
-                        .func
-                        .inner()
-                        .downcast_ref::<PySparkGroupAggregateUDF>()
-                        .is_some()
-                    {
+                    if agg.func.inner().is::<PySparkGroupAggregateUDF>() {
                         if pyspark_agg_name.is_none() {
                             let full = agg.func.name();
                             pyspark_agg_name = Some(get_udf_display_name(full).to_string());

@@ -7,7 +7,7 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::physical_plan::FileSinkConfig;
 use datafusion::execution::object_store::ObjectStoreUrl;
-use datafusion::logical_expr::{Extension, LogicalPlan, TableSource};
+use datafusion::logical_expr::{Extension, LogicalPlan, LogicalPlanBuilder, TableSource};
 use datafusion::physical_expr::LexRequirement;
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::ExecutionPlan;
@@ -16,11 +16,13 @@ use datafusion_common::{not_impl_err, plan_err, Result, Statistics};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::{ListingTableUrl, TableSchema};
+use futures::TryStreamExt;
 use object_store::{ObjectMeta, ObjectStore};
 use sail_common_datafusion::datasource::{
-    find_path_in_options, get_partition_columns_and_file_schema, OptionLayer, SinkInfo, SourceInfo,
-    TableFormat,
+    find_path_in_options, get_partition_columns_and_file_schema, OptionLayer, SinkInfo, SinkMode,
+    SourceInfo, TableFormat,
 };
+use url::Url;
 
 use crate::listing::table::{ListingTableSource, ListingTableSourceConfig};
 use crate::listing::utils::{
@@ -28,6 +30,7 @@ use crate::listing::utils::{
 };
 use crate::listing::write::{FileWriteNode, FileWriteOptions};
 use crate::resolve_listing_urls;
+use crate::url::resolve_listing_writer_url;
 
 /// A trait for creating format instances when reading and writing listing files.
 pub trait FormatFactory: Debug + Send + Sync + 'static {
@@ -247,7 +250,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             bucket_by,
             sort_order,
             options,
-            catalog_table: _,
+            catalog_table,
         } = info;
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for writing listing table format");
@@ -255,31 +258,60 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         if partition_by.iter().any(|field| field.transform.is_some()) {
             return not_impl_err!("partition transforms for writing listing table format");
         }
+        let url = resolve_listing_writer_url(path.clone())?;
+        let overwrite = match mode {
+            SinkMode::ErrorIfExists => {
+                if (catalog_table.is_none() && listing_target_exists(ctx, &url).await?)
+                    || (catalog_table.is_some() && listing_target_nonempty(ctx, &url).await?)
+                {
+                    return plan_err!("listing table path already exists: {path}");
+                }
+                false
+            }
+            SinkMode::IgnoreIfExists => {
+                if listing_target_exists(ctx, &url).await? {
+                    return LogicalPlanBuilder::empty(false).build();
+                }
+                false
+            }
+            SinkMode::Append => false,
+            SinkMode::Overwrite => true,
+            mode => return not_impl_err!("unsupported sink mode for listing table: {mode:?}"),
+        };
         let write_format = T::write(ctx, options)?;
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(FileWriteNode::new(
                 Arc::new(input),
                 FileWriteOptions {
                     format: Arc::new(write_format),
-                    path,
-                    mode,
+                    url,
+                    overwrite,
                     partition_by,
                     sort_by: sort_order,
-                    bucket_by,
                 },
             )),
         }))
     }
 }
+async fn listing_target_exists(ctx: &dyn Session, url: &Url) -> Result<bool> {
+    // For file systems, treat the target as existing even if it is an empty directory.
+    if url.scheme() == "file" {
+        if let Ok(path) = url.to_file_path() {
+            if path.exists() {
+                return Ok(true);
+            }
+        }
+    }
+    listing_target_nonempty(ctx, url).await
+}
+async fn listing_target_nonempty(ctx: &dyn Session, url: &Url) -> Result<bool> {
+    let path = ListingTableUrl::try_new(url.clone(), None)?;
+    let store = ctx.runtime_env().object_store(&path)?;
+    Ok(store.list(Some(path.prefix())).try_next().await?.is_some())
+}
 
-/// Reconciles a user-specified schema's field names with the physical file
-/// schema case-insensitively, matching Spark's default
-/// `spark.sql.caseSensitive=false`. Each user field whose name matches a physical
-/// field only by case is renamed to the physical name (keeping the user type,
-/// nullability, and metadata) so that downstream statistics and reads — which
-/// resolve columns by exact name — find the data. A user field with no
-/// case-insensitive match is kept as is (it reads as null). Spark errors on an
-/// ambiguous case-insensitive match, so we do too.
+// Reconciles a user-specified schema's field names with the physical file schema
+// case-insensitively, matching Spark's default `spark.sql.caseSensitive=false`.
 fn reconcile_schema_case_insensitive(schema: Schema, physical: &Schema) -> Result<Schema> {
     let mut fields = Vec::with_capacity(schema.fields().len());
     for field in schema.fields() {

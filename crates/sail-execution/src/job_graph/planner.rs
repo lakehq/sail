@@ -15,6 +15,7 @@ use datafusion::physical_plan::{
 };
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_data_source::listing::delete::FileDeleteExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
@@ -196,20 +197,20 @@ fn build_job_graph(
                 )));
             }
         }
-    } else if plan.downcast_ref::<NestedLoopJoinExec>().is_some()
-        || plan.downcast_ref::<CrossJoinExec>().is_some()
-        || plan.downcast_ref::<PiecewiseMergeJoinExec>().is_some()
+    } else if plan.is::<NestedLoopJoinExec>()
+        || plan.is::<CrossJoinExec>()
+        || plan.is::<PiecewiseMergeJoinExec>()
     {
         let (left, right) = plan.children().two()?;
         vec![
             build_job_graph(left.clone(), PartitionUsage::Shared, graph)?,
             build_job_graph(right.clone(), usage, graph)?,
         ]
-    } else if plan.downcast_ref::<RepartitionExec>().is_some()
-        || plan.downcast_ref::<ExplicitRepartitionExec>().is_some()
-        || plan.downcast_ref::<CoalescePartitionsExec>().is_some()
-        || plan.downcast_ref::<SortPreservingMergeExec>().is_some()
-        || plan.downcast_ref::<CoalesceExec>().is_some()
+    } else if plan.is::<RepartitionExec>()
+        || plan.is::<ExplicitRepartitionExec>()
+        || plan.is::<CoalescePartitionsExec>()
+        || plan.is::<SortPreservingMergeExec>()
+        || plan.is::<CoalesceExec>()
     {
         let child = plan.children().one()?;
         // At the stage boundary, we only expect to use the child partition once
@@ -276,15 +277,16 @@ fn build_job_graph(
         } else {
             shuffled
         }
-    } else if plan.downcast_ref::<SortPreservingMergeExec>().is_some() {
+    } else if plan.is::<SortPreservingMergeExec>() {
         let child = plan.children().one()?;
         plan.clone()
             .with_new_children(vec![create_merge_input(child, graph)?])?
     } else if let Some(coalesce) = plan.downcast_ref::<CoalesceExec>() {
         let child = plan.children().one()?;
         create_rescale_input(child, coalesce.output_partitions(), graph)?
-    } else if plan.downcast_ref::<SystemTableExec>().is_some()
-        || plan.downcast_ref::<CatalogCommandExec>().is_some()
+    } else if plan.is::<SystemTableExec>()
+        || plan.is::<CatalogCommandExec>()
+        || plan.is::<FileDeleteExec>()
     {
         plan.children().zero()?;
         create_driver_stage(&plan, graph)?
