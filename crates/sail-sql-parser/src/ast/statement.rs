@@ -690,10 +690,6 @@ pub struct ViewColumnList {
     pub right: RightParenthesis,
 }
 
-/// A column in a view definition.
-/// The data type and `NOT NULL` are only valid for data source temporary views
-/// (`CREATE TEMPORARY VIEW ... USING`), following the `colTypeList` rule in the
-/// Spark grammar, while the AS-query form only allows the name and comment.
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "DataType")]
 pub struct ViewColumn {

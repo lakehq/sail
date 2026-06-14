@@ -419,8 +419,6 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                         },
                 } => {
                     let name = from_ast_object_name(name)?;
-                    // The typed column list is the user-specified schema of the data
-                    // source, following the `colTypeList` rule in the Spark grammar.
                     let (schema, columns) = view_columns(columns)
                         .map(from_ast_view_using_columns)
                         .transpose()?
@@ -434,8 +432,6 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     // Python data sources read the path from the options.
                     // Only the `path` option is a path source; `location` is forwarded
                     // as an ordinary option and never used as the path in Spark.
-                    // The last occurrence wins, following the case-insensitive option
-                    // map semantics in Spark.
                     let paths = options
                         .iter()
                         .rfind(|(key, _)| key.eq_ignore_ascii_case("path"))
@@ -1402,8 +1398,6 @@ fn from_ast_table_columns(
     Ok(output)
 }
 
-/// Converts the column list of the AS-query form of `CREATE VIEW`, where
-/// columns may only have a name and a comment.
 fn from_ast_view_columns(columns: Vec<ViewColumn>) -> SqlResult<Vec<spec::ViewColumnDefinition>> {
     columns
         .into_iter()
@@ -1428,8 +1422,6 @@ fn from_ast_view_columns(columns: Vec<ViewColumn>) -> SqlResult<Vec<spec::ViewCo
         .collect::<SqlResult<Vec<_>>>()
 }
 
-/// Converts the typed column list of `CREATE TEMPORARY VIEW ... USING` into
-/// the user-specified data source schema and catalog column definitions.
 fn from_ast_view_using_columns(
     columns: Vec<ViewColumn>,
 ) -> SqlResult<(spec::Schema, Vec<spec::ViewColumnDefinition>)> {
