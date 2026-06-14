@@ -245,10 +245,10 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         let url = resolve_listing_writer_url(path.clone())?;
         let overwrite = match mode {
             SinkMode::ErrorIfExists => {
-                if catalog_table.is_none() && listing_target_exists(ctx, &url).await? {
+                if (catalog_table.is_none() && listing_target_exists(ctx, &url).await?)
+                    || (catalog_table.is_some() && listing_target_nonempty(ctx, &url).await?)
+                {
                     return plan_err!("listing table path already exists: {path}");
-                } else if catalog_table.is_some() && listing_target_nonempty(ctx, &url).await? {
-                    return plan_err!("listing table location is not empty: {path}");
                 }
                 false
             }
