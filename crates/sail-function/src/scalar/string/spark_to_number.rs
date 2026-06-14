@@ -1,4 +1,3 @@
-use core::any::type_name;
 use std::collections::HashSet;
 use std::fmt::Display;
 use std::ops::Deref;
@@ -73,28 +72,6 @@ impl ScalarUDFImpl for SparkToNumber {
         Ok(DataType::Struct(Fields::empty()))
     }
 
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        let func_name = self.name();
-        if arg_types.len() != 2 {
-            return Err(invalid_arg_count_exec_err(
-                func_name,
-                (2, 2),
-                arg_types.len(),
-            ));
-        }
-        for arg_type in arg_types {
-            match arg_type {
-                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null => {}
-                _ => {
-                    return Err(unsupported_data_type_exec_err(
-                        func_name, "STRING", arg_type,
-                    ));
-                }
-            }
-        }
-        Ok(vec![DataType::Utf8, DataType::Utf8])
-    }
-
     fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
         let ReturnFieldArgs {
             scalar_arguments, ..
@@ -138,6 +115,28 @@ impl ScalarUDFImpl for SparkToNumber {
         let safe = self.safe;
         let ScalarFunctionArgs { args, .. } = args;
         make_scalar_function(move |a| spark_to_number_impl(a, safe), vec![])(&args)
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        let func_name = self.name();
+        if arg_types.len() != 2 {
+            return Err(invalid_arg_count_exec_err(
+                func_name,
+                (2, 2),
+                arg_types.len(),
+            ));
+        }
+        for arg_type in arg_types {
+            match arg_type {
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null => {}
+                _ => {
+                    return Err(unsupported_data_type_exec_err(
+                        func_name, "STRING", arg_type,
+                    ));
+                }
+            }
+        }
+        Ok(vec![DataType::Utf8, DataType::Utf8])
     }
 }
 

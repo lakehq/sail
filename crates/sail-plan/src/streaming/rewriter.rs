@@ -35,7 +35,7 @@ struct StreamingRewriter;
 impl StreamingRewriter {
     fn f_up_extension(&mut self, extension: Extension) -> Result<Transformed<LogicalPlan>> {
         let node = extension.node.as_ref();
-        if node.as_any().downcast_ref::<RangeNode>().is_some() {
+        if node.as_any().is::<RangeNode>() {
             Ok(Transformed::yes(LogicalPlan::Extension(Extension {
                 node: Arc::new(StreamSourceAdapterNode::try_new(Arc::new(
                     LogicalPlan::Extension(extension),
@@ -53,7 +53,7 @@ impl StreamingRewriter {
             || node.as_any().is::<NoopWriteNode>()
         {
             Ok(Transformed::no(LogicalPlan::Extension(extension)))
-        } else if node.as_any().downcast_ref::<BarrierNode>().is_some() {
+        } else if node.as_any().is::<BarrierNode>() {
             // TODO: support BarrierNode for streaming properly.
             Ok(Transformed::no(LogicalPlan::Extension(extension)))
         } else {
@@ -191,10 +191,7 @@ impl TreeNodeRewriter for StreamingRewriter {
 }
 
 fn is_streaming_table_provider(provider: &dyn TableProvider) -> bool {
-    if provider
-        .downcast_ref::<StreamSourceTableProvider>()
-        .is_some()
-    {
+    if provider.is::<StreamSourceTableProvider>() {
         true
     } else if let Some(rename) = provider.downcast_ref::<RenameTableProvider>() {
         is_streaming_table_provider(rename.inner().as_ref())
