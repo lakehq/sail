@@ -12,8 +12,8 @@ use sail_sql_parser::ast::statement::{
     AsQueryClause, Assignment, AssignmentList, ColumnAlteration, ColumnAlterationList,
     ColumnAlterationOption, ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption,
     ColumnPosition, ColumnTypeDefinition, CommentValue, CreateDatabaseClause, CreateTableClause,
-    CreateViewClause, DeleteTableAlias, DescribeItem, ExplainFormat, FileFormat,
-    InsertDirectoryDestination, MergeMatchClause, MergeMatchedAction,
+    CreateViewClause, CreateViewDefinition, DeleteTableAlias, DescribeItem, ExplainFormat,
+    FileFormat, InsertDirectoryDestination, MergeMatchClause, MergeMatchedAction,
     MergeNotMatchedBySourceAction, MergeNotMatchedByTargetAction, MergeSource, PartitionByItem,
     PartitionByList, PartitionClause, PartitionValue, PartitionValueList, PropertyKey,
     PropertyKeyList, PropertyKeyValue, PropertyList, PropertyValue, RowFormat,
@@ -317,32 +317,17 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
         Statement::CreateView {
             create: _,
             or_replace,
-            global_temporary,
-            view: _,
-            if_not_exists,
-            name,
-            columns,
-            using,
-            clauses,
-            r#as,
+            definition,
         } => {
-            let columns = columns.map(
-                |ViewColumnList {
-                     left: _,
-                     columns,
-                     right: _,
-                 }| columns.into_items().collect::<Vec<_>>(),
-            );
-            let name = from_ast_object_name(name)?;
-            let CreateViewClauses {
-                comment,
-                properties,
-            } = clauses.try_into()?;
-            let comment = comment.map(from_ast_string).transpose()?;
-            let properties = properties
-                .map(from_ast_property_list)
-                .transpose()?
-                .unwrap_or_default();
+            let view_columns = |columns: Option<ViewColumnList>| {
+                columns.map(
+                    |ViewColumnList {
+                         left: _,
+                         columns,
+                         right: _,
+                     }| columns.into_items().collect::<Vec<_>>(),
+                )
+            };
             let temporary_view_name = |name: spec::ObjectName| {
                 let mut name: Vec<String> = name.into();
                 match (name.pop(), name.is_empty()) {
@@ -352,117 +337,121 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     )),
                 }
             };
-            let global_temporary = global_temporary.map(|(global, _)| global.is_some());
-            let node = if let Some(ViewUsingClause {
-                using: _,
-                format,
-                options,
-            }) = using
-            {
-                let Some(is_global) = global_temporary else {
-                    return Err(SqlError::unsupported(
-                        "CREATE VIEW ... USING is only supported for temporary views",
-                    ));
-                };
-                if r#as.is_some() {
-                    return Err(SqlError::invalid(
-                        "CREATE TEMPORARY VIEW ... USING cannot be defined with an AS query",
-                    ));
-                }
-                if if_not_exists.is_some() {
-                    return Err(SqlError::invalid(
-                        "IF NOT EXISTS cannot be used with CREATE TEMPORARY VIEW ... USING",
-                    ));
-                }
-                // The typed column list is the user-specified schema of the data
-                // source, following the `colTypeList` rule in the Spark grammar.
-                let (schema, columns) = columns
-                    .map(from_ast_view_using_columns)
-                    .transpose()?
-                    .map(|(schema, columns)| (Some(schema), Some(columns)))
-                    .unwrap_or((None, None));
-                if comment.is_some() || !properties.is_empty() {
-                    return Err(SqlError::invalid(
-                        "COMMENT or TBLPROPERTIES cannot be used with CREATE TEMPORARY VIEW ... USING",
-                    ));
-                }
-                let options = options
-                    .map(|(_, x)| from_ast_property_list(x))
-                    .transpose()?
-                    .unwrap_or_default();
-                // The path is also kept in the options, since data sources such as
-                // Python data sources read the path from the options.
-                // Only the `path` option is a path source; `location` is forwarded
-                // as an ordinary option and never used as the path in Spark.
-                // The last occurrence wins, following the case-insensitive option
-                // map semantics in Spark.
-                let paths = options
-                    .iter()
-                    .rfind(|(key, _)| key.eq_ignore_ascii_case("path"))
-                    .map(|(_, value)| vec![value.clone()])
-                    .ok_or_else(|| {
-                        SqlError::invalid(
-                            "the data source path must be specified for CREATE TEMPORARY VIEW ... USING",
-                        )
-                    })?;
-                let input = spec::QueryPlan::new(spec::QueryNode::Read {
-                    read_type: spec::ReadType::DataSource(Box::new(spec::ReadDataSource {
-                        format: Some(format.value),
-                        schema,
-                        options,
-                        paths,
-                        predicates: vec![],
-                    })),
-                    is_streaming: false,
-                });
-                spec::CommandNode::CreateTemporaryView {
-                    view: temporary_view_name(name)?,
-                    is_global,
-                    definition: spec::TemporaryViewDefinition {
-                        input: Box::new(input),
-                        columns,
-                        if_not_exists: if_not_exists.is_some(),
-                        replace: or_replace.is_some(),
-                        comment: None,
-                        properties: vec![],
-                    },
-                }
-            } else {
-                let Some(AsQueryClause {
-                    r#as: Some(_),
+            let node = match definition {
+                CreateViewDefinition::Query {
+                    temporary,
+                    view: _,
+                    if_not_exists,
+                    name,
+                    columns,
+                    clauses,
+                    r#as: _,
                     query,
-                }) = r#as
-                else {
-                    return Err(SqlError::invalid("expected AS query in CREATE VIEW"));
-                };
-                let columns = columns.map(from_ast_view_columns).transpose()?;
-                let query_text = query.text();
-                let query = from_ast_query(query)?;
-                match global_temporary {
-                    Some(is_global) => spec::CommandNode::CreateTemporaryView {
+                } => {
+                    let name = from_ast_object_name(name)?;
+                    let CreateViewClauses {
+                        comment,
+                        properties,
+                    } = clauses.try_into()?;
+                    let comment = comment.map(from_ast_string).transpose()?;
+                    let properties = properties
+                        .map(from_ast_property_list)
+                        .transpose()?
+                        .unwrap_or_default();
+                    let columns = view_columns(columns)
+                        .map(from_ast_view_columns)
+                        .transpose()?;
+                    let query_text = query.text();
+                    let query = from_ast_query(query)?;
+                    if let Some(temporary) = temporary {
+                        spec::CommandNode::CreateTemporaryView {
+                            view: temporary_view_name(name)?,
+                            is_global: temporary.global.is_some(),
+                            definition: spec::TemporaryViewDefinition {
+                                input: Box::new(query),
+                                columns,
+                                if_not_exists: if_not_exists.is_some(),
+                                replace: or_replace.is_some(),
+                                comment,
+                                properties,
+                            },
+                        }
+                    } else {
+                        spec::CommandNode::CreateView {
+                            view: name,
+                            definition: spec::ViewDefinition {
+                                definition: query_text,
+                                input: Box::new(query),
+                                columns,
+                                if_not_exists: if_not_exists.is_some(),
+                                replace: or_replace.is_some(),
+                                comment,
+                                properties,
+                            },
+                        }
+                    }
+                }
+                CreateViewDefinition::Using {
+                    temporary,
+                    view: _,
+                    name,
+                    columns,
+                    using:
+                        ViewUsingClause {
+                            using: _,
+                            format,
+                            options,
+                        },
+                } => {
+                    let name = from_ast_object_name(name)?;
+                    // The typed column list is the user-specified schema of the data
+                    // source, following the `colTypeList` rule in the Spark grammar.
+                    let (schema, columns) = view_columns(columns)
+                        .map(from_ast_view_using_columns)
+                        .transpose()?
+                        .map(|(schema, columns)| (Some(schema), Some(columns)))
+                        .unwrap_or((None, None));
+                    let options = options
+                        .map(|(_, x)| from_ast_property_list(x))
+                        .transpose()?
+                        .unwrap_or_default();
+                    // The path is also kept in the options, since data sources such as
+                    // Python data sources read the path from the options.
+                    // Only the `path` option is a path source; `location` is forwarded
+                    // as an ordinary option and never used as the path in Spark.
+                    // The last occurrence wins, following the case-insensitive option
+                    // map semantics in Spark.
+                    let paths = options
+                        .iter()
+                        .rfind(|(key, _)| key.eq_ignore_ascii_case("path"))
+                        .map(|(_, value)| vec![value.clone()])
+                        .ok_or_else(|| {
+                            SqlError::invalid(
+                                "the data source path must be specified for CREATE TEMPORARY VIEW ... USING",
+                            )
+                        })?;
+                    let input = spec::QueryPlan::new(spec::QueryNode::Read {
+                        read_type: spec::ReadType::DataSource(Box::new(spec::ReadDataSource {
+                            format: Some(format.value),
+                            schema,
+                            options,
+                            paths,
+                            predicates: vec![],
+                        })),
+                        is_streaming: false,
+                    });
+                    spec::CommandNode::CreateTemporaryView {
                         view: temporary_view_name(name)?,
-                        is_global,
+                        is_global: temporary.global.is_some(),
                         definition: spec::TemporaryViewDefinition {
-                            input: Box::new(query),
+                            input: Box::new(input),
                             columns,
-                            if_not_exists: if_not_exists.is_some(),
+                            if_not_exists: false,
                             replace: or_replace.is_some(),
-                            comment,
-                            properties,
+                            comment: None,
+                            properties: vec![],
                         },
-                    },
-                    None => spec::CommandNode::CreateView {
-                        view: name,
-                        definition: spec::ViewDefinition {
-                            definition: query_text,
-                            input: Box::new(query),
-                            columns,
-                            if_not_exists: if_not_exists.is_some(),
-                            replace: or_replace.is_some(),
-                            comment,
-                            properties,
-                        },
-                    },
+                    }
                 }
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
