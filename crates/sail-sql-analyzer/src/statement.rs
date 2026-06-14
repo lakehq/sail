@@ -358,6 +358,21 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                         .map(from_ast_property_list)
                         .transpose()?
                         .unwrap_or_default();
+                    if if_not_exists.is_some() && or_replace.is_some() {
+                        return Err(SqlError::invalid(
+                            "CREATE VIEW with both IF NOT EXISTS and REPLACE is not allowed",
+                        ));
+                    }
+                    if temporary.is_some() && !properties.is_empty() {
+                        return Err(SqlError::invalid(
+                            "TBLPROPERTIES can't coexist with CREATE TEMPORARY VIEW",
+                        ));
+                    }
+                    if temporary.is_some() && if_not_exists.is_some() {
+                        return Err(SqlError::invalid(
+                            "It is not allowed to define a TEMPORARY view with IF NOT EXISTS",
+                        ));
+                    }
                     let columns = view_columns(columns)
                         .map(from_ast_view_columns)
                         .transpose()?;
