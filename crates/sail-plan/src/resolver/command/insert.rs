@@ -101,8 +101,7 @@ impl PlanResolver<'_> {
         };
 
         // A temporary view created with `USING` is backed by a data source.
-        // `INSERT INTO`/`INSERT OVERWRITE` writes to the same location, just
-        // as Spark treats such a view as a table.
+        // `INSERT INTO/OVERWRITE` writes to the same location, as Spark treats it as a table.
         if let Some((source, columns)) = self.resolve_temporary_view_insert_target(&table).await? {
             return self
                 .resolve_insert_into_temporary_view(
