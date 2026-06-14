@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::collections::VecDeque;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -70,10 +69,6 @@ impl ExecutionPlan for CoalesceExec {
         Self::static_name()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
@@ -131,11 +126,11 @@ impl ExecutionPlan for CoalesceExec {
         }))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if partition.is_none() {
             self.input.partition_statistics(None)
         } else {
-            Ok(Statistics::new_unknown(&self.schema()))
+            Ok(Arc::new(Statistics::new_unknown(&self.schema())))
         }
     }
 
@@ -250,6 +245,22 @@ mod tests {
             values.extend(array.values().iter().copied());
         }
         Ok(values)
+    }
+
+    #[test]
+    fn test_coalesce_exec_reads_contiguous_input_ranges() -> Result<()> {
+        let input = test_plan(vec![
+            vec![test_batch(&[0, 1])],
+            vec![test_batch(&[2, 3])],
+            vec![test_batch(&[4, 5])],
+            vec![test_batch(&[6, 7])],
+        ]);
+        let exec = CoalesceExec::new(input, 2);
+
+        assert_eq!(collect_values(&exec, 0)?, vec![0, 1, 2, 3]);
+        assert_eq!(collect_values(&exec, 1)?, vec![4, 5, 6, 7]);
+
+        Ok(())
     }
 
     #[test]

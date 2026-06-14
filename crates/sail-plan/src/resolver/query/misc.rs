@@ -2,15 +2,16 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::catalog::MemTable;
-use datafusion_common::{DFSchema, DFSchemaRef, ParamValues};
-use datafusion_expr::{EmptyRelation, Extension, LogicalPlan, UNNAMED_TABLE};
+use datafusion_common::{DFSchema, DFSchemaRef, ParamValues, ScalarValue};
+use datafusion_expr::{EmptyRelation, Expr, Extension, LogicalPlan, UNNAMED_TABLE};
 use log::warn;
 use sail_common::spec;
 use sail_common_datafusion::array::record_batch::{
     cast_record_batch_positionally, read_record_batches,
 };
-use sail_common_datafusion::literal::{LiteralEvaluator, LiteralValue};
+use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_logical_plan::range::RangeNode;
+use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
@@ -147,55 +148,52 @@ impl PlanResolver<'_> {
         parameters: Vec<spec::Expr>,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
+        let input = self
+            .resolve_query_plan_with_hidden_fields(input, state)
+            .await?;
+
         if name.eq_ignore_ascii_case("COALESCE") {
             let num_partitions = self
-                .resolve_query_coalesce_hint_partition_count(parameters, state)
+                .resolve_hint_partition_count(&name, &parameters, input.schema(), state)
                 .await?;
-            return self
-                .resolve_query_repartition(input, num_partitions, false, state)
-                .await;
+            return Ok(LogicalPlan::Extension(Extension {
+                node: Arc::new(ExplicitRepartitionNode::new(
+                    Arc::new(input),
+                    Some(num_partitions),
+                    ExplicitRepartitionKind::Coalesce,
+                    vec![],
+                )),
+            }));
         }
 
-        warn!("Hint operation '{name}' is not yet supported and is a no-op");
-        self.resolve_query_plan_with_hidden_fields(input, state)
-            .await
+        warn!("Hint operation is not yet supported and is a no-op");
+        Ok(input)
     }
 
-    async fn resolve_query_coalesce_hint_partition_count(
+    async fn resolve_hint_partition_count(
         &self,
-        parameters: Vec<spec::Expr>,
+        hint_name: &str,
+        parameters: &[spec::Expr],
+        schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<usize> {
-        if parameters.len() != 1 {
+        let hint_name = hint_name.to_uppercase();
+        let [parameter] = parameters else {
             return Err(PlanError::invalid(format!(
-                "COALESCE hint requires exactly one partition count, got {}",
-                parameters.len()
+                "{hint_name} hint requires exactly one partition count"
+            )));
+        };
+
+        let expr = self
+            .resolve_expression(parameter.clone(), schema, state)
+            .await?;
+        let value = literal_partition_count(&hint_name, &expr)?;
+        if value < 1 {
+            return Err(PlanError::invalid(format!(
+                "{hint_name} hint requires at least one partition"
             )));
         }
-
-        let schema = Arc::new(DFSchema::empty());
-        let parameter = parameters.into_iter().next().ok_or_else(|| {
-            PlanError::invalid("COALESCE hint requires exactly one partition count")
-        })?;
-        let expr = self.resolve_expression(parameter, &schema, state).await?;
-        let scalar = LiteralEvaluator::new().evaluate(&expr).map_err(|e| {
-            PlanError::invalid(format!(
-                "COALESCE hint requires an integer literal partition count: {e}"
-            ))
-        })?;
-        let num_partitions = LiteralValue(&scalar).try_to_usize().map_err(|e| {
-            PlanError::invalid(format!(
-                "COALESCE hint requires an integer literal partition count: {e}"
-            ))
-        })?;
-
-        if num_partitions == 0 {
-            return Err(PlanError::invalid(
-                "COALESCE hint requires at least one partition",
-            ));
-        }
-
-        Ok(num_partitions)
+        Ok(value)
     }
 
     pub(super) async fn resolve_query_collect_metrics(
@@ -222,5 +220,39 @@ impl PlanResolver<'_> {
         _state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         Err(PlanError::todo("with watermark"))
+    }
+}
+
+fn literal_partition_count(hint_name: &str, expr: &Expr) -> PlanResult<usize> {
+    match expr {
+        Expr::Literal(ScalarValue::Int8(Some(value)), _metadata) => {
+            usize::try_from(i64::from(*value)).map_err(|_| {
+                PlanError::invalid(format!("{hint_name} hint requires at least one partition"))
+            })
+        }
+        Expr::Literal(ScalarValue::Int16(Some(value)), _metadata) => {
+            usize::try_from(i64::from(*value)).map_err(|_| {
+                PlanError::invalid(format!("{hint_name} hint requires at least one partition"))
+            })
+        }
+        Expr::Literal(ScalarValue::Int32(Some(value)), _metadata) => {
+            usize::try_from(i64::from(*value)).map_err(|_| {
+                PlanError::invalid(format!("{hint_name} hint requires at least one partition"))
+            })
+        }
+        Expr::Literal(ScalarValue::Int64(Some(value)), _metadata) => usize::try_from(*value)
+            .map_err(|_| {
+                PlanError::invalid(format!("{hint_name} hint requires at least one partition"))
+            }),
+        Expr::Literal(ScalarValue::UInt8(Some(value)), _metadata) => Ok(*value as usize),
+        Expr::Literal(ScalarValue::UInt16(Some(value)), _metadata) => Ok(*value as usize),
+        Expr::Literal(ScalarValue::UInt32(Some(value)), _metadata) => Ok(*value as usize),
+        Expr::Literal(ScalarValue::UInt64(Some(value)), _metadata) => usize::try_from(*value)
+            .map_err(|_| {
+                PlanError::invalid(format!("{hint_name} hint partition count is too large"))
+            }),
+        _ => Err(PlanError::invalid(format!(
+            "{hint_name} hint partition count must be an integer"
+        ))),
     }
 }

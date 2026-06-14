@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
@@ -46,6 +45,9 @@ pub struct ShuffleWriteExec {
     /// The partition count for the shuffle output can be different from the
     /// partition count of the input plan.
     shuffle_partitioning: Partitioning,
+    /// Whether to use row-level round-robin partitioning instead of batch-level.
+    /// This is used for explicit user-requested repartition calls.
+    row_based: bool,
     /// For each input partition, a list of locations to write to.
     locations: Vec<Vec<TaskWriteLocation>>,
     properties: Arc<PlanProperties>,
@@ -58,6 +60,7 @@ impl ShuffleWriteExec {
         locations: Vec<Vec<TaskWriteLocation>>,
         writer: Arc<dyn TaskStreamWriter>,
         partitioning: Partitioning,
+        row_based: bool,
     ) -> Self {
         let partitioning = match partitioning {
             Partitioning::Hash(expr, n) if expr.is_empty() => Partitioning::UnknownPartitioning(n),
@@ -65,7 +68,7 @@ impl ShuffleWriteExec {
                 // https://github.com/apache/arrow-datafusion/issues/5184
                 Partitioning::Hash(
                     expr.into_iter()
-                        .filter(|e| e.as_any().downcast_ref::<UnKnownColumn>().is_none())
+                        .filter(|e| !e.is::<UnKnownColumn>())
                         .collect(),
                     n,
                 )
@@ -88,6 +91,7 @@ impl ShuffleWriteExec {
         Self {
             plan,
             shuffle_partitioning: partitioning,
+            row_based,
             locations,
             properties,
             writer,
@@ -99,8 +103,9 @@ impl DisplayAs for ShuffleWriteExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
         write!(
             f,
-            "ShuffleWriteExec: partitioning={}, locations={}",
+            "ShuffleWriteExec: partitioning={}, row_based={}, locations={}",
             self.shuffle_partitioning,
+            self.row_based,
             ListListDisplay(&self.locations),
         )
     }
@@ -109,10 +114,6 @@ impl DisplayAs for ShuffleWriteExec {
 impl ExecutionPlan for ShuffleWriteExec {
     fn name(&self) -> &str {
         "ShuffleWriteExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -158,12 +159,12 @@ impl ExecutionPlan for ShuffleWriteExec {
             );
         }
         let stream = self.plan.execute(partition, context)?;
+        // TODO: Support metrics in batch partitioner
         let num_input_partitions = self
             .plan
             .properties()
             .output_partitioning()
             .partition_count();
-        // TODO: Support metrics in batch partitioner
         let partitioner = match &self.shuffle_partitioning {
             Partitioning::Hash(_, _) => ShufflePartitioner::Batch(BatchPartitioner::try_new(
                 self.shuffle_partitioning.clone(),
@@ -172,11 +173,20 @@ impl ExecutionPlan for ShuffleWriteExec {
                 num_input_partitions,
             )?),
             Partitioning::RoundRobinBatch(size) | Partitioning::UnknownPartitioning(size) => {
-                ShufflePartitioner::RoundRobin(RowRoundRobinPartitioner::new(
-                    *size,
-                    partition,
-                    num_input_partitions,
-                )?)
+                if self.row_based {
+                    ShufflePartitioner::RoundRobin(RowRoundRobinPartitioner::new(
+                        *size,
+                        partition,
+                        num_input_partitions,
+                    )?)
+                } else {
+                    ShufflePartitioner::Batch(BatchPartitioner::try_new(
+                        Partitioning::RoundRobinBatch(*size),
+                        Default::default(),
+                        partition,
+                        num_input_partitions,
+                    )?)
+                }
             }
         };
         let empty = RecordBatch::new_empty(self.schema());

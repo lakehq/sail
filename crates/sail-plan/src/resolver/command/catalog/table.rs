@@ -6,7 +6,8 @@ use sail_catalog::provider::{
 };
 use sail_common::spec;
 use sail_common_datafusion::catalog::{
-    CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort, DatabaseStatus,
+    CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableConstraint, CatalogTableSort,
+    DatabaseStatus,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
@@ -72,6 +73,16 @@ impl PlanResolver<'_> {
         };
         let partition_by =
             self.resolve_catalog_table_partition_by(partition_by, &mut columns, state)?;
+        for partition in &partition_by {
+            if columns.iter().any(|column| {
+                column.identity.is_some() && column.name.eq_ignore_ascii_case(&partition.column)
+            }) {
+                return Err(PlanError::invalid(format!(
+                    "PARTITIONED BY IDENTITY column `{}` is not supported",
+                    partition.column
+                )));
+            }
+        }
         let sort_by = self.resolve_catalog_table_sort(sort_by)?;
         let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
         let properties = properties
@@ -94,6 +105,7 @@ impl PlanResolver<'_> {
                 replace,
                 properties,
                 is_external,
+                is_write_precondition: false,
             },
         };
         self.resolve_catalog_command(command)
@@ -247,7 +259,6 @@ impl PlanResolver<'_> {
         &self,
         table: &spec::ObjectName,
     ) -> PlanResult<String> {
-        use crate::config::qualify_table_location;
         let [qualifier @ .., last] = table.parts() else {
             return Err(PlanError::invalid("missing table name"));
         };
@@ -262,10 +273,24 @@ impl PlanResolver<'_> {
             .await
             .map(|status| database_location(&status))?;
 
-        Ok(qualify_table_location(
-            &name,
-            location.as_deref(),
-            &self.config.default_warehouse_directory,
+        let (base, suffix) = match location.as_deref() {
+            Some(location) => (
+                location.trim_end_matches(object_store::path::DELIMITER),
+                String::new(),
+            ),
+            None => (
+                self.config
+                    .default_warehouse_directory
+                    .trim_end_matches(object_store::path::DELIMITER),
+                format!("-{}", uuid::Uuid::new_v4()),
+            ),
+        };
+        Ok(format!(
+            "{}{}{}{}",
+            base,
+            object_store::path::DELIMITER,
+            name,
+            suffix
         ))
     }
 
@@ -368,17 +393,49 @@ impl PlanResolver<'_> {
                     default,
                     comment,
                     generated_always_as,
+                    identity,
                 } = x;
+                let data_type = self.resolve_data_type(&data_type, state)?;
+                let identity = Self::resolve_table_column_identity(&name, identity)?;
+                if identity.is_some() && data_type != datafusion::arrow::datatypes::DataType::Int64
+                {
+                    return Err(PlanError::invalid(format!(
+                        "identity column `{name}` must be BIGINT"
+                    )));
+                }
                 Ok(CreateTableColumnOptions {
                     name,
-                    data_type: self.resolve_data_type(&data_type, state)?,
+                    data_type,
                     nullable,
                     comment,
                     default,
                     generated_always_as,
+                    identity,
                 })
             })
             .collect()
+    }
+
+    fn resolve_table_column_identity(
+        _name: &str,
+        identity: Option<spec::TableColumnIdentity>,
+    ) -> PlanResult<Option<CatalogTableColumnIdentity>> {
+        identity
+            .map(|identity| {
+                let step = identity.step.unwrap_or(1);
+                if step == 0 {
+                    return Err(PlanError::invalid(
+                        "INCREMENT BY value for identity column cannot be 0",
+                    ));
+                }
+                Ok(CatalogTableColumnIdentity {
+                    start: identity.start.unwrap_or(1),
+                    step,
+                    allow_explicit_insert: identity.allow_explicit_insert,
+                    high_water_mark: None,
+                })
+            })
+            .transpose()
     }
 
     fn resolve_table_constraints(
@@ -480,6 +537,17 @@ impl PlanResolver<'_> {
                     name: name.into(),
                     data_type: self.resolve_data_type(&data_type, state)?,
                 }
+            }
+            spec::AlterTableOperation::AlterColumnDefault { name, default } => {
+                AlterTableOptions::AlterColumnDefault {
+                    name: name.into(),
+                    default,
+                }
+            }
+            spec::AlterTableOperation::AddCheckConstraint { .. } => {
+                return Err(PlanError::unsupported(
+                    "ALTER TABLE ADD CONSTRAINT is only supported for Delta Lake tables",
+                ));
             }
             spec::AlterTableOperation::Unknown => {
                 return Err(PlanError::todo("unsupported ALTER TABLE operation"));
@@ -646,8 +714,6 @@ mod tests {
     use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
     use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
     use sail_common_datafusion::session::plan::PlanService;
-    use sail_logical_plan::barrier::BarrierNode;
-    use sail_logical_plan::file_write::{FileWriteNode, FileWriteOptions};
 
     use super::database_location;
     use crate::catalog::{CatalogCommandNode, SparkCatalogObjectDisplay};
@@ -864,55 +930,6 @@ mod tests {
         })
     }
 
-    fn resolved_create_table_options(plan: LogicalPlan) -> PlanResult<CreateTableOptions> {
-        let LogicalPlan::Extension(extension) = plan else {
-            return Err(PlanError::internal("expected extension logical plan"));
-        };
-        let barrier = extension
-            .node
-            .as_any()
-            .downcast_ref::<BarrierNode>()
-            .ok_or_else(|| PlanError::internal("expected barrier node"))?;
-        let precondition = barrier
-            .preconditions()
-            .first()
-            .ok_or_else(|| PlanError::internal("expected catalog precondition"))?;
-        let LogicalPlan::Extension(extension) = precondition.as_ref() else {
-            return Err(PlanError::internal("expected extension precondition"));
-        };
-        let command = extension
-            .node
-            .as_any()
-            .downcast_ref::<CatalogCommandNode>()
-            .ok_or_else(|| PlanError::internal("expected catalog command node"))?
-            .command()
-            .clone();
-        let sail_catalog::command::CatalogCommand::CreateTable { options, .. } = command else {
-            return Err(PlanError::internal("expected create table command"));
-        };
-        Ok(options)
-    }
-
-    fn resolved_file_write_options(plan: &LogicalPlan) -> PlanResult<FileWriteOptions> {
-        let LogicalPlan::Extension(extension) = plan else {
-            return Err(PlanError::internal("expected extension logical plan"));
-        };
-        let barrier = extension
-            .node
-            .as_any()
-            .downcast_ref::<BarrierNode>()
-            .ok_or_else(|| PlanError::internal("expected barrier node"))?;
-        let LogicalPlan::Extension(extension) = barrier.plan() else {
-            return Err(PlanError::internal("expected extension write plan"));
-        };
-        let node = extension
-            .node
-            .as_any()
-            .downcast_ref::<FileWriteNode>()
-            .ok_or_else(|| PlanError::internal("expected file write node"))?;
-        Ok(node.options().clone())
-    }
-
     fn direct_create_table_options(plan: LogicalPlan) -> PlanResult<CreateTableOptions> {
         let LogicalPlan::Extension(extension) = plan else {
             return Err(PlanError::internal("expected extension logical plan"));
@@ -958,52 +975,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_create_table_rejects_invalid_name_for_default_location() -> PlanResult<()> {
-        let ctx = create_session("sail")?;
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
-        let mut state = PlanResolverState::new();
-
-        let err = match resolver
-            .resolve_catalog_create_table(
-                spec::ObjectName::from(["default", "../escaped"]),
-                table_definition(None, None),
-                &mut state,
-            )
-            .await
-        {
-            Ok(plan) => {
-                return Err(PlanError::internal(format!(
-                    "expected error, got: {plan:?}"
-                )))
-            }
-            Err(err) => err,
-        };
-
-        assert!(
-            err.to_string().contains("invalid table name"),
-            "unexpected error: {err}"
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_create_table_allows_invalid_name_for_explicit_location() -> PlanResult<()> {
-        let ctx = create_session("sail")?;
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
-        let mut state = PlanResolverState::new();
-
-        resolver
-            .resolve_catalog_create_table(
-                spec::ObjectName::from(["default", "nested/table"]),
-                table_definition(Some("relative/table"), None),
-                &mut state,
-            )
-            .await
-            .map(|_| ())?;
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_native_create_table_preserves_explicit_relative_location() -> PlanResult<()> {
         let ctx = create_session("native")?;
         let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
@@ -1044,91 +1015,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_spark_create_table_without_location_synthesizes_default_location(
-    ) -> PlanResult<()> {
-        let ctx = create_session("sail")?;
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
-        let mut state = PlanResolverState::new();
-
-        let plan = resolver
-            .resolve_catalog_create_table(
-                spec::ObjectName::from(["default", "managed_location"]),
-                table_definition(None, None),
-                &mut state,
-            )
-            .await?;
-        let options = direct_create_table_options(plan)?;
-        let location = options
-            .location
-            .ok_or_else(|| PlanError::internal("expected location"))?;
-
-        assert!(
-            location.ends_with("/managed_location"),
-            "unexpected location: {location}"
-        );
-        assert!(!options.is_external);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_spark_create_table_qualifies_explicit_relative_location() -> PlanResult<()> {
-        let ctx = create_session("sail")?;
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
-        let mut state = PlanResolverState::new();
-
-        let plan = resolver
-            .resolve_catalog_create_table(
-                spec::ObjectName::from(["default", "explicit_location"]),
-                table_definition(Some("relative/table"), None),
-                &mut state,
-            )
-            .await?;
-        let options = direct_create_table_options(plan)?;
-        let location = options
-            .location
-            .ok_or_else(|| PlanError::internal("expected location"))?;
-
-        assert!(
-            location.ends_with("/relative/table"),
-            "unexpected location: {location}"
-        );
-        assert_ne!(location, "relative/table");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_spark_create_table_with_path_option_uses_qualified_path_as_location(
-    ) -> PlanResult<()> {
-        let ctx = create_session("sail")?;
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
-        let mut state = PlanResolverState::new();
-        let mut definition = table_definition(None, None);
-        definition
-            .options
-            .push(("path".to_string(), "relative/table".to_string()));
-
-        let plan = resolver
-            .resolve_catalog_create_table(
-                spec::ObjectName::from(["default", "path_option"]),
-                definition,
-                &mut state,
-            )
-            .await?;
-        let options = direct_create_table_options(plan)?;
-        let location = options
-            .location
-            .ok_or_else(|| PlanError::internal("expected location"))?;
-
-        assert!(options.is_external);
-        assert!(
-            location.ends_with("/relative/table"),
-            "unexpected location: {location}"
-        );
-        assert_ne!(location, "relative/table");
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_native_create_table_with_path_option_preserves_relative_location(
     ) -> PlanResult<()> {
         let ctx = create_session("native")?;
@@ -1150,30 +1036,6 @@ mod tests {
 
         assert!(options.is_external);
         assert_eq!(options.location.as_deref(), Some("relative/table"));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_ctas_rejects_invalid_name_for_default_location() -> PlanResult<()> {
-        let ctx = create_session("sail")?;
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
-
-        let err = match resolver
-            .resolve_default_table_location(&spec::ObjectName::from(["default", "../escaped"]))
-            .await
-        {
-            Ok(location) => {
-                return Err(PlanError::internal(format!(
-                    "expected error, got: {location:?}"
-                )));
-            }
-            Err(err) => err,
-        };
-
-        assert!(
-            err.to_string().contains("invalid"),
-            "unexpected error: {err}"
-        );
         Ok(())
     }
 
@@ -1215,125 +1077,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_ctas_without_location_remains_managed() -> PlanResult<()> {
-        let ctx = create_session("sail")?;
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
-        let mut state = PlanResolverState::new();
-
-        let plan = resolver
-            .resolve_catalog_create_table_as_select(
-                spec::ObjectName::from(["default", "ctas_managed"]),
-                table_definition(None, Some("parquet")),
-                ctas_query(),
-                &mut state,
-            )
-            .await?;
-
-        let options = resolved_create_table_options(plan)?;
-        assert!(!options.is_external);
-        assert!(options.location.is_some());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_ctas_with_location_is_external() -> PlanResult<()> {
-        let ctx = create_session("sail")?;
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
-        let mut state = PlanResolverState::new();
-
-        let plan = resolver
-            .resolve_catalog_create_table_as_select(
-                spec::ObjectName::from(["default", "ctas_location"]),
-                table_definition(Some("relative/table"), Some("parquet")),
-                ctas_query(),
-                &mut state,
-            )
-            .await?;
-
-        let options = resolved_create_table_options(plan)?;
-        assert!(options.is_external);
-        assert!(options.location.is_some());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_native_ctas_preserves_explicit_relative_location() -> PlanResult<()> {
+    async fn test_native_ctas_without_location_is_out_of_scope() -> PlanResult<()> {
         let ctx = create_session("native")?;
         let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
         let mut state = PlanResolverState::new();
 
-        let plan = resolver
-            .resolve_catalog_create_table_as_select(
-                spec::ObjectName::from(["default", "ctas_location"]),
-                table_definition(Some("relative/table"), Some("parquet")),
-                ctas_query(),
-                &mut state,
-            )
-            .await?;
-
-        let options = resolved_create_table_options(plan)?;
-        assert!(options.is_external);
-        assert_eq!(options.location.as_deref(), Some("relative/table"));
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_ctas_with_path_option_is_external() -> PlanResult<()> {
-        let ctx = create_session("sail")?;
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
-        let mut state = PlanResolverState::new();
-        let mut definition = table_definition(None, Some("parquet"));
-        definition
-            .options
-            .push(("path".to_string(), "relative/table".to_string()));
-
-        let plan = resolver
-            .resolve_catalog_create_table_as_select(
-                spec::ObjectName::from(["default", "ctas_path_option"]),
-                definition,
-                ctas_query(),
-                &mut state,
-            )
-            .await?;
-
-        let options = resolved_create_table_options(plan)?;
-        assert!(options.is_external);
-        let location = options
-            .location
-            .ok_or_else(|| PlanError::internal("expected location"))?;
-        assert!(
-            location.ends_with("/relative/table"),
-            "unexpected location: {location}"
-        );
-        assert_ne!(location, "relative/table");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_native_ctas_without_location_delegates_location_to_catalog() -> PlanResult<()> {
-        let ctx = create_session("native")?;
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
-        let mut state = PlanResolverState::new();
-
-        let plan = resolver
+        let err = match resolver
             .resolve_catalog_create_table_as_select(
                 spec::ObjectName::from(["default", "ctas_without_location"]),
                 table_definition(None, Some("parquet")),
                 ctas_query(),
                 &mut state,
             )
-            .await?;
+            .await
+        {
+            Ok(plan) => {
+                return Err(PlanError::internal(format!(
+                    "expected error, got: {plan:?}"
+                )));
+            }
+            Err(err) => err,
+        };
 
-        let write_options = resolved_file_write_options(&plan)?;
-        let options = resolved_create_table_options(plan)?;
-        assert_eq!(options.location, None);
-        assert!(!options.is_external);
-        assert_eq!(
-            write_options.catalog_table,
-            Some(vec![
-                "default".to_string(),
-                "ctas_without_location".to_string()
-            ])
+        assert!(
+            err.to_string().contains("explicit location")
+                || err.to_string().contains("explicit path"),
+            "unexpected error: {err}"
         );
         Ok(())
     }

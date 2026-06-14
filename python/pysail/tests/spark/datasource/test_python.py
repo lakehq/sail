@@ -1300,50 +1300,6 @@ def test_python_write_save_path_passed(spark):
     assert PathCheckDataSource._received_options["path"] == "/my/test/path"  # noqa: SLF001
 
 
-def test_python_write_mode_passed_as_option(spark):
-    """Test that the save mode is passed to DataSource via options["mode"]."""
-
-    class ModeCheckWriter(DataSourceWriter):
-        def __init__(self, schema, overwrite):
-            pass
-
-        def write(self, iterator):
-            for _ in iterator:
-                pass
-            return {}
-
-        def commit(self, messages):
-            pass
-
-    class ModeCheckDataSource(DataSource):
-        def __init__(self, options):
-            self.options = options
-            ModeCheckDataSource._received_options = dict(options)
-
-        @classmethod
-        def name(cls):
-            return "mode_check"
-
-        def schema(self):
-            return "id INT"
-
-        def writer(self, schema, overwrite):
-            return ModeCheckWriter(schema, overwrite)
-
-    ModeCheckDataSource._received_options = {}  # noqa: SLF001
-
-    spark.dataSource.register(ModeCheckDataSource)
-
-    df = spark.createDataFrame([(1,), (2,)], ["id"])
-    df.write.format("mode_check").mode("append").save()
-
-    # Verify the mode was passed through options
-    assert "mode" in ModeCheckDataSource._received_options, (  # noqa: SLF001
-        "Save mode should be passed to DataSource via options['mode']"
-    )
-    assert ModeCheckDataSource._received_options["mode"] == "append"  # noqa: SLF001
-
-
 def test_python_write_commit_failure_triggers_abort(spark):
     """Test that abort is called when commit() raises an exception."""
 

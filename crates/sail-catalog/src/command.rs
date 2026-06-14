@@ -1,7 +1,9 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use sail_common_datafusion::array::serde::ArrowSerializer;
-use sail_common_datafusion::datasource::{is_lakehouse_format, TableFormatRegistry};
+use sail_common_datafusion::datasource::{
+    is_lakehouse_format, TableFormatAlterTableOperation, TableFormatRegistry,
+};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use serde::{Deserialize, Serialize};
@@ -415,44 +417,19 @@ impl CatalogCommand {
                         ))
                     })?;
                     let runtime = ctx.runtime_env();
-                    match &options {
-                        AlterTableOptions::SetTableProperties { properties } => {
-                            let changes = properties
-                                .iter()
-                                .map(|(k, v)| (k.clone(), Some(v.clone())))
-                                .collect::<Vec<_>>();
-                            table_format
-                                .alter_table_properties(runtime, &location, changes, false)
-                                .await
-                                .map_err(|e| CatalogError::External(e.to_string()))?;
-                        }
-                        AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
-                            let changes =
-                                keys.iter().map(|k| (k.clone(), None)).collect::<Vec<_>>();
-                            table_format
-                                .alter_table_properties(runtime, &location, changes, *if_exists)
-                                .await
-                                .map_err(|e| CatalogError::External(e.to_string()))?;
-                        }
-                        AlterTableOptions::AlterColumnType { name, data_type } => {
-                            table_format
-                                .alter_table_column_type(
-                                    runtime,
-                                    &location,
-                                    name.clone(),
-                                    data_type.clone(),
-                                )
-                                .await
-                                .map_err(|e| CatalogError::External(e.to_string()))?;
-                        }
-                    };
+                    let storage_operation = table_format_alter_operation(&options);
+                    table_format
+                        .alter_table(runtime, &location, storage_operation)
+                        .await
+                        .map_err(|e| CatalogError::External(e.to_string()))?;
 
                     // Storage is the source of truth for lakehouse ALTER TABLE
                     // operations, but metadata reads still flow through the
                     // catalog. Surface catalog sync failures so callers do not
                     // observe successful storage mutation followed by stale
                     // DESCRIBE/SHOW metadata.
-                    manager.alter_table(&table, options).await?;
+                    let catalog_options = catalog_sync_alter_options(&format, &options)?;
+                    manager.alter_table(&table, catalog_options).await?;
                     return Ok(display.bools().to_record_batch(vec![true])?);
                 }
 
@@ -639,6 +616,63 @@ impl CatalogCommand {
     }
 }
 
+fn table_format_alter_operation(options: &AlterTableOptions) -> TableFormatAlterTableOperation {
+    match options {
+        AlterTableOptions::SetTableProperties { properties } => {
+            TableFormatAlterTableOperation::SetTableProperties {
+                changes: properties
+                    .iter()
+                    .map(|(key, value)| (key.clone(), Some(value.clone())))
+                    .collect(),
+                if_exists: false,
+            }
+        }
+        AlterTableOptions::UnsetTableProperties { keys, if_exists } => {
+            TableFormatAlterTableOperation::SetTableProperties {
+                changes: keys.iter().map(|key| (key.clone(), None)).collect(),
+                if_exists: *if_exists,
+            }
+        }
+        AlterTableOptions::AlterColumnType { name, data_type } => {
+            TableFormatAlterTableOperation::AlterColumnType {
+                column_path: name.clone(),
+                data_type: data_type.clone(),
+            }
+        }
+        AlterTableOptions::AlterColumnDefault { name, default } => {
+            TableFormatAlterTableOperation::AlterColumnDefault {
+                column_path: name.clone(),
+                default: default.clone(),
+            }
+        }
+        AlterTableOptions::AddCheckConstraint { name, expression } => {
+            TableFormatAlterTableOperation::AddCheckConstraint {
+                name: name.clone(),
+                expression: expression.clone(),
+            }
+        }
+    }
+}
+
+fn catalog_sync_alter_options(
+    format: &str,
+    options: &AlterTableOptions,
+) -> CatalogResult<AlterTableOptions> {
+    match options {
+        AlterTableOptions::AddCheckConstraint { name, expression } => {
+            if !format.eq_ignore_ascii_case("delta") {
+                return Err(CatalogError::NotSupported(format!(
+                    "CHECK constraints are not supported for {format} tables"
+                )));
+            }
+            Ok(AlterTableOptions::SetTableProperties {
+                properties: vec![(format!("delta.constraints.{name}"), expression.clone())],
+            })
+        }
+        _ => Ok(options.clone()),
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct DescribeTableRow {
     col_name: String,
@@ -678,10 +712,9 @@ mod tests {
     use async_trait::async_trait;
     use datafusion::catalog::Session;
     use datafusion::execution::context::SessionConfig;
-    use datafusion::physical_plan::ExecutionPlan;
     use datafusion::prelude::SessionContext;
     use datafusion_common::not_impl_err;
-    use datafusion_expr::TableSource;
+    use datafusion_expr::{LogicalPlan, TableSource};
     use sail_common_datafusion::catalog::display::{CatalogObjectDisplay, DefaultCatalogDisplay};
     use sail_common_datafusion::catalog::{
         DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
@@ -900,16 +933,15 @@ mod tests {
             &self,
             _ctx: &dyn Session,
             _info: SinkInfo,
-        ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        ) -> datafusion_common::Result<LogicalPlan> {
             not_impl_err!("unused in test")
         }
 
-        async fn alter_table_properties(
+        async fn alter_table(
             &self,
             _runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
             _path: &str,
-            _changes: Vec<(String, Option<String>)>,
-            _if_exists: bool,
+            _operation: TableFormatAlterTableOperation,
         ) -> datafusion_common::Result<()> {
             Ok(())
         }
@@ -945,6 +977,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                     is_partition: false,
                     is_bucket: false,
                     is_cluster: false,

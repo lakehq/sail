@@ -4,8 +4,9 @@ use std::fmt;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
-use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, PhysicalExpr};
+use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 /// A job graph represents a distributed execution plan for a job.
 /// A job consists of multiple *stages*, where each stage has one or more
@@ -186,6 +187,12 @@ pub enum OutputDistribution {
     RoundRobin {
         channels: usize,
     },
+    /// Row-level round-robin distribution for explicit user repartition calls.
+    /// Unlike `RoundRobin` (batch-based), this distributes individual rows across
+    /// output partitions to ensure even data distribution.
+    RoundRobinRow {
+        channels: usize,
+    },
 }
 
 impl OutputDistribution {
@@ -193,6 +200,7 @@ impl OutputDistribution {
         match self {
             OutputDistribution::Hash { channels, .. } => *channels,
             OutputDistribution::RoundRobin { channels } => *channels,
+            OutputDistribution::RoundRobinRow { channels } => *channels,
         }
     }
 }
@@ -206,6 +214,9 @@ impl fmt::Display for OutputDistribution {
             }
             OutputDistribution::RoundRobin { channels } => {
                 write!(f, "RoundRobin(channels={})", channels)
+            }
+            OutputDistribution::RoundRobinRow { channels } => {
+                write!(f, "RoundRobinRow(channels={})", channels)
             }
         }
     }

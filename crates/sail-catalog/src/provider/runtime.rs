@@ -4,9 +4,9 @@ use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 use tokio::runtime::Handle;
 
 use super::{
-    AlterTableOptions, CatalogLocationPolicy, CatalogProvider, CreateDatabaseOptions,
-    CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
-    Namespace,
+    AlterTableOptions, CatalogLocationPolicy, CatalogProvider, CommitTableOptions,
+    CreateDatabaseOptions, CreateTableOptions, CreateViewOptions, DropDatabaseOptions,
+    DropTableOptions, DropViewOptions, GetTableCommitsOptions, GetTableCommitsResponse, Namespace,
 };
 use crate::error::{CatalogError, CatalogResult};
 
@@ -147,6 +147,38 @@ impl<P: CatalogProvider + 'static> CatalogProvider for RuntimeAwareCatalogProvid
             .spawn(async move { inner.alter_table(&database, &table, options).await })
             .await
             .map_err(|e| CatalogError::External(format!("Failed to execute alter_table: {e}")))?
+    }
+
+    async fn commit_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: CommitTableOptions,
+    ) -> CatalogResult<TableStatus> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        self.handle
+            .spawn(async move { inner.commit_table(&database, &table, options).await })
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to execute commit_table: {e}")))?
+    }
+
+    async fn get_table_commits(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: GetTableCommitsOptions,
+    ) -> CatalogResult<GetTableCommitsResponse> {
+        let inner = self.inner.clone();
+        let database = database.clone();
+        let table = table.to_string();
+        self.handle
+            .spawn(async move { inner.get_table_commits(&database, &table, options).await })
+            .await
+            .map_err(|e| {
+                CatalogError::External(format!("Failed to execute get_table_commits: {e}"))
+            })?
     }
 
     async fn create_view(

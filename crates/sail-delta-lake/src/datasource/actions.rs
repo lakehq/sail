@@ -20,6 +20,7 @@ use chrono::TimeZone;
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use datafusion::common::scalar::ScalarValue;
 use datafusion::datasource::listing::PartitionedFile;
+use datafusion_common::extensions::Extensions;
 use object_store::ObjectMeta;
 
 /// [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
@@ -69,11 +70,12 @@ pub fn partitioned_file_from_action(
             ..object_meta
         },
         partition_values,
-        extensions: None,
+        extensions: Extensions::default(),
         range: None,
         statistics: None,
         ordering: None,
         metadata_size_hint: None,
+        table_reference: None,
     })
 }
 

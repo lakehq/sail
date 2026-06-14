@@ -38,6 +38,20 @@ Feature: product returns the multiplicative product of all non-null input values
         | p    |
         | 12.0 |
 
+    Scenario: product works as a window function
+      When query
+        """
+        SELECT id, product(value) OVER (
+          ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+        ) AS p
+        FROM VALUES (1, 2), (2, 3), (3, 4) AS tab(id, value)
+        """
+      Then query result ordered
+        | id | p    |
+        | 1  | 2.0  |
+        | 2  | 6.0  |
+        | 3  | 24.0 |
+
   Rule: product handles null inputs
 
     Scenario: product skips null values
