@@ -1269,7 +1269,7 @@ mod tests {
     use sail_common::runtime::RuntimeHandle;
 
     use super::{HmsCatalogConfig, HmsCatalogProvider};
-    use crate::hms::Table;
+    use crate::hms::{Table, ThriftHiveMetastoreDropDatabaseException};
 
     #[tokio::test]
     async fn test_create_table_requires_write_precondition_for_iceberg_format() {

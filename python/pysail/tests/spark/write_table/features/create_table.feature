@@ -73,29 +73,29 @@ Feature: CREATE TABLE default location
       """
 
   @sail-only
-  Scenario: CREATE TABLE preserves special characters in table name like Spark
-    Given variable db_location for temporary directory create_table_special_char_db
+  Scenario: CREATE TABLE uses safe identifier characters in default location like Spark
+    Given variable db_location for temporary directory create_table_safe_name_db
     Given final statement
       """
-      DROP DATABASE IF EXISTS create_table_special_char_db CASCADE
+      DROP DATABASE IF EXISTS create_table_safe_name_db CASCADE
       """
     Given statement template
       """
-      CREATE DATABASE IF NOT EXISTS create_table_special_char_db
+      CREATE DATABASE IF NOT EXISTS create_table_safe_name_db
       LOCATION {{ db_location.sql }}
       """
     Given statement
       """
-      CREATE TABLE `create_table_special_char_db`.`my@table` (id INT)
+      CREATE TABLE create_table_safe_name_db.my_table (id INT)
       USING DELTA
       """
     Given statement
       """
-      INSERT INTO `create_table_special_char_db`.`my@table` VALUES (1), (2)
+      INSERT INTO create_table_safe_name_db.my_table VALUES (1), (2)
       """
     When query
       """
-      SELECT * FROM `create_table_special_char_db`.`my@table` ORDER BY id
+      SELECT * FROM create_table_safe_name_db.my_table ORDER BY id
       """
     Then query result ordered
       | id |
@@ -103,7 +103,7 @@ Feature: CREATE TABLE default location
       | 2  |
     Then file tree in db_location matches
       """
-      📂 my@table
+      📂 my_table
         📄 part-<id>.<codec>.parquet
       """
 

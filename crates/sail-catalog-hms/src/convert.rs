@@ -822,7 +822,7 @@ mod tests {
         GenericTableFormat, COMMENT_KEY, SPARK_DATASOURCE_PROVIDER_KEY, SPARK_SCHEMA_KEY,
         VIRTUAL_VIEW_TYPE,
     };
-    use crate::hms::{FieldSchema, SerDeInfo, StorageDescriptor, Table};
+    use crate::hms::{Database, FieldSchema, SerDeInfo, StorageDescriptor, Table};
 
     #[test]
     fn test_validate_namespace_rejects_nested_namespaces() {

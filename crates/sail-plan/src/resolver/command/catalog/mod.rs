@@ -11,6 +11,9 @@ fn validate_location_identifier(name: &str, kind: &str) -> PlanResult<()> {
         || name.contains('/')
         || name.contains('\\')
         || name.contains('\0')
+        || name
+            .chars()
+            .any(|c| !c.is_alphanumeric() && c != '-' && c != '_')
     {
         Err(PlanError::invalid(format!(
             "invalid {kind} name for location derivation: {name:?}"
@@ -25,8 +28,17 @@ mod tests {
     use super::validate_location_identifier;
 
     #[test]
-    fn validate_location_identifier_allows_filename_safe_special_characters() {
-        assert!(validate_location_identifier("my@table", "table").is_ok());
+    fn validate_location_identifier_allows_safe_identifier_characters() {
+        assert!(validate_location_identifier("my-table", "table").is_ok());
+        assert!(validate_location_identifier("my_table", "table").is_ok());
+        assert!(validate_location_identifier("myTable123", "table").is_ok());
+    }
+
+    #[test]
+    fn validate_location_identifier_rejects_special_characters() {
+        assert!(validate_location_identifier("my@table", "table").is_err());
+        assert!(validate_location_identifier("my table", "table").is_err());
+        assert!(validate_location_identifier("my.table", "table").is_err());
     }
 
     #[test]
