@@ -83,16 +83,13 @@ pub enum TableKind {
 /// The data source backing a temporary view created with
 /// `CREATE TEMPORARY VIEW ... USING <format> OPTIONS (...)`.
 ///
-/// This is the write target for `INSERT INTO`/`INSERT OVERWRITE` against the
-/// view: the rows are written to the same data source location that backs the
-/// view, mirroring how Spark treats a data source temporary view as a table.
-/// It is `None` for temporary views defined by an `AS` query, which are not
-/// insertable.
+/// This is the write target for `INSERT INTO`/`INSERT OVERWRITE` against the view:
+///   - The rows are written to the view's backing data source location, matching Spark behavior.
+///   - It is `None` for temporary views defined by an `AS` query, which are not insertable.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct TemporaryViewSource {
     pub format: String,
-    /// The data source options, including the `path` entry that locates the
-    /// data on disk.
+    /// The data source options, including the `path` entry.
     pub options: Vec<(String, String)>,
 }
 
