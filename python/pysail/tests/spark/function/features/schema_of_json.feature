@@ -491,7 +491,7 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         SELECT schema_of_json(json_col) AS result
         FROM VALUES ('{"name":"Alice"}') AS t(json_col)
         """
-      Then query error .*literal value.*
+      Then query error .*(foldable|literal value).*
 
     Scenario: allowNumericLeadingZeros option is accepted
       When query
@@ -990,6 +990,72 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
         | result             |
         | STRUCT<a: STRING>  |
 
+    # Spark's `inferTimestamp` uses a lenient timestamp parser that also accepts
+    # fractional seconds, a trailing `Z`, timezone offsets, partial time
+    # (no seconds), and time-only values. JVM-verified: all expect TIMESTAMP.
+    Scenario: inferTimestamp infers TIMESTAMP from datetime with fractional seconds
+      When query
+        """
+        SELECT schema_of_json('{"a": "2021-01-01 00:00:00.123"}', map('inferTimestamp', 'true')) AS result
+        """
+      Then query result
+        | result               |
+        | STRUCT<a: TIMESTAMP> |
+
+    Scenario: inferTimestamp infers TIMESTAMP from ISO datetime with trailing Z
+      When query
+        """
+        SELECT schema_of_json('{"a": "2021-01-01T00:00:00Z"}', map('inferTimestamp', 'true')) AS result
+        """
+      Then query result
+        | result               |
+        | STRUCT<a: TIMESTAMP> |
+
+    Scenario: inferTimestamp infers TIMESTAMP from datetime with timezone offset
+      When query
+        """
+        SELECT schema_of_json('{"a": "2021-01-01 00:00:00+02:00"}', map('inferTimestamp', 'true')) AS result
+        """
+      Then query result
+        | result               |
+        | STRUCT<a: TIMESTAMP> |
+
+    Scenario: inferTimestamp infers TIMESTAMP from datetime without seconds
+      When query
+        """
+        SELECT schema_of_json('{"a": "2021-01-01 00:00"}', map('inferTimestamp', 'true')) AS result
+        """
+      Then query result
+        | result               |
+        | STRUCT<a: TIMESTAMP> |
+
+    Scenario: inferTimestamp infers TIMESTAMP from a time-only string
+      When query
+        """
+        SELECT schema_of_json('{"a": "03:04:05"}', map('inferTimestamp', 'true')) AS result
+        """
+      Then query result
+        | result               |
+        | STRUCT<a: TIMESTAMP> |
+
+    Scenario: inferTimestamp keeps slash-separated date as STRING
+      When query
+        """
+        SELECT schema_of_json('{"a": "2024/01/02"}', map('inferTimestamp', 'true')) AS result
+        """
+      Then query result
+        | result            |
+        | STRUCT<a: STRING> |
+
+    Scenario: inferTimestamp keeps invalid calendar date as STRING
+      When query
+        """
+        SELECT schema_of_json('{"a": "2024-13-02"}', map('inferTimestamp', 'true')) AS result
+        """
+      Then query result
+        | result            |
+        | STRUCT<a: STRING> |
+
   Rule: allowNonNumericNumbers option
 
     Scenario: allowNonNumericNumbers true allows NaN as DOUBLE
@@ -1094,3 +1160,164 @@ Feature: schema_of_json() returns the schema of a JSON string as DDL
       Then query result
         | from_null | normal_struct                    | big_num               |
         | STRING    | STRUCT<id: BIGINT, name: STRING> | STRUCT<n: DECIMAL(20,0)> |
+
+  Rule: Result nullability
+
+    Scenario: foldable successful call produces a non-nullable result
+      When query
+        """
+        SELECT schema_of_json('{"a":1}') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+    Scenario: foldable scalar call produces a non-nullable result
+      When query
+        """
+        SELECT schema_of_json('[1,2,3]') AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
+  Rule: allowSingleQuotes option
+
+    Scenario: single-quoted field name is allowed by default
+      When query
+        """
+        SELECT schema_of_json('{\'a\': 1}') AS result
+        """
+      Then query result
+        | result            |
+        | STRUCT<a: BIGINT> |
+
+    Scenario: single-quoted string value is allowed by default
+      When query
+        """
+        SELECT schema_of_json('{"a": \'hi\'}') AS result
+        """
+      Then query result
+        | result            |
+        | STRUCT<a: STRING> |
+
+    Scenario: allowSingleQuotes false rejects single quotes
+      When query
+        """
+        SELECT schema_of_json('{\'a\': 1}', map('allowSingleQuotes', 'false')) AS result
+        """
+      Then query error .*
+
+  Rule: allowUnquotedFieldNames option
+
+    Scenario: unquoted field name is rejected by default
+      When query
+        """
+        SELECT schema_of_json('{a: 1}') AS result
+        """
+      Then query error .*
+
+    Scenario: allowUnquotedFieldNames true accepts unquoted field names
+      When query
+        """
+        SELECT schema_of_json('{a: 1}', map('allowUnquotedFieldNames', 'true')) AS result
+        """
+      Then query result
+        | result            |
+        | STRUCT<a: BIGINT> |
+
+  Rule: prefersDecimal option
+
+    Scenario: prefersDecimal true infers DECIMAL for a fractional number
+      When query
+        """
+        SELECT schema_of_json('{"a": 1.5}', map('prefersDecimal', 'true')) AS result
+        """
+      Then query result
+        | result                  |
+        | STRUCT<a: DECIMAL(2,1)> |
+
+    Scenario: prefersDecimal false keeps fractional number as DOUBLE
+      When query
+        """
+        SELECT schema_of_json('{"a": 1.5}', map('prefersDecimal', 'false')) AS result
+        """
+      Then query result
+        | result            |
+        | STRUCT<a: DOUBLE> |
+
+    Scenario: prefersDecimal with a negative-scale exponent errors
+      When query
+        """
+        SELECT schema_of_json('{"a": 1.5e10}', map('prefersDecimal', 'true')) AS result
+        """
+      Then query error .*
+
+  Rule: Unicode and non-ASCII
+
+    Scenario: non-ASCII field name requires backtick quoting
+      When query
+        """
+        SELECT schema_of_json('{"café": 1}') AS result
+        """
+      Then query result
+        | result                 |
+        | STRUCT<`café`: BIGINT> |
+
+    Scenario: unicode escape in field name is decoded
+      When query
+        """
+        SELECT schema_of_json('{"\\u00e9": 1}') AS result
+        """
+      Then query result
+        | result              |
+        | STRUCT<`é`: BIGINT> |
+
+    Scenario: unicode escape in string value stays STRING
+      When query
+        """
+        SELECT schema_of_json('{"a": "\\u00e9"}') AS result
+        """
+      Then query result
+        | result            |
+        | STRUCT<a: STRING> |
+
+    Scenario: surrogate-pair escape stays STRING
+      When query
+        """
+        SELECT schema_of_json('{"a": "\\ud83d\\ude00"}') AS result
+        """
+      Then query result
+        | result            |
+        | STRUCT<a: STRING> |
+
+  Rule: Option value validation
+
+    Scenario: invalid boolean option value errors
+      When query
+        """
+        SELECT schema_of_json('{"a":1}', map('allowSingleQuotes', 'yes')) AS result
+        """
+      Then query error .*
+
+    Scenario: unrecognized mode falls back to PERMISSIVE
+      When query
+        """
+        SELECT schema_of_json('{"a":1}', map('mode', 'BOGUS')) AS result
+        """
+      Then query result
+        | result            |
+        | STRUCT<a: BIGINT> |
+
+    Scenario: mode value is case-insensitive
+      When query
+        """
+        SELECT schema_of_json('{"a":1}', map('mode', 'permissive')) AS result
+        """
+      Then query result
+        | result            |
+        | STRUCT<a: BIGINT> |
