@@ -166,19 +166,19 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         let (schema, partition_fields) = match schema {
             Some(schema) if !schema.fields().is_empty() => {
                 // Spark matches a user-specified schema against the physical file
-                // columns case-insensitively by default
-                // (`spark.sql.caseSensitive=false`). Reconcile the user column
-                // names to the physical names up front so that both the file
-                // statistics and the reader — which resolve columns by exact name —
-                // find the data. The view's column list restores the
-                // user-specified casing for the output.
+                // columns case-insensitively by default (`spark.sql.caseSensitive=false`).
+                // Reconcile the user column names to the physical names up front so that both
+                // the file stats and reader (which resolve columns by exact name) find the data.
                 let schema = if read_case_sensitive {
                     schema
+                } else if let Ok(physical) = read_format
+                    .infer_schema(ctx, &sampled_files, compression)
+                    .await
+                {
+                    reconcile_schema_names_case_insensitive(schema, &physical)?
                 } else {
-                    let physical = read_format
-                        .infer_schema(ctx, &sampled_files, compression)
-                        .await?;
-                    reconcile_schema_case_insensitive(schema, &physical)?
+                    // Keeps the user schema if physical schema inference is unavailable.
+                    schema
                 };
                 // When the partition columns are not specified, auto-discover
                 // them from `key=value` segments in the listing paths.
@@ -312,7 +312,7 @@ async fn listing_target_nonempty(ctx: &dyn Session, url: &Url) -> Result<bool> {
 
 // Reconciles a user-specified schema's field names with the physical file schema
 // case-insensitively, matching Spark's default `spark.sql.caseSensitive=false`.
-fn reconcile_schema_case_insensitive(schema: Schema, physical: &Schema) -> Result<Schema> {
+fn reconcile_schema_names_case_insensitive(schema: Schema, physical: &Schema) -> Result<Schema> {
     let mut fields = Vec::with_capacity(schema.fields().len());
     for field in schema.fields() {
         let name = field.name();
