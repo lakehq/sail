@@ -12,7 +12,6 @@ use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
 use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
 
-
 /// Spark-compatible `to_xml` UDF. Serializes a StructArray into XML strings.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkToXml {
@@ -180,7 +179,6 @@ impl Default for SparkToXml {
 }
 
 impl ScalarUDFImpl for SparkToXml {
-
     fn name(&self) -> &str {
         Self::TO_XML_NAME
     }
@@ -969,4 +967,3 @@ mod tests {
         Ok(())
     }
 }
-
