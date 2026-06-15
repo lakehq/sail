@@ -10,7 +10,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -30,11 +29,20 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use futures::stream::once;
 use futures::StreamExt;
 use object_store::ObjectStoreExt;
+use sail_catalog::error::CatalogError;
+use sail_catalog::manager::CatalogManager;
+use sail_catalog::provider::{AlterTableOptions, CommitTableOptions};
+use sail_common_datafusion::catalog::managed::{
+    existing_metadata_location_key, METADATA_LOCATION_KEY, PREVIOUS_METADATA_LOCATION_KEY,
+};
+use sail_common_datafusion::catalog::{TableKind, TableStatus};
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
 
 use crate::io::StoreContext;
 use crate::operations::bootstrap::{
-    bootstrap_first_snapshot, bootstrap_new_table, PersistStrategy,
+    bootstrap_first_snapshot, bootstrap_new_table_with_style, bootstrap_snapshot_action_commit,
+    NewTableMetadataStyle, PersistStrategy,
 };
 use crate::operations::helpers::format_version_for_schema;
 use crate::operations::{SnapshotProduceOperation, Transaction, TransactionAction};
@@ -42,15 +50,33 @@ use crate::physical_plan::action_schema::decode_actions_and_meta_from_batch;
 use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::catalog::TableUpdate;
 use crate::spec::metadata::table_metadata::SnapshotLog;
+use crate::spec::partition::{UnboundPartitionField, UnboundPartitionSpec};
 use crate::spec::snapshots::MAIN_BRANCH;
 use crate::spec::{PartitionSpec, Schema as IcebergSchema, TableMetadata, TableRequirement};
 use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
-    metadata_file_version_from_path,
+    metadata_file_version_from_path, metadata_location_to_object_path_string,
+};
+use crate::table_format::{
+    catalog_managed_iceberg_from_properties, catalog_table_from_properties,
+    metadata_location_from_properties,
 };
 use crate::utils::get_object_store_from_context;
 use crate::utils::metadata::metadata_files_for_version;
 const MAX_COMMIT_RETRIES: usize = 5;
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum CatalogCommitOutcome {
+    Committed,
+    NotSupported,
+    Conflict,
+}
+
+#[derive(Debug, Default)]
+struct CatalogTableInfo {
+    metadata_location: Option<String>,
+    is_catalog_managed_iceberg_table: bool,
+}
 
 #[derive(Debug)]
 pub struct IcebergCommitExec {
@@ -190,6 +216,7 @@ impl IcebergCommitExec {
                             .get(reference)
                             .map(|ref_entry| ref_entry.snapshot_id)
                     };
+                    let actual = actual.filter(|snapshot_id| *snapshot_id >= 0);
                     if &actual != snapshot_id {
                         return Err(DataFusionError::Plan(format!(
                             "Iceberg commit failed: reference '{}' expected snapshot {:?} but found {:?}",
@@ -197,14 +224,231 @@ impl IcebergCommitExec {
                         )));
                     }
                 }
-                other => {
-                    return Err(DataFusionError::NotImplemented(format!(
-                        "Table requirement '{other:?}' is not supported in local commits"
-                    )));
+                TableRequirement::UuidMatch { uuid } => {
+                    let meta = table_meta.ok_or_else(|| {
+                        DataFusionError::Plan(
+                            "Iceberg table metadata missing while validating UUID requirement"
+                                .to_string(),
+                        )
+                    })?;
+                    if meta.table_uuid.as_ref() != Some(uuid) {
+                        return Err(DataFusionError::Plan(format!(
+                            "Iceberg commit failed: expected table UUID {} but found {:?}. Reload table metadata and retry.",
+                            uuid, meta.table_uuid
+                        )));
+                    }
+                }
+                TableRequirement::LastAssignedPartitionIdMatch {
+                    last_assigned_partition_id,
+                } => {
+                    let meta = table_meta.ok_or_else(|| {
+                        DataFusionError::Plan(
+                            "Iceberg table metadata missing while validating partition id requirement"
+                                .to_string(),
+                        )
+                    })?;
+                    if &meta.last_partition_id != last_assigned_partition_id {
+                        return Err(DataFusionError::Plan(format!(
+                            "Iceberg commit failed: expected last assigned partition id {} but found {}. Reload table metadata and retry.",
+                            last_assigned_partition_id, meta.last_partition_id
+                        )));
+                    }
+                }
+                TableRequirement::DefaultSpecIdMatch { default_spec_id } => {
+                    let meta = table_meta.ok_or_else(|| {
+                        DataFusionError::Plan(
+                            "Iceberg table metadata missing while validating partition spec requirement"
+                                .to_string(),
+                        )
+                    })?;
+                    if &meta.default_spec_id != default_spec_id {
+                        return Err(DataFusionError::Plan(format!(
+                            "Iceberg commit failed: expected default partition spec id {} but found {}. Reload table metadata and retry.",
+                            default_spec_id, meta.default_spec_id
+                        )));
+                    }
+                }
+                TableRequirement::DefaultSortOrderIdMatch {
+                    default_sort_order_id,
+                } => {
+                    let meta = table_meta.ok_or_else(|| {
+                        DataFusionError::Plan(
+                            "Iceberg table metadata missing while validating sort order requirement"
+                                .to_string(),
+                        )
+                    })?;
+                    let actual = meta.default_sort_order_id.map(i64::from).unwrap_or(0);
+                    if &actual != default_sort_order_id {
+                        return Err(DataFusionError::Plan(format!(
+                            "Iceberg commit failed: expected default sort order id {} but found {}. Reload table metadata and retry.",
+                            default_sort_order_id, actual
+                        )));
+                    }
                 }
             }
         }
         Ok(())
+    }
+
+    fn unbound_partition_spec(spec: &PartitionSpec) -> UnboundPartitionSpec {
+        let fields = spec
+            .fields()
+            .iter()
+            .map(|field| UnboundPartitionField {
+                source_id: field.source_id,
+                name: field.name.clone(),
+                transform: field.transform,
+            })
+            .collect();
+        UnboundPartitionSpec { fields }
+    }
+
+    fn catalog_table_info_from_status(status: &TableStatus) -> CatalogTableInfo {
+        match &status.kind {
+            TableKind::Table {
+                format: _,
+                properties,
+                ..
+            } => CatalogTableInfo {
+                metadata_location: metadata_location_from_properties(properties),
+                is_catalog_managed_iceberg_table: catalog_managed_iceberg_from_properties(
+                    properties,
+                ),
+            },
+            _ => CatalogTableInfo::default(),
+        }
+    }
+
+    async fn load_catalog_table_info(
+        context: &Arc<TaskContext>,
+        catalog_table: &[String],
+    ) -> Result<CatalogTableInfo> {
+        let manager = match context.extension::<CatalogManager>() {
+            Ok(manager) => manager,
+            Err(err) => {
+                log::debug!(
+                    "Catalog manager unavailable while resolving Iceberg metadata location: {err}"
+                );
+                return Ok(CatalogTableInfo::default());
+            }
+        };
+        match manager.get_table(catalog_table).await {
+            Ok(status) => Ok(Self::catalog_table_info_from_status(&status)),
+            Err(CatalogError::NotFound(_, _)) | Err(CatalogError::NotSupported(_)) => {
+                Ok(CatalogTableInfo::default())
+            }
+            Err(err) => Err(DataFusionError::External(Box::new(err))),
+        }
+    }
+
+    async fn load_catalog_metadata_location(
+        context: &Arc<TaskContext>,
+        catalog_table: &[String],
+    ) -> Result<Option<String>> {
+        Ok(Self::load_catalog_table_info(context, catalog_table)
+            .await?
+            .metadata_location)
+    }
+
+    fn catalog_requirements(
+        table_meta: &TableMetadata,
+        commit_requirements: &[TableRequirement],
+        action_requirements: &[TableRequirement],
+    ) -> Vec<TableRequirement> {
+        let mut requirements = Vec::with_capacity(
+            commit_requirements.len()
+                + action_requirements.len()
+                + usize::from(table_meta.table_uuid.is_some()),
+        );
+        requirements.extend_from_slice(commit_requirements);
+        requirements.extend_from_slice(action_requirements);
+        if let Some(uuid) = table_meta.table_uuid {
+            if !requirements
+                .iter()
+                .any(|requirement| matches!(requirement, TableRequirement::UuidMatch { uuid: u } if *u == uuid))
+            {
+                requirements.push(TableRequirement::UuidMatch { uuid });
+            }
+        }
+        requirements
+    }
+
+    async fn try_commit_to_catalog(
+        context: &Arc<TaskContext>,
+        catalog_table: &[String],
+        requirements: Vec<TableRequirement>,
+        updates: Vec<TableUpdate>,
+    ) -> Result<CatalogCommitOutcome> {
+        let manager = context.extension::<CatalogManager>()?;
+        let requirements = requirements
+            .into_iter()
+            .map(serde_json::to_value)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let updates = updates
+            .into_iter()
+            .map(serde_json::to_value)
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        match manager
+            .commit_table(
+                catalog_table,
+                CommitTableOptions {
+                    format: "iceberg".to_string(),
+                    requirements,
+                    updates,
+                },
+            )
+            .await
+        {
+            Ok(_) => Ok(CatalogCommitOutcome::Committed),
+            Err(CatalogError::NotSupported(err)) => {
+                log::debug!("Iceberg catalog commit is not supported: {err}");
+                Ok(CatalogCommitOutcome::NotSupported)
+            }
+            Err(CatalogError::Conflict(err)) => {
+                log::warn!("Iceberg catalog commit conflict: {err}");
+                Ok(CatalogCommitOutcome::Conflict)
+            }
+            Err(err) => Err(DataFusionError::External(Box::new(err))),
+        }
+    }
+
+    async fn update_catalog_metadata_location(
+        context: &Arc<TaskContext>,
+        catalog_table: &[String],
+        existing_properties: &[(String, String)],
+        previous_metadata_location: Option<&str>,
+        new_metadata_location: &str,
+    ) -> Result<()> {
+        let manager = context.extension::<CatalogManager>()?;
+        let metadata_location_key = existing_metadata_location_key(existing_properties)
+            .map(ToString::to_string)
+            .unwrap_or_else(|| METADATA_LOCATION_KEY.to_string());
+        let mut properties = vec![(metadata_location_key, new_metadata_location.to_string())];
+        if let Some(previous_metadata_location) = previous_metadata_location {
+            properties.push((
+                PREVIOUS_METADATA_LOCATION_KEY.to_string(),
+                previous_metadata_location.to_string(),
+            ));
+        }
+        manager
+            .alter_table(
+                catalog_table,
+                AlterTableOptions::SetTableProperties { properties },
+            )
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))
+    }
+
+    fn table_metadata_location(table_url: &Url, metadata_file: &str) -> Result<String> {
+        if Url::parse(metadata_file).is_ok() {
+            return Ok(metadata_file.to_string());
+        }
+        Ok(table_url
+            .join(metadata_file)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .to_string())
     }
 }
 
@@ -212,10 +456,6 @@ impl IcebergCommitExec {
 impl ExecutionPlan for IcebergCommitExec {
     fn name(&self) -> &'static str {
         "IcebergCommitExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -310,43 +550,138 @@ impl ExecutionPlan for IcebergCommitExec {
                 partition_spec: commit_meta.partition_spec,
             };
 
-            // Load table metadata JSON if exists; for overwrite on new table we bootstrap
-            let latest_meta_res =
-                crate::table::find_latest_metadata_file(&object_store, &table_url).await;
+            let catalog_table = catalog_table_from_properties(&commit_info.table_properties)?;
+            let CatalogTableInfo {
+                metadata_location: catalog_status_metadata_location,
+                is_catalog_managed_iceberg_table: is_catalog_status_managed_iceberg_table,
+            } = match catalog_table.as_ref() {
+                Some(table) => Self::load_catalog_table_info(&context, table).await?,
+                None => CatalogTableInfo::default(),
+            };
+            let table_property_metadata_location =
+                metadata_location_from_properties(&commit_info.table_properties);
+            let catalog_recorded_metadata_location = table_property_metadata_location
+                .clone()
+                .or(catalog_status_metadata_location);
+            let catalog_managed_table =
+                catalog_managed_iceberg_from_properties(&commit_info.table_properties)
+                    || is_catalog_status_managed_iceberg_table;
+            let catalog_metadata_location = catalog_managed_table
+                .then(|| catalog_recorded_metadata_location.clone())
+                .flatten();
+
+            // Managed external catalogs use the authoritative metadata-location.
+            // Path tables may record metadata-location in the session catalog for display, but
+            // their current state is discovered from the metadata directory and version hint.
+            let latest_meta_res = match catalog_metadata_location.as_deref() {
+                Some(location) => Ok(metadata_location_to_object_path_string(location)?),
+                None => crate::table::find_latest_metadata_file(&object_store, &table_url).await,
+            };
+            let catalog_commit_table = catalog_table.as_ref().filter(|_| catalog_managed_table);
+            log::debug!(
+                "Iceberg catalog commit context: table={:?}, metadata_location={:?}, managed={}",
+                catalog_table,
+                catalog_metadata_location,
+                catalog_managed_table
+            );
 
             if latest_meta_res.is_err()
                 && (matches!(commit_info.operation, crate::spec::Operation::Overwrite)
                     || matches!(commit_info.operation, crate::spec::Operation::Append))
             {
                 Self::validate_requirements(None, &commit_info.requirements)?;
-                // Bootstrap a new table using the unified bootstrap helper
-                bootstrap_new_table(&table_url, &store_ctx, &commit_info).await?;
+                if let Some(catalog_table) =
+                    catalog_table.as_ref().filter(|_| catalog_managed_table)
+                {
+                    let bootstrap_result = bootstrap_new_table_with_style(
+                        &table_url,
+                        &store_ctx,
+                        &commit_info,
+                        NewTableMetadataStyle::Uuid,
+                    )
+                    .await?;
+                    let new_metadata_location =
+                        Self::table_metadata_location(&table_url, &bootstrap_result.metadata_file)?;
+                    Self::update_catalog_metadata_location(
+                        &context,
+                        catalog_table,
+                        &commit_info.table_properties,
+                        None,
+                        &new_metadata_location,
+                    )
+                    .await?;
+                } else {
+                    // Bootstrap a new table using the Hadoop/path-table convention.
+                    let bootstrap_result = bootstrap_new_table_with_style(
+                        &table_url,
+                        &store_ctx,
+                        &commit_info,
+                        NewTableMetadataStyle::Hadoop,
+                    )
+                    .await?;
+                    if let Some(catalog_table) = catalog_table.as_ref() {
+                        let new_metadata_location = Self::table_metadata_location(
+                            &table_url,
+                            &bootstrap_result.metadata_file,
+                        )?;
+                        Self::update_catalog_metadata_location(
+                            &context,
+                            catalog_table,
+                            &commit_info.table_properties,
+                            catalog_recorded_metadata_location.as_deref(),
+                            &new_metadata_location,
+                        )
+                        .await?;
+                    }
+                }
 
                 let array = Arc::new(UInt64Array::from(vec![commit_info.row_count]));
                 let batch = RecordBatch::try_new(schema, vec![array])?;
                 return Ok(batch);
             }
 
-            let initial_latest_meta =
-                latest_meta_res.map_err(|e| DataFusionError::External(Box::new(e)))?;
+            let initial_latest_meta = latest_meta_res?;
 
             let mut attempt = 0;
             loop {
                 attempt += 1;
+                let catalog_metadata_location = if attempt == 1 {
+                    catalog_metadata_location.clone()
+                } else if let Some(catalog_table) = catalog_commit_table {
+                    Self::load_catalog_metadata_location(&context, catalog_table).await?
+                } else {
+                    catalog_metadata_location.clone()
+                };
                 let latest_meta = if attempt == 1 {
                     initial_latest_meta.clone()
+                } else if let Some(location) = catalog_metadata_location.as_deref() {
+                    metadata_location_to_object_path_string(location)?
                 } else {
-                    crate::table::find_latest_metadata_file(&object_store, &table_url)
-                        .await
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    crate::table::find_latest_metadata_file(&object_store, &table_url).await?
                 };
 
                 let bytes = load_metadata_file_bytes(&object_store, &latest_meta).await?;
                 let mut table_meta = TableMetadata::from_json(&bytes)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 Self::validate_requirements(Some(&table_meta), &commit_info.requirements)?;
+                let original_format_version = table_meta.format_version;
+                let mut metadata_updates = Vec::new();
                 if let Some(new_schema) = commit_info.schema.clone() {
-                    Self::apply_schema_update(&mut table_meta, new_schema);
+                    let schema_id = new_schema.schema_id();
+                    let should_add_schema = !table_meta
+                        .schemas
+                        .iter()
+                        .any(|schema| schema.schema_id() == schema_id);
+                    let should_set_current_schema = table_meta.current_schema_id != schema_id;
+                    Self::apply_schema_update(&mut table_meta, new_schema.clone());
+                    if should_add_schema {
+                        metadata_updates.push(TableUpdate::AddSchema {
+                            schema: Box::new(new_schema),
+                        });
+                    }
+                    if should_set_current_schema {
+                        metadata_updates.push(TableUpdate::SetCurrentSchema { schema_id });
+                    }
                 }
                 let mut partition_spec_for_commit = table_meta
                     .default_partition_spec()
@@ -358,8 +693,22 @@ impl ExecutionPlan for IcebergCommitExec {
                     } else {
                         new_spec
                     };
+                    let spec_id = spec.spec_id();
+                    let should_add_spec = !table_meta
+                        .partition_specs
+                        .iter()
+                        .any(|partition_spec| partition_spec.spec_id() == spec_id);
+                    let should_set_default_spec = table_meta.default_spec_id != spec_id;
                     Self::apply_partition_spec_update(&mut table_meta, spec.clone());
                     partition_spec_for_commit = spec;
+                    if should_add_spec {
+                        metadata_updates.push(TableUpdate::AddSpec {
+                            spec: Self::unbound_partition_spec(&partition_spec_for_commit),
+                        });
+                    }
+                    if should_set_default_spec {
+                        metadata_updates.push(TableUpdate::SetDefaultSpec { spec_id });
+                    }
                 }
                 let maybe_snapshot = table_meta.current_snapshot().cloned();
                 let schema_iceberg = table_meta.current_schema().cloned().ok_or_else(|| {
@@ -368,6 +717,14 @@ impl ExecutionPlan for IcebergCommitExec {
                 table_meta.format_version = table_meta
                     .format_version
                     .max(format_version_for_schema(&schema_iceberg));
+                if table_meta.format_version > original_format_version {
+                    metadata_updates.insert(
+                        0,
+                        TableUpdate::UpgradeFormatVersion {
+                            format_version: table_meta.format_version,
+                        },
+                    );
+                }
                 let row_lineage_start_row_id = table_meta.row_lineage_start_row_id();
 
                 // If metadata exists but there is no current snapshot (e.g. from a CREATE TABLE),
@@ -377,15 +734,82 @@ impl ExecutionPlan for IcebergCommitExec {
                     && (matches!(commit_info.operation, crate::spec::Operation::Overwrite)
                         || matches!(commit_info.operation, crate::spec::Operation::Append))
                 {
-                    bootstrap_first_snapshot(
+                    let mut catalog_fallback_table = catalog_table
+                        .as_ref()
+                        .filter(|_| catalog_commit_table.is_none() && catalog_managed_table);
+                    if let Some(catalog_table) = catalog_commit_table {
+                        let action_commit = bootstrap_snapshot_action_commit(
+                            &table_url,
+                            &store_ctx,
+                            &commit_info,
+                            &table_meta,
+                        )
+                        .await?;
+                        let action_requirements = action_commit.requirements().to_vec();
+                        let requirements = Self::catalog_requirements(
+                            &table_meta,
+                            &commit_info.requirements,
+                            &action_requirements,
+                        );
+                        Self::validate_requirements(Some(&table_meta), &requirements)?;
+                        let mut updates = metadata_updates.clone();
+                        updates.extend(action_commit.into_updates());
+                        match Self::try_commit_to_catalog(
+                            &context,
+                            catalog_table,
+                            requirements,
+                            updates,
+                        )
+                        .await?
+                        {
+                            CatalogCommitOutcome::Committed => {
+                                let array =
+                                    Arc::new(UInt64Array::from(vec![commit_info.row_count]));
+                                let batch = RecordBatch::try_new(schema, vec![array])?;
+                                return Ok(batch);
+                            }
+                            CatalogCommitOutcome::NotSupported => {
+                                catalog_fallback_table = Some(catalog_table);
+                            }
+                            CatalogCommitOutcome::Conflict => {
+                                if attempt >= MAX_COMMIT_RETRIES {
+                                    return Err(commit_conflict_error());
+                                }
+                                continue;
+                            }
+                        }
+                    }
+
+                    let persist_strategy = if catalog_fallback_table.is_some() {
+                        PersistStrategy::NewUuidVersion
+                    } else {
+                        PersistStrategy::InPlace
+                    };
+                    let bootstrap_result = bootstrap_first_snapshot(
                         &table_url,
                         &store_ctx,
                         &commit_info,
                         table_meta,
                         &latest_meta,
-                        PersistStrategy::InPlace,
+                        persist_strategy,
                     )
                     .await?;
+                    if let (Some(catalog_table), Some(previous_metadata_location)) =
+                        (catalog_fallback_table, catalog_metadata_location.as_deref())
+                    {
+                        let new_metadata_location = Self::table_metadata_location(
+                            &table_url,
+                            &bootstrap_result.metadata_file,
+                        )?;
+                        Self::update_catalog_metadata_location(
+                            &context,
+                            catalog_table,
+                            &commit_info.table_properties,
+                            Some(previous_metadata_location),
+                            &new_metadata_location,
+                        )
+                        .await?;
+                    }
 
                     let array = Arc::new(UInt64Array::from(vec![commit_info.row_count]));
                     let batch = RecordBatch::try_new(schema, vec![array])?;
@@ -465,12 +889,44 @@ impl ExecutionPlan for IcebergCommitExec {
                 // Apply updates (only handle the ones we emit: AddSnapshot, SetSnapshotRef)
                 let action_requirements = action_commit.requirements().to_vec();
                 Self::validate_requirements(Some(&table_meta), &action_requirements)?;
-                let updates = action_commit.into_updates();
-                log::trace!("commit_exec: applying updates: {:?}", &updates);
+                let action_updates = action_commit.into_updates();
+                if let Some(catalog_table) = catalog_commit_table {
+                    let requirements = Self::catalog_requirements(
+                        &table_meta,
+                        &commit_info.requirements,
+                        &action_requirements,
+                    );
+                    Self::validate_requirements(Some(&table_meta), &requirements)?;
+                    let mut updates = metadata_updates.clone();
+                    updates.extend(action_updates.clone());
+                    match Self::try_commit_to_catalog(
+                        &context,
+                        catalog_table,
+                        requirements,
+                        updates,
+                    )
+                    .await?
+                    {
+                        CatalogCommitOutcome::Committed => {
+                            let array = Arc::new(UInt64Array::from(vec![commit_info.row_count]));
+                            let batch = RecordBatch::try_new(schema, vec![array])?;
+                            return Ok(batch);
+                        }
+                        CatalogCommitOutcome::NotSupported => {}
+                        CatalogCommitOutcome::Conflict => {
+                            if attempt >= MAX_COMMIT_RETRIES {
+                                return Err(commit_conflict_error());
+                            }
+                            continue;
+                        }
+                    }
+                }
+
+                log::trace!("commit_exec: applying updates: {:?}", &action_updates);
                 let mut newest_snapshot_seq: Option<i64> = None;
                 let mut newest_snapshot_added_rows: Option<i64> = None;
                 let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
-                for upd in updates {
+                for upd in action_updates {
                     match upd {
                         TableUpdate::AddSnapshot { snapshot } => {
                             newest_snapshot_seq = Some(snapshot.sequence_number());
@@ -506,7 +962,9 @@ impl ExecutionPlan for IcebergCommitExec {
                     .metadata_log
                     .push(crate::spec::metadata::table_metadata::MetadataLog {
                         timestamp_ms,
-                        metadata_file: latest_meta.clone(),
+                        metadata_file: catalog_metadata_location
+                            .clone()
+                            .unwrap_or_else(|| latest_meta.clone()),
                     });
 
                 let new_meta_json = table_meta
@@ -514,7 +972,17 @@ impl ExecutionPlan for IcebergCommitExec {
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let file_extension =
                     metadata_file_extension_from_properties(&table_meta.properties)?;
-                let new_meta_rel = format!("metadata/v{next_version}{file_extension}");
+                let use_uuid_metadata_file = catalog_commit_table.is_some();
+                let new_meta_rel = if use_uuid_metadata_file {
+                    format!(
+                        "metadata/{next_version:05}-{}{file_extension}",
+                        uuid::Uuid::new_v4()
+                    )
+                } else {
+                    format!("metadata/v{next_version}{file_extension}")
+                };
+                let new_metadata_location =
+                    Self::table_metadata_location(&table_url, &new_meta_rel)?;
                 let new_meta_bytes = encode_metadata_file(&new_meta_rel, &new_meta_json)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
@@ -574,13 +1042,44 @@ impl ExecutionPlan for IcebergCommitExec {
                 }
                 log::trace!("Metadata written successfully");
 
-                let hint_bytes = Bytes::from(next_version.to_string().into_bytes());
+                let hint = if use_uuid_metadata_file {
+                    new_meta_rel
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(new_meta_rel.as_str())
+                        .to_string()
+                } else {
+                    next_version.to_string()
+                };
+                let hint_bytes = Bytes::from(hint.into_bytes());
                 let hint_path = object_store::path::Path::from("metadata/version-hint.text");
                 store_ctx
                     .prefixed
                     .put(&hint_path, object_store::PutPayload::from(hint_bytes))
                     .await
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+                if let Some(catalog_table) = catalog_commit_table {
+                    Self::update_catalog_metadata_location(
+                        &context,
+                        catalog_table,
+                        &commit_info.table_properties,
+                        catalog_metadata_location.as_deref(),
+                        &new_metadata_location,
+                    )
+                    .await?;
+                } else if let Some(catalog_table) =
+                    catalog_table.as_ref().filter(|_| !catalog_managed_table)
+                {
+                    Self::update_catalog_metadata_location(
+                        &context,
+                        catalog_table,
+                        &commit_info.table_properties,
+                        catalog_recorded_metadata_location.as_deref(),
+                        &new_metadata_location,
+                    )
+                    .await?;
+                }
 
                 let array = Arc::new(UInt64Array::from(vec![commit_info.row_count]));
                 let batch = RecordBatch::try_new(schema, vec![array])?;

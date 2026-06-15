@@ -1,0 +1,34 @@
+# 1) mode(col), unique most frequent value -> expected: 10
+>>> spark.sql("SELECT mode(col) FROM VALUES (0), (10), (10) AS tab(col);").show()
++---------+
+|mode(col)|
++---------+
+|       10|
++---------+
+
+# 2) WITHIN GROUP ascending, frequency tie between 10 and 20 -> expected: lowest (10)
+# Spark names the column after its internal reverse flag, so the ascending query
+# is displayed as DESC.
+>>> spark.sql("SELECT mode() WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10), (10), (20), (20) AS tab(col);").show()
++---------------------------------------+
+|mode() WITHIN GROUP (ORDER BY col DESC)|
++---------------------------------------+
+|                                     10|
++---------------------------------------+
+
+# 3) WITHIN GROUP ascending, unique most frequent value -> expected: 10
+>>> spark.sql("SELECT mode() WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10), (10) AS tab(col);").show()
++---------------------------------------+
+|mode() WITHIN GROUP (ORDER BY col DESC)|
++---------------------------------------+
+|                                     10|
++---------------------------------------+
+
+# 4) WITHIN GROUP descending, frequency tie between 10 and 20 -> expected: highest (20)
+# The descending query is displayed without a sort direction.
+>>> spark.sql("SELECT mode() WITHIN GROUP (ORDER BY col DESC) FROM VALUES (0), (10), (10), (20), (20) AS tab(col);").show()
++----------------------------------+
+|mode() WITHIN GROUP (ORDER BY col)|
++----------------------------------+
+|                                20|
++----------------------------------+

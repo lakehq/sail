@@ -102,6 +102,11 @@ pub enum DeltaOperation {
         properties: HashMap<String, String>,
     },
     #[serde(rename_all = "camelCase")]
+    AddConstraint {
+        name: String,
+        expr: String,
+    },
+    #[serde(rename_all = "camelCase")]
     UnsetTableProperties {
         properties: Vec<String>,
     },
@@ -125,6 +130,7 @@ impl DeltaOperation {
             Self::FileSystemCheck { .. } => "FSCK",
             Self::Restore { .. } => "RESTORE",
             Self::SetTableProperties { .. } => "SET TBLPROPERTIES",
+            Self::AddConstraint { .. } => "ADD CONSTRAINT",
             Self::UnsetTableProperties { .. } => "UNSET TBLPROPERTIES",
             Self::AlterColumn { .. } => "CHANGE COLUMN",
         }
@@ -204,6 +210,10 @@ impl DeltaOperation {
             }
             Self::SetTableProperties { properties } => {
                 insert_json(&mut parameters, "properties", properties)?;
+            }
+            Self::AddConstraint { name, expr } => {
+                insert_opt(&mut parameters, "name", Some(name));
+                insert_opt(&mut parameters, "expr", Some(expr));
             }
             Self::UnsetTableProperties { properties } => {
                 insert_json(&mut parameters, "properties", properties)?;

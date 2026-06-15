@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -82,10 +81,6 @@ impl DisplayAs for ShowStringExec {
 impl ExecutionPlan for ShowStringExec {
     fn name(&self) -> &'static str {
         Self::static_name()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

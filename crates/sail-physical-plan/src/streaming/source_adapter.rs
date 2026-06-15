@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -53,10 +52,6 @@ impl DisplayAs for StreamSourceAdapterExec {
 impl ExecutionPlan for StreamSourceAdapterExec {
     fn name(&self) -> &str {
         Self::static_name()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

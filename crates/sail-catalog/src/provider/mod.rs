@@ -9,7 +9,7 @@ pub use options::*;
 pub use runtime::*;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 
-use crate::error::CatalogResult;
+use crate::error::{CatalogError, CatalogResult};
 
 /// A trait that defines the interface for a catalog.
 /// A catalog contains *databases*, where each database has a multi-level name
@@ -76,6 +76,34 @@ pub trait CatalogProvider: Send + Sync {
         table: &str,
         options: AlterTableOptions,
     ) -> CatalogResult<()>;
+
+    /// Commits table-format metadata through the catalog control plane.
+    async fn commit_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: CommitTableOptions,
+    ) -> CatalogResult<TableStatus> {
+        let _ = (database, table);
+        Err(CatalogError::NotSupported(format!(
+            "catalog commit for {} tables",
+            options.format
+        )))
+    }
+
+    /// Gets table-format commits tracked by the catalog control plane.
+    async fn get_table_commits(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: GetTableCommitsOptions,
+    ) -> CatalogResult<GetTableCommitsResponse> {
+        let _ = (database, table);
+        Err(crate::error::CatalogError::NotSupported(format!(
+            "catalog commit discovery for {} tables",
+            options.format
+        )))
+    }
 
     /// Creates a view in the catalog.
     async fn create_view(

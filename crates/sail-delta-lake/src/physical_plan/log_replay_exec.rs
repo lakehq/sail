@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -562,10 +561,6 @@ impl ExecutionPlan for DeltaLogReplayExec {
         "DeltaLogReplayExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -894,10 +889,6 @@ mod tests {
     impl ExecutionPlan for OneBatchExec {
         fn name(&self) -> &'static str {
             "OneBatchExec"
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
         }
 
         fn properties(&self) -> &Arc<PlanProperties> {

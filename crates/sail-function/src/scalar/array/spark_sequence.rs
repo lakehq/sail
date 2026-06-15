@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::iter::from_fn;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -39,10 +38,6 @@ impl SparkSequence {
 }
 
 impl ScalarUDFImpl for SparkSequence {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_sequence"
     }

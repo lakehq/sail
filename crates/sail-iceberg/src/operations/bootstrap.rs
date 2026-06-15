@@ -24,7 +24,7 @@ use url::Url;
 
 use crate::io::StoreContext;
 use crate::operations::helpers::format_version_for_schema;
-use crate::operations::{SnapshotProduceOperation, SnapshotProducer, Transaction};
+use crate::operations::{ActionCommit, SnapshotProduceOperation, SnapshotProducer, Transaction};
 use crate::physical_plan::commit::IcebergCommitInfo;
 use crate::spec::metadata::table_metadata::SnapshotLog;
 use crate::spec::partition::PartitionSpec;
@@ -43,6 +43,23 @@ pub enum PersistStrategy {
     InPlace,
     /// Generate and write a new version of the metadata file (standard Iceberg approach)
     NewVersion,
+    /// Generate and write a new UUID-style metadata file for catalog-backed tables.
+    NewUuidVersion,
+}
+
+/// Metadata file naming style for bootstrapping a table with no metadata files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewTableMetadataStyle {
+    /// Hadoop/path table convention: `metadata/v1.metadata.json`.
+    Hadoop,
+    /// Catalog table convention: `metadata/00000-<uuid>.metadata.json`.
+    Uuid,
+}
+
+#[derive(Debug)]
+pub struct BootstrapResult {
+    pub table_metadata: TableMetadata,
+    pub metadata_file: String,
 }
 
 /// Bootstrap operation for SnapshotProducer
@@ -52,6 +69,63 @@ impl SnapshotProduceOperation for BootstrapOperation {
     fn operation(&self) -> &'static str {
         "append"
     }
+}
+
+pub(crate) async fn bootstrap_snapshot_action_commit(
+    table_url: &Url,
+    store_ctx: &StoreContext,
+    commit_info: &IcebergCommitInfo,
+    table_meta: &TableMetadata,
+) -> Result<ActionCommit> {
+    let mut table_meta = table_meta.clone();
+    let schema_iceberg = table_meta
+        .current_schema()
+        .cloned()
+        .ok_or_else(|| DataFusionError::Plan("No current schema in table metadata".to_string()))?;
+
+    let partition_spec = table_meta
+        .default_partition_spec()
+        .cloned()
+        .unwrap_or_else(PartitionSpec::unpartitioned_spec);
+    let format_version = table_meta
+        .format_version
+        .max(format_version_for_schema(&schema_iceberg));
+    let row_lineage_start_row_id = table_meta.row_lineage_start_row_id();
+
+    let empty_snapshot = SnapshotBuilder::new()
+        .with_snapshot_id(0)
+        .with_sequence_number(0)
+        .with_manifest_list(String::new())
+        .with_summary(crate::spec::snapshots::Summary::new(
+            crate::spec::Operation::Append,
+        ))
+        .with_schema_id(schema_iceberg.schema_id())
+        .build()
+        .map_err(DataFusionError::Execution)?;
+
+    let tx = Transaction::new(table_url.to_string(), empty_snapshot);
+    let manifest_meta = crate::spec::manifest::ManifestMetadata::new(
+        Arc::new(schema_iceberg.clone()),
+        schema_iceberg.schema_id(),
+        partition_spec,
+        format_version,
+        crate::spec::ManifestContentType::Data,
+    );
+
+    let producer = SnapshotProducer::new(
+        &tx,
+        commit_info.data_files.clone(),
+        Some(store_ctx.clone()),
+        Some(manifest_meta),
+    )
+    .with_bootstrap(true)
+    .with_row_lineage_start_row_id(row_lineage_start_row_id)
+    .with_write_path_mode(WritePathMode::Absolute);
+
+    producer
+        .commit(BootstrapOperation)
+        .await
+        .map_err(DataFusionError::Execution)
 }
 
 /// Bootstrap a new table when no metadata file exists
@@ -67,6 +141,22 @@ pub async fn bootstrap_new_table(
     store_ctx: &StoreContext,
     commit_info: &IcebergCommitInfo,
 ) -> Result<TableMetadata> {
+    Ok(bootstrap_new_table_with_style(
+        table_url,
+        store_ctx,
+        commit_info,
+        NewTableMetadataStyle::Hadoop,
+    )
+    .await?
+    .table_metadata)
+}
+
+pub async fn bootstrap_new_table_with_style(
+    table_url: &Url,
+    store_ctx: &StoreContext,
+    commit_info: &IcebergCommitInfo,
+    metadata_style: NewTableMetadataStyle,
+) -> Result<BootstrapResult> {
     let iceberg_schema: IcebergSchema = commit_info
         .schema
         .clone()
@@ -175,12 +265,18 @@ pub async fn bootstrap_new_table(
     let mut table_meta = table_meta;
     table_meta.ensure_required_format_fields();
 
-    // Write metadata v1 using the Hadoop table convention for path-based compatibility.
+    // Write metadata using the selected table/catalog convention.
     let new_meta_json = table_meta
         .to_json()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let file_extension = metadata_file_extension_from_properties(&table_meta.properties)?;
-    let new_meta_rel = format!("metadata/v1{file_extension}");
+    let (new_meta_rel, hint) = match metadata_style {
+        NewTableMetadataStyle::Hadoop => (format!("metadata/v1{file_extension}"), "1".to_string()),
+        NewTableMetadataStyle::Uuid => {
+            let file = format!("00000-{}{}", uuid::Uuid::new_v4(), file_extension);
+            (format!("metadata/{file}"), file)
+        }
+    };
     let new_meta_bytes = encode_metadata_file(&new_meta_rel, &new_meta_json)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let meta_path = object_store::path::Path::from(new_meta_rel.as_str());
@@ -199,12 +295,15 @@ pub async fn bootstrap_new_table(
         .prefixed
         .put(
             &hint_path,
-            object_store::PutPayload::from(Bytes::from("1".as_bytes().to_vec())),
+            object_store::PutPayload::from(Bytes::from(hint.into_bytes())),
         )
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-    Ok(table_meta)
+    Ok(BootstrapResult {
+        table_metadata: table_meta,
+        metadata_file: new_meta_rel,
+    })
 }
 
 /// Bootstrap the first snapshot for an existing table that has no current snapshot
@@ -213,6 +312,7 @@ pub async fn bootstrap_new_table(
 /// The persist_strategy determines how the metadata is written:
 /// - InPlace: Overwrites the existing metadata file (for external catalog sync)
 /// - NewVersion: Creates a new metadata version (standard Iceberg)
+/// - NewUuidVersion: Creates a new UUID-style metadata version for catalog-backed tables
 pub async fn bootstrap_first_snapshot(
     table_url: &Url,
     store_ctx: &StoreContext,
@@ -220,58 +320,17 @@ pub async fn bootstrap_first_snapshot(
     mut table_meta: TableMetadata,
     latest_meta_path: &str,
     persist_strategy: PersistStrategy,
-) -> Result<TableMetadata> {
+) -> Result<BootstrapResult> {
     let schema_iceberg = table_meta
         .current_schema()
         .cloned()
         .ok_or_else(|| DataFusionError::Plan("No current schema in table metadata".to_string()))?;
-
-    let partition_spec = table_meta
-        .default_partition_spec()
-        .cloned()
-        .unwrap_or_else(PartitionSpec::unpartitioned_spec);
     let format_version = table_meta
         .format_version
         .max(format_version_for_schema(&schema_iceberg));
     table_meta.format_version = format_version;
-    let row_lineage_start_row_id = table_meta.row_lineage_start_row_id();
-
-    // Create a minimal transaction context (no parent snapshot)
-    let empty_snapshot = SnapshotBuilder::new()
-        .with_snapshot_id(0)
-        .with_sequence_number(0)
-        .with_manifest_list(String::new())
-        .with_summary(crate::spec::snapshots::Summary::new(
-            crate::spec::Operation::Append,
-        ))
-        .with_schema_id(schema_iceberg.schema_id())
-        .build()
-        .map_err(DataFusionError::Execution)?;
-
-    let tx = Transaction::new(table_url.to_string(), empty_snapshot);
-    let manifest_meta = crate::spec::manifest::ManifestMetadata::new(
-        Arc::new(schema_iceberg.clone()),
-        schema_iceberg.schema_id(),
-        partition_spec.clone(),
-        format_version,
-        crate::spec::ManifestContentType::Data,
-    );
-
-    // Use SnapshotProducer in bootstrap mode
-    let producer = SnapshotProducer::new(
-        &tx,
-        commit_info.data_files.clone(),
-        Some(store_ctx.clone()),
-        Some(manifest_meta),
-    )
-    .with_bootstrap(true)
-    .with_row_lineage_start_row_id(row_lineage_start_row_id)
-    .with_write_path_mode(WritePathMode::Absolute);
-
-    let action_commit = producer
-        .commit(BootstrapOperation)
-        .await
-        .map_err(DataFusionError::Execution)?;
+    let action_commit =
+        bootstrap_snapshot_action_commit(table_url, store_ctx, commit_info, &table_meta).await?;
 
     // Extract the new snapshot from the updates
     let updates = action_commit.into_updates();
@@ -320,7 +379,7 @@ pub async fn bootstrap_first_snapshot(
         .to_json()
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
-    match persist_strategy {
+    let metadata_file = match persist_strategy {
         PersistStrategy::InPlace => {
             // Overwrite the existing metadata file in place
             let rel_name = if latest_meta_path.starts_with(&table_url.to_string()) {
@@ -364,14 +423,25 @@ pub async fn bootstrap_first_snapshot(
                 )
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            rel_name
         }
-        PersistStrategy::NewVersion => {
+        PersistStrategy::NewVersion | PersistStrategy::NewUuidVersion => {
             // Create a new metadata version
             let version = metadata_file_version_from_path(latest_meta_path)
                 .map(|version| version + 1)
                 .unwrap_or_else(|| table_meta.metadata_log.len() as i32 + 1);
             let file_extension = metadata_file_extension_from_properties(&table_meta.properties)?;
-            let new_meta_rel = format!("metadata/v{version}{file_extension}");
+            let (new_meta_rel, hint) = match persist_strategy {
+                PersistStrategy::NewVersion => (
+                    format!("metadata/v{version}{file_extension}"),
+                    version.to_string(),
+                ),
+                PersistStrategy::NewUuidVersion => {
+                    let file = format!("{version:05}-{}{}", uuid::Uuid::new_v4(), file_extension);
+                    (format!("metadata/{file}"), file)
+                }
+                PersistStrategy::InPlace => unreachable!(),
+            };
             let new_meta_bytes = encode_metadata_file(&new_meta_rel, &new_meta_json)
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
             let meta_path = object_store::path::Path::from(new_meta_rel.as_str());
@@ -390,12 +460,16 @@ pub async fn bootstrap_first_snapshot(
                 .prefixed
                 .put(
                     &hint_path,
-                    object_store::PutPayload::from(Bytes::from(format!("{}", version))),
+                    object_store::PutPayload::from(Bytes::from(hint.into_bytes())),
                 )
                 .await
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            new_meta_rel
         }
-    }
+    };
 
-    Ok(table_meta)
+    Ok(BootstrapResult {
+        table_metadata: table_meta,
+        metadata_file,
+    })
 }

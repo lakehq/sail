@@ -408,7 +408,7 @@ impl JoinReorder {
             HashMap::new();
 
         let transformed = expr.transform(|node| {
-            if let Some(col) = node.as_any().downcast_ref::<Column>() {
+            if let Some(col) = node.downcast_ref::<Column>() {
                 let original_entry = input_map.get(col.index()).ok_or_else(|| {
                     DataFusionError::Internal(format!(
                         "Expression column index {} out of bounds for its input_map (len {})",
@@ -1034,7 +1034,6 @@ mod tests {
         )?;
         #[expect(clippy::expect_used)]
         let proj = plan
-            .as_any()
             .downcast_ref::<ProjectionExec>()
             .expect("expected ProjectionExec");
         assert_eq!(proj.schema().fields().len(), 1);

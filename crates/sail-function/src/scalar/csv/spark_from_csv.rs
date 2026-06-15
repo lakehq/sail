@@ -1,4 +1,3 @@
-use core::any::type_name;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -111,10 +110,6 @@ impl SparkFromCSV {
 }
 
 impl ScalarUDFImpl for SparkFromCSV {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         Self::FROM_CSV_NAME
     }
