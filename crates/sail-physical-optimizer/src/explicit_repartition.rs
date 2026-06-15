@@ -34,7 +34,7 @@ impl PhysicalOptimizerRule for RewriteExplicitRepartition {
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let result = plan.transform_up(|plan| {
-            if let Some(node) = plan.as_any().downcast_ref::<ExplicitRepartitionExec>() {
+            if let Some(node) = plan.downcast_ref::<ExplicitRepartitionExec>() {
                 let partitioning = node.properties().output_partitioning().clone();
                 let input = node.input().clone();
                 let input_partition_count = input.output_partitioning().partition_count();
@@ -119,10 +119,7 @@ mod tests {
 
         let optimized = optimize(plan);
 
-        assert!(optimized
-            .as_any()
-            .downcast_ref::<CoalescePartitionsExec>()
-            .is_some());
+        assert!(optimized.is::<CoalescePartitionsExec>());
         assert_eq!(optimized.output_partitioning().partition_count(), 1);
     }
 
@@ -141,7 +138,7 @@ mod tests {
 
         let optimized = optimize(plan);
 
-        let coalesce = optimized.as_any().downcast_ref::<CoalesceExec>().unwrap();
+        let coalesce = optimized.downcast_ref::<CoalesceExec>().unwrap();
         assert_eq!(coalesce.output_partitions(), 2);
         assert_eq!(optimized.output_partitioning().partition_count(), 2);
     }
@@ -156,8 +153,8 @@ mod tests {
 
         let optimized = optimize(plan);
 
-        assert!(optimized.as_any().downcast_ref::<UnionExec>().is_some());
-        assert!(optimized.as_any().downcast_ref::<CoalesceExec>().is_none());
+        assert!(optimized.is::<UnionExec>());
+        assert!(!optimized.is::<CoalesceExec>());
         assert_eq!(optimized.output_partitioning().partition_count(), 2);
     }
 
@@ -172,7 +169,6 @@ mod tests {
         let optimized = optimize(plan);
 
         assert!(optimized
-            .as_any()
             .downcast_ref::<ExplicitRepartitionExec>()
             .is_some());
         assert_eq!(optimized.output_partitioning().partition_count(), 4);

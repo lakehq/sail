@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::collections::HashSet;
 use std::fmt;
 use std::sync::Arc;
@@ -133,10 +132,6 @@ impl DisplayAs for IcebergDeleteApplyExec {
 impl ExecutionPlan for IcebergDeleteApplyExec {
     fn name(&self) -> &str {
         "IcebergDeleteApplyExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn schema(&self) -> SchemaRef {

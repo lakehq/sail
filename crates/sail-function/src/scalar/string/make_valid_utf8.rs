@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, LargeStringArray, StringArray};
@@ -31,10 +30,6 @@ impl MakeValidUtf8 {
 }
 
 impl ScalarUDFImpl for MakeValidUtf8 {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "make_valid_utf8"
     }

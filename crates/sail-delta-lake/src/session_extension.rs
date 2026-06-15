@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::TaskContext;
 use datafusion_common::{DataFusionError, Result};
 use moka::future::Cache as FutureCache;
@@ -8,7 +7,10 @@ use url::Url;
 
 use crate::kernel::DeltaSnapshotConfig;
 use crate::storage::StorageConfig;
-use crate::table::{open_table_with_object_store_and_table_config_at_version, DeltaSnapshot};
+use crate::table::{
+    create_logstore_with_object_store, load_catalog_managed_commits_for_snapshot, DeltaSnapshot,
+    DeltaTable,
+};
 
 const DEFAULT_MAX_ENTRIES: u64 = 1024;
 
@@ -16,6 +18,7 @@ const DEFAULT_MAX_ENTRIES: u64 = 1024;
 pub(crate) struct TableCacheKey {
     pub(crate) table_url: String,
     pub(crate) version: i64,
+    pub(crate) catalog_table: Vec<String>,
 }
 
 pub(crate) struct CachedTable {
@@ -38,16 +41,18 @@ impl DeltaTableCache {
         context: &TaskContext,
         table_url: &Url,
         version: i64,
+        catalog_table: Option<&[String]>,
     ) -> Result<Arc<CachedTable>> {
         let key = TableCacheKey {
             table_url: table_url.to_string(),
             version,
+            catalog_table: catalog_table.unwrap_or_default().to_vec(),
         };
-        let runtime_env = context.runtime_env();
         let table_url = table_url.clone();
+        let catalog_table = catalog_table.map(<[String]>::to_vec);
         self.cache
             .try_get_with(key, async move {
-                load_table_uncached(runtime_env, &table_url, version).await
+                load_table_uncached(context, &table_url, version, catalog_table.as_deref()).await
             })
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))
@@ -67,27 +72,38 @@ impl sail_common_datafusion::extension::SessionExtension for DeltaTableCache {
 }
 
 pub(crate) async fn load_table_uncached(
-    runtime_env: Arc<RuntimeEnv>,
+    context: &TaskContext,
     table_url: &Url,
     version: i64,
+    catalog_table: Option<&[String]>,
 ) -> Result<Arc<CachedTable>> {
-    let object_store = runtime_env
+    let object_store = context
+        .runtime_env()
         .object_store_registry
         .get_store(table_url)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let table_config = DeltaSnapshotConfig {
+    let log_store =
+        create_logstore_with_object_store(object_store, table_url.clone(), StorageConfig)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let mut table_config = DeltaSnapshotConfig {
         require_files: false,
         ..Default::default()
     };
-    let table = open_table_with_object_store_and_table_config_at_version(
-        table_url.clone(),
-        object_store,
-        StorageConfig,
-        table_config,
-        version,
-    )
-    .await
-    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    if let Some(catalog_table) = catalog_table {
+        table_config.catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
+            context,
+            catalog_table,
+            table_url,
+            log_store.clone(),
+            Some(version),
+        )
+        .await?;
+    }
+    let mut table = DeltaTable::new(log_store.clone(), table_config);
+    table
+        .load_version(version)
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let snapshot_state = table
         .snapshot()
         .map_err(|e| DataFusionError::External(Box::new(e)))?

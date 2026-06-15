@@ -89,7 +89,7 @@ con.sql("SELECT country, COUNT(*) AS n FROM users GROUP BY country").execute()
 For production use, run Sail on your own infrastructure and have your Ibis client connect to it over the network.
 See the [Deployment](/guide/deployment/) guide for how to run Sail on Kubernetes or in a container.
 
-Once Sail is running, point Ibis at its address. The client code is the same as local use — only the `sc://` URL changes.
+Once Sail is running, point Ibis at its address. The client code is the same as local use. Only the `sc://` URL changes.
 
 ```python
 import ibis
@@ -99,7 +99,7 @@ spark = SparkSession.builder.remote("sc://sail.internal:50051").getOrCreate()
 con = ibis.pyspark.connect(session=spark)
 ```
 
-Your Ibis client can run anywhere that has network access to the Sail server — an application server, an Airflow worker, a notebook environment, or a data science workstation. Ibis itself is a thin client over Spark Connect, so it does not need to be co-located with Sail.
+Your Ibis client can run anywhere that has network access to the Sail server, such as an application server, an Airflow worker, a notebook environment, or a data science workstation. Ibis itself is a thin client over Spark Connect, so it does not need to be co-located with Sail.
 
 ::: info
 Sail serves Spark Connect over gRPC on the configured address. Network-level access control (private networking, ingress rules, VPN, port-forwarding for Kubernetes) is handled at your deployment layer, not inside Ibis or the Spark Connect client.

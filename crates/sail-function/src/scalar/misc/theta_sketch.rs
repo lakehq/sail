@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{
@@ -42,10 +41,6 @@ impl ThetaSketchEstimateFunction {
 }
 
 impl ScalarUDFImpl for ThetaSketchEstimateFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "theta_sketch_estimate"
     }
@@ -104,10 +99,6 @@ impl ThetaUnionFunction {
 }
 
 impl ScalarUDFImpl for ThetaUnionFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "theta_union"
     }
@@ -163,10 +154,6 @@ impl ThetaIntersectionFunction {
 }
 
 impl ScalarUDFImpl for ThetaIntersectionFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "theta_intersection"
     }
@@ -220,10 +207,6 @@ impl ThetaDifferenceFunction {
 }
 
 impl ScalarUDFImpl for ThetaDifferenceFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "theta_difference"
     }

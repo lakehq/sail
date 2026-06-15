@@ -40,7 +40,7 @@ impl PhysicalOptimizerRule for EnforceBarrierPartitioning {
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let result = plan.transform_up(|node: Arc<dyn ExecutionPlan>| {
-            let Some(barrier) = node.as_any().downcast_ref::<BarrierExec>() else {
+            let Some(barrier) = node.downcast_ref::<BarrierExec>() else {
                 return Ok(Transformed::no(node));
             };
 

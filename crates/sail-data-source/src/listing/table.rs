@@ -1,7 +1,6 @@
 // The listing table source is adapted from the DataFusion `ListingTable` implementation.
 // [CREDIT]: https://github.com/apache/datafusion/blob/53.1.0/datafusion/catalog-listing/src/table.rs
 
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
@@ -46,10 +45,6 @@ impl ListingTableSource {
 }
 
 impl TableSource for ListingTableSource {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         Arc::clone(self.config.schema.table_schema())
     }

@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use datafusion::arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::plan_datafusion_err;
+use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_expr::{
     create_physical_sort_exprs, LexOrdering, LexRequirement, PhysicalSortRequirement,
 };
@@ -31,6 +32,12 @@ pub const MERGE_ROW_INDEX_COLUMN: &str = "__sail_file_row_index";
 /// remove it before persisting user data.
 /// Value is one of the [`RowLevelOperationType`] integer constants.
 pub const OPERATION_COLUMN: &str = "__sail_operation_type";
+
+/// Reserved write option name for the fully qualified catalog table name.
+///
+/// The planner carries this as typed private state on [`SinkInfo`]. User-visible option layers must
+/// reject this key so it cannot become part of the public write API.
+pub const CATALOG_TABLE_OPTION: &str = "__sail.catalog.table";
 
 /// Internal column carrying pre-aggregated MERGE source row counts on
 /// [`RowLevelOperationType::SourceMetric`] rows.
@@ -176,6 +183,11 @@ pub struct BucketBy {
 #[derive(Debug, Clone)]
 pub struct SourceInfo {
     pub paths: Vec<String>,
+    /// Fully qualified catalog table name for catalog-coordinated reads.
+    ///
+    /// This is injected by the planner and must not be accepted from user-facing
+    /// data source options.
+    pub catalog_table: Option<Vec<String>>,
     /// The (optional) schema of the data source including partitioning columns.
     pub schema: Option<Schema>,
     pub constraints: Constraints,
@@ -197,20 +209,31 @@ pub struct TableFormatMetadata {
 /// Information required to create a data writer.
 #[derive(Debug, Clone)]
 pub struct SinkInfo {
-    pub input: Arc<dyn ExecutionPlan>,
-    pub mode: PhysicalSinkMode,
+    pub input: LogicalPlan,
+    pub mode: SinkMode,
     pub partition_by: Vec<CatalogPartitionField>,
     pub bucket_by: Option<BucketBy>,
-    pub sort_order: Option<LexRequirement>,
+    pub sort_order: Vec<Sort>,
     /// The sets of options for the data sink.
     /// A later set of options can override earlier ones.
     /// The path for the sink is stored under the `"path"` key in options.
     pub options: Vec<OptionLayer>,
-    /// The logical schema of the writer's input, if available. This schema can
-    /// preserve arrow field metadata that the physical planner may strip (e.g.
-    /// metadata attached via `Expr::Alias::with_metadata`). Table formats can use
-    /// this to recover column-level metadata such as `delta.generationExpression`.
-    pub logical_schema: Option<datafusion_common::DFSchemaRef>,
+    /// Fully qualified catalog table name for catalog-coordinated writes.
+    ///
+    /// This is injected by the planner and must not be accepted from user-facing
+    /// data source options.
+    pub catalog_table: Option<Vec<String>>,
+}
+
+/// Information required to create a logical DELETE plan for a table format.
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
+pub struct DeleteInfo {
+    pub table_name: Vec<String>,
+    pub path: String,
+    pub condition: Option<ExprWithSource>,
+    /// The layers of options for the delete operation.
+    /// A later layer can override earlier ones.
+    pub options: Vec<OptionLayer>,
 }
 
 /// Returns the path from options, or `None` if not set.
@@ -359,12 +382,14 @@ pub trait TableFormat: Send + Sync {
         })
     }
 
-    /// Creates a `ExecutionPlan` for write.
-    async fn create_writer(
-        &self,
-        ctx: &dyn Session,
-        info: SinkInfo,
-    ) -> Result<Arc<dyn ExecutionPlan>>;
+    /// Creates a logical plan for write.
+    async fn create_writer(&self, ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan>;
+
+    /// Creates a logical plan for DELETE.
+    async fn create_deleter(&self, ctx: &dyn Session, info: DeleteInfo) -> Result<LogicalPlan> {
+        let _ = (ctx, info);
+        not_impl_err!("DELETE is not yet implemented for {} format", self.name())
+    }
 
     /// Creates an `ExecutionPlan` for row-level operations (DELETE, UPDATE, MERGE).
     async fn create_row_level_writer(
