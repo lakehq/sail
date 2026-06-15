@@ -1,16 +1,17 @@
 use std::sync::Arc;
 
 use datafusion_common::{DFSchemaRef, ToDFSchema};
-use datafusion_expr::{Extension, LogicalPlan};
+use datafusion_expr::LogicalPlan;
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{TableKind, TableStatus};
-use sail_common_datafusion::datasource::{OptionLayer, SourceInfo, TableFormatRegistry};
+use sail_common_datafusion::datasource::{
+    DeleteInfo, OptionLayer, SourceInfo, TableFormatRegistry,
+};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::expression::expression_before_rename;
 use sail_common_datafusion::rename::schema::rename_schema;
-use sail_logical_plan::file_delete::{FileDeleteNode, FileDeleteOptions};
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
@@ -63,19 +64,21 @@ impl PlanResolver<'_> {
             None
         };
 
-        let file_delete_options = FileDeleteOptions {
+        let delete_info = DeleteInfo {
             table_name,
             path: info.location,
-            format: info.format,
             condition,
             options: vec![OptionLayer::TablePropertyList {
                 items: info.properties,
             }],
         };
 
-        Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(FileDeleteNode::new(file_delete_options)),
-        }))
+        let registry = self.ctx.extension::<TableFormatRegistry>()?;
+        registry
+            .get(&info.format)?
+            .create_deleter(&self.ctx.state(), delete_info)
+            .await
+            .map_err(PlanError::from)
     }
 
     async fn get_table_info_for_delete(

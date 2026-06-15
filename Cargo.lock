@@ -7735,6 +7735,7 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-data-source",
+ "sail-logical-plan",
  "sail-physical-plan",
  "serde",
  "serde_arrow",
@@ -8047,24 +8048,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sail-plan-lakehouse"
-version = "0.6.4"
-dependencies = [
- "async-trait",
- "datafusion",
- "datafusion-common",
- "datafusion-expr",
- "log",
- "sail-common-datafusion",
- "sail-data-source",
- "sail-delta-lake",
- "sail-iceberg",
- "sail-logical-plan",
- "sail-physical-plan",
- "url",
-]
-
-[[package]]
 name = "sail-python"
 version = "0.6.4"
 dependencies = [
@@ -8151,7 +8134,6 @@ dependencies = [
  "sail-physical-optimizer",
  "sail-physical-plan",
  "sail-plan",
- "sail-plan-lakehouse",
  "sail-server",
  "sail-sql-analyzer",
  "sail-telemetry",

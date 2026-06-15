@@ -26,15 +26,20 @@ use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::misc::raise_error::RaiseError;
 
-use crate::check_constraints::{apply_delta_check_constraint_filter, DeltaCheckConstraintExpr};
+use crate::check_constraints::apply_delta_check_constraint_filter;
 use crate::monotonic_id::MonotonicIdNode;
 
 pub const SOURCE_PRESENT_COLUMN: &str = "__sail_merge_source_row_present";
 pub const TARGET_PRESENT_COLUMN: &str = "__sail_merge_target_row_present";
 pub const TARGET_ROW_ID_COLUMN: &str = "__sail_merge_target_row_id";
 
+pub use sail_common_datafusion::datasource::{
+    DeltaCheckConstraintExpr, MergeAssignment, MergeInfo, MergeIntoOptions, MergeMatchedAction,
+    MergeMatchedClause, MergeNotMatchedBySourceAction, MergeNotMatchedBySourceClause,
+    MergeNotMatchedByTargetAction, MergeNotMatchedByTargetClause, MergeTargetInfo,
+    MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN,
+};
 use sail_common_datafusion::datasource::{OptionLayer, RowLevelOperationType};
-pub use sail_common_datafusion::datasource::{MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
 #[educe(PartialOrd)]
@@ -119,182 +124,6 @@ impl UserDefinedLogicalNodeCore for MergeCardinalityCheckNode {
             self.target_present_col.clone(),
             self.source_present_col.clone(),
         ))
-    }
-
-    fn necessary_children_exprs(&self, _output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
-        None
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct MergeIntoOptions {
-    pub target_alias: Option<String>,
-    pub source_alias: Option<String>,
-    pub target: MergeTargetInfo,
-    pub with_schema_evolution: bool,
-    /// Resolved logical schemas from analysis time (before any rewrites)
-    pub resolved_target_schema: DFSchemaRef,
-    pub resolved_source_schema: DFSchemaRef,
-    /// User-facing field names for target and source, resolved from opaque IDs
-    /// at plan resolution time. Used by `expand_merge` to map opaque IDs back
-    /// to real column names without the fragile `recover_field_names` heuristic.
-    pub resolved_target_field_names: Vec<String>,
-    pub resolved_source_field_names: Vec<String>,
-    pub on_condition: ExprWithSource,
-    pub matched_clauses: Vec<MergeMatchedClause>,
-    pub not_matched_by_source_clauses: Vec<MergeNotMatchedBySourceClause>,
-    pub not_matched_by_target_clauses: Vec<MergeNotMatchedByTargetClause>,
-    /// Pre-analyzed join equality keys extracted from the ON condition (target, source)
-    pub join_key_pairs: Vec<(Expr, Expr)>,
-    /// Residual predicates from the ON condition that are not equality join keys
-    pub residual_predicates: Vec<Expr>,
-    /// Predicates from ON that only touch target columns (useful for early pruning)
-    pub target_only_predicates: Vec<Expr>,
-    /// Generation expressions for generated columns in the target table.
-    /// Each entry is `(column_name, resolved_expr)` where `resolved_expr` initially
-    /// references target schema field IDs and is rewritten to actual column names
-    /// by `expand_merge` before being applied as a post-processing projection.
-    pub generated_column_exprs: Vec<(String, Expr)>,
-    /// Delta CHECK constraint expressions for the target table.
-    pub check_constraint_exprs: Vec<DeltaCheckConstraintExpr>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
-pub struct MergeTargetInfo {
-    pub table_name: Vec<String>,
-    pub format: String,
-    pub location: String,
-    pub partition_by: Vec<String>,
-    pub options: Vec<OptionLayer>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct MergeMatchedClause {
-    pub condition: Option<ExprWithSource>,
-    pub action: MergeMatchedAction,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub enum MergeMatchedAction {
-    Delete,
-    UpdateAll,
-    UpdateSet(Vec<MergeAssignment>),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct MergeNotMatchedBySourceClause {
-    pub condition: Option<ExprWithSource>,
-    pub action: MergeNotMatchedBySourceAction,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub enum MergeNotMatchedBySourceAction {
-    Delete,
-    UpdateSet(Vec<MergeAssignment>),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct MergeNotMatchedByTargetClause {
-    pub condition: Option<ExprWithSource>,
-    pub action: MergeNotMatchedByTargetAction,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub enum MergeNotMatchedByTargetAction {
-    InsertAll,
-    InsertColumns {
-        columns: Vec<String>,
-        values: Vec<Expr>,
-    },
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct MergeAssignment {
-    pub column: String,
-    pub value: Expr,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
-#[educe(PartialOrd)]
-pub struct MergeIntoNode {
-    target: Arc<LogicalPlan>,
-    source: Arc<LogicalPlan>,
-    #[educe(PartialOrd(ignore))]
-    options: MergeIntoOptions,
-    #[educe(PartialOrd(ignore))]
-    schema: DFSchemaRef,
-    #[educe(PartialOrd(ignore))]
-    input_schema: DFSchemaRef,
-}
-
-impl MergeIntoNode {
-    pub fn new(
-        target: Arc<LogicalPlan>,
-        source: Arc<LogicalPlan>,
-        options: MergeIntoOptions,
-        input_schema: DFSchemaRef,
-    ) -> Self {
-        Self {
-            target,
-            source,
-            options,
-            schema: Arc::new(DFSchema::empty()),
-            input_schema,
-        }
-    }
-
-    pub fn options(&self) -> &MergeIntoOptions {
-        &self.options
-    }
-
-    pub fn target(&self) -> &Arc<LogicalPlan> {
-        &self.target
-    }
-
-    pub fn source(&self) -> &Arc<LogicalPlan> {
-        &self.source
-    }
-
-    pub fn input_schema(&self) -> &DFSchemaRef {
-        &self.input_schema
-    }
-}
-
-impl UserDefinedLogicalNodeCore for MergeIntoNode {
-    fn name(&self) -> &str {
-        "MergeInto"
-    }
-
-    fn inputs(&self) -> Vec<&LogicalPlan> {
-        vec![self.target.as_ref(), self.source.as_ref()]
-    }
-
-    fn schema(&self) -> &DFSchemaRef {
-        &self.schema
-    }
-
-    fn expressions(&self) -> Vec<Expr> {
-        vec![]
-    }
-
-    fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
-        write!(f, "MergeInto: options={:?}", self.options)
-    }
-
-    fn with_exprs_and_inputs(
-        &self,
-        exprs: Vec<Expr>,
-        inputs: Vec<LogicalPlan>,
-    ) -> datafusion_common::Result<Self> {
-        exprs.zero()?;
-        let (target, source) = inputs.two()?;
-        Ok(Self {
-            target: Arc::new(target),
-            source: Arc::new(source),
-            options: self.options.clone(),
-            schema: self.schema.clone(),
-            input_schema: self.input_schema.clone(),
-        })
     }
 
     fn necessary_children_exprs(&self, _output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
@@ -587,14 +416,14 @@ pub struct MergeExpansion {
 }
 
 pub fn expand_merge(
-    node: &MergeIntoNode,
+    info: MergeInfo,
     path_column: &str,
     row_index_column: Option<&str>,
 ) -> Result<MergeExpansion> {
-    let target_plan = node.target.as_ref().clone();
-    let source_plan = node.source.as_ref().clone();
-    let mut options = node.options().clone();
-    let merge_schema = node.input_schema.clone();
+    let target_plan = info.target.as_ref().clone();
+    let source_plan = info.source.as_ref().clone();
+    let mut options = info.options;
+    let merge_schema = info.input_schema;
     let mut should_check_cardinality = should_check_cardinality(&options.matched_clauses);
     if should_check_cardinality
         && source_is_unique_on_merge_join_keys(&source_plan, &options.join_key_pairs)
@@ -656,20 +485,12 @@ pub fn expand_merge(
     trace!("resolved target names: {:?}", &desired_target_names);
     trace!("resolved source names: {:?}", &desired_source_names);
 
-    let _target_relation = node
-        .options()
-        .target_alias
-        .as_ref()
-        .map(|a| TableReference::Bare {
-            table: a.clone().into(),
-        });
-    let source_relation = node
-        .options()
-        .source_alias
-        .as_ref()
-        .map(|a| TableReference::Bare {
-            table: a.clone().into(),
-        });
+    let _target_relation = options.target_alias.as_ref().map(|a| TableReference::Bare {
+        table: a.clone().into(),
+    });
+    let source_relation = options.source_alias.as_ref().map(|a| TableReference::Bare {
+        table: a.clone().into(),
+    });
 
     let target_scan_fields: Vec<String> = target_plan
         .schema()
@@ -1858,7 +1679,7 @@ fn build_merge_projection(
         else_expr: Some(Box::new(copy_op)),
     });
     projections.push(op_expr.alias(OPERATION_COLUMN));
-    projections.push(lit(ScalarValue::UInt64(None)).alias(MERGE_SOURCE_METRIC_COLUMN));
+    projections.push(lit(ScalarValue::Int64(None)).alias(MERGE_SOURCE_METRIC_COLUMN));
 
     Ok(projections)
 }

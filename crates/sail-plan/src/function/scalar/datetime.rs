@@ -7,6 +7,7 @@ use datafusion::functions::expr_fn;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{self, Expr};
 use datafusion_expr::{cast, lit, try_cast, when, BinaryExpr, ExprSchemable, Operator, ScalarUDF};
+use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_functions::expr_fn::to_time;
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
@@ -855,6 +856,40 @@ fn window(input: ScalarFunctionInput) -> PlanResult<Expr> {
     Ok(ScalarUDF::from(Explode::new(ExplodeKind::Explode)).call(vec![buckets]))
 }
 
+/// The Spark `window_time` function: the event-time of a time window, defined as
+/// `window.end - 1 microsecond`. Spark validates the argument via column metadata
+/// markers; we approximate that with a structural check on the window struct type.
+fn window_time(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let schema = input.function_context.schema;
+    let arg = input.arguments.one()?;
+    let end_type = match arg.get_type(schema)? {
+        DataType::Struct(fields)
+            if fields.len() == 2
+                && fields[0].name() == "start"
+                && fields[1].name() == "end"
+                && matches!(
+                    fields[0].data_type(),
+                    DataType::Timestamp(TimeUnit::Microsecond, _)
+                )
+                && matches!(
+                    fields[1].data_type(),
+                    DataType::Timestamp(TimeUnit::Microsecond, _)
+                ) =>
+        {
+            fields[1].data_type().clone()
+        }
+        other => {
+            return Err(PlanError::invalid(format!(
+                "window_time requires a window column (struct with start and end timestamps), got {other:?}"
+            )))
+        }
+    };
+    Ok(cast(
+        cast(arg.field("end"), DataType::Int64) - lit(1_i64),
+        end_type,
+    ))
+}
+
 pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -1058,7 +1093,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             F::unary(|arg| cast(expr_fn::to_char(arg, lit("%V")), DataType::Int32)),
         ),
         ("window", F::custom(window)),
-        ("window_time", F::unknown("window_time")),
+        ("window_time", F::custom(window_time)),
         ("year", F::udf(SparkYear::new())),
         ("years", F::unary(years)),
     ]

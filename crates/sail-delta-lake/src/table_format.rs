@@ -17,15 +17,16 @@ use sail_common_datafusion::column_features::{
     ColumnFeatureKey, ColumnFeatures, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
 use sail_common_datafusion::datasource::{
-    create_sort_order, find_path_in_options, BucketBy, MergeStrategy, OptionLayer,
-    PhysicalSinkMode, RowLevelCommand, RowLevelWriteInfo, SinkInfo, SinkMode, SourceInfo,
-    TableFormat, TableFormatAlterTableOperation, TableFormatMetadata, TableFormatRegistry,
-    CATALOG_TABLE_OPTION,
+    create_sort_order, find_path_in_options, BucketBy, DeleteInfo, MergeInfo, MergeStrategy,
+    OptionLayer, PhysicalSinkMode, RowLevelCommand, RowLevelWriteInfo, SinkInfo, SinkMode,
+    SourceInfo, TableFormat, TableFormatAlterTableOperation, TableFormatMetadata,
+    TableFormatRegistry, CATALOG_TABLE_OPTION,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_data_source::options::ResolveOptions;
 use sail_data_source::resolve_listing_urls;
+use sail_logical_plan::merge::RowLevelWriteNode;
 use url::Url;
 
 use crate::kernel::DeltaSnapshotConfig;
@@ -161,6 +162,37 @@ impl TableFormat for DeltaTableFormat {
                 },
             )),
         }))
+    }
+
+    async fn create_deleter(&self, _ctx: &dyn Session, info: DeleteInfo) -> Result<LogicalPlan> {
+        let DeleteInfo {
+            table_name,
+            path,
+            condition,
+            options,
+        } = info;
+        let write_node = RowLevelWriteNode::new_delete(
+            Arc::new(LogicalPlan::EmptyRelation(
+                datafusion_expr::logical_plan::EmptyRelation {
+                    produce_one_row: false,
+                    schema: Arc::new(DFSchema::empty()),
+                },
+            )),
+            Arc::new(DFSchema::empty()),
+            condition,
+            self.name().to_string(),
+            path,
+            table_name,
+            options,
+        );
+
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(write_node),
+        }))
+    }
+
+    async fn create_merger(&self, _ctx: &dyn Session, info: MergeInfo) -> Result<LogicalPlan> {
+        crate::logical::merge::expand_merge_node(info)
     }
 
     async fn create_row_level_writer(
