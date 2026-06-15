@@ -68,7 +68,7 @@ impl ShuffleWriteExec {
                 // https://github.com/apache/arrow-datafusion/issues/5184
                 Partitioning::Hash(
                     expr.into_iter()
-                        .filter(|e| e.downcast_ref::<UnKnownColumn>().is_none())
+                        .filter(|e| !e.is::<UnKnownColumn>())
                         .collect(),
                     n,
                 )

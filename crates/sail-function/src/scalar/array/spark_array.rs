@@ -258,7 +258,7 @@ fn array_array<O: OffsetSizeTrait>(
     let mut data = vec![];
     let mut total_len = 0;
     for arg in args {
-        let arg_data = if arg.as_any().downcast_ref::<NullArray>().is_some() {
+        let arg_data = if arg.as_any().is::<NullArray>() {
             ArrayData::new_empty(&data_type)
         } else {
             arg.to_data()
@@ -277,10 +277,7 @@ fn array_array<O: OffsetSizeTrait>(
     let num_rows = args[0].len();
     for row_idx in 0..num_rows {
         for (arr_idx, arg) in args.iter().enumerate() {
-            if arg.as_any().downcast_ref::<NullArray>().is_none()
-                && !arg.is_null(row_idx)
-                && arg.is_valid(row_idx)
-            {
+            if !arg.as_any().is::<NullArray>() && !arg.is_null(row_idx) && arg.is_valid(row_idx) {
                 mutable.extend(arr_idx, row_idx, row_idx + 1);
             } else {
                 mutable.extend_nulls(1);

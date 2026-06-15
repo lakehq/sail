@@ -610,58 +610,57 @@ impl GraphBuilder {
         // statistics from its *input* (pre-filter) so we retain the most original/accurate
         // datasource stats (e.g., Parquet), and apply the filter's selectivity as a penalty
         // factor to initial cardinality.
-        let (stats, initial_cardinality, base_cardinality) =
-            if plan.downcast_ref::<FilterExec>().is_some() {
-                // NOTE: We still keep FilterExec as the boundary leaf (filter-boundary strategy), but
-                // we must avoid
-                // an inconsistent stats state where num_rows is "post-filter" while distinct_count
-                // (and thus TDom) remains "pre-filter". That mismatch can cause greedy join ordering
-                // to prefer catastrophic NLJs.
-                //
-                // We therefore:
-                // - read base (pre-filter) datasource statistics from beneath the filter chain, and
-                // - estimate a selectivity factor for the filter predicate(s), and
-                // - apply that selectivity to num_rows / total_byte_size (inexact) while preserving
-                //   base column stats as a best-effort proxy for join planning.
-                let (pre_filter_plan, selectivity) =
-                    self.peel_filter_chain_and_estimate_selectivity(plan.clone())?;
-                let pre_stats = Arc::unwrap_or_clone(pre_filter_plan.partition_statistics(None)?);
-                let base = match pre_stats.num_rows {
-                    Precision::Exact(count) => count as f64,
-                    Precision::Inexact(count) => count as f64,
-                    Precision::Absent => 1000.0,
-                };
-
-                let mut adjusted = pre_stats.to_inexact();
-                adjusted.num_rows = adjusted.num_rows.with_estimated_selectivity(selectivity);
-                adjusted.total_byte_size = adjusted
-                    .total_byte_size
-                    .with_estimated_selectivity(selectivity);
-
-                (adjusted, base * selectivity, base)
-            } else if plan.downcast_ref::<ProjectionExec>().is_some() {
-                // Preserve ProjectionExec as a relation leaf, but prefer its input statistics
-                // (ProjectionExec may not have accurate stats of its own).
-                let mut cur = plan.clone();
-                while let Some(p) = cur.downcast_ref::<ProjectionExec>() {
-                    cur = p.input().clone();
-                }
-                let stats = Arc::unwrap_or_clone(cur.partition_statistics(None)?);
-                let initial_cardinality = match stats.num_rows {
-                    Precision::Exact(count) => count as f64,
-                    Precision::Inexact(count) => count as f64,
-                    Precision::Absent => 1000.0, // Default estimation
-                };
-                (stats, initial_cardinality, initial_cardinality)
-            } else {
-                let stats = Arc::unwrap_or_clone(plan.partition_statistics(None)?);
-                let initial_cardinality = match stats.num_rows {
-                    Precision::Exact(count) => count as f64,
-                    Precision::Inexact(count) => count as f64,
-                    Precision::Absent => 1000.0, // Default estimation
-                };
-                (stats, initial_cardinality, initial_cardinality)
+        let (stats, initial_cardinality, base_cardinality) = if plan.is::<FilterExec>() {
+            // NOTE: We still keep FilterExec as the boundary leaf (filter-boundary strategy), but
+            // we must avoid
+            // an inconsistent stats state where num_rows is "post-filter" while distinct_count
+            // (and thus TDom) remains "pre-filter". That mismatch can cause greedy join ordering
+            // to prefer catastrophic NLJs.
+            //
+            // We therefore:
+            // - read base (pre-filter) datasource statistics from beneath the filter chain, and
+            // - estimate a selectivity factor for the filter predicate(s), and
+            // - apply that selectivity to num_rows / total_byte_size (inexact) while preserving
+            //   base column stats as a best-effort proxy for join planning.
+            let (pre_filter_plan, selectivity) =
+                self.peel_filter_chain_and_estimate_selectivity(plan.clone())?;
+            let pre_stats = Arc::unwrap_or_clone(pre_filter_plan.partition_statistics(None)?);
+            let base = match pre_stats.num_rows {
+                Precision::Exact(count) => count as f64,
+                Precision::Inexact(count) => count as f64,
+                Precision::Absent => 1000.0,
             };
+
+            let mut adjusted = pre_stats.to_inexact();
+            adjusted.num_rows = adjusted.num_rows.with_estimated_selectivity(selectivity);
+            adjusted.total_byte_size = adjusted
+                .total_byte_size
+                .with_estimated_selectivity(selectivity);
+
+            (adjusted, base * selectivity, base)
+        } else if plan.is::<ProjectionExec>() {
+            // Preserve ProjectionExec as a relation leaf, but prefer its input statistics
+            // (ProjectionExec may not have accurate stats of its own).
+            let mut cur = plan.clone();
+            while let Some(p) = cur.downcast_ref::<ProjectionExec>() {
+                cur = p.input().clone();
+            }
+            let stats = Arc::unwrap_or_clone(cur.partition_statistics(None)?);
+            let initial_cardinality = match stats.num_rows {
+                Precision::Exact(count) => count as f64,
+                Precision::Inexact(count) => count as f64,
+                Precision::Absent => 1000.0, // Default estimation
+            };
+            (stats, initial_cardinality, initial_cardinality)
+        } else {
+            let stats = Arc::unwrap_or_clone(plan.partition_statistics(None)?);
+            let initial_cardinality = match stats.num_rows {
+                Precision::Exact(count) => count as f64,
+                Precision::Inexact(count) => count as f64,
+                Precision::Absent => 1000.0, // Default estimation
+            };
+            (stats, initial_cardinality, initial_cardinality)
+        };
 
         let relation_node = RelationNode::new(
             plan.clone(),

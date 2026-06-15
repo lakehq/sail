@@ -71,7 +71,7 @@ impl PlanResolver<'_> {
         let canonical_function_name = function_name.to_ascii_lowercase();
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
         if let Some(udf) = catalog_manager.get_function(&canonical_function_name)? {
-            if udf.inner().downcast_ref::<PySparkUnresolvedUDF>().is_some() {
+            if udf.inner().is::<PySparkUnresolvedUDF>() {
                 state.config_mut().arrow_allow_large_var_types = true;
             }
         }
@@ -80,6 +80,13 @@ impl PlanResolver<'_> {
         // (e.g., DATEDIFF(DAY, start, end)), convert the unresolved attribute
         // to a string literal before resolution.
         let arguments = Self::convert_date_part_argument(&canonical_function_name, arguments);
+
+        // For `mode() WITHIN GROUP (ORDER BY col)`, move the sort expression and a
+        // tie-break sentinel into the argument list before resolution, so that the
+        // aggregate function receives the column and the output column name can be
+        // derived from the argument display names.
+        let (arguments, order_by) =
+            Self::convert_mode_within_group(&canonical_function_name, arguments, order_by)?;
 
         let (argument_display_names, arguments) = if canonical_function_name == "struct" {
             self.resolve_struct_expressions_and_names(arguments, schema, state)
@@ -321,7 +328,7 @@ impl PlanResolver<'_> {
                 // Nested-field wildcard expansion can produce a MultiExpr.
                 // Flatten it so `struct(a.*)` can become `struct(a.x, a.y, ...)`.
                 Expr::ScalarFunction(ScalarFunction { func, args })
-                    if func.inner().downcast_ref::<MultiExpr>().is_some() =>
+                    if func.inner().is::<MultiExpr>() =>
                 {
                     if name.len() == args.len() {
                         for (n, arg) in name.into_iter().zip(args) {
@@ -350,6 +357,49 @@ impl PlanResolver<'_> {
         }
 
         Ok((names, exprs))
+    }
+
+    /// For `mode() WITHIN GROUP (ORDER BY col)`, move the sort expression into the
+    /// argument list along with a tie-break sentinel literal derived from the sort
+    /// direction. Spark returns the lowest value among equally frequent values for
+    /// ascending order and the highest for descending order, so this canonicalizes
+    /// the WITHIN GROUP syntax to the same argument form as `mode(col, deterministic)`
+    /// for both the aggregate function and the output column name formatter.
+    fn convert_mode_within_group(
+        function_name: &str,
+        arguments: Vec<spec::Expr>,
+        order_by: Option<Vec<spec::SortOrder>>,
+    ) -> PlanResult<(Vec<spec::Expr>, Option<Vec<spec::SortOrder>>)> {
+        if function_name.trim().to_lowercase() != "mode" {
+            return Ok((arguments, order_by));
+        }
+        let Some(sorts) = order_by else {
+            // order_by on UnresolvedFunction is populated exclusively from the within_group clause.
+            return Ok((arguments, None));
+        };
+        if !arguments.is_empty() {
+            return Err(PlanError::invalid(
+                "mode() with WITHIN GROUP does not take arguments",
+            ));
+        }
+        let spec::SortOrder {
+            child,
+            direction,
+            null_ordering: _,
+        } = sorts.one()?;
+        let tie_break = match direction {
+            spec::SortDirection::Descending => "highest",
+            spec::SortDirection::Ascending | spec::SortDirection::Unspecified => "lowest",
+        };
+        Ok((
+            vec![
+                *child,
+                spec::Expr::Literal(spec::Literal::Utf8 {
+                    value: Some(tie_break.to_string()),
+                }),
+            ],
+            None,
+        ))
     }
 
     /// For functions that accept a date-part keyword as their first argument

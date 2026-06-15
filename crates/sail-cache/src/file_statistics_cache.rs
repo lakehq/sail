@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
 
 use datafusion::common::{Result, TableReference};
@@ -10,16 +8,14 @@ use datafusion::execution::cache::cache_manager::{
 use datafusion::execution::cache::{CacheAccessor, TableScopedPath};
 use log::debug;
 use moka::sync::Cache;
-use object_store::path::Path;
 
 pub struct MokaFileStatisticsCache {
     statistics: Cache<TableScopedPath, CachedFileMetadata>,
-    cache_limit: Arc<AtomicUsize>,
+    max_entries: Option<u64>,
 }
 
 impl MokaFileStatisticsCache {
     const NAME: &'static str = "MokaFileStatisticsCache";
-    const DEFAULT_CACHE_LIMIT: usize = usize::MAX;
 
     pub fn new(ttl: Option<u64>, max_entries: Option<u64>) -> Self {
         let mut builder = Cache::builder();
@@ -39,7 +35,7 @@ impl MokaFileStatisticsCache {
 
         Self {
             statistics: builder.build(),
-            cache_limit: Arc::new(AtomicUsize::new(Self::DEFAULT_CACHE_LIMIT)),
+            max_entries,
         }
     }
 }
@@ -50,14 +46,7 @@ impl CacheAccessor<TableScopedPath, CachedFileMetadata> for MokaFileStatisticsCa
     }
 
     fn put(&self, key: &TableScopedPath, value: CachedFileMetadata) -> Option<CachedFileMetadata> {
-        // Updates to existing keys always pass; new keys only while under `cache_limit`.
-        // The bound is soft: moka's `entry_count` is eventually consistent.
-        let cache_limit = self.cache_limit.load(Ordering::Relaxed);
-        if self.statistics.contains_key(key)
-            || (self.statistics.entry_count() as usize) < cache_limit
-        {
-            self.statistics.insert(key.clone(), value);
-        }
+        self.statistics.insert(key.clone(), value);
         None
     }
 
@@ -84,11 +73,13 @@ impl CacheAccessor<TableScopedPath, CachedFileMetadata> for MokaFileStatisticsCa
 
 impl FileStatisticsCache for MokaFileStatisticsCache {
     fn cache_limit(&self) -> usize {
-        self.cache_limit.load(Ordering::Relaxed)
+        self.max_entries
+            .map(|limit| limit as usize)
+            .unwrap_or(usize::MAX)
     }
 
-    fn update_cache_limit(&self, limit: usize) {
-        self.cache_limit.store(limit, Ordering::Relaxed);
+    fn update_cache_limit(&self, _limit: usize) {
+        // TODO: support dynamic update of cache limit
     }
 
     fn list_entries(&self) -> HashMap<TableScopedPath, FileStatisticsCacheEntry> {
@@ -124,10 +115,6 @@ impl FileStatisticsCache for MokaFileStatisticsCache {
     }
 }
 
-pub fn scoped_path(path: Path) -> TableScopedPath {
-    TableScopedPath { table: None, path }
-}
-
 #[expect(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -140,6 +127,10 @@ mod tests {
     use object_store::ObjectMeta;
 
     use super::*;
+
+    pub fn scoped_path(path: Path) -> TableScopedPath {
+        TableScopedPath { table: None, path }
+    }
 
     #[test]
     fn test_file_statistics_cache() {
@@ -181,49 +172,5 @@ mod tests {
         meta2.location = Path::from("test2");
         let key3 = scoped_path(meta2.location.clone());
         assert!(cache.get(&key3).is_none());
-    }
-
-    #[test]
-    fn put_respects_runtime_cache_limit() {
-        let cache = MokaFileStatisticsCache::new(None, None);
-        cache.update_cache_limit(1);
-
-        let make = |name: &str| {
-            let meta = ObjectMeta {
-                location: Path::from(name),
-                last_modified: DateTime::parse_from_rfc3339("2022-09-27T22:36:00+02:00")
-                    .unwrap()
-                    .into(),
-                size: 1024,
-                e_tag: None,
-                version: None,
-            };
-            let stats = Arc::new(Statistics::new_unknown(&Schema::new(vec![Field::new(
-                "c",
-                DataType::Timestamp(TimeUnit::Second, None),
-                false,
-            )])));
-            let cached = CachedFileMetadata::new(meta.clone(), stats, None);
-            (scoped_path(meta.location.clone()), cached)
-        };
-
-        let (k1, v1) = make("a");
-        let (k2, v2) = make("b");
-        cache.put(&k1, v1);
-        // `entry_count` is eventually consistent in moka; settle before asserting.
-        cache.statistics.run_pending_tasks();
-        cache.put(&k2, v2.clone());
-        cache.statistics.run_pending_tasks();
-
-        assert!(cache.get(&k1).is_some(), "first entry must be retained");
-        assert!(
-            cache.get(&k2).is_none(),
-            "second entry must be rejected when at limit"
-        );
-
-        // Updating an existing key is always allowed, even at limit.
-        cache.put(&k1, v2);
-        cache.statistics.run_pending_tasks();
-        assert!(cache.get(&k1).is_some());
     }
 }
