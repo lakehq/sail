@@ -19,9 +19,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
   
-    logical_plan after expand_row_level_op:
-    SAME TEXT AS ABOVE
-  
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
   

@@ -11,9 +11,9 @@ use datafusion::physical_expr::{
     create_physical_sort_exprs, LexOrdering, LexRequirement, PhysicalSortRequirement,
 };
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, Result};
+use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, DFSchemaRef, Result};
 use datafusion_expr::expr::Sort;
-use datafusion_expr::TableSource;
+use datafusion_expr::{Expr, TableSource};
 
 use crate::catalog::CatalogPartitionField;
 use crate::extension::SessionExtension;
@@ -236,6 +236,118 @@ pub struct DeleteInfo {
     pub options: Vec<OptionLayer>,
 }
 
+/// Information required to create a logical MERGE plan for a table format.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub struct MergeInfo {
+    pub target: Arc<LogicalPlan>,
+    pub source: Arc<LogicalPlan>,
+    pub options: MergeIntoOptions,
+    pub input_schema: DFSchemaRef,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct MergeIntoOptions {
+    pub target_alias: Option<String>,
+    pub source_alias: Option<String>,
+    pub target: MergeTargetInfo,
+    pub with_schema_evolution: bool,
+    /// Resolved logical schemas from analysis time (before any rewrites)
+    pub resolved_target_schema: DFSchemaRef,
+    pub resolved_source_schema: DFSchemaRef,
+    /// User-facing field names for target and source, resolved from opaque IDs
+    /// at plan resolution time. Used by MERGE expansion to map opaque IDs back
+    /// to real column names without the fragile recover-field-names heuristic.
+    pub resolved_target_field_names: Vec<String>,
+    pub resolved_source_field_names: Vec<String>,
+    pub on_condition: ExprWithSource,
+    pub matched_clauses: Vec<MergeMatchedClause>,
+    pub not_matched_by_source_clauses: Vec<MergeNotMatchedBySourceClause>,
+    pub not_matched_by_target_clauses: Vec<MergeNotMatchedByTargetClause>,
+    /// Pre-analyzed join equality keys extracted from the ON condition (target, source)
+    pub join_key_pairs: Vec<(Expr, Expr)>,
+    /// Residual predicates from the ON condition that are not equality join keys
+    pub residual_predicates: Vec<Expr>,
+    /// Predicates from ON that only touch target columns (useful for early pruning)
+    pub target_only_predicates: Vec<Expr>,
+    /// Generation expressions for generated columns in the target table.
+    /// Each entry is `(column_name, resolved_expr)` where `resolved_expr` initially
+    /// references target schema field IDs and is rewritten to actual column names
+    /// by MERGE expansion before being applied as a post-processing projection.
+    pub generated_column_exprs: Vec<(String, Expr)>,
+    /// Delta CHECK constraint expressions for the target table.
+    pub check_constraint_exprs: Vec<DeltaCheckConstraintExpr>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash, PartialOrd)]
+pub struct MergeTargetInfo {
+    pub table_name: Vec<String>,
+    pub format: String,
+    pub location: String,
+    pub partition_by: Vec<String>,
+    pub options: Vec<OptionLayer>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct MergeMatchedClause {
+    pub condition: Option<ExprWithSource>,
+    pub action: MergeMatchedAction,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum MergeMatchedAction {
+    Delete,
+    UpdateAll,
+    UpdateSet(Vec<MergeAssignment>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct MergeNotMatchedBySourceClause {
+    pub condition: Option<ExprWithSource>,
+    pub action: MergeNotMatchedBySourceAction,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum MergeNotMatchedBySourceAction {
+    Delete,
+    UpdateSet(Vec<MergeAssignment>),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct MergeNotMatchedByTargetClause {
+    pub condition: Option<ExprWithSource>,
+    pub action: MergeNotMatchedByTargetAction,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum MergeNotMatchedByTargetAction {
+    InsertAll,
+    InsertColumns {
+        columns: Vec<String>,
+        values: Vec<Expr>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct MergeAssignment {
+    pub column: String,
+    pub value: Expr,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct DeltaCheckConstraintExpr {
+    pub name: String,
+    pub expression: String,
+    pub expr: Expr,
+    pub violation: DeltaConstraintViolation,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum DeltaConstraintViolation {
+    Check,
+    NotNull { column: String },
+    Invariant { column: String },
+}
+
 /// Returns the path from options, or `None` if not set.
 /// Checks the `"path"` key first, then `"location"`.
 /// Key comparison is case-insensitive.
@@ -389,6 +501,12 @@ pub trait TableFormat: Send + Sync {
     async fn create_deleter(&self, ctx: &dyn Session, info: DeleteInfo) -> Result<LogicalPlan> {
         let _ = (ctx, info);
         not_impl_err!("DELETE is not yet implemented for {} format", self.name())
+    }
+
+    /// Creates a logical plan for MERGE.
+    async fn create_merger(&self, ctx: &dyn Session, info: MergeInfo) -> Result<LogicalPlan> {
+        let _ = (ctx, info);
+        not_impl_err!("MERGE is not yet implemented for {} format", self.name())
     }
 
     /// Creates an `ExecutionPlan` for row-level operations (DELETE, UPDATE, MERGE).
