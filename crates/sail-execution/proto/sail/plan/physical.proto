@@ -109,6 +109,7 @@ message ExtendedScalarUdf {
     SparkWindowBucketsUdf spark_window_buckets = 27;
     SparkToCharUdf spark_to_char = 28;
     SparkToXmlUdf spark_to_xml = 29;
+    SparkBinUdf spark_bin = 30;
   }
 }
 
@@ -214,6 +215,10 @@ message SparkWindowBucketsUdf {
 }
 
 message SparkAbsUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkBinUdf {
   bool ansi_mode = 1;
 }
 
