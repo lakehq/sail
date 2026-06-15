@@ -963,6 +963,8 @@ mod tests {
     struct TestProvider {
         table_status: TableStatus,
         alter_error: Option<String>,
+        table_exists: bool,
+        view_lookup_supported: bool,
     }
 
     #[async_trait]
@@ -1013,9 +1015,16 @@ mod tests {
         async fn get_table(
             &self,
             _database: &crate::provider::Namespace,
-            _table: &str,
+            table: &str,
         ) -> CatalogResult<TableStatus> {
-            Ok(self.table_status.clone())
+            if self.table_exists {
+                Ok(self.table_status.clone())
+            } else {
+                Err(CatalogError::NotFound(
+                    CatalogObject::Table,
+                    table.to_string(),
+                ))
+            }
         }
 
         async fn list_tables(
@@ -1058,9 +1067,18 @@ mod tests {
         async fn get_view(
             &self,
             _database: &crate::provider::Namespace,
-            _view: &str,
+            view: &str,
         ) -> CatalogResult<TableStatus> {
-            unreachable!()
+            if self.view_lookup_supported {
+                Err(CatalogError::NotFound(
+                    CatalogObject::View,
+                    view.to_string(),
+                ))
+            } else {
+                Err(CatalogError::NotSupported(
+                    "persistent views are not supported".to_string(),
+                ))
+            }
         }
 
         async fn list_views(
@@ -1132,6 +1150,14 @@ mod tests {
     }
 
     fn test_manager(alter_error: Option<&str>) -> CatalogManager {
+        test_manager_with_catalog_behavior(alter_error, true, false)
+    }
+
+    fn test_manager_with_catalog_behavior(
+        alter_error: Option<&str>,
+        table_exists: bool,
+        view_lookup_supported: bool,
+    ) -> CatalogManager {
         let table_status = TableStatus {
             catalog: Some("test".to_string()),
             database: vec!["default".to_string()],
@@ -1166,6 +1192,8 @@ mod tests {
                 Arc::new(TestProvider {
                     table_status,
                     alter_error: alter_error.map(ToString::to_string),
+                    table_exists,
+                    view_lookup_supported,
                 }) as Arc<dyn CatalogProvider>,
             ))
             .collect(),
@@ -1186,6 +1214,43 @@ mod tests {
             unreachable!();
         };
         manager
+    }
+
+    #[tokio::test]
+    async fn table_or_view_lookup_treats_unsupported_persistent_views_as_missing() {
+        let manager = test_manager_with_catalog_behavior(None, false, false);
+
+        let result = manager.get_table_or_view(&["missing"]).await;
+        assert!(
+            result.is_err(),
+            "expected table-or-view lookup to report missing relation, got success: {result:?}"
+        );
+        let Err(error) = result else {
+            unreachable!();
+        };
+
+        assert!(
+            matches!(
+                error,
+                CatalogError::NotFound(CatalogObject::Table, ref message)
+                    if message.contains("[TABLE_OR_VIEW_NOT_FOUND]")
+                        && message.contains("missing")
+            ),
+            "unexpected table-or-view error: {error:?}"
+        );
+
+        let result = manager.get_view(&["missing"]).await;
+        assert!(
+            result.is_err(),
+            "expected explicit view lookup to stay unsupported, got success: {result:?}"
+        );
+        let Err(error) = result else {
+            unreachable!();
+        };
+        assert!(
+            matches!(error, CatalogError::NotSupported(ref message) if message.contains("persistent views")),
+            "unexpected explicit view error: {error:?}"
+        );
     }
 
     #[tokio::test]

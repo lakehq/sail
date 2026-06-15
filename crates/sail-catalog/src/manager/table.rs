@@ -146,6 +146,13 @@ impl CatalogManager {
                 CatalogObject::Table,
                 format!("[TABLE_OR_VIEW_NOT_FOUND] Table or view not found: {name}"),
             )),
+            Err(CatalogError::NotSupported(_)) => Err(CatalogError::NotFound(
+                CatalogObject::Table,
+                format!(
+                    "[TABLE_OR_VIEW_NOT_FOUND] Table or view not found: {}",
+                    reference.last().map(AsRef::as_ref).unwrap_or("<unknown>")
+                ),
+            )),
             Err(e) => Err(e),
         }
     }
