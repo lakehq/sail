@@ -7735,6 +7735,7 @@ dependencies = [
  "sail-common",
  "sail-common-datafusion",
  "sail-data-source",
+ "sail-logical-plan",
  "sail-physical-plan",
  "serde",
  "serde_arrow",

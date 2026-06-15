@@ -225,6 +225,17 @@ pub struct SinkInfo {
     pub catalog_table: Option<Vec<String>>,
 }
 
+/// Information required to create a logical DELETE plan for a table format.
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd)]
+pub struct DeleteInfo {
+    pub table_name: Vec<String>,
+    pub path: String,
+    pub condition: Option<ExprWithSource>,
+    /// The layers of options for the delete operation.
+    /// A later layer can override earlier ones.
+    pub options: Vec<OptionLayer>,
+}
+
 /// Returns the path from options, or `None` if not set.
 /// Checks the `"path"` key first, then `"location"`.
 /// Key comparison is case-insensitive.
@@ -373,6 +384,12 @@ pub trait TableFormat: Send + Sync {
 
     /// Creates a logical plan for write.
     async fn create_writer(&self, ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan>;
+
+    /// Creates a logical plan for DELETE.
+    async fn create_deleter(&self, ctx: &dyn Session, info: DeleteInfo) -> Result<LogicalPlan> {
+        let _ = (ctx, info);
+        not_impl_err!("DELETE is not yet implemented for {} format", self.name())
+    }
 
     /// Creates an `ExecutionPlan` for row-level operations (DELETE, UPDATE, MERGE).
     async fn create_row_level_writer(
