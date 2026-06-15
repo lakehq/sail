@@ -868,6 +868,10 @@ fn window_time(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 && fields[0].name() == "start"
                 && fields[1].name() == "end"
                 && matches!(
+                    fields[0].data_type(),
+                    DataType::Timestamp(TimeUnit::Microsecond, _)
+                )
+                && matches!(
                     fields[1].data_type(),
                     DataType::Timestamp(TimeUnit::Microsecond, _)
                 ) =>
