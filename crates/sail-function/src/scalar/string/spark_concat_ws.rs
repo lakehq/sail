@@ -96,18 +96,27 @@ impl ScalarUDFImpl for SparkConcatWs {
 /// Join each row's parts with the separator. `args[0]` is the separator; the rest
 /// are value arguments (strings, or arrays whose elements are expanded).
 fn concat_ws_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    let num_rows = args[0].len();
+    // Arity is enforced by `coerce_types` at planning time; guard the invoke path
+    // too so a direct call that bypasses planning errors instead of panicking.
+    let [separator_arg, value_args @ ..] = args else {
+        return Err(invalid_arg_count_exec_err(
+            "concat_ws",
+            (1, i32::MAX),
+            args.len(),
+        ));
+    };
+    let num_rows = separator_arg.len();
 
     // A null-typed separator makes every row null. Return an N-null column (not a
     // single scalar) so the shape lines up with the other arguments.
-    if *args[0].data_type() == DataType::Null {
+    if *separator_arg.data_type() == DataType::Null {
         return Ok(new_null_array(&DataType::Utf8, num_rows));
     }
 
     // Downcast every argument once, up front — the per-row loop then does no type
     // dispatch and no per-element allocation.
-    let separator = StrCol::try_new(&args[0])?;
-    let values = args[1..]
+    let separator = StrCol::try_new(separator_arg)?;
+    let values = value_args
         .iter()
         .map(ConcatArg::try_new)
         .collect::<Result<Vec<_>>>()?;

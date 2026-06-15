@@ -132,7 +132,7 @@ Feature: concat_ws function
         """
         SELECT concat_ws(',', v, 'X') AS result
         FROM VALUES ('a'), (CAST(NULL AS STRING)), ('c') AS t(v)
-        ORDER BY v
+        ORDER BY v NULLS FIRST
         """
       Then query result ordered
         | result |
