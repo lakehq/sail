@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-variant/blob/main/src/variant_get.rs>
@@ -266,10 +265,6 @@ impl SparkVariantGet {
 }
 
 impl ScalarUDFImpl for SparkVariantGet {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         if self.safe {
             "try_variant_get"

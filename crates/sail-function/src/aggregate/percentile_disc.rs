@@ -122,10 +122,6 @@ impl PercentileDisc {
 }
 
 impl AggregateUDFImpl for PercentileDisc {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "percentile_disc"
     }

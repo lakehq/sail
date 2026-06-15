@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
@@ -37,10 +36,6 @@ impl SparkToBinary {
 }
 
 impl ScalarUDFImpl for SparkToBinary {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_to_binary"
     }
@@ -142,10 +137,10 @@ impl ScalarUDFImpl for SparkToBinary {
                 | Expr::Literal(ScalarValue::LargeUtf8(Some(s)), _metadata)
                     if s.trim().to_lowercase() == "utf-8" || s.trim().to_lowercase() == "utf8" =>
                 {
-                    Ok(ExprSimplifyResult::Simplified(Expr::Cast(expr::Cast {
-                        expr: Box::new(expr),
-                        data_type: DataType::Binary,
-                    })))
+                    Ok(ExprSimplifyResult::Simplified(Expr::Cast(expr::Cast::new(
+                        Box::new(expr),
+                        DataType::Binary,
+                    ))))
                 }
                 Expr::Literal(ScalarValue::Utf8(Some(s)), _metadata)
                 | Expr::Literal(ScalarValue::Utf8View(Some(s)), _metadata)
@@ -200,10 +195,6 @@ impl SparkTryToBinary {
 }
 
 impl ScalarUDFImpl for SparkTryToBinary {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_try_to_binary"
     }

@@ -4,8 +4,8 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field};
 use datafusion::functions_aggregate::{
     approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
-    correlation, count, covariance, first_last, grouping, min_max, percentile_cont, regr, stddev,
-    sum, variance,
+    correlation, count, covariance, first_last, grouping, min_max, percentile_cont, stddev, sum,
+    variance,
 };
 use datafusion::functions_nested::string::array_to_string;
 use datafusion_common::ScalarValue;
@@ -28,6 +28,7 @@ use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::percentile::PercentileFunction;
 use sail_function::aggregate::percentile_disc::percentile_disc_udaf;
 use sail_function::aggregate::product::ProductFunction;
+use sail_function::aggregate::regr::{Regr, RegrType};
 use sail_function::aggregate::schema_of_variant_agg::SchemaOfVariantAggFunction;
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::theta_sketch::{
@@ -130,12 +131,7 @@ fn kurtosis(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let args = input
         .arguments
         .into_iter()
-        .map(|arg| {
-            expr::Expr::Cast(expr::Cast {
-                expr: Box::new(arg),
-                data_type: DataType::Float64,
-            })
-        })
+        .map(|arg| expr::Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Float64)))
         .collect();
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(KurtosisFunction::new())),
@@ -153,12 +149,7 @@ fn product(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let args = input
         .arguments
         .into_iter()
-        .map(|arg| {
-            expr::Expr::Cast(expr::Cast {
-                expr: Box::new(arg),
-                data_type: DataType::Float64,
-            })
-        })
+        .map(|arg| expr::Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Float64)))
         .collect();
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(ProductFunction::new())),
@@ -276,12 +267,7 @@ fn skewness(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let args = input
         .arguments
         .into_iter()
-        .map(|arg| {
-            expr::Expr::Cast(expr::Cast {
-                expr: Box::new(arg),
-                data_type: DataType::Float64,
-            })
-        })
+        .map(|arg| expr::Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Float64)))
         .collect();
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(SkewnessFunc::new())),
@@ -716,15 +702,47 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("percentile_cont", F::custom(percentile_cont)),
         ("percentile_disc", F::custom(percentile_disc)),
         ("product", F::custom(product)),
-        ("regr_avgx", F::default(regr::regr_avgx_udaf)),
-        ("regr_avgy", F::default(regr::regr_avgy_udaf)),
-        ("regr_count", F::default(regr::regr_count_udaf)),
-        ("regr_intercept", F::default(regr::regr_intercept_udaf)),
-        ("regr_r2", F::default(regr::regr_r2_udaf)),
-        ("regr_slope", F::default(regr::regr_slope_udaf)),
-        ("regr_sxx", F::default(regr::regr_sxx_udaf)),
-        ("regr_sxy", F::default(regr::regr_sxy_udaf)),
-        ("regr_syy", F::default(regr::regr_syy_udaf)),
+        (
+            "regr_avgx",
+            F::default(|| Arc::new(AggregateUDF::from(Regr::new(RegrType::AvgX, "regr_avgx")))),
+        ),
+        (
+            "regr_avgy",
+            F::default(|| Arc::new(AggregateUDF::from(Regr::new(RegrType::AvgY, "regr_avgy")))),
+        ),
+        (
+            "regr_count",
+            F::default(|| Arc::new(AggregateUDF::from(Regr::new(RegrType::Count, "regr_count")))),
+        ),
+        (
+            "regr_intercept",
+            F::default(|| {
+                Arc::new(AggregateUDF::from(Regr::new(
+                    RegrType::Intercept,
+                    "regr_intercept",
+                )))
+            }),
+        ),
+        (
+            "regr_r2",
+            F::default(|| Arc::new(AggregateUDF::from(Regr::new(RegrType::R2, "regr_r2")))),
+        ),
+        (
+            "regr_slope",
+            F::default(|| Arc::new(AggregateUDF::from(Regr::new(RegrType::Slope, "regr_slope")))),
+        ),
+        (
+            "regr_sxx",
+            F::default(|| Arc::new(AggregateUDF::from(Regr::new(RegrType::Sxx, "regr_sxx")))),
+        ),
+        (
+            "regr_sxy",
+            F::default(|| Arc::new(AggregateUDF::from(Regr::new(RegrType::Sxy, "regr_sxy")))),
+        ),
+        (
+            "regr_syy",
+            F::default(|| Arc::new(AggregateUDF::from(Regr::new(RegrType::Syy, "regr_syy")))),
+        ),
         ("schema_of_variant_agg", F::custom(schema_of_variant_agg)),
         ("skewness", F::custom(skewness)),
         ("some", F::default(bool_and_or::bool_or_udaf)),

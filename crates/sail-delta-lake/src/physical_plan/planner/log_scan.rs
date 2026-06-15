@@ -11,6 +11,7 @@ use datafusion::datasource::table_schema::TableSchema;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion_common::extensions::Extensions;
 use futures::{stream, StreamExt, TryStreamExt};
 use object_store::path::{Path, DELIMITER};
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
@@ -111,8 +112,9 @@ fn to_partitioned_files(metas: Vec<ObjectMeta>) -> Result<Vec<PartitionedFile>> 
                 range: None,
                 statistics: None,
                 ordering: None,
-                extensions: None,
+                extensions: Extensions::default(),
                 metadata_size_hint: None,
+                table_reference: None,
             })
         })
         .collect()
@@ -132,8 +134,9 @@ fn to_partitioned_files_with_version(
             range: None,
             statistics: None,
             ordering: None,
-            extensions: None,
+            extensions: Extensions::default(),
             metadata_size_hint: None,
+            table_reference: None,
         })
         .collect())
 }

@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
@@ -69,7 +68,7 @@ impl ShuffleWriteExec {
                 // https://github.com/apache/arrow-datafusion/issues/5184
                 Partitioning::Hash(
                     expr.into_iter()
-                        .filter(|e| e.as_any().downcast_ref::<UnKnownColumn>().is_none())
+                        .filter(|e| !e.is::<UnKnownColumn>())
                         .collect(),
                     n,
                 )
@@ -115,10 +114,6 @@ impl DisplayAs for ShuffleWriteExec {
 impl ExecutionPlan for ShuffleWriteExec {
     fn name(&self) -> &str {
         "ShuffleWriteExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

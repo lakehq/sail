@@ -389,6 +389,21 @@ def test_sql_with_clause(spark, df, df_view):
     )
 
 
+def test_sql_named_window_clause(spark, df_view):
+    assert_frame_equal(
+        spark.sql(f"SELECT min(a) OVER w AS min FROM {df_view} WINDOW w AS (ORDER BY a)").toPandas(),  # noqa: S608
+        pd.DataFrame({"min": [1, 1]}, dtype="int32"),
+    )
+
+    with pytest.raises(Exception, match=r"Name w is used more than once in WINDOW clause"):
+        spark.sql(
+            f"SELECT min(a) OVER w AS min FROM {df_view} WINDOW w AS (ORDER BY a), w AS (ORDER BY a)"  # noqa: S608
+        ).toPandas()
+
+    with pytest.raises(Exception, match=r"undefined window"):
+        spark.sql(f"SELECT min(a) OVER w AS min FROM {df_view}").toPandas()  # noqa: S608
+
+
 @pytest.mark.skipif(is_jvm_spark(), reason="Sail only")
 def test_sql_parameters(spark):
     actual = spark.sql("SELECT 1 AS text WHERE $1 > 'a'", ["b"]).toPandas()
