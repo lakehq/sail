@@ -53,9 +53,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
   
-    logical_plan after expand_row_level_op:
-    SAME TEXT AS ABOVE
-  
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
   
@@ -136,9 +133,6 @@ data:
             Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
   
     logical_plan after resolve_lambda_variables:
-    SAME TEXT AS ABOVE
-  
-    logical_plan after expand_row_level_op:
     SAME TEXT AS ABOVE
   
     logical_plan after decorrelate_lateral_projection:
