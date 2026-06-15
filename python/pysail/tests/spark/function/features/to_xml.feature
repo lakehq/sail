@@ -76,6 +76,15 @@ Feature: to_xml converts a struct value to an XML string
         | result |
         | true   |
 
+    Scenario: Child elements are indented with four spaces
+      When query
+        """
+        SELECT to_xml(named_struct('val', 1)) LIKE '%    <val>1</val>%' AS result
+        """
+      Then query result
+        | result |
+        | true   |    
+
   Rule: NULL handling
 
     Scenario: NULL struct returns NULL
@@ -330,6 +339,17 @@ Feature: to_xml converts a struct value to an XML string
       Then query result
         | result     |
         | 06/06/2026 |
+
+    Scenario: TIMESTAMP_NTZ has no timezone offset
+      When query
+        """
+        SELECT to_xml(named_struct('ts', CAST('2026-06-06 00:00:00' AS TIMESTAMP_NTZ))) LIKE '%2026-06-06T00:00:00.000%' AS has_time,
+               to_xml(named_struct('ts', CAST('2026-06-06 00:00:00' AS TIMESTAMP_NTZ))) LIKE '%+%' AS has_plus,
+               to_xml(named_struct('ts', CAST('2026-06-06 00:00:00' AS TIMESTAMP_NTZ))) LIKE '%Z%' AS has_z
+        """
+      Then query result
+        | has_time | has_plus | has_z |
+        | true     | false    | false |    
 
   Rule: Decimal and special values
 
