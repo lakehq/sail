@@ -28,7 +28,10 @@ pub struct SparkToNumber {
 lazy_static! {
     static ref FORMAT_REGEX: Regex = {
         #[expect(clippy::unwrap_used)]
-        Regex::new(r"^(?<sign_left>MI|S)?(?<currency_left>L|\$)?(?<numbers>[09G,]+)(?<dot>[.D])?(?<decimals>[09]+)?(?<currency_right>L|\$)?(?<sign_right>PR|MI|S)?$")
+        // `numbers` uses `*` (not `+`) so "no integer part" formats like `.99`
+        // are accepted; the fully-empty case (no digits anywhere) is rejected
+        // explicitly in `RegexSpec::try_from(&Captures)`.
+        Regex::new(r"^(?<sign_left>MI|S)?(?<currency_left>L|\$)?(?<numbers>[09G,]*)(?<dot>[.D])?(?<decimals>[09]+)?(?<currency_right>L|\$)?(?<sign_right>PR|MI|S)?$")
             .map_err(|e| exec_datafusion_err!("Failed to compile regex: {e}"))
             .unwrap()
     };
@@ -144,10 +147,7 @@ fn spark_to_number_impl(args: &[ArrayRef], safe: bool) -> Result<ArrayRef> {
     let format_arr = downcast_arg!(&args[1], StringArray);
     if format_arr.is_null(0) {
         let values = downcast_arg!(&args[0], StringArray);
-        let nulls: Vec<ScalarValue> = (0..values.len())
-            .map(|_| ScalarValue::Decimal256(None, 38, 18))
-            .collect();
-        return ScalarValue::iter_to_array(nulls);
+        return Ok(new_null_array(&DataType::Decimal256(38, 18), values.len()));
     }
     let format: &str = format_arr.value(0);
     let format_spec: RegexSpec = RegexSpec::try_from(format)?;
@@ -275,6 +275,27 @@ macro_rules! get_capture_group {
     };
 }
 
+// Borrowing variants of the `get_*_capture_group` macros: return `&str` instead
+// of an owned `String`. Used on the per-row value-parsing path where the capture
+// is only inspected (compared, measured), never stored — avoiding an allocation
+// per row per group.
+macro_rules! get_opt_capture_str {
+    ($captures:expr, $group_name:expr) => {
+        $captures.name($group_name).map(|m| m.as_str().trim())
+    };
+}
+
+macro_rules! get_capture_str {
+    ($captures:expr, $group_name:expr) => {
+        get_opt_capture_str!($captures, $group_name).ok_or_else(|| {
+            exec_datafusion_err!(
+                "Missing '{}' group in the format regex or not well formed.",
+                $group_name
+            )
+        })
+    };
+}
+
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct RegexSpec {
     left_sign: Option<String>,
@@ -289,7 +310,10 @@ impl TryFrom<&str> for RegexSpec {
     type Error = DataFusionError;
 
     fn try_from(format: &str) -> Result<Self, Self::Error> {
-        let captures: Captures = match_regex(format, &FORMAT_REGEX)?;
+        // Spark uppercases the format before parsing, making the format tokens
+        // (G, D, L, MI, PR, S) case-insensitive (e.g. `9g999` == `9G999`).
+        let format = format.to_uppercase();
+        let captures: Captures = match_regex(&format, &FORMAT_REGEX)?;
         RegexSpec::try_from(&captures)
     }
 }
@@ -298,16 +322,67 @@ impl TryFrom<&Captures<'_>> for RegexSpec {
     type Error = DataFusionError;
 
     fn try_from(captures: &Captures<'_>) -> Result<Self, Self::Error> {
+        let numbers: String = get_capture_group!(captures, "numbers")?;
+        let decimals: Option<String> = get_opt_capture_group!(captures, "decimals");
+
+        // Spark rejects formats with no digit at all (`S`, `.`, `$`, …).
+        // `numbers` may be empty (e.g. `.99`), but then `decimals` must be present.
+        if numbers.is_empty() && decimals.is_none() {
+            return exec_err!(
+                "The format is invalid. The format string requires at least one number digit."
+            );
+        }
+
+        // Thousands separators (`,` / `G`) must have digits on both sides
+        // (`INVALID_FORMAT.CONT_THOUSANDS_SEPS`): reject `,999`, `999,`, `9,,9`.
+        validate_thousands_separator_positions(&numbers)?;
+
+        // Spark: currency characters must appear BEFORE digits. `$999` is valid;
+        // `999$` raises `INVALID_FORMAT.CUR_MUST_BEFORE_DIGIT`. The FORMAT_REGEX
+        // accepts a trailing currency because the grammar is shared with other
+        // SQL dialects, so reject it explicitly here for Spark compatibility.
+        let currency_right: Option<String> = get_opt_capture_group!(captures, "currency_right");
+        if currency_right.is_some() {
+            return exec_err!(
+                "The format is invalid. Currency characters must appear before digits in the number format."
+            );
+        }
+
         Ok(Self {
             left_sign: get_opt_capture_group!(captures, "sign_left"),
             currency_left: get_opt_capture_group!(captures, "currency_left"),
-            numbers: get_capture_group!(captures, "numbers")?,
+            numbers,
             dot: get_opt_capture_group!(captures, "dot"),
-            decimals: get_opt_capture_group!(captures, "decimals"),
-            currency_right: get_opt_capture_group!(captures, "currency_right"),
+            decimals,
+            currency_right,
             right_sign: get_opt_capture_group!(captures, "sign_right"),
         })
     }
+}
+
+/// Reject thousands-separator positions that Spark classifies as
+/// `INVALID_FORMAT.CONT_THOUSANDS_SEPS` — separators (`,` or `G`) must have
+/// digits on both sides. Rejects leading (`,999`), trailing (`999,`), and
+/// consecutive (`9,,9`) separators.
+fn validate_thousands_separator_positions(numbers: &str) -> Result<()> {
+    let bytes = numbers.as_bytes();
+    if bytes.is_empty() {
+        return Ok(());
+    }
+    let is_sep = |b: u8| b == b',' || b == b'G';
+    if is_sep(bytes[0]) || is_sep(bytes[bytes.len() - 1]) {
+        return exec_err!(
+            "The format is invalid: '{numbers}'. Thousands separators (, or G) must have digits on both sides."
+        );
+    }
+    for w in bytes.windows(2) {
+        if is_sep(w[0]) && is_sep(w[1]) {
+            return exec_err!(
+                "The format is invalid: '{numbers}'. Thousands separators (, or G) must have digits between them."
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Parses a numeric value from a string using a specified format string.
@@ -442,7 +517,9 @@ impl Display for PatternExpression {
                 // PR format: <123> for negative, space-padded for positive
                 write!(f, "(?<angled_left>[< ])?{expr}(?<angled_right>[> ])?")
             }
-            PatternExpression::Number => write!(f, "(?<numbers>[0-9,]+)"),
+            // `*` (not `+`) so values with no integer part (e.g. `.5` against
+            // format `.99`) match; an entirely empty value is rejected downstream.
+            PatternExpression::Number => write!(f, "(?<numbers>[0-9,]*)"),
             PatternExpression::Dot(_dot) => write!(f, "(?<dot>[.])?"),
             PatternExpression::Decimal => write!(f, "(?<decimals>[0-9]+)?"),
             PatternExpression::Group(group) => {
@@ -538,12 +615,11 @@ fn get_grouping_positions(numbers: &str) -> HashSet<(usize, char)> {
 /// Computes the sign factor based on captured sign information.
 fn get_sign_factor(captures: &Captures) -> i8 {
     let angle_factor =
-        get_opt_capture_group!(captures, "angled_left")
-            .map_or(1, |s| if s == "<" { -1 } else { 1 });
+        get_opt_capture_str!(captures, "angled_left").map_or(1, |s| if s == "<" { -1 } else { 1 });
     let sign_left_factor =
-        get_opt_capture_group!(captures, "sign_left").map_or(1, |s| if s == "-" { -1 } else { 1 });
+        get_opt_capture_str!(captures, "sign_left").map_or(1, |s| if s == "-" { -1 } else { 1 });
     let sign_right_factor =
-        get_opt_capture_group!(captures, "sign_right").map_or(1, |s| if s == "-" { -1 } else { 1 });
+        get_opt_capture_str!(captures, "sign_right").map_or(1, |s| if s == "-" { -1 } else { 1 });
     angle_factor * sign_left_factor * sign_right_factor
 }
 
@@ -558,8 +634,8 @@ fn match_angled_condition(value: &str) -> Result<()> {
 }
 /// Validates the grouping of numbers against the specified format to ensure conformity.
 fn match_grouping(value_captures: &Captures, format_spec: &RegexSpec) -> Result<()> {
-    let numbers = get_capture_group!(value_captures, "numbers")?;
-    let format_numbers = format_spec.numbers.clone();
+    let numbers = get_capture_str!(value_captures, "numbers")?;
+    let format_numbers = &format_spec.numbers;
 
     // Get the positions of the groupings in the format
     let format_positions = get_grouping_positions(&format_numbers);
@@ -585,8 +661,8 @@ fn match_grouping(value_captures: &Captures, format_spec: &RegexSpec) -> Result<
 /// Validates a value against a regex pattern generated from a format string.
 fn create_regex_expression(format_spec: &RegexSpec) -> Result<Regex> {
     let format_pattern: PatternExpression = PatternExpression::try_from(format_spec)?;
-    // Allow leading spaces (Spark trims input before matching)
-    let pattern_string: String = format!("^\\s*{format_pattern}$");
+    // Allow surrounding spaces (Spark trims the input on both sides before matching).
+    let pattern_string: String = format!("^\\s*{format_pattern}\\s*$");
     // Create a Regex instance
     Regex::new(pattern_string.as_str())
         .map_err(|e| exec_datafusion_err!("Failed to compile regex: {e}"))
