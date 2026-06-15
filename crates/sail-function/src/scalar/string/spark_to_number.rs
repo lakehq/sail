@@ -638,7 +638,7 @@ fn match_grouping(value_captures: &Captures, format_spec: &RegexSpec) -> Result<
     let format_numbers = &format_spec.numbers;
 
     // Get the positions of the groupings in the format
-    let format_positions = get_grouping_positions(&format_numbers);
+    let format_positions = get_grouping_positions(format_numbers);
 
     // Reject formats that mix ',' and 'G' separators (e.g. "9,9G9" is invalid in Spark)
     let has_comma = format_positions.iter().any(|(_, d)| *d == ',');
