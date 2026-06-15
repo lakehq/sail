@@ -24,7 +24,6 @@ use sail_delta_lake::physical::DeltaPhysicalPlanner;
 use sail_iceberg::IcebergPhysicalPlanner;
 use sail_logical_plan::barrier::BarrierNode;
 use sail_logical_plan::map_partitions::MapPartitionsNode;
-use sail_logical_plan::merge::MergeIntoNode;
 use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::range::RangeNode;
 use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
@@ -51,7 +50,6 @@ use sail_physical_plan::streaming::filter::StreamFilterExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
 use sail_plan::catalog::CatalogCommandNode;
-use sail_plan_lakehouse::DeltaExtensionPlanner;
 
 #[derive(Debug)]
 pub struct ExtensionQueryPlanner {}
@@ -73,7 +71,6 @@ impl QueryPlanner for ExtensionQueryPlanner {
         let extension_planners: Vec<Arc<dyn ExtensionPlanner + Send + Sync>> = vec![
             Arc::new(DeltaPhysicalPlanner),
             Arc::new(IcebergPhysicalPlanner),
-            Arc::new(DeltaExtensionPlanner),
             Arc::new(SystemTablePhysicalPlanner),
             Arc::new(ListingPhysicalPlanner),
             Arc::new(ConsolePhysicalPlanner),
@@ -174,18 +171,6 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                 node.names().to_vec(),
                 node.schema().inner().clone(),
             ))
-        } else if let Some(node) = node.as_any().downcast_ref::<MergeIntoNode>() {
-            let _ = (
-                planner,
-                logical_inputs,
-                physical_inputs,
-                session_state,
-                node,
-            );
-            return internal_err!(
-                "MERGE planning expects a pre-expanded logical plan (RowLevelWriteNode). \
-Ensure expand_row_level_op is enabled; MERGE is currently only supported for lakehouse tables."
-            );
         } else if let Some(node) = node.as_any().downcast_ref::<ExplicitRepartitionNode>() {
             let [input] = physical_inputs else {
                 return internal_err!(

@@ -17,10 +17,10 @@ use sail_common_datafusion::column_features::{
     ColumnFeatureKey, ColumnFeatures, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
 use sail_common_datafusion::datasource::{
-    create_sort_order, find_path_in_options, BucketBy, DeleteInfo, MergeStrategy, OptionLayer,
-    PhysicalSinkMode, RowLevelCommand, RowLevelWriteInfo, SinkInfo, SinkMode, SourceInfo,
-    TableFormat, TableFormatAlterTableOperation, TableFormatMetadata, TableFormatRegistry,
-    CATALOG_TABLE_OPTION,
+    create_sort_order, find_path_in_options, BucketBy, DeleteInfo, MergeInfo, MergeStrategy,
+    OptionLayer, PhysicalSinkMode, RowLevelCommand, RowLevelWriteInfo, SinkInfo, SinkMode,
+    SourceInfo, TableFormat, TableFormatAlterTableOperation, TableFormatMetadata,
+    TableFormatRegistry, CATALOG_TABLE_OPTION,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -186,6 +186,10 @@ impl TableFormat for DeltaTableFormat {
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(write_node),
         }))
+    }
+
+    async fn create_merger(&self, _ctx: &dyn Session, info: MergeInfo) -> Result<LogicalPlan> {
+        crate::logical::merge::expand_merge_node(info)
     }
 
     async fn create_row_level_writer(

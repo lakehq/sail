@@ -1,65 +1,26 @@
-use std::fmt::Debug;
 use std::sync::Arc;
 
 use datafusion::logical_expr::logical_plan::builder::LogicalPlanBuilder;
-use datafusion::optimizer::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, Result};
 use datafusion_expr::logical_plan::Extension;
 use datafusion_expr::{Expr, LogicalPlan, TableScan, TableSource};
 use log::trace;
 use sail_common_datafusion::datasource::{
-    is_lakehouse_format, MergeCapableSource, MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN,
+    MergeCapableSource, MergeInfo, MergeMatchedAction, MergeNotMatchedBySourceAction,
+    MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN,
 };
-use sail_delta_lake::DeltaTableSource;
-use sail_logical_plan::merge::{
-    expand_merge, MergeIntoNode, MergeMatchedAction, MergeNotMatchedBySourceAction,
-    RowLevelWriteNode,
-};
+use sail_logical_plan::merge::{expand_merge, RowLevelWriteNode};
 
-/// Optimizer rule that expands row-level operations (DELETE, UPDATE, MERGE)
-/// into `RowLevelWriteNode` for lakehouse formats.
-#[derive(Debug, Clone, Default)]
-pub struct ExpandRowLevelOp;
+use crate::logical::table_source::DeltaTableSource;
 
-impl ExpandRowLevelOp {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl OptimizerRule for ExpandRowLevelOp {
-    fn rewrite(
-        &self,
-        plan: LogicalPlan,
-        _config: &dyn OptimizerConfig,
-    ) -> Result<Transformed<LogicalPlan>> {
-        plan.transform_up(|plan| {
-            if let LogicalPlan::Extension(ext) = &plan {
-                // MERGE expansion
-                if let Some(node) = ext.node.as_any().downcast_ref::<MergeIntoNode>() {
-                    if !is_lakehouse_format(&node.options().target.format) {
-                        return Ok(Transformed::no(plan));
-                    }
-                    return expand_merge_node(node);
-                }
-            }
-            Ok(Transformed::no(plan))
-        })
-    }
-
-    fn name(&self) -> &str {
-        "expand_row_level_op"
-    }
-}
-
-/// Expand `MergeIntoNode` → `RowLevelWriteNode(Merge)`.
-fn expand_merge_node(node: &MergeIntoNode) -> Result<Transformed<LogicalPlan>> {
-    let row_index_column = (merge_has_delete_actions(node)
-        && merge_target_supports_deletion_vectors(node.target().as_ref())?)
+/// Expand MERGE information into a unified row-level write node for Delta.
+pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
+    let row_index_column = (merge_has_delete_actions(&info)
+        && merge_target_supports_deletion_vectors(info.target.as_ref())?)
     .then_some(MERGE_ROW_INDEX_COLUMN);
     let mut target_plan = ensure_merge_metadata_columns(
-        node.target().as_ref().clone(),
+        info.target.as_ref().clone(),
         MERGE_FILE_COLUMN,
         row_index_column,
     )?;
@@ -103,16 +64,19 @@ fn expand_merge_node(node: &MergeIntoNode) -> Result<Transformed<LogicalPlan>> {
                 .collect::<Vec<_>>()
         );
     }
-    let node = MergeIntoNode::new(
-        Arc::new(target_plan),
-        node.source().clone(),
-        node.options().clone(),
-        node.input_schema().clone(),
-    );
 
-    let expansion = expand_merge(&node, MERGE_FILE_COLUMN, row_index_column)?;
+    let info = MergeInfo {
+        target: Arc::new(target_plan),
+        source: info.source,
+        options: info.options,
+        input_schema: info.input_schema,
+    };
+    let raw_target = Arc::clone(&info.target);
+    let raw_source = Arc::clone(&info.source);
+    let raw_input_schema = info.input_schema.clone();
+    let expansion = expand_merge(info, MERGE_FILE_COLUMN, row_index_column)?;
     trace!(
-        "ExpandRowLevelOp write_plan schema fields: {:?}",
+        "MERGE expansion write_plan schema fields: {:?}",
         expansion
             .write_plan
             .schema()
@@ -122,9 +86,9 @@ fn expand_merge_node(node: &MergeIntoNode) -> Result<Transformed<LogicalPlan>> {
             .collect::<Vec<_>>()
     );
     let write_node = RowLevelWriteNode::new_merge(
-        Arc::clone(node.target()),
-        Arc::clone(node.source()),
-        node.input_schema().clone(),
+        raw_target,
+        raw_source,
+        raw_input_schema,
         Arc::new(expansion.write_plan),
         Arc::new(expansion.touched_files_plan),
         expansion.deletion_vector_plan.map(Arc::new),
@@ -132,18 +96,18 @@ fn expand_merge_node(node: &MergeIntoNode) -> Result<Transformed<LogicalPlan>> {
         expansion.output_schema,
     );
 
-    Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+    Ok(LogicalPlan::Extension(Extension {
         node: Arc::new(write_node),
-    })))
+    }))
 }
 
-fn merge_has_delete_actions(node: &MergeIntoNode) -> bool {
-    node.options()
+fn merge_has_delete_actions(info: &MergeInfo) -> bool {
+    info.options
         .matched_clauses
         .iter()
         .any(|clause| matches!(clause.action, MergeMatchedAction::Delete))
-        || node
-            .options()
+        || info
+            .options
             .not_matched_by_source_clauses
             .iter()
             .any(|clause| matches!(clause.action, MergeNotMatchedBySourceAction::Delete))
@@ -163,7 +127,7 @@ fn merge_target_supports_deletion_vectors(plan: &LogicalPlan) -> Result<bool> {
     Ok(supports)
 }
 
-/// Attempts to enable MERGE metadata columns on a table source via the [`MergeCapableSource`] trait.
+/// Attempts to enable MERGE metadata columns on a Delta table source.
 /// Returns `Some((new_source, schema))` if reconfigured, or `None` if unsupported.
 fn try_enable_merge_metadata_columns(
     source: &Arc<dyn TableSource>,
@@ -175,40 +139,33 @@ fn try_enable_merge_metadata_columns(
         datafusion::arrow::datatypes::SchemaRef,
     )>,
 > {
-    // Try Delta Lake source
-    if let Some(delta_source) = source.downcast_ref::<DeltaTableSource>() {
-        let mut new_source = Arc::clone(source);
-        let mut changed = false;
+    let Some(delta_source) = source.downcast_ref::<DeltaTableSource>() else {
+        return Ok(None);
+    };
+    let mut new_source = Arc::clone(source);
+    let mut changed = false;
 
-        if delta_source.file_column_name().is_none() {
-            new_source = delta_source.with_file_column(file_col)?;
+    if delta_source.file_column_name().is_none() {
+        new_source = delta_source.with_file_column(file_col)?;
+        changed = true;
+    }
+    if let (Some(row_index_col), Some(delta_source)) =
+        (row_index_col, new_source.downcast_ref::<DeltaTableSource>())
+    {
+        if delta_source.row_index_column_name().is_none() {
+            new_source = delta_source.with_row_index_column(row_index_col)?;
             changed = true;
         }
-        if let (Some(row_index_col), Some(delta_source)) =
-            (row_index_col, new_source.downcast_ref::<DeltaTableSource>())
-        {
-            if delta_source.row_index_column_name().is_none() {
-                new_source = delta_source.with_row_index_column(row_index_col)?;
-                changed = true;
-            }
-        }
-        if changed {
-            let schema = new_source.schema();
-            return Ok(Some((new_source, schema)));
-        }
-        return Ok(None);
     }
-
-    // Future: try Iceberg source when it implements MergeCapableSource
-    // if let Some(iceberg_source) = source.downcast_ref::<IcebergTableSource>() {
-    //     ...
-    // }
-
+    if changed {
+        let schema = new_source.schema();
+        return Ok(Some((new_source, schema)));
+    }
     Ok(None)
 }
 
-/// Traverses a logical plan to ensure that merge-capable table scans expose the
-/// file path and optional file-local row-index columns, and that parent projections propagate them.
+/// Traverses a logical plan to ensure that Delta table scans expose the file path
+/// and optional file-local row-index columns, and that parent projections keep them.
 fn ensure_merge_metadata_columns(
     plan: LogicalPlan,
     file_col: &str,
@@ -343,21 +300,4 @@ fn ensure_merge_metadata_columns(
     );
 
     Ok(transformed)
-}
-
-pub fn lakehouse_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
-    vec![Arc::new(ExpandRowLevelOp::new())]
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn lakehouse_rules_include_expand_row_level_op() {
-        let rules = lakehouse_optimizer_rules();
-        assert!(rules
-            .iter()
-            .any(|rule| rule.name() == "expand_row_level_op"));
-    }
 }
