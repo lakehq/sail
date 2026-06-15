@@ -4,7 +4,7 @@ use std::sync::Arc;
 use datafusion::logical_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion::optimizer::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, DFSchema, Result};
+use datafusion_common::{Column, Result};
 use datafusion_expr::logical_plan::Extension;
 use datafusion_expr::{Expr, LogicalPlan, TableScan, TableSource};
 use log::trace;
@@ -12,7 +12,6 @@ use sail_common_datafusion::datasource::{
     is_lakehouse_format, MergeCapableSource, MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN,
 };
 use sail_delta_lake::DeltaTableSource;
-use sail_logical_plan::file_delete::FileDeleteNode;
 use sail_logical_plan::merge::{
     expand_merge, MergeIntoNode, MergeMatchedAction, MergeNotMatchedBySourceAction,
     RowLevelWriteNode,
@@ -43,14 +42,6 @@ impl OptimizerRule for ExpandRowLevelOp {
                         return Ok(Transformed::no(plan));
                     }
                     return expand_merge_node(node);
-                }
-
-                // DELETE → RowLevelWriteNode (delegates physical plan to format)
-                if let Some(node) = ext.node.as_any().downcast_ref::<FileDeleteNode>() {
-                    if !is_lakehouse_format(node.options().format.as_str()) {
-                        return Ok(Transformed::no(plan));
-                    }
-                    return expand_delete_node(node);
                 }
             }
             Ok(Transformed::no(plan))
@@ -139,32 +130,6 @@ fn expand_merge_node(node: &MergeIntoNode) -> Result<Transformed<LogicalPlan>> {
         expansion.deletion_vector_plan.map(Arc::new),
         expansion.options,
         expansion.output_schema,
-    );
-
-    Ok(Transformed::yes(LogicalPlan::Extension(Extension {
-        node: Arc::new(write_node),
-    })))
-}
-
-/// Convert `FileDeleteNode` → `RowLevelWriteNode(Delete)`.
-///
-/// DELETE's physical plan is built by the format's `create_row_level_writer`
-/// (e.g., Delta's `build_delete_plan`), so we simply wrap the parameters.
-fn expand_delete_node(node: &FileDeleteNode) -> Result<Transformed<LogicalPlan>> {
-    let opts = node.options();
-    let write_node = RowLevelWriteNode::new_delete(
-        Arc::new(LogicalPlan::EmptyRelation(
-            datafusion_expr::logical_plan::EmptyRelation {
-                produce_one_row: false,
-                schema: Arc::new(DFSchema::empty()),
-            },
-        )),
-        Arc::new(DFSchema::empty()),
-        opts.condition.clone(),
-        opts.format.clone(),
-        opts.path.clone(),
-        opts.table_name.clone(),
-        opts.options.clone(),
     );
 
     Ok(Transformed::yes(LogicalPlan::Extension(Extension {
