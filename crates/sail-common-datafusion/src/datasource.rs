@@ -10,7 +10,6 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_expr::{
     create_physical_sort_exprs, LexOrdering, LexRequirement, PhysicalSortRequirement,
 };
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, DFSchemaRef, Result};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, TableSource};
@@ -197,6 +196,12 @@ pub struct SourceInfo {
     /// The layers of options for the data source.
     /// A later layer can override earlier ones.
     pub options: Vec<OptionLayer>,
+    /// Whether reads match the requested columns case-sensitively against the
+    /// physical file schema. Spark defaults to case-insensitive matching
+    /// (`spark.sql.caseSensitive=false`). This only affects formats that
+    /// reconcile a requested schema against files on read (e.g. Parquet); it is
+    /// inert for formats that resolve their schema from metadata.
+    pub read_case_sensitive: bool,
 }
 
 /// Metadata about an existing table format instance needed during logical planning.
@@ -384,59 +389,6 @@ pub enum RowLevelCommand {
     Merge,
 }
 
-/// Target table information shared by all row-level operations.
-#[derive(Debug, Clone)]
-pub struct RowLevelTargetInfo {
-    pub table_name: Vec<String>,
-    pub path: String,
-    pub partition_by: Vec<String>,
-    pub options: Vec<OptionLayer>,
-}
-
-/// Operation metadata used to construct commit log `operationParameters`.
-#[derive(Debug, Clone)]
-pub struct MergePredicateInfo {
-    pub action_type: String,
-    pub predicate: Option<String>,
-}
-
-/// Override metadata for operation commit logs.
-#[derive(Debug, Clone)]
-pub enum OperationOverride {
-    Merge {
-        predicate: Option<String>,
-        merge_predicate: Option<String>,
-        matched_predicates: Vec<MergePredicateInfo>,
-        not_matched_predicates: Vec<MergePredicateInfo>,
-        not_matched_by_source_predicates: Vec<MergePredicateInfo>,
-    },
-}
-
-/// Unified information for all row-level write operations (DELETE, UPDATE, MERGE).
-#[derive(Debug, Clone)]
-pub struct RowLevelWriteInfo {
-    pub command: RowLevelCommand,
-    pub target: RowLevelTargetInfo,
-    /// Condition for DELETE/UPDATE. `None` for MERGE.
-    pub condition: Option<ExprWithSource>,
-    /// Pre-expanded physical plan for writing (MERGE, future UPDATE).
-    pub expanded_input: Option<Arc<dyn ExecutionPlan>>,
-    /// Physical plan that yields touched file paths (MERGE targeted rewrite).
-    pub touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
-    /// Physical plan that yields target file path and file-local row index rows to delete via DVs.
-    pub deletion_vector_plan: Option<Arc<dyn ExecutionPlan>>,
-    pub with_schema_evolution: bool,
-    /// Override for commit operation metadata.
-    pub operation_override: Option<OperationOverride>,
-    /// Materialization strategy. Defaults to [`MergeStrategy::Eager`].
-    pub merge_strategy: MergeStrategy,
-}
-
-// TODO: MERGE schema evolution end-to-end
-// - Expand sink schema during MERGE: detect source-only columns (case-insensitive), keep target order, append new cols, project source/NULL for them.
-// - Emit Metadata (and Protocol if required) in writer/commit so the new schema is persisted and readable.
-// - Reading: time-travel must stay on the requested version; non-time-travel can refresh to latest snapshot to see new schema.
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum TableFormatAlterTableOperation {
     /// Alters table properties (SET/UNSET TBLPROPERTIES).
@@ -507,25 +459,6 @@ pub trait TableFormat: Send + Sync {
     async fn create_merger(&self, ctx: &dyn Session, info: MergeInfo) -> Result<LogicalPlan> {
         let _ = (ctx, info);
         not_impl_err!("MERGE is not yet implemented for {} format", self.name())
-    }
-
-    /// Creates an `ExecutionPlan` for row-level operations (DELETE, UPDATE, MERGE).
-    async fn create_row_level_writer(
-        &self,
-        ctx: &dyn Session,
-        info: RowLevelWriteInfo,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let _ = (ctx, info);
-        not_impl_err!(
-            "Row-level operations are not yet implemented for {} format",
-            self.name()
-        )
-    }
-
-    /// Returns the materialization strategy for row-level modifications.
-    /// Defaults to [`MergeStrategy::Eager`]. Override for Merge-on-Read formats.
-    fn merge_strategy(&self) -> MergeStrategy {
-        MergeStrategy::Eager
     }
 
     /// Alters table-format storage metadata for an existing table.

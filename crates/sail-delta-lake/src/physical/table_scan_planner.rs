@@ -6,13 +6,12 @@ use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
 use datafusion::logical_expr::{LogicalPlan, TableScan, UserDefinedLogicalNode};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use sail_common_datafusion::datasource::is_lakehouse_format;
 use sail_logical_plan::merge::{MergeCardinalityCheckNode, RowLevelWriteNode};
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
-use sail_physical_plan::row_level_write::create_row_level_write_physical_plan;
 
 use crate::logical::table_source::DeltaTableSource;
 use crate::physical::scan_planner::plan_delta_scan;
+use crate::physical_plan::planner::create_row_level_write_physical_plan;
 use crate::table_format::{plan_delta_write, DeltaWriteNode};
 
 /// Physical planner for logical Delta table scans.
@@ -46,7 +45,7 @@ impl ExtensionPlanner for DeltaPhysicalPlanner {
         }
 
         if let Some(node) = node.as_any().downcast_ref::<RowLevelWriteNode>() {
-            if !is_lakehouse_format(node.target_format()) {
+            if !node.target_format().eq_ignore_ascii_case("delta") {
                 return Ok(None);
             }
 
