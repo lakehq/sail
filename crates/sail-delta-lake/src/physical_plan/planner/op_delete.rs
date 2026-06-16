@@ -121,7 +121,7 @@ pub async fn build_delete_plan(
         None,
         None,
         None,
-        ctx.catalog_table().cloned(),
+        ctx.lakehouse_table().cloned(),
     ));
 
     // Adapt the predicate to the scan schema. PhysicalExpr Column indices are schema-dependent,
@@ -167,7 +167,6 @@ pub async fn build_delete_plan(
         ctx.options().user_metadata.clone(),
         write_context,
         ctx.lakehouse_table().cloned(),
-        ctx.catalog_table().cloned(),
     )
 }
 
@@ -276,6 +275,5 @@ pub async fn build_delete_plan_mor(
         ctx.options().user_metadata.clone(),
         DeltaCommitContext::from_snapshot(snapshot_state.as_ref()),
         ctx.lakehouse_table().cloned(),
-        ctx.catalog_table().cloned(),
     )))
 }

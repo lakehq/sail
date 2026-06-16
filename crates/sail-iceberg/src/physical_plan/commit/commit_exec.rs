@@ -37,9 +37,7 @@ use sail_common_datafusion::catalog::managed::{
     existing_metadata_location_key, METADATA_LOCATION_UNDERSCORE_KEY,
     PREVIOUS_METADATA_LOCATION_KEY,
 };
-use sail_common_datafusion::catalog::{
-    LakehouseExecutionContext, LakehouseOperation, TableKind, TableStatus,
-};
+use sail_common_datafusion::catalog::{LakehouseExecutionContext, TableKind, TableStatus};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
 
@@ -62,8 +60,7 @@ use crate::table::metadata_loader::{
     metadata_file_version_from_path, metadata_location_to_object_path_string,
 };
 use crate::table_format::{
-    catalog_managed_iceberg_from_properties, catalog_table_from_properties,
-    metadata_location_from_properties,
+    catalog_managed_iceberg_from_properties, metadata_location_from_properties,
 };
 use crate::utils::get_object_store_from_context;
 use crate::utils::metadata::metadata_files_for_version;
@@ -380,6 +377,7 @@ impl IcebergCommitExec {
     async fn try_commit_to_catalog(
         context: &Arc<TaskContext>,
         catalog_table: &[String],
+        lakehouse_table: &LakehouseExecutionContext,
         requirements: Vec<TableRequirement>,
         updates: Vec<TableUpdate>,
     ) -> Result<CatalogCommitOutcome> {
@@ -398,10 +396,7 @@ impl IcebergCommitExec {
             .commit_lakehouse_table(
                 catalog_table,
                 LakehouseCommitRequest {
-                    context: LakehouseExecutionContext::legacy_catalog_table(
-                        catalog_table.to_vec(),
-                        LakehouseOperation::Write,
-                    ),
+                    context: lakehouse_table.clone(),
                     format: "iceberg".to_string(),
                     requirements,
                     updates,
@@ -411,7 +406,7 @@ impl IcebergCommitExec {
             .await
         {
             Ok(_) => Ok(CatalogCommitOutcome::Committed),
-            Err(CatalogError::NotSupported(err)) => {
+            Err(CatalogError::NotSupported(err) | CatalogError::UnsupportedCapability(err)) => {
                 log::debug!("Iceberg catalog commit is not supported: {err}");
                 Ok(CatalogCommitOutcome::NotSupported)
             }
@@ -554,12 +549,16 @@ impl ExecutionPlan for IcebergCommitExec {
                 updates: vec![],
                 requirements: commit_meta.requirements,
                 table_properties: commit_meta.table_properties,
+                lakehouse_table: commit_meta.lakehouse_table,
                 operation: commit_meta.operation,
                 schema: commit_meta.schema,
                 partition_spec: commit_meta.partition_spec,
             };
 
-            let catalog_table = catalog_table_from_properties(&commit_info.table_properties)?;
+            let catalog_table = commit_info
+                .lakehouse_table
+                .as_ref()
+                .map(|context| context.catalog_table().to_vec());
             let CatalogTableInfo {
                 metadata_location: catalog_status_metadata_location,
                 is_catalog_managed_iceberg_table: is_catalog_status_managed_iceberg_table,
@@ -765,6 +764,12 @@ impl ExecutionPlan for IcebergCommitExec {
                         match Self::try_commit_to_catalog(
                             &context,
                             catalog_table,
+                            commit_info.lakehouse_table.as_ref().ok_or_else(|| {
+                                DataFusionError::Internal(
+                                    "missing lakehouse context for Iceberg catalog commit"
+                                        .to_string(),
+                                )
+                            })?,
                             requirements,
                             updates,
                         )
@@ -930,6 +935,11 @@ impl ExecutionPlan for IcebergCommitExec {
                     match Self::try_commit_to_catalog(
                         &context,
                         catalog_table,
+                        commit_info.lakehouse_table.as_ref().ok_or_else(|| {
+                            DataFusionError::Internal(
+                                "missing lakehouse context for Iceberg catalog commit".to_string(),
+                            )
+                        })?,
                         requirements,
                         updates,
                     )

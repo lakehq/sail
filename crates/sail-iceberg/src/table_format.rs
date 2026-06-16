@@ -27,7 +27,7 @@ use educe::Educe;
 use object_store::ObjectStoreExt;
 use sail_common_datafusion::catalog::iceberg::is_iceberg_table_marker;
 use sail_common_datafusion::catalog::managed::metadata_location_value;
-use sail_common_datafusion::catalog::CatalogPartitionField;
+use sail_common_datafusion::catalog::{CatalogPartitionField, LakehouseExecutionContext};
 use sail_common_datafusion::datasource::{
     create_sort_order, find_path_in_options, BucketBy, OptionLayer, PhysicalSinkMode, SinkInfo,
     SinkMode, SourceInfo, TableFormat, TableFormatAlterTableOperation,
@@ -120,11 +120,7 @@ impl TableFormat for IcebergTableFormat {
             sort_order,
             options,
             lakehouse_table,
-            catalog_table,
         } = info;
-        let catalog_table = lakehouse_table
-            .map(|context| context.catalog_table().to_vec())
-            .or(catalog_table);
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for Iceberg format");
         }
@@ -139,7 +135,7 @@ impl TableFormat for IcebergTableFormat {
                     bucket_by,
                     sort_order,
                     options,
-                    catalog_table,
+                    lakehouse_table,
                 },
             )),
         }))
@@ -158,11 +154,10 @@ impl TableFormat for IcebergTableFormat {
             properties,
             replace,
             lakehouse_table,
-            catalog_table,
         } = info;
         let catalog_table = lakehouse_table
-            .map(|context| context.catalog_table().to_vec())
-            .or(catalog_table);
+            .as_ref()
+            .map(|context| context.catalog_table().to_vec());
 
         let table_url = Self::parse_table_url(vec![path]).await?;
         let object_store = runtime_env
@@ -291,7 +286,7 @@ pub struct IcebergWriteNodeOptions {
     pub bucket_by: Option<BucketBy>,
     pub sort_order: Vec<Sort>,
     pub options: Vec<OptionLayer>,
-    pub catalog_table: Option<Vec<String>>,
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
 }
 
 #[derive(Clone, Debug, Educe)]
@@ -363,7 +358,7 @@ pub(crate) async fn plan_iceberg_write(
         bucket_by: _,
         sort_order,
         options,
-        catalog_table,
+        lakehouse_table,
     } = node.options().clone();
 
     let mode = match mode {
@@ -463,13 +458,7 @@ pub(crate) async fn plan_iceberg_write(
     let mut options = IcebergWriterExecOptions::from(iceberg_options);
     options.apply_variant_shredding_option_presence(variant_shredding_option_presence);
     options.table_properties = table_properties;
-    if let Some(catalog_table) = catalog_table {
-        options.table_properties.push((
-            sail_common_datafusion::datasource::CATALOG_TABLE_OPTION.to_string(),
-            serde_json::to_string(&catalog_table)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?,
-        ));
-    }
+    options.lakehouse_table = lakehouse_table;
     let table_config = IcebergTableConfig {
         table_url,
         partition_columns: resolved_partition_columns,
@@ -648,7 +637,6 @@ async fn build_iceberg_provider(
     let SourceInfo {
         paths,
         lakehouse_table: _,
-        catalog_table: _,
         schema: _,
         constraints: _,
         partition_by: _,
@@ -908,22 +896,6 @@ pub fn catalog_managed_iceberg_from_options(options: &[OptionLayer]) -> bool {
         }
         _ => false,
     })
-}
-
-pub(crate) fn catalog_table_from_properties(
-    properties: &[(String, String)],
-) -> Result<Option<Vec<String>>> {
-    properties
-        .iter()
-        .rev()
-        .find(|(key, _)| {
-            key.eq_ignore_ascii_case(sail_common_datafusion::datasource::CATALOG_TABLE_OPTION)
-        })
-        .map(|(_, value)| {
-            serde_json::from_str::<Vec<String>>(value)
-                .map_err(|e| DataFusionError::Plan(format!("invalid catalog table reference: {e}")))
-        })
-        .transpose()
 }
 
 #[expect(clippy::type_complexity)]

@@ -30,6 +30,7 @@ use datafusion_common::{internal_err, DataFusionError, Result, Statistics};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
+use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
 use url::Url;
@@ -58,7 +59,7 @@ struct ScanByAddsStreamState {
     table_version: i64,
     output_schema: SchemaRef,
     scan_config: DeltaScanConfig,
-    catalog_table: Option<Vec<String>>,
+    lakehouse_table: Option<LakehouseExecutionContext>,
     limit: Option<usize>,
     pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
 
@@ -87,7 +88,7 @@ impl ScanByAddsStreamState {
         table_version: i64,
         output_schema: SchemaRef,
         scan_config: DeltaScanConfig,
-        catalog_table: Option<Vec<String>>,
+        lakehouse_table: Option<LakehouseExecutionContext>,
         limit: Option<usize>,
         pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
     ) -> Self {
@@ -98,7 +99,7 @@ impl ScanByAddsStreamState {
             table_version,
             output_schema,
             scan_config,
-            catalog_table,
+            lakehouse_table,
             limit,
             pushdown_filter,
             table_opened: false,
@@ -121,7 +122,7 @@ impl ScanByAddsStreamState {
         }
         // Prefer a session-scoped cache. This avoids leaking state across sessions / RuntimeEnvs.
         // If the cache extension is not installed, fall back to no caching.
-        let catalog_table = self.catalog_table.as_deref();
+        let lakehouse_table = self.lakehouse_table.as_ref();
         let cached = match self.context.as_ref().extension::<DeltaTableCache>() {
             Ok(cache) => {
                 cache
@@ -129,7 +130,7 @@ impl ScanByAddsStreamState {
                         self.context.as_ref(),
                         &self.table_url,
                         self.table_version,
-                        catalog_table,
+                        lakehouse_table,
                     )
                     .await?
             }
@@ -138,7 +139,7 @@ impl ScanByAddsStreamState {
                     self.context.as_ref(),
                     &self.table_url,
                     self.table_version,
-                    catalog_table,
+                    lakehouse_table,
                 )
                 .await?
             }
@@ -592,7 +593,7 @@ pub struct DeltaScanByAddsExec {
     projection: Option<Vec<usize>>,
     limit: Option<usize>,
     pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
-    catalog_table: Option<Vec<String>>,
+    lakehouse_table: Option<LakehouseExecutionContext>,
     statistics: Statistics,
     cache: Arc<PlanProperties>,
 }
@@ -609,7 +610,7 @@ impl DeltaScanByAddsExec {
         projection: Option<Vec<usize>>,
         limit: Option<usize>,
         pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
-        catalog_table: Option<Vec<String>>,
+        lakehouse_table: Option<LakehouseExecutionContext>,
     ) -> Self {
         let statistics = Statistics::new_unknown(output_schema.as_ref());
         let cache = Self::compute_properties(
@@ -626,7 +627,7 @@ impl DeltaScanByAddsExec {
             projection,
             limit,
             pushdown_filter,
-            catalog_table,
+            lakehouse_table,
             statistics,
             cache,
         }
@@ -691,7 +692,13 @@ impl DeltaScanByAddsExec {
     }
 
     pub fn catalog_table(&self) -> Option<&[String]> {
-        self.catalog_table.as_deref()
+        self.lakehouse_table
+            .as_ref()
+            .map(LakehouseExecutionContext::catalog_table)
+    }
+
+    pub fn lakehouse_table(&self) -> Option<&LakehouseExecutionContext> {
+        self.lakehouse_table.as_ref()
     }
 
     pub fn statistics(&self) -> &Statistics {
@@ -752,7 +759,7 @@ impl ExecutionPlan for DeltaScanByAddsExec {
         let table_version = self.version;
         let output_schema = self.schema();
         let scan_config = self.scan_config.clone();
-        let catalog_table = self.catalog_table.clone();
+        let lakehouse_table = self.lakehouse_table.clone();
         let limit = self.limit;
         let pushdown_filter = self.pushdown_filter.clone();
         let state = ScanByAddsStreamState::new(
@@ -762,7 +769,7 @@ impl ExecutionPlan for DeltaScanByAddsExec {
             table_version,
             Arc::clone(&output_schema),
             scan_config,
-            catalog_table,
+            lakehouse_table,
             limit,
             pushdown_filter,
         );

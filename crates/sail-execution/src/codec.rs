@@ -78,7 +78,7 @@ use prost::Message;
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
 use sail_common_datafusion::catalog::{
-    CatalogPartitionField, LakehouseExecutionContext, LakehouseOperation, PartitionTransform,
+    CatalogPartitionField, LakehouseExecutionContext, PartitionTransform,
 };
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionCastColumnExpr;
@@ -639,7 +639,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     sink_mode,
                     metadata_configuration,
                     write_context,
-                    catalog_table,
+                    lakehouse_table_json,
                 } = *delta_writer;
                 let input = self.try_decode_plan(&input, ctx)?;
                 let sink_schema = self.try_decode_schema(&sink_schema)?;
@@ -658,6 +658,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Some(write_context) => self.try_decode_delta_write_context(write_context)?,
                     None => return plan_err!("Missing write_context for DeltaWriterExec"),
                 };
+                let lakehouse_table = self.try_decode_lakehouse_table(&lakehouse_table_json)?;
 
                 Ok(Arc::new(DeltaWriterExec::new(
                     input,
@@ -669,7 +670,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     table_exists,
                     Arc::new(sink_schema),
                     write_context,
-                    (!catalog_table.is_empty()).then_some(catalog_table),
+                    lakehouse_table,
                 )?))
             }
             NodeKind::DeltaCommit(gen::DeltaCommitExecNode {
@@ -681,7 +682,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sink_mode,
                 user_metadata,
                 commit_context,
-                catalog_table,
+                lakehouse_table_json,
             }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let sink_schema = self.try_decode_schema(&sink_schema)?;
@@ -698,13 +699,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     None => return plan_err!("Missing commit_context for DeltaCommitExec"),
                 };
 
-                let catalog_table = (!catalog_table.is_empty()).then_some(catalog_table);
-                let lakehouse_table = catalog_table.as_ref().map(|catalog_table| {
-                    LakehouseExecutionContext::legacy_catalog_table(
-                        catalog_table.clone(),
-                        LakehouseOperation::Write,
-                    )
-                });
+                let lakehouse_table = self.try_decode_lakehouse_table(&lakehouse_table_json)?;
                 Ok(Arc::new(DeltaCommitExec::new(
                     input,
                     table_url,
@@ -715,7 +710,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     user_metadata,
                     commit_context,
                     lakehouse_table,
-                    catalog_table,
                 )))
             }
             NodeKind::DeltaScanByAdds(gen::DeltaScanByAddsExecNode {
@@ -729,7 +723,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 pushdown_filter,
                 version,
                 statistics,
-                catalog_table,
+                lakehouse_table_json,
             }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let table_url = Url::parse(&table_url)
@@ -773,6 +767,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .as_ref()
                     .map(|bytes| self.try_decode_statistics(bytes))
                     .transpose()?;
+                let lakehouse_table = self.try_decode_lakehouse_table(&lakehouse_table_json)?;
                 Ok(Arc::new(
                     DeltaScanByAddsExec::new(
                         input,
@@ -784,7 +779,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         projection,
                         limit,
                         pushdown_filter,
-                        (!catalog_table.is_empty()).then_some(catalog_table),
+                        lakehouse_table,
                     )
                     .with_output_statistics(statistics),
                 ))
@@ -1622,10 +1617,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 write_context: Some(
                     self.try_encode_delta_write_context(delta_writer_exec.write_context())?,
                 ),
-                catalog_table: delta_writer_exec
-                    .catalog_table()
-                    .map(|table| table.to_vec())
-                    .unwrap_or_default(),
+                lakehouse_table_json: self
+                    .try_encode_lakehouse_table(delta_writer_exec.lakehouse_table())?,
             }))
         } else if let Some(delta_commit_exec) = node.downcast_ref::<DeltaCommitExec>() {
             let input = self.try_encode_plan(delta_commit_exec.input().clone())?;
@@ -1641,10 +1634,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 commit_context: Some(
                     self.try_encode_delta_commit_context(delta_commit_exec.commit_context())?,
                 ),
-                catalog_table: delta_commit_exec
-                    .catalog_table()
-                    .map(|table| table.to_vec())
-                    .unwrap_or_default(),
+                lakehouse_table_json: self
+                    .try_encode_lakehouse_table(delta_commit_exec.lakehouse_table())?,
             })
         } else if let Some(delta_scan_by_adds_exec) = node.downcast_ref::<DeltaScanByAddsExec>() {
             let input = self.try_encode_plan(delta_scan_by_adds_exec.input().clone())?;
@@ -1684,10 +1675,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 pushdown_filter,
                 version: delta_scan_by_adds_exec.version(),
                 statistics,
-                catalog_table: delta_scan_by_adds_exec
-                    .catalog_table()
-                    .map(|table| table.to_vec())
-                    .unwrap_or_default(),
+                lakehouse_table_json: self
+                    .try_encode_lakehouse_table(delta_scan_by_adds_exec.lakehouse_table())?,
             })
         } else if let Some(delta_discovery_exec) = node.downcast_ref::<DeltaDiscoveryExec>() {
             let input = Some(self.try_encode_plan(delta_discovery_exec.input())?);
@@ -3309,6 +3298,24 @@ impl RemoteExecutionCodec {
     fn try_encode_json<T: Serialize>(&self, value: &T, description: &str) -> Result<String> {
         serde_json::to_string(value)
             .map_err(|e| plan_datafusion_err!("failed to encode {description}: {e}"))
+    }
+
+    fn try_decode_lakehouse_table(&self, value: &str) -> Result<Option<LakehouseExecutionContext>> {
+        if value.is_empty() {
+            Ok(None)
+        } else {
+            self.try_decode_json(value, "lakehouse execution context")
+                .map(Some)
+        }
+    }
+
+    fn try_encode_lakehouse_table(
+        &self,
+        value: Option<&LakehouseExecutionContext>,
+    ) -> Result<String> {
+        value
+            .map(|value| self.try_encode_json(value, "lakehouse execution context"))
+            .unwrap_or_else(|| Ok(String::new()))
     }
 
     fn try_decode_catalog_partition_field(

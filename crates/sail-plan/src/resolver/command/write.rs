@@ -245,7 +245,6 @@ impl PlanResolver<'_> {
                 .map(|items| OptionLayer::OptionList { items })
                 .collect(),
             lakehouse_table: None,
-            catalog_table: None,
         };
         let mut preconditions = vec![];
         match target {
@@ -479,11 +478,10 @@ impl PlanResolver<'_> {
                     .iter()
                     .map(|part| part.as_ref().to_string())
                     .collect::<Vec<_>>();
-                sink_info.lakehouse_table = Some(LakehouseExecutionContext::legacy_catalog_table(
+                sink_info.lakehouse_table = Some(LakehouseExecutionContext::from_catalog_table(
                     catalog_table.clone(),
                     LakehouseOperation::Write,
                 ));
-                sink_info.catalog_table = Some(catalog_table);
 
                 sink_info.mode = self
                     .resolve_write_mode(mode, schema_for_cond.as_ref(), state)
@@ -596,11 +594,10 @@ impl PlanResolver<'_> {
                     })?;
                     let info = SourceInfo {
                         paths: location.iter().cloned().collect(),
-                        lakehouse_table: Some(LakehouseExecutionContext::legacy_catalog_table(
+                        lakehouse_table: Some(LakehouseExecutionContext::from_catalog_table(
                             table.clone().into(),
                             LakehouseOperation::WritePrecondition,
                         )),
-                        catalog_table: Some(table.clone().into()),
                         schema: None,
                         constraints: Default::default(),
                         partition_by: vec![],
@@ -637,11 +634,10 @@ impl PlanResolver<'_> {
                     })?;
                     let info = SourceInfo {
                         paths: location.iter().cloned().collect(),
-                        lakehouse_table: Some(LakehouseExecutionContext::legacy_catalog_table(
+                        lakehouse_table: Some(LakehouseExecutionContext::from_catalog_table(
                             table.clone().into(),
                             LakehouseOperation::WritePrecondition,
                         )),
-                        catalog_table: Some(table.clone().into()),
                         schema: None,
                         constraints: Default::default(),
                         partition_by: vec![],
@@ -668,7 +664,10 @@ impl PlanResolver<'_> {
                     }
                 }
                 Ok(Some(TableInfo {
-                    catalog_table: Some(table.clone().into()),
+                    lakehouse_table: Some(LakehouseExecutionContext::from_catalog_table(
+                        table.clone().into(),
+                        LakehouseOperation::Read,
+                    )),
                     columns,
                     location,
                     format,
@@ -1695,7 +1694,7 @@ fn extract_partition_int_arg(
 }
 
 pub(super) struct TableInfo {
-    pub(super) catalog_table: Option<Vec<String>>,
+    pub(super) lakehouse_table: Option<LakehouseExecutionContext>,
     pub(super) columns: Vec<TableColumnStatus>,
     pub(super) location: Option<String>,
     pub(super) format: String,

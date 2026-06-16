@@ -8,10 +8,16 @@ use sail_common::config::CatalogCacheConfig;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 
 use crate::error::{CatalogError, CatalogResult};
+use crate::lakehouse::{
+    BeginTableAccessRequest, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
+    LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan,
+    LakehouseCreateRequest, LakehouseResolvedTable, LakehouseScanPlanningRequest,
+    LakehouseScanPlanningResponse, ResolveLakehouseTableRequest, TableAccessSession,
+};
 use crate::provider::{
-    AlterTableOptions, CatalogProvider, CommitTableOptions, CreateDatabaseOptions,
-    CreateTableMetadataRequirement, CreateTableOptions, CreateViewOptions, DropDatabaseOptions,
-    DropTableOptions, DropViewOptions, GetTableCommitsOptions, GetTableCommitsResponse, Namespace,
+    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
+    CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
+    Namespace,
 };
 
 #[derive(Clone)]
@@ -279,6 +285,82 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         self.inner.create_table_metadata_requirement(options)
     }
 
+    fn lakehouse_capabilities(&self) -> Vec<LakehouseCapability> {
+        self.inner.lakehouse_capabilities()
+    }
+
+    async fn resolve_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        self.inner
+            .resolve_lakehouse_table(database, table, request)
+            .await
+    }
+
+    async fn plan_lakehouse_create(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseCreateRequest,
+    ) -> CatalogResult<LakehouseCreatePlan> {
+        self.inner
+            .plan_lakehouse_create(database, table, request)
+            .await
+    }
+
+    async fn begin_table_access(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: BeginTableAccessRequest,
+    ) -> CatalogResult<TableAccessSession> {
+        self.inner
+            .begin_table_access(database, table, request)
+            .await
+    }
+
+    async fn plan_lakehouse_scan(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseScanPlanningRequest,
+    ) -> CatalogResult<LakehouseScanPlanningResponse> {
+        self.inner
+            .plan_lakehouse_scan(database, table, request)
+            .await
+    }
+
+    async fn commit_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseCommitRequest,
+    ) -> CatalogResult<LakehouseCommitOutcome> {
+        let outcome = self
+            .inner
+            .commit_lakehouse_table(database, table, request)
+            .await?;
+        if let Some(c) = self.table_cache.as_ref() {
+            let c: &Cache<Namespace, Vec<TableStatus>> = c;
+            c.invalidate(database).await;
+        }
+        Ok(outcome)
+    }
+
+    async fn get_delta_ratified_commits(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: DeltaRatifiedCommitRequest,
+    ) -> CatalogResult<DeltaRatifiedCommitResponse> {
+        self.inner
+            .get_delta_ratified_commits(database, table, request)
+            .await
+    }
+
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
         self.inner.get_table(database, table).await
     }
@@ -324,29 +406,6 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
             c.invalidate(database).await;
         }
         Ok(())
-    }
-
-    async fn commit_table(
-        &self,
-        database: &Namespace,
-        table: &str,
-        options: CommitTableOptions,
-    ) -> CatalogResult<TableStatus> {
-        let status = self.inner.commit_table(database, table, options).await?;
-        if let Some(c) = self.table_cache.as_ref() {
-            let c: &Cache<Namespace, Vec<TableStatus>> = c;
-            c.invalidate(database).await;
-        }
-        Ok(status)
-    }
-
-    async fn get_table_commits(
-        &self,
-        database: &Namespace,
-        table: &str,
-        options: GetTableCommitsOptions,
-    ) -> CatalogResult<GetTableCommitsResponse> {
-        self.inner.get_table_commits(database, table, options).await
     }
 
     async fn create_view(

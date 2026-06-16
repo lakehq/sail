@@ -599,6 +599,7 @@ impl ExecutionPlan for IcebergWriterExec {
                 },
                 requirements: commit_requirements,
                 table_properties: options.table_properties,
+                lakehouse_table: options.lakehouse_table,
                 schema: commit_schema.clone(),
                 partition_spec: if !table_exists
                     || matches!(schema_mode, Some(SchemaMode::Overwrite))

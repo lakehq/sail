@@ -152,7 +152,7 @@ pub fn build_standard_write_layers(
         ctx.table_exists(),
         writer_schema,
         write_context.clone(),
-        ctx.catalog_table().cloned(),
+        ctx.lakehouse_table().cloned(),
     )?);
 
     // DeltaCommitExec is single-partition; gather writer partitions first.
@@ -168,7 +168,6 @@ pub fn build_standard_write_layers(
         ctx.options().user_metadata.clone(),
         write_context.commit_context.clone(),
         ctx.lakehouse_table().cloned(),
-        ctx.catalog_table().cloned(),
     )))
 }
 

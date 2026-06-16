@@ -4,9 +4,7 @@ use sail_common_datafusion::catalog::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::provider::{
-    CreateTableMetadataRequirement, CreateTableOptions, GetTableCommitsResponse, TableCommitInfo,
-};
+use crate::provider::{CreateTableMetadataRequirement, CreateTableOptions};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub enum LakehouseCapability {
@@ -153,36 +151,4 @@ pub struct DeltaRatifiedCommit {
     pub file_name: String,
     pub file_size: i64,
     pub file_modification_timestamp: i64,
-}
-
-impl From<TableCommitInfo> for DeltaRatifiedCommit {
-    fn from(value: TableCommitInfo) -> Self {
-        let TableCommitInfo {
-            version,
-            timestamp,
-            file_name,
-            file_size,
-            file_modification_timestamp,
-        } = value;
-        Self {
-            version,
-            timestamp,
-            file_name,
-            file_size,
-            file_modification_timestamp,
-        }
-    }
-}
-
-impl From<GetTableCommitsResponse> for DeltaRatifiedCommitResponse {
-    fn from(value: GetTableCommitsResponse) -> Self {
-        let GetTableCommitsResponse {
-            latest_table_version,
-            commits,
-        } = value;
-        Self {
-            latest_table_version,
-            commits: commits.into_iter().map(Into::into).collect(),
-        }
-    }
 }

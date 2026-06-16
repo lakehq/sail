@@ -207,7 +207,6 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                     let source_info = SourceInfo {
                         paths: vec![location.clone()],
                         lakehouse_table: None,
-                        catalog_table: None,
                         schema: None,
                         constraints: Default::default(),
                         partition_by: vec![],

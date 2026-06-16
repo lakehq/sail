@@ -15,11 +15,13 @@ use std::sync::Arc;
 
 use percent_encoding::percent_decode_str;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
+use sail_catalog::lakehouse::{
+    LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest,
+};
 use sail_catalog::provider::{
-    AlterTableOptions, CatalogPartitionField, CatalogProvider, CommitTableOptions,
-    CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions,
-    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
-    PartitionTransform,
+    AlterTableOptions, CatalogPartitionField, CatalogProvider, CreateDatabaseOptions,
+    CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
+    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
 use sail_common_datafusion::catalog::managed::METADATA_LOCATION_KEY;
@@ -243,12 +245,13 @@ impl IcebergRestCatalogProvider {
         &self,
         database: &Namespace,
         table: &str,
-        options: CommitTableOptions,
+        format: &str,
+        requirements: Vec<serde_json::Value>,
+        updates: Vec<serde_json::Value>,
     ) -> CatalogResult<crate::models::CommitTableResponse> {
-        if !options.format.eq_ignore_ascii_case("iceberg") {
+        if !format.eq_ignore_ascii_case("iceberg") {
             return Err(CatalogError::NotSupported(format!(
-                "Iceberg REST catalog cannot commit '{}' tables",
-                options.format
+                "Iceberg REST catalog cannot commit '{format}' tables",
             )));
         }
 
@@ -271,8 +274,8 @@ impl IcebergRestCatalogProvider {
                 "namespace": Vec::<String>::from(database.clone()),
                 "name": table,
             },
-            "requirements": options.requirements,
-            "updates": options.updates,
+            "requirements": requirements,
+            "updates": updates,
         });
 
         let mut request = client_config.client.post(uri);
@@ -691,6 +694,10 @@ impl IcebergRestCatalogProvider {
 impl CatalogProvider for IcebergRestCatalogProvider {
     fn get_name(&self) -> &str {
         &self.name
+    }
+
+    fn lakehouse_capabilities(&self) -> Vec<LakehouseCapability> {
+        vec![LakehouseCapability::IcebergRestCommit]
     }
 
     async fn create_database(
@@ -1120,20 +1127,29 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         ))
     }
 
-    async fn commit_table(
+    async fn commit_lakehouse_table(
         &self,
         database: &Namespace,
         table: &str,
-        options: CommitTableOptions,
-    ) -> CatalogResult<TableStatus> {
-        let response = self.commit_table_request(database, table, options).await?;
-        let result = crate::models::LoadTableResult {
-            metadata_location: Some(response.metadata_location),
-            metadata: response.metadata,
-            config: None,
-            storage_credentials: None,
+        request: LakehouseCommitRequest,
+    ) -> CatalogResult<LakehouseCommitOutcome> {
+        let LakehouseCommitRequest {
+            context,
+            format,
+            requirements,
+            updates,
+            payload,
+        } = request;
+        let response = self
+            .commit_table_request(database, table, &format, requirements, updates)
+            .await?;
+        let payload = match payload {
+            Some(payload) => Some(payload),
+            None => Some(serde_json::to_value(response).map_err(|e| {
+                CatalogError::External(format!("Failed to serialize commit response: {e}"))
+            })?),
         };
-        self.load_table_result_to_status(table, database, result)
+        Ok(LakehouseCommitOutcome::Committed { context, payload })
     }
 
     async fn create_view(

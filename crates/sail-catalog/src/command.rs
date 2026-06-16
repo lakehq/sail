@@ -704,12 +704,11 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
                 properties: options.properties.clone(),
                 replace: options.replace,
                 lakehouse_table: catalog_managed.then(|| {
-                    LakehouseExecutionContext::legacy_catalog_table(
+                    LakehouseExecutionContext::from_catalog_table(
                         table.to_vec(),
                         LakehouseOperation::Create,
                     )
                 }),
-                catalog_table: catalog_managed.then(|| table.to_vec()),
             },
         )
         .await
@@ -782,11 +781,10 @@ async fn prepare_created_table_storage_metadata<C: SessionExtensionAccessor>(
                 partition_by: partition_by.clone(),
                 properties: properties.clone(),
                 replace: false,
-                lakehouse_table: Some(LakehouseExecutionContext::legacy_catalog_table(
+                lakehouse_table: Some(LakehouseExecutionContext::from_catalog_table(
                     table.to_vec(),
                     LakehouseOperation::Create,
                 )),
-                catalog_table: Some(table.to_vec()),
             },
         )
         .await

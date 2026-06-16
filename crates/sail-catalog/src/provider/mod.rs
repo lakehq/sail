@@ -130,26 +130,10 @@ pub trait CatalogProvider: Send + Sync {
         table: &str,
         request: LakehouseCommitRequest,
     ) -> CatalogResult<LakehouseCommitOutcome> {
-        let LakehouseCommitRequest {
-            context,
-            format,
-            requirements,
-            updates,
-            payload,
-        } = request;
-        let _status = self
-            .commit_table(
-                database,
-                table,
-                CommitTableOptions {
-                    format,
-                    lakehouse_table: Some(context.clone()),
-                    requirements,
-                    updates,
-                },
-            )
-            .await?;
-        Ok(LakehouseCommitOutcome::Committed { context, payload })
+        let _ = (database, table, request);
+        Err(CatalogError::UnsupportedCapability(
+            "lakehouse table commits".to_string(),
+        ))
     }
 
     async fn get_delta_ratified_commits(
@@ -158,26 +142,10 @@ pub trait CatalogProvider: Send + Sync {
         table: &str,
         request: DeltaRatifiedCommitRequest,
     ) -> CatalogResult<DeltaRatifiedCommitResponse> {
-        let DeltaRatifiedCommitRequest {
-            context,
-            table_uri,
-            start_version,
-            end_version,
-        } = request;
-        let response = self
-            .get_table_commits(
-                database,
-                table,
-                GetTableCommitsOptions {
-                    format: "delta".to_string(),
-                    lakehouse_table: Some(context),
-                    table_uri,
-                    start_version,
-                    end_version,
-                },
-            )
-            .await?;
-        Ok(response.into())
+        let _ = (database, table, request);
+        Err(CatalogError::UnsupportedCapability(
+            "Delta ratified commits".to_string(),
+        ))
     }
 
     /// Gets the status of a table in the catalog.
@@ -201,34 +169,6 @@ pub trait CatalogProvider: Send + Sync {
         table: &str,
         options: AlterTableOptions,
     ) -> CatalogResult<()>;
-
-    /// Commits table-format metadata through the catalog control plane.
-    async fn commit_table(
-        &self,
-        database: &Namespace,
-        table: &str,
-        options: CommitTableOptions,
-    ) -> CatalogResult<TableStatus> {
-        let _ = (database, table);
-        Err(CatalogError::NotSupported(format!(
-            "catalog commit for {} tables",
-            options.format
-        )))
-    }
-
-    /// Gets table-format commits tracked by the catalog control plane.
-    async fn get_table_commits(
-        &self,
-        database: &Namespace,
-        table: &str,
-        options: GetTableCommitsOptions,
-    ) -> CatalogResult<GetTableCommitsResponse> {
-        let _ = (database, table);
-        Err(crate::error::CatalogError::NotSupported(format!(
-            "catalog commit discovery for {} tables",
-            options.format
-        )))
-    }
 
     /// Creates a view in the catalog.
     async fn create_view(

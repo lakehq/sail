@@ -220,7 +220,7 @@ pub struct LakehouseExecutionContext {
 }
 
 impl LakehouseExecutionContext {
-    pub fn legacy_catalog_table(catalog_table: Vec<String>, operation: LakehouseOperation) -> Self {
+    pub fn from_catalog_table(catalog_table: Vec<String>, operation: LakehouseOperation) -> Self {
         let fingerprint = catalog_table.join(".");
         Self {
             catalog_provider_id: CatalogProviderId(
@@ -246,7 +246,7 @@ impl LakehouseExecutionContext {
             versioned_catalog: None,
             cross_format: None,
             governance: None,
-            capability_fingerprint: CapabilityFingerprint(format!("legacy:{fingerprint}")),
+            capability_fingerprint: CapabilityFingerprint(format!("catalog-table:{fingerprint}")),
         }
     }
 

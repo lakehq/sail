@@ -36,7 +36,7 @@ use object_store::{Error as ObjectStoreError, ObjectStoreExt, PutMode, PutOption
 use sail_catalog::error::CatalogError;
 use sail_catalog::lakehouse::{DeltaRatifiedCommitRequest, LakehouseCommitRequest};
 use sail_catalog::manager::CatalogManager;
-use sail_common_datafusion::catalog::{LakehouseExecutionContext, LakehouseOperation};
+use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
@@ -102,7 +102,6 @@ pub struct DeltaCommitExec {
     user_metadata: Option<String>,
     commit_context: DeltaCommitContext,
     lakehouse_table: Option<LakehouseExecutionContext>,
-    catalog_table: Option<Vec<String>>,
     metrics: ExecutionPlanMetricsSet,
     cache: Arc<PlanProperties>,
 }
@@ -119,7 +118,6 @@ impl DeltaCommitExec {
         user_metadata: Option<String>,
         commit_context: DeltaCommitContext,
         lakehouse_table: Option<LakehouseExecutionContext>,
-        catalog_table: Option<Vec<String>>,
     ) -> Self {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "count",
@@ -137,7 +135,6 @@ impl DeltaCommitExec {
             user_metadata,
             commit_context,
             lakehouse_table,
-            catalog_table,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
         }
@@ -185,23 +182,13 @@ impl DeltaCommitExec {
     }
 
     pub fn catalog_table(&self) -> Option<&[String]> {
-        self.catalog_table.as_deref()
+        self.lakehouse_table
+            .as_ref()
+            .map(LakehouseExecutionContext::catalog_table)
     }
 
     pub fn lakehouse_table(&self) -> Option<&LakehouseExecutionContext> {
         self.lakehouse_table.as_ref()
-    }
-
-    fn lakehouse_context_for(
-        catalog_table: &[String],
-        lakehouse_table: Option<&LakehouseExecutionContext>,
-    ) -> LakehouseExecutionContext {
-        lakehouse_table.cloned().unwrap_or_else(|| {
-            LakehouseExecutionContext::legacy_catalog_table(
-                catalog_table.to_vec(),
-                LakehouseOperation::Write,
-            )
-        })
     }
 
     async fn load_catalog_managed_table(
@@ -227,7 +214,7 @@ impl DeltaCommitExec {
     async fn latest_catalog_managed_table_version(
         context: &Arc<TaskContext>,
         catalog_table: &[String],
-        lakehouse_table: Option<&LakehouseExecutionContext>,
+        lakehouse_table: &LakehouseExecutionContext,
         table: &DeltaCatalogManagedTable,
     ) -> Result<i64> {
         let manager = context.extension::<CatalogManager>()?;
@@ -235,7 +222,7 @@ impl DeltaCommitExec {
             .get_delta_ratified_commits(
                 catalog_table,
                 DeltaRatifiedCommitRequest {
-                    context: Self::lakehouse_context_for(catalog_table, lakehouse_table),
+                    context: lakehouse_table.clone(),
                     table_uri: table.table_uri.clone(),
                     start_version: 1,
                     end_version: None,
@@ -248,7 +235,7 @@ impl DeltaCommitExec {
 
     async fn refresh_catalog_managed_reference(
         context: &Arc<TaskContext>,
-        catalog_table: &[String],
+        lakehouse_table: &LakehouseExecutionContext,
         table_url: &Url,
         log_store: &LogStoreRef,
         reference: Option<Arc<crate::table::DeltaSnapshot>>,
@@ -269,7 +256,7 @@ impl DeltaCommitExec {
 
         let catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
             context.as_ref(),
-            catalog_table,
+            lakehouse_table,
             table_url,
             log_store.clone(),
             Some(latest_catalog_version),
@@ -619,7 +606,7 @@ impl DeltaCommitExec {
     async fn commit_catalog_managed_table(
         context: &Arc<TaskContext>,
         catalog_table: &[String],
-        lakehouse_table: Option<&LakehouseExecutionContext>,
+        lakehouse_table: &LakehouseExecutionContext,
         table: &DeltaCatalogManagedTable,
         staged: &CatalogManagedStagedCommit,
         actions: &[CommitAction],
@@ -647,7 +634,7 @@ impl DeltaCommitExec {
             .commit_lakehouse_table(
                 catalog_table,
                 LakehouseCommitRequest {
-                    context: Self::lakehouse_context_for(catalog_table, lakehouse_table),
+                    context: lakehouse_table.clone(),
                     format: "delta".to_string(),
                     requirements: vec![],
                     updates: vec![update],
@@ -764,7 +751,6 @@ impl ExecutionPlan for DeltaCommitExec {
             self.user_metadata.clone(),
             self.commit_context.clone(),
             self.lakehouse_table.clone(),
-            self.catalog_table.clone(),
         )))
     }
 
@@ -799,7 +785,7 @@ impl ExecutionPlan for DeltaCommitExec {
         let user_metadata = self.user_metadata.clone();
         let commit_context = self.commit_context.clone();
         let lakehouse_table = self.lakehouse_table.clone();
-        let catalog_table = self.catalog_table.clone();
+        let catalog_table = self.catalog_table().map(<[String]>::to_vec);
         let schema = self.schema();
         let future = async move {
             let _elapsed_compute_timer = elapsed_compute.timer();
@@ -1148,6 +1134,11 @@ impl ExecutionPlan for DeltaCommitExec {
                         "catalog-managed Delta commit missing catalog table reference".to_string(),
                     )
                 })?;
+                let lakehouse_context = lakehouse_table.as_ref().ok_or_else(|| {
+                    DataFusionError::Internal(
+                        "catalog-managed Delta commit missing lakehouse context".to_string(),
+                    )
+                })?;
                 let (reference, final_actions, operation, operation_metrics) = if !table_exists {
                     let (bootstrap_actions, commit_actions) =
                         Self::split_create_actions_for_catalog_managed_commit(final_actions);
@@ -1219,13 +1210,13 @@ impl ExecutionPlan for DeltaCommitExec {
                     let latest_catalog_version = Self::latest_catalog_managed_table_version(
                         &context,
                         catalog_table,
-                        lakehouse_table.as_ref(),
+                        lakehouse_context,
                         table,
                     )
                     .await?;
                     let reference = Self::refresh_catalog_managed_reference(
                         &context,
-                        catalog_table,
+                        lakehouse_context,
                         &table_url,
                         &log_store,
                         reference,
@@ -1251,7 +1242,7 @@ impl ExecutionPlan for DeltaCommitExec {
                     Self::commit_catalog_managed_table(
                         &context,
                         catalog_table,
-                        lakehouse_table.as_ref(),
+                        lakehouse_context,
                         table,
                         &staged,
                         &final_actions,

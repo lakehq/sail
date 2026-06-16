@@ -90,7 +90,6 @@ impl TableFormat for DeltaTableFormat {
         let SourceInfo {
             paths,
             lakehouse_table,
-            catalog_table,
             schema,
             constraints: _,
             partition_by: _,
@@ -98,20 +97,15 @@ impl TableFormat for DeltaTableFormat {
             sort_order: _,
             options,
         } = info;
-        let catalog_table = lakehouse_table
-            .as_ref()
-            .map(|context| context.catalog_table().to_vec())
-            .or(catalog_table);
         let table_url = Self::parse_table_url(ctx, paths).await?;
         let options = DeltaReadOptions::resolve(ctx, options)?;
-        create_delta_source(ctx, table_url, schema, options, catalog_table).await
+        create_delta_source(ctx, table_url, schema, options, lakehouse_table).await
     }
 
     async fn infer_schema(&self, ctx: &dyn Session, info: SourceInfo) -> Result<SchemaRef> {
         let SourceInfo {
             paths,
             lakehouse_table,
-            catalog_table,
             schema,
             constraints: _,
             partition_by: _,
@@ -119,13 +113,9 @@ impl TableFormat for DeltaTableFormat {
             sort_order: _,
             options,
         } = info;
-        let catalog_table = lakehouse_table
-            .as_ref()
-            .map(|context| context.catalog_table().to_vec())
-            .or(catalog_table);
         let table_url = Self::parse_table_url(ctx, paths).await?;
         let options = DeltaReadOptions::resolve(ctx, options)?;
-        infer_delta_logical_schema(ctx, table_url, schema, options, catalog_table).await
+        infer_delta_logical_schema(ctx, table_url, schema, options, lakehouse_table).await
     }
 
     async fn infer_metadata(
@@ -136,7 +126,6 @@ impl TableFormat for DeltaTableFormat {
         let SourceInfo {
             paths,
             lakehouse_table,
-            catalog_table,
             schema,
             constraints: _,
             partition_by: _,
@@ -144,14 +133,10 @@ impl TableFormat for DeltaTableFormat {
             sort_order: _,
             options,
         } = info;
-        let catalog_table = lakehouse_table
-            .as_ref()
-            .map(|context| context.catalog_table().to_vec())
-            .or(catalog_table);
         let table_url = Self::parse_table_url(ctx, paths).await?;
         let options = DeltaReadOptions::resolve(ctx, options)?;
         let (schema, properties) =
-            infer_delta_logical_metadata(ctx, table_url, schema, options, catalog_table).await?;
+            infer_delta_logical_metadata(ctx, table_url, schema, options, lakehouse_table).await?;
         Ok(TableFormatMetadata { schema, properties })
     }
 
@@ -168,12 +153,10 @@ impl TableFormat for DeltaTableFormat {
             properties,
             replace: _,
             lakehouse_table,
-            catalog_table,
         } = info;
         let catalog_table = lakehouse_table
             .as_ref()
-            .map(|context| context.catalog_table().to_vec())
-            .or(catalog_table);
+            .map(|context| context.catalog_table().to_vec());
 
         let catalog_managed_table_id = if catalog_table.is_some() {
             Some(
@@ -369,12 +352,7 @@ impl TableFormat for DeltaTableFormat {
             sort_order,
             options,
             lakehouse_table,
-            catalog_table,
         } = info;
-        let catalog_table = lakehouse_table
-            .as_ref()
-            .map(|context| context.catalog_table().to_vec())
-            .or(catalog_table);
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for Delta format");
         }
@@ -392,7 +370,6 @@ impl TableFormat for DeltaTableFormat {
                     sort_order,
                     options,
                     lakehouse_table,
-                    catalog_table,
                 },
             )),
         }))
@@ -416,8 +393,7 @@ impl TableFormat for DeltaTableFormat {
         } else {
             info.merge_strategy
         };
-        let catalog_table =
-            (!info.target.table_name.is_empty()).then(|| info.target.table_name.clone());
+        let lakehouse_table = info.target.lakehouse_table.clone();
         let (target_options, _) =
             split_delta_write_options_and_table_properties(info.target.options.clone())?;
 
@@ -437,7 +413,7 @@ impl TableFormat for DeltaTableFormat {
                     None,
                     true,
                 )
-                .with_catalog_table(catalog_table.clone());
+                .with_lakehouse_table(lakehouse_table.clone());
                 let delete_ctx = PlannerContext::new(ctx, delete_config);
                 plan_delete_mor(&delete_ctx, condition).await
             }
@@ -453,7 +429,7 @@ impl TableFormat for DeltaTableFormat {
                     None,
                     true,
                 )
-                .with_catalog_table(catalog_table.clone());
+                .with_lakehouse_table(lakehouse_table.clone());
                 let merge_ctx = PlannerContext::new(ctx, merge_config);
                 plan_merge_mor(&merge_ctx, info).await
             }
@@ -477,7 +453,7 @@ impl TableFormat for DeltaTableFormat {
                     None,
                     true,
                 )
-                .with_catalog_table(catalog_table.clone());
+                .with_lakehouse_table(lakehouse_table.clone());
                 let delete_ctx = PlannerContext::new(ctx, delete_config);
                 plan_delete(&delete_ctx, condition).await
             }
@@ -493,7 +469,7 @@ impl TableFormat for DeltaTableFormat {
                     None,
                     true,
                 )
-                .with_catalog_table(catalog_table.clone());
+                .with_lakehouse_table(lakehouse_table.clone());
                 let merge_ctx = PlannerContext::new(ctx, merge_config);
                 plan_merge(&merge_ctx, info).await
             }
@@ -547,7 +523,6 @@ pub struct DeltaWriteNodeOptions {
     #[educe(PartialEq(ignore), Hash(ignore), PartialOrd(ignore))]
     pub options: Vec<OptionLayer>,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
-    pub catalog_table: Option<Vec<String>>,
 }
 
 #[derive(Clone, Debug, Educe)]
@@ -617,7 +592,6 @@ pub(crate) async fn plan_delta_write(
         bucket_by: _,
         sort_order,
         options,
-        catalog_table,
         lakehouse_table,
     } = node.options().clone();
 
@@ -768,8 +742,7 @@ pub(crate) async fn plan_delta_write(
     .with_metadata_schema(extract_metadata_schema(Some(logical_schema)))
     .with_identity_columns(extract_identity_columns(Some(logical_schema)))
     .with_table_snapshot(table_snapshot)
-    .with_lakehouse_table(lakehouse_table)
-    .with_catalog_table(catalog_table);
+    .with_lakehouse_table(lakehouse_table);
     let planner_ctx = PlannerContext::new(ctx, table_config);
     let planner = DeltaPhysicalPlanner::new(planner_ctx);
     planner

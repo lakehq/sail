@@ -149,7 +149,6 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         let SourceInfo {
             paths,
             lakehouse_table: _,
-            catalog_table: _,
             schema,
             constraints,
             partition_by,
@@ -235,9 +234,9 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             bucket_by,
             sort_order,
             options,
-            lakehouse_table: _,
-            catalog_table,
+            lakehouse_table,
         } = info;
+        let catalog_managed = lakehouse_table.is_some();
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for writing listing table format");
         }
@@ -247,8 +246,8 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         let url = resolve_listing_writer_url(path.clone())?;
         let overwrite = match mode {
             SinkMode::ErrorIfExists => {
-                if (catalog_table.is_none() && listing_target_exists(ctx, &url).await?)
-                    || (catalog_table.is_some() && listing_target_nonempty(ctx, &url).await?)
+                if (!catalog_managed && listing_target_exists(ctx, &url).await?)
+                    || (catalog_managed && listing_target_nonempty(ctx, &url).await?)
                 {
                     return plan_err!("listing table path already exists: {path}");
                 }

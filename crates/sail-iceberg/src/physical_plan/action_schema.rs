@@ -6,6 +6,7 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
+use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use serde::{Deserialize, Serialize};
 
 use crate::spec::types::values::{Literal, PrimitiveLiteral};
@@ -36,6 +37,7 @@ pub struct CommitMeta {
     pub operation: Operation,
     pub requirements: Vec<TableRequirement>,
     pub table_properties: Vec<(String, String)>,
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
     pub schema: Option<IcebergSchema>,
     pub partition_spec: Option<PartitionSpec>,
 }
@@ -49,6 +51,7 @@ pub struct CommitMetaAction {
     pub requirements_json: String,
     /// Table properties are applied only when bootstrapping new table metadata.
     pub table_properties_json: String,
+    pub lakehouse_table_json: Option<String>,
     /// Optional Iceberg Schema JSON (rare) to avoid huge Arrow schema.
     pub schema_json: Option<String>,
     /// Optional PartitionSpec JSON (rare) to avoid huge Arrow schema.
@@ -388,6 +391,12 @@ pub fn encode_commit_meta(meta: CommitMeta) -> Result<RecordBatch> {
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let table_properties_json = serde_json::to_string(&meta.table_properties)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let lakehouse_table_json = meta
+        .lakehouse_table
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let schema_json = meta
         .schema
         .as_ref()
@@ -408,6 +417,7 @@ pub fn encode_commit_meta(meta: CommitMeta) -> Result<RecordBatch> {
             operation: meta.operation.as_str().to_string(),
             requirements_json,
             table_properties_json,
+            lakehouse_table_json,
             schema_json,
             partition_spec_json,
         }),
@@ -441,6 +451,12 @@ pub fn decode_actions_and_meta_from_batch(
                 let table_properties: Vec<(String, String)> =
                     serde_json::from_str(&m.table_properties_json)
                         .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                let lakehouse_table: Option<LakehouseExecutionContext> = m
+                    .lakehouse_table_json
+                    .as_deref()
+                    .map(serde_json::from_str)
+                    .transpose()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let schema: Option<IcebergSchema> = m
                     .schema_json
                     .as_deref()
@@ -459,6 +475,7 @@ pub fn decode_actions_and_meta_from_batch(
                     operation: parse_operation(&m.operation)?,
                     requirements,
                     table_properties,
+                    lakehouse_table,
                     schema,
                     partition_spec,
                 });
@@ -510,6 +527,7 @@ mod tests {
             operation: Operation::Append,
             requirements: vec![TableRequirement::NotExist],
             table_properties: vec![],
+            lakehouse_table: None,
             schema: None,
             partition_spec: None,
         };

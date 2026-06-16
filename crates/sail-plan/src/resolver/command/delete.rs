@@ -112,11 +112,10 @@ impl PlanResolver<'_> {
             // Schema is not in catalog, try to infer from data source
             let source_info = SourceInfo {
                 paths: vec![location.clone()],
-                lakehouse_table: Some(LakehouseExecutionContext::legacy_catalog_table(
+                lakehouse_table: Some(LakehouseExecutionContext::from_catalog_table(
                     table_name.to_vec(),
                     LakehouseOperation::Read,
                 )),
-                catalog_table: Some(table_name.to_vec()),
                 schema: None,
                 constraints: Default::default(),
                 partition_by: vec![],

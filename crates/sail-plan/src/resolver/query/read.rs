@@ -108,11 +108,10 @@ impl PlanResolver<'_> {
                     .await?;
                 let info = SourceInfo {
                     paths: location.map(|x| vec![x]).unwrap_or_default(),
-                    lakehouse_table: Some(LakehouseExecutionContext::legacy_catalog_table(
+                    lakehouse_table: Some(LakehouseExecutionContext::from_catalog_table(
                         reference.clone(),
                         LakehouseOperation::Read,
                     )),
-                    catalog_table: Some(reference.clone()),
                     schema: Some(schema),
                     constraints,
                     partition_by: partition_by.into_iter().map(|field| field.column).collect(),
@@ -465,7 +464,6 @@ impl PlanResolver<'_> {
         let info = SourceInfo {
             paths,
             lakehouse_table: None,
-            catalog_table: None,
             schema,
             constraints: Default::default(),
             partition_by: vec![],

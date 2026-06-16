@@ -3,6 +3,7 @@ use std::sync::Arc;
 use datafusion::execution::TaskContext;
 use datafusion_common::{DataFusionError, Result};
 use moka::future::Cache as FutureCache;
+use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use url::Url;
 
 use crate::kernel::DeltaSnapshotConfig;
@@ -41,18 +42,21 @@ impl DeltaTableCache {
         context: &TaskContext,
         table_url: &Url,
         version: i64,
-        catalog_table: Option<&[String]>,
+        lakehouse_table: Option<&LakehouseExecutionContext>,
     ) -> Result<Arc<CachedTable>> {
         let key = TableCacheKey {
             table_url: table_url.to_string(),
             version,
-            catalog_table: catalog_table.unwrap_or_default().to_vec(),
+            catalog_table: lakehouse_table
+                .map(LakehouseExecutionContext::catalog_table)
+                .unwrap_or_default()
+                .to_vec(),
         };
         let table_url = table_url.clone();
-        let catalog_table = catalog_table.map(<[String]>::to_vec);
+        let lakehouse_table = lakehouse_table.cloned();
         self.cache
             .try_get_with(key, async move {
-                load_table_uncached(context, &table_url, version, catalog_table.as_deref()).await
+                load_table_uncached(context, &table_url, version, lakehouse_table.as_ref()).await
             })
             .await
             .map_err(|e| DataFusionError::External(Box::new(e)))
@@ -75,7 +79,7 @@ pub(crate) async fn load_table_uncached(
     context: &TaskContext,
     table_url: &Url,
     version: i64,
-    catalog_table: Option<&[String]>,
+    lakehouse_table: Option<&LakehouseExecutionContext>,
 ) -> Result<Arc<CachedTable>> {
     let object_store = context
         .runtime_env()
@@ -89,10 +93,10 @@ pub(crate) async fn load_table_uncached(
         require_files: false,
         ..Default::default()
     };
-    if let Some(catalog_table) = catalog_table {
+    if let Some(lakehouse_table) = lakehouse_table {
         table_config.catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
             context,
-            catalog_table,
+            lakehouse_table,
             table_url,
             log_store.clone(),
             Some(version),

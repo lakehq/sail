@@ -16,7 +16,7 @@ use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, Result};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::TableSource;
 
-use crate::catalog::{CatalogPartitionField, LakehouseExecutionContext, LakehouseOperation};
+use crate::catalog::{CatalogPartitionField, LakehouseExecutionContext};
 use crate::extension::SessionExtension;
 use crate::logical_expr::ExprWithSource;
 
@@ -34,10 +34,7 @@ pub const MERGE_ROW_INDEX_COLUMN: &str = "__sail_file_row_index";
 /// Value is one of the [`RowLevelOperationType`] integer constants.
 pub const OPERATION_COLUMN: &str = "__sail_operation_type";
 
-/// Reserved write option name for the fully qualified catalog table name.
-///
-/// The planner carries this as typed private state on [`SinkInfo`]. User-visible option layers must
-/// reject this key so it cannot become part of the public write API.
+/// Reserved private write option name. User-visible option layers must reject this key.
 pub const CATALOG_TABLE_OPTION: &str = "__sail.catalog.table";
 
 /// Internal column carrying pre-aggregated MERGE source row counts on
@@ -66,9 +63,8 @@ pub enum OptionLayer {
 impl OptionLayer {
     /// Converts this option layer into an opaque key-value map.
     ///
-    /// This is used for data sources that have not yet migrated to the typed
-    /// option system. The returned map can be passed to existing code that
-    /// accepts `HashMap<String, String>`.
+    /// This is used when a data source consumes untyped key-value options.
+    /// The returned map can be passed to code that accepts `HashMap<String, String>`.
     pub fn into_opaque_options(self) -> HashMap<String, String> {
         match self {
             OptionLayer::TablePropertyList { items } => items.into_iter().collect(),
@@ -185,15 +181,7 @@ pub struct BucketBy {
 pub struct SourceInfo {
     pub paths: Vec<String>,
     /// Unified lakehouse catalog context for catalog-coordinated reads.
-    ///
-    /// This is the replacement for [`Self::catalog_table`]. During the migration,
-    /// table formats should prefer this value and fall back to `catalog_table`.
     pub lakehouse_table: Option<LakehouseExecutionContext>,
-    /// Fully qualified catalog table name for catalog-coordinated reads.
-    ///
-    /// This is injected by the planner and must not be accepted from user-facing
-    /// data source options.
-    pub catalog_table: Option<Vec<String>>,
     /// The (optional) schema of the data source including partitioning columns.
     pub schema: Option<Schema>,
     pub constraints: Constraints,
@@ -206,11 +194,10 @@ pub struct SourceInfo {
 }
 
 impl SourceInfo {
-    pub fn effective_catalog_table(&self) -> Option<&[String]> {
+    pub fn catalog_table(&self) -> Option<&[String]> {
         self.lakehouse_table
             .as_ref()
             .map(|context| context.catalog_table())
-            .or(self.catalog_table.as_deref())
     }
 }
 
@@ -245,15 +232,13 @@ pub struct TableFormatCreateTableInfo {
     pub properties: Vec<(String, String)>,
     pub replace: bool,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
-    pub catalog_table: Option<Vec<String>>,
 }
 
 impl TableFormatCreateTableInfo {
-    pub fn effective_catalog_table(&self) -> Option<&[String]> {
+    pub fn catalog_table(&self) -> Option<&[String]> {
         self.lakehouse_table
             .as_ref()
             .map(|context| context.catalog_table())
-            .or(self.catalog_table.as_deref())
     }
 }
 
@@ -275,29 +260,16 @@ pub struct SinkInfo {
     /// A later set of options can override earlier ones.
     /// The path for the sink is stored under the `"path"` key in options.
     pub options: Vec<OptionLayer>,
-    /// Fully qualified catalog table name for catalog-coordinated writes.
-    ///
-    /// This is injected by the planner and must not be accepted from user-facing
-    /// data source options.
+    /// Unified lakehouse catalog context for catalog-coordinated writes.
     pub lakehouse_table: Option<LakehouseExecutionContext>,
-    pub catalog_table: Option<Vec<String>>,
 }
 
 impl SinkInfo {
-    pub fn effective_catalog_table(&self) -> Option<&[String]> {
+    pub fn catalog_table(&self) -> Option<&[String]> {
         self.lakehouse_table
             .as_ref()
             .map(|context| context.catalog_table())
-            .or(self.catalog_table.as_deref())
     }
-}
-
-pub fn legacy_lakehouse_context(
-    catalog_table: Option<&[String]>,
-    operation: LakehouseOperation,
-) -> Option<LakehouseExecutionContext> {
-    catalog_table
-        .map(|table| LakehouseExecutionContext::legacy_catalog_table(table.to_vec(), operation))
 }
 
 /// Returns the path from options, or `None` if not set.

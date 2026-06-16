@@ -7,8 +7,7 @@ use crate::lakehouse::{
 };
 use crate::manager::CatalogManager;
 use crate::provider::{
-    AlterTableOptions, CommitTableOptions, CreateTableMetadataRequirement, CreateTableOptions,
-    DropTableOptions, GetTableCommitsOptions, GetTableCommitsResponse,
+    AlterTableOptions, CreateTableMetadataRequirement, CreateTableOptions, DropTableOptions,
 };
 use crate::utils::match_pattern;
 
@@ -103,24 +102,6 @@ impl CatalogManager {
     ) -> CatalogResult<()> {
         let (provider, database, table) = self.resolve_object(table)?;
         provider.alter_table(&database, &table, options).await
-    }
-
-    pub async fn commit_table<T: AsRef<str>>(
-        &self,
-        table: &[T],
-        options: CommitTableOptions,
-    ) -> CatalogResult<TableStatus> {
-        let (provider, database, table) = self.resolve_object(table)?;
-        provider.commit_table(&database, &table, options).await
-    }
-
-    pub async fn get_table_commits<T: AsRef<str>>(
-        &self,
-        table: &[T],
-        options: GetTableCommitsOptions,
-    ) -> CatalogResult<GetTableCommitsResponse> {
-        let (provider, database, table) = self.resolve_object(table)?;
-        provider.get_table_commits(&database, &table, options).await
     }
 
     pub async fn commit_lakehouse_table<T: AsRef<str>>(

@@ -37,7 +37,6 @@ impl TableFormat for RateTableFormat {
         let SourceInfo {
             paths: _,
             lakehouse_table: _,
-            catalog_table: _,
             schema,
             constraints,
             partition_by,

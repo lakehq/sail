@@ -11,9 +11,7 @@ use sail_catalog::error::CatalogError;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::AlterTableOptions;
 use sail_common::spec;
-use sail_common_datafusion::catalog::{
-    LakehouseExecutionContext, LakehouseOperation, TableColumnStatus, TableKind,
-};
+use sail_common_datafusion::catalog::{TableColumnStatus, TableKind};
 use sail_common_datafusion::column_features::ColumnFeatures;
 use sail_common_datafusion::datasource::{
     find_path_in_options, OptionLayer, SinkInfo, SourceInfo, TableFormatRegistry,
@@ -124,7 +122,6 @@ impl PlanResolver<'_> {
         let source_info = SourceInfo {
             paths: vec![path.clone()],
             lakehouse_table: None,
-            catalog_table: None,
             schema: None,
             constraints: Default::default(),
             partition_by: vec![],
@@ -182,7 +179,7 @@ impl PlanResolver<'_> {
         }
 
         let info = TableInfo {
-            catalog_table: info.catalog_table.clone(),
+            lakehouse_table: info.lakehouse_table.clone(),
             columns,
             location: Some(path),
             format: format.to_string(),
@@ -524,13 +521,7 @@ impl PlanResolver<'_> {
         })?;
         let source = SourceInfo {
             paths: vec![location.clone()],
-            lakehouse_table: info.catalog_table.as_ref().map(|table| {
-                LakehouseExecutionContext::legacy_catalog_table(
-                    table.clone(),
-                    LakehouseOperation::WritePrecondition,
-                )
-            }),
-            catalog_table: info.catalog_table.clone(),
+            lakehouse_table: info.lakehouse_table.clone(),
             schema: None,
             constraints: Default::default(),
             partition_by: vec![],

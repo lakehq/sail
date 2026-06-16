@@ -47,7 +47,6 @@ impl TableFormat for ConsoleTableFormat {
             sort_order,
             options,
             lakehouse_table: _,
-            catalog_table: _,
         } = info;
         if !matches!(mode, SinkMode::Append) {
             return not_impl_err!("the console table format only supports append mode");

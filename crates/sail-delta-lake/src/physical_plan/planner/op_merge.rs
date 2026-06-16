@@ -136,7 +136,6 @@ pub async fn build_merge_plan(
         ctx.options().user_metadata.clone(),
         write_context,
         ctx.lakehouse_table().cloned(),
-        ctx.catalog_table().cloned(),
     )
 }
 
@@ -217,7 +216,7 @@ pub async fn build_merge_plan_mor(
         true,
         table_schema.clone(),
         write_context.clone(),
-        ctx.catalog_table().cloned(),
+        ctx.lakehouse_table().cloned(),
     )?);
 
     let commit_input: Arc<dyn ExecutionPlan> =
@@ -274,7 +273,6 @@ pub async fn build_merge_plan_mor(
         ctx.options().user_metadata.clone(),
         write_context.commit_context.clone(),
         ctx.lakehouse_table().cloned(),
-        ctx.catalog_table().cloned(),
     )))
 }
 

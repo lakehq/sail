@@ -30,7 +30,7 @@ pub async fn create_file_delete_physical_plan(
     let info = RowLevelWriteInfo {
         command: RowLevelCommand::Delete,
         target: RowLevelTargetInfo {
-            lakehouse_table: Some(LakehouseExecutionContext::legacy_catalog_table(
+            lakehouse_table: Some(LakehouseExecutionContext::from_catalog_table(
                 table_name.clone(),
                 LakehouseOperation::Write,
             )),

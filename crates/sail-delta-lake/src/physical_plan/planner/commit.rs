@@ -66,7 +66,6 @@ pub fn assemble_commit_plan(
     user_metadata: Option<String>,
     write_context: DeltaWriteContext,
     lakehouse_table: Option<LakehouseExecutionContext>,
-    catalog_table: Option<Vec<String>>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaWriterExec::new(
         writer_input,
@@ -78,7 +77,7 @@ pub fn assemble_commit_plan(
         table_exists,
         table_schema.clone(),
         write_context.clone(),
-        catalog_table.clone(),
+        lakehouse_table.clone(),
     )?);
 
     let commit_input: Arc<dyn ExecutionPlan> = if let Some(remove_src) = remove_source {
@@ -101,7 +100,6 @@ pub fn assemble_commit_plan(
         user_metadata,
         write_context.commit_context.clone(),
         lakehouse_table,
-        catalog_table,
     )))
 }
 
