@@ -7493,12 +7493,12 @@ dependencies = [
  "sail-catalog",
  "sail-common",
  "sail-common-datafusion",
+ "sail-common-hms",
  "serde_json",
  "tempfile",
  "testcontainers",
  "tokio",
  "volo",
- "volo-build",
  "volo-thrift",
 ]
 
@@ -7660,6 +7660,16 @@ dependencies = [
  "tokio",
  "tonic",
  "tonic-prost-build",
+]
+
+[[package]]
+name = "sail-common-hms"
+version = "0.6.4"
+dependencies = [
+ "pilota",
+ "volo",
+ "volo-build",
+ "volo-thrift",
 ]
 
 [[package]]
