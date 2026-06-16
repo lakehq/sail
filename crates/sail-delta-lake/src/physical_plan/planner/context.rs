@@ -17,7 +17,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result};
 use object_store::ObjectStore;
-use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
+use sail_common_datafusion::catalog::{CatalogTableColumnIdentity, LakehouseExecutionContext};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
@@ -59,6 +59,7 @@ pub struct DeltaPlannerConfig {
     pub metadata_schema: Option<SchemaRef>,
     pub identity_columns: HashMap<String, CatalogTableColumnIdentity>,
     pub table_snapshot: Option<Arc<DeltaSnapshot>>,
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
     pub catalog_table: Option<Vec<String>>,
 }
 
@@ -84,6 +85,7 @@ impl DeltaPlannerConfig {
             metadata_schema: None,
             identity_columns: HashMap::new(),
             table_snapshot: None,
+            lakehouse_table: None,
             catalog_table: None,
         }
     }
@@ -129,6 +131,14 @@ impl DeltaPlannerConfig {
 
     pub fn with_catalog_table(mut self, catalog_table: Option<Vec<String>>) -> Self {
         self.catalog_table = catalog_table;
+        self
+    }
+
+    pub fn with_lakehouse_table(
+        mut self,
+        lakehouse_table: Option<LakehouseExecutionContext>,
+    ) -> Self {
+        self.lakehouse_table = lakehouse_table;
         self
     }
 }
@@ -209,6 +219,10 @@ impl<'a> PlannerContext<'a> {
 
     pub fn catalog_table(&self) -> Option<&Vec<String>> {
         self.config.catalog_table.as_ref()
+    }
+
+    pub fn lakehouse_table(&self) -> Option<&LakehouseExecutionContext> {
+        self.config.lakehouse_table.as_ref()
     }
 
     pub fn commit_context(&self) -> DeltaCommitContext {

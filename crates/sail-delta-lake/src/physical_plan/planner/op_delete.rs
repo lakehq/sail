@@ -166,6 +166,7 @@ pub async fn build_delete_plan(
         table_schema,
         ctx.options().user_metadata.clone(),
         write_context,
+        ctx.lakehouse_table().cloned(),
         ctx.catalog_table().cloned(),
     )
 }
@@ -274,6 +275,7 @@ pub async fn build_delete_plan_mor(
         sail_common_datafusion::datasource::PhysicalSinkMode::Append,
         ctx.options().user_metadata.clone(),
         DeltaCommitContext::from_snapshot(snapshot_state.as_ref()),
+        ctx.lakehouse_table().cloned(),
         ctx.catalog_table().cloned(),
     )))
 }

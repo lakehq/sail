@@ -4,6 +4,7 @@ use datafusion::execution::SessionState;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::PhysicalPlanner;
 use datafusion_common::Result;
+use sail_common_datafusion::catalog::{LakehouseExecutionContext, LakehouseOperation};
 use sail_common_datafusion::datasource::{
     RowLevelCommand, RowLevelTargetInfo, RowLevelWriteInfo, TableFormatRegistry,
 };
@@ -29,6 +30,10 @@ pub async fn create_file_delete_physical_plan(
     let info = RowLevelWriteInfo {
         command: RowLevelCommand::Delete,
         target: RowLevelTargetInfo {
+            lakehouse_table: Some(LakehouseExecutionContext::legacy_catalog_table(
+                table_name.clone(),
+                LakehouseOperation::Write,
+            )),
             table_name,
             path,
             partition_by: Vec::new(),

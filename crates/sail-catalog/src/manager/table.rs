@@ -1,6 +1,10 @@
 use sail_common_datafusion::catalog::TableStatus;
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
+use crate::lakehouse::{
+    DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse, LakehouseCommitOutcome,
+    LakehouseCommitRequest,
+};
 use crate::manager::CatalogManager;
 use crate::provider::{
     AlterTableOptions, CommitTableOptions, CreateTableMetadataRequirement, CreateTableOptions,
@@ -117,6 +121,28 @@ impl CatalogManager {
     ) -> CatalogResult<GetTableCommitsResponse> {
         let (provider, database, table) = self.resolve_object(table)?;
         provider.get_table_commits(&database, &table, options).await
+    }
+
+    pub async fn commit_lakehouse_table<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        request: LakehouseCommitRequest,
+    ) -> CatalogResult<LakehouseCommitOutcome> {
+        let (provider, database, table) = self.resolve_object(table)?;
+        provider
+            .commit_lakehouse_table(&database, &table, request)
+            .await
+    }
+
+    pub async fn get_delta_ratified_commits<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        request: DeltaRatifiedCommitRequest,
+    ) -> CatalogResult<DeltaRatifiedCommitResponse> {
+        let (provider, database, table) = self.resolve_object(table)?;
+        provider
+            .get_delta_ratified_commits(&database, &table, request)
+            .await
     }
 
     pub async fn get_table_or_view<T: AsRef<str>>(

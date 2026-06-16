@@ -34,8 +34,9 @@ use futures::stream::{self, StreamExt};
 use log::warn;
 use object_store::{Error as ObjectStoreError, ObjectStoreExt, PutMode, PutOptions};
 use sail_catalog::error::CatalogError;
+use sail_catalog::lakehouse::{DeltaRatifiedCommitRequest, LakehouseCommitRequest};
 use sail_catalog::manager::CatalogManager;
-use sail_catalog::provider::{CommitTableOptions, GetTableCommitsOptions};
+use sail_common_datafusion::catalog::{LakehouseExecutionContext, LakehouseOperation};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
@@ -100,6 +101,7 @@ pub struct DeltaCommitExec {
     /// Per-commit user-defined metadata to record in `commitInfo.userMetadata`.
     user_metadata: Option<String>,
     commit_context: DeltaCommitContext,
+    lakehouse_table: Option<LakehouseExecutionContext>,
     catalog_table: Option<Vec<String>>,
     metrics: ExecutionPlanMetricsSet,
     cache: Arc<PlanProperties>,
@@ -116,6 +118,7 @@ impl DeltaCommitExec {
         sink_mode: PhysicalSinkMode,
         user_metadata: Option<String>,
         commit_context: DeltaCommitContext,
+        lakehouse_table: Option<LakehouseExecutionContext>,
         catalog_table: Option<Vec<String>>,
     ) -> Self {
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -133,6 +136,7 @@ impl DeltaCommitExec {
             sink_mode,
             user_metadata,
             commit_context,
+            lakehouse_table,
             catalog_table,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
@@ -184,6 +188,22 @@ impl DeltaCommitExec {
         self.catalog_table.as_deref()
     }
 
+    pub fn lakehouse_table(&self) -> Option<&LakehouseExecutionContext> {
+        self.lakehouse_table.as_ref()
+    }
+
+    fn lakehouse_context_for(
+        catalog_table: &[String],
+        lakehouse_table: Option<&LakehouseExecutionContext>,
+    ) -> LakehouseExecutionContext {
+        lakehouse_table.cloned().unwrap_or_else(|| {
+            LakehouseExecutionContext::legacy_catalog_table(
+                catalog_table.to_vec(),
+                LakehouseOperation::Write,
+            )
+        })
+    }
+
     async fn load_catalog_managed_table(
         context: &Arc<TaskContext>,
         catalog_table: &[String],
@@ -207,14 +227,15 @@ impl DeltaCommitExec {
     async fn latest_catalog_managed_table_version(
         context: &Arc<TaskContext>,
         catalog_table: &[String],
+        lakehouse_table: Option<&LakehouseExecutionContext>,
         table: &DeltaCatalogManagedTable,
     ) -> Result<i64> {
         let manager = context.extension::<CatalogManager>()?;
         manager
-            .get_table_commits(
+            .get_delta_ratified_commits(
                 catalog_table,
-                GetTableCommitsOptions {
-                    format: "delta".to_string(),
+                DeltaRatifiedCommitRequest {
+                    context: Self::lakehouse_context_for(catalog_table, lakehouse_table),
                     table_uri: table.table_uri.clone(),
                     start_version: 1,
                     end_version: None,
@@ -598,6 +619,7 @@ impl DeltaCommitExec {
     async fn commit_catalog_managed_table(
         context: &Arc<TaskContext>,
         catalog_table: &[String],
+        lakehouse_table: Option<&LakehouseExecutionContext>,
         table: &DeltaCatalogManagedTable,
         staged: &CatalogManagedStagedCommit,
         actions: &[CommitAction],
@@ -622,12 +644,14 @@ impl DeltaCommitExec {
             update["metadata"] = metadata;
         }
         manager
-            .commit_table(
+            .commit_lakehouse_table(
                 catalog_table,
-                CommitTableOptions {
+                LakehouseCommitRequest {
+                    context: Self::lakehouse_context_for(catalog_table, lakehouse_table),
                     format: "delta".to_string(),
                     requirements: vec![],
                     updates: vec![update],
+                    payload: None,
                 },
             )
             .await
@@ -739,6 +763,7 @@ impl ExecutionPlan for DeltaCommitExec {
             self.sink_mode.clone(),
             self.user_metadata.clone(),
             self.commit_context.clone(),
+            self.lakehouse_table.clone(),
             self.catalog_table.clone(),
         )))
     }
@@ -773,6 +798,7 @@ impl ExecutionPlan for DeltaCommitExec {
         let sink_mode = self.sink_mode.clone();
         let user_metadata = self.user_metadata.clone();
         let commit_context = self.commit_context.clone();
+        let lakehouse_table = self.lakehouse_table.clone();
         let catalog_table = self.catalog_table.clone();
         let schema = self.schema();
         let future = async move {
@@ -1190,9 +1216,13 @@ impl ExecutionPlan for DeltaCommitExec {
                     .map_err(|e| DataFusionError::External(Box::new(e)))?
                 } else {
                     operation_metrics.finalize_for(&operation);
-                    let latest_catalog_version =
-                        Self::latest_catalog_managed_table_version(&context, catalog_table, table)
-                            .await?;
+                    let latest_catalog_version = Self::latest_catalog_managed_table_version(
+                        &context,
+                        catalog_table,
+                        lakehouse_table.as_ref(),
+                        table,
+                    )
+                    .await?;
                     let reference = Self::refresh_catalog_managed_reference(
                         &context,
                         catalog_table,
@@ -1221,6 +1251,7 @@ impl ExecutionPlan for DeltaCommitExec {
                     Self::commit_catalog_managed_table(
                         &context,
                         catalog_table,
+                        lakehouse_table.as_ref(),
                         table,
                         &staged,
                         &final_actions,

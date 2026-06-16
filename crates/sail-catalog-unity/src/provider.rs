@@ -877,6 +877,15 @@ impl CatalogProvider for UnityCatalogProvider {
                     "Unity Catalog Delta commit invalid argument: {e}"
                 )))
             }
+            Err(e) if e.status().is_some_and(|status| status.as_u16() == 401) => Err(
+                CatalogError::Unauthorized(format!("Unity Catalog Delta commit unauthorized: {e}")),
+            ),
+            Err(e) if e.status().is_some_and(|status| status.as_u16() == 403) => Err(
+                CatalogError::Forbidden(format!("Unity Catalog Delta commit forbidden: {e}")),
+            ),
+            Err(e) if e.status().is_some_and(|status| status.as_u16() == 429) => Err(
+                CatalogError::RateLimited(format!("Unity Catalog Delta commit rate limited: {e}")),
+            ),
             Err(e) if e.status().is_some_and(|status| status.as_u16() == 501) => Err(
                 CatalogError::NotSupported("Unity Catalog Delta commit endpoint".to_string()),
             ),

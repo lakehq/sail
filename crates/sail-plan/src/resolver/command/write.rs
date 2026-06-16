@@ -19,8 +19,8 @@ use sail_catalog::provider::{
 };
 use sail_common::spec::{self, DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID};
 use sail_common_datafusion::catalog::{
-    CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableSort, TableColumnStatus,
-    TableKind,
+    CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableSort, LakehouseExecutionContext,
+    LakehouseOperation, TableColumnStatus, TableKind,
 };
 use sail_common_datafusion::column_features::{
     ColumnFeatures, ColumnFeaturesBuilder, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
@@ -244,6 +244,7 @@ impl PlanResolver<'_> {
                 .into_iter()
                 .map(|items| OptionLayer::OptionList { items })
                 .collect(),
+            lakehouse_table: None,
             catalog_table: None,
         };
         let mut preconditions = vec![];
@@ -473,13 +474,16 @@ impl PlanResolver<'_> {
                     preconditions.push(Arc::new(self.resolve_catalog_command(command)?));
                 }
 
-                sink_info.catalog_table = Some(
-                    table
-                        .parts()
-                        .iter()
-                        .map(|part| part.as_ref().to_string())
-                        .collect::<Vec<_>>(),
-                );
+                let catalog_table = table
+                    .parts()
+                    .iter()
+                    .map(|part| part.as_ref().to_string())
+                    .collect::<Vec<_>>();
+                sink_info.lakehouse_table = Some(LakehouseExecutionContext::legacy_catalog_table(
+                    catalog_table.clone(),
+                    LakehouseOperation::Write,
+                ));
+                sink_info.catalog_table = Some(catalog_table);
 
                 sink_info.mode = self
                     .resolve_write_mode(mode, schema_for_cond.as_ref(), state)
@@ -592,6 +596,10 @@ impl PlanResolver<'_> {
                     })?;
                     let info = SourceInfo {
                         paths: location.iter().cloned().collect(),
+                        lakehouse_table: Some(LakehouseExecutionContext::legacy_catalog_table(
+                            table.clone().into(),
+                            LakehouseOperation::WritePrecondition,
+                        )),
                         catalog_table: Some(table.clone().into()),
                         schema: None,
                         constraints: Default::default(),
@@ -629,6 +637,10 @@ impl PlanResolver<'_> {
                     })?;
                     let info = SourceInfo {
                         paths: location.iter().cloned().collect(),
+                        lakehouse_table: Some(LakehouseExecutionContext::legacy_catalog_table(
+                            table.clone().into(),
+                            LakehouseOperation::WritePrecondition,
+                        )),
                         catalog_table: Some(table.clone().into()),
                         schema: None,
                         constraints: Default::default(),

@@ -316,6 +316,24 @@ impl IcebergRestCatalogProvider {
                 quote_namespace_if_needed(database),
                 quote_name_if_needed(table)
             )))
+        } else if status == reqwest::StatusCode::UNAUTHORIZED {
+            Err(CatalogError::Unauthorized(format!(
+                "Iceberg REST catalog commit unauthorized for {}.{}: {content}",
+                quote_namespace_if_needed(database),
+                quote_name_if_needed(table)
+            )))
+        } else if status == reqwest::StatusCode::FORBIDDEN {
+            Err(CatalogError::Forbidden(format!(
+                "Iceberg REST catalog commit forbidden for {}.{}: {content}",
+                quote_namespace_if_needed(database),
+                quote_name_if_needed(table)
+            )))
+        } else if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            Err(CatalogError::RateLimited(format!(
+                "Iceberg REST catalog commit rate limited for {}.{}: {content}",
+                quote_namespace_if_needed(database),
+                quote_name_if_needed(table)
+            )))
         } else {
             Err(CatalogError::External(format!(
                 "Failed to commit Iceberg table {}.{}: status {status}: {content}",

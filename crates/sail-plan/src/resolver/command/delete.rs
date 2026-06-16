@@ -4,7 +4,9 @@ use datafusion_common::{DFSchemaRef, ToDFSchema};
 use datafusion_expr::{Extension, LogicalPlan};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::{TableKind, TableStatus};
+use sail_common_datafusion::catalog::{
+    LakehouseExecutionContext, LakehouseOperation, TableKind, TableStatus,
+};
 use sail_common_datafusion::datasource::{OptionLayer, SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
@@ -110,6 +112,10 @@ impl PlanResolver<'_> {
             // Schema is not in catalog, try to infer from data source
             let source_info = SourceInfo {
                 paths: vec![location.clone()],
+                lakehouse_table: Some(LakehouseExecutionContext::legacy_catalog_table(
+                    table_name.to_vec(),
+                    LakehouseOperation::Read,
+                )),
                 catalog_table: Some(table_name.to_vec()),
                 schema: None,
                 constraints: Default::default(),

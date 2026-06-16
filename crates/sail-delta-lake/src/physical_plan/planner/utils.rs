@@ -167,6 +167,7 @@ pub fn build_standard_write_layers(
         sink_mode.clone(),
         ctx.options().user_metadata.clone(),
         write_context.commit_context.clone(),
+        ctx.lakehouse_table().cloned(),
         ctx.catalog_table().cloned(),
     )))
 }

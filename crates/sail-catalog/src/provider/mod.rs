@@ -10,6 +10,12 @@ pub use runtime::*;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 
 use crate::error::{CatalogError, CatalogResult};
+use crate::lakehouse::{
+    BeginTableAccessRequest, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
+    LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan,
+    LakehouseCreateRequest, LakehouseResolvedTable, LakehouseScanPlanningRequest,
+    LakehouseScanPlanningResponse, ResolveLakehouseTableRequest, TableAccessSession,
+};
 
 /// A trait that defines the interface for a catalog.
 /// A catalog contains *databases*, where each database has a multi-level name
@@ -64,6 +70,114 @@ pub trait CatalogProvider: Send + Sync {
     ) -> CatalogResult<CreateTableMetadataRequirement> {
         let _ = options;
         Ok(CreateTableMetadataRequirement::None)
+    }
+
+    fn lakehouse_capabilities(&self) -> Vec<LakehouseCapability> {
+        Vec::new()
+    }
+
+    async fn resolve_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        let _ = (database, table, request);
+        Err(CatalogError::UnsupportedCapability(
+            "lakehouse table resolution".to_string(),
+        ))
+    }
+
+    async fn plan_lakehouse_create(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseCreateRequest,
+    ) -> CatalogResult<LakehouseCreatePlan> {
+        let _ = (database, table, request);
+        Err(CatalogError::UnsupportedCapability(
+            "lakehouse CREATE TABLE planning".to_string(),
+        ))
+    }
+
+    async fn begin_table_access(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: BeginTableAccessRequest,
+    ) -> CatalogResult<TableAccessSession> {
+        let _ = (database, table, request);
+        Err(CatalogError::UnsupportedCapability(
+            "table access sessions".to_string(),
+        ))
+    }
+
+    async fn plan_lakehouse_scan(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseScanPlanningRequest,
+    ) -> CatalogResult<LakehouseScanPlanningResponse> {
+        let _ = (database, table, request);
+        Err(CatalogError::UnsupportedCapability(
+            "lakehouse scan planning".to_string(),
+        ))
+    }
+
+    async fn commit_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseCommitRequest,
+    ) -> CatalogResult<LakehouseCommitOutcome> {
+        let LakehouseCommitRequest {
+            context,
+            format,
+            requirements,
+            updates,
+            payload,
+        } = request;
+        let _status = self
+            .commit_table(
+                database,
+                table,
+                CommitTableOptions {
+                    format,
+                    lakehouse_table: Some(context.clone()),
+                    requirements,
+                    updates,
+                },
+            )
+            .await?;
+        Ok(LakehouseCommitOutcome::Committed { context, payload })
+    }
+
+    async fn get_delta_ratified_commits(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: DeltaRatifiedCommitRequest,
+    ) -> CatalogResult<DeltaRatifiedCommitResponse> {
+        let DeltaRatifiedCommitRequest {
+            context,
+            table_uri,
+            start_version,
+            end_version,
+        } = request;
+        let response = self
+            .get_table_commits(
+                database,
+                table,
+                GetTableCommitsOptions {
+                    format: "delta".to_string(),
+                    lakehouse_table: Some(context),
+                    table_uri,
+                    start_version,
+                    end_version,
+                },
+            )
+            .await?;
+        Ok(response.into())
     }
 
     /// Gets the status of a table in the catalog.

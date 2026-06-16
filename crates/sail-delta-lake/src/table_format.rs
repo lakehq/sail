@@ -17,7 +17,9 @@ use educe::Educe;
 use sail_common_datafusion::catalog::delta::{
     unity_table_id_value, DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
 };
-use sail_common_datafusion::catalog::{CatalogPartitionField, CatalogTableColumnIdentity};
+use sail_common_datafusion::catalog::{
+    CatalogPartitionField, CatalogTableColumnIdentity, LakehouseExecutionContext,
+};
 use sail_common_datafusion::column_features::{
     ColumnFeatureKey, ColumnFeatures, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
@@ -87,6 +89,7 @@ impl TableFormat for DeltaTableFormat {
     ) -> Result<Arc<dyn TableSource>> {
         let SourceInfo {
             paths,
+            lakehouse_table,
             catalog_table,
             schema,
             constraints: _,
@@ -95,6 +98,10 @@ impl TableFormat for DeltaTableFormat {
             sort_order: _,
             options,
         } = info;
+        let catalog_table = lakehouse_table
+            .as_ref()
+            .map(|context| context.catalog_table().to_vec())
+            .or(catalog_table);
         let table_url = Self::parse_table_url(ctx, paths).await?;
         let options = DeltaReadOptions::resolve(ctx, options)?;
         create_delta_source(ctx, table_url, schema, options, catalog_table).await
@@ -103,6 +110,7 @@ impl TableFormat for DeltaTableFormat {
     async fn infer_schema(&self, ctx: &dyn Session, info: SourceInfo) -> Result<SchemaRef> {
         let SourceInfo {
             paths,
+            lakehouse_table,
             catalog_table,
             schema,
             constraints: _,
@@ -111,6 +119,10 @@ impl TableFormat for DeltaTableFormat {
             sort_order: _,
             options,
         } = info;
+        let catalog_table = lakehouse_table
+            .as_ref()
+            .map(|context| context.catalog_table().to_vec())
+            .or(catalog_table);
         let table_url = Self::parse_table_url(ctx, paths).await?;
         let options = DeltaReadOptions::resolve(ctx, options)?;
         infer_delta_logical_schema(ctx, table_url, schema, options, catalog_table).await
@@ -123,6 +135,7 @@ impl TableFormat for DeltaTableFormat {
     ) -> Result<TableFormatMetadata> {
         let SourceInfo {
             paths,
+            lakehouse_table,
             catalog_table,
             schema,
             constraints: _,
@@ -131,6 +144,10 @@ impl TableFormat for DeltaTableFormat {
             sort_order: _,
             options,
         } = info;
+        let catalog_table = lakehouse_table
+            .as_ref()
+            .map(|context| context.catalog_table().to_vec())
+            .or(catalog_table);
         let table_url = Self::parse_table_url(ctx, paths).await?;
         let options = DeltaReadOptions::resolve(ctx, options)?;
         let (schema, properties) =
@@ -150,8 +167,13 @@ impl TableFormat for DeltaTableFormat {
             partition_by,
             properties,
             replace: _,
+            lakehouse_table,
             catalog_table,
         } = info;
+        let catalog_table = lakehouse_table
+            .as_ref()
+            .map(|context| context.catalog_table().to_vec())
+            .or(catalog_table);
 
         let catalog_managed_table_id = if catalog_table.is_some() {
             Some(
@@ -346,8 +368,13 @@ impl TableFormat for DeltaTableFormat {
             bucket_by,
             sort_order,
             options,
+            lakehouse_table,
             catalog_table,
         } = info;
+        let catalog_table = lakehouse_table
+            .as_ref()
+            .map(|context| context.catalog_table().to_vec())
+            .or(catalog_table);
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for Delta format");
         }
@@ -364,6 +391,7 @@ impl TableFormat for DeltaTableFormat {
                     bucket_by,
                     sort_order,
                     options,
+                    lakehouse_table,
                     catalog_table,
                 },
             )),
@@ -518,6 +546,7 @@ pub struct DeltaWriteNodeOptions {
     pub sort_order: Vec<Sort>,
     #[educe(PartialEq(ignore), Hash(ignore), PartialOrd(ignore))]
     pub options: Vec<OptionLayer>,
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
     pub catalog_table: Option<Vec<String>>,
 }
 
@@ -589,6 +618,7 @@ pub(crate) async fn plan_delta_write(
         sort_order,
         options,
         catalog_table,
+        lakehouse_table,
     } = node.options().clone();
 
     if is_flow_event_schema(logical_input.schema().as_arrow()) {
@@ -738,6 +768,7 @@ pub(crate) async fn plan_delta_write(
     .with_metadata_schema(extract_metadata_schema(Some(logical_schema)))
     .with_identity_columns(extract_identity_columns(Some(logical_schema)))
     .with_table_snapshot(table_snapshot)
+    .with_lakehouse_table(lakehouse_table)
     .with_catalog_table(catalog_table);
     let planner_ctx = PlannerContext::new(ctx, table_config);
     let planner = DeltaPhysicalPlanner::new(planner_ctx);

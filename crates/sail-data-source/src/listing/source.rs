@@ -148,6 +148,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
     ) -> Result<Arc<dyn TableSource>> {
         let SourceInfo {
             paths,
+            lakehouse_table: _,
             catalog_table: _,
             schema,
             constraints,
@@ -234,6 +235,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             bucket_by,
             sort_order,
             options,
+            lakehouse_table: _,
             catalog_table,
         } = info;
         if bucket_by.is_some() {

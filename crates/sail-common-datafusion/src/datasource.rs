@@ -16,7 +16,7 @@ use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, Result};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::TableSource;
 
-use crate::catalog::CatalogPartitionField;
+use crate::catalog::{CatalogPartitionField, LakehouseExecutionContext, LakehouseOperation};
 use crate::extension::SessionExtension;
 use crate::logical_expr::ExprWithSource;
 
@@ -184,6 +184,11 @@ pub struct BucketBy {
 #[derive(Debug, Clone)]
 pub struct SourceInfo {
     pub paths: Vec<String>,
+    /// Unified lakehouse catalog context for catalog-coordinated reads.
+    ///
+    /// This is the replacement for [`Self::catalog_table`]. During the migration,
+    /// table formats should prefer this value and fall back to `catalog_table`.
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
     /// Fully qualified catalog table name for catalog-coordinated reads.
     ///
     /// This is injected by the planner and must not be accepted from user-facing
@@ -198,6 +203,15 @@ pub struct SourceInfo {
     /// The layers of options for the data source.
     /// A later layer can override earlier ones.
     pub options: Vec<OptionLayer>,
+}
+
+impl SourceInfo {
+    pub fn effective_catalog_table(&self) -> Option<&[String]> {
+        self.lakehouse_table
+            .as_ref()
+            .map(|context| context.catalog_table())
+            .or(self.catalog_table.as_deref())
+    }
 }
 
 /// Metadata about an existing table format instance needed during logical planning.
@@ -230,7 +244,17 @@ pub struct TableFormatCreateTableInfo {
     pub partition_by: Vec<CatalogPartitionField>,
     pub properties: Vec<(String, String)>,
     pub replace: bool,
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
     pub catalog_table: Option<Vec<String>>,
+}
+
+impl TableFormatCreateTableInfo {
+    pub fn effective_catalog_table(&self) -> Option<&[String]> {
+        self.lakehouse_table
+            .as_ref()
+            .map(|context| context.catalog_table())
+            .or(self.catalog_table.as_deref())
+    }
 }
 
 /// Storage metadata created by a table format before catalog registration.
@@ -255,7 +279,25 @@ pub struct SinkInfo {
     ///
     /// This is injected by the planner and must not be accepted from user-facing
     /// data source options.
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
     pub catalog_table: Option<Vec<String>>,
+}
+
+impl SinkInfo {
+    pub fn effective_catalog_table(&self) -> Option<&[String]> {
+        self.lakehouse_table
+            .as_ref()
+            .map(|context| context.catalog_table())
+            .or(self.catalog_table.as_deref())
+    }
+}
+
+pub fn legacy_lakehouse_context(
+    catalog_table: Option<&[String]>,
+    operation: LakehouseOperation,
+) -> Option<LakehouseExecutionContext> {
+    catalog_table
+        .map(|table| LakehouseExecutionContext::legacy_catalog_table(table.to_vec(), operation))
 }
 
 /// Returns the path from options, or `None` if not set.
@@ -301,6 +343,7 @@ pub struct RowLevelTargetInfo {
     pub path: String,
     pub partition_by: Vec<String>,
     pub options: Vec<OptionLayer>,
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
 }
 
 /// Operation metadata used to construct commit log `operationParameters`.

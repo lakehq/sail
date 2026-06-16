@@ -4,6 +4,7 @@ use sail_common_datafusion::array::serde::ArrowSerializer;
 use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
 };
+use sail_common_datafusion::catalog::{LakehouseExecutionContext, LakehouseOperation};
 use sail_common_datafusion::datasource::{
     is_lakehouse_format, TableFormatAlterTableOperation, TableFormatCreateTableColumn,
     TableFormatCreateTableInfo, TableFormatRegistry,
@@ -702,6 +703,12 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
                 partition_by: options.partition_by.clone(),
                 properties: options.properties.clone(),
                 replace: options.replace,
+                lakehouse_table: catalog_managed.then(|| {
+                    LakehouseExecutionContext::legacy_catalog_table(
+                        table.to_vec(),
+                        LakehouseOperation::Create,
+                    )
+                }),
                 catalog_table: catalog_managed.then(|| table.to_vec()),
             },
         )
@@ -775,6 +782,10 @@ async fn prepare_created_table_storage_metadata<C: SessionExtensionAccessor>(
                 partition_by: partition_by.clone(),
                 properties: properties.clone(),
                 replace: false,
+                lakehouse_table: Some(LakehouseExecutionContext::legacy_catalog_table(
+                    table.to_vec(),
+                    LakehouseOperation::Create,
+                )),
                 catalog_table: Some(table.to_vec()),
             },
         )

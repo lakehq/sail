@@ -135,6 +135,7 @@ pub async fn build_merge_plan(
         table_schema,
         ctx.options().user_metadata.clone(),
         write_context,
+        ctx.lakehouse_table().cloned(),
         ctx.catalog_table().cloned(),
     )
 }
@@ -272,6 +273,7 @@ pub async fn build_merge_plan_mor(
         PhysicalSinkMode::Append,
         ctx.options().user_metadata.clone(),
         write_context.commit_context.clone(),
+        ctx.lakehouse_table().cloned(),
         ctx.catalog_table().cloned(),
     )))
 }

@@ -119,8 +119,12 @@ impl TableFormat for IcebergTableFormat {
             bucket_by,
             sort_order,
             options,
+            lakehouse_table,
             catalog_table,
         } = info;
+        let catalog_table = lakehouse_table
+            .map(|context| context.catalog_table().to_vec())
+            .or(catalog_table);
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for Iceberg format");
         }
@@ -153,8 +157,12 @@ impl TableFormat for IcebergTableFormat {
             partition_by,
             properties,
             replace,
+            lakehouse_table,
             catalog_table,
         } = info;
+        let catalog_table = lakehouse_table
+            .map(|context| context.catalog_table().to_vec())
+            .or(catalog_table);
 
         let table_url = Self::parse_table_url(vec![path]).await?;
         let object_store = runtime_env
@@ -639,6 +647,7 @@ async fn build_iceberg_provider(
 ) -> Result<Arc<IcebergTableProvider>> {
     let SourceInfo {
         paths,
+        lakehouse_table: _,
         catalog_table: _,
         schema: _,
         constraints: _,

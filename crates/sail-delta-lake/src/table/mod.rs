@@ -28,12 +28,14 @@ use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::{DataFusionError, Result};
 use object_store::ObjectStore;
+use sail_catalog::lakehouse::DeltaRatifiedCommitRequest;
 use sail_catalog::manager::CatalogManager;
-use sail_catalog::provider::GetTableCommitsOptions;
 use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
 };
-use sail_common_datafusion::catalog::TableColumnStatus;
+use sail_common_datafusion::catalog::{
+    LakehouseExecutionContext, LakehouseOperation, TableColumnStatus,
+};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
 
@@ -537,10 +539,13 @@ where
 
     let latest_table_version = loop {
         let response = manager
-            .get_table_commits(
+            .get_delta_ratified_commits(
                 catalog_table,
-                GetTableCommitsOptions {
-                    format: "delta".to_string(),
+                DeltaRatifiedCommitRequest {
+                    context: LakehouseExecutionContext::legacy_catalog_table(
+                        catalog_table.to_vec(),
+                        LakehouseOperation::Read,
+                    ),
                     table_uri: table_url.to_string(),
                     start_version,
                     end_version: version_as_of,

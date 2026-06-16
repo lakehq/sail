@@ -5,6 +5,7 @@ use datafusion_expr::LogicalPlan;
 pub use sail_common_datafusion::catalog::{CatalogPartitionField, PartitionTransform};
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableConstraint, CatalogTableSort,
+    LakehouseExecutionContext,
 };
 use serde::{Deserialize, Serialize};
 
@@ -89,6 +90,7 @@ pub struct DropTableOptions {
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub struct CommitTableOptions {
     pub format: String,
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
     pub requirements: Vec<serde_json::Value>,
     pub updates: Vec<serde_json::Value>,
 }
@@ -97,6 +99,7 @@ pub struct CommitTableOptions {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct GetTableCommitsOptions {
     pub format: String,
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
     pub table_uri: String,
     pub start_version: i64,
     pub end_version: Option<i64>,

@@ -77,7 +77,9 @@ use datafusion_spark::function::url::url_encode::UrlEncode;
 use prost::Message;
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
-use sail_common_datafusion::catalog::{CatalogPartitionField, PartitionTransform};
+use sail_common_datafusion::catalog::{
+    CatalogPartitionField, LakehouseExecutionContext, LakehouseOperation, PartitionTransform,
+};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionCastColumnExpr;
 use sail_common_datafusion::system::catalog::SystemTable;
@@ -696,6 +698,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     None => return plan_err!("Missing commit_context for DeltaCommitExec"),
                 };
 
+                let catalog_table = (!catalog_table.is_empty()).then_some(catalog_table);
+                let lakehouse_table = catalog_table.as_ref().map(|catalog_table| {
+                    LakehouseExecutionContext::legacy_catalog_table(
+                        catalog_table.clone(),
+                        LakehouseOperation::Write,
+                    )
+                });
                 Ok(Arc::new(DeltaCommitExec::new(
                     input,
                     table_url,
@@ -705,7 +714,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     sink_mode,
                     user_metadata,
                     commit_context,
-                    (!catalog_table.is_empty()).then_some(catalog_table),
+                    lakehouse_table,
+                    catalog_table,
                 )))
             }
             NodeKind::DeltaScanByAdds(gen::DeltaScanByAddsExecNode {

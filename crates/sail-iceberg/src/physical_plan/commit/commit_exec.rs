@@ -30,13 +30,16 @@ use futures::stream::once;
 use futures::StreamExt;
 use object_store::ObjectStoreExt;
 use sail_catalog::error::CatalogError;
+use sail_catalog::lakehouse::LakehouseCommitRequest;
 use sail_catalog::manager::CatalogManager;
-use sail_catalog::provider::{AlterTableOptions, CommitTableOptions};
+use sail_catalog::provider::AlterTableOptions;
 use sail_common_datafusion::catalog::managed::{
     existing_metadata_location_key, METADATA_LOCATION_UNDERSCORE_KEY,
     PREVIOUS_METADATA_LOCATION_KEY,
 };
-use sail_common_datafusion::catalog::{TableKind, TableStatus};
+use sail_common_datafusion::catalog::{
+    LakehouseExecutionContext, LakehouseOperation, TableKind, TableStatus,
+};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
 
@@ -392,12 +395,17 @@ impl IcebergCommitExec {
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
         match manager
-            .commit_table(
+            .commit_lakehouse_table(
                 catalog_table,
-                CommitTableOptions {
+                LakehouseCommitRequest {
+                    context: LakehouseExecutionContext::legacy_catalog_table(
+                        catalog_table.to_vec(),
+                        LakehouseOperation::Write,
+                    ),
                     format: "iceberg".to_string(),
                     requirements,
                     updates,
+                    payload: None,
                 },
             )
             .await

@@ -46,6 +46,7 @@ impl TableFormat for ConsoleTableFormat {
             bucket_by,
             sort_order,
             options,
+            lakehouse_table: _,
             catalog_table: _,
         } = info;
         if !matches!(mode, SinkMode::Append) {

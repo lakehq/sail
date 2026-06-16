@@ -4,6 +4,7 @@ use datafusion::execution::SessionState;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::PhysicalPlanner;
 use datafusion_common::{internal_err, Result};
+use sail_common_datafusion::catalog::{LakehouseExecutionContext, LakehouseOperation};
 use sail_common_datafusion::datasource::{
     MergePredicateInfo, OperationOverride, RowLevelCommand, RowLevelTargetInfo, RowLevelWriteInfo,
     TableFormatRegistry,
@@ -25,6 +26,10 @@ pub async fn create_row_level_write_physical_plan(
         path: node.target_location().to_string(),
         partition_by: node.target_partition_by().to_vec(),
         options: node.target_options().to_vec(),
+        lakehouse_table: Some(LakehouseExecutionContext::legacy_catalog_table(
+            node.target_table_name().to_vec(),
+            LakehouseOperation::Write,
+        )),
     };
 
     let format = node.target_format().to_string();
