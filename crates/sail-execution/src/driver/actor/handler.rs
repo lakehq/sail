@@ -256,15 +256,30 @@ impl DriverActor {
             .get_task_state(&key)
             .is_some_and(|x| matches!(x, TaskState::Created))
         {
-            let message = "task scheduling timeout".to_string();
-            let cause = CommonErrorCause::Execution(message.clone());
-            ctx.send(DriverEvent::UpdateTask {
-                key,
-                status: TaskStatus::Failed,
-                message: Some(message),
-                cause: Some(cause),
-                sequence: None,
-            })
+            // The task has not been assigned to a worker within the launch
+            // timeout. If workers are still launching, the task can be assigned
+            // once one registers (`handle_register_worker` runs pending tasks),
+            // so reschedule the probe instead of failing. This keeps long,
+            // many-stage jobs alive while the worker pool scales between stages.
+            // It cannot loop forever: a pending worker that never registers is
+            // failed at `worker_launch_timeout`, after which there are no pending
+            // workers and the task fails below.
+            if self.worker_pool.has_pending_workers() {
+                ctx.send_with_delay(
+                    DriverEvent::ProbePendingTask { key },
+                    self.options.task_launch_timeout,
+                );
+            } else {
+                let message = "task scheduling timeout".to_string();
+                let cause = CommonErrorCause::Execution(message.clone());
+                ctx.send(DriverEvent::UpdateTask {
+                    key,
+                    status: TaskStatus::Failed,
+                    message: Some(message),
+                    cause: Some(cause),
+                    sequence: None,
+                })
+            }
         }
         ActorAction::Continue
     }
