@@ -264,11 +264,18 @@ impl DriverActor {
             // It cannot loop forever: a pending worker that never registers is
             // failed at `worker_launch_timeout`, after which there are no pending
             // workers and the task fails below.
+            //
+            // Re-probe at `worker_launch_timeout` (capped by `task_launch_timeout`)
+            // rather than a full `task_launch_timeout`: that is the window a
+            // pending worker takes to register or be failed, so once the last
+            // pending worker resolves the task fails promptly instead of waiting
+            // another full launch window.
             if self.worker_pool.has_pending_workers() {
-                ctx.send_with_delay(
-                    DriverEvent::ProbePendingTask { key },
-                    self.options.task_launch_timeout,
-                );
+                let delay = self
+                    .options
+                    .worker_launch_timeout
+                    .min(self.options.task_launch_timeout);
+                ctx.send_with_delay(DriverEvent::ProbePendingTask { key }, delay);
             } else {
                 let message = "task scheduling timeout".to_string();
                 let cause = CommonErrorCause::Execution(message.clone());
