@@ -428,8 +428,6 @@ pub struct RowLevelWriteInfo {
     pub with_schema_evolution: bool,
     /// Override for commit operation metadata.
     pub operation_override: Option<OperationOverride>,
-    /// Materialization strategy. Defaults to [`MergeStrategy::Eager`].
-    pub merge_strategy: MergeStrategy,
 }
 
 // TODO: MERGE schema evolution end-to-end
@@ -507,25 +505,6 @@ pub trait TableFormat: Send + Sync {
     async fn create_merger(&self, ctx: &dyn Session, info: MergeInfo) -> Result<LogicalPlan> {
         let _ = (ctx, info);
         not_impl_err!("MERGE is not yet implemented for {} format", self.name())
-    }
-
-    /// Creates an `ExecutionPlan` for row-level operations (DELETE, UPDATE, MERGE).
-    async fn create_row_level_writer(
-        &self,
-        ctx: &dyn Session,
-        info: RowLevelWriteInfo,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let _ = (ctx, info);
-        not_impl_err!(
-            "Row-level operations are not yet implemented for {} format",
-            self.name()
-        )
-    }
-
-    /// Returns the materialization strategy for row-level modifications.
-    /// Defaults to [`MergeStrategy::Eager`]. Override for Merge-on-Read formats.
-    fn merge_strategy(&self) -> MergeStrategy {
-        MergeStrategy::Eager
     }
 
     /// Alters table-format storage metadata for an existing table.

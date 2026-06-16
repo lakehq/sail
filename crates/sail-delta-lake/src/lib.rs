@@ -22,7 +22,6 @@ pub mod operations;
 pub mod options;
 pub mod physical;
 pub mod physical_plan;
-pub mod planner;
 pub mod schema;
 pub mod session_extension;
 pub mod spec;
