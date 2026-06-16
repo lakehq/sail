@@ -9,7 +9,7 @@ use crate::spec::expression::{
     SortOrder,
 };
 use crate::spec::literal::Literal;
-use crate::spec::{DataType, FunctionDefinition, Identifier};
+use crate::spec::{DataType, FunctionDefinition, Identifier, Window};
 
 /// Unresolved logical plan node for Sail.
 /// As a starting point, the definition matches the structure of the `Relation` message
@@ -256,6 +256,10 @@ pub enum QueryNode {
         input: Box<QueryPlan>,
         recursive: bool,
         ctes: Vec<(Identifier, QueryPlan)>,
+    },
+    NamedWindows {
+        input: Box<QueryPlan>,
+        windows: Vec<(Identifier, Window)>,
     },
     /// A relation that wraps a root plan with referenced subquery plans.
     WithRelations {

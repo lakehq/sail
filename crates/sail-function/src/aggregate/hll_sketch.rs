@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::Debug;
 
 use arrow::array::{Array, ArrayRef, BinaryArray};
@@ -39,10 +38,6 @@ impl HllSketchAggFunction {
 }
 
 impl AggregateUDFImpl for HllSketchAggFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "hll_sketch_agg"
     }
@@ -94,10 +89,6 @@ impl HllUnionAggFunction {
 }
 
 impl AggregateUDFImpl for HllUnionAggFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "hll_union_agg"
     }

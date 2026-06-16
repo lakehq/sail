@@ -5,6 +5,7 @@ use datafusion_expr::LogicalPlan;
 pub use sail_common_datafusion::catalog::{CatalogPartitionField, PartitionTransform};
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableConstraint, CatalogTableSort,
+    TemporaryViewSource,
 };
 use serde::{Deserialize, Serialize};
 
@@ -37,6 +38,8 @@ pub struct CreateTableOptions {
     pub replace: bool,
     pub properties: Vec<(String, String)>,
     pub is_external: bool,
+    #[serde(default)]
+    pub is_write_precondition: bool,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
@@ -54,6 +57,42 @@ pub struct CreateTableColumnOptions {
 pub struct DropTableOptions {
     pub if_exists: bool,
     pub purge: bool,
+}
+
+/// Options for committing table-format metadata through a catalog.
+///
+/// `requirements` and `updates` use JSON so the catalog facade can remain independent of any
+/// particular lakehouse format crate. Format-specific catalog providers deserialize or forward the
+/// payload according to their protocol.
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CommitTableOptions {
+    pub format: String,
+    pub requirements: Vec<serde_json::Value>,
+    pub updates: Vec<serde_json::Value>,
+}
+
+/// Options for retrieving table-format commits tracked by a catalog.
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct GetTableCommitsOptions {
+    pub format: String,
+    pub table_uri: String,
+    pub start_version: i64,
+    pub end_version: Option<i64>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct TableCommitInfo {
+    pub version: i64,
+    pub timestamp: i64,
+    pub file_name: String,
+    pub file_size: i64,
+    pub file_modification_timestamp: i64,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct GetTableCommitsResponse {
+    pub latest_table_version: i64,
+    pub commits: Vec<TableCommitInfo>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
@@ -82,6 +121,8 @@ pub struct CreateTemporaryViewOptions<I = Arc<LogicalPlan>> {
     pub replace: bool,
     pub comment: Option<String>,
     pub properties: Vec<(String, String)>,
+    /// The data source backing the view, if it was created with `USING`.
+    pub source: Option<TemporaryViewSource>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]

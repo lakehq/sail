@@ -1,0 +1,15 @@
+[package]
+name = "sail-common-hms"
+version = { workspace = true }
+edition = { workspace = true }
+
+[lints]
+workspace = true
+
+[build-dependencies]
+volo-build = { workspace = true }
+
+[dependencies]
+pilota = { workspace = true }
+volo = { workspace = true }
+volo-thrift = { workspace = true }

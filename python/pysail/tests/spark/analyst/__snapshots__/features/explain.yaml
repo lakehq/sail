@@ -53,9 +53,6 @@ data:
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
   
-    logical_plan after expand_row_level_op:
-    SAME TEXT AS ABOVE
-  
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
   
@@ -63,6 +60,9 @@ data:
     SAME TEXT AS ABOVE
   
     logical_plan after optimize_unions:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after unions_to_filter:
     SAME TEXT AS ABOVE
   
     logical_plan after simplify_expressions:
@@ -132,9 +132,6 @@ data:
           Projection: column1 AS #2, column2 AS #3
             Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
   
-    logical_plan after expand_row_level_op:
-    SAME TEXT AS ABOVE
-  
     logical_plan after decorrelate_lateral_projection:
     SAME TEXT AS ABOVE
   
@@ -142,6 +139,9 @@ data:
     SAME TEXT AS ABOVE
   
     logical_plan after optimize_unions:
+    SAME TEXT AS ABOVE
+  
+    logical_plan after unions_to_filter:
     SAME TEXT AS ABOVE
   
     logical_plan after simplify_expressions:
@@ -278,6 +278,9 @@ data:
     physical_plan after OptimizeAggregateOrder:
     SAME TEXT AS ABOVE
   
+    physical_plan after WindowTopN:
+    SAME TEXT AS ABOVE
+  
     physical_plan after ProjectionPushdown:
     SAME TEXT AS ABOVE
   
@@ -296,7 +299,13 @@ data:
     physical_plan after LimitPushPastWindows:
     SAME TEXT AS ABOVE
   
+    physical_plan after HashJoinBuffering:
+    SAME TEXT AS ABOVE
+  
     physical_plan after LimitPushdown:
+    SAME TEXT AS ABOVE
+  
+    physical_plan after TopKRepartition:
     SAME TEXT AS ABOVE
   
     physical_plan after ProjectionPushdown:

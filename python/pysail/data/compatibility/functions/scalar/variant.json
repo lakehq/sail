@@ -27,8 +27,7 @@
   {
     "module": "pyspark.sql.functions",
     "function": "try_parse_json",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/862"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",

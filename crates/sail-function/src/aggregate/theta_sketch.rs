@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::Debug;
 
 use arrow::array::{Array, ArrayRef, BinaryArray};
@@ -40,10 +39,6 @@ impl ThetaSketchAggFunction {
 }
 
 impl AggregateUDFImpl for ThetaSketchAggFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "theta_sketch_agg"
     }
@@ -95,10 +90,6 @@ impl ThetaUnionAggFunction {
 }
 
 impl AggregateUDFImpl for ThetaUnionAggFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "theta_union_agg"
     }
@@ -147,10 +138,6 @@ impl ThetaIntersectionAggFunction {
 }
 
 impl AggregateUDFImpl for ThetaIntersectionAggFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "theta_intersection_agg"
     }

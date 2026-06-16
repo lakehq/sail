@@ -185,10 +185,6 @@ impl SparkToCsv {
 }
 
 impl ScalarUDFImpl for SparkToCsv {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         Self::TO_CSV_NAME
     }
