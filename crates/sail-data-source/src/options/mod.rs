@@ -1,5 +1,4 @@
 pub mod parsers;
-pub mod types;
 
 use datafusion::catalog::Session;
 use sail_common_datafusion::datasource::OptionLayer;
@@ -10,8 +9,6 @@ pub mod gen {
     include!(concat!(env!("OUT_DIR"), "/options/socket.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/rate.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/console.rs"));
-    include!(concat!(env!("OUT_DIR"), "/options/delta.rs"));
-    include!(concat!(env!("OUT_DIR"), "/options/iceberg.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/parquet.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/csv.rs"));
     include!(concat!(env!("OUT_DIR"), "/options/json.rs"));

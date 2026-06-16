@@ -273,6 +273,10 @@ pub struct DeltaScanConfig {
     #[serde(default)]
     pub delta_log_replay_strategy: DeltaLogReplayStrategy,
     /// Threshold for `Auto` replay strategy.
-    #[serde(default = "default_delta_log_replay_hash_threshold")]
+    #[serde(default = "default_delta_log_replay_hash_threshold_usize")]
     pub delta_log_replay_hash_threshold: usize,
+}
+
+fn default_delta_log_replay_hash_threshold_usize() -> usize {
+    default_delta_log_replay_hash_threshold().get()
 }

@@ -26,7 +26,8 @@ use sail_common_datafusion::column_features::{
     ColumnFeatures, ColumnFeaturesBuilder, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
 use sail_common_datafusion::datasource::{
-    find_path_in_options, BucketBy, OptionLayer, SinkMode, SourceInfo, TableFormatRegistry,
+    find_path_in_options, BucketBy, OptionLayer, SinkInfo, SinkMode, SourceInfo,
+    TableFormatRegistry,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
@@ -37,7 +38,6 @@ use sail_function::scalar::math::spark_try_add::SparkTryAdd;
 use sail_function::scalar::math::spark_try_mult::SparkTryMult;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_logical_plan::barrier::BarrierNode;
-use sail_logical_plan::file_write::{FileWriteNode, FileWriteOptions};
 
 use super::delta::parse_delta_generation_expr;
 use crate::error::{PlanError, PlanResult};
@@ -230,12 +230,13 @@ impl PlanResolver<'_> {
             return Err(PlanError::todo("CLUSTER BY for write"));
         }
         let input_schema = input.schema().inner().clone();
-        let mut file_write_options = FileWriteOptions {
+        let mut write_format = format.unwrap_or_default();
+        let mut sink_info = SinkInfo {
+            input: input.clone(),
             // The mode will be set later so the value here is just a placeholder.
             mode: SinkMode::ErrorIfExists,
-            format: format.unwrap_or_default(),
             partition_by: partition_by.clone(),
-            sort_by: self
+            sort_order: self
                 .resolve_sort_orders(sort_by.clone(), true, input.schema(), state)
                 .await?,
             bucket_by: self.resolve_write_bucket_by(bucket_by.clone())?,
@@ -243,6 +244,7 @@ impl PlanResolver<'_> {
                 .into_iter()
                 .map(|items| OptionLayer::OptionList { items })
                 .collect(),
+            catalog_table: None,
         };
         let mut preconditions = vec![];
         match target {
@@ -252,24 +254,29 @@ impl PlanResolver<'_> {
                         "table properties are not supported for writing to a data source",
                     ));
                 }
-                if file_write_options.format.is_empty() {
-                    file_write_options.format = self.config.default_table_file_format.clone();
+                if write_format.is_empty() {
+                    write_format = self.config.default_table_file_format.clone();
                 }
                 let should_rewrite_existing_delta_table_features =
                     !(matches!(&mode, WriteMode::ErrorIfExists | WriteMode::IgnoreIfExists)
                         || matches!(&mode, WriteMode::Replace { .. })
                             && Self::has_truthy_option(
-                                &file_write_options.options,
+                                &sink_info.options,
                                 &["overwriteSchema", "overwrite_schema"],
                             ));
                 if should_rewrite_existing_delta_table_features {
                     input = self
-                        .rewrite_data_source_delta_table_features(input, &file_write_options, state)
+                        .rewrite_data_source_delta_table_features(
+                            input,
+                            &write_format,
+                            &sink_info,
+                            state,
+                        )
                         .await?;
                 }
                 let schema_for_cond =
                     matches!(mode, WriteMode::TruncateIf { .. }).then_some(input_schema.as_ref());
-                file_write_options.mode = self
+                sink_info.mode = self
                     .resolve_write_mode(mode, schema_for_cond, state)
                     .await?;
             }
@@ -323,29 +330,35 @@ impl PlanResolver<'_> {
                             "cannot specify table properties when writing to an existing table",
                         ));
                     }
-                    info.validate_file_write_options(&file_write_options)?;
-                    input = self
-                        .rewrite_write_input(input, column_match, info, state)
-                        .await?;
+                    info.validate_write_info(&write_format, &sink_info)?;
+                    let delta_merge_schema = info.format.eq_ignore_ascii_case("delta")
+                        && Self::has_truthy_option(
+                            &sink_info.options,
+                            &["mergeSchema", "merge_schema"],
+                        );
+                    if !delta_merge_schema {
+                        input = self
+                            .rewrite_write_input(input, column_match, info, state)
+                            .await?;
+                    }
                     input = self
                         .apply_delta_table_constraints(input, info, state)
                         .await?;
-                    if file_write_options.partition_by.is_empty()
+                    if sink_info.partition_by.is_empty()
                         || !info.format.eq_ignore_ascii_case("iceberg")
                     {
-                        file_write_options.partition_by = info.partition_by.clone();
+                        sink_info.partition_by = info.partition_by.clone();
                     }
-                    file_write_options.sort_by =
-                        info.sort_by.iter().cloned().map(|x| x.into()).collect();
-                    file_write_options.bucket_by = info.bucket_by.clone().map(|x| x.into());
+                    sink_info.sort_order = info.sort_by.iter().cloned().map(|x| x.into()).collect();
+                    sink_info.bucket_by = info.bucket_by.clone().map(|x| x.into());
                     let location = info.location.clone().ok_or_else(|| {
                         PlanError::invalid(format!("table does not have a location: {table:?}"))
                     })?;
-                    file_write_options.options.push(OptionLayer::OptionList {
+                    sink_info.options.push(OptionLayer::OptionList {
                         items: vec![("path".to_string(), location)],
                     });
-                    file_write_options.format = info.format.clone();
-                    file_write_options.options.insert(
+                    write_format = info.format.clone();
+                    sink_info.options.insert(
                         0,
                         OptionLayer::TablePropertyList {
                             items: info.properties.clone(),
@@ -353,46 +366,45 @@ impl PlanResolver<'_> {
                     );
                 } else {
                     let write_options_had_location =
-                        find_path_in_options(&file_write_options.options).is_some();
-                    file_write_options.options.insert(
+                        find_path_in_options(&sink_info.options).is_some();
+                    sink_info.options.insert(
                         0,
                         OptionLayer::TablePropertyList {
                             items: table_properties,
                         },
                     );
                     // Create or replace the table
-                    if file_write_options.format.is_empty() {
+                    if write_format.is_empty() {
                         if let Some(format) = info.as_ref().map(|x| &x.format) {
-                            file_write_options.format = format.clone();
+                            write_format = format.clone();
                         } else {
-                            file_write_options.format =
-                                self.config.default_table_file_format.clone();
+                            write_format = self.config.default_table_file_format.clone();
                         }
                     }
                     if let Some(location) = info.as_ref().and_then(|x| x.location.as_ref()) {
-                        file_write_options.options.push(OptionLayer::OptionList {
+                        sink_info.options.push(OptionLayer::OptionList {
                             items: vec![("path".to_string(), location.clone())],
                         });
                     } else {
                         let default_location = self.resolve_default_table_location(&table).await?;
-                        file_write_options.options.insert(
+                        sink_info.options.insert(
                             0,
                             OptionLayer::OptionList {
                                 items: vec![("path".to_string(), default_location)],
                             },
                         );
                     };
-                    if file_write_options
+                    if sink_info
                         .partition_by
                         .iter()
                         .any(|field| field.transform.is_some())
-                        && !file_write_options.format.eq_ignore_ascii_case("iceberg")
+                        && !write_format.eq_ignore_ascii_case("iceberg")
                     {
                         return Err(PlanError::unsupported(
                             "partition transforms are only supported for Iceberg tables",
                         ));
                     }
-                    let table_location = find_path_in_options(&file_write_options.options);
+                    let table_location = find_path_in_options(&sink_info.options);
                     let (if_not_exists, replace) = if matches!(mode, WriteMode::Append { .. }) {
                         (true, false)
                     } else if matches!(mode, WriteMode::Replace { .. }) {
@@ -417,7 +429,7 @@ impl PlanResolver<'_> {
                         })
                         .collect();
                     // TODO: Revisit passing write options as table properties.
-                    let properties = file_write_options
+                    let properties: Vec<(String, String)> = sink_info
                         .options
                         .clone()
                         .into_iter()
@@ -441,13 +453,13 @@ impl PlanResolver<'_> {
                     let sort_by = self.resolve_catalog_table_sort(sort_by)?;
                     let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
                     let command = CatalogCommand::CreateTable {
-                        table: table.into(),
+                        table: table.clone().into(),
                         options: CreateTableOptions {
                             columns,
                             comment: None,
                             constraints: vec![],
                             location: table_location,
-                            format: file_write_options.format.clone(),
+                            format: write_format.clone(),
                             partition_by,
                             sort_by,
                             bucket_by,
@@ -455,22 +467,34 @@ impl PlanResolver<'_> {
                             replace,
                             properties,
                             is_external: table_is_external || write_options_had_location,
+                            is_write_precondition: true,
                         },
                     };
                     preconditions.push(Arc::new(self.resolve_catalog_command(command)?));
                 }
 
-                file_write_options.mode = self
+                sink_info.catalog_table = Some(
+                    table
+                        .parts()
+                        .iter()
+                        .map(|part| part.as_ref().to_string())
+                        .collect::<Vec<_>>(),
+                );
+
+                sink_info.mode = self
                     .resolve_write_mode(mode, schema_for_cond.as_ref(), state)
                     .await?;
             }
         };
         input = self
-            .rewrite_delta_check_constraints_from_options(input, &file_write_options, state)
+            .rewrite_delta_check_constraints_from_options(input, &write_format, &sink_info, state)
             .await?;
-        let plan = LogicalPlan::Extension(Extension {
-            node: Arc::new(FileWriteNode::new(Arc::new(input), file_write_options)),
-        });
+        sink_info.input = input;
+        let registry = self.ctx.extension::<TableFormatRegistry>()?;
+        let plan = registry
+            .get(&write_format)?
+            .create_writer(&self.ctx.state(), sink_info)
+            .await?;
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(BarrierNode::new(preconditions, Arc::new(plan))),
         }))
@@ -568,6 +592,7 @@ impl PlanResolver<'_> {
                     })?;
                     let info = SourceInfo {
                         paths: location.iter().cloned().collect(),
+                        catalog_table: Some(table.clone().into()),
                         schema: None,
                         constraints: Default::default(),
                         partition_by: vec![],
@@ -576,6 +601,7 @@ impl PlanResolver<'_> {
                         options: vec![OptionLayer::TablePropertyList {
                             items: properties.to_vec(),
                         }],
+                        read_case_sensitive: self.config.case_sensitive,
                     };
                     let metadata = table_format
                         .infer_metadata(&self.ctx.state(), info)
@@ -604,6 +630,7 @@ impl PlanResolver<'_> {
                     })?;
                     let info = SourceInfo {
                         paths: location.iter().cloned().collect(),
+                        catalog_table: Some(table.clone().into()),
                         schema: None,
                         constraints: Default::default(),
                         partition_by: vec![],
@@ -612,6 +639,7 @@ impl PlanResolver<'_> {
                         options: vec![OptionLayer::TablePropertyList {
                             items: properties.to_vec(),
                         }],
+                        read_case_sensitive: self.config.case_sensitive,
                     };
                     match table_format.infer_metadata(&self.ctx.state(), info).await {
                         Ok(metadata) => {
@@ -630,6 +658,7 @@ impl PlanResolver<'_> {
                     }
                 }
                 Ok(Some(TableInfo {
+                    catalog_table: Some(table.clone().into()),
                     columns,
                     location,
                     format,
@@ -1656,6 +1685,7 @@ fn extract_partition_int_arg(
 }
 
 pub(super) struct TableInfo {
+    pub(super) catalog_table: Option<Vec<String>>,
     pub(super) columns: Vec<TableColumnStatus>,
     pub(super) location: Option<String>,
     pub(super) format: String,
@@ -1675,23 +1705,23 @@ impl TableInfo {
         Schema::new(fields)
     }
 
-    fn validate_file_write_options(&self, options: &FileWriteOptions) -> PlanResult<()> {
+    fn validate_write_info(&self, format: &str, info: &SinkInfo) -> PlanResult<()> {
         if !self.format.eq_ignore_ascii_case("iceberg")
-            && !self.is_empty_or_equivalent_partitioning(&options.partition_by)
+            && !self.is_empty_or_equivalent_partitioning(&info.partition_by)
         {
             return Err(PlanError::invalid(
                 "cannot specify a different partitioning when writing to an existing table",
             ));
         }
-        if !self.is_empty_or_equivalent_bucketing(&options.bucket_by, &options.sort_by) {
+        if !self.is_empty_or_equivalent_bucketing(&info.bucket_by, &info.sort_order) {
             return Err(PlanError::invalid(
                 "cannot specify a different bucketing when writing to an existing table",
             ));
         }
-        if !options.format.is_empty() && !options.format.eq_ignore_ascii_case(&self.format) {
+        if !format.is_empty() && !format.eq_ignore_ascii_case(&self.format) {
             return Err(PlanError::invalid(format!(
                 "the format '{}' does not match the table format '{}'",
-                options.format, self.format
+                format, self.format
             )));
         }
         Ok(())

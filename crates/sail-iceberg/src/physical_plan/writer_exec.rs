@@ -10,7 +10,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -46,6 +45,10 @@ use crate::spec::partition::{
 };
 use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::{TableMetadata, TableRequirement};
+use crate::table::metadata_loader::metadata_location_to_object_path_string;
+use crate::table_format::{
+    catalog_managed_iceberg_from_properties, metadata_location_from_properties,
+};
 use crate::utils::get_object_store_from_context;
 use crate::utils::partition_transform::{
     catalog_partition_field_from_iceberg, format_partition_expr,
@@ -286,10 +289,6 @@ impl ExecutionPlan for IcebergWriterExec {
         "IcebergWriterExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -385,7 +384,17 @@ impl ExecutionPlan for IcebergWriterExec {
                 variant_shredding,
             ) = if table_exists {
                 let latest_meta =
-                    crate::table::find_latest_metadata_file(&object_store, &table_url).await?;
+                    if catalog_managed_iceberg_from_properties(&options.table_properties) {
+                        match metadata_location_from_properties(&options.table_properties) {
+                            Some(location) => metadata_location_to_object_path_string(&location)?,
+                            None => {
+                                crate::table::find_latest_metadata_file(&object_store, &table_url)
+                                    .await?
+                            }
+                        }
+                    } else {
+                        crate::table::find_latest_metadata_file(&object_store, &table_url).await?
+                    };
                 let bytes = crate::table::metadata_loader::load_metadata_file_bytes(
                     &object_store,
                     &latest_meta,

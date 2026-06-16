@@ -10,16 +10,21 @@ use sail_catalog::provider::{
     Namespace,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
+use sail_common_datafusion::catalog::iceberg::{
+    is_iceberg_table_properties, ICEBERG_TABLE_TYPE_KEY, ICEBERG_TABLE_TYPE_VALUE,
+};
 use sail_common_datafusion::catalog::{
     identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
 };
 use sail_common_datafusion::column_features::{ColumnFeatures, ColumnFeaturesBuilder};
+use sail_common_hms::hms::{
+    Database, FieldSchema, PrincipalType, SerDeInfo, StorageDescriptor, Table,
+};
 
 use crate::data_type::{
     arrow_to_hive_type, hive_type_to_arrow, spark_struct_json_from_fields,
     spark_struct_json_to_fields,
 };
-use crate::hms::{Database, FieldSchema, PrincipalType, SerDeInfo, StorageDescriptor, Table};
 
 pub(crate) const COMMENT_KEY: &str = "comment";
 pub(crate) const EXTERNAL_KEY: &str = "EXTERNAL";
@@ -90,15 +95,19 @@ pub(crate) fn table_to_status(
     let location = storage
         .and_then(|sd| sd.location.as_ref())
         .map(ToString::to_string);
-    let format = table_provider_format(table.parameters.as_ref()).unwrap_or_else(|| {
-        detect_hms_logical_format(
-            storage
-                .and_then(|sd| sd.serde_info.as_ref())
-                .and_then(|serde| serde.serialization_lib.as_deref()),
-            storage.and_then(|sd| sd.input_format.as_deref()),
-            storage.and_then(|sd| sd.output_format.as_deref()),
-        )
-    });
+    let format = if is_iceberg_table_parameters(table.parameters.as_ref()) {
+        ICEBERG_TABLE_TYPE_VALUE.to_string()
+    } else {
+        table_provider_format(table.parameters.as_ref()).unwrap_or_else(|| {
+            detect_hms_logical_format(
+                storage
+                    .and_then(|sd| sd.serde_info.as_ref())
+                    .and_then(|serde| serde.serialization_lib.as_deref()),
+                storage.and_then(|sd| sd.input_format.as_deref()),
+                storage.and_then(|sd| sd.output_format.as_deref()),
+            )
+        })
+    };
     let partition_by = table
         .partition_keys
         .as_ref()
@@ -198,14 +207,23 @@ pub(crate) fn build_generic_table(
     let (regular_columns, partition_keys) = build_columns(columns, &partition_columns)?;
     let mut parameters = vec_to_map(properties);
     insert_comment(&mut parameters, comment);
+    let table_parameters = parameters.get_or_insert_with(AHashMap::new);
     if format.logical_format.eq_ignore_ascii_case("delta") {
-        parameters.get_or_insert_with(AHashMap::new).insert(
+        table_parameters.insert(
             FastStr::from_static_str(SPARK_DATASOURCE_PROVIDER_KEY),
             FastStr::from_static_str("delta"),
         );
+    } else if format
+        .logical_format
+        .eq_ignore_ascii_case(ICEBERG_TABLE_TYPE_VALUE)
+    {
+        table_parameters.insert(
+            FastStr::from_static_str(ICEBERG_TABLE_TYPE_KEY),
+            FastStr::from_static_str(ICEBERG_TABLE_TYPE_VALUE),
+        );
     }
 
-    parameters.get_or_insert_with(AHashMap::new).insert(
+    table_parameters.insert(
         FastStr::from_static_str(EXTERNAL_KEY),
         FastStr::from_static_str(EXTERNAL_TRUE),
     );
@@ -430,6 +448,16 @@ fn table_provider_format(parameters: Option<&AHashMap<FastStr, FastStr>>) -> Opt
     Some(match provider.as_str() {
         "deltalake" => "delta".to_string(),
         _ => provider,
+    })
+}
+
+fn is_iceberg_table_parameters(parameters: Option<&AHashMap<FastStr, FastStr>>) -> bool {
+    parameters.is_some_and(|properties| {
+        is_iceberg_table_properties(
+            properties
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        )
     })
 }
 
@@ -777,13 +805,13 @@ mod tests {
     use sail_catalog::provider::{
         CreateTableColumnOptions, CreateViewColumnOptions, CreateViewOptions,
     };
+    use sail_common_hms::hms::{FieldSchema, SerDeInfo, StorageDescriptor, Table};
 
     use super::{
         build_generic_table, build_view, columns_from_spark_properties, database_to_status,
         inject_spark_metadata, is_view_table, map_to_vec, validate_namespace, GenericTableFormat,
         COMMENT_KEY, SPARK_DATASOURCE_PROVIDER_KEY, SPARK_SCHEMA_KEY, VIRTUAL_VIEW_TYPE,
     };
-    use crate::hms::{FieldSchema, SerDeInfo, StorageDescriptor, Table};
 
     #[test]
     fn test_validate_namespace_rejects_nested_namespaces() {
@@ -793,7 +821,7 @@ mod tests {
 
     #[test]
     fn test_database_to_status_reads_properties() {
-        let database = crate::hms::Database {
+        let database = sail_common_hms::hms::Database {
             name: Some("default".into()),
             description: Some("test".into()),
             parameters: Some([("k".into(), "v".into())].into_iter().collect()),
@@ -938,6 +966,41 @@ mod tests {
         match status.kind {
             sail_common_datafusion::catalog::TableKind::Table { format, .. } => {
                 assert_eq!(format, "textfile");
+            }
+            other => panic!("expected table, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_table_to_status_detects_jvm_iceberg_table_type_case_insensitive() {
+        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let table = build_generic_table(
+            "default",
+            "items",
+            vec![CreateTableColumnOptions {
+                name: "id".to_string(),
+                data_type: DataType::Int64,
+                nullable: false,
+                comment: None,
+                default: None,
+                generated_always_as: None,
+                identity: None,
+            }],
+            vec![],
+            Some("s3://warehouse/items".to_string()),
+            GenericTableFormat {
+                logical_format: "parquet",
+                storage: &HiveStorageFormat::parquet(),
+            },
+            None,
+            vec![("table_type".to_string(), "ICEBERG".to_string())],
+        )
+        .unwrap();
+
+        let status = super::table_to_status("hms", &namespace, &table).unwrap();
+        match status.kind {
+            sail_common_datafusion::catalog::TableKind::Table { format, .. } => {
+                assert_eq!(format, "iceberg");
             }
             other => panic!("expected table, got {other:?}"),
         }

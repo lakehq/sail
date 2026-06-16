@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, StructArray};
@@ -141,10 +140,6 @@ impl UpdateStructField {
 }
 
 impl ScalarUDFImpl for UpdateStructField {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "update_struct_field"
     }

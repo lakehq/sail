@@ -1,16 +1,17 @@
 use std::sync::Arc;
 
 use datafusion_common::{DFSchemaRef, ToDFSchema};
-use datafusion_expr::{Extension, LogicalPlan};
+use datafusion_expr::LogicalPlan;
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::catalog::{TableKind, TableStatus};
-use sail_common_datafusion::datasource::{OptionLayer, SourceInfo, TableFormatRegistry};
+use sail_common_datafusion::datasource::{
+    DeleteInfo, OptionLayer, SourceInfo, TableFormatRegistry,
+};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::expression::expression_before_rename;
 use sail_common_datafusion::rename::schema::rename_schema;
-use sail_logical_plan::file_delete::{FileDeleteNode, FileDeleteOptions};
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
@@ -28,13 +29,16 @@ impl PlanResolver<'_> {
             table_alias: _,
             condition,
         } = delete;
+        let table_name: Vec<String> = table.clone().into();
         // Look up the table in the catalog to get its metadata
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
         let table_status = catalog_manager
             .get_table_or_view(table.parts())
             .await
             .map_err(PlanError::from)?;
-        let info = self.get_table_info_for_delete(&table_status).await?;
+        let info = self
+            .get_table_info_for_delete(&table_status, &table_name)
+            .await?;
 
         let field_ids = state.register_fields(info.schema.fields());
 
@@ -60,22 +64,28 @@ impl PlanResolver<'_> {
             None
         };
 
-        let file_delete_options = FileDeleteOptions {
-            table_name: table.into(),
+        let delete_info = DeleteInfo {
+            table_name,
             path: info.location,
-            format: info.format,
             condition,
             options: vec![OptionLayer::TablePropertyList {
                 items: info.properties,
             }],
         };
 
-        Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(FileDeleteNode::new(file_delete_options)),
-        }))
+        let registry = self.ctx.extension::<TableFormatRegistry>()?;
+        registry
+            .get(&info.format)?
+            .create_deleter(&self.ctx.state(), delete_info)
+            .await
+            .map_err(PlanError::from)
     }
 
-    async fn get_table_info_for_delete(&self, table_status: &TableStatus) -> PlanResult<TableInfo> {
+    async fn get_table_info_for_delete(
+        &self,
+        table_status: &TableStatus,
+        table_name: &[String],
+    ) -> PlanResult<TableInfo> {
         let (location, format, columns, properties) = match &table_status.kind {
             TableKind::Table {
                 location,
@@ -103,12 +113,14 @@ impl PlanResolver<'_> {
             // Schema is not in catalog, try to infer from data source
             let source_info = SourceInfo {
                 paths: vec![location.clone()],
+                catalog_table: Some(table_name.to_vec()),
                 schema: None,
                 constraints: Default::default(),
                 partition_by: vec![],
                 bucket_by: None,
                 sort_order: vec![],
                 options: vec![],
+                read_case_sensitive: self.config.case_sensitive,
             };
             let registry = self.ctx.extension::<TableFormatRegistry>()?;
             let table_format = registry.get(&format)?;

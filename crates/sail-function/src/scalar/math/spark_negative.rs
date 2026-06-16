@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::datatypes::DataType;
@@ -57,10 +56,6 @@ impl SparkNegative {
 }
 
 impl ScalarUDFImpl for SparkNegative {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.inner.name()
     }

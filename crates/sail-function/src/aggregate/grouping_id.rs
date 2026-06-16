@@ -1,5 +1,3 @@
-use std::any::Any;
-
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::common::{not_impl_err, Result};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -25,10 +23,6 @@ impl GroupingIdFunction {
 }
 
 impl AggregateUDFImpl for GroupingIdFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "grouping_id"
     }

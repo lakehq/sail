@@ -74,6 +74,9 @@ impl<'de> serde::de::Visitor<'de> for StrictValueVisitor {
         Ok(StrictValue(v.into()))
     }
     fn visit_f64<E>(self, v: f64) -> std::result::Result<StrictValue, E> {
+        // Spark normalizes negative zero to positive zero in variants, e.g.
+        // `parse_json('-0')` / `parse_json('-0.0')` render as `0`.
+        let v = if v == 0.0 { 0.0 } else { v };
         Ok(StrictValue(v.into()))
     }
     fn visit_str<E>(self, v: &str) -> std::result::Result<StrictValue, E> {
@@ -165,10 +168,6 @@ fn append_json_strict(builder: &mut VariantArrayBuilder, json_str: &str) -> Resu
 }
 
 impl ScalarUDFImpl for SparkParseJson {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         if self.safe {
             "try_parse_json"

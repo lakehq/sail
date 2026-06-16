@@ -81,7 +81,7 @@ impl PlanResolver<'_> {
                     Ok(matches!(
                         e,
                         Expr::ScalarFunction(ScalarFunction { func, .. })
-                            if func.inner().as_any().is::<TableInput>()
+                            if func.inner().is::<TableInput>()
                     ))
                 })
             })

@@ -16,6 +16,7 @@ version = { workspace = true }
 edition = { workspace = true }
 
 [dependencies]
+sail-catalog = { path = "../sail-catalog" }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-data-source = { path = "../sail-data-source" }
@@ -24,6 +25,7 @@ sail-sql-analyzer = { path = "../sail-sql-analyzer" }
 # DataFusion dependencies
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
+datafusion-expr = { workspace = true }
 arrow-schema = { workspace = true }
 parquet-variant = { workspace = true }
 parquet-variant-compute = { workspace = true }
@@ -53,6 +55,10 @@ apache-avro = { workspace = true }
 rust_decimal = { workspace = true }
 # base64 = { workspace = true }
 murmur3 = { workspace = true }
+educe = { workspace = true }
+
+[build-dependencies]
+sail-build-scripts = { path = "../sail-build-scripts" }
 
 [lints]
 workspace = true

@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -36,10 +35,6 @@ impl StGeogFromWKB {
 }
 
 impl ScalarUDFImpl for StGeogFromWKB {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "st_geogfromwkb"
     }

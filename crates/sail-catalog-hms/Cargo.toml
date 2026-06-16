@@ -6,13 +6,11 @@ edition = { workspace = true }
 [lints]
 workspace = true
 
-[build-dependencies]
-volo-build = { workspace = true }
-
 [dependencies]
 sail-catalog = { path = "../sail-catalog" }
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-common-hms = { path = "../sail-common-hms" }
 
 arrow = { workspace = true }
 async-trait = { workspace = true }

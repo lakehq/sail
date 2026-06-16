@@ -4,7 +4,6 @@
 //! If any argument is an array, its elements are joined with the separator.
 //! Null values (both scalar and array elements) are skipped.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -38,10 +37,6 @@ impl SparkConcatWs {
 }
 
 impl ScalarUDFImpl for SparkConcatWs {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_concat_ws"
     }
