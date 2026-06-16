@@ -124,3 +124,37 @@ Feature: Struct NULL field extraction
         | result |
         | 1      |
         | 3      |
+
+  Rule: Wildcard expansion from NULL struct
+
+    Scenario: Expand all fields from NULL struct via wildcard
+      When query
+        """
+        SELECT s.*
+        FROM VALUES (named_struct('id', 1, 'name', 'alice')), (CAST(NULL AS STRUCT<id: INT, name: STRING>)) AS t(s)
+        """
+      Then query result
+        | id   | name  |
+        | 1    | alice |
+        | NULL | NULL  |
+
+    Scenario: Expand nested fields from NULL parent struct via wildcard
+      When query
+        """
+        SELECT s.inner.*
+        FROM VALUES (named_struct('inner', named_struct('val', 10, 'tag', 'x'))), (CAST(NULL AS STRUCT<inner: STRUCT<val: INT, tag: STRING>>)) AS t(s)
+        """
+      Then query result
+        | val  | tag  |
+        | 10   | x    |
+        | NULL | NULL |
+
+    Scenario: Expand fields from NULL inner struct via wildcard
+      When query
+        """
+        SELECT s.inner.*
+        FROM VALUES (named_struct('inner', CAST(NULL AS STRUCT<val: INT, tag: STRING>))) AS t(s)
+        """
+      Then query result
+        | val  | tag  |
+        | NULL | NULL |

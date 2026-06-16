@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{make_array, Array, StructArray};
@@ -48,10 +47,6 @@ impl GetStructField {
 }
 
 impl ScalarUDFImpl for GetStructField {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "get_struct_field"
     }

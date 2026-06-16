@@ -149,14 +149,52 @@ def test_struct_field_from_null_struct_preserves_metadata(spark):
     result = df.select(
         df.s.id.alias("id"),
         df.s["name"].alias("name"),
+        df.s["id"].alias("id_bracket"),
         df.s.inner.val.alias("val"),
     )
     assert result.collect() == [
-        Row(id=1, name="alice", val=10),
-        Row(id=None, name=None, val=None),
+        Row(id=1, name="alice", id_bracket=1, val=10),
+        Row(id=None, name=None, id_bracket=None, val=None),
     ]
+    # Metadata must survive for dot access (`s.id`), bracket access (`s['id']`),
+    # and nested access (`s.inner.val`) — the cases Spark preserves.
     assert result.schema["id"].metadata == {"comment": "the id"}
+    assert result.schema["id_bracket"].metadata == {"comment": "the id"}
     assert result.schema["val"].metadata == {"m": "v"}
+
+
+def test_struct_wildcard_from_null_struct_preserves_metadata(spark):
+    schema = StructType(
+        [
+            StructField(
+                "s",
+                StructType(
+                    [
+                        StructField("id", IntegerType(), True, metadata={"comment": "the id"}),
+                        StructField("name", StringType(), True),
+                        StructField(
+                            "inner",
+                            StructType([StructField("val", IntegerType(), True, metadata={"m": "v"})]),
+                            True,
+                        ),
+                    ]
+                ),
+                True,
+            ),
+        ]
+    )
+    df = spark.createDataFrame(
+        [({"id": 1, "name": "alice", "inner": {"val": 10}},), (None,)],
+        schema,
+    )
+    # Top-level wildcard `s.*` expands to the leaf field columns, preserving metadata.
+    top = df.select("s.*")
+    assert [(r["id"], r["name"]) for r in top.collect()] == [(1, "alice"), (None, None)]
+    assert top.schema["id"].metadata == {"comment": "the id"}
+    # Nested wildcard `s.inner.*` expands the inner struct; NULL parent yields NULL.
+    nested = df.select("s.inner.*")
+    assert nested.collect() == [Row(val=10), Row(val=None)]
+    assert nested.schema["val"].metadata == {"m": "v"}
 
 
 def reverse_sorted_map_in_pandas(df):
