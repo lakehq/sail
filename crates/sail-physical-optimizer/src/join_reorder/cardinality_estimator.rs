@@ -418,7 +418,7 @@ impl CardinalityEstimator {
 
         // Recursively count the number of base conditions in the expression
         fn count_conditions(expr: &Arc<dyn datafusion::physical_expr::PhysicalExpr>) -> usize {
-            if let Some(binary_expr) = expr.as_any().downcast_ref::<BinaryExpr>() {
+            if let Some(binary_expr) = expr.downcast_ref::<BinaryExpr>() {
                 if binary_expr.op() == &Operator::And {
                     return count_conditions(binary_expr.left())
                         + count_conditions(binary_expr.right());
@@ -502,8 +502,13 @@ mod tests {
         let r: Arc<dyn PhysicalExpr> = Arc::new(Literal::new(ScalarValue::Int32(Some(1))));
         let pred: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(l, Operator::Gt, r));
 
-        let join_set = JoinSet::from_iter([0usize, 1usize])?;
-        graph.add_edge(JoinEdge::new(join_set, pred, JoinType::Inner, vec![]))?;
+        graph.add_edge(JoinEdge::new(
+            JoinSet::new_singleton(0)?,
+            JoinSet::new_singleton(1)?,
+            pred,
+            JoinType::Inner,
+            vec![],
+        ))?;
 
         let estimator = CardinalityEstimator::new(graph);
         let out = estimator.estimate_join_cardinality(1_000_000.0, 1_000_000.0, &[0]);
@@ -594,9 +599,8 @@ mod tests {
         )];
 
         let equi_edge = JoinEdge::new(
-            JoinSet::new_singleton(0)
-                .unwrap()
-                .union(&JoinSet::new_singleton(1).unwrap()),
+            JoinSet::new_singleton(0).unwrap(),
+            JoinSet::new_singleton(1).unwrap(),
             equi_condition,
             JoinType::Inner,
             equi_pairs.clone(),
@@ -620,9 +624,8 @@ mod tests {
         )) as Arc<dyn PhysicalExpr>;
 
         let combined_edge = JoinEdge::new(
-            JoinSet::new_singleton(0)
-                .unwrap()
-                .union(&JoinSet::new_singleton(1).unwrap()),
+            JoinSet::new_singleton(0).unwrap(),
+            JoinSet::new_singleton(1).unwrap(),
             combined_condition,
             JoinType::Inner,
             equi_pairs,
@@ -662,11 +665,9 @@ mod tests {
         };
 
         // Edge R0 and R1
-        let js01: JoinSet = JoinSet::new_singleton(0)
-            .unwrap()
-            .union(&JoinSet::new_singleton(1).unwrap());
         let edge01: JoinEdge = JoinEdge::new(
-            js01,
+            JoinSet::new_singleton(0).unwrap(),
+            JoinSet::new_singleton(1).unwrap(),
             equi_join(),
             JoinType::Inner,
             vec![(
@@ -685,11 +686,9 @@ mod tests {
         let _ = graph.add_edge(edge01);
 
         // Edge R1 and R2
-        let js12: JoinSet = JoinSet::new_singleton(1)
-            .unwrap()
-            .union(&JoinSet::new_singleton(2).unwrap());
         let edge12: JoinEdge = JoinEdge::new(
-            js12,
+            JoinSet::new_singleton(1).unwrap(),
+            JoinSet::new_singleton(2).unwrap(),
             equi_join(),
             JoinType::Inner,
             vec![(
@@ -751,9 +750,9 @@ mod tests {
         let l: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k", 0));
         let r: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k", 0));
         let filter = Arc::new(BinaryExpr::new(l, Operator::Eq, r)) as Arc<dyn PhysicalExpr>;
-        let join_set = JoinSet::new_singleton(0)?.union(&JoinSet::new_singleton(1)?);
         let edge = JoinEdge::new(
-            join_set,
+            JoinSet::new_singleton(0)?,
+            JoinSet::new_singleton(1)?,
             filter,
             JoinType::Inner,
             vec![(
@@ -817,9 +816,9 @@ mod tests {
         let l: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k", 0));
         let r: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k", 0));
         let filter = Arc::new(BinaryExpr::new(l, Operator::Eq, r)) as Arc<dyn PhysicalExpr>;
-        let join_set = JoinSet::new_singleton(0)?.union(&JoinSet::new_singleton(1)?);
         graph.add_edge(JoinEdge::new(
-            join_set,
+            JoinSet::new_singleton(0)?,
+            JoinSet::new_singleton(1)?,
             filter,
             JoinType::Inner,
             vec![(
@@ -883,9 +882,9 @@ mod tests {
         let l: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k", 0));
         let r: Arc<dyn PhysicalExpr> = Arc::new(Column::new("k", 0));
         let filter = Arc::new(BinaryExpr::new(l, Operator::Eq, r)) as Arc<dyn PhysicalExpr>;
-        let join_set = JoinSet::new_singleton(0)?.union(&JoinSet::new_singleton(1)?);
         let edge = JoinEdge::new(
-            join_set,
+            JoinSet::new_singleton(0)?,
+            JoinSet::new_singleton(1)?,
             filter,
             JoinType::Inner,
             vec![(
@@ -951,9 +950,9 @@ mod tests {
         let eq2 = Arc::new(BinaryExpr::new(k2_l, Operator::Eq, k2_r)) as Arc<dyn PhysicalExpr>;
         let filter = Arc::new(BinaryExpr::new(eq1, Operator::And, eq2)) as Arc<dyn PhysicalExpr>;
 
-        let join_set = JoinSet::new_singleton(0)?.union(&JoinSet::new_singleton(1)?);
         graph.add_edge(JoinEdge::new(
-            join_set,
+            JoinSet::new_singleton(0)?,
+            JoinSet::new_singleton(1)?,
             filter,
             JoinType::Inner,
             vec![
@@ -1034,9 +1033,9 @@ mod tests {
         let eq2 = Arc::new(BinaryExpr::new(k2_l, Operator::Eq, k2_r)) as Arc<dyn PhysicalExpr>;
         let filter = Arc::new(BinaryExpr::new(eq1, Operator::And, eq2)) as Arc<dyn PhysicalExpr>;
 
-        let join_set = JoinSet::new_singleton(0)?.union(&JoinSet::new_singleton(1)?);
         graph.add_edge(JoinEdge::new(
-            join_set,
+            JoinSet::new_singleton(0)?,
+            JoinSet::new_singleton(1)?,
             filter,
             JoinType::Inner,
             vec![

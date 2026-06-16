@@ -16,6 +16,7 @@ sail-catalog-memory = { path = "../sail-catalog-memory" }
 sail-function = { path = "../sail-function" }
 sail-logical-plan = { path = "../sail-logical-plan" }
 sail-physical-plan = { path = "../sail-physical-plan" }
+sail-data-source = { path = "../sail-data-source" }
 
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
@@ -39,8 +40,10 @@ uuid = { workspace = true }
 object_store = { workspace = true }
 half = { workspace = true }
 arrow = { workspace = true }
+arrow-schema = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 indexmap = { workspace = true }
 log = { workspace = true }
 regex = { workspace = true }
+parquet-variant-compute = { workspace = true }

@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::ops::Neg;
 use std::sync::Arc;
 
@@ -39,10 +38,6 @@ impl SparkTrySubtract {
 }
 
 impl ScalarUDFImpl for SparkTrySubtract {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "try_subtract"
     }

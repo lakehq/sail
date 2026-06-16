@@ -8,7 +8,7 @@ Feature: schema_of_json function detects the schema of a literal json string
         """
       Then query result
         | result         |
-        | STRUCT<a: BIGINT, b: DOUBLE, c: STRING, d: BOOL>  |
+        | STRUCT<a: BIGINT, b: DOUBLE, c: STRING, d: BOOLEAN>  |
 
     Scenario: schema of json empty list
       When query
@@ -70,9 +70,10 @@ Feature: schema_of_json function detects the schema of a literal json string
       Then query error .*found invalid arg types: \[Null\]
 
     Scenario: schema of json leading zeros
-        Testing that this fails
       When query
         """
         SELECT schema_of_json('{"01b": 01, "b": "01"}', map('allowNumericLeadingZeros', 'true')) AS result
         """
-      Then query error .*doesn't support option allowNumericLeadingZeros
+      Then query result
+        | result         |
+        | STRUCT<`01b`: BIGINT, b: STRING>  |

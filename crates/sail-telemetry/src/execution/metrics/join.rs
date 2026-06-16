@@ -361,6 +361,9 @@ mod tests {
         vec![
             registry.execution_join_candidate_count.name(),
             registry.execution_join_output_row_count.name(),
+            registry.execution_spill_count.name(),
+            registry.execution_spill_size.name(),
+            registry.execution_spill_row_count.name(),
         ]
     }
 

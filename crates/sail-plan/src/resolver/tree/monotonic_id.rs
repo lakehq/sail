@@ -42,11 +42,7 @@ impl TreeNodeRewriter for MonotonicIdRewriter<'_> {
         };
 
         let inner = func.inner();
-        if inner
-            .as_any()
-            .downcast_ref::<SparkMonotonicallyIncreasingId>()
-            .is_none()
-        {
+        if !inner.is::<SparkMonotonicallyIncreasingId>() {
             return Ok(Transformed::no(func.call(args)));
         }
 

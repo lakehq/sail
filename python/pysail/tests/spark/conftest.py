@@ -31,9 +31,11 @@ def pytest_configure(config):
         "(deselected by default; pass -m catalog_integration to run)",
     )
     # Load all pytest-bdd step modules.
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.coalesce")
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.file_tree")
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.sql")
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.plan")
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.partitioning")
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.delta_log")
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.iceberg_metadata")
 
@@ -206,6 +208,23 @@ DOCTEST_MARKERS = [
     DoctestMarker(
         keywords=["test_arrow_udtf.txt"],
         markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="arrow_udtf requires PySpark 4.1+")],
+    ),
+    DoctestMarker(
+        keywords=["test_pandas_grouped_map_iter_udf.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="applyInPandas iterator requires PySpark 4.1+")],
+    ),
+    DoctestMarker(
+        keywords=["test_arrow_grouped_map_iter_udf.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="applyInArrow iterator requires PySpark 4.1+")],
+    ),
+    DoctestMarker(
+        keywords=["test_ipython_key_completions.txt"],
+        markers=[
+            pytest.mark.skipif(
+                pyspark_version() < (4,),
+                reason="_ipython_key_completions_ is not defined on the PySpark 3.x Connect DataFrame",
+            )
+        ],
     ),
 ]
 

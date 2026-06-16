@@ -194,7 +194,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_xml"
+        "success": "ok"
       }
     },
     {
@@ -218,7 +218,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: to_xml"
+        "success": "ok"
       }
     },
     {

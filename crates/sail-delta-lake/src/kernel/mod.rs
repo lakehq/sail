@@ -18,7 +18,7 @@ pub(crate) mod checkpoint_augment;
 pub(crate) mod checkpoints;
 mod config;
 
-pub use config::DeltaSnapshotConfig;
+pub use config::{CatalogManagedCommitFile, CatalogManagedCommitSet, DeltaSnapshotConfig};
 
 pub use crate::spec::operation::{DeltaOperation, MergePredicate, SaveMode};
 pub use crate::spec::SchemaRef;

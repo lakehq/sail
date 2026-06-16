@@ -1,0 +1,27 @@
+# serializer version: 1
+---
+name: "test_add_constraint_validates_existing_data_and_enforces_future_writes"
+data:
+  metaData:
+    configuration:
+      delta.constraints.positive_id: id > 0
+  protocol:
+    minWriterVersion: 3
+---
+name: "test_first_commit_contains_the_legacy_check_constraints_writer_protocol_and_constraint_property"
+data:
+  metaData:
+    configuration:
+      delta.constraints.positive_id: id > 0
+  protocol:
+    minWriterVersion: 3
+---
+name: "test_not_null_constraints_reject_nulls_and_persist_nonnullable_schema"
+data:
+  metaData:
+    schemaString:
+      fields:
+      - name: id
+        nullable: false
+  protocol:
+    minWriterVersion: 2

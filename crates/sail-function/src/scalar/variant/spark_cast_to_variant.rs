@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, StructArray};
@@ -10,8 +9,9 @@ use datafusion::logical_expr::{
 use datafusion::scalar::ScalarValue;
 use datafusion_common::exec_err;
 use parquet_variant_compute::{cast_to_variant, VariantType};
+use sail_common_datafusion::variant::variant_metadata_field;
 
-use super::spark_json_to_variant::convert_binaryview_to_binary;
+use super::spark_parse_json::convert_binaryview_to_binary;
 
 /// Implements `CAST(expr AS VARIANT)` for Spark-compatible variant conversion.
 ///
@@ -37,10 +37,6 @@ impl Default for SparkCastToVariant {
 }
 
 impl ScalarUDFImpl for SparkCastToVariant {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_cast_to_variant"
     }
@@ -51,7 +47,7 @@ impl ScalarUDFImpl for SparkCastToVariant {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Struct(Fields::from(vec![
-            Field::new("metadata", DataType::Binary, false),
+            variant_metadata_field(DataType::Binary, false),
             Field::new("value", DataType::Binary, false),
         ])))
     }
@@ -90,7 +86,7 @@ impl ScalarUDFImpl for SparkCastToVariant {
                 if scalar.is_null() {
                     // SQL NULL → NULL Variant struct (must match promised return type)
                     let fields = Fields::from(vec![
-                        Field::new("metadata", DataType::Binary, false),
+                        variant_metadata_field(DataType::Binary, false),
                         Field::new("value", DataType::Binary, false),
                     ]);
                     let null_struct = StructArray::new_null(fields, 1);

@@ -62,16 +62,18 @@ message ExtendedPhysicalPlanNode {
     SparkPartitionIdExecNode spark_partition_id = 47;
     DeletionVectorWriterExecNode deletion_vector_writer = 48;
     DeletionVectorRowsWriterExecNode deletion_vector_rows_writer = 49;
+    CoalesceExecNode coalesce = 50;
+    FileDeleteExecNode file_delete = 51;
   }
 }
 
 message ExtendedPhysicalExprNode {
   oneof ExprKind {
-    DeltaCastColumnExprNode delta_cast = 1;
+    CastColumnExprNode schema_evolution_cast = 1;
   }
 }
 
-message DeltaCastColumnExprNode {
+message CastColumnExprNode {
   bytes input_schema = 1;
   bytes target_schema = 2;
 }
@@ -100,6 +102,14 @@ message ExtendedScalarUdf {
     SparkAbsUdf spark_abs = 20;
     SparkMakeTimestampNtzUdf spark_make_timestamp_ntz = 21;
     ConvertTzUdf convert_tz = 22;
+    SparkToCsvUdf spark_to_csv = 23;
+    SparkPmodUdf spark_pmod = 24;
+    SparkParseJsonUdf spark_parse_json = 25;
+    SparkStructRenameUdf spark_struct_rename = 26;
+    SparkWindowBucketsUdf spark_window_buckets = 27;
+    SparkToCharUdf spark_to_char = 28;
+    SparkToXmlUdf spark_to_xml = 29;
+    SparkBinUdf spark_bin = 30;
   }
 }
 
@@ -156,6 +166,10 @@ message XpathTypedUdf {
   string name = 1;
 }
 
+message SparkToXmlUdf {
+    string session_timezone = 1;
+}
+
 message SparkUnixTimestampUdf {
   string timezone = 1;
 }
@@ -194,11 +208,39 @@ message SparkNextDayUdf {
   bool ansi_mode = 1;
 }
 
+message SparkWindowBucketsUdf {
+  int64 window_duration = 1;
+  int64 slide_duration = 2;
+  int64 start_time = 3;
+}
+
 message SparkAbsUdf {
   bool ansi_mode = 1;
 }
 
+message SparkBinUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkParseJsonUdf {
+  bool safe = 1;
+}
+
+message SparkPmodUdf {
+  bool ansi_mode = 1;
+}
+
 message SparkFromCsvUdf {
+  string session_timezone = 1;
+}
+
+message SparkStructRenameUdf {
+  // The target data type (struct or container-of-struct), encoded as Arrow
+  // ArrowType protobuf bytes.
+  bytes target_type = 1;
+}
+
+message SparkToCsvUdf {
   string session_timezone = 1;
 }
 
@@ -212,6 +254,10 @@ message SparkFromJsonUdf {
 
 message SparkToNumberUdf {
   bool safe = 1;
+}
+
+message SparkToCharUdf {
+  bool ansi_mode = 1;
 }
 
 message SparkMakeTimestampNtzUdf {
@@ -262,6 +308,7 @@ message PySparkGroupMapUdaf {
   bytes output_type = 6;
   bool is_pandas = 7;
   PySparkUdfConfig config = 8;
+  bool is_iter = 9;
 }
 
 message PySparkBatchCollectorUdaf {
@@ -558,6 +605,7 @@ message DeltaWriterExecNode {
   PhysicalSinkMode sink_mode = 7;
   map<string, string> metadata_configuration = 8;
   DeltaWriteContext write_context = 9;
+  repeated string catalog_table = 10;
 }
 
 message DeltaCommitExecNode {
@@ -569,6 +617,7 @@ message DeltaCommitExecNode {
   PhysicalSinkMode sink_mode = 6;
   optional string user_metadata = 7;
   DeltaCommitContext commit_context = 8;
+  repeated string catalog_table = 9;
 }
 
 message DeltaScanByAddsExecNode {
@@ -582,6 +631,7 @@ message DeltaScanByAddsExecNode {
   optional bytes pushdown_filter = 8;
   int64 version = 9;
   optional bytes statistics = 10;
+  repeated string catalog_table = 11;
   // TODO: Consider snapshot hints (partition columns, kernel schema) to avoid worker log reads.
 }
 
@@ -634,6 +684,11 @@ message TextSinkExecNode {
   optional PhysicalSortExprNodeCollection sort_order = 6;
 }
 
+message FileDeleteExecNode {
+  string object_store_url = 1;
+  string path = 2;
+}
+
 message StreamCollectorExecNode {
   bytes input = 1;
 }
@@ -670,6 +725,11 @@ message SparkPartitionIdExecNode {
   bytes input = 1;
   string column_name = 2;
   bytes schema = 3;
+}
+
+message CoalesceExecNode {
+  bytes input = 1;
+  uint64 output_partitions = 2;
 }
 
 message RelaxedTzCastExecNode {
@@ -734,6 +794,7 @@ message IcebergWriterExecNode {
   PhysicalSinkMode sink_mode = 4;
   bool table_exists = 5;
   string options = 6;
+  bytes logical_input_schema = 7;
 }
 
 message IcebergCommitExecNode {

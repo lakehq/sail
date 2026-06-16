@@ -8,7 +8,7 @@ This page documents the current HMS implementation and test strategy in Sail for
 
 ## Maintainer Summary
 
-The current HMS work establishes a metadata-focused compatibility layer for Apache Hive Metastore.
+The current HMS work provides a metadata-focused compatibility layer for Apache Hive Metastore.
 
 What maintainers can rely on today:
 
@@ -43,7 +43,7 @@ When this target is green, it means Sail successfully:
 - performs table create/get/drop operations
 - fails cleanly when Kerberos credentials are missing
 
-This is strong evidence that the Kerberos transport and basic HMS metadata path work end to end.
+This is evidence that the Kerberos transport and basic HMS metadata path work end to end.
 
 It is not evidence that Sail supports:
 
