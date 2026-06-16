@@ -7,10 +7,7 @@ use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::execution::SessionState;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::PhysicalPlanner;
-use sail_common_datafusion::datasource::{
-    MergePredicateInfo, MergeStrategy, OperationOverride, RowLevelCommand, RowLevelTargetInfo,
-    RowLevelWriteInfo,
-};
+use sail_common_datafusion::datasource::{MergeStrategy, RowLevelCommand};
 use sail_data_source::options::ResolveOptions;
 use sail_data_source::resolve_listing_urls;
 use sail_logical_plan::merge::RowLevelWriteNode;
@@ -18,7 +15,8 @@ use url::Url;
 
 use crate::options::gen::DeltaWriteOptions;
 use crate::physical_plan::planner::{
-    plan_delete, plan_delete_mor, plan_merge, plan_merge_mor, DeltaPlannerConfig, PlannerContext,
+    plan_delete, plan_delete_mor, plan_merge, plan_merge_mor, DeltaPlannerConfig,
+    MergePredicateInfo, OperationOverride, PlannerContext, RowLevelTargetInfo, RowLevelWriteInfo,
 };
 use crate::table::open_table_with_object_store;
 use crate::table_format::{split_delta_write_options_and_table_properties, DeltaTableFormat};

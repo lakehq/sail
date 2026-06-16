@@ -26,9 +26,8 @@ use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_common::{not_impl_err, JoinType, NullEquality};
 use datafusion_physical_expr::expressions::{Column, IsNullExpr};
-use sail_common_datafusion::datasource::{
-    MergePredicateInfo, OperationOverride, PhysicalSinkMode, RowLevelWriteInfo,
-};
+use sail_common_datafusion::datasource::{OptionLayer, PhysicalSinkMode, RowLevelCommand};
+use sail_common_datafusion::logical_expr::ExprWithSource;
 
 use super::super::writer_options::DeltaWriterExecOptions;
 use super::commit::{
@@ -39,6 +38,57 @@ use super::utils::LogReplayOptions;
 use crate::datasource::PATH_COLUMN;
 use crate::kernel::{DeltaOperation, MergePredicate};
 use crate::physical_plan::{prepare_delta_write_context, DeltaCommitExec, DeltaWriterExec};
+
+/// Target table information shared by Delta row-level operations.
+#[derive(Debug, Clone)]
+pub struct RowLevelTargetInfo {
+    pub table_name: Vec<String>,
+    pub path: String,
+    pub partition_by: Vec<String>,
+    pub options: Vec<OptionLayer>,
+}
+
+/// Operation metadata used to construct MERGE commit log `operationParameters`.
+#[derive(Debug, Clone)]
+pub struct MergePredicateInfo {
+    pub action_type: String,
+    pub predicate: Option<String>,
+}
+
+/// Override metadata for Delta row-level operation commit logs.
+#[derive(Debug, Clone)]
+pub enum OperationOverride {
+    Merge {
+        predicate: Option<String>,
+        merge_predicate: Option<String>,
+        matched_predicates: Vec<MergePredicateInfo>,
+        not_matched_predicates: Vec<MergePredicateInfo>,
+        not_matched_by_source_predicates: Vec<MergePredicateInfo>,
+    },
+}
+
+/// Unified information for Delta row-level write operations (DELETE, UPDATE, MERGE).
+#[derive(Debug, Clone)]
+pub struct RowLevelWriteInfo {
+    pub command: RowLevelCommand,
+    pub target: RowLevelTargetInfo,
+    /// Condition for DELETE/UPDATE. `None` for MERGE.
+    pub condition: Option<ExprWithSource>,
+    /// Pre-expanded physical plan for writing (MERGE, future UPDATE).
+    pub expanded_input: Option<Arc<dyn ExecutionPlan>>,
+    /// Physical plan that yields touched file paths (MERGE targeted rewrite).
+    pub touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
+    /// Physical plan that yields target file path and file-local row index rows to delete via DVs.
+    pub deletion_vector_plan: Option<Arc<dyn ExecutionPlan>>,
+    pub with_schema_evolution: bool,
+    /// Override for commit operation metadata.
+    pub operation_override: Option<OperationOverride>,
+}
+
+// TODO: MERGE schema evolution end-to-end
+// - Expand sink schema during MERGE: detect source-only columns (case-insensitive), keep target order, append new cols, project source/NULL for them.
+// - Emit Metadata (and Protocol if required) in writer/commit so the new schema is persisted and readable.
+// - Reading: time-travel must stay on the requested version; non-time-travel can refresh to latest snapshot to see new schema.
 
 /// Internal metadata columns stripped before passing rows to DeltaWriterExec.
 ///

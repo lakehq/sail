@@ -10,7 +10,6 @@ use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_expr::{
     create_physical_sort_exprs, LexOrdering, LexRequirement, PhysicalSortRequirement,
 };
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, DFSchemaRef, Result};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, TableSource};
@@ -383,57 +382,6 @@ pub enum RowLevelCommand {
     Update,
     Merge,
 }
-
-/// Target table information shared by all row-level operations.
-#[derive(Debug, Clone)]
-pub struct RowLevelTargetInfo {
-    pub table_name: Vec<String>,
-    pub path: String,
-    pub partition_by: Vec<String>,
-    pub options: Vec<OptionLayer>,
-}
-
-/// Operation metadata used to construct commit log `operationParameters`.
-#[derive(Debug, Clone)]
-pub struct MergePredicateInfo {
-    pub action_type: String,
-    pub predicate: Option<String>,
-}
-
-/// Override metadata for operation commit logs.
-#[derive(Debug, Clone)]
-pub enum OperationOverride {
-    Merge {
-        predicate: Option<String>,
-        merge_predicate: Option<String>,
-        matched_predicates: Vec<MergePredicateInfo>,
-        not_matched_predicates: Vec<MergePredicateInfo>,
-        not_matched_by_source_predicates: Vec<MergePredicateInfo>,
-    },
-}
-
-/// Unified information for all row-level write operations (DELETE, UPDATE, MERGE).
-#[derive(Debug, Clone)]
-pub struct RowLevelWriteInfo {
-    pub command: RowLevelCommand,
-    pub target: RowLevelTargetInfo,
-    /// Condition for DELETE/UPDATE. `None` for MERGE.
-    pub condition: Option<ExprWithSource>,
-    /// Pre-expanded physical plan for writing (MERGE, future UPDATE).
-    pub expanded_input: Option<Arc<dyn ExecutionPlan>>,
-    /// Physical plan that yields touched file paths (MERGE targeted rewrite).
-    pub touched_file_plan: Option<Arc<dyn ExecutionPlan>>,
-    /// Physical plan that yields target file path and file-local row index rows to delete via DVs.
-    pub deletion_vector_plan: Option<Arc<dyn ExecutionPlan>>,
-    pub with_schema_evolution: bool,
-    /// Override for commit operation metadata.
-    pub operation_override: Option<OperationOverride>,
-}
-
-// TODO: MERGE schema evolution end-to-end
-// - Expand sink schema during MERGE: detect source-only columns (case-insensitive), keep target order, append new cols, project source/NULL for them.
-// - Emit Metadata (and Protocol if required) in writer/commit so the new schema is persisted and readable.
-// - Reading: time-travel must stay on the requested version; non-time-travel can refresh to latest snapshot to see new schema.
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum TableFormatAlterTableOperation {
