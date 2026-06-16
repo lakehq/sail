@@ -753,12 +753,12 @@ impl ExecutionPlan for IcebergCommitExec {
                         )
                         .await?;
                         let action_requirements = action_commit.requirements().to_vec();
+                        Self::validate_requirements(Some(&table_meta), &action_requirements)?;
                         let requirements = Self::catalog_requirements(
                             &table_meta,
                             &commit_info.requirements,
                             &action_requirements,
                         );
-                        Self::validate_requirements(Some(&table_meta), &requirements)?;
                         let mut updates = metadata_updates.clone();
                         updates.extend(action_commit.into_updates());
                         match Self::try_commit_to_catalog(
@@ -929,7 +929,6 @@ impl ExecutionPlan for IcebergCommitExec {
                         &commit_info.requirements,
                         &action_requirements,
                     );
-                    Self::validate_requirements(Some(&table_meta), &requirements)?;
                     let mut updates = metadata_updates.clone();
                     updates.extend(action_updates.clone());
                     match Self::try_commit_to_catalog(

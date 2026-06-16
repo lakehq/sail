@@ -606,6 +606,23 @@ where
     C: SessionExtensionAccessor + ?Sized,
 {
     let catalog_table = lakehouse_table.catalog_table();
+    if load_catalog_managed_delta_bootstrap_info(ctx, catalog_table)
+        .await?
+        .is_some()
+    {
+        match log_store.get_latest_version(-1).await {
+            Ok(_) => {}
+            Err(DeltaError::MissingVersion) => {
+                bootstrap_catalog_managed_delta_table(ctx, catalog_table, table_url, log_store)
+                    .await?;
+            }
+            Err(err) => return Err(DataFusionError::from(err)),
+        }
+        return Ok(Some(
+            load_catalog_managed_commits(ctx, lakehouse_table, table_url, version_as_of).await?,
+        ));
+    }
+
     let mut detector = DeltaTable::new(
         log_store.clone(),
         DeltaSnapshotConfig {

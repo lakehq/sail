@@ -43,6 +43,12 @@ def _assert_uuid_metadata_location(metadata_location: str, expected_version: int
         assert filename.startswith(f"{expected_version:05}-"), filename
 
 
+def _current_schema_field_names(metadata: dict) -> list[str]:
+    current_schema_id = metadata["current-schema-id"]
+    current_schema = next(schema for schema in metadata["schemas"] if schema["schema-id"] == current_schema_id)
+    return [field["name"] for field in current_schema["fields"]]
+
+
 def test_ctas_records_rest_catalog_metadata_location(
     iceberg_spark: SparkSession,
     iceberg_rest_endpoint: str,
@@ -113,6 +119,41 @@ def test_insert_advances_rest_catalog_metadata_location(
 
     rows = iceberg_spark.sql(f"SELECT id, name FROM {NAMESPACE}.{table_name} ORDER BY id").collect()  # noqa: S608
     assert [(row["id"], row["name"]) for row in rows] == [(1, "a"), (2, "b"), (3, "c")]
+
+
+def test_merge_schema_append_advances_rest_catalog_metadata_location(
+    iceberg_spark: SparkSession,
+    iceberg_rest_endpoint: str,
+) -> None:
+    table_name = "merge_schema_t"
+    table_fqn = f"{NAMESPACE}.{table_name}"
+    iceberg_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+    iceberg_spark.sql(
+        f"""
+        CREATE TABLE {table_fqn} (
+          id INT,
+          name STRING
+        )
+        USING iceberg
+        """
+    )
+    iceberg_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a')")  # noqa: S608
+    before = _load_table(iceberg_rest_endpoint, table_name)
+    before_location = before["metadata-location"]
+    _assert_uuid_metadata_location(before_location, 1)
+
+    evolved = iceberg_spark.createDataFrame([(2, "b", 20)], schema="id INT, name STRING, age INT")
+    (evolved.write.format("iceberg").mode("append").option("mergeSchema", "true").saveAsTable(table_fqn))
+
+    after = _load_table(iceberg_rest_endpoint, table_name)
+    after_location = after["metadata-location"]
+    assert after_location != before_location
+    _assert_uuid_metadata_location(after_location, 2)
+    assert after["metadata"]["metadata-log"][-1]["metadata-file"] == before_location
+    assert _current_schema_field_names(after["metadata"]) == ["id", "name", "age"]
+
+    rows = iceberg_spark.sql(f"SELECT id, name, age FROM {table_fqn} ORDER BY id").collect()  # noqa: S608
+    assert [(row["id"], row["name"], row["age"]) for row in rows] == [(1, "a", None), (2, "b", 20)]
 
 
 def test_rest_catalog_rejects_non_iceberg_create_format(

@@ -331,12 +331,13 @@ impl PlanResolver<'_> {
                         ));
                     }
                     info.validate_write_info(&write_format, &sink_info)?;
-                    let delta_merge_schema = info.format.eq_ignore_ascii_case("delta")
+                    let table_format_merge_schema = (info.format.eq_ignore_ascii_case("delta")
+                        || info.format.eq_ignore_ascii_case("iceberg"))
                         && Self::has_truthy_option(
                             &sink_info.options,
                             &["mergeSchema", "merge_schema"],
                         );
-                    if !delta_merge_schema {
+                    if !table_format_merge_schema {
                         input = self
                             .rewrite_write_input(input, column_match, info, state)
                             .await?;

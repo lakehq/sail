@@ -73,6 +73,12 @@ def _load_metadata_json(location: str) -> dict:
     return json.loads(Path(urllib.parse.unquote(parsed.path)).read_text(encoding="utf-8"))
 
 
+def _current_schema_field_names(metadata: dict) -> list[str]:
+    current_schema_id = metadata["current-schema-id"]
+    current_schema = next(schema for schema in metadata["schemas"] if schema["schema-id"] == current_schema_id)
+    return [field["name"] for field in current_schema["fields"]]
+
+
 def test_ctas_records_glue_iceberg_metadata_location(
     glue_spark: SparkSession,
     moto_endpoint: str,
@@ -160,6 +166,51 @@ def test_insert_advances_glue_iceberg_metadata_location(
 
         rows = glue_spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
         assert [(row.id, row.name) for row in rows] == [(1, "a"), (2, "b"), (3, "c")]
+    finally:
+        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        glue_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+
+
+def test_merge_schema_append_advances_glue_iceberg_metadata_location(
+    glue_spark: SparkSession,
+    moto_endpoint: str,
+    tmp_path: Path,
+) -> None:
+    database = "glue_iceberg_merge_schema_db"
+    table = "merge_schema_t"
+    table_fqn = f"{database}.{table}"
+    location = (tmp_path / "merge_schema_t").as_uri()
+
+    glue_spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
+    try:
+        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        glue_spark.sql(
+            f"""
+            CREATE TABLE {table_fqn} (
+              id INT,
+              name STRING
+            )
+            USING ICEBERG
+            LOCATION '{location}'
+            """
+        )
+        glue_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a')")
+        before_location = _metadata_location(moto_endpoint, database, table)
+        _assert_uuid_metadata_location(before_location, 1)
+
+        evolved = glue_spark.createDataFrame([(2, "b", 20)], schema="id INT, name STRING, age INT")
+        (evolved.write.format("iceberg").mode("append").option("mergeSchema", "true").saveAsTable(table_fqn))
+
+        after_location = _metadata_location(moto_endpoint, database, table)
+        assert after_location != before_location
+        assert after_location.startswith(location)
+        _assert_uuid_metadata_location(after_location, 2)
+        after_metadata = _load_metadata_json(after_location)
+        assert after_metadata["metadata-log"][-1]["metadata-file"] == before_location
+        assert _current_schema_field_names(after_metadata) == ["id", "name", "age"]
+
+        rows = glue_spark.sql(f"SELECT id, name, age FROM {table_fqn} ORDER BY id").collect()
+        assert [(row.id, row.name, row.age) for row in rows] == [(1, "a", None), (2, "b", 20)]
     finally:
         glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
         glue_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
