@@ -5,13 +5,13 @@ use sail_catalog::provider::AlterTableOptions;
 use sail_common_datafusion::catalog::managed::{
     metadata_location_update, metadata_location_value, previous_metadata_location_update,
 };
-use volo_thrift::MaybeException;
-
-use crate::hms::{
+use sail_common_hms::hms::{
     CheckLockRequest, DataOperationType, LockComponent, LockLevel, LockRequest, LockState,
     LockType, Table, ThriftHiveMetastoreCheckLockException, ThriftHiveMetastoreClient,
     ThriftHiveMetastoreLockException, ThriftHiveMetastoreUnlockException, UnlockRequest,
 };
+use volo_thrift::MaybeException;
+
 use crate::provider::{apply_alter_table_options, HmsCatalogProvider};
 
 const HMS_LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(30);

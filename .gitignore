@@ -106,3 +106,5 @@ docs/.vitepress/.temp
 
 CLAUDE.md
 AGENTS.md
+# roborev snapshots
+/.roborev/

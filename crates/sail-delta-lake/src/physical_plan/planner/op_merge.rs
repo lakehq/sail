@@ -49,7 +49,7 @@ use crate::physical_plan::{prepare_delta_write_context, DeltaCommitExec, DeltaWr
 const INTERNAL_MERGE_COLUMNS: &[&str] = &[PATH_COLUMN];
 
 /// Entry point for MERGE execution. Expects the logical MERGE to be fully
-/// expanded (handled by ExpandRowLevelOp) and passed down as pre-expanded plans.
+/// expanded during Delta logical MERGE planning and passed down as pre-expanded plans.
 pub async fn build_merge_plan(
     ctx: &PlannerContext<'_>,
     merge_info: RowLevelWriteInfo,

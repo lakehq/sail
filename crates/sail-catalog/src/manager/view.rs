@@ -26,6 +26,7 @@ impl CatalogManager {
                     columns: view.columns().to_vec(),
                     comment: view.comment().clone(),
                     properties: view.properties().to_vec(),
+                    source: view.source().clone(),
                 },
             })
             .collect();
@@ -49,6 +50,7 @@ impl CatalogManager {
                     columns: view.columns().to_vec(),
                     comment: view.comment().clone(),
                     properties: view.properties().to_vec(),
+                    source: view.source().clone(),
                 },
             })
             .collect();
@@ -173,6 +175,7 @@ impl CatalogManager {
                 columns: view.columns().to_vec(),
                 comment: view.comment().clone(),
                 properties: view.properties().to_vec(),
+                source: view.source().clone(),
             },
         })
     }
@@ -188,6 +191,7 @@ impl CatalogManager {
                 columns: view.columns().to_vec(),
                 comment: view.comment().clone(),
                 properties: view.properties().to_vec(),
+                source: view.source().clone(),
             },
         })
     }

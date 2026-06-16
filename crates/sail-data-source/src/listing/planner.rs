@@ -428,19 +428,25 @@ async fn do_collect_statistics_and_ordering(
     store: &Arc<dyn ObjectStore>,
     part_file: &datafusion_datasource::PartitionedFile,
 ) -> datafusion_common::Result<(Arc<Statistics>, Option<LexOrdering>)> {
-    let path = &part_file.object_meta.location;
     let meta = &part_file.object_meta;
+    let file_schema = source.config().schema.file_schema();
     let file_statistic_cache = ctx.runtime_env().cache_manager.get_file_statistic_cache();
     let cache_key = TableScopedPath {
-        table: part_file.table_reference.clone(),
-        path: path.clone(),
+        table: Some(statistics_cache_table_ref(
+            part_file.table_reference.as_ref(),
+            file_schema.as_ref(),
+        )),
+        path: meta.location.clone(),
     };
 
     if let Some(cached) = file_statistic_cache
         .as_ref()
         .and_then(|x| x.get(&cache_key))
     {
-        if cached.is_valid_for(meta) {
+        // Skip a cached entry whose column count differs to avoid an out-of-bounds panic
+        if cached.is_valid_for(meta)
+            && cached.statistics.column_statistics.len() == file_schema.fields().len()
+        {
             return Ok((Arc::clone(&cached.statistics), cached.ordering.clone()));
         }
     }
@@ -470,6 +476,28 @@ async fn do_collect_statistics_and_ordering(
     });
 
     Ok((statistics, file_meta.ordering))
+}
+
+fn statistics_cache_table_ref(
+    table: Option<&datafusion_common::TableReference>,
+    schema: &arrow::datatypes::Schema,
+) -> datafusion_common::TableReference {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+
+    for field in schema.fields() {
+        std::hash::Hash::hash(field.name(), &mut hasher);
+        std::hash::Hash::hash(&field.data_type().to_string(), &mut hasher);
+        std::hash::Hash::hash(&field.is_nullable(), &mut hasher);
+    }
+
+    let table = table
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "listing".to_string());
+
+    datafusion_common::TableReference::bare(format!(
+        "{table}_{:016x}",
+        std::hash::Hasher::finish(&hasher)
+    ))
 }
 
 async fn get_files_with_limit(

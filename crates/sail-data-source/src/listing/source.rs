@@ -3,7 +3,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::{DataType, Field, SchemaRef};
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::physical_plan::FileSinkConfig;
 use datafusion::execution::object_store::ObjectStoreUrl;
@@ -155,6 +155,7 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
             bucket_by: _,
             sort_order,
             options,
+            read_case_sensitive,
         } = info;
 
         let read_format = T::read(ctx, options)?;
@@ -164,6 +165,21 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
 
         let (schema, partition_fields) = match schema {
             Some(schema) if !schema.fields().is_empty() => {
+                // Spark matches a user-specified schema against the physical file
+                // columns case-insensitively by default (`spark.sql.caseSensitive=false`).
+                // Reconcile the user column names to the physical names up front so that both
+                // the file stats and reader (which resolve columns by exact name) find the data.
+                let schema = if read_case_sensitive {
+                    schema
+                } else if let Ok(physical) = read_format
+                    .infer_schema(ctx, &sampled_files, compression)
+                    .await
+                {
+                    reconcile_schema_names_case_insensitive(schema, &physical)?
+                } else {
+                    // Keeps the user schema if physical schema inference is unavailable.
+                    schema
+                };
                 // When the partition columns are not specified, auto-discover
                 // them from `key=value` segments in the listing paths.
                 // Without this, columns that exist only in the directory tree
@@ -278,7 +294,6 @@ impl<T: FormatFactory> TableFormat for ListingTableFormat<T> {
         }))
     }
 }
-
 async fn listing_target_exists(ctx: &dyn Session, url: &Url) -> Result<bool> {
     // For file systems, treat the target as existing even if it is an empty directory.
     if url.scheme() == "file" {
@@ -290,9 +305,41 @@ async fn listing_target_exists(ctx: &dyn Session, url: &Url) -> Result<bool> {
     }
     listing_target_nonempty(ctx, url).await
 }
-
 async fn listing_target_nonempty(ctx: &dyn Session, url: &Url) -> Result<bool> {
     let path = ListingTableUrl::try_new(url.clone(), None)?;
     let store = ctx.runtime_env().object_store(&path)?;
     Ok(store.list(Some(path.prefix())).try_next().await?.is_some())
+}
+
+// Reconciles a user-specified schema's field names with the physical file schema
+// case-insensitively, matching Spark's default `spark.sql.caseSensitive=false`.
+fn reconcile_schema_names_case_insensitive(schema: Schema, physical: &Schema) -> Result<Schema> {
+    let mut fields = Vec::with_capacity(schema.fields().len());
+    for field in schema.fields() {
+        let name = field.name();
+        let mut matches = physical
+            .fields()
+            .iter()
+            .filter(|f| f.name().eq_ignore_ascii_case(name));
+        let reconciled = match matches.next() {
+            None => Arc::clone(field),
+            Some(first) => {
+                if let Some(second) = matches.next() {
+                    let mut names = vec![first.name().as_str(), second.name().as_str()];
+                    names.extend(matches.map(|f| f.name().as_str()));
+                    return plan_err!(
+                        "Ambiguous case-insensitive column match for `{name}`: [{}]",
+                        names.join(", ")
+                    );
+                }
+                if first.name() == name {
+                    Arc::clone(field)
+                } else {
+                    Arc::new(field.as_ref().clone().with_name(first.name().as_str()))
+                }
+            }
+        };
+        fields.push(reconciled);
+    }
+    Ok(Schema::new_with_metadata(fields, schema.metadata().clone()))
 }

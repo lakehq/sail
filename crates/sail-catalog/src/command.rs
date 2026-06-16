@@ -582,6 +582,7 @@ impl CatalogCommand {
                     replace: options.replace,
                     comment: options.comment,
                     properties: options.properties,
+                    source: options.source,
                 };
                 if is_global {
                     manager.create_global_temporary_view(&view, options).await?;

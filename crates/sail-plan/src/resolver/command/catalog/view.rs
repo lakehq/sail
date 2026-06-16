@@ -10,6 +10,7 @@ use sail_catalog::provider::{
     CreateViewOptions, DropTemporaryViewOptions, DropViewOptions,
 };
 use sail_common::spec;
+use sail_common_datafusion::catalog::TemporaryViewSource;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 
@@ -99,6 +100,22 @@ impl PlanResolver<'_> {
             comment,
             properties,
         } = definition;
+        // A view created with `USING` is backed by a data source. We keep the
+        // format and options (which carry the `path`) so that `INSERT INTO` the
+        // view can write to the same location, like Spark treats it as a table.
+        let source = match &input.node {
+            spec::QueryNode::Read {
+                read_type: spec::ReadType::DataSource(data_source),
+                ..
+            } => data_source
+                .format
+                .clone()
+                .map(|format| TemporaryViewSource {
+                    format,
+                    options: data_source.options.clone(),
+                }),
+            _ => None,
+        };
         let input = self.resolve_query_plan(*input, state).await?;
         let input = LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
             Arc::new(input),
@@ -134,6 +151,7 @@ impl PlanResolver<'_> {
                 replace,
                 comment,
                 properties,
+                source,
             },
         };
         self.resolve_catalog_command(command)

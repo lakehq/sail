@@ -24,7 +24,7 @@ data:
                                   MonotonicIdExec: col=__sail_merge_target_row_id
                                     DataSourceExec: file_groups={3 groups: [[<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path], file_type=parquet
                 FilterExec: __sail_file_path@2 IS NULL, projection=[id@0, value@1, __sail_operation_type@3, __sail_merge_source_metric@4]
-                  ProjectionExec: expr=[NULL as id, NULL as value, NULL as __sail_file_path, 9 as __sail_operation_type, CAST(2 AS UInt64) as __sail_merge_source_metric]
+                  ProjectionExec: expr=[NULL as id, NULL as value, NULL as __sail_file_path, 9 as __sail_operation_type, 2 as __sail_merge_source_metric]
                     PlaceholderRowExec
               HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(__sail_file_path@0, __sail_file_path@2)], projection=[id@1, value@2, __sail_operation_type@4, __sail_merge_source_metric@5]
                 CoalescePartitionsExec
@@ -55,7 +55,7 @@ data:
                                   ProjectionExec: expr=[id@0 as id, value@1 as value, __sail_file_path@2 as __sail_file_path, __sail_merge_target_row_id@3 as __sail_merge_target_row_id, true as __sail_merge_target_row_present]
                                     MonotonicIdExec: col=__sail_merge_target_row_id
                                       DataSourceExec: file_groups={3 groups: [[<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet], [<tmp>/logscan_parallel/part-<id>.snappy.parquet]]}, projection=[id, value, __sail_file_path], file_type=parquet
-                  ProjectionExec: expr=[NULL as id, NULL as value, NULL as __sail_file_path, 9 as __sail_operation_type, CAST(2 AS UInt64) as __sail_merge_source_metric]
+                  ProjectionExec: expr=[NULL as id, NULL as value, NULL as __sail_file_path, 9 as __sail_operation_type, 2 as __sail_merge_source_metric]
                     PlaceholderRowExec
           DeltaRemoveActionsExec
             CoalescePartitionsExec

@@ -5,6 +5,7 @@ use datafusion_expr::LogicalPlan;
 pub use sail_common_datafusion::catalog::{CatalogPartitionField, PartitionTransform};
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableConstraint, CatalogTableSort,
+    TemporaryViewSource,
 };
 use serde::{Deserialize, Serialize};
 
@@ -107,6 +108,8 @@ pub struct CreateTemporaryViewOptions<I = Arc<LogicalPlan>> {
     pub replace: bool,
     pub comment: Option<String>,
     pub properties: Vec<(String, String)>,
+    /// The data source backing the view, if it was created with `USING`.
+    pub source: Option<TemporaryViewSource>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
