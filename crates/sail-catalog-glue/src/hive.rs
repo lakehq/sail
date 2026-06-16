@@ -103,6 +103,7 @@ fn validate_hive_options(options: CreateTableOptions) -> CatalogResult<Validated
         replace,
         properties,
         is_external: _,
+        is_write_precondition: _,
     } = options;
 
     if replace {

@@ -22,6 +22,7 @@ use uuid::Uuid;
 // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/path.rs#L23-L25>
 pub const DELTA_LOG_DIR: &str = "_delta_log";
 pub const SIDECARS_DIR: &str = "_sidecars";
+pub const STAGED_COMMITS_DIR: &str = "_staged_commits";
 
 // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/last_checkpoint_hint.rs#L14-L17>
 pub const LAST_CHECKPOINT_FILE: &str = "_last_checkpoint";
@@ -45,6 +46,14 @@ pub fn checkpoint_path(version: i64) -> Path {
 
 pub fn commit_path(version: i64) -> Path {
     Path::from_iter([DELTA_LOG_DIR, &format!("{version:020}.json")])
+}
+
+pub fn staged_commit_path(version: i64, uuid: &Uuid) -> Path {
+    Path::from_iter([
+        DELTA_LOG_DIR,
+        STAGED_COMMITS_DIR,
+        &format!("{version:020}.{uuid}.json"),
+    ])
 }
 
 pub fn checksum_path(version: i64) -> Path {

@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchemaRef, TableReference};
 use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::sql::{Ident, ObjectName, ObjectNamePart};
 use datafusion_expr::{col, expr, lit, ScalarUDF};
 use datafusion_functions::core::get_field;
 use sail_common::spec;
@@ -153,12 +154,16 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<expr::WildcardOptions> {
-        fn make_ident(value: impl Into<String>) -> expr::Ident {
-            expr::Ident {
+        fn make_ident(value: impl Into<String>) -> Ident {
+            Ident {
                 value: value.into(),
                 quote_style: None,
                 span: String::new(),
             }
+        }
+
+        fn make_object_name(value: impl Into<String>) -> ObjectName {
+            ObjectName(vec![ObjectNamePart::Identifier(make_ident(value))])
         }
 
         let ilike = wildcard_options
@@ -168,9 +173,9 @@ impl PlanResolver<'_> {
             .exclude_columns
             .map(|x| {
                 let exclude = if x.len() > 1 {
-                    expr::ExcludeSelectItem::Multiple(x.into_iter().map(make_ident).collect())
+                    expr::ExcludeSelectItem::Multiple(x.into_iter().map(make_object_name).collect())
                 } else if let Some(x) = x.into_iter().next() {
-                    expr::ExcludeSelectItem::Single(make_ident(x))
+                    expr::ExcludeSelectItem::Single(make_object_name(x))
                 } else {
                     return Err(PlanError::invalid(
                         "exclude columns must have at least one column",

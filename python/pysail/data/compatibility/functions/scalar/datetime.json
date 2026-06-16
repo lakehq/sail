@@ -248,7 +248,7 @@
   {
     "module": "pyspark.sql.functions",
     "function": "timestamp_diff",
-    "status": "planned"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",

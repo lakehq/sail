@@ -1,12 +1,15 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::Schema;
-use datafusion_common::{Column, DFSchema};
-use datafusion_expr::expr::{FieldMetadata, Sort};
+use datafusion::arrow::datatypes::{Field, Schema};
+use datafusion::functions_window::row_number::row_number_udwf;
+use datafusion::logical_expr::expr::NullTreatment;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::{Column, DFSchema, ScalarValue};
+use datafusion_expr::expr::{self, FieldMetadata, Sort, WindowFunctionParams};
 use datafusion_expr::{
     col, lit, when, BinaryExpr, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder,
-    Operator, ScalarUDF,
+    Operator, Projection, ScalarUDF, WindowFrame, WindowFunctionDefinition,
 };
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::error::CatalogError;
@@ -14,23 +17,29 @@ use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{
     CatalogPartitionField, CreateTableColumnOptions, CreateTableOptions, PartitionTransform,
 };
-use sail_common::spec;
+use sail_common::spec::{self, DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID};
 use sail_common_datafusion::catalog::{
-    CatalogTableBucketBy, CatalogTableSort, TableColumnStatus, TableKind,
+    CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableSort, TableColumnStatus,
+    TableKind,
 };
-use sail_common_datafusion::column_features::{ColumnFeatures, ColumnFeaturesBuilder};
+use sail_common_datafusion::column_features::{
+    ColumnFeatures, ColumnFeaturesBuilder, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
+};
 use sail_common_datafusion::datasource::{
-    find_path_in_options, BucketBy, OptionLayer, SinkMode, SourceInfo, TableFormatRegistry,
+    find_path_in_options, BucketBy, OptionLayer, SinkInfo, SinkMode, SourceInfo,
+    TableFormatRegistry,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::math::spark_try_add::SparkTryAdd;
+use sail_function::scalar::math::spark_try_mult::SparkTryMult;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_logical_plan::barrier::BarrierNode;
-use sail_logical_plan::file_write::{FileWriteNode, FileWriteOptions};
 
+use super::delta::parse_delta_generation_expr;
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
@@ -221,12 +230,13 @@ impl PlanResolver<'_> {
             return Err(PlanError::todo("CLUSTER BY for write"));
         }
         let input_schema = input.schema().inner().clone();
-        let mut file_write_options = FileWriteOptions {
+        let mut write_format = format.unwrap_or_default();
+        let mut sink_info = SinkInfo {
+            input: input.clone(),
             // The mode will be set later so the value here is just a placeholder.
             mode: SinkMode::ErrorIfExists,
-            format: format.unwrap_or_default(),
             partition_by: partition_by.clone(),
-            sort_by: self
+            sort_order: self
                 .resolve_sort_orders(sort_by.clone(), true, input.schema(), state)
                 .await?,
             bucket_by: self.resolve_write_bucket_by(bucket_by.clone())?,
@@ -234,6 +244,7 @@ impl PlanResolver<'_> {
                 .into_iter()
                 .map(|items| OptionLayer::OptionList { items })
                 .collect(),
+            catalog_table: None,
         };
         let mut preconditions = vec![];
         match target {
@@ -243,28 +254,29 @@ impl PlanResolver<'_> {
                         "table properties are not supported for writing to a data source",
                     ));
                 }
-                if file_write_options.format.is_empty() {
-                    file_write_options.format = self.config.default_table_file_format.clone();
+                if write_format.is_empty() {
+                    write_format = self.config.default_table_file_format.clone();
                 }
-                let should_rewrite_existing_delta_generated_columns =
+                let should_rewrite_existing_delta_table_features =
                     !(matches!(&mode, WriteMode::ErrorIfExists | WriteMode::IgnoreIfExists)
                         || matches!(&mode, WriteMode::Replace { .. })
                             && Self::has_truthy_option(
-                                &file_write_options.options,
+                                &sink_info.options,
                                 &["overwriteSchema", "overwrite_schema"],
                             ));
-                if should_rewrite_existing_delta_generated_columns {
+                if should_rewrite_existing_delta_table_features {
                     input = self
-                        .rewrite_data_source_delta_generated_columns(
+                        .rewrite_data_source_delta_table_features(
                             input,
-                            &file_write_options,
+                            &write_format,
+                            &sink_info,
                             state,
                         )
                         .await?;
                 }
                 let schema_for_cond =
                     matches!(mode, WriteMode::TruncateIf { .. }).then_some(input_schema.as_ref());
-                file_write_options.mode = self
+                sink_info.mode = self
                     .resolve_write_mode(mode, schema_for_cond, state)
                     .await?;
             }
@@ -318,26 +330,35 @@ impl PlanResolver<'_> {
                             "cannot specify table properties when writing to an existing table",
                         ));
                     }
-                    info.validate_file_write_options(&file_write_options)?;
+                    info.validate_write_info(&write_format, &sink_info)?;
+                    let delta_merge_schema = info.format.eq_ignore_ascii_case("delta")
+                        && Self::has_truthy_option(
+                            &sink_info.options,
+                            &["mergeSchema", "merge_schema"],
+                        );
+                    if !delta_merge_schema {
+                        input = self
+                            .rewrite_write_input(input, column_match, info, state)
+                            .await?;
+                    }
                     input = self
-                        .rewrite_write_input(input, column_match, info, state)
+                        .apply_delta_table_constraints(input, info, state)
                         .await?;
-                    if file_write_options.partition_by.is_empty()
+                    if sink_info.partition_by.is_empty()
                         || !info.format.eq_ignore_ascii_case("iceberg")
                     {
-                        file_write_options.partition_by = info.partition_by.clone();
+                        sink_info.partition_by = info.partition_by.clone();
                     }
-                    file_write_options.sort_by =
-                        info.sort_by.iter().cloned().map(|x| x.into()).collect();
-                    file_write_options.bucket_by = info.bucket_by.clone().map(|x| x.into());
+                    sink_info.sort_order = info.sort_by.iter().cloned().map(|x| x.into()).collect();
+                    sink_info.bucket_by = info.bucket_by.clone().map(|x| x.into());
                     let location = info.location.clone().ok_or_else(|| {
                         PlanError::invalid(format!("table does not have a location: {table:?}"))
                     })?;
-                    file_write_options.options.push(OptionLayer::OptionList {
+                    sink_info.options.push(OptionLayer::OptionList {
                         items: vec![("path".to_string(), location)],
                     });
-                    file_write_options.format = info.format.clone();
-                    file_write_options.options.insert(
+                    write_format = info.format.clone();
+                    sink_info.options.insert(
                         0,
                         OptionLayer::TablePropertyList {
                             items: info.properties.clone(),
@@ -345,46 +366,45 @@ impl PlanResolver<'_> {
                     );
                 } else {
                     let write_options_had_location =
-                        find_path_in_options(&file_write_options.options).is_some();
-                    file_write_options.options.insert(
+                        find_path_in_options(&sink_info.options).is_some();
+                    sink_info.options.insert(
                         0,
                         OptionLayer::TablePropertyList {
                             items: table_properties,
                         },
                     );
                     // Create or replace the table
-                    if file_write_options.format.is_empty() {
+                    if write_format.is_empty() {
                         if let Some(format) = info.as_ref().map(|x| &x.format) {
-                            file_write_options.format = format.clone();
+                            write_format = format.clone();
                         } else {
-                            file_write_options.format =
-                                self.config.default_table_file_format.clone();
+                            write_format = self.config.default_table_file_format.clone();
                         }
                     }
                     if let Some(location) = info.as_ref().and_then(|x| x.location.as_ref()) {
-                        file_write_options.options.push(OptionLayer::OptionList {
+                        sink_info.options.push(OptionLayer::OptionList {
                             items: vec![("path".to_string(), location.clone())],
                         });
                     } else {
                         let default_location = self.resolve_default_table_location(&table).await?;
-                        file_write_options.options.insert(
+                        sink_info.options.insert(
                             0,
                             OptionLayer::OptionList {
                                 items: vec![("path".to_string(), default_location)],
                             },
                         );
                     };
-                    if file_write_options
+                    if sink_info
                         .partition_by
                         .iter()
                         .any(|field| field.transform.is_some())
-                        && !file_write_options.format.eq_ignore_ascii_case("iceberg")
+                        && !write_format.eq_ignore_ascii_case("iceberg")
                     {
                         return Err(PlanError::unsupported(
                             "partition transforms are only supported for Iceberg tables",
                         ));
                     }
-                    let table_location = find_path_in_options(&file_write_options.options);
+                    let table_location = find_path_in_options(&sink_info.options);
                     let (if_not_exists, replace) = if matches!(mode, WriteMode::Append { .. }) {
                         (true, false)
                     } else if matches!(mode, WriteMode::Replace { .. }) {
@@ -405,10 +425,11 @@ impl PlanResolver<'_> {
                             comment: None,
                             default: None,
                             generated_always_as: None,
+                            identity: None,
                         })
                         .collect();
                     // TODO: Revisit passing write options as table properties.
-                    let properties = file_write_options
+                    let properties: Vec<(String, String)> = sink_info
                         .options
                         .clone()
                         .into_iter()
@@ -432,13 +453,13 @@ impl PlanResolver<'_> {
                     let sort_by = self.resolve_catalog_table_sort(sort_by)?;
                     let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
                     let command = CatalogCommand::CreateTable {
-                        table: table.into(),
+                        table: table.clone().into(),
                         options: CreateTableOptions {
                             columns,
                             comment: None,
                             constraints: vec![],
                             location: table_location,
-                            format: file_write_options.format.clone(),
+                            format: write_format.clone(),
                             partition_by,
                             sort_by,
                             bucket_by,
@@ -446,19 +467,34 @@ impl PlanResolver<'_> {
                             replace,
                             properties,
                             is_external: table_is_external || write_options_had_location,
+                            is_write_precondition: true,
                         },
                     };
                     preconditions.push(Arc::new(self.resolve_catalog_command(command)?));
                 }
 
-                file_write_options.mode = self
+                sink_info.catalog_table = Some(
+                    table
+                        .parts()
+                        .iter()
+                        .map(|part| part.as_ref().to_string())
+                        .collect::<Vec<_>>(),
+                );
+
+                sink_info.mode = self
                     .resolve_write_mode(mode, schema_for_cond.as_ref(), state)
                     .await?;
             }
         };
-        let plan = LogicalPlan::Extension(Extension {
-            node: Arc::new(FileWriteNode::new(Arc::new(input), file_write_options)),
-        });
+        input = self
+            .rewrite_delta_check_constraints_from_options(input, &write_format, &sink_info, state)
+            .await?;
+        sink_info.input = input;
+        let registry = self.ctx.extension::<TableFormatRegistry>()?;
+        let plan = registry
+            .get(&write_format)?
+            .create_writer(&self.ctx.state(), sink_info)
+            .await?;
         Ok(LogicalPlan::Extension(Extension {
             node: Arc::new(BarrierNode::new(preconditions, Arc::new(plan))),
         }))
@@ -536,7 +572,7 @@ impl PlanResolver<'_> {
                 partition_by,
                 sort_by,
                 bucket_by,
-                properties,
+                mut properties,
                 is_external: _,
             } => {
                 // When a table is created without column definitions
@@ -556,6 +592,7 @@ impl PlanResolver<'_> {
                     })?;
                     let info = SourceInfo {
                         paths: location.iter().cloned().collect(),
+                        catalog_table: Some(table.clone().into()),
                         schema: None,
                         constraints: Default::default(),
                         partition_by: vec![],
@@ -564,40 +601,64 @@ impl PlanResolver<'_> {
                         options: vec![OptionLayer::TablePropertyList {
                             items: properties.to_vec(),
                         }],
+                        read_case_sensitive: self.config.case_sensitive,
                     };
-                    let schema = table_format
-                        .infer_schema(&self.ctx.state(), info)
+                    let metadata = table_format
+                        .infer_metadata(&self.ctx.state(), info)
                         .await
                         .map_err(|e| {
                             PlanError::invalid(format!(
-                                "failed to infer schema for table `{table:?}` from format `{format}`: {e}",
+                                "failed to infer metadata for table `{table:?}` from format `{format}`: {e}",
                             ))
                         })?;
-                    columns = schema
-                        .fields()
-                        .iter()
-                        .map(|f| {
-                            // Read the Delta generation expression from Arrow field metadata.
-                            // `ColumnFeatures` transparently JSON-unwraps the value if the
-                            // table was created externally and the expression was stored as
-                            // a JSON-encoded string.
-                            let generated_always_as =
-                                ColumnFeatures::from_field(f).generation_expression();
-                            TableColumnStatus {
-                                name: f.name().clone(),
-                                data_type: f.data_type().clone(),
-                                nullable: f.is_nullable(),
-                                comment: None,
-                                default: None,
-                                generated_always_as,
-                                is_partition: false,
-                                is_bucket: false,
-                                is_cluster: false,
+                    columns = Self::table_columns_from_format_schema(metadata.schema.as_ref());
+                    if !metadata.properties.is_empty() {
+                        let mut merged_properties = metadata.properties;
+                        merged_properties.extend(properties);
+                        properties = merged_properties;
+                    }
+                } else if format.eq_ignore_ascii_case("delta") && location.is_some() {
+                    let registry = self.ctx.extension::<TableFormatRegistry>().map_err(|e| {
+                        PlanError::invalid(format!(
+                            "failed to access table format registry for table `{table:?}`: {e}",
+                        ))
+                    })?;
+                    let table_format = registry.get(&format).map_err(|e| {
+                        PlanError::invalid(format!(
+                            "failed to resolve table format `{format}` for table `{table:?}`: {e}",
+                        ))
+                    })?;
+                    let info = SourceInfo {
+                        paths: location.iter().cloned().collect(),
+                        catalog_table: Some(table.clone().into()),
+                        schema: None,
+                        constraints: Default::default(),
+                        partition_by: vec![],
+                        bucket_by: None,
+                        sort_order: vec![],
+                        options: vec![OptionLayer::TablePropertyList {
+                            items: properties.to_vec(),
+                        }],
+                        read_case_sensitive: self.config.case_sensitive,
+                    };
+                    match table_format.infer_metadata(&self.ctx.state(), info).await {
+                        Ok(metadata) => {
+                            Self::merge_format_columns(&mut columns, metadata.schema.as_ref());
+                            if !metadata.properties.is_empty() {
+                                let mut merged_properties = metadata.properties;
+                                merged_properties.extend(properties);
+                                properties = merged_properties;
                             }
-                        })
-                        .collect();
+                        }
+                        Err(e) => {
+                            log::debug!(
+                                "using catalog metadata for Delta table `{table:?}` because the Delta log metadata could not be loaded yet: {e}"
+                            );
+                        }
+                    }
                 }
                 Ok(Some(TableInfo {
+                    catalog_table: Some(table.clone().into()),
                     columns,
                     location,
                     format,
@@ -611,93 +672,79 @@ impl PlanResolver<'_> {
         }
     }
 
-    async fn rewrite_data_source_delta_generated_columns(
-        &self,
-        input: LogicalPlan,
-        options: &FileWriteOptions,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<LogicalPlan> {
-        if !options.format.eq_ignore_ascii_case("delta") {
-            return Ok(input);
-        }
-        let Some(path) = find_path_in_options(&options.options) else {
-            return Ok(input);
-        };
-
-        let registry = self.ctx.extension::<TableFormatRegistry>().map_err(|e| {
-            PlanError::invalid(format!(
-                "failed to access table format registry for Delta path `{path}`: {e}",
-            ))
-        })?;
-        let table_format = registry.get(&options.format).map_err(|e| {
-            PlanError::invalid(format!(
-                "failed to resolve table format `{}` for Delta path `{path}`: {e}",
-                options.format
-            ))
-        })?;
-        let info = SourceInfo {
-            paths: vec![path.clone()],
-            schema: None,
-            constraints: Default::default(),
-            partition_by: vec![],
-            bucket_by: None,
-            sort_order: vec![],
-            options: vec![],
-        };
-        let schema = match table_format.infer_schema(&self.ctx.state(), info).await {
-            Ok(schema) => schema,
-            Err(e) => {
-                log::debug!(
-                    "skipping generated column rewrite for Delta path `{path}` because existing table schema could not be loaded: {e}"
-                );
-                return Ok(input);
-            }
-        };
-
-        let columns = schema
+    fn table_columns_from_format_schema(schema: &Schema) -> Vec<TableColumnStatus> {
+        schema
             .fields()
             .iter()
-            .map(|field| TableColumnStatus {
-                name: field.name().clone(),
-                data_type: field.data_type().clone(),
-                nullable: field.is_nullable(),
-                comment: None,
-                default: None,
-                generated_always_as: ColumnFeatures::from_field(field).generation_expression(),
-                is_partition: false,
-                is_bucket: false,
-                is_cluster: false,
-            })
-            .collect::<Vec<_>>();
-        if !columns
-            .iter()
-            .any(|column| column.generated_always_as.is_some())
-        {
-            return Ok(input);
-        }
-
-        let info = TableInfo {
-            columns,
-            location: Some(path),
-            format: options.format.clone(),
-            partition_by: vec![],
-            sort_by: vec![],
-            bucket_by: None,
-            properties: vec![],
-        };
-        self.rewrite_write_input(input, WriteColumnMatch::ByName, &info, state)
-            .await
+            .map(|field| Self::table_column_from_format_field(field.as_ref()))
+            .collect()
     }
 
-    async fn rewrite_write_input(
+    fn table_column_from_format_field(field: &Field) -> TableColumnStatus {
+        // Read Delta column features from Arrow field metadata. `ColumnFeatures`
+        // transparently JSON-unwraps generation expressions when external
+        // writers store them as JSON-encoded strings.
+        let features = ColumnFeatures::from_field(field);
+        TableColumnStatus {
+            name: field.name().clone(),
+            data_type: field.data_type().clone(),
+            nullable: field.is_nullable(),
+            comment: None,
+            default: features.current_default(),
+            generated_always_as: features.generation_expression(),
+            identity: features.identity(),
+            is_partition: false,
+            is_bucket: false,
+            is_cluster: false,
+        }
+    }
+
+    fn merge_format_columns(columns: &mut Vec<TableColumnStatus>, schema: &Schema) {
+        let fields_by_name = schema
+            .fields()
+            .iter()
+            .map(|field| (field.name().to_lowercase(), field.as_ref()))
+            .collect::<HashMap<_, _>>();
+        let existing_names = columns
+            .iter()
+            .map(|column| column.name.to_lowercase())
+            .collect::<HashSet<_>>();
+
+        for column in columns.iter_mut() {
+            let Some(field) = fields_by_name.get(&column.name.to_lowercase()) else {
+                continue;
+            };
+            let features = ColumnFeatures::from_field(field);
+            column.data_type = field.data_type().clone();
+            column.nullable = field.is_nullable();
+            column.default = features.current_default();
+            column.generated_always_as = features.generation_expression();
+            column.identity = features.identity();
+        }
+
+        columns.extend(
+            schema
+                .fields()
+                .iter()
+                .filter(|field| !existing_names.contains(&field.name().to_lowercase()))
+                .map(|field| Self::table_column_from_format_field(field.as_ref())),
+        );
+    }
+
+    pub(super) async fn rewrite_write_input(
         &self,
         input: LogicalPlan,
         column_match: WriteColumnMatch,
         info: &TableInfo,
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        let has_generated = info.columns.iter().any(|c| c.generated_always_as.is_some());
-        if has_generated {
+        let has_column_expressions = info.columns.iter().any(|c| {
+            c.generated_always_as.is_some() || c.default.is_some() || c.identity.is_some()
+        });
+        let has_default_values = Self::plan_has_default_column_value(&input)?;
+        let requires_delta_not_null_metadata =
+            info.format.eq_ignore_ascii_case("delta") && info.columns.iter().any(|c| !c.nullable);
+        if has_column_expressions || has_default_values || requires_delta_not_null_metadata {
             self.rewrite_write_input_with_column_expressions(input, column_match, info, state)
                 .await
         } else {
@@ -728,8 +775,8 @@ impl PlanResolver<'_> {
                     .into_iter()
                     .zip(table_schema.fields().iter())
                     .map(|(column, field)| {
-                        Ok(col(column)
-                            .cast_to(field.data_type(), input.schema())?
+                        let expr = col(column).cast_to(field.data_type(), input.schema())?;
+                        Ok(Self::make_nullable_if_needed(expr, field, input.schema())?
                             .alias(field.name()))
                     })
                     .collect::<PlanResult<Vec<_>>>()?;
@@ -746,16 +793,23 @@ impl PlanResolver<'_> {
                             .fields()
                             .iter()
                             .filter(|f| f.name().eq_ignore_ascii_case(name))
-                            .map(|f| Ok(col(f.name()).cast_to(field.data_type(), input.schema())?))
+                            .map(|f| {
+                                let expr =
+                                    col(f.name()).cast_to(field.data_type(), input.schema())?;
+                                Self::make_nullable_if_needed(expr, field, input.schema())
+                            })
                             .collect::<PlanResult<Vec<_>>>()?;
                         if matches.is_empty() {
                             Err(PlanError::invalid(format!(
                                 "column not found for INSERT: {name}"
                             )))
                         } else {
-                            matches.one().map_err(|_| {
-                                PlanError::invalid(format!("ambiguous column: {name}"))
-                            })
+                            matches
+                                .one()
+                                .map_err(|_| {
+                                    PlanError::invalid(format!("ambiguous column: {name}"))
+                                })
+                                .map(|expr| expr.alias(name))
                         }
                     })
                     .collect::<PlanResult<Vec<_>>>()?;
@@ -809,12 +863,13 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let table_field_count = info.columns.len();
-        let generated_count = info
+        let optional_count = info
             .columns
             .iter()
-            .filter(|c| c.generated_always_as.is_some())
+            .filter(|c| Self::table_column_is_omittable(c))
             .count();
-        let non_generated_count = table_field_count - generated_count;
+        let identity_count = info.columns.iter().filter(|c| c.identity.is_some()).count();
+        let required_count = table_field_count - optional_count;
         let input_field_count = input.schema().fields().len();
 
         // Determine, for each table column, whether the user provided a value (`Some(expr)`
@@ -826,7 +881,13 @@ impl PlanResolver<'_> {
             info,
             input_field_count,
             table_field_count,
-            non_generated_count,
+            required_count,
+        )?;
+        let default_input_exprs = self.resolve_default_input_expressions(info, state).await?;
+        let input = self.rewrite_default_column_values_in_input(
+            input,
+            &provided_by_input,
+            &default_input_exprs,
         )?;
 
         // Register field IDs for each table column. Non-generated cols get their input
@@ -843,7 +904,7 @@ impl PlanResolver<'_> {
         // via the intermediate plan to enforce the CHECK.
         let mut gen_check_field_ids: Vec<Option<String>> = vec![None; table_field_count];
 
-        // Build intermediate plan: one alias expression per non-generated table column,
+        // Build intermediate plan: one alias expression per non-generated/non-identity table column,
         // plus one extra alias per user-provided generated-column value.
         // Cast each expression to the target column type so that generation expressions
         // are resolved against correctly-typed values (e.g. INT -> BIGINT, string ->
@@ -862,21 +923,63 @@ impl PlanResolver<'_> {
                 }
                 continue;
             }
-            let Some(input_expr) = provided else {
+            if let Some(identity) = &col.identity {
+                if let Some(user_expr) = provided {
+                    if !identity.allow_explicit_insert {
+                        return Err(PlanError::invalid(format!(
+                            "Providing values for GENERATED ALWAYS AS IDENTITY column `{}` is not supported",
+                            col.name
+                        )));
+                    }
+                    let cast_expr = user_expr
+                        .clone()
+                        .cast_to(col.field().data_type(), input.schema())?;
+                    intermediate_aliases.push(cast_expr.alias(field_ids[idx].clone()));
+                }
+                continue;
+            }
+            let input_expr = if let Some(input_expr) = provided {
+                input_expr.clone()
+            } else if col.default.is_some() {
+                default_input_exprs[idx].clone()
+            } else {
                 return Err(PlanError::invalid(format!(
                     "INSERT is missing value for non-generated column `{}`",
                     col.name
                 )));
             };
-            let cast_expr = input_expr
-                .clone()
-                .cast_to(col.field().data_type(), input.schema())?;
+            let cast_expr = input_expr.cast_to(col.field().data_type(), input.schema())?;
             intermediate_aliases.push(cast_expr.alias(field_ids[idx].clone()));
         }
         let intermediate = LogicalPlanBuilder::new(input)
             .project(intermediate_aliases)?
             .build()?;
-        let intermediate_schema = intermediate.schema().clone();
+        let identity_row_number = if identity_count > 0 {
+            Some(state.register_hidden_field_name("__identity_row_number"))
+        } else {
+            None
+        };
+        let plan_for_final_projection = if let Some(alias) = identity_row_number.as_deref() {
+            let row_number_window = Expr::WindowFunction(Box::new(expr::WindowFunction {
+                fun: WindowFunctionDefinition::WindowUDF(row_number_udwf()),
+                params: WindowFunctionParams {
+                    args: vec![],
+                    partition_by: vec![],
+                    order_by: vec![],
+                    window_frame: WindowFrame::new(None),
+                    filter: None,
+                    null_treatment: Some(NullTreatment::RespectNulls),
+                    distinct: false,
+                },
+            }))
+            .alias(alias);
+            LogicalPlanBuilder::from(intermediate)
+                .window(vec![row_number_window])?
+                .build()?
+        } else {
+            intermediate
+        };
+        let intermediate_schema = plan_for_final_projection.schema().clone();
 
         // Resolve each generation expression against the intermediate schema.
         let mut gen_exprs: HashMap<String, Expr> = HashMap::new();
@@ -884,18 +987,7 @@ impl PlanResolver<'_> {
             let Some(gen_expr_str) = col.generated_always_as.as_deref() else {
                 continue;
             };
-            let ast_expr =
-                sail_sql_analyzer::parser::parse_expression(gen_expr_str).map_err(|e| {
-                    PlanError::invalid(format!(
-                        "failed to parse generation expression `{gen_expr_str}`: {e}"
-                    ))
-                })?;
-            let spec_expr =
-                sail_sql_analyzer::expression::from_ast_expression(ast_expr).map_err(|e| {
-                    PlanError::invalid(format!(
-                        "failed to analyze generation expression `{gen_expr_str}`: {e}"
-                    ))
-                })?;
+            let spec_expr = parse_delta_generation_expr(gen_expr_str)?;
             let resolved = self
                 .resolve_expression(spec_expr, &intermediate_schema, state)
                 .await?;
@@ -950,40 +1042,60 @@ impl PlanResolver<'_> {
                     gen_expr
                 };
                 final_expr.cast_to(field.data_type(), &intermediate_schema)?
+            } else if let Some(identity) = &table_col.identity {
+                if provided_by_input[idx].is_some() {
+                    col(Column::from_name(&field_ids[idx]))
+                        .cast_to(field.data_type(), &intermediate_schema)?
+                } else {
+                    let row_number_alias = identity_row_number.as_deref().ok_or_else(|| {
+                        PlanError::internal(format!(
+                            "expected row number for identity column `{}`",
+                            table_col.name
+                        ))
+                    })?;
+                    Self::make_identity_value_expr(
+                        &table_col.name,
+                        identity,
+                        row_number_alias,
+                        &intermediate_schema,
+                    )?
+                    .cast_to(field.data_type(), &intermediate_schema)?
+                }
             } else {
-                // Non-generated column: reference the aliased field in intermediate plan.
+                // Regular column: reference the aliased field in intermediate plan.
                 col(Column::from_name(&field_ids[idx]))
                     .cast_to(field.data_type(), &intermediate_schema)?
             };
-            let gen_meta = table_col
-                .generated_always_as
-                .as_deref()
-                .map(Self::make_gen_field_metadata);
-            let alias = if let Some(meta) = gen_meta {
+            let expr = Self::make_nullable_if_needed(expr, &field, &intermediate_schema)?;
+            let field_meta = Self::make_column_field_metadata(
+                table_col,
+                info.format.eq_ignore_ascii_case("delta") && !table_col.nullable,
+            );
+            let alias = if let Some(meta) = field_meta {
                 expr.alias_with_metadata(out_name, Some(meta))
             } else {
                 expr.alias(out_name)
             };
             final_exprs.push(alias);
         }
-        Ok(LogicalPlanBuilder::new(intermediate)
+        Ok(LogicalPlanBuilder::new(plan_for_final_projection)
             .project(final_exprs)?
             .build()?)
     }
 
     /// Build an `Expr` for each table column that references a user-provided input
     /// value (if any). `None` indicates the user did not supply a value for that
-    /// table column (only valid for generated columns).
+    /// table column (only valid for generated columns and identity columns).
     ///
     /// Rules per `column_match`:
     ///
     /// - `ByPosition`:
     ///   - If input has `table_field_count` fields: column `i` maps to input `i`.
-    ///   - If input has `non_generated_count` fields: the input lines up with the
-    ///     non-generated table columns in table order; generated columns get `None`.
+    ///   - If input has `required_count` fields: the input lines up with the
+    ///     required table columns in table order; generated/default/identity columns get `None`.
     ///   - Otherwise: error.
     /// - `ByName`: each table column looks up (case-insensitive) in the input schema.
-    ///   Columns not found map to `None` (allowed only for generated cols).
+    ///   Columns not found map to `None` (allowed only for generated/default/identity cols).
     /// - `ByColumns { columns }`: `columns` enumerates the table columns being
     ///   provided. Input field `i` binds to the table column whose name matches
     ///   `columns[i]` (case-insensitive). Anything not listed maps to `None`.
@@ -993,29 +1105,39 @@ impl PlanResolver<'_> {
         info: &TableInfo,
         input_field_count: usize,
         table_field_count: usize,
-        non_generated_count: usize,
+        required_count: usize,
     ) -> PlanResult<Vec<Option<Expr>>> {
         let input_cols = input.schema().columns();
         let mut out: Vec<Option<Expr>> = vec![None; table_field_count];
         match column_match {
             WriteColumnMatch::ByPosition => {
                 if input_field_count == table_field_count {
+                    if let Some(column) = info.columns.iter().find(|c| {
+                        c.identity
+                            .as_ref()
+                            .is_some_and(|i| !i.allow_explicit_insert)
+                    }) {
+                        return Err(PlanError::invalid(format!(
+                            "Providing values for GENERATED ALWAYS AS IDENTITY column `{}` is not supported",
+                            column.name
+                        )));
+                    }
                     for (i, input_col) in input_cols.iter().enumerate() {
                         out[i] = Some(col(input_col.clone()));
                     }
-                } else if input_field_count == non_generated_count {
-                    let mut non_gen_idx = 0usize;
+                } else if input_field_count == required_count {
+                    let mut required_idx = 0usize;
                     for (i, table_col) in info.columns.iter().enumerate() {
-                        if table_col.generated_always_as.is_some() {
+                        if Self::table_column_is_omittable(table_col) {
                             continue;
                         }
-                        out[i] = Some(col(input_cols[non_gen_idx].clone()));
-                        non_gen_idx += 1;
+                        out[i] = Some(col(input_cols[required_idx].clone()));
+                        required_idx += 1;
                     }
                 } else {
                     return Err(PlanError::invalid(format!(
-                        "input schema for INSERT has {input_field_count} fields, but table schema has {table_field_count} fields (with {} generated)",
-                        table_field_count - non_generated_count
+                        "input schema for INSERT has {input_field_count} fields, but table schema has {table_field_count} fields (with {} generated/default/identity)",
+                        table_field_count - required_count
                     )));
                 }
             }
@@ -1035,7 +1157,17 @@ impl PlanResolver<'_> {
                     }
                     if let Some(f) = first {
                         out[i] = Some(col(Column::from_name(f.name())));
-                    } else if table_col.generated_always_as.is_none() {
+                        if table_col
+                            .identity
+                            .as_ref()
+                            .is_some_and(|identity| !identity.allow_explicit_insert)
+                        {
+                            return Err(PlanError::invalid(format!(
+                                "Providing values for GENERATED ALWAYS AS IDENTITY column `{}` is not supported",
+                                table_col.name
+                            )));
+                        }
+                    } else if !Self::table_column_is_omittable(table_col) {
                         return Err(PlanError::invalid(format!(
                             "column not found for INSERT by name: {}",
                             table_col.name
@@ -1070,20 +1202,301 @@ impl PlanResolver<'_> {
                             user_col.as_ref()
                         )));
                     }
+                    if info.columns[pos]
+                        .identity
+                        .as_ref()
+                        .is_some_and(|identity| !identity.allow_explicit_insert)
+                    {
+                        return Err(PlanError::invalid(format!(
+                            "Providing values for GENERATED ALWAYS AS IDENTITY column `{}` is not supported",
+                            info.columns[pos].name
+                        )));
+                    }
                     out[pos] = Some(col(input_col.clone()));
+                }
+                for table_col in &info.columns {
+                    if !Self::table_column_is_omittable(table_col)
+                        && !columns
+                            .iter()
+                            .any(|name| name.as_ref().eq_ignore_ascii_case(&table_col.name))
+                    {
+                        return Err(PlanError::invalid(format!(
+                            "INSERT is missing value for non-generated column `{}`",
+                            table_col.name
+                        )));
+                    }
                 }
             }
         }
         Ok(out)
     }
 
-    /// Build arrow field metadata carrying the Delta generation expression.
-    fn make_gen_field_metadata(gen_expr: &str) -> FieldMetadata {
-        FieldMetadata::from(
-            ColumnFeaturesBuilder::new()
-                .with_generation_expression(gen_expr)
-                .build(),
+    async fn resolve_default_input_expressions(
+        &self,
+        info: &TableInfo,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<Vec<Expr>> {
+        let empty_schema = Arc::new(DFSchema::empty());
+        let mut out = Vec::with_capacity(info.columns.len());
+        for column in &info.columns {
+            let expr = if let Some(default) = column.default.as_deref() {
+                let ast_expr =
+                    sail_sql_analyzer::parser::parse_expression(default).map_err(|e| {
+                        PlanError::invalid(format!(
+                            "failed to parse default expression `{default}`: {e}"
+                        ))
+                    })?;
+                let spec_expr = sail_sql_analyzer::expression::from_ast_expression(ast_expr)
+                    .map_err(|e| {
+                        PlanError::invalid(format!(
+                            "failed to analyze default expression `{default}`: {e}"
+                        ))
+                    })?;
+                self.resolve_expression(spec_expr, &empty_schema, state)
+                    .await?
+            } else {
+                lit(ScalarValue::try_from(column.field().data_type())?)
+            };
+            out.push(expr);
+        }
+        Ok(out)
+    }
+
+    fn rewrite_default_column_values_in_input(
+        &self,
+        input: LogicalPlan,
+        provided_by_input: &[Option<Expr>],
+        default_input_exprs: &[Expr],
+    ) -> PlanResult<LogicalPlan> {
+        if !Self::plan_has_default_column_value(&input)? {
+            return Ok(input);
+        }
+
+        let input_cols = input.schema().columns();
+        let mut target_by_input = vec![None; input_cols.len()];
+        for (target_idx, provided) in provided_by_input.iter().enumerate() {
+            let Some(Expr::Column(column)) = provided else {
+                continue;
+            };
+            let Some(input_idx) = input_cols.iter().position(|input_col| input_col == column)
+            else {
+                continue;
+            };
+            target_by_input[input_idx] = Some(target_idx);
+        }
+
+        let input = Self::rewrite_values_default_column_values(
+            input,
+            &target_by_input,
+            default_input_exprs,
+        )?;
+        if Self::plan_has_default_column_value(&input)? {
+            return Err(PlanError::invalid(
+                "DEFAULT is only supported as a standalone VALUES item in INSERT",
+            ));
+        }
+        Ok(input)
+    }
+
+    fn rewrite_values_default_column_values(
+        input: LogicalPlan,
+        target_by_input: &[Option<usize>],
+        default_input_exprs: &[Expr],
+    ) -> PlanResult<LogicalPlan> {
+        match input {
+            LogicalPlan::Values(values) => {
+                let rows = values
+                    .values
+                    .into_iter()
+                    .map(|row| {
+                        row.into_iter()
+                            .enumerate()
+                            .map(|(idx, expr)| {
+                                if Self::is_standalone_default_column_value_expr(&expr) {
+                                    let Some(target_idx) =
+                                        target_by_input.get(idx).and_then(|x| *x)
+                                    else {
+                                        return Err(PlanError::invalid(
+                                            "DEFAULT could not be matched to a target column",
+                                        ));
+                                    };
+                                    Ok(default_input_exprs[target_idx].clone())
+                                } else if Self::expr_contains_default_column_value(&expr)? {
+                                    Err(PlanError::invalid(
+                                        "DEFAULT must be a standalone INSERT value",
+                                    ))
+                                } else {
+                                    Ok(expr)
+                                }
+                            })
+                            .collect::<PlanResult<Vec<_>>>()
+                    })
+                    .collect::<PlanResult<Vec<_>>>()?;
+                Ok(LogicalPlanBuilder::values(rows)?.build()?)
+            }
+            LogicalPlan::Projection(projection) => {
+                let mut child_targets = vec![None; projection.input.schema().fields().len()];
+                let child_cols = projection.input.schema().columns();
+                for (output_idx, target_idx) in target_by_input.iter().enumerate() {
+                    let Some(target_idx) = target_idx else {
+                        continue;
+                    };
+                    let Some(expr) = projection.expr.get(output_idx) else {
+                        continue;
+                    };
+                    let child_column = match expr {
+                        Expr::Column(column) => Some(column),
+                        Expr::Alias(alias) => match alias.expr.as_ref() {
+                            Expr::Column(column) => Some(column),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    let Some(child_column) = child_column else {
+                        continue;
+                    };
+                    let Some(child_idx) =
+                        child_cols.iter().position(|column| column == child_column)
+                    else {
+                        continue;
+                    };
+                    child_targets[child_idx] = Some(*target_idx);
+                }
+                let input = Self::rewrite_values_default_column_values(
+                    projection.input.as_ref().clone(),
+                    &child_targets,
+                    default_input_exprs,
+                )?;
+                Ok(LogicalPlan::Projection(Projection::try_new(
+                    projection.expr,
+                    Arc::new(input),
+                )?))
+            }
+            other => Ok(other),
+        }
+    }
+
+    pub(super) fn plan_has_default_column_value(plan: &LogicalPlan) -> PlanResult<bool> {
+        let mut found = false;
+        plan.apply(|node| {
+            node.apply_expressions(|expr| {
+                if Self::expr_contains_default_column_value(expr)? {
+                    found = true;
+                    Ok(TreeNodeRecursion::Stop)
+                } else {
+                    Ok(TreeNodeRecursion::Continue)
+                }
+            })?;
+            Ok(if found {
+                TreeNodeRecursion::Stop
+            } else {
+                TreeNodeRecursion::Continue
+            })
+        })?;
+        Ok(found)
+    }
+
+    fn make_nullable_if_needed(expr: Expr, field: &Field, schema: &DFSchema) -> PlanResult<Expr> {
+        if field.is_nullable() && !expr.nullable(schema)? {
+            let null = lit(ScalarValue::try_from(field.data_type())?);
+            Ok(when(lit(true), expr).otherwise(null)?)
+        } else {
+            Ok(expr)
+        }
+    }
+
+    fn expr_contains_default_column_value(expr: &Expr) -> datafusion_common::Result<bool> {
+        let mut found = false;
+        expr.apply(|expr| {
+            if Self::is_default_column_value_expr(expr) {
+                found = true;
+                Ok(TreeNodeRecursion::Stop)
+            } else {
+                Ok(TreeNodeRecursion::Continue)
+            }
+        })?;
+        Ok(found)
+    }
+
+    fn is_standalone_default_column_value_expr(expr: &Expr) -> bool {
+        if Self::is_default_column_value_expr(expr) {
+            return true;
+        }
+        match expr {
+            Expr::Cast(cast) => Self::is_default_column_value_expr(cast.expr.as_ref()),
+            Expr::TryCast(cast) => Self::is_default_column_value_expr(cast.expr.as_ref()),
+            _ => false,
+        }
+    }
+
+    fn is_default_column_value_expr(expr: &Expr) -> bool {
+        matches!(
+            expr,
+            Expr::Placeholder(placeholder)
+                if placeholder.id == DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID
         )
+    }
+
+    fn table_column_is_omittable(column: &TableColumnStatus) -> bool {
+        column.generated_always_as.is_some()
+            || column.default.is_some()
+            || column.identity.is_some()
+    }
+
+    fn make_column_field_metadata(
+        column: &TableColumnStatus,
+        preserve_delta_not_null: bool,
+    ) -> Option<FieldMetadata> {
+        let mut builder = ColumnFeaturesBuilder::new();
+        if let Some(gen_expr) = column.generated_always_as.as_deref() {
+            builder = builder.with_generation_expression(gen_expr);
+        }
+        if let Some(default) = column.default.as_deref() {
+            builder = builder.with_current_default(default);
+        }
+        if let Some(identity) = column.identity.as_ref() {
+            builder = builder.with_identity(identity);
+        }
+        if preserve_delta_not_null {
+            builder = builder.with_not_null_constraint();
+        }
+        let mut metadata = builder.build();
+        metadata.insert(
+            SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY.to_string(),
+            column.nullable.to_string(),
+        );
+        Some(FieldMetadata::from(metadata))
+    }
+
+    fn make_identity_value_expr(
+        column_name: &str,
+        identity: &CatalogTableColumnIdentity,
+        row_number_alias: &str,
+        schema: &DFSchema,
+    ) -> PlanResult<Expr> {
+        let base = match identity.high_water_mark {
+            Some(high_water_mark) => high_water_mark.checked_add(identity.step).ok_or_else(|| {
+                PlanError::invalid(format!(
+                    "identity column `{column_name}` cannot generate a next value without overflowing BIGINT"
+                ))
+            })?,
+            None => identity.start,
+        };
+        let row_number = col(Column::from_name(row_number_alias))
+            .cast_to(&datafusion::arrow::datatypes::DataType::Int64, schema)?;
+        let row_offset = Expr::BinaryExpr(BinaryExpr::new(
+            Box::new(row_number),
+            Operator::Minus,
+            Box::new(lit(1_i64)),
+        ));
+        let product =
+            ScalarUDF::from(SparkTryMult::new()).call(vec![row_offset, lit(identity.step)]);
+        let value = ScalarUDF::from(SparkTryAdd::new()).call(vec![lit(base), product.clone()]);
+        let err_msg = format!(
+            "[DELTA_IDENTITY_COLUMN_VALUE_OVERFLOW] identity column `{column_name}` overflowed BIGINT while generating values"
+        );
+        let raise = ScalarUDF::from(RaiseError::new()).call(vec![lit(err_msg)]);
+        Ok(when(product.is_null().or(value.clone().is_null()), raise).otherwise(value)?)
     }
 
     pub(super) fn resolve_partition_by_expression(
@@ -1271,14 +1684,15 @@ fn extract_partition_int_arg(
     }
 }
 
-struct TableInfo {
-    columns: Vec<TableColumnStatus>,
-    location: Option<String>,
-    format: String,
-    partition_by: Vec<CatalogPartitionField>,
-    sort_by: Vec<CatalogTableSort>,
-    bucket_by: Option<CatalogTableBucketBy>,
-    properties: Vec<(String, String)>,
+pub(super) struct TableInfo {
+    pub(super) catalog_table: Option<Vec<String>>,
+    pub(super) columns: Vec<TableColumnStatus>,
+    pub(super) location: Option<String>,
+    pub(super) format: String,
+    pub(super) partition_by: Vec<CatalogPartitionField>,
+    pub(super) sort_by: Vec<CatalogTableSort>,
+    pub(super) bucket_by: Option<CatalogTableBucketBy>,
+    pub(super) properties: Vec<(String, String)>,
 }
 
 impl TableInfo {
@@ -1291,23 +1705,23 @@ impl TableInfo {
         Schema::new(fields)
     }
 
-    fn validate_file_write_options(&self, options: &FileWriteOptions) -> PlanResult<()> {
+    fn validate_write_info(&self, format: &str, info: &SinkInfo) -> PlanResult<()> {
         if !self.format.eq_ignore_ascii_case("iceberg")
-            && !self.is_empty_or_equivalent_partitioning(&options.partition_by)
+            && !self.is_empty_or_equivalent_partitioning(&info.partition_by)
         {
             return Err(PlanError::invalid(
                 "cannot specify a different partitioning when writing to an existing table",
             ));
         }
-        if !self.is_empty_or_equivalent_bucketing(&options.bucket_by, &options.sort_by) {
+        if !self.is_empty_or_equivalent_bucketing(&info.bucket_by, &info.sort_order) {
             return Err(PlanError::invalid(
                 "cannot specify a different bucketing when writing to an existing table",
             ));
         }
-        if !options.format.is_empty() && !options.format.eq_ignore_ascii_case(&self.format) {
+        if !format.is_empty() && !format.eq_ignore_ascii_case(&self.format) {
             return Err(PlanError::invalid(format!(
                 "the format '{}' does not match the table format '{}'",
-                options.format, self.format
+                format, self.format
             )));
         }
         Ok(())

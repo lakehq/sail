@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
@@ -165,10 +164,6 @@ impl DisplayAs for RateSourceExec {
 impl ExecutionPlan for RateSourceExec {
     fn name(&self) -> &str {
         Self::static_name()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

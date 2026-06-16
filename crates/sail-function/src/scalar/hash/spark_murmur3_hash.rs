@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, Int32Array};
@@ -30,10 +29,6 @@ impl SparkMurmur3Hash {
 }
 
 impl ScalarUDFImpl for SparkMurmur3Hash {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_murmur3_hash"
     }
