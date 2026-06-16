@@ -43,6 +43,7 @@ impl TableFormat for SocketTableFormat {
             bucket_by,
             sort_order,
             options,
+            read_case_sensitive: _,
         } = info;
         if !constraints.deref().is_empty() {
             return plan_err!("the socket table format does not support constraints");

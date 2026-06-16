@@ -157,19 +157,8 @@ pub enum Statement {
     CreateView {
         create: Create,
         or_replace: Option<(Or, Replace)>,
-        global_temporary: Option<(Option<Global>, Either<Temp, Temporary>)>,
-        view: View,
-        if_not_exists: Option<(If, Not, Exists)>,
-        name: ObjectName,
-        columns: Option<(
-            LeftParenthesis,
-            Sequence<ViewColumn, Comma>,
-            RightParenthesis,
-        )>,
-        clauses: Vec<CreateViewClause>,
-        r#as: As,
-        #[parser(function = |(_, q, _, _), _| q)]
-        query: Query,
+        #[parser(function = |(_, q, _, d), o| compose((q, d), o))]
+        definition: CreateViewDefinition,
     },
     AlterView {
         alter: Alter,
@@ -414,6 +403,44 @@ pub struct AsQueryClause {
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub struct ViewUsingClause {
+    pub using: Using,
+    pub format: Ident,
+    pub options: Option<(Options, PropertyList)>,
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub struct TemporaryViewClause {
+    pub global: Option<Global>,
+    pub temporary: Either<Temp, Temporary>,
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "(Query, DataType)")]
+pub enum CreateViewDefinition {
+    Query {
+        temporary: Option<TemporaryViewClause>,
+        view: View,
+        if_not_exists: Option<(If, Not, Exists)>,
+        name: ObjectName,
+        #[parser(function = |(_, d), o| compose(d, o))]
+        columns: Option<ViewColumnList>,
+        clauses: Vec<CreateViewClause>,
+        r#as: As,
+        #[parser(function = |(q, _), _| q)]
+        query: Query,
+    },
+    Using {
+        temporary: TemporaryViewClause,
+        view: View,
+        name: ObjectName,
+        #[parser(function = |(_, d), o| compose(d, o))]
+        columns: Option<ViewColumnList>,
+        using: ViewUsingClause,
+    },
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "(Expr, DataType)")]
 pub struct ColumnDefinitionList {
     pub left: LeftParenthesis,
@@ -655,8 +682,21 @@ pub enum CreateViewClause {
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "DataType")]
+pub struct ViewColumnList {
+    pub left: LeftParenthesis,
+    #[parser(function = |d, o| sequence(compose(d, o), unit(o)))]
+    pub columns: Sequence<ViewColumn, Comma>,
+    pub right: RightParenthesis,
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "DataType")]
 pub struct ViewColumn {
     pub name: Ident,
+    #[parser(function = |d, o| compose(d, o))]
+    pub data_type: Option<DataType>,
+    pub not_null: Option<(Not, Null)>,
     pub comment: Option<(Comment, StringLiteral)>,
 }
 
