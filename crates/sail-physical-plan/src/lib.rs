@@ -6,7 +6,6 @@ pub mod merge_cardinality_check;
 pub mod monotonic_id;
 pub mod range;
 pub mod repartition;
-pub mod row_level_write;
 pub mod schema_pivot;
 pub mod show_string;
 pub mod spark_partition_id;
