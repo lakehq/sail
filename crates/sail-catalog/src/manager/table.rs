@@ -2,9 +2,11 @@ use sail_common_datafusion::catalog::TableStatus;
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::lakehouse::{
-    resolve_lakehouse_table_status, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
-    LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan, LakehouseCreateRequest,
-    LakehouseResolvedTable, ResolveLakehouseTableRequest,
+    resolve_lakehouse_table_status, BeginTableAccessRequest, DeltaRatifiedCommitRequest,
+    DeltaRatifiedCommitResponse, LakehouseCommitOutcome, LakehouseCommitRequest,
+    LakehouseCreatePlan, LakehouseCreateRequest, LakehouseResolvedTable,
+    LakehouseScanPlanningRequest, LakehouseScanPlanningResponse, ResolveLakehouseTableRequest,
+    TableAccessSession,
 };
 use crate::manager::CatalogManager;
 use crate::provider::{
@@ -75,6 +77,26 @@ impl CatalogManager {
         let (provider, database, name) = self.resolve_object(table)?;
         provider
             .plan_lakehouse_create(&database, &name, request)
+            .await
+    }
+
+    pub async fn begin_table_access<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        request: BeginTableAccessRequest,
+    ) -> CatalogResult<TableAccessSession> {
+        let (provider, database, name) = self.resolve_object(table)?;
+        provider.begin_table_access(&database, &name, request).await
+    }
+
+    pub async fn plan_lakehouse_scan<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        request: LakehouseScanPlanningRequest,
+    ) -> CatalogResult<LakehouseScanPlanningResponse> {
+        let (provider, database, name) = self.resolve_object(table)?;
+        provider
+            .plan_lakehouse_scan(&database, &name, request)
             .await
     }
 

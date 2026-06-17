@@ -1,4 +1,7 @@
-use sail_catalog::lakehouse::ResolveLakehouseTableRequest;
+use sail_catalog::error::CatalogError;
+use sail_catalog::lakehouse::{
+    BeginTableAccessRequest, ResolveLakehouseTableRequest, TableAccessPurpose,
+};
 use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::catalog::{
     LakehouseExecutionContext, LakehouseFormat, LakehouseOperation,
@@ -16,9 +19,8 @@ impl PlanResolver<'_> {
         requested_format: Option<&str>,
         options: Vec<(String, String)>,
     ) -> PlanResult<LakehouseExecutionContext> {
-        let resolved = self
-            .ctx
-            .extension::<CatalogManager>()?
+        let manager = self.ctx.extension::<CatalogManager>()?;
+        let resolved = manager
             .resolve_lakehouse_table(
                 table,
                 ResolveLakehouseTableRequest {
@@ -29,6 +31,35 @@ impl PlanResolver<'_> {
                 },
             )
             .await?;
-        Ok(resolved.execution)
+        let execution = resolved.execution;
+        match manager
+            .begin_table_access(
+                table,
+                BeginTableAccessRequest {
+                    context: execution.clone(),
+                    purpose: table_access_purpose(operation),
+                },
+            )
+            .await
+        {
+            Ok(session) => Ok(session.context),
+            Err(CatalogError::NotSupported(_) | CatalogError::UnsupportedCapability(_)) => {
+                Ok(execution)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+}
+
+fn table_access_purpose(operation: LakehouseOperation) -> TableAccessPurpose {
+    match operation {
+        LakehouseOperation::Read => TableAccessPurpose::DataRead,
+        LakehouseOperation::Write
+        | LakehouseOperation::WritePrecondition
+        | LakehouseOperation::Create
+        | LakehouseOperation::Register => TableAccessPurpose::DataWrite,
+        LakehouseOperation::Alter | LakehouseOperation::Maintenance => {
+            TableAccessPurpose::MetadataRead
+        }
     }
 }
