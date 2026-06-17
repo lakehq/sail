@@ -45,7 +45,13 @@ pub struct CreateTableOptions {
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub enum CreateTableMetadataRequirement {
     None,
-    TableFormat { catalog_managed: bool },
+    TableFormat { mode: TableFormatCreateMetadataMode },
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub enum TableFormatCreateMetadataMode {
+    PathManaged,
+    CatalogCoordinated,
 }
 
 pub fn plain_lakehouse_create_table_metadata_requirement(
@@ -58,7 +64,7 @@ pub fn plain_lakehouse_create_table_metadata_requirement(
         || options.format.eq_ignore_ascii_case("iceberg")
     {
         CreateTableMetadataRequirement::TableFormat {
-            catalog_managed: false,
+            mode: TableFormatCreateMetadataMode::PathManaged,
         }
     } else {
         CreateTableMetadataRequirement::None

@@ -284,6 +284,7 @@ pub struct DeleteInfo {
     pub table_name: Vec<String>,
     pub path: String,
     pub condition: Option<ExprWithSource>,
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
     /// The layers of options for the delete operation.
     /// A later layer can override earlier ones.
     pub options: Vec<OptionLayer>,
@@ -338,6 +339,7 @@ pub struct MergeTargetInfo {
     pub location: String,
     pub partition_by: Vec<String>,
     pub options: Vec<OptionLayer>,
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]

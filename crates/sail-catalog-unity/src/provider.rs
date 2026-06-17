@@ -19,10 +19,12 @@ use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::lakehouse::{
     DeltaRatifiedCommit, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
     LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest,
+    LakehouseCreateMaterialization, LakehouseCreatePlan, LakehouseCreateRequest,
 };
 use sail_catalog::provider::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
     CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    TableFormatCreateMetadataMode,
 };
 use sail_catalog::utils::{get_property, quote_namespace_if_needed};
 use sail_common_datafusion::catalog::delta::{
@@ -836,6 +838,28 @@ impl CatalogProvider for UnityCatalogProvider {
             LakehouseCapability::CatalogCommit,
             LakehouseCapability::DeltaRatifiedCommits,
         ]
+    }
+
+    async fn plan_lakehouse_create(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseCreateRequest,
+    ) -> CatalogResult<LakehouseCreatePlan> {
+        let mut plan = sail_catalog::lakehouse::plan_lakehouse_create_from_requirement(
+            self.get_name(),
+            request.catalog_table,
+            &request.options,
+            sail_catalog::provider::CreateTableMetadataRequirement::None,
+            &self.lakehouse_capabilities(),
+        );
+        let _ = (database, table);
+        if request.options.format.eq_ignore_ascii_case("delta") && !request.options.is_external {
+            plan.materialization = LakehouseCreateMaterialization::AfterCatalogTableFormat {
+                mode: TableFormatCreateMetadataMode::CatalogCoordinated,
+            };
+        }
+        Ok(plan)
     }
 
     async fn commit_lakehouse_table(

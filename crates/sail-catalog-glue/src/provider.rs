@@ -11,7 +11,7 @@ use sail_catalog::hive_format::HiveDetectedFormat;
 use sail_catalog::provider::{
     AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
     CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
-    DropTableOptions, DropViewOptions, Namespace,
+    DropTableOptions, DropViewOptions, Namespace, TableFormatCreateMetadataMode,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
@@ -560,11 +560,11 @@ impl CatalogProvider for GlueCatalogProvider {
             && !options.is_write_precondition
         {
             Ok(CreateTableMetadataRequirement::TableFormat {
-                catalog_managed: true,
+                mode: TableFormatCreateMetadataMode::CatalogCoordinated,
             })
         } else if options.format.eq_ignore_ascii_case("delta") && !options.is_write_precondition {
             Ok(CreateTableMetadataRequirement::TableFormat {
-                catalog_managed: false,
+                mode: TableFormatCreateMetadataMode::PathManaged,
             })
         } else {
             Ok(CreateTableMetadataRequirement::None)
@@ -937,7 +937,7 @@ mod tests {
     use aws_sdk_glue::types::{SerDeInfo, StorageDescriptor, Table};
     use sail_catalog::provider::{
         CatalogProvider, CreateTableColumnOptions, CreateTableMetadataRequirement,
-        CreateTableOptions,
+        CreateTableOptions, TableFormatCreateMetadataMode,
     };
     use sail_common_datafusion::catalog::TableKind;
 
@@ -984,7 +984,7 @@ mod tests {
                 .create_table_metadata_requirement(&create_options("delta", false))
                 .unwrap(),
             CreateTableMetadataRequirement::TableFormat {
-                catalog_managed: false,
+                mode: TableFormatCreateMetadataMode::PathManaged,
             }
         );
         assert_eq!(
@@ -1006,7 +1006,7 @@ mod tests {
                 .create_table_metadata_requirement(&create_options("iceberg", false))
                 .unwrap(),
             CreateTableMetadataRequirement::TableFormat {
-                catalog_managed: true,
+                mode: TableFormatCreateMetadataMode::CatalogCoordinated,
             }
         );
     }

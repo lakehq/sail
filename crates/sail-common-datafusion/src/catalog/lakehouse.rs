@@ -220,6 +220,55 @@ pub struct LakehouseExecutionContext {
 }
 
 impl LakehouseExecutionContext {
+    pub fn catalog_table_context(
+        catalog_provider_id: CatalogProviderId,
+        catalog_table: Vec<String>,
+        table_identity: CatalogTableIdentity,
+        operation: LakehouseOperation,
+        format: LakehouseFormat,
+        authority: LakehouseAuthority,
+        scan: ScanAuthority,
+    ) -> Self {
+        let (pointer, commit) = match &authority {
+            LakehouseAuthority::PathManaged => (
+                MetadataPointerAuthority::StorageDiscovery,
+                CommitAuthority::Filesystem,
+            ),
+            LakehouseAuthority::CatalogRegistered {
+                pointer, commit, ..
+            }
+            | LakehouseAuthority::CatalogAuthoritative {
+                pointer, commit, ..
+            } => (*pointer, *commit),
+            LakehouseAuthority::ReadOnlyVirtualized { .. } => (
+                MetadataPointerAuthority::ReadOnlyVirtual,
+                CommitAuthority::ReadOnly,
+            ),
+        };
+        let fingerprint = format!(
+            "{}:{}:{format:?}:{authority:?}",
+            catalog_provider_id.0,
+            catalog_table.join(".")
+        );
+        Self {
+            catalog_provider_id,
+            catalog_table,
+            table_identity,
+            operation,
+            format,
+            authority,
+            pointer,
+            commit,
+            scan,
+            access_session: None,
+            rest_session: None,
+            versioned_catalog: None,
+            cross_format: None,
+            governance: None,
+            capability_fingerprint: CapabilityFingerprint(fingerprint),
+        }
+    }
+
     pub fn from_catalog_table(catalog_table: Vec<String>, operation: LakehouseOperation) -> Self {
         let fingerprint = catalog_table.join(".");
         Self {
@@ -252,6 +301,12 @@ impl LakehouseExecutionContext {
 
     pub fn catalog_table(&self) -> &[String] {
         &self.catalog_table
+    }
+
+    pub fn for_operation(&self, operation: LakehouseOperation) -> Self {
+        let mut context = self.clone();
+        context.operation = operation;
+        context
     }
 }
 

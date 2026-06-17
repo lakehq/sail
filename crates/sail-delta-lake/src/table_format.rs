@@ -384,6 +384,7 @@ impl TableFormat for DeltaTableFormat {
             table_name,
             path,
             condition,
+            lakehouse_table,
             options,
         } = info;
         let write_node = RowLevelWriteNode::new_delete(
@@ -399,6 +400,7 @@ impl TableFormat for DeltaTableFormat {
             path,
             table_name,
             options,
+            lakehouse_table,
         );
 
         Ok(LogicalPlan::Extension(Extension {

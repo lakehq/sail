@@ -70,6 +70,7 @@ impl PlanResolver<'_> {
             table_name,
             path: info.location,
             condition,
+            lakehouse_table: info.lakehouse_table,
             options: vec![OptionLayer::TablePropertyList {
                 items: info.properties,
             }],
@@ -110,15 +111,20 @@ impl PlanResolver<'_> {
 
         let location =
             location.ok_or_else(|| PlanError::unsupported("DELETE on tables without location"))?;
+        let lakehouse_table = self
+            .resolve_lakehouse_table_context(
+                table_name,
+                LakehouseOperation::Read,
+                Some(&format),
+                vec![],
+            )
+            .await?;
 
         let schema = if columns.is_empty() && format.eq_ignore_ascii_case("DELTA") {
             // Schema is not in catalog, try to infer from data source
             let source_info = SourceInfo {
                 paths: vec![location.clone()],
-                lakehouse_table: Some(LakehouseExecutionContext::from_catalog_table(
-                    table_name.to_vec(),
-                    LakehouseOperation::Read,
-                )),
+                lakehouse_table: Some(lakehouse_table.clone()),
                 schema: None,
                 constraints: Default::default(),
                 partition_by: vec![],
@@ -145,6 +151,7 @@ impl PlanResolver<'_> {
             format,
             schema,
             properties,
+            lakehouse_table: Some(lakehouse_table.for_operation(LakehouseOperation::Write)),
         })
     }
 }
@@ -154,4 +161,5 @@ struct TableInfo {
     format: String,
     schema: DFSchemaRef,
     properties: Vec<(String, String)>,
+    lakehouse_table: Option<LakehouseExecutionContext>,
 }

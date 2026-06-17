@@ -2,8 +2,9 @@ use sail_common_datafusion::catalog::TableStatus;
 
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::lakehouse::{
-    DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse, LakehouseCommitOutcome,
-    LakehouseCommitRequest,
+    resolve_lakehouse_table_status, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
+    LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan, LakehouseCreateRequest,
+    LakehouseResolvedTable, ResolveLakehouseTableRequest,
 };
 use crate::manager::CatalogManager;
 use crate::provider::{
@@ -33,6 +34,48 @@ impl CatalogManager {
     pub async fn get_table<T: AsRef<str>>(&self, table: &[T]) -> CatalogResult<TableStatus> {
         let (provider, database, table) = self.resolve_object(table)?;
         provider.get_table(&database, &table).await
+    }
+
+    pub async fn resolve_lakehouse_table<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        let (provider, database, name) = self.resolve_object(table)?;
+        provider
+            .resolve_lakehouse_table(&database, &name, request)
+            .await
+    }
+
+    pub async fn resolve_lakehouse_table_status<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        status: &TableStatus,
+        operation: sail_common_datafusion::catalog::LakehouseOperation,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        let (provider, _, _) = self.resolve_object(table)?;
+        let catalog_table = table
+            .iter()
+            .map(|part| part.as_ref().to_string())
+            .collect::<Vec<_>>();
+        Ok(resolve_lakehouse_table_status(
+            provider.get_name(),
+            catalog_table,
+            status,
+            operation,
+            &provider.lakehouse_capabilities(),
+        ))
+    }
+
+    pub async fn plan_lakehouse_create<T: AsRef<str>>(
+        &self,
+        table: &[T],
+        request: LakehouseCreateRequest,
+    ) -> CatalogResult<LakehouseCreatePlan> {
+        let (provider, database, name) = self.resolve_object(table)?;
+        provider
+            .plan_lakehouse_create(&database, &name, request)
+            .await
     }
 
     pub async fn list_tables<T: AsRef<str>>(

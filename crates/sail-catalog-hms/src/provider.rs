@@ -8,6 +8,7 @@ use sail_catalog::provider::{
     plain_lakehouse_create_table_metadata_requirement, AlterTableOptions, CatalogProvider,
     CreateDatabaseOptions, CreateTableMetadataRequirement, CreateTableOptions, CreateViewOptions,
     DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
+    TableFormatCreateMetadataMode,
 };
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
@@ -1070,7 +1071,7 @@ impl CatalogProvider for HmsCatalogProvider {
         validate_create_table_options(options)?;
         if options.format.eq_ignore_ascii_case("iceberg") && !options.is_write_precondition {
             Ok(CreateTableMetadataRequirement::TableFormat {
-                catalog_managed: true,
+                mode: TableFormatCreateMetadataMode::CatalogCoordinated,
             })
         } else {
             Ok(plain_lakehouse_create_table_metadata_requirement(options))
@@ -1261,7 +1262,7 @@ mod tests {
     use sail_catalog::error::{CatalogError, CatalogObject};
     use sail_catalog::provider::{
         AlterTableOptions, CatalogProvider, CreateTableColumnOptions,
-        CreateTableMetadataRequirement, CreateTableOptions,
+        CreateTableMetadataRequirement, CreateTableOptions, TableFormatCreateMetadataMode,
     };
     use sail_common::runtime::RuntimeHandle;
     use sail_common_hms::hms::Table;
@@ -1315,7 +1316,7 @@ mod tests {
         assert_eq!(
             provider.create_table_metadata_requirement(&base).unwrap(),
             CreateTableMetadataRequirement::TableFormat {
-                catalog_managed: true,
+                mode: TableFormatCreateMetadataMode::CatalogCoordinated,
             }
         );
 
@@ -1333,7 +1334,7 @@ mod tests {
         assert_eq!(
             provider.create_table_metadata_requirement(&delta).unwrap(),
             CreateTableMetadataRequirement::TableFormat {
-                catalog_managed: false,
+                mode: TableFormatCreateMetadataMode::PathManaged,
             }
         );
 

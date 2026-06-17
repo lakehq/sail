@@ -11,6 +11,7 @@ use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 
 use crate::error::{CatalogError, CatalogResult};
 use crate::lakehouse::{
+    plan_lakehouse_create_from_requirement, resolve_lakehouse_table_status,
     BeginTableAccessRequest, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
     LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan,
     LakehouseCreateRequest, LakehouseResolvedTable, LakehouseScanPlanningRequest,
@@ -82,9 +83,13 @@ pub trait CatalogProvider: Send + Sync {
         table: &str,
         request: ResolveLakehouseTableRequest,
     ) -> CatalogResult<LakehouseResolvedTable> {
-        let _ = (database, table, request);
-        Err(CatalogError::UnsupportedCapability(
-            "lakehouse table resolution".to_string(),
+        let status = self.get_table(database, table).await?;
+        Ok(resolve_lakehouse_table_status(
+            self.get_name(),
+            request.catalog_table,
+            &status,
+            request.operation,
+            &self.lakehouse_capabilities(),
         ))
     }
 
@@ -94,9 +99,14 @@ pub trait CatalogProvider: Send + Sync {
         table: &str,
         request: LakehouseCreateRequest,
     ) -> CatalogResult<LakehouseCreatePlan> {
-        let _ = (database, table, request);
-        Err(CatalogError::UnsupportedCapability(
-            "lakehouse CREATE TABLE planning".to_string(),
+        let _ = (database, table);
+        let requirement = self.create_table_metadata_requirement(&request.options)?;
+        Ok(plan_lakehouse_create_from_requirement(
+            self.get_name(),
+            request.catalog_table,
+            &request.options,
+            requirement,
+            &self.lakehouse_capabilities(),
         ))
     }
 

@@ -13,6 +13,7 @@ use datafusion_expr::{
 };
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::error::CatalogError;
+use sail_catalog::lakehouse::LakehouseCreateRequest;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{
     CatalogPartitionField, CreateTableColumnOptions, CreateTableOptions, PartitionTransform,
@@ -453,36 +454,56 @@ impl PlanResolver<'_> {
                         .collect();
                     let sort_by = self.resolve_catalog_table_sort(sort_by)?;
                     let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
+                    let catalog_table = table
+                        .parts()
+                        .iter()
+                        .map(|part| part.as_ref().to_string())
+                        .collect::<Vec<_>>();
+                    let create_options = CreateTableOptions {
+                        columns,
+                        comment: None,
+                        constraints: vec![],
+                        location: table_location,
+                        format: write_format.clone(),
+                        partition_by,
+                        sort_by,
+                        bucket_by,
+                        if_not_exists,
+                        replace,
+                        properties,
+                        is_external: table_is_external || write_options_had_location,
+                        is_write_precondition: true,
+                    };
+                    let create_plan = self
+                        .ctx
+                        .extension::<CatalogManager>()?
+                        .plan_lakehouse_create(
+                            &catalog_table,
+                            LakehouseCreateRequest {
+                                catalog_table: catalog_table.clone(),
+                                options: create_options.clone(),
+                            },
+                        )
+                        .await?;
+                    sink_info.lakehouse_table = Some(
+                        create_plan
+                            .table
+                            .execution
+                            .for_operation(LakehouseOperation::Write),
+                    );
                     let command = CatalogCommand::CreateTable {
                         table: table.clone().into(),
-                        options: CreateTableOptions {
-                            columns,
-                            comment: None,
-                            constraints: vec![],
-                            location: table_location,
-                            format: write_format.clone(),
-                            partition_by,
-                            sort_by,
-                            bucket_by,
-                            if_not_exists,
-                            replace,
-                            properties,
-                            is_external: table_is_external || write_options_had_location,
-                            is_write_precondition: true,
-                        },
+                        options: create_options,
                     };
                     preconditions.push(Arc::new(self.resolve_catalog_command(command)?));
                 }
 
-                let catalog_table = table
-                    .parts()
-                    .iter()
-                    .map(|part| part.as_ref().to_string())
-                    .collect::<Vec<_>>();
-                sink_info.lakehouse_table = Some(LakehouseExecutionContext::from_catalog_table(
-                    catalog_table.clone(),
-                    LakehouseOperation::Write,
-                ));
+                if sink_info.lakehouse_table.is_none() {
+                    sink_info.lakehouse_table = info
+                        .as_ref()
+                        .and_then(|info| info.lakehouse_table.as_ref())
+                        .map(|context| context.for_operation(LakehouseOperation::Write));
+                }
 
                 sink_info.mode = self
                     .resolve_write_mode(mode, schema_for_cond.as_ref(), state)
@@ -578,6 +599,21 @@ impl PlanResolver<'_> {
                 mut properties,
                 is_external: _,
             } => {
+                let catalog_table = table
+                    .parts()
+                    .iter()
+                    .map(|part| part.as_ref().to_string())
+                    .collect::<Vec<_>>();
+                let lakehouse_table = self
+                    .resolve_lakehouse_table_context(
+                        &catalog_table,
+                        LakehouseOperation::Read,
+                        Some(&format),
+                        vec![],
+                    )
+                    .await?;
+                let write_precondition_lakehouse_table =
+                    Some(lakehouse_table.for_operation(LakehouseOperation::WritePrecondition));
                 // When a table is created without column definitions
                 // (e.g. `CREATE TABLE t USING fmt`), the catalog stores an empty column list.
                 // Discover the schema from the table format so that write operations
@@ -595,10 +631,7 @@ impl PlanResolver<'_> {
                     })?;
                     let info = SourceInfo {
                         paths: location.iter().cloned().collect(),
-                        lakehouse_table: Some(LakehouseExecutionContext::from_catalog_table(
-                            table.clone().into(),
-                            LakehouseOperation::WritePrecondition,
-                        )),
+                        lakehouse_table: write_precondition_lakehouse_table.clone(),
                         schema: None,
                         constraints: Default::default(),
                         partition_by: vec![],
@@ -636,10 +669,7 @@ impl PlanResolver<'_> {
                     })?;
                     let info = SourceInfo {
                         paths: location.iter().cloned().collect(),
-                        lakehouse_table: Some(LakehouseExecutionContext::from_catalog_table(
-                            table.clone().into(),
-                            LakehouseOperation::WritePrecondition,
-                        )),
+                        lakehouse_table: write_precondition_lakehouse_table,
                         schema: None,
                         constraints: Default::default(),
                         partition_by: vec![],
@@ -667,10 +697,7 @@ impl PlanResolver<'_> {
                     }
                 }
                 Ok(Some(TableInfo {
-                    lakehouse_table: Some(LakehouseExecutionContext::from_catalog_table(
-                        table.clone().into(),
-                        LakehouseOperation::Read,
-                    )),
+                    lakehouse_table: Some(lakehouse_table),
                     columns,
                     location,
                     format,

@@ -33,6 +33,7 @@ pub const SOURCE_PRESENT_COLUMN: &str = "__sail_merge_source_row_present";
 pub const TARGET_PRESENT_COLUMN: &str = "__sail_merge_target_row_present";
 pub const TARGET_ROW_ID_COLUMN: &str = "__sail_merge_target_row_id";
 
+use sail_common_datafusion::catalog::LakehouseExecutionContext;
 pub use sail_common_datafusion::datasource::{
     DeltaCheckConstraintExpr, MergeAssignment, MergeInfo, MergeIntoOptions, MergeMatchedAction,
     MergeMatchedClause, MergeNotMatchedBySourceAction, MergeNotMatchedBySourceClause,
@@ -161,6 +162,7 @@ pub struct RowLevelWriteNode {
     target_table_name: Vec<String>,
     target_partition_by: Vec<String>,
     target_options: Vec<OptionLayer>,
+    target_lakehouse_table: Option<LakehouseExecutionContext>,
     with_schema_evolution: bool,
     #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
@@ -185,6 +187,7 @@ impl RowLevelWriteNode {
             target_table_name: options.target.table_name.clone(),
             target_partition_by: options.target.partition_by.clone(),
             target_options: options.target.options.clone(),
+            target_lakehouse_table: options.target.lakehouse_table.clone(),
             with_schema_evolution: options.with_schema_evolution,
             raw_target,
             raw_source: Some(raw_source),
@@ -207,6 +210,7 @@ impl RowLevelWriteNode {
         location: String,
         table_name: Vec<String>,
         options: Vec<OptionLayer>,
+        lakehouse_table: Option<LakehouseExecutionContext>,
     ) -> Self {
         Self {
             command: RowLevelCommand::Delete,
@@ -223,6 +227,7 @@ impl RowLevelWriteNode {
             target_table_name: table_name,
             target_partition_by: Vec::new(),
             target_options: options,
+            target_lakehouse_table: lakehouse_table,
             with_schema_evolution: false,
             schema: Arc::new(DFSchema::empty()),
         }
@@ -282,6 +287,10 @@ impl RowLevelWriteNode {
 
     pub fn target_options(&self) -> &[OptionLayer] {
         &self.target_options
+    }
+
+    pub fn target_lakehouse_table(&self) -> Option<&LakehouseExecutionContext> {
+        self.target_lakehouse_table.as_ref()
     }
 
     pub fn with_schema_evolution(&self) -> bool {
@@ -396,6 +405,7 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
             target_table_name: self.target_table_name.clone(),
             target_partition_by: self.target_partition_by.clone(),
             target_options: self.target_options.clone(),
+            target_lakehouse_table: self.target_lakehouse_table.clone(),
             with_schema_evolution: self.with_schema_evolution,
             schema: self.schema.clone(),
         })
