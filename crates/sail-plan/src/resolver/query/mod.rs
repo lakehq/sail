@@ -31,6 +31,7 @@ mod time_travel;
 mod udf;
 mod udtf;
 mod values;
+mod window;
 mod with_relations;
 
 impl PlanResolver<'_> {
@@ -137,10 +138,9 @@ impl PlanResolver<'_> {
             QueryNode::Repartition {
                 input,
                 num_partitions,
-                // TODO: avoid unnecessary repartition if `shuffle` is false
-                shuffle: _,
+                shuffle,
             } => {
-                self.resolve_query_repartition(*input, num_partitions, state)
+                self.resolve_query_repartition(*input, num_partitions, shuffle, state)
                     .await?
             }
             QueryNode::ToDf {
@@ -356,6 +356,9 @@ impl PlanResolver<'_> {
             } => {
                 self.resolve_query_lateral_join(*left, *right, join_condition, join_type, state)
                     .await?
+            }
+            QueryNode::NamedWindows { input, windows } => {
+                self.resolve_named_windows(*input, windows, state).await?
             }
         };
         self.verify_query_plan(&plan, state)?;

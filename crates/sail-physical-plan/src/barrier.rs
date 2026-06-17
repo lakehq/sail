@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
@@ -63,10 +62,6 @@ impl DisplayAs for BarrierExec {
 impl ExecutionPlan for BarrierExec {
     fn name(&self) -> &'static str {
         Self::static_name()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

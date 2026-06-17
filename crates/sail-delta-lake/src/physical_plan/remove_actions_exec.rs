@@ -10,7 +10,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
@@ -108,10 +107,6 @@ impl DisplayAs for DeltaRemoveActionsExec {
 impl ExecutionPlan for DeltaRemoveActionsExec {
     fn name(&self) -> &'static str {
         "DeltaRemoveActionsExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

@@ -27,6 +27,9 @@ use sail_common::runtime::RuntimeHandle;
 use sail_common::spec::{
     SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
 };
+use sail_common_datafusion::catalog::delta::{
+    DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
+};
 use sail_common_datafusion::catalog::{DatabaseStatus, TableKind};
 use testcontainers::core::{ContainerPort, ContainerRequest, Mount, WaitFor};
 use testcontainers::runners::AsyncRunner;
@@ -111,7 +114,7 @@ async fn setup_catalog(
             .to_string();
         let network = network.clone();
         start_container_with_retry(move || {
-            GenericImage::new("unitycatalog/unitycatalog", "v0.3.0")
+            GenericImage::new("unitycatalog/unitycatalog", "v0.4.0")
                 .with_wait_for(WaitFor::message_on_stdout(
                     "###################################################################",
                 ))
@@ -608,6 +611,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
         },
         CreateTableColumnOptions {
             name: "bar".to_string(),
@@ -623,6 +627,7 @@ async fn test_create_table() {
             comment: Some("meow".to_string()),
             default: None,
             generated_always_as: None,
+            identity: None,
         },
         CreateTableColumnOptions {
             name: "baz".to_string(),
@@ -641,6 +646,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
         },
         CreateTableColumnOptions {
             name: "mew".to_string(),
@@ -652,6 +658,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
         },
     ];
 
@@ -671,6 +678,8 @@ async fn test_create_table() {
                 if_not_exists: false,
                 replace: false,
                 properties: vec![],
+                is_external: true,
+                is_write_precondition: false,
             },
         )
         .await
@@ -693,10 +702,14 @@ async fn test_create_table() {
     };
 
     let properties: HashMap<String, String> = properties.into_iter().collect();
-    assert_eq!(properties.len(), 5);
+    assert_eq!(properties.len(), 6);
     assert!(properties.contains_key("updated_at"));
     assert!(properties.contains_key("created_at"));
-    assert!(properties.contains_key("table_id"));
+    assert!(properties.contains_key(DELTA_UNITY_TABLE_ID_LEGACY_KEY));
+    assert_eq!(
+        properties.get(DELTA_UNITY_TABLE_ID_KEY),
+        properties.get(DELTA_UNITY_TABLE_ID_LEGACY_KEY)
+    );
     assert_eq!(properties.get("comment"), Some(&"peow".to_string()));
     assert_eq!(properties.get("table_type"), Some(&"EXTERNAL".to_string()));
 
@@ -722,6 +735,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: false,
             is_bucket: false,
             is_cluster: false,
@@ -742,6 +756,7 @@ async fn test_create_table() {
             comment: Some("meow".to_string()),
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: false,
             is_bucket: false,
             is_cluster: false,
@@ -765,6 +780,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: false,
             is_bucket: false,
             is_cluster: false,
@@ -781,6 +797,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: false,
             is_bucket: false,
             is_cluster: false,
@@ -803,6 +820,8 @@ async fn test_create_table() {
                 if_not_exists: false,
                 replace: false,
                 properties: vec![],
+                is_external: true,
+                is_write_precondition: false,
             },
         )
         .await;
@@ -824,6 +843,8 @@ async fn test_create_table() {
                 if_not_exists: true,
                 replace: false,
                 properties: vec![],
+                is_external: true,
+                is_write_precondition: false,
             },
         )
         .await;
@@ -837,6 +858,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
         },
         CreateTableColumnOptions {
             name: "bar".to_string(),
@@ -845,6 +867,7 @@ async fn test_create_table() {
             comment: Some("meow".to_string()),
             default: None,
             generated_always_as: None,
+            identity: None,
         },
         CreateTableColumnOptions {
             name: "baz".to_string(),
@@ -853,6 +876,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
         },
     ];
     let table = unity_catalog
@@ -878,6 +902,8 @@ async fn test_create_table() {
                     ("owner".to_string(), "mr. meow".to_string()),
                     ("team".to_string(), "data-eng".to_string()),
                 ],
+                is_external: true,
+                is_write_precondition: false,
             },
         )
         .await
@@ -918,10 +944,16 @@ async fn test_create_table() {
     );
     assert!(sort_by.is_empty());
     assert_eq!(bucket_by, None);
-    assert_eq!(properties.len(), 8);
+    assert_eq!(properties.len(), 9);
     assert!(properties.contains(&("option.key1".to_string(), "value1".to_string())));
     assert!(properties.contains(&("owner".to_string(), "mr. meow".to_string())));
     assert!(properties.contains(&("team".to_string(), "data-eng".to_string())));
+    assert!(properties
+        .iter()
+        .any(|(key, _)| key == DELTA_UNITY_TABLE_ID_LEGACY_KEY));
+    assert!(properties
+        .iter()
+        .any(|(key, _)| key == DELTA_UNITY_TABLE_ID_KEY));
     assert_eq!(columns.len(), 3);
     assert!(
         columns.contains(&sail_common_datafusion::catalog::TableColumnStatus {
@@ -931,6 +963,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: false,
             is_bucket: false,
             is_cluster: false,
@@ -944,6 +977,7 @@ async fn test_create_table() {
             comment: Some("meow".to_string()),
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: false,
             is_bucket: false,
             is_cluster: false,
@@ -957,6 +991,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: true,
             is_bucket: false,
             is_cluster: false,
@@ -1002,6 +1037,7 @@ async fn test_get_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
         },
         CreateTableColumnOptions {
             name: "bar".to_string(),
@@ -1010,6 +1046,7 @@ async fn test_get_table() {
             comment: Some("meow".to_string()),
             default: None,
             generated_always_as: None,
+            identity: None,
         },
         CreateTableColumnOptions {
             name: "baz".to_string(),
@@ -1018,6 +1055,7 @@ async fn test_get_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
         },
     ];
     unity_catalog
@@ -1043,6 +1081,8 @@ async fn test_get_table() {
                     ("owner".to_string(), "mr. meow".to_string()),
                     ("team".to_string(), "data-eng".to_string()),
                 ],
+                is_external: true,
+                is_write_precondition: false,
             },
         )
         .await
@@ -1069,10 +1109,14 @@ async fn test_get_table() {
     };
 
     let properties: HashMap<String, String> = properties.into_iter().collect();
-    assert_eq!(properties.len(), 8);
+    assert_eq!(properties.len(), 9);
     assert!(properties.contains_key("updated_at"));
     assert!(properties.contains_key("created_at"));
-    assert!(properties.contains_key("table_id"));
+    assert!(properties.contains_key(DELTA_UNITY_TABLE_ID_LEGACY_KEY));
+    assert_eq!(
+        properties.get(DELTA_UNITY_TABLE_ID_KEY),
+        properties.get(DELTA_UNITY_TABLE_ID_LEGACY_KEY)
+    );
     assert_eq!(properties.get("comment"), Some(&"test table".to_string()));
     assert_eq!(properties.get("table_type"), Some(&"EXTERNAL".to_string()));
     assert_eq!(properties.get("option.key1"), Some(&"value1".to_string()));
@@ -1107,6 +1151,7 @@ async fn test_get_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: false,
             is_bucket: false,
             is_cluster: false,
@@ -1120,6 +1165,7 @@ async fn test_get_table() {
             comment: Some("meow".to_string()),
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: false,
             is_bucket: false,
             is_cluster: false,
@@ -1133,6 +1179,7 @@ async fn test_get_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: true,
             is_bucket: false,
             is_cluster: false,
@@ -1173,6 +1220,7 @@ async fn test_list_tables() {
         comment: None,
         default: None,
         generated_always_as: None,
+        identity: None,
     }];
 
     let tables = unity_catalog.list_tables(&ns).await.unwrap();
@@ -1194,6 +1242,8 @@ async fn test_list_tables() {
                 if_not_exists: false,
                 replace: false,
                 properties: vec![],
+                is_external: true,
+                is_write_precondition: false,
             },
         )
         .await
@@ -1215,6 +1265,8 @@ async fn test_list_tables() {
                 if_not_exists: false,
                 replace: false,
                 properties: vec![],
+                is_external: true,
+                is_write_precondition: false,
             },
         )
         .await
@@ -1267,6 +1319,7 @@ async fn test_drop_table() {
         comment: None,
         default: None,
         generated_always_as: None,
+        identity: None,
     }];
 
     unity_catalog
@@ -1285,6 +1338,8 @@ async fn test_drop_table() {
                 if_not_exists: false,
                 replace: false,
                 properties: vec![],
+                is_external: true,
+                is_write_precondition: false,
             },
         )
         .await

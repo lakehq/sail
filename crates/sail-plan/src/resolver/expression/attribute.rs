@@ -1,9 +1,12 @@
-use arrow::datatypes::DataType;
+use std::sync::Arc;
+
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::{Column, DFSchemaRef, TableReference};
 use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::{col, expr, lit};
+use datafusion_expr::{col, expr, lit, ScalarUDF};
 use datafusion_functions::core::get_field;
 use sail_common::spec;
+use sail_function::scalar::array_struct_field::ArrayStructField;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
@@ -234,6 +237,33 @@ impl PlanResolver<'_> {
                             expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args));
                         Self::resolve_potentially_nested_field(expr, field.data_type(), remaining)
                     }),
+                DataType::List(field)
+                | DataType::LargeList(field)
+                | DataType::FixedSizeList(field, _) => {
+                    let DataType::Struct(fields) = field.data_type() else {
+                        return None;
+                    };
+                    fields
+                        .iter()
+                        .find(|x| x.name().eq_ignore_ascii_case(name.as_ref()))
+                        .and_then(|child| {
+                            let expr = ScalarUDF::from(ArrayStructField::new())
+                                .call(vec![expr, lit(child.name().to_string())]);
+                            let item = Arc::new(Field::new_list_field(
+                                child.data_type().clone(),
+                                field.is_nullable() || child.is_nullable(),
+                            ));
+                            let data_type = match data_type {
+                                DataType::List(_) => DataType::List(item),
+                                DataType::LargeList(_) => DataType::LargeList(item),
+                                DataType::FixedSizeList(_, size) => {
+                                    DataType::FixedSizeList(item, *size)
+                                }
+                                _ => unreachable!("list data type matched above"),
+                            };
+                            Self::resolve_potentially_nested_field(expr, &data_type, remaining)
+                        })
+                }
                 _ => None,
             },
         }

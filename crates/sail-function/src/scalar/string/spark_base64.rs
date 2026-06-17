@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig, STANDARD};
@@ -39,10 +38,6 @@ impl SparkBase64 {
 }
 
 impl ScalarUDFImpl for SparkBase64 {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_base64"
     }
@@ -335,10 +330,6 @@ fn decode_spark_base64_array<'a>(
 }
 
 impl ScalarUDFImpl for SparkUnbase64 {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_unbase64"
     }

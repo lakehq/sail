@@ -1,7 +1,7 @@
 """Pytest fixtures for Iceberg REST catalog integration tests.
 
-Uses SeaweedFS for S3-compatible storage and the Apache Iceberg REST fixture
-as the catalog server.
+Uses SeaweedFS for S3-compatible storage and Iceberg REST-compatible catalog
+servers.
 """
 
 from __future__ import annotations
@@ -23,8 +23,11 @@ from pysail.tests.spark.catalog_integration.conftest import (
 
 if TYPE_CHECKING:
     from collections.abc import Generator
+    from pathlib import Path
 
     from pyspark.sql import SparkSession
+
+NESSIE_NAMESPACE_SEPARATOR = "-"
 
 
 @pytest.fixture(scope="module")
@@ -144,11 +147,169 @@ def iceberg_rest_endpoint(iceberg_rest_container: DockerContainer) -> str:
 
 
 @pytest.fixture(scope="module")
-def iceberg_spark(iceberg_rest_endpoint: str) -> Generator[SparkSession, None, None]:
+def iceberg_spark(
+    iceberg_rest_endpoint: str,
+    seaweedfs_host_endpoint: str,
+) -> Generator[SparkSession, None, None]:
     """Start Sail server with Iceberg REST catalog and create a Spark session."""
     catalog_config = f'[{{name="sail", type="iceberg-rest", uri="{iceberg_rest_endpoint}"}}]'
-    server, remote, saved_env = start_sail_server(catalog_list=catalog_config)
+    server, remote, saved_env = start_sail_server(
+        catalog_list=catalog_config,
+        extra_env={
+            "AWS_ACCESS_KEY_ID": "admin",
+            "AWS_SECRET_ACCESS_KEY": "password",
+            "AWS_REGION": "us-east-1",
+            "AWS_ENDPOINT": seaweedfs_host_endpoint,
+            "AWS_VIRTUAL_HOSTED_STYLE_REQUEST": "false",
+            "AWS_ALLOW_HTTP": "true",
+        },
+    )
     spark = create_spark_session(remote, "iceberg_rest_catalog_test")
+    yield spark
+    with contextlib.suppress(Exception):
+        spark.stop()
+    stop_sail_server(server, saved_env)
+
+
+def make_nessie_container(
+    docker_network: Network,
+    seaweedfs_internal_endpoint: str,
+    *,
+    config_path: Path | None = None,
+) -> DockerContainer:
+    """Build a Nessie server container with Iceberg REST enabled."""
+    container = (
+        DockerContainer("ghcr.io/projectnessie/nessie:0.107.5")
+        .with_exposed_ports(19120)
+        .with_env("NESSIE_CATALOG_DEFAULT_WAREHOUSE", "warehouse")
+        .with_env("NESSIE_CATALOG_WAREHOUSES_WAREHOUSE_LOCATION", "s3://icebergdata/nessie")
+        .with_env("NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_ENDPOINT", seaweedfs_internal_endpoint)
+        .with_env("NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_REGION", "us-east-1")
+        .with_env("NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_PATH_STYLE_ACCESS", "true")
+        .with_env("NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_AUTH_TYPE", "STATIC")
+        .with_env(
+            "NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_ACCESS_KEY",
+            "urn:nessie-secret:quarkus:nessie.catalog.secrets.s3default",
+        )
+        .with_env("NESSIE_CATALOG_SECRETS_S3DEFAULT_NAME", "admin")
+        .with_env("NESSIE_CATALOG_SECRETS_S3DEFAULT_SECRET", "password")
+        .with_network(docker_network)
+        .with_network_aliases("nessie")
+    )
+    if config_path is not None:
+        container = container.with_volume_mapping(
+            str(config_path),
+            "/tmp/nessie-application.properties",  # noqa: S108
+            "ro",
+        ).with_env("QUARKUS_CONFIG_LOCATIONS", "file:/tmp/nessie-application.properties")
+    return container
+
+
+@pytest.fixture(scope="module")
+def nessie_container(
+    docker_network: Network,
+    seaweedfs_container: DockerContainer,  # noqa: ARG001
+    seaweedfs_internal_endpoint: str,
+    _create_s3_bucket: None,
+) -> Generator[DockerContainer, None, None]:
+    """Start a Nessie server with Iceberg REST enabled."""
+    container = make_nessie_container(
+        docker_network,
+        seaweedfs_internal_endpoint,
+    )
+    container.start()
+    wait_for_logs(container, "Nessie 0.107.5", timeout=120)
+    yield container
+    container.stop()
+
+
+@pytest.fixture(scope="module")
+def nessie_iceberg_rest_endpoint(nessie_container: DockerContainer) -> str:
+    """Host-accessible Nessie Iceberg REST catalog endpoint."""
+    host = nessie_container.get_container_host_ip()
+    port = nessie_container.get_exposed_port(19120)
+    return f"http://{host}:{port}/iceberg"
+
+
+@pytest.fixture(scope="module")
+def nessie_spark(nessie_iceberg_rest_endpoint: str) -> Generator[SparkSession, None, None]:
+    """Start Sail server with Nessie as the Iceberg REST catalog."""
+    catalog_config = f'[{{name="sail", type="iceberg-rest", uri="{nessie_iceberg_rest_endpoint}"}}]'
+    server, remote, saved_env = start_sail_server(catalog_list=catalog_config)
+    spark = create_spark_session(remote, "nessie_iceberg_rest_catalog_test", new_session=True)
+    yield spark
+    with contextlib.suppress(Exception):
+        spark.stop()
+    stop_sail_server(server, saved_env)
+
+
+@pytest.fixture(scope="module")
+def nessie_container_custom_separator(
+    docker_network: Network,
+    seaweedfs_container: DockerContainer,  # noqa: ARG001
+    seaweedfs_internal_endpoint: str,
+    _create_s3_bucket: None,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Generator[DockerContainer, None, None]:
+    """Start a Nessie server whose Iceberg REST config uses a custom namespace separator."""
+    tmp_dir = tmp_path_factory.mktemp("nessie-custom-separator")
+    config_path = tmp_dir / "nessie-application.properties"
+    config_path.write_text(f"nessie.catalog.iceberg-config-defaults.namespace-separator={NESSIE_NAMESPACE_SEPARATOR}\n")
+    container = make_nessie_container(
+        docker_network,
+        seaweedfs_internal_endpoint,
+        config_path=config_path,
+    )
+    container.start()
+    wait_for_logs(container, "Nessie 0.107.5", timeout=120)
+    yield container
+    container.stop()
+
+
+@pytest.fixture(scope="module")
+def nessie_custom_separator_iceberg_rest_endpoint(nessie_container_custom_separator: DockerContainer) -> str:
+    """Host-accessible custom-separator Nessie Iceberg REST catalog endpoint."""
+    host = nessie_container_custom_separator.get_container_host_ip()
+    port = nessie_container_custom_separator.get_exposed_port(19120)
+    return f"http://{host}:{port}/iceberg"
+
+
+@pytest.fixture(scope="module")
+def nessie_spark_custom_separator(
+    nessie_custom_separator_iceberg_rest_endpoint: str,
+) -> Generator[SparkSession, None, None]:
+    """Start Sail with Nessie catalog for namespace separator config."""
+    catalogs = [
+        f'{{name="sail_custom_separator", type="iceberg-rest", uri="{nessie_custom_separator_iceberg_rest_endpoint}", '
+        f'namespace_separator="{NESSIE_NAMESPACE_SEPARATOR}"}}'
+    ]
+    default_catalog = "sail_custom_separator"
+    server, remote, saved_env = start_sail_server(
+        catalog_list=f"[{', '.join(catalogs)}]",
+        extra_env={"SAIL_CATALOG__DEFAULT_CATALOG": default_catalog},
+    )
+    spark = create_spark_session(remote, "nessie_iceberg_rest_custom_separator_test", new_session=True)
+    yield spark
+    with contextlib.suppress(Exception):
+        spark.stop()
+    stop_sail_server(server, saved_env)
+
+
+@pytest.fixture(scope="module")
+def nessie_spark_incorrect_custom_separator(
+    nessie_iceberg_rest_endpoint: str,
+) -> Generator[SparkSession, None, None]:
+    """Start Sail with default and custom-separator catalogs against a default-separator Nessie server."""
+    catalogs = [
+        f'{{name="sail", type="iceberg-rest", uri="{nessie_iceberg_rest_endpoint}"}}',
+        f'{{name="sail_custom_separator", type="iceberg-rest", uri="{nessie_iceberg_rest_endpoint}", '
+        f'namespace_separator="{NESSIE_NAMESPACE_SEPARATOR}"}}',
+    ]
+    server, remote, saved_env = start_sail_server(
+        catalog_list=f"[{', '.join(catalogs)}]",
+        extra_env={"SAIL_CATALOG__DEFAULT_CATALOG": "sail"},
+    )
+    spark = create_spark_session(remote, "nessie_iceberg_rest_incorrect_custom_separator_test", new_session=True)
     yield spark
     with contextlib.suppress(Exception):
         spark.stop()

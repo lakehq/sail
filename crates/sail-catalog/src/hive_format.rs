@@ -84,6 +84,10 @@ impl HiveCatalogFormat {
                 logical_format: "delta",
                 storage_format: HiveStorageFormat::parquet(),
             }),
+            "iceberg" => Ok(Self {
+                logical_format: "iceberg",
+                storage_format: HiveStorageFormat::parquet(),
+            }),
             "parquet" => Ok(Self {
                 logical_format: "parquet",
                 storage_format: HiveStorageFormat::parquet(),

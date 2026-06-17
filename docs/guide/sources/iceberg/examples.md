@@ -88,4 +88,4 @@ Time travel is not available for Spark SQL in Sail yet, but we plan to support i
 ## More Features
 
 We will continue adding more examples for advanced Iceberg features as they become available in Sail.
-In the meantime, feel free to reach out to us on [Slack](https://lakesail.com/slack) or [GitHub Discussions](https://github.com/lakehq/sail/discussions) if you have questions!
+For questions, reach out on [Slack](https://lakesail.com/slack) or [GitHub Discussions](https://github.com/lakehq/sail/discussions).

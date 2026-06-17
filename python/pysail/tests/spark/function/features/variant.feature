@@ -808,6 +808,17 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
         | NULL    |
         | {"a":1} |
 
+  Rule: Variant storage detection
+
+    Scenario: ordinary struct with Variant-shaped field names is not treated as Variant
+      When query
+        """
+        SELECT CAST(named_struct('metadata', X'01', 'value', X'02') AS STRING) IS NOT NULL AS result
+        """
+      Then query result
+        | result |
+        | true   |
+
   Rule: CAST to VARIANT
 
     Scenario: CAST string to variant
@@ -928,3 +939,40 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
       Then query result
         | result |
         | null   |
+  Rule: Spark variant path compatibility
+
+    Scenario: Extract array element under field path
+      When query
+        """
+        SELECT variant_get(parse_json('{"a":[42]}'), '$.a[0]', 'int') AS result
+        """
+      Then query result
+        | result |
+        | 42     |
+
+    Scenario: Extract field after array index path
+      When query
+        """
+        SELECT variant_get(parse_json('{"a":[{"b":42}]}'), '$.a[0].b', 'int') AS result
+        """
+      Then query result
+        | result |
+        | 42     |
+
+    Scenario: Quoted field containing dot is treated as one field
+      When query
+        """
+        SELECT variant_get(parse_json('{"a.b":42,"a":{"b":99}}'), '$["a.b"]', 'int') AS result
+        """
+      Then query result
+        | result |
+        | 42     |
+
+    Scenario: Quoted field containing brackets is treated as one field
+      When query
+        """
+        SELECT variant_get(parse_json('{"a[0]":42,"a":[99]}'), '$["a[0]"]', 'int') AS result
+        """
+      Then query result
+        | result |
+        | 42     |

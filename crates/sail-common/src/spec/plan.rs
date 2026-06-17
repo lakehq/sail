@@ -9,7 +9,7 @@ use crate::spec::expression::{
     SortOrder,
 };
 use crate::spec::literal::Literal;
-use crate::spec::{DataType, FunctionDefinition, Identifier};
+use crate::spec::{DataType, FunctionDefinition, Identifier, Window};
 
 /// Unresolved logical plan node for Sail.
 /// As a starting point, the definition matches the structure of the `Relation` message
@@ -256,6 +256,10 @@ pub enum QueryNode {
         input: Box<QueryPlan>,
         recursive: bool,
         ctes: Vec<(Identifier, QueryPlan)>,
+    },
+    NamedWindows {
+        input: Box<QueryPlan>,
+        windows: Vec<(Identifier, Window)>,
     },
     /// A relation that wraps a root plan with referenced subquery plans.
     WithRelations {
@@ -872,6 +876,10 @@ pub struct HtmlString {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TableDefinition {
+    /// Whether the table is explicitly marked as external.
+    /// Note that the table may still be considered external semantically
+    /// when the location or path is specified, even when this field is `false`.
+    pub external: bool,
     pub columns: Vec<TableColumnDefinition>,
     pub comment: Option<String>,
     pub constraints: Vec<TableConstraint>,
@@ -886,6 +894,18 @@ pub struct TableDefinition {
     pub replace: bool,
     pub options: Vec<(String, String)>,
     pub properties: Vec<(String, String)>,
+}
+
+/// Returns whether a non-empty path or location is specified,
+/// either via the `location` argument or via `"path"` / `"location"` keys in options.
+/// Key comparison is case-insensitive and empty-string values are ignored.
+pub fn has_path_or_location(location: Option<&str>, options: &[(String, String)]) -> bool {
+    let has_location = location.is_some_and(|s| !s.trim().is_empty());
+    let has_path_in_options = options.iter().any(|(k, v)| {
+        !v.trim().is_empty()
+            && (k.eq_ignore_ascii_case("path") || k.eq_ignore_ascii_case("location"))
+    });
+    has_location || has_path_in_options
 }
 
 /// A column reference or typed column definition used in a `PARTITIONED BY` clause.
@@ -910,6 +930,16 @@ pub struct TableColumnDefinition {
     pub default: Option<String>,
     /// An optional SQL expression string to calculate the generated value.
     pub generated_always_as: Option<String>,
+    /// Delta identity column metadata.
+    pub identity: Option<TableColumnIdentity>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableColumnIdentity {
+    pub start: Option<i64>,
+    pub step: Option<i64>,
+    pub allow_explicit_insert: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1309,6 +1339,14 @@ pub enum AlterTableOperation {
     AlterColumnType {
         name: ObjectName,
         data_type: DataType,
+    },
+    AlterColumnDefault {
+        name: ObjectName,
+        default: Option<String>,
+    },
+    AddCheckConstraint {
+        name: Identifier,
+        expression: ExprWithSource,
     },
     // TODO: add all the alter table operations
 }

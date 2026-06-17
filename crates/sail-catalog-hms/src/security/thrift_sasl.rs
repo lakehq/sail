@@ -11,7 +11,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, Interest, Re
 use tokio::net::tcp;
 use volo::net::conn::{OwnedReadHalf, OwnedWriteHalf};
 use volo::net::dial::{DefaultMakeTransport, MakeTransport};
-use volo::net::ready::AsyncReady;
+use volo::net::ext::AsyncExt;
 use volo::net::Address;
 
 use super::gssapi::{GssapiFrameProtector, GssapiSession, SaslQop};
@@ -255,7 +255,7 @@ impl AsyncRead for SaslReadHalf {
     }
 }
 
-impl AsyncReady for SaslReadHalf {
+impl AsyncExt for SaslReadHalf {
     async fn ready(&self, interest: Interest) -> io::Result<Ready> {
         self.inner.ready(interest).await
     }
@@ -372,7 +372,7 @@ impl AsyncWrite for SaslWriteHalf {
     }
 }
 
-impl AsyncReady for SaslWriteHalf {
+impl AsyncExt for SaslWriteHalf {
     async fn ready(&self, interest: Interest) -> io::Result<Ready> {
         self.inner.ready(interest).await
     }

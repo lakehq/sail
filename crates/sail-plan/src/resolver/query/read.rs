@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Schema};
+use datafusion::catalog::TableFunctionArgs;
 use datafusion::datasource::{provider_as_source, source_as_provider, TableProvider};
 use datafusion_common::{DFSchema, ScalarValue, TableReference};
 use datafusion_expr::{Expr, LogicalPlan, SubqueryAlias, TableScan, TableSource, UNNAMED_TABLE};
@@ -105,6 +106,7 @@ impl PlanResolver<'_> {
                     .await?;
                 let info = SourceInfo {
                     paths: location.map(|x| vec![x]).unwrap_or_default(),
+                    catalog_table: Some(reference.clone()),
                     schema: Some(schema),
                     constraints,
                     partition_by: partition_by.into_iter().map(|field| field.column).collect(),
@@ -118,6 +120,7 @@ impl PlanResolver<'_> {
                             items: temporal_options,
                         },
                     ],
+                    read_case_sensitive: self.config.case_sensitive,
                 };
                 let registry = self.ctx.extension::<TableFormatRegistry>()?;
                 let table_source = registry
@@ -279,10 +282,10 @@ impl PlanResolver<'_> {
     ) -> PlanResult<f64> {
         let schema = Arc::new(DFSchema::empty());
         let resolved = self.resolve_expression(expr, &schema, state).await?;
-        let cast_expr = Expr::Cast(datafusion_expr::expr::Cast {
-            expr: Box::new(resolved),
-            data_type: DataType::Float64,
-        });
+        let cast_expr = Expr::Cast(datafusion_expr::expr::Cast::new(
+            Box::new(resolved),
+            DataType::Float64,
+        ));
         let evaluator = LiteralEvaluator::new();
         let scalar = evaluator
             .evaluate(&cast_expr)
@@ -334,7 +337,7 @@ impl PlanResolver<'_> {
             let udf = catalog_manager.get_function(&canonical_function_name)?;
             if let Some(f) = udf
                 .as_ref()
-                .and_then(|x| x.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>())
+                .and_then(|x| x.inner().downcast_ref::<PySparkUnresolvedUDF>())
             {
                 if f.eval_type().is_table_function() {
                     let udtf = PythonUdtf {
@@ -416,7 +419,10 @@ impl PlanResolver<'_> {
                             "unknown table function: {function_name}"
                         )));
                     };
-                let table_provider = table_function.create_table_provider(&arguments)?;
+                let session_state = self.ctx.state();
+                let table_provider = table_function.create_table_provider_with_args(
+                    TableFunctionArgs::new(&arguments, &session_state),
+                )?;
                 self.resolve_table_provider_with_rename(
                     table_provider,
                     function_name,
@@ -453,6 +459,7 @@ impl PlanResolver<'_> {
         };
         let info = SourceInfo {
             paths,
+            catalog_table: None,
             schema,
             constraints: Default::default(),
             partition_by: vec![],
@@ -462,6 +469,7 @@ impl PlanResolver<'_> {
             options: vec![OptionLayer::OptionList {
                 items: options.into_iter().collect(),
             }],
+            read_case_sensitive: self.config.case_sensitive,
         };
         let registry = self.ctx.extension::<TableFormatRegistry>()?;
         let table_source = registry
@@ -516,6 +524,7 @@ impl PlanResolver<'_> {
         let table_source: Arc<dyn TableSource> = if has_duplicates {
             // Preserve existing behavior by wrapping the underlying TableProvider with renaming,
             // but only if this TableSource is DataFusion's DefaultTableSource.
+            // TODO: support duplicate column names for other `TableSource` implementations
             let provider = source_as_provider(&table_source).map_err(|e| {
                 PlanError::unsupported(format!(
                     "duplicate column names require DefaultTableSource-backed TableProvider: {e}"

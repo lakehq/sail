@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -8,6 +7,7 @@ use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+use sail_common::geoarrow::extension::GeoArrowWkbType;
 
 use super::wkb_reader::validate_geography;
 
@@ -35,10 +35,6 @@ impl StGeogFromWKB {
 }
 
 impl ScalarUDFImpl for StGeogFromWKB {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "st_geogfromwkb"
     }
@@ -54,11 +50,11 @@ impl ScalarUDFImpl for StGeogFromWKB {
     fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<Arc<Field>> {
         let mut metadata = HashMap::new();
         metadata.insert(
-            sail_common::spec::EXTENSION_TYPE_NAME_KEY.to_string(),
-            "geoarrow.wkb".to_string(),
+            arrow_schema::extension::EXTENSION_TYPE_NAME_KEY.to_string(),
+            GeoArrowWkbType::NAME.to_string(),
         );
         metadata.insert(
-            sail_common::spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
+            arrow_schema::extension::EXTENSION_TYPE_METADATA_KEY.to_string(),
             r#"{"crs":"OGC:CRS84","edges":"spherical"}"#.to_string(),
         );
         Ok(Arc::new(
