@@ -14,11 +14,12 @@ use crate::provider::{
 };
 
 // TODO: Complete the remaining lakehouse catalog capability work:
-// typed create/register state machines; typed commit recovery and cleanup
-// policy; operation-scoped credentials; REST server-side scan planning; Delta
-// inline ratified commits and protocol profiles; Iceberg HMS/Glue/Nessie
-// authority state machines; cross-format metadata and governance; and migration
-// shim removal after conformance coverage.
+// staged create/register/abort state machines; typed Delta, Iceberg REST,
+// metadata-location CAS, and provider-native commit recovery; operation-scoped
+// credentials and remote signing; REST server-side scan planning; Delta
+// ratified-version bounds and protocol profiles; separate classic Glue CAS from
+// Glue OpenTableFormat; versioned catalog authority; cross-format virtual
+// metadata and governance; and migration shim removal after conformance coverage.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub enum LakehouseCapability {
     TableAccessSessions,
@@ -61,7 +62,8 @@ pub struct LakehouseCreatePlan {
 }
 
 // TODO: Replace this compatibility materialization shape with protocol-specific
-// create/register state machines for UC Delta and Iceberg REST staged/register flows.
+// staged create/register/commit/abort state machines for UC Delta, Iceberg REST,
+// Spark CTAS/RTAS staging, and provider-native Glue OpenTableFormat flows.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LakehouseCreateMaterialization {
     None,
@@ -131,7 +133,8 @@ pub struct LakehouseCommitRequest {
 
 // TODO: Expand this with typed success payloads, retry/reconcile hints, and
 // cleanup policy before wiring providers that can return commit-state-unknown
-// after side effects.
+// after side effects. Keep REST requirements/updates, metadata-location CAS,
+// Delta ratification, and provider-native update outcomes distinct.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LakehouseCommitOutcome {
     Committed {

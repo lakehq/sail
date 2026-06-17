@@ -163,8 +163,9 @@ pub struct VersionedCatalogContext {
     pub expected_hash: Option<String>,
 }
 
-// TODO: Populate this for OneLake/UniForm-style providers and enforce
-// freshness, conversion failure, limitations, and write policy in planning.
+// TODO: Populate this for OneLake/Fabric and UniForm-style virtual projections,
+// then enforce freshness, conversion failure, limitations, and explicit
+// read-only or write-through policy in planning.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct CrossFormatMetadata {
     pub source_format: LakehouseFormat,
@@ -187,7 +188,8 @@ pub struct CrossFormatLimitation {
 }
 
 // TODO: Map provider authorization and governance decisions into operation-scoped
-// planning checks before catalog-authoritative storage mutation is allowed.
+// planning checks before create, alter, maintenance, commit, or
+// catalog-authoritative storage mutation is allowed.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct GovernanceContext {
     pub metadata_access: AccessDecision,
