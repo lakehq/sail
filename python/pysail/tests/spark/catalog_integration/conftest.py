@@ -24,7 +24,6 @@ if TYPE_CHECKING:
 
 CATALOG_SPARK_FIXTURES = {
     "glue": "glue_spark",
-    "hms": "hms_spark",
     "iceberg_rest": "iceberg_spark",
     "unity": "unity_spark",
 }
