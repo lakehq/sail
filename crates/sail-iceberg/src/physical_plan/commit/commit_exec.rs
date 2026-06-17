@@ -29,18 +29,13 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use futures::stream::once;
 use futures::StreamExt;
 use object_store::ObjectStoreExt;
-use sail_catalog::error::CatalogError;
-use sail_catalog::lakehouse::LakehouseCommitRequest;
-use sail_catalog::manager::CatalogManager;
-use sail_catalog::provider::AlterTableOptions;
-use sail_common_datafusion::catalog::managed::{
-    existing_metadata_location_key, METADATA_LOCATION_UNDERSCORE_KEY,
-    PREVIOUS_METADATA_LOCATION_KEY,
-};
-use sail_common_datafusion::catalog::{LakehouseExecutionContext, TableKind, TableStatus};
-use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use url::Url;
 
+use crate::catalog_support::commit::{
+    catalog_requirements, table_metadata_location, CatalogCommitOutcome, CatalogTableInfo,
+    IcebergCatalogCommitCoordinator,
+};
 use crate::io::StoreContext;
 use crate::operations::bootstrap::{
     bootstrap_first_snapshot, bootstrap_new_table_with_style, bootstrap_snapshot_action_commit,
@@ -65,19 +60,6 @@ use crate::table_format::{
 use crate::utils::get_object_store_from_context;
 use crate::utils::metadata::metadata_files_for_version;
 const MAX_COMMIT_RETRIES: usize = 5;
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum CatalogCommitOutcome {
-    Committed,
-    NotSupported,
-    Conflict,
-}
-
-#[derive(Debug, Default)]
-struct CatalogTableInfo {
-    metadata_location: Option<String>,
-    is_catalog_managed_iceberg_table: bool,
-}
 
 #[derive(Debug)]
 pub struct IcebergCommitExec {
@@ -304,74 +286,19 @@ impl IcebergCommitExec {
         UnboundPartitionSpec { fields }
     }
 
-    fn catalog_table_info_from_status(status: &TableStatus) -> CatalogTableInfo {
-        match &status.kind {
-            TableKind::Table {
-                format: _,
-                properties,
-                ..
-            } => CatalogTableInfo {
-                metadata_location: metadata_location_from_properties(properties),
-                is_catalog_managed_iceberg_table: catalog_managed_iceberg_from_properties(
-                    properties,
-                ),
-            },
-            _ => CatalogTableInfo::default(),
-        }
-    }
-
     async fn load_catalog_table_info(
         context: &Arc<TaskContext>,
         catalog_table: &[String],
     ) -> Result<CatalogTableInfo> {
-        let manager = match context.extension::<CatalogManager>() {
-            Ok(manager) => manager,
-            Err(err) => {
-                log::debug!(
-                    "Catalog manager unavailable while resolving Iceberg metadata location: {err}"
-                );
-                return Ok(CatalogTableInfo::default());
-            }
-        };
-        match manager.get_table(catalog_table).await {
-            Ok(status) => Ok(Self::catalog_table_info_from_status(&status)),
-            Err(CatalogError::NotFound(_, _)) | Err(CatalogError::NotSupported(_)) => {
-                Ok(CatalogTableInfo::default())
-            }
-            Err(err) => Err(DataFusionError::External(Box::new(err))),
-        }
+        IcebergCatalogCommitCoordinator::load_table_info(context.as_ref(), catalog_table).await
     }
 
     async fn load_catalog_metadata_location(
         context: &Arc<TaskContext>,
         catalog_table: &[String],
     ) -> Result<Option<String>> {
-        Ok(Self::load_catalog_table_info(context, catalog_table)
-            .await?
-            .metadata_location)
-    }
-
-    fn catalog_requirements(
-        table_meta: &TableMetadata,
-        commit_requirements: &[TableRequirement],
-        action_requirements: &[TableRequirement],
-    ) -> Vec<TableRequirement> {
-        let mut requirements = Vec::with_capacity(
-            commit_requirements.len()
-                + action_requirements.len()
-                + usize::from(table_meta.table_uuid.is_some()),
-        );
-        requirements.extend_from_slice(commit_requirements);
-        requirements.extend_from_slice(action_requirements);
-        if let Some(uuid) = table_meta.table_uuid {
-            if !requirements
-                .iter()
-                .any(|requirement| matches!(requirement, TableRequirement::UuidMatch { uuid: u } if *u == uuid))
-            {
-                requirements.push(TableRequirement::UuidMatch { uuid });
-            }
-        }
-        requirements
+        IcebergCatalogCommitCoordinator::load_metadata_location(context.as_ref(), catalog_table)
+            .await
     }
 
     async fn try_commit_to_catalog(
@@ -381,41 +308,9 @@ impl IcebergCommitExec {
         requirements: Vec<TableRequirement>,
         updates: Vec<TableUpdate>,
     ) -> Result<CatalogCommitOutcome> {
-        let manager = context.extension::<CatalogManager>()?;
-        let requirements = requirements
-            .into_iter()
-            .map(serde_json::to_value)
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let updates = updates
-            .into_iter()
-            .map(serde_json::to_value)
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        match manager
-            .commit_lakehouse_table(
-                catalog_table,
-                LakehouseCommitRequest {
-                    context: lakehouse_table.clone(),
-                    format: "iceberg".to_string(),
-                    requirements,
-                    updates,
-                    payload: None,
-                },
-            )
+        IcebergCatalogCommitCoordinator::new(context.as_ref(), catalog_table)
+            .commit(lakehouse_table, requirements, updates)
             .await
-        {
-            Ok(_) => Ok(CatalogCommitOutcome::Committed),
-            Err(CatalogError::NotSupported(err) | CatalogError::UnsupportedCapability(err)) => {
-                log::debug!("Iceberg catalog commit is not supported: {err}");
-                Ok(CatalogCommitOutcome::NotSupported)
-            }
-            Err(CatalogError::Conflict(err)) => {
-                log::warn!("Iceberg catalog commit conflict: {err}");
-                Ok(CatalogCommitOutcome::Conflict)
-            }
-            Err(err) => Err(DataFusionError::External(Box::new(err))),
-        }
     }
 
     async fn update_catalog_metadata_location(
@@ -425,34 +320,17 @@ impl IcebergCommitExec {
         previous_metadata_location: Option<&str>,
         new_metadata_location: &str,
     ) -> Result<()> {
-        let manager = context.extension::<CatalogManager>()?;
-        let metadata_location_key = existing_metadata_location_key(existing_properties)
-            .map(ToString::to_string)
-            .unwrap_or_else(|| METADATA_LOCATION_UNDERSCORE_KEY.to_string());
-        let mut properties = vec![(metadata_location_key, new_metadata_location.to_string())];
-        if let Some(previous_metadata_location) = previous_metadata_location {
-            properties.push((
-                PREVIOUS_METADATA_LOCATION_KEY.to_string(),
-                previous_metadata_location.to_string(),
-            ));
-        }
-        manager
-            .alter_table(
-                catalog_table,
-                AlterTableOptions::SetTableProperties { properties },
+        IcebergCatalogCommitCoordinator::new(context.as_ref(), catalog_table)
+            .update_metadata_location(
+                existing_properties,
+                previous_metadata_location,
+                new_metadata_location,
             )
             .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))
     }
 
     fn table_metadata_location(table_url: &Url, metadata_file: &str) -> Result<String> {
-        if Url::parse(metadata_file).is_ok() {
-            return Ok(metadata_file.to_string());
-        }
-        Ok(table_url
-            .join(metadata_file)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?
-            .to_string())
+        table_metadata_location(table_url, metadata_file)
     }
 }
 
@@ -754,7 +632,7 @@ impl ExecutionPlan for IcebergCommitExec {
                         .await?;
                         let action_requirements = action_commit.requirements().to_vec();
                         Self::validate_requirements(Some(&table_meta), &action_requirements)?;
-                        let requirements = Self::catalog_requirements(
+                        let requirements = catalog_requirements(
                             &table_meta,
                             &commit_info.requirements,
                             &action_requirements,
@@ -924,7 +802,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 Self::validate_requirements(Some(&table_meta), &action_requirements)?;
                 let action_updates = action_commit.into_updates();
                 if let Some(catalog_table) = catalog_commit_table {
-                    let requirements = Self::catalog_requirements(
+                    let requirements = catalog_requirements(
                         &table_meta,
                         &commit_info.requirements,
                         &action_requirements,
