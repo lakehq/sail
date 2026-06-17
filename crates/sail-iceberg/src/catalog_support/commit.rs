@@ -1,6 +1,6 @@
 use datafusion_common::{DataFusionError, Result};
 use sail_catalog::error::CatalogError;
-use sail_catalog::lakehouse::LakehouseCommitRequest;
+use sail_catalog::lakehouse::{LakehouseCommitOutcome, LakehouseCommitRequest};
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::AlterTableOptions;
 use sail_common_datafusion::catalog::managed::{
@@ -19,11 +19,39 @@ use crate::table_format::{
     catalog_managed_iceberg_from_properties, metadata_location_from_properties,
 };
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub(crate) enum CatalogCommitOutcome {
-    Committed,
+    Committed(CatalogCommittedTable),
     NotSupported,
     Conflict,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(crate) struct CatalogCommittedTable {
+    metadata_location: Option<String>,
+    payload: Option<serde_json::Value>,
+}
+
+impl CatalogCommittedTable {
+    fn from_payload(payload: Option<serde_json::Value>) -> Self {
+        let metadata_location = payload
+            .as_ref()
+            .and_then(|payload| payload.get("metadata-location"))
+            .and_then(serde_json::Value::as_str)
+            .map(ToString::to_string);
+        Self {
+            metadata_location,
+            payload,
+        }
+    }
+
+    pub(crate) fn metadata_location(&self) -> Option<&str> {
+        self.metadata_location.as_deref()
+    }
+
+    pub(crate) fn payload(&self) -> Option<&serde_json::Value> {
+        self.payload.as_ref()
+    }
 }
 
 #[derive(Debug, Default)]
@@ -162,7 +190,26 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> IcebergCatalogCommitCoordinator<'
             )
             .await
         {
-            Ok(_) => Ok(CatalogCommitOutcome::Committed),
+            Ok(outcome) => match outcome {
+                LakehouseCommitOutcome::Committed { payload, .. } => Ok(
+                    CatalogCommitOutcome::Committed(CatalogCommittedTable::from_payload(payload)),
+                ),
+                LakehouseCommitOutcome::Noop { .. } => Ok(CatalogCommitOutcome::Committed(
+                    CatalogCommittedTable::from_payload(None),
+                )),
+                LakehouseCommitOutcome::RetryableConflict { message } => {
+                    log::warn!("Iceberg catalog commit conflict: {message}");
+                    Ok(CatalogCommitOutcome::Conflict)
+                }
+                LakehouseCommitOutcome::StateUnknown { message } => {
+                    Err(DataFusionError::Execution(format!(
+                        "Iceberg catalog commit state is unknown: {message}"
+                    )))
+                }
+                LakehouseCommitOutcome::Rejected { message } => Err(DataFusionError::Execution(
+                    format!("Iceberg catalog commit was rejected: {message}"),
+                )),
+            },
             Err(CatalogError::NotSupported(err) | CatalogError::UnsupportedCapability(err)) => {
                 log::debug!("Iceberg catalog commit is not supported: {err}");
                 Ok(CatalogCommitOutcome::NotSupported)
@@ -284,6 +331,24 @@ mod tests {
             authority,
             ScanAuthority::ClientTableFormat,
         )
+    }
+
+    #[test]
+    fn committed_table_preserves_rest_commit_payload_metadata_location() {
+        let payload = serde_json::json!({
+            "metadata-location": "s3://bucket/table/metadata/00002-uuid.metadata.json",
+            "metadata": {
+                "table-uuid": "table-uuid"
+            }
+        });
+
+        let committed = CatalogCommittedTable::from_payload(Some(payload.clone()));
+
+        assert_eq!(
+            committed.metadata_location(),
+            Some("s3://bucket/table/metadata/00002-uuid.metadata.json")
+        );
+        assert_eq!(committed.payload(), Some(&payload));
     }
 
     #[test]

@@ -669,7 +669,15 @@ impl ExecutionPlan for IcebergCommitExec {
                         )
                         .await?
                         {
-                            CatalogCommitOutcome::Committed => {
+                            CatalogCommitOutcome::Committed(committed) => {
+                                if let Some(metadata_location) = committed.metadata_location() {
+                                    log::debug!(
+                                        "Iceberg catalog commit returned metadata-location={metadata_location}"
+                                    );
+                                }
+                                if committed.payload().is_some() {
+                                    log::trace!("Iceberg catalog commit returned a payload");
+                                }
                                 let array =
                                     Arc::new(UInt64Array::from(vec![commit_info.row_count]));
                                 let batch = RecordBatch::try_new(schema, vec![array])?;
@@ -846,7 +854,15 @@ impl ExecutionPlan for IcebergCommitExec {
                     )
                     .await?
                     {
-                        CatalogCommitOutcome::Committed => {
+                        CatalogCommitOutcome::Committed(committed) => {
+                            if let Some(metadata_location) = committed.metadata_location() {
+                                log::debug!(
+                                    "Iceberg catalog commit returned metadata-location={metadata_location}"
+                                );
+                            }
+                            if committed.payload().is_some() {
+                                log::trace!("Iceberg catalog commit returned a payload");
+                            }
                             let array = Arc::new(UInt64Array::from(vec![commit_info.row_count]));
                             let batch = RecordBatch::try_new(schema, vec![array])?;
                             return Ok(batch);
