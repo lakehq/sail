@@ -88,7 +88,7 @@ impl SparkTryToDate {
             }
             ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
                 Some(value) => {
-                    let date = value.and_then(|s| Date32Type::parse(s));
+                    let date = value.and_then(Date32Type::parse);
                     Ok(ColumnarValue::Scalar(ScalarValue::Date32(date)))
                 }
                 _ => exec_err!("Unsupported data type {scalar:?} for function try_to_date"),
