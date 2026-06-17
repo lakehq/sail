@@ -13,6 +13,7 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use futures::{StreamExt, TryStreamExt};
 use object_store::{ObjectMeta, ObjectStore};
+use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 
 use crate::listing::source::{ListingFileMeta, ListingFileSample, ListingScanInput, ReadFormat};
 use crate::options::gen::ParquetReadOptions;
@@ -155,6 +156,7 @@ impl ReadFormat for ParquetReadFormat {
             .with_file_groups(input.file_groups)
             .with_constraints(input.constraints)
             .with_statistics(input.statistics)
+            .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})))
             .with_projection_indices(input.projection)?
             .with_limit(input.limit)
             .with_output_ordering(input.output_ordering)

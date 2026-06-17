@@ -1,21 +1,7 @@
 use datafusion_common::Result;
 use datafusion_expr::{lit, when, Expr, LogicalPlan, LogicalPlanBuilder, ScalarUDF};
+pub use sail_common_datafusion::datasource::{DeltaCheckConstraintExpr, DeltaConstraintViolation};
 use sail_function::scalar::misc::raise_error::RaiseError;
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub struct DeltaCheckConstraintExpr {
-    pub name: String,
-    pub expression: String,
-    pub expr: Expr,
-    pub violation: DeltaConstraintViolation,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-pub enum DeltaConstraintViolation {
-    Check,
-    NotNull { column: String },
-    Invariant { column: String },
-}
 
 pub fn apply_delta_check_constraint_filter(
     plan: LogicalPlan,

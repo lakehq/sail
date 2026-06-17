@@ -11,6 +11,15 @@ use sail_catalog::provider::{
 };
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
+use sail_common_hms::hms::{
+    EnvironmentContext, GetTableRequest, Table, ThriftHiveMetastoreAlterTableException,
+    ThriftHiveMetastoreClient, ThriftHiveMetastoreClientBuilder,
+    ThriftHiveMetastoreCreateDatabaseException, ThriftHiveMetastoreCreateTableException,
+    ThriftHiveMetastoreDropDatabaseException, ThriftHiveMetastoreDropTableException,
+    ThriftHiveMetastoreDropTableWithEnvironmentContextException,
+    ThriftHiveMetastoreGetDatabaseException, ThriftHiveMetastoreGetTableException,
+    ThriftHiveMetastoreGetTableReqException,
+};
 use tokio::sync::Mutex;
 use volo_thrift::MaybeException;
 
@@ -21,15 +30,6 @@ use crate::convert::{
     GenericTableFormat,
 };
 use crate::data_type::arrow_to_hive_type;
-use crate::hms::{
-    EnvironmentContext, GetTableRequest, Table, ThriftHiveMetastoreAlterTableException,
-    ThriftHiveMetastoreClient, ThriftHiveMetastoreClientBuilder,
-    ThriftHiveMetastoreCreateDatabaseException, ThriftHiveMetastoreCreateTableException,
-    ThriftHiveMetastoreDropDatabaseException, ThriftHiveMetastoreDropTableException,
-    ThriftHiveMetastoreDropTableWithEnvironmentContextException,
-    ThriftHiveMetastoreGetDatabaseException, ThriftHiveMetastoreGetTableException,
-    ThriftHiveMetastoreGetTableReqException,
-};
 use crate::managed_table;
 use crate::security::{KerberosMakeTransport, SaslQop};
 
@@ -1253,9 +1253,9 @@ mod tests {
         AlterTableOptions, CatalogProvider, CreateTableColumnOptions, CreateTableOptions, Namespace,
     };
     use sail_common::runtime::RuntimeHandle;
+    use sail_common_hms::hms::Table;
 
     use super::{HmsCatalogConfig, HmsCatalogProvider};
-    use crate::hms::Table;
 
     #[tokio::test]
     async fn test_create_table_requires_write_precondition_for_iceberg_format() {

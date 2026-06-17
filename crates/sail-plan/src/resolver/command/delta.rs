@@ -128,6 +128,7 @@ impl PlanResolver<'_> {
             bucket_by: None,
             sort_order: vec![],
             options: vec![],
+            read_case_sensitive: self.config.case_sensitive,
         };
         let metadata = match table_format
             .infer_metadata(&self.ctx.state(), source_info)
@@ -530,6 +531,7 @@ impl PlanResolver<'_> {
             options: vec![OptionLayer::TablePropertyList {
                 items: info.properties.clone(),
             }],
+            read_case_sensitive: self.config.case_sensitive,
         };
         match table_format.infer_metadata(&self.ctx.state(), source).await {
             Ok(metadata) => Ok(Some(metadata)),

@@ -217,14 +217,17 @@ pub struct SelectClause {
 pub struct NamedExpr {
     #[parser(function = |(e, _), _| e)]
     pub expr: Expr,
-    // If the alias is an identifier list, it will be parsed by the default `Ident` parser
-    // rather than the restricted `Ident` parser passed as a dependency.
-    // This is because the identifier list is inside the parentheses so there will be no ambiguity.
-    // TODO: The restricted `Ident` parser should only apply when the `AS` keyword is omitted.
-    //   Keywords are restricted as column aliases only to keep parsing unambiguous (e.g. so that
-    //   `CASE WHEN a THEN b END` does not parse `b END` as an aliased expression), but with an
-    //   explicit `AS` there is no ambiguity, and Spark accepts e.g. `SELECT 1 AS end`.
-    #[parser(function = |(_, i), o| unit(o).or_not().then(either_or(i, unit(o))).or_not())]
+    // The restricted `Ident` parser passed as a dependency only applies when the `AS`
+    // keyword is omitted: keywords are restricted as implicit column aliases to keep
+    // parsing unambiguous (e.g. so that `CASE WHEN a THEN b END` does not parse `b END`
+    // as an aliased expression). With an explicit `AS` there is no ambiguity, so the
+    // default `Ident` parser is used and Spark queries such as `SELECT 1 AS end` are
+    // accepted. An identifier list is always parsed by the default `Ident` parser since
+    // it is inside parentheses where no ambiguity arises.
+    #[parser(function = |(_, i), o| choice((
+        unit(o).then(either_or(unit(o), unit(o))).map(|(r#as, alias)| (Some(r#as), alias)),
+        either_or(i, unit(o)).map(|alias| (None, alias)),
+    )).or_not())]
     pub alias: Option<(Option<As>, Either<Ident, IdentList>)>,
 }
 

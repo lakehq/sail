@@ -120,6 +120,7 @@ impl PlanResolver<'_> {
                             items: temporal_options,
                         },
                     ],
+                    read_case_sensitive: self.config.case_sensitive,
                 };
                 let registry = self.ctx.extension::<TableFormatRegistry>()?;
                 let table_source = registry
@@ -468,6 +469,7 @@ impl PlanResolver<'_> {
             options: vec![OptionLayer::OptionList {
                 items: options.into_iter().collect(),
             }],
+            read_case_sensitive: self.config.case_sensitive,
         };
         let registry = self.ctx.extension::<TableFormatRegistry>()?;
         let table_source = registry
