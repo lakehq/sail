@@ -27,7 +27,9 @@ use educe::Educe;
 use object_store::ObjectStoreExt;
 use sail_common_datafusion::catalog::iceberg::is_iceberg_table_marker;
 use sail_common_datafusion::catalog::managed::metadata_location_value;
-use sail_common_datafusion::catalog::{CatalogPartitionField, LakehouseExecutionContext};
+use sail_common_datafusion::catalog::{
+    CatalogPartitionField, LakehouseExecutionContext, ScanAuthority,
+};
 use sail_common_datafusion::datasource::{
     create_sort_order, find_path_in_options, BucketBy, OptionLayer, PhysicalSinkMode, SinkInfo,
     SinkMode, SourceInfo, TableFormat, TableFormatAlterTableOperation,
@@ -370,6 +372,7 @@ pub(crate) async fn plan_iceberg_write(
             return not_impl_err!("predicate or partition overwrite for Iceberg");
         }
     };
+    validate_iceberg_lakehouse_storage_access(lakehouse_table.as_ref())?;
     let metadata_location = metadata_location_from_options(&options);
     let catalog_managed_table = catalog_managed_iceberg_from_options(&options);
     let (clean_options, table_properties) =
@@ -636,7 +639,7 @@ async fn build_iceberg_provider(
 ) -> Result<Arc<IcebergTableProvider>> {
     let SourceInfo {
         paths,
-        lakehouse_table: _,
+        lakehouse_table,
         schema: _,
         constraints: _,
         partition_by: _,
@@ -646,6 +649,7 @@ async fn build_iceberg_provider(
         read_case_sensitive: _,
     } = info;
 
+    validate_iceberg_read_lakehouse_context(lakehouse_table.as_ref())?;
     let table_url = IcebergTableFormat::parse_table_url(paths).await?;
     let metadata_location = metadata_location_from_options(&options);
     let catalog_managed_table = catalog_managed_iceberg_from_options(&options);
@@ -658,6 +662,41 @@ async fn build_iceberg_provider(
         catalog_managed_table,
     )
     .await
+}
+
+fn validate_iceberg_read_lakehouse_context(
+    lakehouse_table: Option<&LakehouseExecutionContext>,
+) -> Result<()> {
+    let Some(context) = lakehouse_table else {
+        return Ok(());
+    };
+    validate_iceberg_lakehouse_storage_access(Some(context))?;
+    if context.scan == ScanAuthority::IcebergRestServerSide {
+        return not_impl_err!(
+            "Iceberg REST catalog table {} requires server-side scan planning, which is not implemented yet",
+            context.catalog_table().join(".")
+        );
+    }
+    Ok(())
+}
+
+fn validate_iceberg_lakehouse_storage_access(
+    lakehouse_table: Option<&LakehouseExecutionContext>,
+) -> Result<()> {
+    let Some(context) = lakehouse_table else {
+        return Ok(());
+    };
+    if context
+        .rest_session
+        .as_ref()
+        .is_some_and(|session| session.remote_signing_enabled)
+    {
+        return not_impl_err!(
+            "Iceberg REST catalog table {} requires remote signing, which is not implemented yet",
+            context.catalog_table().join(".")
+        );
+    }
+    Ok(())
 }
 
 /// Load metadata and pick snapshot per options (precedence: snapshot_id > ref > timestamp > current).
@@ -955,6 +994,12 @@ fn alter_table_properties_conflict_error() -> DataFusionError {
 
 #[cfg(test)]
 mod tests {
+    use sail_common_datafusion::catalog::{
+        CatalogProviderId, CatalogTableIdentity, CommitAuthority, IcebergRestTableSessionRef,
+        LakehouseAuthority, LakehouseFormat, LakehouseOperation, MetadataPointerAuthority,
+        TableLifecycle,
+    };
+
     use super::*;
 
     #[test]
@@ -1055,5 +1100,63 @@ mod tests {
             "metadata.table-uuid".to_string(),
             "9f7c2fc5-2e7d-4a6a-b3f9-0f6a47a3522c".to_string(),
         )]));
+    }
+
+    #[test]
+    fn read_rejects_required_rest_server_side_scan_planning() {
+        let context = LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("rest".to_string()),
+            vec!["rest".to_string(), "db".to_string(), "tbl".to_string()],
+            CatalogTableIdentity {
+                table_id: Some("12345678-1234-1234-1234-123456789012".to_string()),
+                table_uri: Some("s3://bucket/table".to_string()),
+            },
+            LakehouseOperation::Read,
+            LakehouseFormat::Iceberg,
+            LakehouseAuthority::CatalogAuthoritative {
+                lifecycle: TableLifecycle::External,
+                pointer: MetadataPointerAuthority::IcebergRest,
+                commit: CommitAuthority::IcebergRestCommit,
+            },
+            ScanAuthority::IcebergRestServerSide,
+        );
+
+        let result = validate_iceberg_read_lakehouse_context(Some(&context));
+        assert!(matches!(
+            &result,
+            Err(err) if format!("{err}").contains("requires server-side scan planning")
+        ));
+    }
+
+    #[test]
+    fn storage_access_rejects_required_rest_remote_signing() {
+        let mut context = LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("rest".to_string()),
+            vec!["rest".to_string(), "db".to_string(), "tbl".to_string()],
+            CatalogTableIdentity {
+                table_id: Some("12345678-1234-1234-1234-123456789012".to_string()),
+                table_uri: Some("s3://bucket/table".to_string()),
+            },
+            LakehouseOperation::Read,
+            LakehouseFormat::Iceberg,
+            LakehouseAuthority::CatalogAuthoritative {
+                lifecycle: TableLifecycle::External,
+                pointer: MetadataPointerAuthority::IcebergRest,
+                commit: CommitAuthority::IcebergRestCommit,
+            },
+            ScanAuthority::ClientTableFormat,
+        );
+        context.rest_session = Some(IcebergRestTableSessionRef {
+            fingerprint: "rest-session".to_string(),
+            scan_planning_mode: Some("client".to_string()),
+            storage_credential_count: 0,
+            remote_signing_enabled: true,
+        });
+
+        let result = validate_iceberg_lakehouse_storage_access(Some(&context));
+        assert!(matches!(
+            &result,
+            Err(err) if format!("{err}").contains("requires remote signing")
+        ));
     }
 }

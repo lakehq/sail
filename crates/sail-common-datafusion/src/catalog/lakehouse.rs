@@ -140,6 +140,12 @@ pub struct TableAccessSessionRef {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct IcebergRestTableSessionRef {
     pub fingerprint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_planning_mode: Option<String>,
+    #[serde(default)]
+    pub storage_credential_count: usize,
+    #[serde(default)]
+    pub remote_signing_enabled: bool,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
@@ -292,3 +298,20 @@ pub struct CapabilityKey(pub String);
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct AccessSessionKey(pub String);
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn iceberg_rest_session_ref_decodes_legacy_fingerprint_only_json() {
+        let session: IcebergRestTableSessionRef =
+            serde_json::from_str(r#"{"fingerprint":"rest-session"}"#).unwrap();
+
+        assert_eq!(session.fingerprint, "rest-session");
+        assert_eq!(session.scan_planning_mode, None);
+        assert_eq!(session.storage_credential_count, 0);
+        assert!(!session.remote_signing_enabled);
+    }
+}
