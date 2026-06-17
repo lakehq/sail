@@ -129,9 +129,9 @@ fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         if pos_val >= 1 {
             match length_opt {
                 None => return Ok(cast(expr_fn::substr(string, position), DataType::Utf8)),
-                Some(ref len_expr) if literal_as_i64(len_expr).map_or(false, |l| l >= 0) => {
+                Some(ref len_expr) if literal_as_i64(len_expr).is_some_and(|l| l >= 0) => {
                     return Ok(cast(
-                        expr_fn::substring(string, position, length_opt.unwrap()),
+                        expr_fn::substring(string, position, len_expr.clone()),
                         DataType::Utf8,
                     ));
                 }
