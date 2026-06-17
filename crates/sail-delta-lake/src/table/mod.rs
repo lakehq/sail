@@ -28,7 +28,6 @@ use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::{DataFusionError, Result};
 use object_store::ObjectStore;
-use sail_catalog::lakehouse::DeltaRatifiedCommitRequest;
 use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
@@ -37,6 +36,7 @@ use sail_common_datafusion::catalog::{LakehouseExecutionContext, TableColumnStat
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
 
+use crate::catalog::coordinator::DeltaCatalogCommitCoordinator;
 use crate::catalog_managed::{
     catalog_managed_delta_table, metadata_with_catalog_managed, protocol_with_catalog_managed,
     CatalogManagedDeltaTable,
@@ -531,24 +531,20 @@ where
         });
     }
 
-    let manager = ctx.extension::<CatalogManager>()?;
     let catalog_table = lakehouse_table.catalog_table();
+    let coordinator = DeltaCatalogCommitCoordinator::new(ctx, catalog_table);
     let mut start_version = 1;
     let mut commits = Vec::new();
 
     let latest_table_version = loop {
-        let response = manager
-            .get_delta_ratified_commits(
-                catalog_table,
-                DeltaRatifiedCommitRequest {
-                    context: lakehouse_table.clone(),
-                    table_uri: table_url.to_string(),
-                    start_version,
-                    end_version: version_as_of,
-                },
+        let response = coordinator
+            .get_ratified_commits(
+                lakehouse_table,
+                table_url.to_string(),
+                start_version,
+                version_as_of,
             )
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            .await?;
 
         let latest_table_version = response.latest_table_version;
         if let Some(version) = version_as_of {
