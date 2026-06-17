@@ -8023,6 +8023,7 @@ dependencies = [
  "async-recursion",
  "async-trait",
  "chrono",
+ "chumsky 0.12.0",
  "datafusion",
  "datafusion-common",
  "datafusion-expr",

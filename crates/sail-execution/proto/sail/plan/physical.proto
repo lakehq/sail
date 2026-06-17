@@ -158,6 +158,7 @@ message ExtendedScalarUdf {
     SparkToCharUdf spark_to_char = 28;
     SparkToXmlUdf spark_to_xml = 29;
     SparkBinUdf spark_bin = 30;
+    SparkNegativeUdf spark_negative = 31;
   }
 }
 
@@ -275,6 +276,10 @@ message SparkParseJsonUdf {
 }
 
 message SparkPmodUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkNegativeUdf {
   bool ansi_mode = 1;
 }
 
