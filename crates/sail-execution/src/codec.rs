@@ -174,6 +174,7 @@ use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
 use sail_function::scalar::math::spark_div::SparkIntervalDiv;
+use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
 use sail_function::scalar::math::spark_try_add::SparkTryAdd;
@@ -207,7 +208,9 @@ use sail_function::scalar::string::spark_concat_ws::SparkConcatWs;
 use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_function::scalar::string::spark_mask::SparkMask;
 use sail_function::scalar::string::spark_quote::SparkQuote;
-use sail_function::scalar::string::spark_regexp_extract_all::SparkRegexpExtractAll;
+use sail_function::scalar::string::spark_regexp_extract_all::{
+    SparkRegexpExtract, SparkRegexpExtractAll,
+};
 use sail_function::scalar::string::spark_sentences::SparkSentences;
 use sail_function::scalar::string::spark_split::SparkSplit;
 use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
@@ -225,6 +228,7 @@ use sail_function::scalar::variant::spark_to_variant_object::SparkToVariantObjec
 use sail_function::scalar::variant::spark_variant_explode::SparkVariantExplodeUdf;
 use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
 use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
+use sail_function::scalar::xml::to_xml::SparkToXml;
 use sail_function::scalar::xml::xpath::Xpath;
 use sail_function::scalar::xml::xpath_typed::{xpath_typed_name_to_kind, XpathTyped};
 use sail_function::window::SparkNtile;
@@ -2169,6 +2173,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = XpathTyped::new(kind);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
+            UdfKind::SparkToXml(gen::SparkToXmlUdf { session_timezone }) => {
+                let udf = SparkToXml::new(Arc::from(session_timezone));
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
             UdfKind::SparkUnixTimestamp(gen::SparkUnixTimestampUdf { timezone }) => {
                 let udf = SparkUnixTimestamp::new(Arc::from(timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
@@ -2243,8 +2251,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkAbs(gen::SparkAbsUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkAbs::new(ansi_mode))));
             }
+            UdfKind::SparkBin(gen::SparkBinUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkBin::new(ansi_mode))));
+            }
             UdfKind::SparkPmod(gen::SparkPmodUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkPmod::new(ansi_mode))));
+            }
+            UdfKind::SparkNegative(gen::SparkNegativeUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkNegative::new(ansi_mode))));
             }
             UdfKind::SparkMakeTimestampNtz(gen::SparkMakeTimestampNtzUdf { is_try }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new(
@@ -2308,6 +2322,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkConcat::new())))
             }
             "spark_split" | "split" => Ok(Arc::new(ScalarUDF::from(SparkSplit::new()))),
+            "regexp_extract" => Ok(Arc::new(ScalarUDF::from(SparkRegexpExtract::new()))),
             "regexp_extract_all" => Ok(Arc::new(ScalarUDF::from(SparkRegexpExtractAll::new()))),
             "sentences" => Ok(Arc::new(ScalarUDF::from(SparkSentences::new()))),
             "spark_hex" | "hex" => Ok(Arc::new(ScalarUDF::from(SparkHex::new()))),
@@ -2398,7 +2413,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_encode" | "encode" => Ok(Arc::new(ScalarUDF::from(SparkEncode::new()))),
             "spark_elt" | "elt" => Ok(Arc::new(ScalarUDF::from(SparkElt::new()))),
             "spark_decode" | "decode" => Ok(Arc::new(ScalarUDF::from(SparkDecode::new()))),
-            "spark_bin" | "bin" => Ok(Arc::new(ScalarUDF::from(SparkBin::new()))),
             "spark_year_month_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkYearMonthInterval::new())))
             }
@@ -2516,6 +2530,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkMask>()
             || node_inner.is::<SparkConcatWs>()
             || node_inner.is::<SparkMurmur3Hash>()
+            || node_inner.is::<SparkRegexpExtract>()
             || node_inner.is::<SparkRegexpExtractAll>()
             || node_inner.is::<SparkReverse>()
             || node_inner.is::<SparkSequence>()
@@ -2618,6 +2633,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(_func) = node.inner().downcast_ref::<XpathTyped>() {
             let name = node.name().to_string();
             UdfKind::XpathTyped(gen::XpathTypedUdf { name })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkToXml>() {
+            let session_timezone = func.session_timezone().to_string();
+            UdfKind::SparkToXml(gen::SparkToXmlUdf { session_timezone })
         } else if let Some(func) = node.inner().downcast_ref::<SparkUnixTimestamp>() {
             let timezone = func.timezone().to_string();
             UdfKind::SparkUnixTimestamp(gen::SparkUnixTimestampUdf { timezone })
@@ -2681,9 +2699,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkAbs>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkAbs(gen::SparkAbsUdf { ansi_mode })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkBin>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkBin(gen::SparkBinUdf { ansi_mode })
         } else if let Some(func) = node.inner().downcast_ref::<SparkPmod>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkPmod(gen::SparkPmodUdf { ansi_mode })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkNegative>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkNegative(gen::SparkNegativeUdf { ansi_mode })
         } else if let Some(func) = node.inner().downcast_ref::<SparkMakeTimestampNtz>() {
             let is_try = func.is_try();
             UdfKind::SparkMakeTimestampNtz(gen::SparkMakeTimestampNtzUdf { is_try })

@@ -11,6 +11,15 @@ use sail_catalog::provider::{
 };
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
+use sail_common_hms::hms::{
+    EnvironmentContext, GetTableRequest, Table, ThriftHiveMetastoreAlterTableException,
+    ThriftHiveMetastoreClient, ThriftHiveMetastoreClientBuilder,
+    ThriftHiveMetastoreCreateDatabaseException, ThriftHiveMetastoreCreateTableException,
+    ThriftHiveMetastoreDropDatabaseException, ThriftHiveMetastoreDropTableException,
+    ThriftHiveMetastoreDropTableWithEnvironmentContextException,
+    ThriftHiveMetastoreGetDatabaseException, ThriftHiveMetastoreGetTableException,
+    ThriftHiveMetastoreGetTableReqException,
+};
 use tokio::sync::Mutex;
 use volo_thrift::MaybeException;
 
@@ -21,15 +30,6 @@ use crate::convert::{
     GenericTableFormat,
 };
 use crate::data_type::arrow_to_hive_type;
-use crate::hms::{
-    EnvironmentContext, GetTableRequest, Table, ThriftHiveMetastoreAlterTableException,
-    ThriftHiveMetastoreClient, ThriftHiveMetastoreClientBuilder,
-    ThriftHiveMetastoreCreateDatabaseException, ThriftHiveMetastoreCreateTableException,
-    ThriftHiveMetastoreDropDatabaseException, ThriftHiveMetastoreDropTableException,
-    ThriftHiveMetastoreDropTableWithEnvironmentContextException,
-    ThriftHiveMetastoreGetDatabaseException, ThriftHiveMetastoreGetTableException,
-    ThriftHiveMetastoreGetTableReqException,
-};
 use crate::managed_table;
 use crate::security::{KerberosMakeTransport, SaslQop};
 
@@ -529,17 +529,49 @@ impl HmsCatalogProvider {
         table_name: &str,
         context: &str,
     ) -> CatalogResult<Table> {
+        // `get_table_req` is available since Hive 2.1 and is the only variant
+        // served by HMS 4.x, which removed the legacy `get_table` method. The
+        // legacy method is kept as a fallback for older metastores.
         match client
-            .get_table(db_name.to_string().into(), table_name.to_string().into())
+            .get_table_req(GetTableRequest {
+                db_name: db_name.to_string().into(),
+                tbl_name: table_name.to_string().into(),
+                capabilities: None,
+            })
             .await
         {
-            Ok(MaybeException::Ok(table)) => Ok(table),
-            Ok(MaybeException::Exception(ThriftHiveMetastoreGetTableException::O2(_))) => Err(
+            Ok(MaybeException::Ok(result)) => Ok(result.table),
+            Ok(MaybeException::Exception(ThriftHiveMetastoreGetTableReqException::O2(_))) => Err(
                 CatalogError::NotFound(CatalogObject::Table, format!("{db_name}.{table_name}")),
             ),
             Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
                 "{context} '{db_name}.{table_name}': {err:?}"
             ))),
+            Err(err)
+                if err
+                    .to_string()
+                    .contains("Invalid method name: 'get_table_req'") =>
+            {
+                match client
+                    .get_table(db_name.to_string().into(), table_name.to_string().into())
+                    .await
+                {
+                    Ok(MaybeException::Ok(table)) => Ok(table),
+                    Ok(MaybeException::Exception(ThriftHiveMetastoreGetTableException::O2(_))) => {
+                        Err(CatalogError::NotFound(
+                            CatalogObject::Table,
+                            format!("{db_name}.{table_name}"),
+                        ))
+                    }
+                    Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
+                        "{context} '{db_name}.{table_name}' via legacy get_table: {err:?}"
+                    ))),
+                    Err(err) => Err(Self::hms_client_error(
+                        &format!("{context} '{db_name}.{table_name}' via legacy get_table"),
+                        err,
+                    )),
+                }
+            }
             Err(err) => Err(Self::hms_client_error(
                 &format!("{context} '{db_name}.{table_name}'"),
                 err,
@@ -628,51 +660,13 @@ impl HmsCatalogProvider {
             let db_name = db_name.clone();
             let table_name = table_name.clone();
             async move {
-                match client
-                    .get_table(db_name.clone().into(), table_name.clone().into())
-                    .await
-                {
-                    Ok(MaybeException::Ok(table)) => Ok(table),
-                    Ok(MaybeException::Exception(ThriftHiveMetastoreGetTableException::O2(_))) => {
-                        Err(CatalogError::NotFound(CatalogObject::Table, format!("{db_name}.{table_name}")))
-                    }
-                    Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
-                        "Failed to fetch HMS table '{db_name}.{table_name}': {err:?}"
-                    ))),
-                    Err(err) if err.to_string().contains("Invalid method name: 'get_table'") => {
-                        match client
-                            .get_table_req(GetTableRequest {
-                                db_name: db_name.clone().into(),
-                                tbl_name: table_name.clone().into(),
-                                capabilities: None,
-                            })
-                            .await
-                        {
-                            Ok(MaybeException::Ok(result)) => Ok(result.table),
-                            Ok(MaybeException::Exception(
-                                ThriftHiveMetastoreGetTableReqException::O2(_),
-                            )) => Err(CatalogError::NotFound(
-                                CatalogObject::Table,
-                                format!("{db_name}.{table_name}"),
-                            )),
-                            Ok(MaybeException::Exception(err)) => {
-                                Err(CatalogError::External(format!(
-                                    "Failed to fetch HMS table '{db_name}.{table_name}' via get_table_req: {err:?}"
-                                )))
-                            }
-                            Err(err) => Err(Self::hms_client_error(
-                                &format!(
-                                    "Failed to fetch HMS table '{db_name}.{table_name}' via get_table_req"
-                                ),
-                                err,
-                            )),
-                        }
-                    }
-                    Err(err) => Err(Self::hms_client_error(
-                        &format!("Failed to fetch HMS table '{db_name}.{table_name}'"),
-                        err,
-                    )),
-                }
+                Self::get_table_with_client(
+                    &client,
+                    &db_name,
+                    &table_name,
+                    "Failed to fetch HMS table",
+                )
+                .await
             }
         })
         .await
@@ -962,6 +956,14 @@ impl CatalogProvider for HmsCatalogProvider {
         options: DropDatabaseOptions,
     ) -> CatalogResult<()> {
         let db_name = validate_namespace(database)?;
+        match self.get_database(database).await {
+            Ok(_) => {}
+            Err(CatalogError::NotFound(_, _)) if options.if_exists => return Ok(()),
+            Err(CatalogError::NotFound(_, _)) => {
+                return Err(CatalogError::NotFound(CatalogObject::Database, db_name));
+            }
+            Err(err) => return Err(err),
+        }
 
         self.with_failover_attempt(|client, attempt| {
             let db_name = db_name.clone();
@@ -1251,9 +1253,9 @@ mod tests {
         AlterTableOptions, CatalogProvider, CreateTableColumnOptions, CreateTableOptions, Namespace,
     };
     use sail_common::runtime::RuntimeHandle;
+    use sail_common_hms::hms::Table;
 
     use super::{HmsCatalogConfig, HmsCatalogProvider};
-    use crate::hms::Table;
 
     #[tokio::test]
     async fn test_create_table_requires_write_precondition_for_iceberg_format() {

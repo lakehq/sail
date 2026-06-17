@@ -22,6 +22,7 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{self, StreamExt};
 use object_store::ObjectStore;
+use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 use url::Url;
 
 use crate::deletion_vector::{DeletionVectorBitmap, DeletionVectorWriter};
@@ -908,6 +909,7 @@ async fn scan_file_for_matching_rows(
     let file_group = FileGroup::from(vec![partitioned_file]);
     let file_scan_config = FileScanConfigBuilder::new(object_store_url, file_source)
         .with_file_groups(vec![file_group])
+        .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})))
         .build();
 
     let parquet_exec: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(file_scan_config);

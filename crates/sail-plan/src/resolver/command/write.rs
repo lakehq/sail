@@ -601,6 +601,7 @@ impl PlanResolver<'_> {
                         options: vec![OptionLayer::TablePropertyList {
                             items: properties.to_vec(),
                         }],
+                        read_case_sensitive: self.config.case_sensitive,
                     };
                     let metadata = table_format
                         .infer_metadata(&self.ctx.state(), info)
@@ -638,6 +639,7 @@ impl PlanResolver<'_> {
                         options: vec![OptionLayer::TablePropertyList {
                             items: properties.to_vec(),
                         }],
+                        read_case_sensitive: self.config.case_sensitive,
                     };
                     match table_format.infer_metadata(&self.ctx.state(), info).await {
                         Ok(metadata) => {
@@ -1250,6 +1252,18 @@ impl PlanResolver<'_> {
                             "failed to analyze default expression `{default}`: {e}"
                         ))
                     })?;
+                // A column reference can never be a valid default value. Such text
+                // comes from metadata that stored a raw string value (e.g. the
+                // JSON-encoded string `"hello"` for an Iceberg column default)
+                // rather than SQL expression text, so it is interpreted as a
+                // string literal.
+                let spec_expr = if matches!(spec_expr, spec::Expr::UnresolvedAttribute { .. }) {
+                    spec::Expr::Literal(spec::Literal::Utf8 {
+                        value: Some(default.to_string()),
+                    })
+                } else {
+                    spec_expr
+                };
                 self.resolve_expression(spec_expr, &empty_schema, state)
                     .await?
             } else {

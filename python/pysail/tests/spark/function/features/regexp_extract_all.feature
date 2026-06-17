@@ -60,6 +60,15 @@ Feature: regexp_extract_all() extracts all regex capture group matches from stri
       | result |
       | []     |
 
+    Scenario: regexp_extract_all returns empty strings for unmatched optional groups
+      When query
+      """
+      SELECT to_json(regexp_extract_all('aaaac aaabc', r'(a+)(b)?(c)', 2)) AS result
+      """
+      Then query result
+      | result   |
+      | ["","b"] |
+
   Rule: NULL handling
 
     Scenario: regexp_extract_all returns NULL when input is NULL

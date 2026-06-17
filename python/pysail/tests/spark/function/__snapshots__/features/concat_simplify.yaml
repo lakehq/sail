@@ -1,0 +1,25 @@
+# serializer version: 1
+---
+name: "test_explain_concat_of_single_string_column__no_spark_concat_in_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as result]
+      ProjectionExec: expr=[column1@0 as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_concat_of_single_integer_column__spark_concat_stays_in_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#2@0 as result]
+      ProjectionExec: expr=[spark_concat(column1@0) as #2]
+        DataSourceExec: partitions=1, partition_sizes=[1]
+---
+name: "test_explain_concat_of_two_array_columns__spark_concat_stays_in_plan"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#4@0 as result]
+      ProjectionExec: expr=[spark_concat(column1@0, column2@1) as #4]
+        DataSourceExec: partitions=1, partition_sizes=[1]
