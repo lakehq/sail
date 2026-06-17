@@ -269,36 +269,6 @@ impl LakehouseExecutionContext {
         }
     }
 
-    pub fn from_catalog_table(catalog_table: Vec<String>, operation: LakehouseOperation) -> Self {
-        let fingerprint = catalog_table.join(".");
-        Self {
-            catalog_provider_id: CatalogProviderId(
-                catalog_table.first().cloned().unwrap_or_default(),
-            ),
-            catalog_table,
-            table_identity: CatalogTableIdentity {
-                table_id: None,
-                table_uri: None,
-            },
-            operation,
-            format: LakehouseFormat::Other("unknown".to_string()),
-            authority: LakehouseAuthority::CatalogRegistered {
-                lifecycle: TableLifecycle::Unknown,
-                pointer: MetadataPointerAuthority::StorageDiscovery,
-                commit: CommitAuthority::Filesystem,
-            },
-            pointer: MetadataPointerAuthority::StorageDiscovery,
-            commit: CommitAuthority::Filesystem,
-            scan: ScanAuthority::ClientTableFormat,
-            access_session: None,
-            rest_session: None,
-            versioned_catalog: None,
-            cross_format: None,
-            governance: None,
-            capability_fingerprint: CapabilityFingerprint(format!("catalog-table:{fingerprint}")),
-        }
-    }
-
     pub fn catalog_table(&self) -> &[String] {
         &self.catalog_table
     }

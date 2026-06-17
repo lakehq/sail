@@ -7,7 +7,9 @@ use sail_common_datafusion::catalog::managed::{
     existing_metadata_location_key, METADATA_LOCATION_UNDERSCORE_KEY,
     PREVIOUS_METADATA_LOCATION_KEY,
 };
-use sail_common_datafusion::catalog::{LakehouseExecutionContext, TableKind, TableStatus};
+use sail_common_datafusion::catalog::{
+    CommitAuthority, LakehouseExecutionContext, TableKind, TableStatus,
+};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
 
@@ -28,6 +30,62 @@ pub(crate) enum CatalogCommitOutcome {
 pub(crate) struct CatalogTableInfo {
     pub(crate) metadata_location: Option<String>,
     pub(crate) is_catalog_managed_iceberg_table: bool,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum IcebergCatalogCommitMode {
+    Filesystem,
+    MetadataLocationCas,
+    CatalogCommit,
+    CompatibilityCatalogCommit,
+}
+
+impl IcebergCatalogCommitMode {
+    pub(crate) fn resolve(
+        context: Option<&LakehouseExecutionContext>,
+        catalog_table_info: &CatalogTableInfo,
+        table_properties: &[(String, String)],
+    ) -> Self {
+        if let Some(context) = context {
+            if matches!(context.commit, CommitAuthority::Filesystem)
+                && catalog_table_info.is_catalog_managed_iceberg_table
+            {
+                return Self::MetadataLocationCas;
+            }
+            return match context.commit {
+                CommitAuthority::IcebergMetadataLocationCas => Self::MetadataLocationCas,
+                CommitAuthority::IcebergRestCommit | CommitAuthority::VersionedCatalogCommit => {
+                    Self::CatalogCommit
+                }
+                CommitAuthority::Filesystem
+                | CommitAuthority::DeltaRatifiedCommit
+                | CommitAuthority::ReadOnly => Self::Filesystem,
+            };
+        }
+
+        if catalog_table_info.is_catalog_managed_iceberg_table
+            || catalog_managed_iceberg_from_properties(table_properties)
+        {
+            Self::CompatibilityCatalogCommit
+        } else {
+            Self::Filesystem
+        }
+    }
+
+    pub(crate) fn uses_catalog_metadata(self) -> bool {
+        !matches!(self, Self::Filesystem)
+    }
+
+    pub(crate) fn uses_catalog_commit(self) -> bool {
+        matches!(self, Self::CatalogCommit | Self::CompatibilityCatalogCommit)
+    }
+
+    pub(crate) fn uses_metadata_location_update(self) -> bool {
+        matches!(
+            self,
+            Self::MetadataLocationCas | Self::CompatibilityCatalogCommit
+        )
+    }
 }
 
 pub(crate) struct IcebergCatalogCommitCoordinator<'a, C: SessionExtensionAccessor + ?Sized> {
@@ -189,4 +247,96 @@ pub(crate) fn table_metadata_location(table_url: &Url, metadata_file: &str) -> R
         .join(metadata_file)
         .map_err(|e| DataFusionError::External(Box::new(e)))?
         .to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use sail_common_datafusion::catalog::{
+        CatalogProviderId, CatalogTableIdentity, LakehouseAuthority, LakehouseFormat,
+        LakehouseOperation, MetadataPointerAuthority, ScanAuthority, TableLifecycle,
+    };
+
+    use super::*;
+
+    fn iceberg_context(commit: CommitAuthority) -> LakehouseExecutionContext {
+        let pointer = match commit {
+            CommitAuthority::IcebergRestCommit => MetadataPointerAuthority::IcebergRest,
+            CommitAuthority::VersionedCatalogCommit => MetadataPointerAuthority::VersionedCatalog,
+            CommitAuthority::IcebergMetadataLocationCas => {
+                MetadataPointerAuthority::CatalogPropertyCas
+            }
+            _ => MetadataPointerAuthority::StorageDiscovery,
+        };
+        let authority = LakehouseAuthority::CatalogAuthoritative {
+            lifecycle: TableLifecycle::Managed,
+            pointer,
+            commit,
+        };
+        LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("sail".to_string()),
+            vec!["sail".to_string(), "db".to_string(), "tbl".to_string()],
+            CatalogTableIdentity {
+                table_id: None,
+                table_uri: None,
+            },
+            LakehouseOperation::Write,
+            LakehouseFormat::Iceberg,
+            authority,
+            ScanAuthority::ClientTableFormat,
+        )
+    }
+
+    #[test]
+    fn commit_mode_prefers_typed_metadata_location_authority() {
+        let context = iceberg_context(CommitAuthority::IcebergMetadataLocationCas);
+        let mode =
+            IcebergCatalogCommitMode::resolve(Some(&context), &CatalogTableInfo::default(), &[]);
+
+        assert_eq!(mode, IcebergCatalogCommitMode::MetadataLocationCas);
+        assert!(mode.uses_catalog_metadata());
+        assert!(!mode.uses_catalog_commit());
+        assert!(mode.uses_metadata_location_update());
+    }
+
+    #[test]
+    fn commit_mode_prefers_typed_rest_commit_authority() {
+        let context = iceberg_context(CommitAuthority::IcebergRestCommit);
+        let mode =
+            IcebergCatalogCommitMode::resolve(Some(&context), &CatalogTableInfo::default(), &[]);
+
+        assert_eq!(mode, IcebergCatalogCommitMode::CatalogCommit);
+        assert!(mode.uses_catalog_metadata());
+        assert!(mode.uses_catalog_commit());
+        assert!(!mode.uses_metadata_location_update());
+    }
+
+    #[test]
+    fn commit_mode_upgrades_filesystem_context_when_catalog_status_is_managed_iceberg() {
+        let context = iceberg_context(CommitAuthority::Filesystem);
+        let table_info = CatalogTableInfo {
+            metadata_location: Some("file:///tmp/table/metadata/v1.metadata.json".to_string()),
+            is_catalog_managed_iceberg_table: true,
+        };
+        let mode = IcebergCatalogCommitMode::resolve(Some(&context), &table_info, &[]);
+
+        assert_eq!(mode, IcebergCatalogCommitMode::MetadataLocationCas);
+        assert!(mode.uses_catalog_metadata());
+        assert!(!mode.uses_catalog_commit());
+        assert!(mode.uses_metadata_location_update());
+    }
+
+    #[test]
+    fn commit_mode_keeps_property_marker_as_compatibility_fallback() {
+        let table_properties = vec![("table_type".to_string(), "ICEBERG".to_string())];
+        let mode = IcebergCatalogCommitMode::resolve(
+            None,
+            &CatalogTableInfo::default(),
+            &table_properties,
+        );
+
+        assert_eq!(mode, IcebergCatalogCommitMode::CompatibilityCatalogCommit);
+        assert!(mode.uses_catalog_metadata());
+        assert!(mode.uses_catalog_commit());
+        assert!(mode.uses_metadata_location_update());
+    }
 }
