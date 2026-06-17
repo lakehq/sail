@@ -19,6 +19,7 @@ use sail_common_datafusion::catalog::delta::{
 };
 use sail_common_datafusion::catalog::{
     CatalogPartitionField, CatalogTableColumnIdentity, LakehouseExecutionContext,
+    LakehouseOperation,
 };
 use sail_common_datafusion::column_features::{
     ColumnFeatureKey, ColumnFeatures, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
@@ -60,9 +61,12 @@ use crate::spec::{
     CommitAction, DataType as DeltaDataType, DeltaOperation, MetadataValue, Protocol, StructField,
     StructType, TableFeature, TableProperties,
 };
+use crate::storage::StorageConfig;
 use crate::table::{
-    create_delta_table_with_object_store, infer_delta_logical_metadata, infer_delta_logical_schema,
-    open_table_with_object_store, open_table_with_object_store_and_table_config,
+    create_delta_table_with_object_store, create_logstore_with_object_store,
+    infer_delta_logical_metadata, infer_delta_logical_schema,
+    load_catalog_managed_commits_for_snapshot, open_table_with_object_store,
+    open_table_with_object_store_and_table_config, DeltaTable,
 };
 use crate::{create_delta_source, DeltaTableError};
 
@@ -667,16 +671,18 @@ pub(crate) async fn plan_delta_write(
         .object_store_registry
         .get_store(&table_url)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let table = match open_table_with_object_store_and_table_config(
+    let lakehouse_planning_context = lakehouse_table.as_ref().filter(|context| {
+        context.table_identity.table_id.is_some()
+            && !matches!(
+                context.operation,
+                LakehouseOperation::Create | LakehouseOperation::Register
+            )
+    });
+    let table = match open_delta_write_planning_table(
+        ctx,
         table_url.clone(),
         object_store,
-        Default::default(),
-        // Only partition columns and table existence are needed at planning time;
-        // skip replaying Add/Remove file actions which are not used here.
-        DeltaSnapshotConfig {
-            require_files: false,
-            ..Default::default()
-        },
+        lakehouse_planning_context,
     )
     .await
     {
@@ -785,6 +791,48 @@ pub(crate) async fn plan_delta_write(
     planner
         .create_plan(physical_input, mode, physical_sort)
         .await
+}
+
+async fn open_delta_write_planning_table(
+    ctx: &SessionState,
+    table_url: Url,
+    object_store: Arc<dyn object_store::ObjectStore>,
+    lakehouse_table: Option<&LakehouseExecutionContext>,
+) -> std::result::Result<DeltaTable, DeltaTableError> {
+    // Only partition columns and table existence are needed at planning time;
+    // skip replaying Add/Remove file actions unless a later physical plan needs them.
+    let mut table_config = DeltaSnapshotConfig {
+        require_files: false,
+        ..Default::default()
+    };
+
+    if let Some(lakehouse_table) = lakehouse_table {
+        let log_store = create_logstore_with_object_store(
+            Arc::clone(&object_store),
+            table_url.clone(),
+            StorageConfig,
+        )?;
+        table_config.catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
+            ctx,
+            lakehouse_table,
+            &table_url,
+            log_store.clone(),
+            None,
+        )
+        .await
+        .map_err(DeltaTableError::from)?;
+        let mut table = DeltaTable::new(log_store, table_config);
+        table.load().await?;
+        Ok(table)
+    } else {
+        open_table_with_object_store_and_table_config(
+            table_url,
+            object_store,
+            Default::default(),
+            table_config,
+        )
+        .await
+    }
 }
 
 impl DeltaTableFormat {
