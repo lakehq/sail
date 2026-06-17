@@ -63,11 +63,16 @@ const MAX_COMMIT_RETRIES: usize = 5;
 pub struct IcebergCommitExec {
     input: Arc<dyn ExecutionPlan>,
     table_url: Url,
+    lakehouse_table: Option<LakehouseExecutionContext>,
     cache: Arc<PlanProperties>,
 }
 
 impl IcebergCommitExec {
-    pub fn new(input: Arc<dyn ExecutionPlan>, table_url: Url) -> Self {
+    pub fn new(
+        input: Arc<dyn ExecutionPlan>,
+        table_url: Url,
+        lakehouse_table: Option<LakehouseExecutionContext>,
+    ) -> Self {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "count",
             DataType::UInt64,
@@ -82,6 +87,7 @@ impl IcebergCommitExec {
         Self {
             input,
             table_url,
+            lakehouse_table,
             cache,
         }
     }
@@ -92,6 +98,10 @@ impl IcebergCommitExec {
 
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    pub fn lakehouse_table(&self) -> Option<&LakehouseExecutionContext> {
+        self.lakehouse_table.as_ref()
     }
 
     fn apply_schema_update(table_meta: &mut TableMetadata, new_schema: IcebergSchema) {
@@ -360,6 +370,7 @@ impl ExecutionPlan for IcebergCommitExec {
         Ok(Arc::new(Self::new(
             Arc::clone(&children[0]),
             self.table_url.clone(),
+            self.lakehouse_table.clone(),
         )))
     }
 
@@ -382,6 +393,7 @@ impl ExecutionPlan for IcebergCommitExec {
         let input_stream = self.input.execute(0, Arc::clone(&context))?;
 
         let table_url = self.table_url.clone();
+        let lakehouse_table = self.lakehouse_table.clone();
         let schema = self.schema();
         let future = async move {
             let object_store = get_object_store_from_context(&context, &table_url)?;
@@ -425,7 +437,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 updates: vec![],
                 requirements: commit_meta.requirements,
                 table_properties: commit_meta.table_properties,
-                lakehouse_table: commit_meta.lakehouse_table,
+                lakehouse_table: commit_meta.lakehouse_table.or(lakehouse_table),
                 operation: commit_meta.operation,
                 schema: commit_meta.schema,
                 partition_spec: commit_meta.partition_spec,

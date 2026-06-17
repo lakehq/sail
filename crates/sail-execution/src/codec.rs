@@ -1170,6 +1170,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_exists,
                 options,
                 logical_input_schema,
+                lakehouse_table_json,
             }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let sink_mode = match sink_mode {
@@ -1184,13 +1185,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .into_iter()
                     .map(|field| self.try_decode_catalog_partition_field(field))
                     .collect::<Result<Vec<_>>>()?;
-                let options = if options.is_empty() {
+                let mut options = if options.is_empty() {
                     IcebergWriterExecOptions::default()
                 } else {
                     serde_json::from_str(&options).map_err(|e| {
                         plan_datafusion_err!("failed to decode Iceberg options: {e}")
                     })?
                 };
+                if let Some(lakehouse_table) =
+                    self.try_decode_lakehouse_table(&lakehouse_table_json)?
+                {
+                    options.lakehouse_table = Some(lakehouse_table);
+                }
                 let logical_input_schema = if logical_input_schema.is_empty() {
                     None
                 } else {
@@ -1207,12 +1213,21 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     logical_input_schema,
                 )))
             }
-            NodeKind::IcebergCommit(gen::IcebergCommitExecNode { input, table_url }) => {
+            NodeKind::IcebergCommit(gen::IcebergCommitExecNode {
+                input,
+                table_url,
+                lakehouse_table_json,
+            }) => {
                 let input = self.try_decode_plan(&input, ctx)?;
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
+                let lakehouse_table = self.try_decode_lakehouse_table(&lakehouse_table_json)?;
 
-                Ok(Arc::new(IcebergCommitExec::new(input, table_url)))
+                Ok(Arc::new(IcebergCommitExec::new(
+                    input,
+                    table_url,
+                    lakehouse_table,
+                )))
             }
             NodeKind::IcebergManifestScan(gen::IcebergManifestScanExecNode {
                 table_url,
@@ -1963,12 +1978,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_exists: iceberg_writer_exec.table_exists(),
                 options,
                 logical_input_schema,
+                lakehouse_table_json: self
+                    .try_encode_lakehouse_table(iceberg_writer_exec.lakehouse_table())?,
             })
         } else if let Some(iceberg_commit_exec) = node.downcast_ref::<IcebergCommitExec>() {
             let input = self.try_encode_plan(iceberg_commit_exec.input().clone())?;
             NodeKind::IcebergCommit(gen::IcebergCommitExecNode {
                 input,
                 table_url: iceberg_commit_exec.table_url().to_string(),
+                lakehouse_table_json: self
+                    .try_encode_lakehouse_table(iceberg_commit_exec.lakehouse_table())?,
             })
         } else if let Some(manifest_scan) = node.downcast_ref::<IcebergManifestScanExec>() {
             let snapshot_json = serde_json::to_string(manifest_scan.snapshot())

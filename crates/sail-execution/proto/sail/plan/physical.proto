@@ -795,11 +795,13 @@ message IcebergWriterExecNode {
   bool table_exists = 5;
   string options = 6;
   bytes logical_input_schema = 7;
+  string lakehouse_table_json = 8;
 }
 
 message IcebergCommitExecNode {
   bytes input = 1;
   string table_url = 2;
+  string lakehouse_table_json = 3;
 }
 
 message IcebergManifestScanExecNode {
