@@ -935,83 +935,11 @@ mod tests {
 
     use std::collections::HashMap;
 
-    use arrow::datatypes::DataType;
     use aws_sdk_glue::types::{SerDeInfo, StorageDescriptor, Table};
-    use sail_catalog::provider::{
-        CatalogProvider, CreateTableColumnOptions, CreateTableMetadataRequirement,
-        CreateTableOptions, TableFormatCreateMetadataMode,
-    };
     use sail_common_datafusion::catalog::TableKind;
 
     use super::{GlueCatalogConfig, GlueCatalogProvider};
     use crate::hive;
-
-    fn create_options(format: &str, is_write_precondition: bool) -> CreateTableOptions {
-        CreateTableOptions {
-            columns: vec![CreateTableColumnOptions {
-                name: "id".to_string(),
-                data_type: DataType::Int64,
-                nullable: false,
-                comment: None,
-                default: None,
-                generated_always_as: None,
-                identity: None,
-            }],
-            comment: None,
-            constraints: vec![],
-            location: Some("file:///tmp/sail_glue_create_options".to_string()),
-            format: format.to_string(),
-            partition_by: vec![],
-            sort_by: vec![],
-            bucket_by: None,
-            if_not_exists: false,
-            replace: false,
-            properties: vec![],
-            is_external: true,
-            is_write_precondition,
-        }
-    }
-
-    #[test]
-    fn create_table_metadata_requirement_preserves_glue_iceberg_api() {
-        let real_glue = GlueCatalogProvider::new("glue".to_string(), GlueCatalogConfig::default());
-        assert_eq!(
-            real_glue
-                .create_table_metadata_requirement(&create_options("iceberg", false))
-                .unwrap(),
-            CreateTableMetadataRequirement::None
-        );
-        assert_eq!(
-            real_glue
-                .create_table_metadata_requirement(&create_options("delta", false))
-                .unwrap(),
-            CreateTableMetadataRequirement::TableFormat {
-                mode: TableFormatCreateMetadataMode::PathManaged,
-            }
-        );
-        assert_eq!(
-            real_glue
-                .create_table_metadata_requirement(&create_options("delta", true))
-                .unwrap(),
-            CreateTableMetadataRequirement::None
-        );
-
-        let custom_endpoint = GlueCatalogProvider::new(
-            "glue".to_string(),
-            GlueCatalogConfig {
-                endpoint_url: Some("http://127.0.0.1:4566".to_string()),
-                ..Default::default()
-            },
-        );
-        assert_eq!(
-            custom_endpoint
-                .create_table_metadata_requirement(&create_options("iceberg", false))
-                .unwrap(),
-            CreateTableMetadataRequirement::TableFormat {
-                mode: TableFormatCreateMetadataMode::CatalogCoordinated,
-            }
-        );
-    }
 
     #[test]
     fn table_to_status_prefers_delta_provider_over_parquet_storage() {

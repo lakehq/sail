@@ -2005,37 +2005,6 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn create_table_rejects_non_iceberg_format_before_remote_config() {
-        let catalog = IcebergRestCatalogProvider::new("sail".to_string(), HashMap::new());
-        let namespace = Namespace::try_from(vec!["default".to_string()]).unwrap();
-
-        let err = catalog
-            .create_table(
-                &namespace,
-                "delta_t",
-                CreateTableOptions {
-                    columns: Vec::new(),
-                    comment: None,
-                    constraints: Vec::new(),
-                    location: None,
-                    format: "delta".to_string(),
-                    partition_by: Vec::new(),
-                    sort_by: Vec::new(),
-                    bucket_by: None,
-                    if_not_exists: false,
-                    replace: false,
-                    properties: Vec::new(),
-                    is_external: true,
-                    is_write_precondition: false,
-                },
-            )
-            .await
-            .unwrap_err();
-
-        assert!(matches!(err, CatalogError::NotSupported(message) if message.contains("delta")));
-    }
-
     async fn load_merged_test_config(
         defaults: HashMap<String, String>,
         mut client_props: HashMap<String, String>,

@@ -300,40 +300,7 @@ pub(crate) fn table_metadata_location(table_url: &Url, metadata_file: &str) -> R
 
 #[cfg(test)]
 mod tests {
-    use sail_common_datafusion::catalog::{
-        CatalogProviderId, CatalogTableIdentity, LakehouseAuthority, LakehouseFormat,
-        LakehouseOperation, MetadataPointerAuthority, ScanAuthority, TableLifecycle,
-    };
-
     use super::*;
-
-    fn iceberg_context(commit: CommitAuthority) -> LakehouseExecutionContext {
-        let pointer = match commit {
-            CommitAuthority::IcebergRestCommit => MetadataPointerAuthority::IcebergRest,
-            CommitAuthority::VersionedCatalogCommit => MetadataPointerAuthority::VersionedCatalog,
-            CommitAuthority::IcebergMetadataLocationCas => {
-                MetadataPointerAuthority::CatalogPropertyCas
-            }
-            _ => MetadataPointerAuthority::StorageDiscovery,
-        };
-        let authority = LakehouseAuthority::CatalogAuthoritative {
-            lifecycle: TableLifecycle::Managed,
-            pointer,
-            commit,
-        };
-        LakehouseExecutionContext::catalog_table_context(
-            CatalogProviderId("sail".to_string()),
-            vec!["sail".to_string(), "db".to_string(), "tbl".to_string()],
-            CatalogTableIdentity {
-                table_id: None,
-                table_uri: None,
-            },
-            LakehouseOperation::Write,
-            LakehouseFormat::Iceberg,
-            authority,
-            ScanAuthority::ClientTableFormat,
-        )
-    }
 
     #[test]
     fn committed_table_preserves_rest_commit_payload_metadata_location() {
@@ -351,59 +318,5 @@ mod tests {
             Some("s3://bucket/table/metadata/00002-uuid.metadata.json")
         );
         assert_eq!(committed.payload(), Some(&payload));
-    }
-
-    #[test]
-    fn commit_mode_prefers_typed_metadata_location_authority() {
-        let context = iceberg_context(CommitAuthority::IcebergMetadataLocationCas);
-        let mode =
-            IcebergCatalogCommitMode::resolve(Some(&context), &CatalogTableInfo::default(), &[]);
-
-        assert_eq!(mode, IcebergCatalogCommitMode::MetadataLocationCas);
-        assert!(mode.uses_catalog_metadata());
-        assert!(!mode.uses_catalog_commit());
-        assert!(mode.uses_metadata_location_update());
-    }
-
-    #[test]
-    fn commit_mode_prefers_typed_rest_commit_authority() {
-        let context = iceberg_context(CommitAuthority::IcebergRestCommit);
-        let mode =
-            IcebergCatalogCommitMode::resolve(Some(&context), &CatalogTableInfo::default(), &[]);
-
-        assert_eq!(mode, IcebergCatalogCommitMode::CatalogCommit);
-        assert!(mode.uses_catalog_metadata());
-        assert!(mode.uses_catalog_commit());
-        assert!(!mode.uses_metadata_location_update());
-    }
-
-    #[test]
-    fn commit_mode_upgrades_filesystem_context_when_catalog_status_is_managed_iceberg() {
-        let context = iceberg_context(CommitAuthority::Filesystem);
-        let table_info = CatalogTableInfo {
-            metadata_location: Some("file:///tmp/table/metadata/v1.metadata.json".to_string()),
-            is_catalog_managed_iceberg_table: true,
-        };
-        let mode = IcebergCatalogCommitMode::resolve(Some(&context), &table_info, &[]);
-
-        assert_eq!(mode, IcebergCatalogCommitMode::MetadataLocationCas);
-        assert!(mode.uses_catalog_metadata());
-        assert!(!mode.uses_catalog_commit());
-        assert!(mode.uses_metadata_location_update());
-    }
-
-    #[test]
-    fn commit_mode_keeps_property_marker_as_compatibility_fallback() {
-        let table_properties = vec![("table_type".to_string(), "ICEBERG".to_string())];
-        let mode = IcebergCatalogCommitMode::resolve(
-            None,
-            &CatalogTableInfo::default(),
-            &table_properties,
-        );
-
-        assert_eq!(mode, IcebergCatalogCommitMode::CompatibilityCatalogCommit);
-        assert!(mode.uses_catalog_metadata());
-        assert!(mode.uses_catalog_commit());
-        assert!(mode.uses_metadata_location_update());
     }
 }

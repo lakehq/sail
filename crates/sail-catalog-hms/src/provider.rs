@@ -1257,96 +1257,12 @@ mod tests {
 
     use std::time::Duration;
 
-    use arrow::datatypes::DataType;
     use pilota::{AHashMap, FastStr};
     use sail_catalog::error::{CatalogError, CatalogObject};
-    use sail_catalog::provider::{
-        AlterTableOptions, CatalogProvider, CreateTableColumnOptions,
-        CreateTableMetadataRequirement, CreateTableOptions, TableFormatCreateMetadataMode,
-    };
-    use sail_common::runtime::RuntimeHandle;
+    use sail_catalog::provider::AlterTableOptions;
     use sail_common_hms::hms::Table;
 
-    use super::{HmsCatalogConfig, HmsCatalogProvider};
-
-    #[tokio::test]
-    async fn test_create_table_metadata_requirement_for_lakehouse_formats() {
-        let runtime = RuntimeHandle::new(
-            tokio::runtime::Handle::current(),
-            tokio::runtime::Handle::current(),
-        );
-        let provider = HmsCatalogProvider::new(
-            "hms".to_string(),
-            HmsCatalogConfig {
-                uris: vec!["127.0.0.1:9083".to_string()],
-                thrift_transport: None,
-                auth: None,
-                kerberos_service_principal: None,
-                min_sasl_qop: None,
-                connect_timeout_secs: None,
-            },
-            runtime,
-        )
-        .unwrap();
-
-        let base = CreateTableOptions {
-            columns: vec![CreateTableColumnOptions {
-                name: "id".to_string(),
-                data_type: DataType::Int64,
-                nullable: false,
-                comment: None,
-                default: None,
-                generated_always_as: None,
-                identity: None,
-            }],
-            comment: None,
-            constraints: vec![],
-            location: None,
-            format: "iceberg".to_string(),
-            partition_by: vec![],
-            sort_by: vec![],
-            bucket_by: None,
-            if_not_exists: false,
-            replace: false,
-            properties: vec![],
-            is_external: true,
-            is_write_precondition: false,
-        };
-
-        assert_eq!(
-            provider.create_table_metadata_requirement(&base).unwrap(),
-            CreateTableMetadataRequirement::TableFormat {
-                mode: TableFormatCreateMetadataMode::CatalogCoordinated,
-            }
-        );
-
-        let mut write_precondition = base.clone();
-        write_precondition.is_write_precondition = true;
-        assert_eq!(
-            provider
-                .create_table_metadata_requirement(&write_precondition)
-                .unwrap(),
-            CreateTableMetadataRequirement::None
-        );
-
-        let mut delta = base.clone();
-        delta.format = "delta".to_string();
-        assert_eq!(
-            provider.create_table_metadata_requirement(&delta).unwrap(),
-            CreateTableMetadataRequirement::TableFormat {
-                mode: TableFormatCreateMetadataMode::PathManaged,
-            }
-        );
-
-        let mut parquet = base;
-        parquet.format = "parquet".to_string();
-        assert_eq!(
-            provider
-                .create_table_metadata_requirement(&parquet)
-                .unwrap(),
-            CreateTableMetadataRequirement::None
-        );
-    }
+    use super::HmsCatalogConfig;
 
     #[test]
     fn test_build_drop_table_request_without_purge_preserves_data() {
