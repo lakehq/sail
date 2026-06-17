@@ -286,9 +286,12 @@ fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
 fn try_to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if input.arguments.len() == 1 {
         let expr = input.arguments.one()?;
-        Ok(ScalarUDF::from(SparkTryToDate::new()).call(vec![expr]))
+        Ok(try_cast(expr, DataType::Date32))
     } else if input.arguments.len() == 2 {
         let (expr, format) = input.arguments.two()?;
+        if is_null_literal(&expr) || is_null_literal(&format) {
+            return Ok(lit(ScalarValue::Date32(None)));
+        }
         let expr_type = expr.get_type(input.function_context.schema);
         if let Ok(DataType::Timestamp(_, _)) = expr_type {
             let expr = expr_fn::to_local_time(vec![expr]);
