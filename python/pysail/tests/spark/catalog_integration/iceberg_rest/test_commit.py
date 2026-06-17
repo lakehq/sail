@@ -196,6 +196,36 @@ def test_insert_overwrite_advances_rest_catalog_metadata_location(
     assert [(row["id"], row["name"]) for row in rows] == [(3, "new"), (4, "new")]
 
 
+def test_rest_catalog_rejects_catalog_managed_iceberg_alter(
+    iceberg_spark: SparkSession,
+    iceberg_rest_endpoint: str,
+) -> None:
+    table_name = "alter_reject_t"
+    table_fqn = f"{NAMESPACE}.{table_name}"
+    iceberg_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+    iceberg_spark.sql(
+        f"""
+        CREATE TABLE {table_fqn} (
+          id INT
+        )
+        USING iceberg
+        """
+    )
+    before = _load_table(iceberg_rest_endpoint, table_name)
+    before_location = before["metadata-location"]
+
+    with pytest.raises(Exception, match="catalog-managed Iceberg tables"):
+        iceberg_spark.sql(
+            f"""
+            ALTER TABLE {table_fqn}
+            SET TBLPROPERTIES ('owner' = 'alice')
+            """
+        )
+
+    after = _load_table(iceberg_rest_endpoint, table_name)
+    assert after["metadata-location"] == before_location
+
+
 def test_rest_catalog_rejects_non_iceberg_create_format(
     iceberg_spark: SparkSession,
 ) -> None:

@@ -18,7 +18,7 @@ use sail_common_datafusion::catalog::delta::{
     unity_table_id_value, DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
 };
 use sail_common_datafusion::catalog::{
-    CatalogPartitionField, CatalogTableColumnIdentity, LakehouseExecutionContext,
+    CatalogPartitionField, CatalogTableColumnIdentity, CommitAuthority, LakehouseExecutionContext,
     LakehouseOperation,
 };
 use sail_common_datafusion::column_features::{
@@ -525,7 +525,9 @@ impl TableFormat for DeltaTableFormat {
         runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
         path: &str,
         operation: TableFormatAlterTableOperation,
+        lakehouse_table: Option<LakehouseExecutionContext>,
     ) -> Result<()> {
+        reject_catalog_managed_delta_alter(lakehouse_table.as_ref(), &operation)?;
         match operation {
             TableFormatAlterTableOperation::SetTableProperties { changes, if_exists } => {
                 self.alter_table_properties(runtime_env, path, changes, if_exists)
@@ -550,6 +552,35 @@ impl TableFormat for DeltaTableFormat {
                     .await
             }
         }
+    }
+}
+
+fn reject_catalog_managed_delta_alter(
+    lakehouse_table: Option<&LakehouseExecutionContext>,
+    operation: &TableFormatAlterTableOperation,
+) -> Result<()> {
+    let Some(context) = lakehouse_table else {
+        return Ok(());
+    };
+    if context.commit == CommitAuthority::DeltaRatifiedCommit {
+        return not_impl_err!(
+            "{} is not yet supported for catalog-managed Delta tables",
+            delta_alter_operation_name(operation)
+        );
+    }
+    Ok(())
+}
+
+fn delta_alter_operation_name(operation: &TableFormatAlterTableOperation) -> &'static str {
+    match operation {
+        TableFormatAlterTableOperation::SetTableProperties { .. } => {
+            "ALTER TABLE SET/UNSET TBLPROPERTIES"
+        }
+        TableFormatAlterTableOperation::AlterColumnType { .. } => "ALTER TABLE ALTER COLUMN TYPE",
+        TableFormatAlterTableOperation::AlterColumnDefault { .. } => {
+            "ALTER TABLE ALTER COLUMN DEFAULT"
+        }
+        TableFormatAlterTableOperation::AddCheckConstraint { .. } => "ALTER TABLE ADD CONSTRAINT",
     }
 }
 

@@ -373,7 +373,7 @@ def test_glue_rejects_stale_iceberg_metadata_location_update(
         glue_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a')")
         current_location = _metadata_location(moto_endpoint, database, table)
 
-        with pytest.raises(Exception, match="base metadata location"):
+        with pytest.raises(Exception, match="catalog-managed Iceberg tables"):
             glue_spark.sql(
                 f"""
                 ALTER TABLE {table_fqn}

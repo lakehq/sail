@@ -1,6 +1,7 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use sail_common_datafusion::array::serde::ArrowSerializer;
+use sail_common_datafusion::catalog::LakehouseOperation;
 use sail_common_datafusion::datasource::{
     is_lakehouse_format, TableFormatAlterTableOperation, TableFormatCreateTableColumn,
     TableFormatCreateTableInfo, TableFormatRegistry,
@@ -446,8 +447,16 @@ impl CatalogCommand {
                     })?;
                     let runtime = ctx.runtime_env();
                     let storage_operation = table_format_alter_operation(&options);
+                    let lakehouse_table = manager
+                        .resolve_lakehouse_table_status(
+                            &table,
+                            &table_status,
+                            LakehouseOperation::Alter,
+                        )
+                        .await?
+                        .execution;
                     table_format
-                        .alter_table(runtime, &location, storage_operation)
+                        .alter_table(runtime, &location, storage_operation, Some(lakehouse_table))
                         .await
                         .map_err(|e| CatalogError::External(e.to_string()))?;
 
@@ -975,7 +984,7 @@ struct ShowTableExtendedRow {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
     use datafusion::catalog::Session;
@@ -985,7 +994,8 @@ mod tests {
     use datafusion_expr::{LogicalPlan, TableSource};
     use sail_common_datafusion::catalog::display::{CatalogObjectDisplay, DefaultCatalogDisplay};
     use sail_common_datafusion::catalog::{
-        DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
+        CommitAuthority, DatabaseStatus, LakehouseExecutionContext, LakehouseFormat,
+        TableColumnStatus, TableKind, TableStatus,
     };
     use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
     use sail_common_datafusion::session::plan::{PlanFormatter, PlanService};
@@ -1199,7 +1209,9 @@ mod tests {
         }
     }
 
-    struct TestTableFormat;
+    struct TestTableFormat {
+        alter_contexts: Arc<Mutex<Vec<Option<LakehouseExecutionContext>>>>,
+    }
 
     #[async_trait]
     impl TableFormat for TestTableFormat {
@@ -1228,14 +1240,31 @@ mod tests {
             _runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
             _path: &str,
             _operation: TableFormatAlterTableOperation,
+            lakehouse_table: Option<LakehouseExecutionContext>,
         ) -> datafusion_common::Result<()> {
+            let mut alter_contexts = self.alter_contexts.lock().map_err(|e| {
+                datafusion_common::DataFusionError::Execution(format!(
+                    "failed to lock test alter contexts: {e}"
+                ))
+            })?;
+            alter_contexts.push(lakehouse_table);
             Ok(())
         }
     }
 
     fn test_session_context() -> SessionContext {
+        test_session_context_with_alter_contexts().0
+    }
+
+    fn test_session_context_with_alter_contexts() -> (
+        SessionContext,
+        Arc<Mutex<Vec<Option<LakehouseExecutionContext>>>>,
+    ) {
         let registry = Arc::new(TableFormatRegistry::new());
-        let register_result = registry.register(Arc::new(TestTableFormat));
+        let alter_contexts = Arc::new(Mutex::new(Vec::new()));
+        let register_result = registry.register(Arc::new(TestTableFormat {
+            alter_contexts: Arc::clone(&alter_contexts),
+        }));
         assert!(
             register_result.is_ok(),
             "failed to register test table format: {register_result:?}"
@@ -1247,7 +1276,7 @@ mod tests {
         let config = SessionConfig::new()
             .with_extension(registry)
             .with_extension(plan_service);
-        SessionContext::new_with_config(config)
+        (SessionContext::new_with_config(config), alter_contexts)
     }
 
     fn test_manager(alter_error: Option<&str>) -> CatalogManager {
@@ -1378,5 +1407,38 @@ mod tests {
         assert!(
             matches!(error, CatalogError::External(message) if message.contains("catalog sync failed"))
         );
+    }
+
+    #[tokio::test]
+    async fn alter_table_passes_lakehouse_context_to_table_format() {
+        let (ctx, alter_contexts) = test_session_context_with_alter_contexts();
+        let manager = test_manager(None);
+        let command = CatalogCommand::AlterTable {
+            table: vec!["items".to_string()],
+            if_exists: false,
+            options: AlterTableOptions::SetTableProperties {
+                properties: vec![("owner".to_string(), "alice".to_string())],
+            },
+        };
+
+        let result = command.execute(&ctx, &manager).await;
+        assert!(result.is_ok(), "unexpected ALTER TABLE error: {result:?}");
+
+        let contexts = alter_contexts.lock();
+        assert!(
+            contexts.is_ok(),
+            "failed to lock alter contexts: {contexts:?}"
+        );
+        let Ok(contexts) = contexts else {
+            unreachable!();
+        };
+        assert_eq!(contexts.len(), 1);
+        assert!(contexts[0].is_some(), "missing lakehouse context");
+        let Some(context) = contexts[0].as_ref() else {
+            unreachable!();
+        };
+        assert_eq!(context.operation, LakehouseOperation::Alter);
+        assert_eq!(context.format, LakehouseFormat::Delta);
+        assert_eq!(context.commit, CommitAuthority::Filesystem);
     }
 }

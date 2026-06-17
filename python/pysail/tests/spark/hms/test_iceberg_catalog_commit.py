@@ -152,7 +152,7 @@ def test_hms_rejects_stale_iceberg_metadata_location_update(
     )
     current_location = _metadata_location(reference_spark_s3, hms_s3_database, table)
 
-    with pytest.raises(Exception, match="base metadata location"):
+    with pytest.raises(Exception, match="catalog-managed Iceberg tables"):
         hms_s3_spark.sql(
             f"""
             ALTER TABLE {table_fqn}

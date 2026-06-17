@@ -602,7 +602,9 @@ pub trait TableFormat: Send + Sync {
         runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
         path: &str,
         operation: TableFormatAlterTableOperation,
+        lakehouse_table: Option<LakehouseExecutionContext>,
     ) -> Result<()> {
+        let _ = lakehouse_table;
         match operation {
             TableFormatAlterTableOperation::SetTableProperties { changes, if_exists } => {
                 self.alter_table_properties(runtime_env, path, changes, if_exists)

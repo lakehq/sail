@@ -28,7 +28,7 @@ use object_store::ObjectStoreExt;
 use sail_common_datafusion::catalog::iceberg::is_iceberg_table_marker;
 use sail_common_datafusion::catalog::managed::metadata_location_value;
 use sail_common_datafusion::catalog::{
-    CatalogPartitionField, LakehouseExecutionContext, ScanAuthority,
+    CatalogPartitionField, CommitAuthority, LakehouseExecutionContext, ScanAuthority,
 };
 use sail_common_datafusion::datasource::{
     create_sort_order, find_path_in_options, BucketBy, OptionLayer, PhysicalSinkMode, SinkInfo,
@@ -268,7 +268,9 @@ impl TableFormat for IcebergTableFormat {
         runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
         path: &str,
         operation: TableFormatAlterTableOperation,
+        lakehouse_table: Option<LakehouseExecutionContext>,
     ) -> Result<()> {
+        reject_catalog_managed_iceberg_alter(lakehouse_table.as_ref())?;
         match operation {
             TableFormatAlterTableOperation::SetTableProperties { changes, if_exists } => {
                 self.alter_table_properties(runtime_env, path, changes, if_exists)
@@ -277,6 +279,21 @@ impl TableFormat for IcebergTableFormat {
             op => not_impl_err!("unsupported Iceberg ALTER TABLE operation: {op:?}"),
         }
     }
+}
+
+fn reject_catalog_managed_iceberg_alter(
+    lakehouse_table: Option<&LakehouseExecutionContext>,
+) -> Result<()> {
+    let Some(context) = lakehouse_table else {
+        return Ok(());
+    };
+    if context.commit != CommitAuthority::Filesystem {
+        return not_impl_err!(
+            "ALTER TABLE is not yet supported for catalog-managed Iceberg tables: {}",
+            context.catalog_table().join(".")
+        );
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Educe)]
@@ -693,6 +710,16 @@ fn validate_iceberg_lakehouse_storage_access(
     {
         return not_impl_err!(
             "Iceberg REST catalog table {} requires remote signing, which is not implemented yet",
+            context.catalog_table().join(".")
+        );
+    }
+    if context
+        .rest_session
+        .as_ref()
+        .is_some_and(|session| session.storage_credential_count > 0)
+    {
+        return not_impl_err!(
+            "Iceberg REST catalog table {} requires vended storage credentials, which is not implemented yet",
             context.catalog_table().join(".")
         );
     }
@@ -1158,5 +1185,85 @@ mod tests {
             &result,
             Err(err) if format!("{err}").contains("requires remote signing")
         ));
+    }
+
+    #[test]
+    fn storage_access_rejects_required_rest_vended_credentials() {
+        let mut context = LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("rest".to_string()),
+            vec!["rest".to_string(), "db".to_string(), "tbl".to_string()],
+            CatalogTableIdentity {
+                table_id: Some("12345678-1234-1234-1234-123456789012".to_string()),
+                table_uri: Some("s3://bucket/table".to_string()),
+            },
+            LakehouseOperation::Read,
+            LakehouseFormat::Iceberg,
+            LakehouseAuthority::CatalogAuthoritative {
+                lifecycle: TableLifecycle::External,
+                pointer: MetadataPointerAuthority::IcebergRest,
+                commit: CommitAuthority::IcebergRestCommit,
+            },
+            ScanAuthority::ClientTableFormat,
+        );
+        context.rest_session = Some(IcebergRestTableSessionRef {
+            fingerprint: "rest-session".to_string(),
+            scan_planning_mode: Some("client".to_string()),
+            storage_credential_count: 1,
+            remote_signing_enabled: false,
+        });
+
+        let result = validate_iceberg_lakehouse_storage_access(Some(&context));
+        assert!(matches!(
+            &result,
+            Err(err) if format!("{err}").contains("vended storage credentials")
+        ));
+    }
+
+    #[test]
+    fn alter_rejects_catalog_managed_iceberg_context() {
+        let context = LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("glue".to_string()),
+            vec!["glue".to_string(), "db".to_string(), "tbl".to_string()],
+            CatalogTableIdentity {
+                table_id: Some("12345678-1234-1234-1234-123456789012".to_string()),
+                table_uri: Some("s3://bucket/table".to_string()),
+            },
+            LakehouseOperation::Alter,
+            LakehouseFormat::Iceberg,
+            LakehouseAuthority::CatalogAuthoritative {
+                lifecycle: TableLifecycle::External,
+                pointer: MetadataPointerAuthority::CatalogPropertyCas,
+                commit: CommitAuthority::IcebergMetadataLocationCas,
+            },
+            ScanAuthority::ClientTableFormat,
+        );
+
+        let result = reject_catalog_managed_iceberg_alter(Some(&context));
+        assert!(matches!(
+            &result,
+            Err(err) if format!("{err}").contains("catalog-managed Iceberg tables")
+        ));
+    }
+
+    #[test]
+    fn alter_allows_path_managed_iceberg_context() {
+        let context = LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("session".to_string()),
+            vec!["session".to_string(), "db".to_string(), "tbl".to_string()],
+            CatalogTableIdentity {
+                table_id: None,
+                table_uri: Some("file:///tmp/table".to_string()),
+            },
+            LakehouseOperation::Alter,
+            LakehouseFormat::Iceberg,
+            LakehouseAuthority::PathManaged,
+            ScanAuthority::ClientTableFormat,
+        );
+
+        let result = reject_catalog_managed_iceberg_alter(Some(&context));
+        assert!(
+            result.is_ok(),
+            "unexpected path-managed ALTER error: {result:?}"
+        );
     }
 }
