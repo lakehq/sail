@@ -174,6 +174,7 @@ use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
 use sail_function::scalar::math::spark_div::SparkIntervalDiv;
+use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
 use sail_function::scalar::math::spark_try_add::SparkTryAdd;
@@ -2254,6 +2255,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkPmod(gen::SparkPmodUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkPmod::new(ansi_mode))));
             }
+            UdfKind::SparkNegative(gen::SparkNegativeUdf { ansi_mode }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkNegative::new(ansi_mode))));
+            }
             UdfKind::SparkMakeTimestampNtz(gen::SparkMakeTimestampNtzUdf { is_try }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new(
                     is_try,
@@ -2697,6 +2701,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkPmod>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkPmod(gen::SparkPmodUdf { ansi_mode })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkNegative>() {
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkNegative(gen::SparkNegativeUdf { ansi_mode })
         } else if let Some(func) = node.inner().downcast_ref::<SparkMakeTimestampNtz>() {
             let is_try = func.is_try();
             UdfKind::SparkMakeTimestampNtz(gen::SparkMakeTimestampNtzUdf { is_try })

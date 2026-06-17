@@ -3,8 +3,10 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{i256, DataType, IntervalUnit, TimeUnit};
 use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
-use datafusion_common::ScalarValue;
-use datafusion_expr::{cast, expr, lit, BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF};
+use datafusion_common::{DFSchemaRef, ScalarValue};
+use datafusion_expr::{
+    cast, expr, lit, try_cast, BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF,
+};
 use datafusion_spark::function::math::expr_fn as math_fn;
 use half::f16;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -19,6 +21,7 @@ use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
 use sail_function::scalar::math::spark_div::SparkIntervalDiv;
+use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
 use sail_function::scalar::math::spark_try_add::SparkTryAdd;
@@ -105,13 +108,11 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
     } = input;
     if arguments.len() < 2 {
         let arg = arguments.one()?;
-        // DataFusion's Negative doesn't support Duration types, so we use a custom UDF
-        let arg_type = arg.get_type(function_context.schema);
-        if matches!(arg_type, Ok(DataType::Duration(_))) {
-            Ok(ScalarUDF::from(NegateDuration::new()).call(vec![arg]))
-        } else {
-            Ok(Expr::Negative(Box::new(arg)))
-        }
+        Ok(spark_unary_negate(
+            arg,
+            function_context.plan_config.ansi_mode,
+            function_context.schema,
+        ))
     } else {
         let (left, right) = arguments.two()?;
         let (left_type, right_type) = (
@@ -585,6 +586,75 @@ fn spark_pmod(input: ScalarFunctionInput) -> PlanResult<Expr> {
     Ok(udf.call(input.arguments))
 }
 
+/// Negate a numeric literal at planning time so a constant operand stays a
+/// literal (some functions, e.g. `ceil`/`floor` target scale, require a literal
+/// argument and run before the optimizer would fold a `SparkNegative` call).
+/// Returns `None` when the value is not a foldable numeric literal or the
+/// negation overflows (e.g. `-INT_MIN`), leaving such cases to the runtime UDF.
+fn negate_literal(arg: &Expr) -> Option<Expr> {
+    let Expr::Literal(value, _) = arg else {
+        return None;
+    };
+    let negated = match value {
+        ScalarValue::Int8(Some(v)) => ScalarValue::Int8(Some(v.checked_neg()?)),
+        ScalarValue::Int16(Some(v)) => ScalarValue::Int16(Some(v.checked_neg()?)),
+        ScalarValue::Int32(Some(v)) => ScalarValue::Int32(Some(v.checked_neg()?)),
+        ScalarValue::Int64(Some(v)) => ScalarValue::Int64(Some(v.checked_neg()?)),
+        ScalarValue::Float32(Some(v)) => ScalarValue::Float32(Some(-v)),
+        ScalarValue::Float64(Some(v)) => ScalarValue::Float64(Some(-v)),
+        _ => return None,
+    };
+    Some(lit(negated))
+}
+
+/// Spark unary minus / `negative(x)`. Duration negation goes through
+/// `NegateDuration`; everything else uses `SparkNegative`, which honors the ANSI
+/// overflow semantics with `ansi_mode` baked at planning time.
+fn spark_unary_negate(arg: Expr, ansi_mode: bool, schema: &DFSchemaRef) -> Expr {
+    match arg.get_type(schema) {
+        // DataFusion's `Negative` doesn't support Duration types, so route those
+        // to the dedicated UDF.
+        Ok(DataType::Duration(_)) => ScalarUDF::from(NegateDuration::new()).call(vec![arg]),
+        // Spark's unary minus coerces strings to DOUBLE before negating. The
+        // cast honors ANSI mode: an invalid string is NULL under ANSI off and
+        // errors under ANSI on. (Without this, the `SparkNegative` signature
+        // would coerce the string to an interval instead.)
+        Ok(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View) => {
+            let casted = if ansi_mode {
+                cast(arg, DataType::Float64)
+            } else {
+                try_cast(arg, DataType::Float64)
+            };
+            ScalarUDF::from(SparkNegative::new(ansi_mode)).call(vec![casted])
+        }
+        // Floating-point negation never overflows and is identical in both ANSI
+        // modes, so use the native (vectorized, foldable) operator.
+        Ok(DataType::Float16 | DataType::Float32 | DataType::Float64) => {
+            Expr::Negative(Box::new(arg))
+        }
+        // A negated numeric literal folds to a literal so constant-arg functions
+        // (e.g. `ceil`/`floor` target scale) still see a constant; overflow
+        // (`-INT_MIN`) can't fold and falls through to the runtime UDF.
+        _ => match negate_literal(&arg) {
+            Some(folded) => folded,
+            None => ScalarUDF::from(SparkNegative::new(ansi_mode)).call(vec![arg]),
+        },
+    }
+}
+
+fn spark_negative(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let arg = arguments.one()?;
+    Ok(spark_unary_negate(
+        arg,
+        function_context.plan_config.ansi_mode,
+        function_context.schema,
+    ))
+}
+
 pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -629,7 +699,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("log1p", F::unary(double(log1p))),
         ("log2", F::unary(double(log2))),
         ("mod", F::custom(spark_modulo)),
-        ("negative", F::unary(|x| Expr::Negative(Box::new(x)))),
+        ("negative", F::custom(spark_negative)),
         ("pi", F::nullary(expr_fn::pi)),
         ("pmod", F::custom(spark_pmod)),
         ("positive", F::unary(positive)),
