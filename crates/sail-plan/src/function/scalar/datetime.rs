@@ -25,6 +25,7 @@ use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
+use sail_function::scalar::datetime::spark_try_to_date::SparkTryToDate;
 use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
@@ -279,6 +280,28 @@ fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
         Ok(expr_fn::to_date(vec![expr, format]))
     } else {
         Err(PlanError::invalid("to_date requires 1 or 2 arguments"))
+    }
+}
+
+fn try_to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    if input.arguments.len() == 1 {
+        let expr = input.arguments.one()?;
+        Ok(ScalarUDF::from(SparkTryToDate::new()).call(vec![expr]))
+    } else if input.arguments.len() == 2 {
+        let (expr, format) = input.arguments.two()?;
+        let expr_type = expr.get_type(input.function_context.schema);
+        if let Ok(DataType::Timestamp(_, _)) = expr_type {
+            let expr = expr_fn::to_local_time(vec![expr]);
+            return Ok(try_cast(expr, DataType::Date32));
+        }
+        let expr = match expr_type {
+            Ok(_other) => expr,
+            Err(_) => cast(expr, DataType::Utf8),
+        };
+        let format = to_chrono_fmt(format);
+        Ok(ScalarUDF::from(SparkTryToDate::new()).call(vec![expr, format]))
+    } else {
+        Err(PlanError::invalid("try_to_date requires 1 or 2 arguments"))
     }
 }
 
@@ -1013,6 +1036,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ),
         ("timestampdiff", F::custom(datediff)),
         ("to_date", F::custom(to_date)),
+        ("try_to_date", F::custom(try_to_date)),
         ("to_time", F::var_arg(to_time)),
         (
             "to_timestamp",
