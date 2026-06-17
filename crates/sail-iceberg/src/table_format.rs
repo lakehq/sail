@@ -689,6 +689,8 @@ fn validate_iceberg_read_lakehouse_context(
     };
     validate_iceberg_lakehouse_storage_access(Some(context))?;
     if context.scan == ScanAuthority::IcebergRestServerSide {
+        // TODO: Implement Iceberg REST server-side scan planning sessions before
+        // allowing server-mode tables to fall through to client-side storage access.
         return not_impl_err!(
             "Iceberg REST catalog table {} requires server-side scan planning, which is not implemented yet",
             context.catalog_table().join(".")
@@ -708,6 +710,7 @@ fn validate_iceberg_lakehouse_storage_access(
         .as_ref()
         .is_some_and(|session| session.remote_signing_enabled)
     {
+        // TODO: Wire REST remote signing into Iceberg FileIO/object-store access.
         return not_impl_err!(
             "Iceberg REST catalog table {} requires remote signing, which is not implemented yet",
             context.catalog_table().join(".")
@@ -718,6 +721,7 @@ fn validate_iceberg_lakehouse_storage_access(
         .as_ref()
         .is_some_and(|session| session.storage_credential_count > 0)
     {
+        // TODO: Apply REST vended credentials to operation-scoped storage access.
         return not_impl_err!(
             "Iceberg REST catalog table {} requires vended storage credentials, which is not implemented yet",
             context.catalog_table().join(".")

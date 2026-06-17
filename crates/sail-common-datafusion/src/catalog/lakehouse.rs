@@ -151,6 +151,8 @@ pub struct IcebergRestTableSessionRef {
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct CapabilityFingerprint(pub String);
 
+// TODO: Wire versioned catalog providers into this context, including ref/hash
+// mutability and expected-head commit preconditions.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct VersionedCatalogContext {
     pub ref_name: String,
@@ -161,6 +163,8 @@ pub struct VersionedCatalogContext {
     pub expected_hash: Option<String>,
 }
 
+// TODO: Populate this for OneLake/UniForm-style providers and enforce
+// freshness, conversion failure, limitations, and write policy in planning.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct CrossFormatMetadata {
     pub source_format: LakehouseFormat,
@@ -182,6 +186,8 @@ pub struct CrossFormatLimitation {
     pub message: String,
 }
 
+// TODO: Map provider authorization and governance decisions into operation-scoped
+// planning checks before catalog-authoritative storage mutation is allowed.
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct GovernanceContext {
     pub metadata_access: AccessDecision,

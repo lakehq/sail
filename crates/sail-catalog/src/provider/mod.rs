@@ -65,6 +65,8 @@ pub trait CatalogProvider: Send + Sync {
     /// Whether catalog `CREATE TABLE` needs the table format to create storage metadata before
     /// registering the catalog object. Providers that can reject create options should do so here
     /// before storage metadata is materialized.
+    // TODO: Remove this compatibility hook after LakehouseCreatePlan owns all
+    // create/register paths.
     fn create_table_metadata_requirement(
         &self,
         options: &CreateTableOptions,

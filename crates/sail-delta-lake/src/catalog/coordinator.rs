@@ -28,6 +28,8 @@ struct UnityCommitColumnType {
     type_scale: Option<i32>,
 }
 
+// TODO: Extend catalog-managed Delta coordination to cover inline ratified
+// commits, provider protocol profiles, and commit-state-unknown reconciliation.
 pub(crate) struct DeltaCatalogCommitCoordinator<'a, C: SessionExtensionAccessor + ?Sized> {
     context: &'a C,
     catalog_table: &'a [String],

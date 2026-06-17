@@ -13,6 +13,12 @@ use crate::provider::{
     CreateTableMetadataRequirement, CreateTableOptions, TableFormatCreateMetadataMode,
 };
 
+// TODO: Complete the remaining lakehouse catalog capability work:
+// typed create/register state machines; typed commit recovery and cleanup
+// policy; operation-scoped credentials; REST server-side scan planning; Delta
+// inline ratified commits and protocol profiles; Iceberg HMS/Glue/Nessie
+// authority state machines; cross-format metadata and governance; and migration
+// shim removal after conformance coverage.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub enum LakehouseCapability {
     TableAccessSessions,
@@ -54,6 +60,8 @@ pub struct LakehouseCreatePlan {
     pub materialization: LakehouseCreateMaterialization,
 }
 
+// TODO: Replace this compatibility materialization shape with protocol-specific
+// create/register state machines for UC Delta and Iceberg REST staged/register flows.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LakehouseCreateMaterialization {
     None,
@@ -121,6 +129,9 @@ pub struct LakehouseCommitRequest {
     pub payload: Option<serde_json::Value>,
 }
 
+// TODO: Expand this with typed success payloads, retry/reconcile hints, and
+// cleanup policy before wiring providers that can return commit-state-unknown
+// after side effects.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LakehouseCommitOutcome {
     Committed {

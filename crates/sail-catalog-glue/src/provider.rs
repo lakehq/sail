@@ -729,6 +729,8 @@ impl CatalogProvider for GlueCatalogProvider {
             .database_name(&database_name)
             .table_input(table_input);
         if let Some(version_id) = table_value.version_id() {
+            // TODO: Promote Glue optimistic version conflicts and Lake Formation
+            // governance/credential modes into typed lakehouse commit outcomes.
             update_table = update_table.version_id(version_id.to_string());
         }
         let result = update_table.send().await;

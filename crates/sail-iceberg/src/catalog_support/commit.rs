@@ -202,6 +202,8 @@ impl<'a, C: SessionExtensionAccessor + ?Sized> IcebergCatalogCommitCoordinator<'
                     Ok(CatalogCommitOutcome::Conflict)
                 }
                 LakehouseCommitOutcome::StateUnknown { message } => {
+                    // TODO: Preserve recovery and cleanup policy for Iceberg
+                    // commit-state-unknown instead of reducing it to an execution error.
                     Err(DataFusionError::Execution(format!(
                         "Iceberg catalog commit state is unknown: {message}"
                     )))

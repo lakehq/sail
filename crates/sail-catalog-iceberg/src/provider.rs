@@ -1304,6 +1304,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 Some(REST_ACCESS_DELEGATION_VENDED_CREDENTIALS),
             )
             .await?;
+        // TODO: Convert preserved REST table-session credentials into operation-scoped
+        // FileIO/object-store access instead of only fingerprinting the session.
         let rest_session = self.rest_table_session_ref(database, table, catalog_config, &result)?;
         if rest_session.scan_planning_mode.as_deref() == Some("server") {
             context.scan = ScanAuthority::IcebergRestServerSide;
