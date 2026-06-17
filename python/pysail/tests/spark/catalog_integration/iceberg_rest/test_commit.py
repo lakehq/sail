@@ -156,6 +156,46 @@ def test_merge_schema_append_advances_rest_catalog_metadata_location(
     assert [(row["id"], row["name"], row["age"]) for row in rows] == [(1, "a", None), (2, "b", 20)]
 
 
+def test_insert_overwrite_advances_rest_catalog_metadata_location(
+    iceberg_spark: SparkSession,
+    iceberg_rest_endpoint: str,
+) -> None:
+    table_name = "overwrite_t"
+    table_fqn = f"{NAMESPACE}.{table_name}"
+    iceberg_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+    iceberg_spark.sql(
+        f"""
+        CREATE TABLE {table_fqn} (
+          id INT,
+          name STRING
+        )
+        USING iceberg
+        """
+    )
+    created = _load_table(iceberg_rest_endpoint, table_name)
+    created_location = created["metadata-location"]
+    _assert_uuid_metadata_location(created_location, 0)
+
+    iceberg_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'old'), (2, 'old')")  # noqa: S608
+    before_overwrite = _load_table(iceberg_rest_endpoint, table_name)
+    before_overwrite_location = before_overwrite["metadata-location"]
+    _assert_uuid_metadata_location(before_overwrite_location, 1)
+
+    iceberg_spark.sql(f"INSERT OVERWRITE TABLE {table_fqn} VALUES (3, 'new'), (4, 'new')")  # noqa: S608
+    after_overwrite = _load_table(iceberg_rest_endpoint, table_name)
+    after_overwrite_location = after_overwrite["metadata-location"]
+    assert after_overwrite_location != before_overwrite_location
+    _assert_uuid_metadata_location(after_overwrite_location, 2)
+    assert [entry["metadata-file"] for entry in after_overwrite["metadata"]["metadata-log"]] == [
+        created_location,
+        before_overwrite_location,
+    ]
+    assert after_overwrite["metadata"]["snapshots"][-1]["summary"]["operation"] == "overwrite"
+
+    rows = iceberg_spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()  # noqa: S608
+    assert [(row["id"], row["name"]) for row in rows] == [(3, "new"), (4, "new")]
+
+
 def test_rest_catalog_rejects_non_iceberg_create_format(
     iceberg_spark: SparkSession,
 ) -> None:

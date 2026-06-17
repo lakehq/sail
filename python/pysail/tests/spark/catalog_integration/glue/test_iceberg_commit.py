@@ -216,6 +216,55 @@ def test_merge_schema_append_advances_glue_iceberg_metadata_location(
         glue_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
 
 
+def test_insert_overwrite_advances_glue_iceberg_metadata_location(
+    glue_spark: SparkSession,
+    moto_endpoint: str,
+    tmp_path: Path,
+) -> None:
+    database = "glue_iceberg_overwrite_db"
+    table = "overwrite_t"
+    table_fqn = f"{database}.{table}"
+    location = (tmp_path / "overwrite_t").as_uri()
+
+    glue_spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
+    try:
+        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        glue_spark.sql(
+            f"""
+            CREATE TABLE {table_fqn} (
+              id INT,
+              name STRING
+            )
+            USING ICEBERG
+            LOCATION '{location}'
+            """
+        )
+        created_location = _metadata_location(moto_endpoint, database, table)
+        _assert_uuid_metadata_location(created_location, 0)
+
+        glue_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'old'), (2, 'old')")
+        before_overwrite_location = _metadata_location(moto_endpoint, database, table)
+        _assert_uuid_metadata_location(before_overwrite_location, 1)
+
+        glue_spark.sql(f"INSERT OVERWRITE TABLE {table_fqn} VALUES (3, 'new'), (4, 'new')")
+        after_overwrite_location = _metadata_location(moto_endpoint, database, table)
+        assert after_overwrite_location != before_overwrite_location
+        assert after_overwrite_location.startswith(location)
+        _assert_uuid_metadata_location(after_overwrite_location, 2)
+        after_metadata = _load_metadata_json(after_overwrite_location)
+        assert [entry["metadata-file"] for entry in after_metadata["metadata-log"]] == [
+            created_location,
+            before_overwrite_location,
+        ]
+        assert after_metadata["snapshots"][-1]["summary"]["operation"] == "overwrite"
+
+        rows = glue_spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
+        assert [(row.id, row.name) for row in rows] == [(3, "new"), (4, "new")]
+    finally:
+        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        glue_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+
+
 def test_create_table_validation_runs_before_glue_iceberg_metadata_materialization(
     glue_spark: SparkSession,
     tmp_path: Path,

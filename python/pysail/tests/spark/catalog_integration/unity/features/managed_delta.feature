@@ -219,6 +219,34 @@ Feature: Unity Catalog managed Delta table operations
     Then staged Delta commit for version 2 exists in location
     Then Unity Catalog Delta commit for table unity_table_test.managed_delta_multi_commit_t version 3 references staged Delta commit in location
 
+  Scenario: INSERT OVERWRITE on managed Delta table is coordinated by Unity Catalog
+    Given statement
+      """
+      CREATE TABLE unity_table_test.managed_delta_overwrite_t
+      USING delta
+      AS SELECT * FROM VALUES
+        (1, 'old'),
+        (2, 'old')
+      AS t(id, name)
+      """
+    Given statement
+      """
+      INSERT OVERWRITE TABLE unity_table_test.managed_delta_overwrite_t VALUES
+        (3, 'new'),
+        (4, 'new')
+      """
+    Given variable location for table unity_table_test.managed_delta_overwrite_t
+    When query
+      """
+      SELECT id, name FROM unity_table_test.managed_delta_overwrite_t ORDER BY id
+      """
+    Then query result ordered
+      | id | name |
+      | 3  | new  |
+      | 4  | new  |
+    Then Unity Catalog table unity_table_test.managed_delta_overwrite_t is a managed Delta table
+    Then Unity Catalog Delta commit for table unity_table_test.managed_delta_overwrite_t version 2 references staged Delta commit in location
+
   Scenario: Managed Delta writes use Unity latest version when prior commit is unpublished
     Given statement
       """
