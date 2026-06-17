@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use arrow::array::types::Date32Type;
 use arrow::array::{Array, Date32Array};
-use arrow::compute::cast_with_options;
 use arrow::compute::kernels::cast_utils::Parser;
+use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::*;
 use datafusion::functions::datetime::to_date::ToDateFunc;
@@ -12,8 +12,6 @@ use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
 use datafusion_common::{exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_expr_common::signature::TypeSignature;
-
-use arrow::compute::CastOptions;
 
 const TRY_CAST_OPTIONS: CastOptions<'static> = CastOptions {
     safe: true,
