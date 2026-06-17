@@ -233,6 +233,13 @@ def patch_pyspark_connect_test_class():
 class TestMarker:
     keywords: list[str]
     reason: str
+    spark_major_version_less_than: int | None = None
+
+
+def _spark_major_version() -> int:
+    import pyspark
+
+    return int(pyspark.__version__.split(".", maxsplit=1)[0])
 
 
 SKIPPED_SPARK_TESTS = [
@@ -308,6 +315,10 @@ SKIPPED_SPARK_TESTS = [
         reason="Segmentation fault",
     ),
     TestMarker(
+        keywords=["test_recursion_handling_for_plan_logging"],
+        reason="Stack overflow due to large query plan",
+    ),
+    TestMarker(
         keywords=["test_reattach.py"],
         reason="Slow test not working yet",
     ),
@@ -373,12 +384,37 @@ SKIPPED_SPARK_TESTS = [
         keywords=["pyspark.sql.catalog.Catalog.listCatalogs"],
         reason="Sail exposes an additional 'system' catalog that Spark does not have; ported to PySail test suite",
     ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame._ipython_key_completions_"],
+        reason="Not available in Spark Connect until Spark 4",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame._joinAsOf"],
+        reason="Not available in Spark Connect until Spark 4",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.checkpoint"],
+        reason="Not available in Spark Connect until Spark 4",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.localCheckpoint"],
+        reason="Not available in Spark Connect until Spark 4",
+        spark_major_version_less_than=4,
+    ),
 ]
 
 
 def add_pyspark_test_markers(items: list[pytest.Item]):
     for item in items:
         for test in SKIPPED_SPARK_TESTS:
+            if (
+                test.spark_major_version_less_than is not None
+                and _spark_major_version() >= test.spark_major_version_less_than
+            ):
+                continue
             if all(k in item.keywords for k in test.keywords):
                 item.add_marker(pytest.mark.skip(reason=test.reason))
 

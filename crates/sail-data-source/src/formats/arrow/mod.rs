@@ -1,41 +1,36 @@
-use std::sync::Arc;
-
 use datafusion::catalog::Session;
-use datafusion::datasource::file_format::arrow::ArrowFormat;
-use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_datasource::file_format::FileFormat;
+use datafusion_common::Result;
 use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::formats::listing::{DefaultSchemaInfer, ListingFormat, ListingTableFormat, SchemaInfer};
+use crate::listing::source::{FormatFactory, ListingTableFormat};
 
-pub type ArrowTableFormat = ListingTableFormat<ArrowListingFormat>;
+// Some of the code in the `read` and `write` modules is adapted from the DataFusion `ArrowFormat` implementation.
+// [CREDIT]: https://github.com/apache/datafusion/blob/53.1.0/datafusion/datasource-arrow/src/file_format.rs
+
+mod read;
+mod write;
+
+pub use read::ArrowReadFormat;
+pub use write::ArrowWriteFormat;
+
+pub type ArrowTableFormat = ListingTableFormat<ArrowFormatFactory>;
 
 #[derive(Debug, Default)]
-pub struct ArrowListingFormat;
+pub struct ArrowFormatFactory;
 
-impl ListingFormat for ArrowListingFormat {
-    fn name(&self) -> &'static str {
+impl FormatFactory for ArrowFormatFactory {
+    type Read = ArrowReadFormat;
+    type Write = ArrowWriteFormat;
+
+    fn name() -> &'static str {
         "arrow"
     }
 
-    fn create_read_format(
-        &self,
-        _ctx: &dyn Session,
-        _options: Vec<OptionLayer>,
-        _compression: Option<CompressionTypeVariant>,
-    ) -> datafusion_common::Result<Arc<dyn FileFormat>> {
-        Ok(Arc::new(ArrowFormat))
+    fn read(_ctx: &dyn Session, _options: Vec<OptionLayer>) -> Result<Self::Read> {
+        Ok(ArrowReadFormat)
     }
 
-    fn create_write_format(
-        &self,
-        _ctx: &dyn Session,
-        _options: Vec<OptionLayer>,
-    ) -> datafusion_common::Result<(Arc<dyn FileFormat>, Option<String>)> {
-        Ok((Arc::new(ArrowFormat), None))
-    }
-
-    fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
-        Arc::new(DefaultSchemaInfer)
+    fn write(_ctx: &dyn Session, _options: Vec<OptionLayer>) -> Result<Self::Write> {
+        Ok(ArrowWriteFormat)
     }
 }

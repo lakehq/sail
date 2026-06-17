@@ -58,7 +58,7 @@ jobs:
         # separately, we skip coverage upload for Dependabot to avoid failures,
         # since coverage reports from Dependabot runs are not useful.
         if: ${{ github.actor != 'dependabot[bot]' }}
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage-rust-unit.info
@@ -93,7 +93,7 @@ jobs:
 
       - name: Upload Rust slow coverage to Codecov
         if: ${{ inputs.run_catalog_tests == 'true' && github.actor != 'dependabot[bot]' }}
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage-rust-slow.info

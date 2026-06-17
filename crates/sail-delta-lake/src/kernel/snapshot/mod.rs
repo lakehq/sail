@@ -39,7 +39,10 @@ use crate::kernel::checkpoints::{
 use crate::kernel::log_segment::ReplayedTableHeader;
 pub use crate::kernel::snapshot::stats::SnapshotPruningStats;
 use crate::kernel::{DeltaSnapshotConfig, SchemaRef};
-use crate::schema::{arrow_field_physical_name, arrow_schema_reorder_partitions};
+use crate::schema::{
+    arrow_field_physical_name, arrow_schema_reorder_partitions, protocol_supports_type_widening,
+    schema_contains_type_widening_metadata, validate_type_widening_metadata,
+};
 use crate::spec::fields::{
     FIELD_NAME_MODIFICATION_TIME, FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_PATH,
     FIELD_NAME_SIZE, FIELD_NAME_STATS_PARSED, STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES,
@@ -47,8 +50,8 @@ use crate::spec::fields::{
 };
 use crate::spec::{
     Add, ColumnMappingMode, ColumnMetadataKey, CommitConflictError, DeltaError as DeltaTableError,
-    DeltaResult, DomainMetadata, Metadata, Protocol, Remove, TableFeature, TableProperties,
-    Transaction, TransactionError, VersionChecksum,
+    DeltaResult, DomainMetadata, Metadata, Protocol, Remove, StructType, TableFeature,
+    TableProperties, Transaction, TransactionError, VersionChecksum,
 };
 use crate::storage::LogStore;
 use crate::table::{
@@ -112,6 +115,36 @@ impl Clone for DeltaSnapshot {
 }
 
 impl DeltaSnapshot {
+    pub(crate) fn from_metadata_only_parts(
+        log_store: &dyn LogStore,
+        config: DeltaSnapshotConfig,
+        version: i64,
+        protocol: Protocol,
+        metadata: Metadata,
+        txns: HashMap<String, Transaction>,
+        domain_metadata: HashMap<String, DomainMetadata>,
+        commit_timestamps: BTreeMap<i64, i64>,
+    ) -> DeltaResult<Self> {
+        let arrow_schema = Arc::new(metadata.parse_schema_arrow()?);
+        let table_properties = TableProperties::from(metadata.configuration().iter());
+
+        Ok(Self {
+            version,
+            table_url: log_store.config().location.clone(),
+            config,
+            protocol,
+            metadata,
+            table_properties,
+            arrow_schema,
+            adds: Arc::new(Vec::new()),
+            removes: Arc::new(Vec::new()),
+            app_txns: Arc::new(txns),
+            domain_metadata: Arc::new(domain_metadata),
+            commit_timestamps: Arc::new(commit_timestamps),
+            files_batch: OnceCell::new(),
+        })
+    }
+
     pub(crate) async fn try_new(
         log_store: &dyn LogStore,
         config: DeltaSnapshotConfig,
@@ -120,19 +153,36 @@ impl DeltaSnapshot {
     ) -> DeltaResult<Self> {
         let target_version = match version {
             Some(v) => v,
-            None => match latest_replayable_version(log_store).await {
-                Ok(v) => v,
-                Err(crate::spec::DeltaError::MissingVersion) => {
-                    return Err(DeltaTableError::invalid_table_location(
-                        "No commit files found in _delta_log",
-                    ))
+            None => {
+                if let Some(version) = config
+                    .catalog_managed_commits
+                    .as_ref()
+                    .and_then(|commits| commits.latest_replay_version())
+                {
+                    version
+                } else {
+                    match latest_replayable_version(log_store).await {
+                        Ok(v) => v,
+                        Err(crate::spec::DeltaError::MissingVersion) => {
+                            return Err(DeltaTableError::invalid_table_location(
+                                "No commit files found in _delta_log",
+                            ))
+                        }
+                        Err(err) => return Err(err),
+                    }
                 }
-                Err(err) => return Err(err),
-            },
+            }
         };
 
         if !config.require_files {
-            match load_replayed_table_header(target_version, log_store, replay_hint).await {
+            match load_replayed_table_header(
+                target_version,
+                log_store,
+                replay_hint,
+                config.catalog_managed_commits.as_ref(),
+            )
+            .await
+            {
                 Ok(Some(replayed)) => {
                     return Self::from_replayed_header(log_store, config, replayed)
                 }
@@ -146,7 +196,12 @@ impl DeltaSnapshot {
             }
         }
 
-        let replayed = load_replayed_table_state(target_version, log_store).await?;
+        let replayed = load_replayed_table_state(
+            target_version,
+            log_store,
+            config.catalog_managed_commits.as_ref(),
+        )
+        .await?;
         Self::from_replayed_state(log_store, config, replayed)
     }
 
@@ -251,7 +306,18 @@ impl DeltaSnapshot {
         let target_version = match target_version {
             Some(v) => i64::try_from(v)
                 .map_err(|_| DeltaTableError::generic("target version overflows i64"))?,
-            None => log_store.get_latest_version(self.version()).await?,
+            None => {
+                if let Some(version) = self
+                    .config
+                    .catalog_managed_commits
+                    .as_ref()
+                    .and_then(|commits| commits.latest_replay_version())
+                {
+                    version
+                } else {
+                    log_store.get_latest_version(self.version()).await?
+                }
+            }
         };
 
         if target_version == self.version() {
@@ -311,6 +377,14 @@ impl DeltaSnapshot {
         self.domain_metadata.as_ref()
     }
 
+    pub(crate) fn app_txns(&self) -> &HashMap<String, Transaction> {
+        self.app_txns.as_ref()
+    }
+
+    pub(crate) fn commit_timestamps(&self) -> &BTreeMap<i64, i64> {
+        self.commit_timestamps.as_ref()
+    }
+
     pub fn load_config(&self) -> &DeltaSnapshotConfig {
         &self.config
     }
@@ -368,9 +442,35 @@ impl DeltaSnapshot {
     }
 
     pub fn ensure_data_read_supported(&self) -> DeltaResult<()> {
+        if (self
+            .protocol()
+            .has_reader_feature(&TableFeature::CatalogManaged)
+            || self
+                .protocol()
+                .has_writer_feature(&TableFeature::CatalogManaged))
+            && self.config.catalog_managed_commits.is_none()
+        {
+            return Err(DeltaTableError::Unsupported(
+                "Reading catalog-managed Delta tables requires catalog commit replay context"
+                    .to_string(),
+            ));
+        }
+
         crate::kernel::transaction::PROTOCOL
             .can_read_from_protocol(self.protocol())
-            .map_err(map_read_protocol_error)
+            .map_err(map_read_protocol_error)?;
+
+        let schema = StructType::try_from(self.schema())?;
+        let has_type_changes = schema_contains_type_widening_metadata(&schema);
+        if has_type_changes && !protocol_supports_type_widening(self.protocol()) {
+            return Err(DeltaTableError::Unsupported(
+                "Reading this Delta table requires the typeWidening reader feature".to_string(),
+            ));
+        }
+        if has_type_changes {
+            validate_type_widening_metadata(&schema)?;
+        }
+        Ok(())
     }
 
     fn has_unsupported_table_features(&self) -> bool {
@@ -902,7 +1002,7 @@ mod tests {
 
     use super::DeltaSnapshot;
     use crate::datasource::DeltaScanConfig;
-    use crate::kernel::DeltaSnapshotConfig;
+    use crate::kernel::{CatalogManagedCommitSet, DeltaSnapshotConfig};
     use crate::logical::table_source::DeltaTableSource;
     use crate::spec::{
         Add, ColumnMappingMode, ColumnMetadataKey, DataType, DomainMetadata, Metadata,
@@ -1248,6 +1348,41 @@ mod tests {
             ]),
         );
         let snapshot = test_snapshot(protocol, test_metadata([]), Vec::new());
+
+        assert!(snapshot.ensure_data_read_supported().is_ok());
+    }
+
+    #[test]
+    fn data_read_support_rejects_catalog_managed_without_catalog_replay() {
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::CatalogManaged]),
+            Some(vec![TableFeature::CatalogManaged]),
+        );
+        let snapshot = test_snapshot(protocol, test_metadata([]), Vec::new());
+
+        let result = snapshot.ensure_data_read_supported();
+        assert!(matches!(
+            result,
+            Err(crate::spec::DeltaError::Unsupported(message))
+                if message.contains("catalog commit replay context")
+        ));
+    }
+
+    #[test]
+    fn data_read_support_allows_catalog_managed_with_catalog_replay() {
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::CatalogManaged]),
+            Some(vec![TableFeature::CatalogManaged]),
+        );
+        let mut snapshot = test_snapshot(protocol, test_metadata([]), Vec::new());
+        snapshot.config.catalog_managed_commits = Some(CatalogManagedCommitSet {
+            latest_table_version: 0,
+            commits: Vec::new(),
+        });
 
         assert!(snapshot.ensure_data_read_supported().is_ok());
     }

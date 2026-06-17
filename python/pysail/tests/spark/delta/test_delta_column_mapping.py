@@ -10,6 +10,26 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+def _latest_metadata(base: Path) -> dict:
+    for log_file in sorted((base / "_delta_log").glob("*.json"), reverse=True):
+        with log_file.open("r", encoding="utf-8") as f:
+            for line in f:
+                obj = json.loads(line)
+                if "metaData" in obj:
+                    return obj["metaData"]
+    message = f"metadata action not found in {base / '_delta_log'}"
+    raise AssertionError(message)
+
+
+def _physical_name_for_column(metadata: dict, column_name: str) -> str:
+    schema = json.loads(metadata["schemaString"])
+    for field in schema["fields"]:
+        if field["name"] == column_name:
+            return field.get("metadata", {}).get("delta.columnMapping.physicalName", column_name)
+    message = f"column {column_name!r} not found in schema"
+    raise AssertionError(message)
+
+
 class TestDeltaColumnMapping:
     def test_create_table_with_column_mapping_name(self, spark, tmp_path: Path):
         base = tmp_path / "delta_cm_name"
@@ -249,6 +269,45 @@ class TestDeltaColumnMapping:
             {"id": 3, "region": "us", "data": "c"},
             {"id": 4, "region": "asia", "data": "d"},
         ]
+
+    def test_remove_actions_for_partitioned_column_mapping_table_use_physical_keys(self, spark, tmp_path: Path):
+        base = tmp_path / "delta_cm_partition_remove_keys"
+
+        df = spark.createDataFrame(
+            [
+                Row(id=1, region="us", data="a"),
+                Row(id=2, region="eu", data="b"),
+            ]
+        )
+        (
+            df.write.format("delta")
+            .mode("overwrite")
+            .option("column_mapping_mode", "name")
+            .partitionBy("region")
+            .save(str(base))
+        )
+
+        physical_region = _physical_name_for_column(_latest_metadata(base), "region")
+        assert physical_region != "region"
+
+        df2 = spark.createDataFrame(
+            [
+                Row(id=3, region="apac", data="c"),
+            ]
+        )
+        df2.write.format("delta").mode("overwrite").save(str(base))
+
+        latest_log = sorted((base / "_delta_log").glob("*.json"))[-1]
+        remove_partition_values = []
+        with latest_log.open("r", encoding="utf-8") as f:
+            for line in f:
+                action = json.loads(line)
+                if "remove" in action:
+                    remove_partition_values.append(action["remove"].get("partitionValues", {}))
+
+        assert remove_partition_values
+        assert all(physical_region in values for values in remove_partition_values)
+        assert all("region" not in values for values in remove_partition_values)
 
     def test_partitioned_table_with_column_mapping_id(self, spark, tmp_path: Path):
         """Partitioned table append/read should work in column mapping id mode."""

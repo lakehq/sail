@@ -2,7 +2,8 @@ import pandas as pd
 import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql import Row
-from pyspark.sql.functions import col, lit
+from pyspark.sql.functions import col, lit, row_number
+from pyspark.sql.window import Window
 
 
 def test_dataframe_drop(spark):
@@ -110,3 +111,40 @@ def test_dataframe_with_column_alias(spark):
             }
         ).astype({"id": "int32", "col1": "int32", "col3": "int32"}),
     )
+
+
+def test_with_metadata(spark):
+    df = spark.sql("SELECT 1 AS a")
+    assert df.schema["a"].metadata == {}
+    assert df.withMetadata("a", {"m": "x"}).schema["a"].metadata == {"m": "x"}
+    assert df.withMetadata("a", {"m": "x"}).withMetadata("a", {"n": "y"}).schema["a"].metadata == {"n": "y"}
+    assert df.withMetadata("a", {"m": "x"}).withMetadata("a", {}).schema["a"].metadata == {}
+
+
+def reverse_sorted_map_in_pandas(df):
+    def reverse_batches(iterator):
+        for pdf in iterator:
+            yield pd.DataFrame({"id": pdf["id"].iloc[::-1].to_numpy()})
+
+    return df.orderBy(col("id")).mapInPandas(reverse_batches, schema="id long")
+
+
+def test_map_in_pandas_reordered_rows_can_be_sorted_again(spark):
+    actual = reverse_sorted_map_in_pandas(spark.range(0, 4, 1, 1)).orderBy(col("id")).toPandas()
+    expected = pd.DataFrame({"id": [0, 1, 2, 3]}, dtype="int64")
+
+    assert_frame_equal(actual, expected)
+
+
+def test_map_in_pandas_reordering_does_not_satisfy_window_ordering(spark):
+    window = Window.orderBy(col("id"))
+
+    actual = (
+        reverse_sorted_map_in_pandas(spark.range(0, 4, 1, 1))
+        .select("id", row_number().over(window).alias("rn"))
+        .orderBy(col("id"))
+        .toPandas()
+    )
+    expected = pd.DataFrame({"id": [0, 1, 2, 3], "rn": [1, 2, 3, 4]}).astype({"rn": "int32"})
+
+    assert_frame_equal(actual, expected)

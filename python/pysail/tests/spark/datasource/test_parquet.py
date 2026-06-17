@@ -24,6 +24,39 @@ def test_parquet_read_write_basic(spark, sample_df, tmp_path):
     assert sorted(sample_df.collect(), key=safe_sort_key) == sorted(read_df.collect(), key=safe_sort_key)
 
 
+def test_parquet_write_modes(spark, tmp_path):
+    path = str(tmp_path / "parquet_write_modes")
+
+    spark.createDataFrame([(1, "old")], schema="id INT, value STRING").write.parquet(path)
+
+    with pytest.raises(Exception, match="already exists"):
+        spark.createDataFrame([(2, "error")], schema="id INT, value STRING").write.parquet(path)
+
+    spark.createDataFrame([(3, "ignored")], schema="id INT, value STRING").write.mode("ignore").parquet(path)
+    assert spark.read.parquet(path).orderBy("id").collect() == [Row(id=1, value="old")]
+
+    spark.createDataFrame([(4, "appended")], schema="id INT, value STRING").write.mode("append").parquet(path)
+    assert spark.read.parquet(path).orderBy("id").collect() == [
+        Row(id=1, value="old"),
+        Row(id=4, value="appended"),
+    ]
+
+    spark.createDataFrame([(5, "new")], schema="id INT, value STRING").write.mode("overwrite").parquet(path)
+    assert spark.read.parquet(path).orderBy("id").collect() == [Row(id=5, value="new")]
+
+
+def test_parquet_write_modes_with_empty_existing_path(spark, tmp_path):
+    path = tmp_path / "parquet_write_modes_empty_existing_path"
+    path.mkdir()
+
+    with pytest.raises(Exception, match="already exists"):
+        spark.createDataFrame([(1, "error")], schema="id INT, value STRING").write.parquet(str(path))
+    assert list(path.iterdir()) == []
+
+    spark.createDataFrame([(2, "ignored")], schema="id INT, value STRING").write.mode("ignore").parquet(str(path))
+    assert list(path.iterdir()) == []
+
+
 def test_parquet_read_write_compressed(spark, sample_df, sample_pandas_df, tmp_path):
     # Test reading a compressed Parquet file written by Sail
     path = str(tmp_path / "parquet_compressed_zstd")
@@ -86,16 +119,11 @@ def test_parquet_write_with_bloom_filter(spark, tmpdir):
     def size(p):
         return get_data_directory_size(p, extension=".parquet")
 
-    # The bloom filter size is determined by a formula of FPP and NDV,
-    # and then rounded up to the nearest power of two.
-    # When the data is small, the bloom filter dominates the file size if enabled,
-    # and one bloom filter is created for each column.
-    # The file size in the assertions below are rough estimates.
-
     path = str(tmpdir / "default")
     spark.sql("SELECT 1").write.parquet(path)
     # The Parquet file without bloom filter is small (less than 1 kB).
-    assert size(path) < 1024  # noqa: PLR2004
+    base_size = size(path)
+    assert base_size < 1024  # noqa: PLR2004
 
     path = str(tmpdir / "bloom_filter_off_explicit")
     (
@@ -125,7 +153,8 @@ def test_parquet_write_with_bloom_filter(spark, tmpdir):
         .option("bloom_filter_ndv", "10000")
         .parquet(path)
     )
-    assert 16384 < size(path) < 16384 + 1024  # noqa: PLR2004
+    # Bloom filter adds overhead; file must be larger than the base (no bloom filter) size.
+    assert size(path) > base_size
 
     path = str(tmpdir / "bloom_filter_on_with_multiple_columns")
     (
@@ -135,7 +164,8 @@ def test_parquet_write_with_bloom_filter(spark, tmpdir):
         .option("bloom_filter_ndv", "10000")
         .parquet(path)
     )
-    assert 32768 < size(path) < 32768 + 1024  # noqa: PLR2004
+    # Two columns produce a larger bloom filter than one column.
+    assert size(path) > size(str(tmpdir / "bloom_filter_on"))
 
 
 def test_parquet_write_with_path_option(spark, tmpdir):

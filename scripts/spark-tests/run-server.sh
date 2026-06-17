@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 set -euo 'pipefail'
 
@@ -19,6 +19,7 @@ export PYARROW_IGNORE_TIMEZONE="1"
 # We use a fixed default parallelism to ensure deterministic execution plans
 # when we run the server to develop snapshot tests.
 export SAIL_EXECUTION__DEFAULT_PARALLELISM="4"
+export SAIL_RUNTIME__STACK_SIZE="16777216"
 export SAIL_CATALOG__DEFAULT_CATALOG='"spark_catalog"'
 export SAIL_CATALOG__DEFAULT_DATABASE='["default"]'
 export SAIL_CATALOG__LIST='[{name="spark_catalog", type="memory", initial_database=["default"], initial_database_comment="default database"}]'

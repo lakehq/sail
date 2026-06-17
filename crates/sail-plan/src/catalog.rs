@@ -8,7 +8,7 @@ use educe::Educe;
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::utils::quote_names_if_needed;
 use sail_common_datafusion::catalog::display::CatalogObjectDisplay;
-use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
+use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableStatus};
 use sail_common_datafusion::session::plan::PlanFormatter;
 use sail_common_datafusion::utils::items::ItemTaker;
 
@@ -150,22 +150,14 @@ impl CatalogObjectDisplay for SparkCatalogObjectDisplay {
     }
 
     fn table(status: TableStatus) -> Self::Table {
-        let table_type = match status.kind {
-            TableKind::Table { .. } => "MANAGED",
-            TableKind::View { .. } => "VIEW",
-            TableKind::TemporaryView { .. } => "TEMPORARY",
-            TableKind::GlobalTemporaryView { .. } => "TEMPORARY",
-        };
-        let is_temporary = match status.kind {
-            TableKind::Table { .. } | TableKind::View { .. } => false,
-            TableKind::TemporaryView { .. } | TableKind::GlobalTemporaryView { .. } => true,
-        };
+        let table_type = status.kind.type_name().to_string();
+        let is_temporary = status.kind.is_temporary();
         Self::Table {
             name: status.name,
             catalog: status.catalog,
             namespace: status.database,
             description: status.kind.comment(),
-            table_type: table_type.to_string(),
+            table_type,
             is_temporary,
         }
     }

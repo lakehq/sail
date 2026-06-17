@@ -34,10 +34,9 @@ use url::Url;
 use super::context::PlannerContext;
 use super::utils::{build_log_replay_pipeline_with_options, LogReplayOptions};
 use crate::datasource::PATH_COLUMN;
-use crate::kernel::DeltaOperation;
 use crate::physical_plan::{
-    DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaWriterExec,
-    DeltaWriterExecOptions,
+    DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaWriteContext,
+    DeltaWriterExec, DeltaWriterExecOptions,
 };
 use crate::table::DeltaSnapshot;
 
@@ -56,14 +55,16 @@ use crate::table::DeltaSnapshot;
 pub fn assemble_commit_plan(
     writer_input: Arc<dyn ExecutionPlan>,
     remove_source: Option<Arc<dyn ExecutionPlan>>,
+    remove_partition_value_columns: Option<Vec<(String, String)>>,
     table_url: Url,
     options: DeltaWriterExecOptions,
     metadata_configuration: HashMap<String, String>,
     partition_columns: Vec<String>,
     table_exists: bool,
     table_schema: SchemaRef,
-    operation: Option<DeltaOperation>,
     user_metadata: Option<String>,
+    write_context: DeltaWriteContext,
+    catalog_table: Option<Vec<String>>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaWriterExec::new(
         writer_input,
@@ -74,11 +75,15 @@ pub fn assemble_commit_plan(
         PhysicalSinkMode::Append,
         table_exists,
         table_schema.clone(),
-        operation,
+        write_context.clone(),
+        catalog_table.clone(),
     )?);
 
     let commit_input: Arc<dyn ExecutionPlan> = if let Some(remove_src) = remove_source {
-        let remover: Arc<dyn ExecutionPlan> = Arc::new(DeltaRemoveActionsExec::new(remove_src)?);
+        let remover: Arc<dyn ExecutionPlan> = Arc::new(DeltaRemoveActionsExec::try_new(
+            remove_src,
+            remove_partition_value_columns,
+        )?);
         UnionExec::try_new(vec![writer, remover])?
     } else {
         writer
@@ -92,6 +97,8 @@ pub fn assemble_commit_plan(
         table_schema,
         PhysicalSinkMode::Append,
         user_metadata,
+        write_context.commit_context.clone(),
+        catalog_table,
     )))
 }
 

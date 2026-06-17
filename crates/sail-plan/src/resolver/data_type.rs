@@ -1,7 +1,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use arrow_schema::extension::{
+    ExtensionType, EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY,
+};
 use datafusion::arrow::datatypes as adt;
+use parquet_variant_compute::VariantType;
+use sail_common::geoarrow::extension::GeoArrowWkbType;
 use sail_common::spec;
 use sail_common::spec::{
     SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
@@ -277,8 +282,10 @@ impl PlanResolver<'_> {
                 // Variant layout using Binary for PySpark compatibility.
                 // parquet-variant uses BinaryView internally but we convert to Binary
                 let fields = adt::Fields::from(vec![
-                    adt::Field::new("metadata", adt::DataType::Binary, false),
                     adt::Field::new("value", adt::DataType::Binary, false),
+                    adt::Field::new("metadata", adt::DataType::Binary, false).with_metadata(
+                        HashMap::from([("variant".to_string(), "true".to_string())]),
+                    ),
                 ]);
                 Ok(adt::DataType::Struct(fields))
             }
@@ -299,10 +306,7 @@ impl PlanResolver<'_> {
             nullable,
             metadata,
         } = field;
-        let mut metadata: HashMap<_, _> = metadata
-            .iter()
-            .map(|(k, v)| (format!("metadata.{k}"), v.to_string()))
-            .collect();
+        let mut metadata: HashMap<String, String> = metadata.iter().cloned().collect();
         let data_type = match data_type {
             spec::DataType::UserDefined {
                 jvm_class,
@@ -310,18 +314,17 @@ impl PlanResolver<'_> {
                 serialized_python_class,
                 sql_type,
             } => {
-                if let Some(jvm_class) = jvm_class {
-                    metadata.insert("udt.jvm_class".to_string(), jvm_class.to_string());
-                }
-                if let Some(python_class) = python_class {
-                    metadata.insert("udt.python_class".to_string(), python_class.to_string());
-                }
-                if let Some(serialized_python_class) = serialized_python_class {
-                    metadata.insert(
-                        "udt.serialized_python_class".to_string(),
-                        serialized_python_class.to_string(),
-                    );
-                }
+                let udt = spec::SparkUdtMetadata {
+                    jvm_class: jvm_class.clone(),
+                    python_class: python_class.clone(),
+                    serialized_python_class: serialized_python_class.clone(),
+                };
+                metadata.insert(
+                    spec::SAIL_SPARK_UDT_METADATA_KEY.to_string(),
+                    serde_json::to_string(&udt).map_err(|e| {
+                        PlanError::internal(format!("failed to serialize UDT metadata: {e}"))
+                    })?,
+                );
                 sql_type
             }
             spec::DataType::Geometry { srid } => {
@@ -331,17 +334,14 @@ impl PlanResolver<'_> {
                 // and are automatically filtered from Spark client responses.
                 // Edges default to planar in GeoArrow, so we omit them for Geometry.
                 metadata.insert(
-                    spec::EXTENSION_TYPE_NAME_KEY.to_string(),
-                    "geoarrow.wkb".to_string(),
+                    EXTENSION_TYPE_NAME_KEY.to_string(),
+                    GeoArrowWkbType::NAME.to_string(),
                 );
                 let mut ext = json!({});
                 if let Some(crs) = srid_to_crs(*srid)? {
                     ext["crs"] = serde_json::Value::String(crs);
                 }
-                metadata.insert(
-                    spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
-                    ext.to_string(),
-                );
+                metadata.insert(EXTENSION_TYPE_METADATA_KEY.to_string(), ext.to_string());
                 data_type
             }
             spec::DataType::Geography { srid, algorithm: _ } => {
@@ -350,23 +350,20 @@ impl PlanResolver<'_> {
                 // ARROW:extension:* keys follow the Apache Arrow extension type standard
                 // and are automatically filtered from Spark client responses.
                 metadata.insert(
-                    spec::EXTENSION_TYPE_NAME_KEY.to_string(),
-                    "geoarrow.wkb".to_string(),
+                    EXTENSION_TYPE_NAME_KEY.to_string(),
+                    GeoArrowWkbType::NAME.to_string(),
                 );
                 let mut ext = json!({"edges": "spherical"});
                 if let Some(crs) = srid_to_crs(*srid)? {
                     ext["crs"] = serde_json::Value::String(crs);
                 }
-                metadata.insert(
-                    spec::EXTENSION_TYPE_METADATA_KEY.to_string(),
-                    ext.to_string(),
-                );
+                metadata.insert(EXTENSION_TYPE_METADATA_KEY.to_string(), ext.to_string());
                 data_type
             }
             spec::DataType::Variant => {
                 metadata.insert(
-                    spec::EXTENSION_TYPE_NAME_KEY.to_string(),
-                    spec::VARIANT_EXTENSION_NAME.to_string(),
+                    EXTENSION_TYPE_NAME_KEY.to_string(),
+                    VariantType::NAME.to_string(),
                 );
                 data_type
             }

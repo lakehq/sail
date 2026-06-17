@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, BinaryBuilder, Int64Array};
@@ -38,10 +37,6 @@ impl SparkSubstrBinary {
 }
 
 impl ScalarUDFImpl for SparkSubstrBinary {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_substr_binary"
     }

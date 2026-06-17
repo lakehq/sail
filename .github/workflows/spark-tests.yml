@@ -137,7 +137,7 @@ jobs:
 
       - name: Upload Spark coverage to Codecov
         if: ${{ github.actor != 'dependabot[bot]' }}
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage-spark-${{ inputs.spark_version }}.info

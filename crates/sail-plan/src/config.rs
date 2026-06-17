@@ -30,6 +30,9 @@ pub struct PlanConfig {
     pub ansi_mode: bool,
     /// Whether to allow cartesian products (cross joins) without explicit `CROSS JOIN` syntax.
     pub cross_join_enabled: bool,
+    /// Whether identifiers (e.g. column names) are matched case-sensitively.
+    /// Spark defaults to case-insensitive matching (`spark.sql.caseSensitive=false`).
+    pub case_sensitive: bool,
 }
 
 impl PlanConfig {
@@ -51,8 +54,9 @@ impl Default for PlanConfig {
             default_table_file_format: "PARQUET".to_string(),
             default_warehouse_directory: "spark-warehouse".to_string(),
             session_user_id: "".to_string(),
-            ansi_mode: false,
+            ansi_mode: true,
             cross_join_enabled: true,
+            case_sensitive: false,
         }
     }
 }

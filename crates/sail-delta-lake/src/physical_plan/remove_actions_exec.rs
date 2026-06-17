@@ -10,7 +10,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
@@ -39,12 +38,24 @@ use crate::spec::{Action, Add, Remove, RemoveOptions, Stats};
 #[derive(Debug)]
 pub struct DeltaRemoveActionsExec {
     input: Arc<dyn ExecutionPlan>,
+    partition_value_columns: Option<Vec<(String, String)>>,
     metrics: ExecutionPlanMetricsSet,
     cache: Arc<PlanProperties>,
 }
 
 impl DeltaRemoveActionsExec {
     pub fn new(input: Arc<dyn ExecutionPlan>) -> Result<Self> {
+        Self::try_new(input, None)
+    }
+
+    pub fn partition_value_columns(&self) -> Option<&[(String, String)]> {
+        self.partition_value_columns.as_deref()
+    }
+
+    pub fn try_new(
+        input: Arc<dyn ExecutionPlan>,
+        partition_value_columns: Option<Vec<(String, String)>>,
+    ) -> Result<Self> {
         // Output schema must match DeltaWriterExec output schema (row-per-action).
         let schema = delta_action_schema()?;
         let cache = Arc::new(PlanProperties::new(
@@ -55,6 +66,7 @@ impl DeltaRemoveActionsExec {
         ));
         Ok(Self {
             input,
+            partition_value_columns,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
         })
@@ -97,10 +109,6 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
         "DeltaRemoveActionsExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -120,7 +128,10 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
         if children.len() != 1 {
             return internal_err!("DeltaRemoveActionsExec requires exactly one child");
         }
-        Ok(Arc::new(DeltaRemoveActionsExec::new(children[0].clone())?))
+        Ok(Arc::new(DeltaRemoveActionsExec::try_new(
+            children[0].clone(),
+            self.partition_value_columns.clone(),
+        )?))
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
@@ -137,6 +148,7 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
         }
 
         let mut stream = self.input.execute(0, context)?;
+        let partition_value_columns = self.partition_value_columns.clone();
 
         let output_rows = MetricBuilder::new(&self.metrics).output_rows(partition);
         let output_bytes = MetricBuilder::new(&self.metrics).output_bytes(partition);
@@ -156,7 +168,10 @@ impl ExecutionPlan for DeltaRemoveActionsExec {
                 let adds = if batch.column_by_name(COL_ACTION).is_some() {
                     decode_adds_from_batch(&batch)?
                 } else {
-                    meta_adds::decode_adds_from_meta_batch(&batch, None)?
+                    meta_adds::decode_adds_from_meta_batch_with_partition_value_columns(
+                        &batch,
+                        partition_value_columns.as_deref(),
+                    )?
                 };
                 for add in adds {
                     num_removed_bytes = num_removed_bytes

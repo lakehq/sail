@@ -1,4 +1,3 @@
-use core::any::type_name;
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -7,7 +6,7 @@ use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
 use datafusion::error::{DataFusionError, Result};
-use datafusion_common::{exec_err, internal_err, plan_err, ScalarValue};
+use datafusion_common::{exec_err, plan_err, ScalarValue};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
@@ -111,10 +110,6 @@ impl SparkFromCSV {
 }
 
 impl ScalarUDFImpl for SparkFromCSV {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         Self::FROM_CSV_NAME
     }
@@ -134,13 +129,18 @@ impl ScalarUDFImpl for SparkFromCSV {
         let ReturnFieldArgs {
             scalar_arguments, ..
         } = args;
-        let schema: &String = if let Some(schema) = scalar_arguments.get(1) {
+        let schema_str = if let Some(schema) = scalar_arguments.get(1) {
             match schema {
-                Some(ScalarValue::Utf8(Some(schema)))
-                | Some(ScalarValue::LargeUtf8(Some(schema)))
-                | Some(ScalarValue::Utf8View(Some(schema))) => Ok(schema),
-                _ => internal_err!("Expected UTF-8 schema string"),
-            }?
+                Some(ScalarValue::Utf8(Some(s)))
+                | Some(ScalarValue::LargeUtf8(Some(s)))
+                | Some(ScalarValue::Utf8View(Some(s))) => s.as_str(),
+                None | Some(_) => {
+                    return plan_err!(
+                        "`{}` function requires the schema argument to be a string literal",
+                        Self::FROM_CSV_NAME
+                    );
+                }
+            }
         } else {
             return plan_err!(
                 "`{}` function requires 2 or 3 arguments, got {}",
@@ -149,7 +149,7 @@ impl ScalarUDFImpl for SparkFromCSV {
             );
         };
 
-        let dt: DataType = DataType::Struct(parse_fields(schema, &self.session_timezone)?);
+        let dt = DataType::Struct(parse_fields(schema_str, &self.session_timezone)?);
         Ok(Arc::new(Field::new(self.name(), dt, true)))
     }
 
@@ -637,6 +637,8 @@ fn find_key_value(options: &MapArray, search_key: &str) -> Option<String> {
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
+    use datafusion_common::internal_err;
+
     use super::*;
 
     /// Unit test for `spark_from_csv_inner` that verifies CSV parsing into a `StructArray`.

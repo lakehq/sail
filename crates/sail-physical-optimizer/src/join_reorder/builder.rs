@@ -19,14 +19,12 @@ use log::trace;
 
 use crate::join_reorder::graph::{JoinEdge, QueryGraph, RelationNode, StableColumn};
 use crate::join_reorder::join_set::JoinSet;
+use crate::join_reorder::JoinReorderOptions;
 
 type PhysicalExprRef = Arc<dyn PhysicalExpr>;
 type EquiPair = (StableColumn, StableColumn);
 type PhysicalExprWithEquiPairs = (PhysicalExprRef, Vec<EquiPair>);
-type GroupedPredicates = HashMap<JoinSet, Vec<PhysicalExprWithEquiPairs>>;
-
-/// Hard limit on the number of base relations in a single reorderable graph.
-const MAX_RELATIONS: usize = 12;
+type GroupedPredicates = HashMap<(JoinSet, JoinSet), Vec<PhysicalExprWithEquiPairs>>;
 
 /// Maps an output column from an ExecutionPlan back to a stable identifier.
 /// The vector is indexed by the column index in the plan's output schema.
@@ -59,14 +57,16 @@ pub struct GraphBuilder {
     /// This helps resolve join conditions that reference columns by their expression object.
     /// Key: A Column expression (which is hashable). Value: Stable ID.
     expr_to_stable_id: HashMap<Column, (usize, usize)>,
+    options: JoinReorderOptions,
 }
 
 impl GraphBuilder {
-    pub fn new() -> Self {
+    pub fn new(options: JoinReorderOptions) -> Self {
         Self {
             graph: QueryGraph::new(),
             relation_counter: 0,
             expr_to_stable_id: HashMap::new(),
+            options,
         }
     }
 
@@ -101,23 +101,27 @@ impl GraphBuilder {
     /// Returns a map of the plan's output columns to our stable IDs.
     fn visit_plan(&mut self, plan: Arc<dyn ExecutionPlan>) -> Result<ColumnMap> {
         trace!("Visiting plan: {}", plan.name());
-        let any_plan = plan.as_any();
 
         // TODO: Extend to support `SortMergeJoinExec`.
-        if let Some(join_plan) = any_plan.downcast_ref::<HashJoinExec>() {
+        if let Some(join_plan) = plan.downcast_ref::<HashJoinExec>() {
             if join_plan.join_type() == &JoinType::Inner {
-                trace!("Visiting inner join: {}", join_plan.name());
-                return self.visit_inner_join(join_plan);
-            } else {
                 trace!(
-                    "Skipping non-inner join ({:?}): {}",
+                    "Visiting hash join ({:?}): {}",
                     join_plan.join_type(),
                     join_plan.name()
                 );
+                return self.visit_hash_join(join_plan);
             }
+            // Non-inner joins preserve null/row semantics through input orientation, so keep
+            // them as reorder boundaries until their reorder correctness is revalidated.
+            trace!(
+                "Skipping non-inner join ({:?}): {}",
+                join_plan.join_type(),
+                join_plan.name()
+            );
         }
 
-        if let Some(proj_plan) = any_plan.downcast_ref::<ProjectionExec>() {
+        if let Some(proj_plan) = plan.downcast_ref::<ProjectionExec>() {
             trace!("Visiting projection: {}", proj_plan.name());
             // Only "see through" projections that are a pure column passthrough
             // (possibly pruning/reordering/renaming/duplicating columns).
@@ -127,11 +131,11 @@ impl GraphBuilder {
             // we can't reconstruct from stable base columns.
             if self.is_trivial_projection(proj_plan) {
                 //TODO: consider apply this limit in different levels of the plan.
-                if self.graph.relation_count() >= MAX_RELATIONS {
+                if self.graph.relation_count() >= self.options.max_relations {
                     trace!(
                         "GraphBuilder: relation_count={} >= MAX_RELATIONS={}, treating ProjectionExec as boundary leaf",
                         self.graph.relation_count(),
-                        MAX_RELATIONS
+                        self.options.max_relations
                     );
                     return self.visit_boundary_or_leaf(plan);
                 }
@@ -144,7 +148,7 @@ impl GraphBuilder {
         // it's either a boundary (leaf of our graph) or not part of a reorderable region.
         // AggregateExec and other transformation nodes are not part of reorderable regions.
 
-        if any_plan.is::<AggregateExec>() {
+        if plan.is::<AggregateExec>() {
             trace!("AggregateExec encountered - not part of reorderable region");
             return Err(DataFusionError::Internal(
                 "AggregateExec is not part of a reorderable join region".to_string(),
@@ -164,7 +168,7 @@ impl GraphBuilder {
         self.create_relation_node(plan)
     }
 
-    fn visit_inner_join(&mut self, join_plan: &HashJoinExec) -> Result<ColumnMap> {
+    fn visit_hash_join(&mut self, join_plan: &HashJoinExec) -> Result<ColumnMap> {
         // Recursively build the graph from both children.
         // This continues building the join chain or hits a boundary to create a RelationNode.
         let left_map = self.visit_plan(join_plan.left().clone())?;
@@ -226,32 +230,67 @@ impl GraphBuilder {
         // This avoids generating hyperedges for join nodes where each conjunct is actually
         // a binary predicate between two base relations.
         let mut grouped: GroupedPredicates = HashMap::new();
+        let left_relations = self.relations_in_map(&left_map)?;
+        let right_relations = self.relations_in_map(&right_map)?;
 
-        for (pred, pairs) in conjuncts {
-            let deps = self.relations_for_expr(&pred, &left_map, &right_map)?;
+        if join_plan.join_type() == &JoinType::Inner {
+            for (pred, pairs) in conjuncts {
+                let deps = self.relations_for_expr(&pred, &left_map, &right_map)?;
 
-            // NOTE: If a predicate depends on <2 base relations, keep it associated with the full
-            // join node so it is not lost (it may be a single-side residual predicate).
-            let deps = if deps.cardinality() < 2 {
-                self.all_relations_in_maps(&left_map, &right_map)?
-            } else {
-                deps
-            };
+                // NOTE: If a predicate depends on <2 base relations, keep it associated with the full
+                // join node so it is not lost (it may be a single-side residual predicate).
+                let deps = if deps.cardinality() < 2 {
+                    self.all_relations_in_maps(&left_map, &right_map)?
+                } else {
+                    deps
+                };
 
-            grouped.entry(deps).or_default().push((pred, pairs));
+                let mut left_endpoint = deps & left_relations;
+                let mut right_endpoint = deps & right_relations;
+                if left_endpoint.is_empty() || right_endpoint.is_empty() {
+                    let fallback = self.all_relations_in_maps(&left_map, &right_map)?;
+                    left_endpoint = fallback & left_relations;
+                    right_endpoint = fallback & right_relations;
+                }
+
+                if left_endpoint.is_empty() || right_endpoint.is_empty() {
+                    return Err(DataFusionError::Internal(
+                        "JoinReorder: predicate did not reference both sides of join region"
+                            .to_string(),
+                    ));
+                }
+
+                grouped
+                    .entry((left_endpoint, right_endpoint))
+                    .or_default()
+                    .push((pred, pairs));
+            }
+        } else {
+            if conjuncts.is_empty() {
+                return Err(DataFusionError::Internal(format!(
+                    "JoinReorder: {:?} join without predicates is not supported",
+                    join_plan.join_type()
+                )));
+            }
+            grouped.insert((left_relations, right_relations), conjuncts);
         }
 
-        for (join_set, preds) in grouped {
+        for ((left_endpoint, right_endpoint), preds) in grouped {
             let (filter, equi_pairs) = Self::combine_predicates(preds)?;
-            let mut edge = JoinEdge::new(join_set, filter, *join_plan.join_type(), equi_pairs);
+            let mut edge = JoinEdge::new(
+                left_endpoint,
+                right_endpoint,
+                filter,
+                *join_plan.join_type(),
+                equi_pairs,
+            );
             edge.null_equality = join_plan.null_equality();
             self.graph.add_edge(edge)?;
         }
 
-        // Build and return the output ColumnMap for current Join node
-        // Inner Join output is concatenation of left and right child outputs
-        let mut output_map = left_map;
-        output_map.extend(right_map);
+        // Build and return the output ColumnMap for current Join node.
+        let mut output_map =
+            Self::join_output_map_for_type(&left_map, &right_map, *join_plan.join_type())?;
         // A projection may be embedded into HashJoinExec; apply it so ColumnMap matches
         // the actual join output schema (reorder/drop columns).
         if let Some(projection) = join_plan.projection.as_ref() {
@@ -270,9 +309,36 @@ impl GraphBuilder {
         Ok(output_map)
     }
 
+    fn join_output_map_for_type(
+        left_map: &ColumnMap,
+        right_map: &ColumnMap,
+        join_type: JoinType,
+    ) -> Result<ColumnMap> {
+        let mut output = Vec::new();
+        match join_type {
+            JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+                output.extend(left_map.iter().cloned());
+                output.extend(right_map.iter().cloned());
+            }
+            JoinType::LeftSemi | JoinType::LeftAnti => {
+                output.extend(left_map.iter().cloned());
+            }
+            JoinType::RightSemi | JoinType::RightAnti => {
+                output.extend(right_map.iter().cloned());
+            }
+            JoinType::LeftMark | JoinType::RightMark => {
+                return Err(DataFusionError::Internal(format!(
+                    "JoinReorder: {:?} is not supported in non-inner join reorder",
+                    join_type
+                )));
+            }
+        }
+        Ok(output)
+    }
+
     fn decompose_conjuncts(expr: &Arc<dyn PhysicalExpr>) -> Vec<Arc<dyn PhysicalExpr>> {
         let mut result = Vec::new();
-        if let Some(binary) = expr.as_any().downcast_ref::<BinaryExpr>() {
+        if let Some(binary) = expr.downcast_ref::<BinaryExpr>() {
             match binary.op() {
                 Operator::And => {
                     result.extend(Self::decompose_conjuncts(binary.left()));
@@ -299,7 +365,7 @@ impl GraphBuilder {
             return false;
         }
         for p in exprs.iter() {
-            let Some(c) = p.expr.as_any().downcast_ref::<Column>() else {
+            let Some(c) = p.expr.downcast_ref::<Column>() else {
                 return false;
             };
             let idx = c.index();
@@ -406,8 +472,12 @@ impl GraphBuilder {
         left_map: &ColumnMap,
         right_map: &ColumnMap,
     ) -> Result<JoinSet> {
+        Ok(self.relations_in_map(left_map)? | self.relations_in_map(right_map)?)
+    }
+
+    fn relations_in_map(&self, map: &ColumnMap) -> Result<JoinSet> {
         let mut bits: u64 = 0;
-        for e in left_map.iter().chain(right_map.iter()) {
+        for e in map {
             self.add_relation_bits_from_entry(e, &mut bits)?;
         }
         Ok(JoinSet::from_bits(bits))
@@ -457,7 +527,7 @@ impl GraphBuilder {
 
         let expr_arc = Arc::clone(expr);
         let transformed = expr_arc.transform(|node| {
-            if let Some(col) = node.as_any().downcast_ref::<Column>() {
+            if let Some(col) = node.downcast_ref::<Column>() {
                 let i = col.index();
                 // Safeguard: if index out of bounds, return error
                 if i >= indices.len() {
@@ -500,7 +570,7 @@ impl GraphBuilder {
         for proj_expr in proj_plan.expr() {
             let expr = &proj_expr.expr;
             // Try to parse expression directly as a single stable column
-            if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+            if let Some(col) = expr.downcast_ref::<Column>() {
                 // This is a simple column reference, like `SELECT a FROM ...`
                 // `col.index()` is its index in the input Schema
                 let entry = input_map.get(col.index()).cloned().ok_or_else(|| {
@@ -522,11 +592,11 @@ impl GraphBuilder {
     }
 
     fn create_relation_node(&mut self, plan: Arc<dyn ExecutionPlan>) -> Result<ColumnMap> {
-        if self.graph.relation_count() >= MAX_RELATIONS {
+        if self.graph.relation_count() >= self.options.max_relations {
             return Err(DataFusionError::Internal(format!(
                 "JoinReorder: relation_count {} reached MAX_RELATIONS {}",
                 self.graph.relation_count(),
-                MAX_RELATIONS
+                self.options.max_relations
             )));
         }
 
@@ -540,7 +610,7 @@ impl GraphBuilder {
         // statistics from its *input* (pre-filter) so we retain the most original/accurate
         // datasource stats (e.g., Parquet), and apply the filter's selectivity as a penalty
         // factor to initial cardinality.
-        let (stats, initial_cardinality, base_cardinality) = if plan.as_any().is::<FilterExec>() {
+        let (stats, initial_cardinality, base_cardinality) = if plan.is::<FilterExec>() {
             // NOTE: We still keep FilterExec as the boundary leaf (filter-boundary strategy), but
             // we must avoid
             // an inconsistent stats state where num_rows is "post-filter" while distinct_count
@@ -554,7 +624,7 @@ impl GraphBuilder {
             //   base column stats as a best-effort proxy for join planning.
             let (pre_filter_plan, selectivity) =
                 self.peel_filter_chain_and_estimate_selectivity(plan.clone())?;
-            let pre_stats = pre_filter_plan.partition_statistics(None)?;
+            let pre_stats = Arc::unwrap_or_clone(pre_filter_plan.partition_statistics(None)?);
             let base = match pre_stats.num_rows {
                 Precision::Exact(count) => count as f64,
                 Precision::Inexact(count) => count as f64,
@@ -568,14 +638,14 @@ impl GraphBuilder {
                 .with_estimated_selectivity(selectivity);
 
             (adjusted, base * selectivity, base)
-        } else if plan.as_any().is::<ProjectionExec>() {
+        } else if plan.is::<ProjectionExec>() {
             // Preserve ProjectionExec as a relation leaf, but prefer its input statistics
             // (ProjectionExec may not have accurate stats of its own).
             let mut cur = plan.clone();
-            while let Some(p) = cur.as_any().downcast_ref::<ProjectionExec>() {
+            while let Some(p) = cur.downcast_ref::<ProjectionExec>() {
                 cur = p.input().clone();
             }
-            let stats = cur.partition_statistics(None)?;
+            let stats = Arc::unwrap_or_clone(cur.partition_statistics(None)?);
             let initial_cardinality = match stats.num_rows {
                 Precision::Exact(count) => count as f64,
                 Precision::Inexact(count) => count as f64,
@@ -583,7 +653,7 @@ impl GraphBuilder {
             };
             (stats, initial_cardinality, initial_cardinality)
         } else {
-            let stats = plan.partition_statistics(None)?;
+            let stats = Arc::unwrap_or_clone(plan.partition_statistics(None)?);
             let initial_cardinality = match stats.num_rows {
                 Precision::Exact(count) => count as f64,
                 Precision::Inexact(count) => count as f64,
@@ -631,9 +701,9 @@ impl GraphBuilder {
         let mut cur = plan;
         let mut selectivity: f64 = 1.0;
 
-        while let Some(filter) = cur.as_any().downcast_ref::<FilterExec>() {
+        while let Some(filter) = cur.downcast_ref::<FilterExec>() {
             let input = filter.input().clone();
-            let input_stats = input.partition_statistics(None)?;
+            let input_stats = Arc::unwrap_or_clone(input.partition_statistics(None)?);
             let input_schema = input.schema();
 
             let sel = self.estimate_filter_selectivity(
@@ -670,7 +740,7 @@ impl GraphBuilder {
 
         // First try a small set of cheap, deterministic heuristics that work well for common
         // predicates (e.g. col = literal, range filters, conjunctions).
-        if let Some(sel) = self.estimate_selectivity_from_stats(predicate, schema, input_stats) {
+        if let Some(sel) = Self::estimate_selectivity_from_stats(predicate, schema, input_stats) {
             return sel.clamp(0.0, 1.0);
         }
 
@@ -693,35 +763,33 @@ impl GraphBuilder {
     }
 
     fn estimate_selectivity_from_stats(
-        &self,
         expr: &Arc<dyn PhysicalExpr>,
         schema: &datafusion::arrow::datatypes::SchemaRef,
         input_stats: &datafusion::common::Statistics,
     ) -> Option<f64> {
-        let bin = expr.as_any().downcast_ref::<BinaryExpr>()?;
+        let bin = expr.downcast_ref::<BinaryExpr>()?;
         match bin.op() {
             Operator::And => {
-                let l = self.estimate_selectivity_from_stats(bin.left(), schema, input_stats)?;
-                let r = self.estimate_selectivity_from_stats(bin.right(), schema, input_stats)?;
+                let l = Self::estimate_selectivity_from_stats(bin.left(), schema, input_stats)?;
+                let r = Self::estimate_selectivity_from_stats(bin.right(), schema, input_stats)?;
                 Some((l * r).clamp(0.0, 1.0))
             }
             Operator::Or => {
-                let l = self.estimate_selectivity_from_stats(bin.left(), schema, input_stats)?;
-                let r = self.estimate_selectivity_from_stats(bin.right(), schema, input_stats)?;
+                let l = Self::estimate_selectivity_from_stats(bin.left(), schema, input_stats)?;
+                let r = Self::estimate_selectivity_from_stats(bin.right(), schema, input_stats)?;
                 // Independence assumption: P(A ∪ B) = P(A) + P(B) - P(A)P(B).
                 // This can misestimate correlated predicates (e.g. `x > 10 OR x > 5`), but is
                 // still a reasonable fallback when we do not have correlation statistics.
                 Some((l + r - l * r).clamp(0.0, 1.0))
             }
             Operator::Eq | Operator::Lt | Operator::LtEq | Operator::Gt | Operator::GtEq => {
-                self.estimate_binary_selectivity_from_stats(bin, schema, input_stats)
+                Self::estimate_binary_selectivity_from_stats(bin, schema, input_stats)
             }
             _ => None,
         }
     }
 
     fn estimate_binary_selectivity_from_stats(
-        &self,
         bin: &BinaryExpr,
         schema: &datafusion::arrow::datatypes::SchemaRef,
         input_stats: &datafusion::common::Statistics,
@@ -731,13 +799,13 @@ impl GraphBuilder {
 
         // Normalize into (Column, Literal) if possible.
         let (col, lit) = if let (Some(c), Some(l)) = (
-            bin.left().as_any().downcast_ref::<Column>(),
-            bin.right().as_any().downcast_ref::<Literal>(),
+            bin.left().downcast_ref::<Column>(),
+            bin.right().downcast_ref::<Literal>(),
         ) {
             (c, l)
         } else if let (Some(l), Some(c)) = (
-            bin.left().as_any().downcast_ref::<Literal>(),
-            bin.right().as_any().downcast_ref::<Column>(),
+            bin.left().downcast_ref::<Literal>(),
+            bin.right().downcast_ref::<Column>(),
         ) {
             // Flip operator direction if needed.
             // For Eq it's symmetric; for inequalities we can invert.
@@ -754,7 +822,7 @@ impl GraphBuilder {
                 flipped_op,
                 Arc::new(Literal::new(l.value().clone())),
             );
-            return self.estimate_binary_selectivity_from_stats(&tmp, schema, input_stats);
+            return Self::estimate_binary_selectivity_from_stats(&tmp, schema, input_stats);
         } else {
             return None;
         };
@@ -840,7 +908,7 @@ impl GraphBuilder {
         expr: &Arc<dyn PhysicalExpr>,
         column_map: &ColumnMap,
     ) -> Result<Option<StableColumn>> {
-        if let Some(col) = expr.as_any().downcast_ref::<Column>() {
+        if let Some(col) = expr.downcast_ref::<Column>() {
             // This is a direct column reference
             if let Some(entry) = column_map.get(col.index()) {
                 match entry {
@@ -869,7 +937,7 @@ impl GraphBuilder {
 
 impl Default for GraphBuilder {
     fn default() -> Self {
-        Self::new()
+        Self::new(JoinReorderOptions::default())
     }
 }
 
@@ -888,14 +956,14 @@ mod tests {
 
     #[test]
     fn test_graph_builder_creation() {
-        let builder = GraphBuilder::new();
+        let builder = GraphBuilder::default();
         assert_eq!(builder.relation_counter, 0);
         assert!(builder.graph.relations.is_empty() && builder.graph.edges.is_empty());
     }
 
     #[test]
     fn test_build_with_simple_plan() -> Result<()> {
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
         let schema = Arc::new(Schema::new(vec![Field::new(
             "col1",
             DataType::Int32,
@@ -913,7 +981,7 @@ mod tests {
 
     #[test]
     fn test_build_with_single_relation() -> Result<()> {
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
         let schema = Arc::new(Schema::new(vec![
             Field::new("id", DataType::Int32, false),
             Field::new("name", DataType::Utf8, false),
@@ -929,7 +997,7 @@ mod tests {
 
     #[test]
     fn test_visit_plan_identifies_base_relations() {
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
         let schema = Arc::new(Schema::new(vec![Field::new(
             "col1",
             DataType::Int32,
@@ -965,7 +1033,7 @@ mod tests {
         use datafusion::common::NullEquality;
         use datafusion::physical_plan::joins::PartitionMode;
 
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
 
         // Create two base relations
         let schema1 = Arc::new(Schema::new(vec![
@@ -998,8 +1066,8 @@ mod tests {
             false, // null_aware
         )?);
 
-        // Test that visit_inner_join correctly handles HashJoinExec
-        let result = builder.visit_inner_join(&join_plan);
+        // Test that visit_hash_join correctly handles HashJoinExec
+        let result = builder.visit_hash_join(&join_plan);
         assert!(result.is_ok());
 
         // Check that an edge was created
@@ -1011,11 +1079,43 @@ mod tests {
     }
 
     #[test]
+    fn test_non_inner_join_is_region_boundary() -> Result<()> {
+        use datafusion::common::NullEquality;
+        use datafusion::physical_plan::joins::PartitionMode;
+
+        let schema_left = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let schema_right = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let left_plan = Arc::new(EmptyExec::new(schema_left));
+        let right_plan = Arc::new(EmptyExec::new(schema_right));
+        let join_plan = Arc::new(HashJoinExec::try_new(
+            left_plan,
+            right_plan,
+            vec![(
+                Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+                Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+            )],
+            None,
+            &JoinType::Left,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let mut disabled = GraphBuilder::default();
+        assert!(
+            disabled.build(join_plan.clone())?.is_none(),
+            "non-inner joins remain reorder boundaries"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn test_trivial_projection_is_seen_through_for_region_building() -> Result<()> {
         use datafusion::common::NullEquality;
         use datafusion::physical_plan::joins::PartitionMode;
 
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
 
         // A(a_id) JOIN B(b_id) -> (a_id, b_id)
         let schema_a = Arc::new(Schema::new(vec![Field::new(
@@ -1100,7 +1200,7 @@ mod tests {
         use datafusion::common::NullEquality;
         use datafusion::physical_plan::joins::PartitionMode;
 
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
 
         // A(a_id) JOIN B(b_id) -> (a_id, b_id)
         let schema_a = Arc::new(Schema::new(vec![Field::new(
@@ -1185,7 +1285,7 @@ mod tests {
         use datafusion::common::NullEquality;
         use datafusion::physical_plan::joins::PartitionMode;
 
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
 
         // A(a_id) JOIN B(b_id) -> (a_id, b_id)
         let schema_a = Arc::new(Schema::new(vec![Field::new(
@@ -1270,7 +1370,7 @@ mod tests {
         use datafusion::common::NullEquality;
         use datafusion::physical_plan::joins::PartitionMode;
 
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
 
         // A(a_id) JOIN B(b_id) -> (a_id, b_id)
         let schema_a = Arc::new(Schema::new(vec![Field::new(
@@ -1370,7 +1470,7 @@ mod tests {
         let filter = FilterExec::try_new(pred, input)?.with_default_selectivity(50)?;
         let filter: Arc<dyn ExecutionPlan> = Arc::new(filter);
 
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
         let _ = builder.visit_plan(filter.clone())?;
 
         assert_eq!(builder.graph.relation_count(), 1);
@@ -1406,7 +1506,7 @@ mod tests {
         use datafusion::common::NullEquality;
         use datafusion::physical_plan::joins::PartitionMode;
 
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
 
         // Create three base relations for complex join testing
         let schema1 = Arc::new(Schema::new(vec![
@@ -1489,7 +1589,7 @@ mod tests {
         use datafusion::common::NullEquality;
         use datafusion::physical_plan::joins::PartitionMode;
 
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
 
         // Each table has a single column "id" to keep join key construction simple.
         let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
@@ -1595,7 +1695,7 @@ mod tests {
         use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
         use datafusion::physical_plan::joins::PartitionMode;
 
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
 
         // Three base relations with distinct column names to avoid name ambiguity.
         let schema_a = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
@@ -1696,7 +1796,7 @@ mod tests {
         use datafusion::logical_expr::JoinType;
         use datafusion::physical_plan::joins::PartitionMode;
 
-        let mut builder = GraphBuilder::new();
+        let mut builder = GraphBuilder::default();
 
         // Two base relations, each with 2 columns, to test projection reorder/drop.
         let schema_left = Arc::new(Schema::new(vec![
@@ -1733,7 +1833,7 @@ mod tests {
             false, // null_aware
         )?);
 
-        let output_map = builder.visit_inner_join(&join_plan)?;
+        let output_map = builder.visit_hash_join(&join_plan)?;
 
         // After applying projection [3,0,2], output_map should have length 3.
         assert_eq!(output_map.len(), 3);
@@ -1774,6 +1874,79 @@ mod tests {
             _ => unreachable!("expected Stable for projected r0"),
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_visit_sort_merge_join_is_treated_as_boundary_leaf() -> Result<()> {
+        use datafusion::common::NullEquality;
+        use datafusion::physical_expr::expressions::Column;
+        use datafusion::physical_expr::{LexOrdering, PhysicalSortExpr};
+        use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
+
+        // Two base relations joined by a SortMergeJoinExec. JoinReorder must treat
+        // SortMergeJoinExec as an opaque boundary leaf (no descent), regardless of how its
+        // join type is set. Wrap it under a HashJoinExec so we get one reorderable join
+        // node plus the SMJ sub-tree as a single relation node.
+        let smj_left_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let smj_right_schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let smj_left = Arc::new(EmptyExec::new(smj_left_schema.clone()));
+        let smj_right = Arc::new(EmptyExec::new(smj_right_schema.clone()));
+
+        let smj_on = vec![(
+            Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+            Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+        )];
+        let sort_options = vec![datafusion::arrow::compute::SortOptions::default()];
+        let smj = Arc::new(SortMergeJoinExec::try_new(
+            smj_left,
+            smj_right,
+            smj_on,
+            None,
+            JoinType::Inner,
+            sort_options,
+            NullEquality::NullEqualsNothing,
+        )?) as Arc<dyn ExecutionPlan>;
+
+        // Outer HashJoinExec joining the SMJ output to a third base relation.
+        let outer_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let outer_right = Arc::new(EmptyExec::new(outer_schema.clone()));
+
+        let outer_on = vec![(
+            Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+            Arc::new(Column::new("id", 0)) as Arc<dyn PhysicalExpr>,
+        )];
+        let outer = Arc::new(HashJoinExec::try_new(
+            smj,
+            outer_right,
+            outer_on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let mut builder = GraphBuilder::default();
+        let result = builder.build(outer)?;
+        let (graph, _) = result.ok_or_else(|| {
+            DataFusionError::Internal(
+                "expected reorderable region rooted at outer hash join".to_string(),
+            )
+        })?;
+
+        // Two relations: the SMJ sub-tree as one leaf, and the third table as another.
+        assert_eq!(
+            graph.relation_count(),
+            2,
+            "SortMergeJoinExec sub-tree must collapse into a single boundary leaf"
+        );
+        assert_eq!(graph.edges.len(), 1);
+
+        // Silence unused-import warning from LexOrdering/PhysicalSortExpr in newer datafusion
+        let _ = std::marker::PhantomData::<(LexOrdering, PhysicalSortExpr)>;
         Ok(())
     }
 }

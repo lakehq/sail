@@ -3,58 +3,48 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::catalog::Session;
 use datafusion_common::arrow::datatypes::SchemaRef;
-use datafusion_common::parsers::CompressionTypeVariant;
-use datafusion_common::{internal_err, not_impl_err, Result};
-use datafusion_datasource::file_format::FileFormat;
+use datafusion_common::{internal_err, DataFusionError, Result};
 use sail_common_datafusion::datasource::OptionLayer;
 
-use crate::formats::binary::file_format::BinaryFileFormat;
-use crate::formats::binary::options::resolve_binary_read_options;
-use crate::formats::listing::{DefaultSchemaInfer, ListingFormat, ListingTableFormat, SchemaInfer};
+use crate::listing::source::{FormatFactory, ListingTableFormat};
+use crate::options::gen::BinaryReadOptions;
+use crate::options::ResolveOptions;
 
-pub mod file_format;
 pub mod options;
+mod read;
 pub mod reader;
 pub mod source;
+mod write;
+
+pub use read::BinaryReadFormat;
+pub use write::BinaryWriteFormat;
 
 #[derive(Default, Debug, Clone, PartialEq)]
 pub struct TableBinaryOptions {
     pub path_glob_filter: Option<String>,
 }
 
-pub type BinaryTableFormat = ListingTableFormat<BinaryListingFormat>;
+pub type BinaryTableFormat = ListingTableFormat<BinaryFormatFactory>;
 
 #[derive(Debug, Default)]
-pub struct BinaryListingFormat;
+pub struct BinaryFormatFactory;
 
-impl ListingFormat for BinaryListingFormat {
-    fn name(&self) -> &'static str {
+impl FormatFactory for BinaryFormatFactory {
+    type Read = BinaryReadFormat;
+    type Write = BinaryWriteFormat;
+
+    fn name() -> &'static str {
         "binaryFile"
     }
 
-    fn create_read_format(
-        &self,
-        _ctx: &dyn Session,
-        options: Vec<OptionLayer>,
-        _compression: Option<CompressionTypeVariant>,
-    ) -> Result<Arc<dyn FileFormat>> {
-        Ok(Arc::new(BinaryFileFormat::new(
-            resolve_binary_read_options(options)
-                .map_err(datafusion_common::DataFusionError::from)?
-                .into_table_options(),
-        )))
+    fn read(ctx: &dyn Session, options: Vec<OptionLayer>) -> Result<Self::Read> {
+        Ok(BinaryReadFormat {
+            options: BinaryReadOptions::resolve(ctx, options).map_err(DataFusionError::from)?,
+        })
     }
 
-    fn create_write_format(
-        &self,
-        _ctx: &dyn Session,
-        _options: Vec<OptionLayer>,
-    ) -> Result<(Arc<dyn FileFormat>, Option<String>)> {
-        not_impl_err!("Binary file format does not support writing")
-    }
-
-    fn schema_inferrer(&self) -> Arc<dyn SchemaInfer> {
-        Arc::new(DefaultSchemaInfer)
+    fn write(_ctx: &dyn Session, _options: Vec<OptionLayer>) -> Result<Self::Write> {
+        Ok(BinaryWriteFormat)
     }
 }
 

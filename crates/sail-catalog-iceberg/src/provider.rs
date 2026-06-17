@@ -13,19 +13,24 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use percent_encoding::percent_decode_str;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
-    AlterTableOptions, CatalogPartitionField, CatalogProvider, CreateDatabaseOptions,
-    CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
-    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
+    AlterTableOptions, CatalogPartitionField, CatalogProvider, CommitTableOptions,
+    CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions,
+    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    PartitionTransform,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
+use sail_common_datafusion::catalog::managed::METADATA_LOCATION_KEY;
 use sail_common_datafusion::catalog::{
-    CatalogTableConstraint, CatalogTableSort, DatabaseStatus, TableColumnStatus, TableKind,
-    TableStatus,
+    CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort, DatabaseStatus,
+    TableColumnStatus, TableKind, TableStatus,
 };
 use sail_iceberg::utils::partition_transform::catalog_partition_field_from_iceberg;
-use sail_iceberg::{arrow_type_to_iceberg, iceberg_type_to_arrow, NestedField, StructType};
+use sail_iceberg::{
+    arrow_type_to_iceberg, iceberg_type_to_arrow, FormatVersion, Literal, NestedField, StructType,
+};
 use tokio::sync::OnceCell;
 
 use crate::apis::configuration::Configuration;
@@ -36,6 +41,10 @@ pub const REST_CATALOG_PROP_URI: &str = "uri";
 pub const REST_CATALOG_PROP_WAREHOUSE: &str = "warehouse";
 
 pub const REST_CATALOG_PROP_PREFIX: &str = "prefix";
+
+pub const REST_CATALOG_PROP_NAMESPACE_SEPARATOR: &str = "namespace-separator";
+
+const REST_CATALOG_DEFAULT_NAMESPACE_SEPARATOR: &str = "\x1F";
 
 // TODO: Further properties and configurations may be needed from:
 //  - https://iceberg.apache.org/docs/nightly/configuration/#catalog-properties
@@ -56,6 +65,35 @@ pub struct IcebergRestCatalogProvider {
 }
 
 impl IcebergRestCatalogProvider {
+    fn normalize_catalog_props(props: HashMap<String, String>) -> HashMap<String, String> {
+        props
+            .into_iter()
+            .map(|(key, value)| {
+                let key = if Self::is_namespace_separator_key(&key) {
+                    REST_CATALOG_PROP_NAMESPACE_SEPARATOR.to_string()
+                } else {
+                    key
+                };
+                (key, value)
+            })
+            .collect()
+    }
+
+    fn catalog_prefix(catalog_config: &RestCatalogConfig) -> Option<&str> {
+        catalog_config
+            .props
+            .get(REST_CATALOG_PROP_PREFIX)
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+    }
+
+    fn is_namespace_separator_key(key: &str) -> bool {
+        matches!(
+            key.trim().to_ascii_lowercase().as_str(),
+            "namespace-separator" | "namespaceseparator" | "namespace_separator"
+        )
+    }
+
     pub fn new(name: String, props: HashMap<String, String>) -> Self {
         let catalog_config = RestCatalogConfig {
             uri: props
@@ -63,10 +101,12 @@ impl IcebergRestCatalogProvider {
                 .cloned()
                 .unwrap_or(Configuration::new().base_path),
             warehouse: props.get(REST_CATALOG_PROP_WAREHOUSE).cloned(),
-            props: props
-                .into_iter()
-                .filter(|(k, _)| k != REST_CATALOG_PROP_URI && k != REST_CATALOG_PROP_WAREHOUSE)
-                .collect(),
+            props: Self::normalize_catalog_props(
+                props
+                    .into_iter()
+                    .filter(|(k, _)| k != REST_CATALOG_PROP_URI && k != REST_CATALOG_PROP_WAREHOUSE)
+                    .collect(),
+            ),
         };
 
         Self {
@@ -77,7 +117,10 @@ impl IcebergRestCatalogProvider {
         }
     }
 
-    fn init_client(&self, catalog_config: &RestCatalogConfig) -> CatalogResult<ApiClient> {
+    fn init_client_config(
+        &self,
+        catalog_config: &RestCatalogConfig,
+    ) -> CatalogResult<Configuration> {
         let mut client_config = Configuration::new();
         client_config.user_agent = Some("Sail".to_string());
         client_config.base_path = catalog_config.uri.to_string();
@@ -94,7 +137,13 @@ impl IcebergRestCatalogProvider {
                 _ => {}
             }
         }
-        Ok(ApiClient::new(Arc::new(client_config)))
+        Ok(client_config)
+    }
+
+    fn init_client(&self, catalog_config: &RestCatalogConfig) -> CatalogResult<ApiClient> {
+        Ok(ApiClient::new(Arc::new(
+            self.init_client_config(catalog_config)?,
+        )))
     }
 
     async fn load_catalog_config(
@@ -120,23 +169,30 @@ impl IcebergRestCatalogProvider {
             .merged_catalog_config
             .get_or_try_init(|| async {
                 let temp_client = self.init_client(&self.catalog_config)?;
-                let mut config = self
+                let config = self
                     .load_catalog_config(&temp_client, self.catalog_config.warehouse.as_deref())
                     .await?;
 
-                let uri = if let Some(uri) = config.overrides.remove(REST_CATALOG_PROP_URI) {
-                    uri
+                let mut overrides = Self::normalize_catalog_props(config.overrides);
+                let mut client_props = self.catalog_config.props.clone();
+                if let Some(warehouse) = &self.catalog_config.warehouse {
+                    client_props.insert(REST_CATALOG_PROP_WAREHOUSE.to_string(), warehouse.clone());
+                }
+
+                let uri = if let Some(uri) = overrides.remove(REST_CATALOG_PROP_URI) {
+                    uri.trim_end_matches('/').to_string()
                 } else {
-                    self.catalog_config.uri.clone()
+                    self.catalog_config.uri.trim_end_matches('/').to_string()
                 };
 
-                let mut props = config.defaults;
-                props.extend(self.catalog_config.props.clone());
-                props.extend(config.overrides);
+                let mut props = Self::normalize_catalog_props(config.defaults);
+                props.extend(client_props);
+                props.extend(overrides);
+                let warehouse = props.get(REST_CATALOG_PROP_WAREHOUSE).cloned();
 
                 Ok::<_, CatalogError>(RestCatalogConfig {
                     uri,
-                    warehouse: self.catalog_config.warehouse.clone(),
+                    warehouse,
                     props,
                 })
             })
@@ -150,16 +206,123 @@ impl IcebergRestCatalogProvider {
         Ok((client, merged_catalog_config))
     }
 
+    fn namespace_separator(catalog_config: &RestCatalogConfig) -> CatalogResult<String> {
+        let separator = catalog_config
+            .props
+            .get(REST_CATALOG_PROP_NAMESPACE_SEPARATOR)
+            .map(|value| value.trim());
+
+        match separator {
+            Some("") | None => Ok(REST_CATALOG_DEFAULT_NAMESPACE_SEPARATOR.to_string()),
+            Some(separator) => percent_decode_str(separator)
+                .decode_utf8()
+                .map(|s| s.into_owned())
+                .map_err(|e| {
+                    CatalogError::InvalidArgument(format!(
+                        "{REST_CATALOG_PROP_NAMESPACE_SEPARATOR} must be valid URL-encoded UTF-8: {e}"
+                    ))
+                }),
+        }
+    }
+
     /// Converts a `Namespace` into a string representation for the REST API URL.
-    /// The Iceberg REST API separates namespace components with `\x1F`.
-    fn namespace_string(database: &Namespace) -> String {
-        // TODO: The separator is actually configurable and we should support it as an option.
+    fn namespace_string(
+        catalog_config: &RestCatalogConfig,
+        database: &Namespace,
+    ) -> CatalogResult<String> {
+        let separator = Self::namespace_separator(catalog_config)?;
         let mut result = database.head.to_string();
         for s in &database.tail {
-            result.push('\x1F');
+            result.push_str(&separator);
             result.push_str(s.as_ref());
         }
-        result
+        Ok(result)
+    }
+
+    async fn commit_table_request(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: CommitTableOptions,
+    ) -> CatalogResult<crate::models::CommitTableResponse> {
+        if !options.format.eq_ignore_ascii_case("iceberg") {
+            return Err(CatalogError::NotSupported(format!(
+                "Iceberg REST catalog cannot commit '{}' tables",
+                options.format
+            )));
+        }
+
+        let (_client, catalog_config) = self.load_client_and_merged_config().await?;
+        let client_config = self.init_client_config(catalog_config)?;
+        let namespace = Self::namespace_string(catalog_config, database)?;
+        let prefix = catalog_config
+            .props
+            .get(REST_CATALOG_PROP_PREFIX)
+            .map(|prefix| format!("/{}", crate::apis::urlencode(prefix)))
+            .unwrap_or_default();
+        let uri = format!(
+            "{}/v1{prefix}/namespaces/{namespace}/tables/{table}",
+            client_config.base_path,
+            namespace = crate::apis::urlencode(namespace),
+            table = crate::apis::urlencode(table)
+        );
+        let body = serde_json::json!({
+            "identifier": {
+                "namespace": Vec::<String>::from(database.clone()),
+                "name": table,
+            },
+            "requirements": options.requirements,
+            "updates": options.updates,
+        });
+
+        let mut request = client_config.client.post(uri);
+        if let Some(user_agent) = client_config.user_agent {
+            request = request.header(reqwest::header::USER_AGENT, user_agent);
+        }
+        if let Some(token) = client_config.oauth_access_token {
+            request = request.bearer_auth(token);
+        }
+        if let Some(token) = client_config.bearer_access_token {
+            request = request.bearer_auth(token);
+        }
+
+        let response = request
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to commit table: {e}")))?;
+        let status = response.status();
+        let content = response
+            .text()
+            .await
+            .map_err(|e| CatalogError::External(format!("Failed to read commit response: {e}")))?;
+
+        if status.is_success() {
+            serde_json::from_str(&content).map_err(|e| {
+                CatalogError::External(format!("Failed to parse commit response: {e}"))
+            })
+        } else if status == reqwest::StatusCode::NOT_FOUND {
+            Err(CatalogError::NotFound(
+                CatalogObject::Table,
+                format!(
+                    "{}.{}",
+                    quote_namespace_if_needed(database),
+                    quote_name_if_needed(table)
+                ),
+            ))
+        } else if status == reqwest::StatusCode::CONFLICT {
+            Err(CatalogError::Conflict(format!(
+                "Iceberg REST catalog commit conflict for {}.{}: {content}",
+                quote_namespace_if_needed(database),
+                quote_name_if_needed(table)
+            )))
+        } else {
+            Err(CatalogError::External(format!(
+                "Failed to commit Iceberg table {}.{}: status {status}: {content}",
+                quote_namespace_if_needed(database),
+                quote_name_if_needed(table)
+            )))
+        }
     }
 
     /// Converts an Iceberg REST API table load result into a catalog `TableStatus`.
@@ -260,6 +423,7 @@ impl IcebergRestCatalogProvider {
                     comment: field.doc.clone(),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                     is_partition: partition_field_ids.contains(&field_id),
                     is_bucket: bucket_field_ids.contains(&field_id),
                     is_cluster: false,
@@ -337,7 +501,7 @@ impl IcebergRestCatalogProvider {
         let comment = get_property(&properties, "comment");
 
         if let Some(metadata_location) = result.metadata_location {
-            properties.insert("metadata-location".to_string(), metadata_location);
+            properties.insert(METADATA_LOCATION_KEY.to_string(), metadata_location);
         }
         properties.insert(
             "metadata.format-version".to_string(),
@@ -401,6 +565,7 @@ impl IcebergRestCatalogProvider {
                 sort_by,
                 bucket_by: None,
                 properties,
+                is_external: true,
             },
         })
     }
@@ -451,6 +616,7 @@ impl IcebergRestCatalogProvider {
                     comment: field.doc.clone(),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                     is_partition: false,
                     is_bucket: false,
                     is_cluster: false,
@@ -475,7 +641,7 @@ impl IcebergRestCatalogProvider {
 
         let comment = get_property(&properties, "comment");
 
-        properties.insert("metadata-location".to_string(), result.metadata_location);
+        properties.insert(METADATA_LOCATION_KEY.to_string(), result.metadata_location);
         properties.insert("metadata.view-uuid".to_string(), view_uuid);
         properties.insert(
             "metadata.format-version".to_string(),
@@ -538,13 +704,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
         let result = client
             .catalog_api_api()
-            .create_namespace(
-                request,
-                catalog_config
-                    .props
-                    .get(REST_CATALOG_PROP_PREFIX)
-                    .map(|s| s.as_str()),
-            )
+            .create_namespace(request, Self::catalog_prefix(catalog_config))
             .await;
 
         match result {
@@ -581,17 +741,11 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
     async fn get_database(&self, database: &Namespace) -> CatalogResult<DatabaseStatus> {
         let (client, catalog_config) = self.load_client_and_merged_config().await?;
-        let namespace = Self::namespace_string(database);
+        let namespace = Self::namespace_string(catalog_config, database)?;
 
         let result = client
             .catalog_api_api()
-            .load_namespace_metadata(
-                &namespace,
-                catalog_config
-                    .props
-                    .get(REST_CATALOG_PROP_PREFIX)
-                    .map(|s| s.as_str()),
-            )
+            .load_namespace_metadata(&namespace, Self::catalog_prefix(catalog_config))
             .await
             .map_err(|e| match e {
                 apis::Error::ResponseError(apis::ResponseContent { status, .. }) => {
@@ -637,7 +791,9 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         prefix: Option<&Namespace>,
     ) -> CatalogResult<Vec<DatabaseStatus>> {
         let (client, catalog_config) = self.load_client_and_merged_config().await?;
-        let parent = prefix.map(|namespace| Self::namespace_string(namespace));
+        let parent = prefix
+            .map(|namespace| Self::namespace_string(catalog_config, namespace))
+            .transpose()?;
 
         let result = client
             .catalog_api_api()
@@ -645,10 +801,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 None,
                 None,
                 parent.as_deref(),
-                catalog_config
-                    .props
-                    .get(REST_CATALOG_PROP_PREFIX)
-                    .map(|s| s.as_str()),
+                Self::catalog_prefix(catalog_config),
             )
             .await
             .map_err(|e| CatalogError::External(format!("Failed to list namespaces: {e}")))?;
@@ -678,11 +831,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
         if cascade {
             // For CASCADE, first drop all tables and views in the namespace before dropping the namespace.
-            let prefix = catalog_config
-                .props
-                .get(REST_CATALOG_PROP_PREFIX)
-                .map(|s| s.as_str());
-            let ns_string = Self::namespace_string(database);
+            let prefix = Self::catalog_prefix(catalog_config);
+            let ns_string = Self::namespace_string(catalog_config, database)?;
             let tables_result = client
                 .catalog_api_api()
                 .list_tables(&ns_string, None, None, prefix)
@@ -712,11 +862,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         match client
             .catalog_api_api()
             .drop_namespace(
-                &Self::namespace_string(database),
-                catalog_config
-                    .props
-                    .get(REST_CATALOG_PROP_PREFIX)
-                    .map(|s| s.as_str()),
+                &Self::namespace_string(catalog_config, database)?,
+                Self::catalog_prefix(catalog_config),
             )
             .await
         {
@@ -752,6 +899,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             if_not_exists,
             replace,
             properties,
+            is_external: _,
+            is_write_precondition: _,
         } = options;
 
         if if_not_exists {
@@ -766,13 +915,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             ));
         }
 
-        if bucket_by.is_some() {
-            return Err(CatalogError::NotSupported(
-                "Bucketed table is not supported yet".to_string(),
-            ));
-        }
-
-        let fields = columns_to_nested_fields(&columns)?;
+        let format_version = requested_iceberg_format_version(&properties)?;
+        let fields = columns_to_nested_fields(&columns, format_version)?;
 
         let struct_type = StructType::new(fields.clone());
 
@@ -805,7 +949,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             identifier_field_ids: Some(schema.identifier_field_ids().collect()),
         };
 
-        let partition_spec = build_partition_spec(&partition_by, &name_to_id);
+        let partition_spec = build_partition_spec(&partition_by, bucket_by.as_ref(), &name_to_id)?;
         let write_order = build_sort_order(&sort_by, &name_to_id)?;
 
         let mut props = HashMap::new();
@@ -822,20 +966,17 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             schema: Box::new(schema),
             partition_spec,
             write_order,
-            stage_create: None,
+            stage_create: Some(false),
             properties: if props.is_empty() { None } else { Some(props) },
         };
 
         let result = client
             .catalog_api_api()
             .create_table(
-                &Self::namespace_string(database),
+                &Self::namespace_string(catalog_config, database)?,
                 request,
                 None,
-                catalog_config
-                    .props
-                    .get(REST_CATALOG_PROP_PREFIX)
-                    .map(|s| s.as_str()),
+                Self::catalog_prefix(catalog_config),
             )
             .await
             .map_err(|e| CatalogError::External(format!("Failed to create table: {e}")))?;
@@ -848,15 +989,12 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let result = client
             .catalog_api_api()
             .load_table(
-                &Self::namespace_string(database),
+                &Self::namespace_string(catalog_config, database)?,
                 table,
                 None,
                 None,
                 None,
-                catalog_config
-                    .props
-                    .get(REST_CATALOG_PROP_PREFIX)
-                    .map(|s| s.as_str()),
+                Self::catalog_prefix(catalog_config),
             )
             .await
             .map_err(|e| match e {
@@ -887,13 +1025,10 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let result = client
             .catalog_api_api()
             .list_tables(
-                &Self::namespace_string(database),
+                &Self::namespace_string(catalog_config, database)?,
                 None,
                 None,
-                catalog_config
-                    .props
-                    .get(REST_CATALOG_PROP_PREFIX)
-                    .map(|s| s.as_str()),
+                Self::catalog_prefix(catalog_config),
             )
             .await
             .map_err(|e| CatalogError::External(format!("Failed to list tables: {e}")))?;
@@ -916,6 +1051,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                     sort_by: Vec::new(),
                     bucket_by: None,
                     properties: Vec::new(),
+                    is_external: true,
                 },
             })
             .collect())
@@ -932,13 +1068,10 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         match client
             .catalog_api_api()
             .drop_table(
-                &Self::namespace_string(database),
+                &Self::namespace_string(catalog_config, database)?,
                 table,
                 Some(purge),
-                catalog_config
-                    .props
-                    .get(REST_CATALOG_PROP_PREFIX)
-                    .map(|s| s.as_str()),
+                Self::catalog_prefix(catalog_config),
             )
             .await
         {
@@ -961,6 +1094,22 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         Err(CatalogError::NotSupported(
             "alter table in Iceberg catalog".to_string(),
         ))
+    }
+
+    async fn commit_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: CommitTableOptions,
+    ) -> CatalogResult<TableStatus> {
+        let response = self.commit_table_request(database, table, options).await?;
+        let result = crate::models::LoadTableResult {
+            metadata_location: Some(response.metadata_location),
+            metadata: response.metadata,
+            config: None,
+            storage_credentials: None,
+        };
+        self.load_table_result_to_status(table, database, result)
     }
 
     async fn create_view(
@@ -994,20 +1143,22 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         }
 
         let mut fields = Vec::new();
-        for (idx, col) in columns.iter().enumerate() {
+        for col in columns.iter() {
             let CreateViewColumnOptions {
                 name,
                 data_type,
                 nullable,
                 comment,
             } = col;
-            let field_id = idx as i32 + 1; // FIXME: Is this wrong?
             let field_type = arrow_type_to_iceberg(data_type).map_err(|e| {
                 CatalogError::External(format!(
                     "Failed to convert Arrow type to Iceberg type for column '{name}': {e}"
                 ))
             })?;
-            let mut field = NestedField::new(field_id, name.clone(), field_type, !nullable);
+            // Use a placeholder field id of 0; after all fields are collected,
+            // `SchemaEvolver::assign_schema_field_ids` assigns unique IDs
+            // including for nested struct/list/map children.
+            let mut field = NestedField::new(0, name.clone(), field_type, !nullable);
             if let Some(comment) = comment {
                 field = field.with_doc(comment);
             }
@@ -1018,6 +1169,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .with_fields(fields)
             .build()
             .map_err(|e| CatalogError::External(format!("Failed to build schema: {e}")))?;
+        let schema = sail_iceberg::SchemaEvolver::assign_schema_field_ids(&schema)
+            .map_err(|e| CatalogError::External(format!("Failed to assign field ids: {e}")))?;
         let schema = crate::models::Schema {
             r#type: crate::models::schema::Type::Struct,
             fields: schema.fields().to_vec(),
@@ -1036,13 +1189,10 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
 
-        // TODO: Is this correct?
         let view_version = crate::models::ViewVersion {
-            version_id: 1,
+            version_id: 1, // FIXME: When `replace` is supported and used, this should be a new version id.
             timestamp_ms,
-            schema_id: schema
-                .schema_id
-                .ok_or_else(|| CatalogError::External("Schema ID is missing".to_string()))?,
+            schema_id: -1,
             summary: HashMap::new(),
             representations: vec![sql_representation],
             default_catalog: None,
@@ -1050,16 +1200,32 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         };
 
         let mut props = HashMap::new();
+        let mut path = None;
+        let mut location = None;
         for (k, v) in properties {
+            let trimmed = v.trim();
+            if !trimmed.is_empty() {
+                if k.eq_ignore_ascii_case("path") {
+                    path = Some(trimmed.to_string());
+                } else if k.eq_ignore_ascii_case("location") {
+                    location = Some(trimmed.to_string());
+                }
+            }
             props.insert(k, v);
         }
         if let Some(c) = comment {
             props.insert("comment".to_string(), c);
         }
 
+        if location.is_none() {
+            if let Some(path) = path {
+                props.insert("location".to_string(), path.clone());
+                location = Some(path);
+            }
+        }
         let request = crate::models::CreateViewRequest {
             name: view.to_string(),
-            location: None, // TODO: Is this correct?
+            location,
             schema: Box::new(schema),
             view_version: Box::new(view_version),
             properties: props,
@@ -1068,12 +1234,9 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let result = client
             .catalog_api_api()
             .create_view(
-                &Self::namespace_string(database),
+                &Self::namespace_string(catalog_config, database)?,
                 request,
-                catalog_config
-                    .props
-                    .get(REST_CATALOG_PROP_PREFIX)
-                    .map(|s| s.as_str()),
+                Self::catalog_prefix(catalog_config),
             )
             .await
             .map_err(|e| CatalogError::External(format!("Failed to create view: {e}")))?;
@@ -1086,20 +1249,29 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let result = client
             .catalog_api_api()
             .load_view(
-                &Self::namespace_string(database),
+                &Self::namespace_string(catalog_config, database)?,
                 view,
-                catalog_config
-                    .props
-                    .get(REST_CATALOG_PROP_PREFIX)
-                    .map(|s| s.as_str()),
+                Self::catalog_prefix(catalog_config),
             )
             .await
-            .map_err(|e| {
-                CatalogError::External(format!(
+            .map_err(|e| match e {
+                apis::Error::ResponseError(apis::ResponseContent { status, .. })
+                    if status == 404 =>
+                {
+                    CatalogError::NotFound(
+                        CatalogObject::View,
+                        format!(
+                            "{}.{}",
+                            quote_namespace_if_needed(database),
+                            quote_name_if_needed(view)
+                        ),
+                    )
+                }
+                _ => CatalogError::External(format!(
                     "Failed to load view {}.{}: {e}",
                     quote_namespace_if_needed(database),
                     quote_name_if_needed(view)
-                ))
+                )),
             })?;
         self.load_view_result_to_status(view, database, result)
     }
@@ -1110,13 +1282,10 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         let result = client
             .catalog_api_api()
             .list_views(
-                &Self::namespace_string(database),
+                &Self::namespace_string(catalog_config, database)?,
                 None,
                 None,
-                catalog_config
-                    .props
-                    .get(REST_CATALOG_PROP_PREFIX)
-                    .map(|s| s.as_str()),
+                Self::catalog_prefix(catalog_config),
             )
             .await
             .map_err(|e| CatalogError::External(format!("Failed to list views: {e}")))?;
@@ -1150,12 +1319,9 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         match client
             .catalog_api_api()
             .drop_view(
-                &Self::namespace_string(database),
+                &Self::namespace_string(catalog_config, database)?,
                 view,
-                catalog_config
-                    .props
-                    .get(REST_CATALOG_PROP_PREFIX)
-                    .map(|s| s.as_str()),
+                Self::catalog_prefix(catalog_config),
             )
             .await
         {
@@ -1191,43 +1357,120 @@ where
     })
 }
 
+fn requested_iceberg_format_version(
+    properties: &[(String, String)],
+) -> CatalogResult<FormatVersion> {
+    let Some((_, value)) = properties.iter().find(|(key, _)| {
+        matches!(
+            key.trim().to_ascii_lowercase().as_str(),
+            "format-version"
+                | "format_version"
+                | "formatversion"
+                | "metadata.format-version"
+                | "metadata.format_version"
+                | "metadata.formatversion"
+        )
+    }) else {
+        return Ok(FormatVersion::default());
+    };
+
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "v1" => Ok(FormatVersion::V1),
+        "2" | "v2" => Ok(FormatVersion::V2),
+        "3" | "v3" => Ok(FormatVersion::V3),
+        value => Err(CatalogError::InvalidArgument(format!(
+            "unsupported Iceberg format-version: {value}"
+        ))),
+    }
+}
+
 /// Converts table column options to Iceberg nested fields.
+///
+/// Ensures all fields (top-level and nested) receive sequential, unique field
+/// IDs starting at 1 via `SchemaEvolver::assign_schema_field_ids`. This is
+/// required because Iceberg uses field IDs for schema indexing and column
+/// identity, and nested children produced by `arrow_type_to_iceberg` would
+/// otherwise default to id 0 since the source `CreateTableColumnOptions` carry
+/// no Iceberg field-id metadata.
 fn columns_to_nested_fields(
     columns: &[CreateTableColumnOptions],
+    format_version: FormatVersion,
 ) -> CatalogResult<Vec<Arc<NestedField>>> {
     let mut fields = Vec::new();
-    for (idx, col) in columns.iter().enumerate() {
+    for col in columns.iter() {
         let CreateTableColumnOptions {
             name,
             data_type,
             nullable,
             comment,
-            default: _,
+            default,
             generated_always_as: _,
+            identity: _,
         } = col;
-        let field_id = idx as i32 + 1; // FIXME: Is this wrong?
+
         let field_type = arrow_type_to_iceberg(data_type).map_err(|e| {
             CatalogError::External(format!(
                 "Failed to convert Arrow type to Iceberg type for column '{name}': {e}"
             ))
         })?;
-        // TODO: `default` is not supported until Iceberg V3
-        let mut field = NestedField::new(field_id, name.clone(), field_type, !nullable);
+
+        // `default` is not supported until Iceberg V3.
+        let default_literal = if let Some(default) = default {
+            if format_version >= FormatVersion::V3 {
+                Some(Literal::try_from_str(default, &field_type)
+                    .map_err(|e| {
+                        CatalogError::InvalidArgument(format!(
+                            "Failed to convert default value to Iceberg literal for column '{name}': {e}"
+                        ))
+                    })?
+                    .ok_or_else(|| {
+                        CatalogError::InvalidArgument(format!(
+                            "column '{name}' has NULL/null default; null defaults are not supported here"
+                        ))
+                    })?)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Use a placeholder field id of 0; after all fields are collected,
+        // `SchemaEvolver::assign_schema_field_ids` assigns unique IDs including
+        // for nested struct/list/map children.
+        let mut field = NestedField::new(0, name.clone(), field_type, !nullable);
         if let Some(comment) = comment {
             field = field.with_doc(comment);
         }
+
+        if format_version >= FormatVersion::V3 {
+            if let Some(default_literal) = default_literal {
+                field = field
+                    .with_initial_default(default_literal.clone())
+                    .with_write_default(default_literal);
+            }
+        }
+
         fields.push(Arc::new(field));
     }
-    Ok(fields)
+
+    let temp_schema = sail_iceberg::spec::Schema::builder()
+        .with_fields(fields)
+        .build()
+        .map_err(|e| CatalogError::External(format!("Failed to build schema: {e}")))?;
+    let assigned = sail_iceberg::SchemaEvolver::assign_schema_field_ids(&temp_schema)
+        .map_err(|e| CatalogError::External(format!("Failed to assign field ids: {e}")))?;
+    Ok(assigned.fields().to_vec())
 }
 
 /// Builds an Iceberg partition spec from partition fields and their field ID mappings.
 fn build_partition_spec(
     partition_by: &[CatalogPartitionField],
+    bucket_by: Option<&CatalogTableBucketBy>,
     name_to_id: &HashMap<String, i32>,
-) -> Option<Box<crate::models::PartitionSpec>> {
-    if partition_by.is_empty() {
-        return None;
+) -> CatalogResult<Option<Box<crate::models::PartitionSpec>>> {
+    if partition_by.is_empty() && bucket_by.is_none() {
+        return Ok(None);
     }
     let mut partition_spec_builder = sail_iceberg::PartitionSpec::builder();
     for field in partition_by {
@@ -1264,8 +1507,27 @@ fn build_partition_spec(
             partition_spec_builder = partition_spec_builder.add_field(source_id, &name, transform);
         }
     }
+    if let Some(bucket_by) = bucket_by {
+        let num_buckets = u32::try_from(bucket_by.num_buckets).map_err(|e| {
+            CatalogError::InvalidArgument(format!("Invalid number of buckets: {e}"))
+        })?;
+        if num_buckets == 0 {
+            return Err(CatalogError::InvalidArgument(
+                "number of buckets must be a positive integer".to_string(),
+            ));
+        }
+        for column in &bucket_by.columns {
+            if let Some(&source_id) = name_to_id.get(column) {
+                partition_spec_builder = partition_spec_builder.add_field(
+                    source_id,
+                    &format!("{column}_bucket"),
+                    sail_iceberg::Transform::Bucket(num_buckets),
+                );
+            }
+        }
+    }
     let spec = partition_spec_builder.build();
-    Some(Box::new(crate::models::PartitionSpec {
+    Ok(Some(Box::new(crate::models::PartitionSpec {
         spec_id: Some(spec.spec_id()),
         fields: spec
             .fields()
@@ -1277,7 +1539,7 @@ fn build_partition_spec(
                 transform: f.transform.to_string(),
             })
             .collect(),
-    }))
+    })))
 }
 
 fn build_sort_order(
@@ -1290,17 +1552,18 @@ fn build_sort_order(
 
     let mut sort_fields = Vec::new();
     for sort in sort_by {
-        if let Some(&source_id) = name_to_id.get(&sort.column) {
+        let (column, transform) = parse_sort_column(&sort.column)?;
+        if let Some(&source_id) = name_to_id.get(&column) {
             sort_fields.push(sail_iceberg::spec::sort::SortField {
                 source_id,
                 source_ids: vec![],
-                transform: sail_iceberg::Transform::Identity, // FIXME: This is wrong, col needs to be parsed.
+                transform,
                 direction: if sort.ascending {
                     sail_iceberg::spec::sort::SortDirection::Ascending
                 } else {
                     sail_iceberg::spec::sort::SortDirection::Descending
                 },
-                null_order: sail_iceberg::spec::sort::NullOrder::Last, // TODO: Should this be configurable?
+                null_order: sail_iceberg::spec::sort::NullOrder::Last, // TODO: Use specified null order when supported by `resolve_catalog_table_sort` in @crates/sail-plan/src/resolver/command/catalog/table.rs
             });
         }
     }
@@ -1337,6 +1600,95 @@ fn build_sort_order(
             })
             .collect(),
     })))
+}
+
+/// Parses a catalog sort column into the Iceberg source column and transform.
+///
+/// The input is either a plain column name or a transform expression such as
+/// `years(ts)`, `bucket(16, id)`, or `truncate(4, category)`.
+fn parse_sort_column(column: &str) -> CatalogResult<(String, sail_iceberg::Transform)> {
+    let column = column.trim();
+    let Some((function, arguments)) = parse_transform_function(column) else {
+        return Ok((column.to_string(), sail_iceberg::Transform::Identity));
+    };
+
+    let arguments = arguments.split(',').map(str::trim).collect::<Vec<_>>();
+
+    match function.to_ascii_lowercase().as_str() {
+        "year" | "years" => {
+            parse_unary_sort_transform(function, arguments, sail_iceberg::Transform::Year)
+        }
+        "month" | "months" => {
+            parse_unary_sort_transform(function, arguments, sail_iceberg::Transform::Month)
+        }
+        "day" | "days" => {
+            parse_unary_sort_transform(function, arguments, sail_iceberg::Transform::Day)
+        }
+        "hour" | "hours" => {
+            parse_unary_sort_transform(function, arguments, sail_iceberg::Transform::Hour)
+        }
+        "bucket" => {
+            let [num_buckets_str, column] = arguments.as_slice() else {
+                return Err(CatalogError::InvalidArgument(
+                    "bucket sort transform expects bucket count and column".to_string(),
+                ));
+            };
+            let num_buckets = num_buckets_str.parse::<u32>().map_err(|_| {
+                CatalogError::InvalidArgument(format!(
+                    "bucket count for sort transform must be a valid unsigned integer: {num_buckets_str}"
+                ))
+            })?;
+            if num_buckets == 0 {
+                return Err(CatalogError::InvalidArgument(
+                    "bucket count for sort transform must be a positive integer".to_string(),
+                ));
+            }
+            Ok((
+                column.to_string(),
+                sail_iceberg::Transform::Bucket(num_buckets),
+            ))
+        }
+        "truncate" => {
+            let [first, second] = arguments.as_slice() else {
+                return Err(CatalogError::InvalidArgument(
+                    "truncate sort transform expects width and column".to_string(),
+                ));
+            };
+            let parse_positive_u32 =
+                |s: &str| -> Option<u32> { s.parse::<u32>().ok().filter(|&w| w > 0) };
+            if let Some(width) = parse_positive_u32(first) {
+                Ok((second.to_string(), sail_iceberg::Transform::Truncate(width)))
+            } else if let Some(width) = parse_positive_u32(second) {
+                Ok((first.to_string(), sail_iceberg::Transform::Truncate(width)))
+            } else {
+                Err(CatalogError::InvalidArgument(format!(
+                    "truncate sort transform requires one argument to be a positive integer width, got: {first}, {second}"
+                )))
+            }
+        }
+        _ => Err(CatalogError::InvalidArgument(format!(
+            "Unsupported sort transform function: {function}"
+        ))),
+    }
+}
+
+fn parse_transform_function(column: &str) -> Option<(&str, &str)> {
+    let column = column.strip_suffix(')')?;
+    let (function, arguments) = column.split_once('(')?;
+    Some((function.trim(), arguments))
+}
+
+fn parse_unary_sort_transform(
+    function: &str,
+    arguments: Vec<&str>,
+    transform: sail_iceberg::Transform,
+) -> CatalogResult<(String, sail_iceberg::Transform)> {
+    let [column] = arguments.as_slice() else {
+        return Err(CatalogError::InvalidArgument(format!(
+            "{function} sort transform expects a single column"
+        )));
+    };
+    Ok((column.to_string(), transform))
 }
 
 #[expect(clippy::unwrap_used, clippy::panic)]
@@ -1420,6 +1772,334 @@ mod tests {
                 .mount(&self.server)
                 .await;
         }
+    }
+
+    async fn load_merged_test_config(
+        defaults: HashMap<String, String>,
+        mut client_props: HashMap<String, String>,
+        overrides: HashMap<String, String>,
+        expected_config_warehouse: Option<&str>,
+    ) -> RestCatalogConfig {
+        let server = MockServer::start().await;
+        let response = ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "defaults": defaults,
+            "overrides": overrides
+        }));
+
+        if let Some(warehouse) = expected_config_warehouse {
+            Mock::given(method("GET"))
+                .and(path("/v1/config"))
+                .and(query_param("warehouse", warehouse))
+                .respond_with(response)
+                .expect(1)
+                .mount(&server)
+                .await;
+        } else {
+            Mock::given(method("GET"))
+                .and(path("/v1/config"))
+                .and(query_param_is_missing("warehouse"))
+                .respond_with(response)
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+
+        client_props
+            .entry(REST_CATALOG_PROP_URI.to_string())
+            .or_insert_with(|| server.uri());
+
+        let catalog = IcebergRestCatalogProvider::new("test".to_string(), client_props);
+
+        let (_, config) = catalog.load_client_and_merged_config().await.unwrap();
+        config.clone()
+    }
+
+    #[test]
+    fn test_namespace_separator_aliases_are_canonicalized() {
+        for alias in [
+            "namespace_separator",
+            "namespace-separator",
+            "namespaceSeparator",
+            "namespaceseparator",
+        ] {
+            let props = IcebergRestCatalogProvider::normalize_catalog_props(HashMap::from([(
+                alias.to_string(),
+                "::".to_string(),
+            )]));
+
+            assert_eq!(
+                props
+                    .get(REST_CATALOG_PROP_NAMESPACE_SEPARATOR)
+                    .map(String::as_str),
+                Some("::")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_catalog_config_merge_precedence_for_properties() {
+        let key = "rest-page-size".to_string();
+
+        let config = load_merged_test_config(
+            HashMap::from([(key.clone(), "defaults".to_string())]),
+            HashMap::new(),
+            HashMap::new(),
+            None,
+        )
+        .await;
+        assert_eq!(config.props.get(&key).map(String::as_str), Some("defaults"));
+
+        let config = load_merged_test_config(
+            HashMap::from([(key.clone(), "defaults".to_string())]),
+            HashMap::from([(key.clone(), "client".to_string())]),
+            HashMap::new(),
+            None,
+        )
+        .await;
+        assert_eq!(config.props.get(&key).map(String::as_str), Some("client"));
+
+        let config = load_merged_test_config(
+            HashMap::from([(key.clone(), "defaults".to_string())]),
+            HashMap::from([(key.clone(), "client".to_string())]),
+            HashMap::from([(key.clone(), "overrides".to_string())]),
+            None,
+        )
+        .await;
+        assert_eq!(
+            config.props.get(&key).map(String::as_str),
+            Some("overrides")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_uri_merge_matrix() {
+        let config = load_merged_test_config(
+            HashMap::from([(
+                REST_CATALOG_PROP_URI.to_string(),
+                "http://default.example".to_string(),
+            )]),
+            HashMap::new(),
+            HashMap::new(),
+            None,
+        )
+        .await;
+        assert_ne!(config.uri, "http://default.example");
+
+        let config = load_merged_test_config(
+            HashMap::new(),
+            HashMap::new(),
+            HashMap::from([(
+                REST_CATALOG_PROP_URI.to_string(),
+                "http://server.example".to_string(),
+            )]),
+            None,
+        )
+        .await;
+        assert_eq!(config.uri, "http://server.example");
+    }
+
+    #[tokio::test]
+    async fn test_warehouse_merge_matrix() {
+        let config =
+            load_merged_test_config(HashMap::new(), HashMap::new(), HashMap::new(), None).await;
+        assert_eq!(config.warehouse, None);
+
+        let config = load_merged_test_config(
+            HashMap::from([(
+                REST_CATALOG_PROP_WAREHOUSE.to_string(),
+                "s3://default/warehouse".to_string(),
+            )]),
+            HashMap::new(),
+            HashMap::new(),
+            None,
+        )
+        .await;
+        assert_eq!(config.warehouse.as_deref(), Some("s3://default/warehouse"));
+
+        let config = load_merged_test_config(
+            HashMap::from([(
+                REST_CATALOG_PROP_WAREHOUSE.to_string(),
+                "s3://default/warehouse".to_string(),
+            )]),
+            HashMap::from([(
+                REST_CATALOG_PROP_WAREHOUSE.to_string(),
+                "s3://client/warehouse".to_string(),
+            )]),
+            HashMap::new(),
+            Some("s3://client/warehouse"),
+        )
+        .await;
+        assert_eq!(config.warehouse.as_deref(), Some("s3://client/warehouse"));
+
+        let config = load_merged_test_config(
+            HashMap::from([(
+                REST_CATALOG_PROP_WAREHOUSE.to_string(),
+                "s3://default/warehouse".to_string(),
+            )]),
+            HashMap::from([(
+                REST_CATALOG_PROP_WAREHOUSE.to_string(),
+                "s3://client/warehouse".to_string(),
+            )]),
+            HashMap::from([(
+                REST_CATALOG_PROP_WAREHOUSE.to_string(),
+                "s3://server/warehouse".to_string(),
+            )]),
+            Some("s3://client/warehouse"),
+        )
+        .await;
+        assert_eq!(config.warehouse.as_deref(), Some("s3://server/warehouse"));
+    }
+
+    #[tokio::test]
+    async fn test_prefix_merge_matrix() {
+        let config =
+            load_merged_test_config(HashMap::new(), HashMap::new(), HashMap::new(), None).await;
+        assert_eq!(IcebergRestCatalogProvider::catalog_prefix(&config), None);
+
+        let config = load_merged_test_config(
+            HashMap::from([(
+                REST_CATALOG_PROP_PREFIX.to_string(),
+                "default_prefix".to_string(),
+            )]),
+            HashMap::new(),
+            HashMap::new(),
+            None,
+        )
+        .await;
+        assert_eq!(
+            IcebergRestCatalogProvider::catalog_prefix(&config),
+            Some("default_prefix")
+        );
+
+        let config = load_merged_test_config(
+            HashMap::from([(
+                REST_CATALOG_PROP_PREFIX.to_string(),
+                "default_prefix".to_string(),
+            )]),
+            HashMap::from([(
+                REST_CATALOG_PROP_PREFIX.to_string(),
+                "client_prefix".to_string(),
+            )]),
+            HashMap::new(),
+            None,
+        )
+        .await;
+        assert_eq!(
+            IcebergRestCatalogProvider::catalog_prefix(&config),
+            Some("client_prefix")
+        );
+
+        let config = load_merged_test_config(
+            HashMap::from([(
+                REST_CATALOG_PROP_PREFIX.to_string(),
+                "default_prefix".to_string(),
+            )]),
+            HashMap::from([(
+                REST_CATALOG_PROP_PREFIX.to_string(),
+                "client_prefix".to_string(),
+            )]),
+            HashMap::from([(
+                REST_CATALOG_PROP_PREFIX.to_string(),
+                "server_prefix".to_string(),
+            )]),
+            None,
+        )
+        .await;
+        assert_eq!(
+            IcebergRestCatalogProvider::catalog_prefix(&config),
+            Some("server_prefix")
+        );
+
+        let config = load_merged_test_config(
+            HashMap::new(),
+            HashMap::from([(
+                REST_CATALOG_PROP_PREFIX.to_string(),
+                "client_prefix".to_string(),
+            )]),
+            HashMap::from([(REST_CATALOG_PROP_PREFIX.to_string(), " ".to_string())]),
+            None,
+        )
+        .await;
+        assert_eq!(IcebergRestCatalogProvider::catalog_prefix(&config), None);
+    }
+
+    #[tokio::test]
+    async fn test_namespace_separator_merge_matrix() {
+        let namespace =
+            Namespace::try_from(vec!["accounting".to_string(), "tax".to_string()]).unwrap();
+
+        let config =
+            load_merged_test_config(HashMap::new(), HashMap::new(), HashMap::new(), None).await;
+        assert_eq!(
+            IcebergRestCatalogProvider::namespace_string(&config, &namespace).unwrap(),
+            "accounting\x1Ftax"
+        );
+
+        let config = load_merged_test_config(
+            HashMap::from([(
+                REST_CATALOG_PROP_NAMESPACE_SEPARATOR.to_string(),
+                "/".to_string(),
+            )]),
+            HashMap::new(),
+            HashMap::new(),
+            None,
+        )
+        .await;
+        assert_eq!(
+            IcebergRestCatalogProvider::namespace_string(&config, &namespace).unwrap(),
+            "accounting/tax"
+        );
+
+        let config = load_merged_test_config(
+            HashMap::from([(
+                REST_CATALOG_PROP_NAMESPACE_SEPARATOR.to_string(),
+                "/".to_string(),
+            )]),
+            HashMap::from([("namespace_separator".to_string(), "%3A%3A".to_string())]),
+            HashMap::new(),
+            None,
+        )
+        .await;
+        assert_eq!(
+            IcebergRestCatalogProvider::namespace_string(&config, &namespace).unwrap(),
+            "accounting::tax"
+        );
+
+        let config = load_merged_test_config(
+            HashMap::from([(
+                REST_CATALOG_PROP_NAMESPACE_SEPARATOR.to_string(),
+                "/".to_string(),
+            )]),
+            HashMap::from([("namespace_separator".to_string(), "::".to_string())]),
+            HashMap::from([(
+                REST_CATALOG_PROP_NAMESPACE_SEPARATOR.to_string(),
+                "%7C".to_string(),
+            )]),
+            None,
+        )
+        .await;
+        assert_eq!(
+            IcebergRestCatalogProvider::namespace_string(&config, &namespace).unwrap(),
+            "accounting|tax"
+        );
+
+        let config = load_merged_test_config(
+            HashMap::from([(
+                REST_CATALOG_PROP_NAMESPACE_SEPARATOR.to_string(),
+                "/".to_string(),
+            )]),
+            HashMap::from([("namespace_separator".to_string(), "::".to_string())]),
+            HashMap::from([(
+                REST_CATALOG_PROP_NAMESPACE_SEPARATOR.to_string(),
+                " ".to_string(),
+            )]),
+            None,
+        )
+        .await;
+        assert_eq!(
+            IcebergRestCatalogProvider::namespace_string(&config, &namespace).unwrap(),
+            "accounting\x1Ftax"
+        );
     }
 
     async fn test_list_databases_impl(name: Option<&str>) {

@@ -1,12 +1,12 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use sail_plan::config::{DefaultTimestampType, PlanConfig};
 use sail_python_udf::config::PySparkUdfConfig;
 
 use crate::error::{SparkError, SparkResult};
 use crate::spark::config::{
-    SPARK_CONFIG, SPARK_SQL_ANSI_ENABLED, SPARK_SQL_CROSS_JOIN_ENABLED,
+    SPARK_CONFIG, SPARK_SQL_ANSI_ENABLED, SPARK_SQL_CASE_SENSITIVE, SPARK_SQL_CROSS_JOIN_ENABLED,
     SPARK_SQL_EXECUTION_ARROW_MAX_RECORDS_PER_BATCH, SPARK_SQL_EXECUTION_ARROW_USE_LARGE_VAR_TYPES,
     SPARK_SQL_EXECUTION_PANDAS_CONVERT_TO_ARROW_ARRAY_SAFELY,
     SPARK_SQL_EXECUTION_PYSPARK_BINARY_AS_BYTES,
@@ -87,6 +87,9 @@ impl SparkRuntimeConfig {
         if let Some(fallback) = entry.and_then(|x| x.fallback) {
             return self.get(fallback);
         }
+        if let Some(value) = versioned_default_value(key) {
+            return Ok(Some(value));
+        }
         if let Some(entry) = entry {
             return Ok(entry.default_value);
         }
@@ -103,6 +106,9 @@ impl SparkRuntimeConfig {
         if let Some(fallback) = entry.and_then(|x| x.fallback) {
             return self.get_option(fallback);
         }
+        if let Some(value) = versioned_default_value(key) {
+            return Some(value);
+        }
         entry.and_then(|x| x.default_value)
     }
 
@@ -117,6 +123,9 @@ impl SparkRuntimeConfig {
         let entry = SPARK_CONFIG.get(key);
         if let Some(fallback) = entry.and_then(|x| x.fallback) {
             return self.get_with_default(fallback, default);
+        }
+        if let Some(value) = versioned_default_value(key) {
+            return Some(value);
         }
         default
     }
@@ -178,6 +187,38 @@ impl SparkRuntimeConfig {
     }
 }
 
+fn versioned_default_value(key: &str) -> Option<&'static str> {
+    match key {
+        SPARK_SQL_ANSI_ENABLED if get_pyspark_major_version().is_some_and(|x| x < 4) => {
+            Some("false")
+        }
+        _ => None,
+    }
+}
+
+fn get_pyspark_major_version() -> Option<u64> {
+    static PYSPARK_MAJOR_VERSION: OnceLock<Option<u64>> = OnceLock::new();
+
+    *PYSPARK_MAJOR_VERSION.get_or_init(|| {
+        get_pyspark_version()
+            .ok()
+            .and_then(|version| version.split('.').next()?.parse().ok())
+    })
+}
+
+pub(crate) fn get_pyspark_version() -> SparkResult<String> {
+    use pyo3::prelude::PyAnyMethods;
+    use pyo3::types::PyModule;
+    use pyo3::Python;
+
+    Python::attach(|py| {
+        let module = PyModule::import(py, "pyspark")?;
+        let version: String = module.getattr("__version__")?.extract()?;
+        Ok(version)
+    })
+    .map_err(|e: pyo3::PyErr| SparkError::invalid(format!("failed to get PySpark version: {e}")))
+}
+
 impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
     type Error = SparkError;
 
@@ -237,6 +278,14 @@ impl TryFrom<&SparkRuntimeConfig> for PlanConfig {
             .transpose()?
         {
             output.cross_join_enabled = value;
+        }
+
+        if let Some(value) = config
+            .get(SPARK_SQL_CASE_SENSITIVE)?
+            .map(|x| x.to_lowercase().parse::<bool>())
+            .transpose()?
+        {
+            output.case_sensitive = value;
         }
 
         output.pyspark_udf_config = Arc::new(PySparkUdfConfig::try_from(config)?);

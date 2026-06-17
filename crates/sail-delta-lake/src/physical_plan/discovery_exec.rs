@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
@@ -148,10 +147,6 @@ impl DeltaDiscoveryExec {
 impl ExecutionPlan for DeltaDiscoveryExec {
     fn name(&self) -> &'static str {
         "DeltaDiscoveryExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

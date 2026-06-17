@@ -1,0 +1,37 @@
+# serializer version: 1
+---
+name: "test_variantshredding_write_round_trips"
+data:
+  metaData:
+    configuration:
+      delta.enableVariantShredding: 'true'
+    createdTime: <created_time>
+    description: null
+    format:
+      options: {}
+      provider: parquet
+    id: <table_id>
+    name: null
+    partitionColumns: []
+    schemaString:
+      fields:
+      - metadata: {}
+        name: id
+        nullable: true
+        type: integer
+      - metadata: {}
+        name: payload
+        nullable: true
+        type: variant
+      type: struct
+  protocol:
+    minReaderVersion: 3
+    minWriterVersion: 7
+    readerFeatures:
+    - variantType
+    - variantShredding-preview
+    writerFeatures:
+    - variantType
+    - appendOnly
+    - invariants
+    - variantShredding-preview

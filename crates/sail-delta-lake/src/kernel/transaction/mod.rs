@@ -39,8 +39,8 @@ use crate::kernel::checkpoints::{
 use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
 use crate::kernel::{DeltaOperation, DeltaSnapshotConfig};
 use crate::spec::{
-    checksum_path, temp_commit_path, Action, CommitAction, DeltaError, DeltaResult, Metadata,
-    TableFeature, Transaction, VersionChecksum,
+    checksum_path, staged_commit_path, temp_commit_path, Action, CommitAction, DeltaError,
+    DeltaResult, Metadata, TableFeature, Transaction, VersionChecksum,
 };
 pub use crate::spec::{CommitConflictError, TransactionError};
 use crate::storage::{CommitOrBytes, LogStoreRef, ObjectStoreRef};
@@ -75,6 +75,7 @@ pub struct OperationMetrics {
     pub num_output_rows: Option<u64>,
     pub num_output_bytes: Option<u64>,
     pub execution_time_ms: Option<u64>,
+    pub materialize_source_time_ms: Option<u64>,
     pub scan_time_ms: Option<u64>,
     pub rewrite_time_ms: Option<u64>,
     pub write_time_ms: Option<u64>,
@@ -83,6 +84,8 @@ pub struct OperationMetrics {
     pub num_output_files: Option<u64>,
     pub num_added_bytes: Option<u64>,
     pub num_removed_bytes: Option<u64>,
+    pub num_added_change_files: Option<u64>,
+    pub change_file_bytes: Option<u64>,
     pub num_deleted_rows: Option<u64>,
     pub num_updated_rows: Option<u64>,
     pub num_copied_rows: Option<u64>,
@@ -90,12 +93,21 @@ pub struct OperationMetrics {
     pub num_source_rows: Option<u64>,
     pub num_target_rows_inserted: Option<u64>,
     pub num_target_rows_updated: Option<u64>,
+    pub num_target_rows_matched_updated: Option<u64>,
+    pub num_target_rows_not_matched_by_source_updated: Option<u64>,
     pub num_target_rows_deleted: Option<u64>,
+    pub num_target_rows_matched_deleted: Option<u64>,
+    pub num_target_rows_not_matched_by_source_deleted: Option<u64>,
     pub num_target_rows_copied: Option<u64>,
     pub num_target_files_added: Option<u64>,
     pub num_target_files_removed: Option<u64>,
     pub num_target_bytes_added: Option<u64>,
     pub num_target_bytes_removed: Option<u64>,
+    pub num_target_change_files_added: Option<u64>,
+    pub num_target_change_file_bytes: Option<u64>,
+    pub num_target_deletion_vectors_added: Option<u64>,
+    pub num_target_deletion_vectors_updated: Option<u64>,
+    pub num_target_deletion_vectors_removed: Option<u64>,
     pub num_deletion_vectors_added: Option<u64>,
     pub num_deletion_vectors_updated: Option<u64>,
     pub num_deletion_vectors_removed: Option<u64>,
@@ -134,6 +146,7 @@ impl OperationMetrics {
         insert_opt!("numOutputRows", self.num_output_rows);
         insert_opt!("numOutputBytes", self.num_output_bytes);
         insert_opt!("executionTimeMs", self.execution_time_ms);
+        insert_opt!("materializeSourceTimeMs", self.materialize_source_time_ms);
         insert_opt!("scanTimeMs", self.scan_time_ms);
         insert_opt!("rewriteTimeMs", self.rewrite_time_ms);
         insert_opt!("writeTimeMs", self.write_time_ms);
@@ -142,6 +155,8 @@ impl OperationMetrics {
         insert_opt!("numOutputFiles", self.num_output_files);
         insert_opt!("numAddedBytes", self.num_added_bytes);
         insert_opt!("numRemovedBytes", self.num_removed_bytes);
+        insert_opt!("numAddedChangeFiles", self.num_added_change_files);
+        insert_opt!("changeFileBytes", self.change_file_bytes);
         insert_opt!("numDeletedRows", self.num_deleted_rows);
         insert_opt!("numUpdatedRows", self.num_updated_rows);
         insert_opt!("numCopiedRows", self.num_copied_rows);
@@ -149,12 +164,48 @@ impl OperationMetrics {
         insert_opt!("numSourceRows", self.num_source_rows);
         insert_opt!("numTargetRowsInserted", self.num_target_rows_inserted);
         insert_opt!("numTargetRowsUpdated", self.num_target_rows_updated);
+        insert_opt!(
+            "numTargetRowsMatchedUpdated",
+            self.num_target_rows_matched_updated
+        );
+        insert_opt!(
+            "numTargetRowsNotMatchedBySourceUpdated",
+            self.num_target_rows_not_matched_by_source_updated
+        );
         insert_opt!("numTargetRowsDeleted", self.num_target_rows_deleted);
+        insert_opt!(
+            "numTargetRowsMatchedDeleted",
+            self.num_target_rows_matched_deleted
+        );
+        insert_opt!(
+            "numTargetRowsNotMatchedBySourceDeleted",
+            self.num_target_rows_not_matched_by_source_deleted
+        );
         insert_opt!("numTargetRowsCopied", self.num_target_rows_copied);
         insert_opt!("numTargetFilesAdded", self.num_target_files_added);
         insert_opt!("numTargetFilesRemoved", self.num_target_files_removed);
         insert_opt!("numTargetBytesAdded", self.num_target_bytes_added);
         insert_opt!("numTargetBytesRemoved", self.num_target_bytes_removed);
+        insert_opt!(
+            "numTargetChangeFilesAdded",
+            self.num_target_change_files_added
+        );
+        insert_opt!(
+            "numTargetChangeFileBytes",
+            self.num_target_change_file_bytes
+        );
+        insert_opt!(
+            "numTargetDeletionVectorsAdded",
+            self.num_target_deletion_vectors_added
+        );
+        insert_opt!(
+            "numTargetDeletionVectorsUpdated",
+            self.num_target_deletion_vectors_updated
+        );
+        insert_opt!(
+            "numTargetDeletionVectorsRemoved",
+            self.num_target_deletion_vectors_removed
+        );
         insert_opt!("numDeletionVectorsAdded", self.num_deletion_vectors_added);
         insert_opt!(
             "numDeletionVectorsUpdated",
@@ -179,6 +230,10 @@ impl OperationMetrics {
         merge_opt(&mut self.num_output_rows, other.num_output_rows);
         merge_opt(&mut self.num_output_bytes, other.num_output_bytes);
         merge_opt(&mut self.execution_time_ms, other.execution_time_ms);
+        merge_opt(
+            &mut self.materialize_source_time_ms,
+            other.materialize_source_time_ms,
+        );
         merge_opt(&mut self.scan_time_ms, other.scan_time_ms);
         merge_opt(&mut self.rewrite_time_ms, other.rewrite_time_ms);
         merge_opt(&mut self.write_time_ms, other.write_time_ms);
@@ -187,6 +242,11 @@ impl OperationMetrics {
         merge_opt(&mut self.num_output_files, other.num_output_files);
         merge_opt(&mut self.num_added_bytes, other.num_added_bytes);
         merge_opt(&mut self.num_removed_bytes, other.num_removed_bytes);
+        merge_opt(
+            &mut self.num_added_change_files,
+            other.num_added_change_files,
+        );
+        merge_opt(&mut self.change_file_bytes, other.change_file_bytes);
         merge_opt(&mut self.num_deleted_rows, other.num_deleted_rows);
         merge_opt(&mut self.num_updated_rows, other.num_updated_rows);
         merge_opt(&mut self.num_copied_rows, other.num_copied_rows);
@@ -201,8 +261,24 @@ impl OperationMetrics {
             other.num_target_rows_updated,
         );
         merge_opt(
+            &mut self.num_target_rows_matched_updated,
+            other.num_target_rows_matched_updated,
+        );
+        merge_opt(
+            &mut self.num_target_rows_not_matched_by_source_updated,
+            other.num_target_rows_not_matched_by_source_updated,
+        );
+        merge_opt(
             &mut self.num_target_rows_deleted,
             other.num_target_rows_deleted,
+        );
+        merge_opt(
+            &mut self.num_target_rows_matched_deleted,
+            other.num_target_rows_matched_deleted,
+        );
+        merge_opt(
+            &mut self.num_target_rows_not_matched_by_source_deleted,
+            other.num_target_rows_not_matched_by_source_deleted,
         );
         merge_opt(
             &mut self.num_target_rows_copied,
@@ -223,6 +299,26 @@ impl OperationMetrics {
         merge_opt(
             &mut self.num_target_bytes_removed,
             other.num_target_bytes_removed,
+        );
+        merge_opt(
+            &mut self.num_target_change_files_added,
+            other.num_target_change_files_added,
+        );
+        merge_opt(
+            &mut self.num_target_change_file_bytes,
+            other.num_target_change_file_bytes,
+        );
+        merge_opt(
+            &mut self.num_target_deletion_vectors_added,
+            other.num_target_deletion_vectors_added,
+        );
+        merge_opt(
+            &mut self.num_target_deletion_vectors_updated,
+            other.num_target_deletion_vectors_updated,
+        );
+        merge_opt(
+            &mut self.num_target_deletion_vectors_removed,
+            other.num_target_deletion_vectors_removed,
         );
         merge_opt(
             &mut self.num_deletion_vectors_added,
@@ -259,6 +355,12 @@ impl OperationMetrics {
                 if self.rewrite_time_ms.is_none() {
                     self.rewrite_time_ms = self.write_time_ms;
                 }
+                self.num_added_change_files.get_or_insert(0);
+                self.num_deletion_vectors_added.get_or_insert(0);
+                self.num_deletion_vectors_updated.get_or_insert(0);
+                if self.num_deletion_vectors_removed.is_none() {
+                    self.num_deletion_vectors_removed = self.num_deletion_vectors_updated;
+                }
             }
             DeltaOperation::Merge { .. } => {
                 if self.num_target_files_added.is_none() {
@@ -276,6 +378,41 @@ impl OperationMetrics {
                 if self.rewrite_time_ms.is_none() {
                     self.rewrite_time_ms = self.write_time_ms;
                 }
+                if self.num_target_rows_deleted.is_none() {
+                    if let (Some(touched), Some(copied), Some(updated)) = (
+                        self.num_touched_rows,
+                        self.num_target_rows_copied,
+                        self.num_target_rows_updated,
+                    ) {
+                        self.num_target_rows_deleted =
+                            Some(touched.saturating_sub(copied.saturating_add(updated)));
+                    }
+                }
+                self.num_target_rows_inserted.get_or_insert(0);
+                self.num_target_rows_updated.get_or_insert(0);
+                self.num_target_rows_deleted.get_or_insert(0);
+                self.num_target_rows_copied.get_or_insert(0);
+                if self.num_output_rows.is_none() {
+                    self.num_output_rows = Some(
+                        self.num_target_rows_inserted.unwrap_or_default()
+                            + self.num_target_rows_updated.unwrap_or_default()
+                            + self.num_target_rows_copied.unwrap_or_default(),
+                    );
+                }
+                if self.num_source_rows.is_none() {
+                    self.num_source_rows = Some(
+                        self.num_target_rows_inserted.unwrap_or_default()
+                            + self.num_target_rows_updated.unwrap_or_default()
+                            + self.num_target_rows_deleted.unwrap_or_default(),
+                    );
+                }
+                self.num_target_change_files_added.get_or_insert(0);
+                self.num_target_deletion_vectors_added.get_or_insert(0);
+                self.num_target_deletion_vectors_updated.get_or_insert(0);
+                if self.num_target_deletion_vectors_removed.is_none() {
+                    self.num_target_deletion_vectors_removed =
+                        self.num_target_deletion_vectors_updated;
+                }
             }
             DeltaOperation::FileSystemCheck { .. } => {
                 self.num_added_files = None;
@@ -292,13 +429,15 @@ impl OperationMetrics {
             | DeltaOperation::Write { .. }
             | DeltaOperation::Create { .. }
             | DeltaOperation::SetTableProperties { .. }
-            | DeltaOperation::UnsetTableProperties { .. } => {} // TODO: When the following operations are implemented, extend this match:
-                                                                //   - UPDATE: numAddedFiles, numRemovedFiles, numUpdatedRows, numCopiedRows,
-                                                                //     executionTimeMs, scanTimeMs, rewriteTimeMs
-                                                                //   - OPTIMIZE / ZORDER: numAdded/Removed files+bytes histograms,
-                                                                //     partitionsOptimized, numBatches, filesAdded/filesRemoved quantiles
-                                                                //   - VACUUM START/END: numFilesToDelete, sizeOfDataToDelete,
-                                                                //     numDeletedFiles, numVacuumedDirectories
+            | DeltaOperation::AddConstraint { .. }
+            | DeltaOperation::UnsetTableProperties { .. }
+            | DeltaOperation::AlterColumn { .. } => {} // TODO: When the following operations are implemented, extend this match:
+                                                       //   - UPDATE: numAddedFiles, numRemovedFiles, numUpdatedRows, numCopiedRows,
+                                                       //     executionTimeMs, scanTimeMs, rewriteTimeMs
+                                                       //   - OPTIMIZE / ZORDER: numAdded/Removed files+bytes histograms,
+                                                       //     partitionsOptimized, numBatches, filesAdded/filesRemoved quantiles
+                                                       //   - VACUUM START/END: numFilesToDelete, sizeOfDataToDelete,
+                                                       //     numDeletedFiles, numVacuumedDirectories
         }
     }
 }
@@ -320,6 +459,7 @@ impl From<HashMap<String, Value>> for OperationMetrics {
         let num_output_rows = take_u64(&mut value, "numOutputRows");
         let num_output_bytes = take_u64(&mut value, "numOutputBytes");
         let execution_time_ms = take_u64(&mut value, "executionTimeMs");
+        let materialize_source_time_ms = take_u64(&mut value, "materializeSourceTimeMs");
         let scan_time_ms = take_u64(&mut value, "scanTimeMs");
         let rewrite_time_ms = take_u64(&mut value, "rewriteTimeMs");
         let write_time_ms = take_u64(&mut value, "writeTimeMs");
@@ -328,6 +468,8 @@ impl From<HashMap<String, Value>> for OperationMetrics {
         let num_output_files = take_u64(&mut value, "numOutputFiles");
         let num_added_bytes = take_u64(&mut value, "numAddedBytes");
         let num_removed_bytes = take_u64(&mut value, "numRemovedBytes");
+        let num_added_change_files = take_u64(&mut value, "numAddedChangeFiles");
+        let change_file_bytes = take_u64(&mut value, "changeFileBytes");
         let num_deleted_rows = take_u64(&mut value, "numDeletedRows");
         let num_updated_rows = take_u64(&mut value, "numUpdatedRows");
         let num_copied_rows = take_u64(&mut value, "numCopiedRows");
@@ -335,12 +477,26 @@ impl From<HashMap<String, Value>> for OperationMetrics {
         let num_source_rows = take_u64(&mut value, "numSourceRows");
         let num_target_rows_inserted = take_u64(&mut value, "numTargetRowsInserted");
         let num_target_rows_updated = take_u64(&mut value, "numTargetRowsUpdated");
+        let num_target_rows_matched_updated = take_u64(&mut value, "numTargetRowsMatchedUpdated");
+        let num_target_rows_not_matched_by_source_updated =
+            take_u64(&mut value, "numTargetRowsNotMatchedBySourceUpdated");
         let num_target_rows_deleted = take_u64(&mut value, "numTargetRowsDeleted");
+        let num_target_rows_matched_deleted = take_u64(&mut value, "numTargetRowsMatchedDeleted");
+        let num_target_rows_not_matched_by_source_deleted =
+            take_u64(&mut value, "numTargetRowsNotMatchedBySourceDeleted");
         let num_target_rows_copied = take_u64(&mut value, "numTargetRowsCopied");
         let num_target_files_added = take_u64(&mut value, "numTargetFilesAdded");
         let num_target_files_removed = take_u64(&mut value, "numTargetFilesRemoved");
         let num_target_bytes_added = take_u64(&mut value, "numTargetBytesAdded");
         let num_target_bytes_removed = take_u64(&mut value, "numTargetBytesRemoved");
+        let num_target_change_files_added = take_u64(&mut value, "numTargetChangeFilesAdded");
+        let num_target_change_file_bytes = take_u64(&mut value, "numTargetChangeFileBytes");
+        let num_target_deletion_vectors_added =
+            take_u64(&mut value, "numTargetDeletionVectorsAdded");
+        let num_target_deletion_vectors_updated =
+            take_u64(&mut value, "numTargetDeletionVectorsUpdated");
+        let num_target_deletion_vectors_removed =
+            take_u64(&mut value, "numTargetDeletionVectorsRemoved");
         let num_deletion_vectors_added = take_u64(&mut value, "numDeletionVectorsAdded");
         let num_deletion_vectors_updated = take_u64(&mut value, "numDeletionVectorsUpdated");
         let num_deletion_vectors_removed = take_u64(&mut value, "numDeletionVectorsRemoved");
@@ -350,6 +506,7 @@ impl From<HashMap<String, Value>> for OperationMetrics {
             num_output_rows,
             num_output_bytes,
             execution_time_ms,
+            materialize_source_time_ms,
             scan_time_ms,
             rewrite_time_ms,
             write_time_ms,
@@ -358,6 +515,8 @@ impl From<HashMap<String, Value>> for OperationMetrics {
             num_output_files,
             num_added_bytes,
             num_removed_bytes,
+            num_added_change_files,
+            change_file_bytes,
             num_deleted_rows,
             num_updated_rows,
             num_copied_rows,
@@ -365,12 +524,21 @@ impl From<HashMap<String, Value>> for OperationMetrics {
             num_source_rows,
             num_target_rows_inserted,
             num_target_rows_updated,
+            num_target_rows_matched_updated,
+            num_target_rows_not_matched_by_source_updated,
             num_target_rows_deleted,
+            num_target_rows_matched_deleted,
+            num_target_rows_not_matched_by_source_deleted,
             num_target_rows_copied,
             num_target_files_added,
             num_target_files_removed,
             num_target_bytes_added,
             num_target_bytes_removed,
+            num_target_change_files_added,
+            num_target_change_file_bytes,
+            num_target_deletion_vectors_added,
+            num_target_deletion_vectors_updated,
+            num_target_deletion_vectors_removed,
             num_deletion_vectors_added,
             num_deletion_vectors_updated,
             num_deletion_vectors_removed,
@@ -445,6 +613,11 @@ impl CommitData {
         // Merge base info + app metadata (app metadata wins on conflicts).
         let mut merged_info = commit_info.info.clone();
         merged_info.extend(app_metadata.clone());
+        if Self::actions_enable_catalog_managed(&actions) {
+            merged_info
+                .entry("txnId".to_string())
+                .or_insert_with(|| Value::String(Uuid::new_v4().to_string()));
+        }
         if !merged_operation_metrics.is_empty() {
             merged_info.insert(
                 "operationMetrics".to_string(),
@@ -494,6 +667,16 @@ impl CommitData {
             }
             _ => false,
         }
+    }
+
+    fn actions_enable_catalog_managed(actions: &[CommitAction]) -> bool {
+        actions.iter().any(|action| {
+            let CommitAction::Protocol(protocol) = action else {
+                return false;
+            };
+            protocol.has_reader_feature(&TableFeature::CatalogManaged)
+                && protocol.has_writer_feature(&TableFeature::CatalogManaged)
+        })
     }
 }
 
@@ -664,6 +847,10 @@ fn validate_effective_commit_target(
     let schema = metadata.parse_schema()?;
     PROTOCOL.check_can_write_timestamp_ntz_to_protocol(&protocol, &schema)?;
     PROTOCOL.check_can_write_variant_to_protocol(&protocol, &schema)?;
+    PROTOCOL.check_can_write_variant_shredding_to_protocol(
+        &protocol,
+        table_property_enabled(&metadata, "delta.enableVariantShredding"),
+    )?;
 
     if actions_as_actions
         .iter()
@@ -1006,6 +1193,20 @@ impl PreCommit {
             })
         })
     }
+
+    /// Prepare the commit and write it as a Delta catalog-managed staged commit file using
+    /// the catalog-ratified latest table version as the commit version source of truth.
+    pub fn into_staged_commit_future_with_catalog_latest_version(
+        self,
+        latest_catalog_version: i64,
+    ) -> BoxFuture<'static, DeltaResult<CatalogManagedStagedCommit>> {
+        Box::pin(async move {
+            self.into_prepared_commit_future()
+                .await?
+                .into_staged_commit_future_with_catalog_latest_version(latest_catalog_version)
+                .await
+        })
+    }
 }
 
 /// Represents a inflight commit
@@ -1095,6 +1296,7 @@ impl std::future::IntoFuture for PreparedCommit {
                                     .into());
                                 }
                             }
+
                             let metadata_compatible =
                                 creation_metadata.as_ref().is_none_or(|txn| {
                                     txn.parse_schema()
@@ -1247,6 +1449,103 @@ impl std::future::IntoFuture for PreparedCommit {
             }
 
             Err(TransactionError::MaxCommitAttempts(effective_max_retries as i32).into())
+        })
+    }
+}
+
+impl PreparedCommit {
+    pub fn into_staged_commit_future_with_catalog_latest_version(
+        self,
+        latest_catalog_version: i64,
+    ) -> BoxFuture<'static, DeltaResult<CatalogManagedStagedCommit>> {
+        self.into_staged_commit_future_inner(latest_catalog_version)
+    }
+
+    fn into_staged_commit_future_inner(
+        self,
+        latest_catalog_version: i64,
+    ) -> BoxFuture<'static, DeltaResult<CatalogManagedStagedCommit>> {
+        let this = self;
+
+        Box::pin(async move {
+            let local_actions: Vec<_> = this.data.actions.to_vec();
+
+            let read_snapshot: Option<Arc<DeltaSnapshot>> = this.table_data.clone();
+            let latest_version = if latest_catalog_version >= 0 {
+                let Some(snapshot) = &read_snapshot else {
+                    return Err(DeltaError::generic(format!(
+                        "catalog-managed Delta commit requires a snapshot at the catalog latest version {latest_catalog_version}"
+                    )));
+                };
+                if snapshot.version() != latest_catalog_version {
+                    return Err(DeltaError::generic(format!(
+                        "catalog-managed Delta commit was prepared from snapshot version {}, but the catalog latest ratified version is {latest_catalog_version}",
+                        snapshot.version()
+                    )));
+                }
+                Some(latest_catalog_version)
+            } else {
+                read_snapshot.as_ref().map(|snapshot| snapshot.version())
+            };
+
+            let version = latest_version.map(|v| v + 1).unwrap_or(0);
+            let previous_commit_timestamp =
+                previous_effective_commit_timestamp(&this.log_store, read_snapshot.as_ref())
+                    .await?;
+            let mut finalized_actions = finalize_attempt_actions(
+                &local_actions,
+                read_snapshot.as_ref(),
+                version,
+                previous_commit_timestamp,
+                Utc::now().timestamp_millis(),
+            )?;
+            validate_effective_commit_target(read_snapshot.as_ref(), &finalized_actions)?;
+
+            let txn_id = Uuid::new_v4().to_string();
+            let in_commit_timestamp = {
+                let commit_info = finalized_commit_info(&mut finalized_actions);
+                commit_info
+                    .info
+                    .entry("txnId".to_string())
+                    .or_insert_with(|| Value::String(txn_id));
+                commit_info.in_commit_timestamp.ok_or_else(|| {
+                    DeltaError::generic(
+                        "catalog-managed Delta commits require inCommitTimestamp to be enabled",
+                    )
+                })?
+            };
+
+            let staged_id = Uuid::new_v4();
+            let staged_path = staged_commit_path(version, &staged_id);
+            let staged_file_name = staged_path
+                .as_ref()
+                .rsplit('/')
+                .next()
+                .unwrap_or(staged_path.as_ref())
+                .to_string();
+            let log_bytes = actions_to_log_bytes(&finalized_actions)?;
+            let object_store = this.log_store.object_store(Some(this.operation_id));
+            object_store
+                .put_opts(
+                    &staged_path,
+                    log_bytes.into(),
+                    PutOptions {
+                        mode: PutMode::Create,
+                        ..Default::default()
+                    },
+                )
+                .await?;
+            let meta = object_store.head(&staged_path).await?;
+
+            Ok(CatalogManagedStagedCommit {
+                version,
+                file_name: staged_file_name,
+                file_size: i64::try_from(meta.size).unwrap_or(i64::MAX),
+                file_modification_timestamp: meta.last_modified.timestamp_millis(),
+                in_commit_timestamp,
+                staged_path,
+                metrics: CommitMetrics { num_retries: 0 },
+            })
         })
     }
 }
@@ -1697,25 +1996,21 @@ pub struct FinalizedCommit {
     /// succeeded regardless.
     pub snapshot: Option<Arc<DeltaSnapshot>>,
 
-    /// Version of the finalized commit
-    pub version: i64,
-
     /// Metrics associated with the commit operation
     pub metrics: Metrics,
 }
-impl FinalizedCommit {
-    /// The new table state after a commit
-    #[expect(dead_code)]
-    pub fn snapshot(&self) -> Option<Arc<DeltaSnapshot>> {
-        self.snapshot.clone()
-    }
-    /// Version of the finalized commit
-    #[expect(dead_code)]
-    pub fn version(&self) -> i64 {
-        self.version
-    }
-}
 
+/// A Delta catalog-managed commit that has been written under `_delta_log/_staged_commits`
+/// but still needs to be ratified by the catalog.
+pub struct CatalogManagedStagedCommit {
+    pub version: i64,
+    pub file_name: String,
+    pub file_size: i64,
+    pub file_modification_timestamp: i64,
+    pub in_commit_timestamp: i64,
+    pub staged_path: object_store::path::Path,
+    pub metrics: CommitMetrics,
+}
 impl std::future::IntoFuture for PostCommit {
     type Output = DeltaResult<FinalizedCommit>;
     type IntoFuture = BoxFuture<'static, Self::Output>;
@@ -1892,7 +2187,6 @@ impl std::future::IntoFuture for PostCommit {
 
             Ok(FinalizedCommit {
                 snapshot: state,
-                version: this.version,
                 metrics: Metrics {
                     num_retries: this.metrics.num_retries,
                     new_checkpoint_created: checkpoint_created,
@@ -1982,7 +2276,16 @@ mod tests {
     async fn commit_writes_commit_info_first_monotonic_ict_and_checksum() -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store);
-        let protocol = protocol_for_create(false, false, true, false, false, &HashMap::new())?;
+        let protocol = protocol_for_create(
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            &HashMap::new(),
+        )?;
         let metadata = test_metadata([("delta.enableInCommitTimestamps", "true")]);
 
         let created = CommitBuilder::default()
@@ -2026,7 +2329,12 @@ mod tests {
                 },
             )
             .await?;
-        let second_actions = read_commit_actions(&log_store, appended.version).await;
+        let appended_version = appended
+            .snapshot
+            .as_ref()
+            .ok_or_else(|| DeltaError::generic("append commit should return a snapshot"))?
+            .version();
+        let second_actions = read_commit_actions(&log_store, appended_version).await;
         let second_commit_info = commit_info(&second_actions)?;
         let second_ict = second_commit_info.in_commit_timestamp.ok_or_else(|| {
             DeltaError::generic("ICT-enabled append commit should write inCommitTimestamp")
@@ -2038,7 +2346,7 @@ mod tests {
         ));
         assert!(second_ict > first_ict);
         assert_eq!(
-            read_version_checksum(&log_store, appended.version)
+            read_version_checksum(&log_store, appended_version)
                 .await
                 .in_commit_timestamp_opt,
             Some(second_ict)
@@ -2050,7 +2358,16 @@ mod tests {
     async fn finalize_attempt_actions_backfills_enablement_metadata() -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store);
-        let protocol = protocol_for_create(false, false, false, false, false, &HashMap::new())?;
+        let protocol = protocol_for_create(
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &HashMap::new(),
+        )?;
         let metadata = test_metadata([]);
         let created = CommitBuilder::default()
             .with_actions(vec![
@@ -2077,8 +2394,16 @@ mod tests {
                 DeltaError::generic("non-ICT tables still track pre-enable commit timestamps")
             })?;
 
-        let upgrade_protocol =
-            protocol_for_create(false, false, true, false, false, &HashMap::new())?;
+        let upgrade_protocol = protocol_for_create(
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+            &HashMap::new(),
+        )?;
         let upgrade_metadata = test_metadata([("delta.enableInCommitTimestamps", "true")]);
         let base_actions = CommitData::new(
             vec![
@@ -2182,7 +2507,16 @@ mod tests {
     async fn commit_rejects_timestamp_ntz_schema_without_protocol_feature() -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store);
-        let protocol = protocol_for_create(false, false, false, false, false, &HashMap::new())?;
+        let protocol = protocol_for_create(
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &HashMap::new(),
+        )?;
         let metadata = test_metadata([]);
         let created = CommitBuilder::default()
             .with_actions(vec![
@@ -2240,7 +2574,16 @@ mod tests {
     async fn commit_rejects_domain_metadata_actions_without_protocol_feature() -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store);
-        let protocol = protocol_for_create(false, false, false, false, false, &HashMap::new())?;
+        let protocol = protocol_for_create(
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            false,
+            &HashMap::new(),
+        )?;
         let metadata = test_metadata([]);
         let created = CommitBuilder::default()
             .with_actions(vec![
