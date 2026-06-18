@@ -335,3 +335,50 @@ Feature: from_xml parses an XML string into a struct value
       Then query result
         | result |
         | NULL   |
+
+    Rule: Decimal type
+
+    Scenario: Parse DECIMAL field
+      When query
+        """
+        SELECT from_xml('<p><a>2.12</a></p>', 'a DECIMAL(10,2)').a AS result
+        """
+      Then query result
+        | result |
+        | 2.12   |
+
+    Scenario: DECIMAL truncates to scale
+      When query
+        """
+        SELECT from_xml('<p><a>2.12159</a></p>', 'a DECIMAL(10,2)').a AS result
+        """
+      Then query result
+        | result |
+        | 2.12   |
+
+    Scenario: DECIMAL overflow returns NULL
+      When query
+        """
+        SELECT from_xml('<p><a>99999999999.99</a></p>', 'a DECIMAL(10,2)').a AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: DECIMAL bad value returns NULL
+      When query
+        """
+        SELECT from_xml('<p><a>bad</a></p>', 'a DECIMAL(10,2)').a AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: DECIMAL in array
+      When query
+        """
+        SELECT from_xml('<p><a>1.10</a><a>2.20</a></p>', 'a ARRAY<DECIMAL(10,2)>').a AS result
+        """
+      Then query result
+        | result         |
+        | [1.10, 2.20]   |

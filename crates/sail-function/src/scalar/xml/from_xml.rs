@@ -430,6 +430,11 @@ enum XmlFieldBuilder {
     Int64(Int64Builder),
     Float32(Float32Builder),
     Float64(Float64Builder),
+    Decimal128 {
+        builder: Decimal128Builder,
+        precision: u8,
+        scale: i8,
+    },
     String(StringBuilder),
     Date32(Date32Builder),
     TimestampMicrosecond {
@@ -489,6 +494,13 @@ fn create_field_builder(
         DataType::Float64 => Ok(XmlFieldBuilder::Float64(Float64Builder::with_capacity(
             capacity,
         ))),
+        DataType::Decimal128(precision, scale) => Ok(XmlFieldBuilder::Decimal128 {
+            builder: Decimal128Builder::with_capacity(capacity)
+                .with_precision_and_scale(*precision, *scale)
+                .map_err(|e| DataFusionError::Internal(format!("Decimal128 builder error: {e}")))?,
+            precision: *precision,
+            scale: *scale,
+        }),
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Ok(XmlFieldBuilder::String(
             StringBuilder::with_capacity(capacity, capacity * 16),
         )),
@@ -581,6 +593,7 @@ fn append_null_to_field(builder: &mut XmlFieldBuilder) -> Result<()> {
         XmlFieldBuilder::Int64(b) => b.append_null(),
         XmlFieldBuilder::Float32(b) => b.append_null(),
         XmlFieldBuilder::Float64(b) => b.append_null(),
+        XmlFieldBuilder::Decimal128 { builder: b, .. } => b.append_null(),
         XmlFieldBuilder::String(b) => b.append_null(),
         XmlFieldBuilder::Date32(b) => b.append_null(),
         XmlFieldBuilder::TimestampMicrosecond { builder: b, .. } => b.append_null(),
@@ -784,6 +797,14 @@ fn append_text(
             Ok(v) => b.append_value(v),
             Err(_) => b.append_null(),
         },
+        XmlFieldBuilder::Decimal128 {
+            builder: b,
+            precision,
+            scale,
+        } => match parse_decimal128(raw, *precision, *scale) {
+            Some(v) => b.append_value(v),
+            None => b.append_null(),
+        },
         XmlFieldBuilder::Float64(b) => match raw.parse::<f64>() {
             Ok(v) => b.append_value(v),
             Err(_) => b.append_null(),
@@ -848,6 +869,41 @@ fn to_utc_micros(naive: NaiveDateTime, has_tz: bool, session_timezone: &str) -> 
     } else {
         Ok(naive.and_utc().timestamp_micros())
     }
+}
+
+fn parse_decimal128(raw: &str, precision: u8, scale: i8) -> Option<i128> {
+    let raw = raw.trim();
+    let is_negative = raw.starts_with('-');
+    let raw = if is_negative { &raw[1..] } else { raw };
+
+    let (int_part, frac_part) = if let Some(pos) = raw.find('.') {
+        (&raw[..pos], &raw[pos + 1..])
+    } else {
+        (raw, "")
+    };
+
+    let int_val: i128 = int_part.parse().ok()?;
+
+    let scale = scale as usize;
+    let frac_val: i128 = if frac_part.len() >= scale {
+        frac_part[..scale].parse().ok()?
+    } else {
+        let padded = format!("{:0<width$}", frac_part, width = scale);
+        padded.parse().ok()?
+    };
+
+    let scale_factor: i128 = 10_i128.checked_pow(scale as u32)?;
+    let value = int_val.checked_mul(scale_factor)?.checked_add(frac_val)?;
+    let value = if is_negative {
+        value.checked_neg()?
+    } else {
+        value
+    };
+    let max_value = 10_i128.checked_pow(precision as u32)?;
+    if value.abs() >= max_value {
+        return None; // overflow
+    }
+    Some(value)
 }
 
 fn child_elements_named(xot: &xot::Xot, parent: xot::Node, name: &str) -> Vec<xot::Node> {
@@ -919,6 +975,7 @@ fn finish_field_builder(builder: XmlFieldBuilder) -> Result<ArrayRef> {
         XmlFieldBuilder::Int64(mut b) => Ok(Arc::new(b.finish())),
         XmlFieldBuilder::Float32(mut b) => Ok(Arc::new(b.finish())),
         XmlFieldBuilder::Float64(mut b) => Ok(Arc::new(b.finish())),
+        XmlFieldBuilder::Decimal128 { mut builder, .. } => Ok(Arc::new(builder.finish())),
         XmlFieldBuilder::String(mut b) => Ok(Arc::new(b.finish())),
         XmlFieldBuilder::Date32(mut b) => Ok(Arc::new(b.finish())),
         XmlFieldBuilder::TimestampMicrosecond { mut builder, .. } => Ok(Arc::new(builder.finish())),
