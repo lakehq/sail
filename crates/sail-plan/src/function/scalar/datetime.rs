@@ -261,50 +261,42 @@ fn to_chrono_fmt(format: Expr) -> Expr {
     ScalarUDF::from(SparkToChronoFmt::new()).call(vec![format])
 }
 
-fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
+fn to_date(input: ScalarFunctionInput, is_try: bool) -> PlanResult<Expr> {
     if input.arguments.len() == 1 {
         // If format is not supplied, the function is a synonym for cast(expr AS DATE).
-        crate::function::scalar::conversion::cast_to_date(input)
+        if is_try {
+            let expr = input.arguments.one()?;
+            Ok(try_cast(expr, DataType::Date32))
+        } else {
+            crate::function::scalar::conversion::cast_to_date(input)
+        }
     } else if input.arguments.len() == 2 {
         let (expr, format) = input.arguments.two()?;
         let expr_type = expr.get_type(input.function_context.schema);
         if let Ok(DataType::Timestamp(_, _)) = expr_type {
             let expr = expr_fn::to_local_time(vec![expr]);
-            return Ok(cast(expr, DataType::Date32)); // In case of data type timestamp, ignore format
+            return Ok(if is_try {
+                try_cast(expr, DataType::Date32)
+            } else {
+                cast(expr, DataType::Date32)
+            }); // In case of data type timestamp, ignore format
         }
         let expr = match expr_type {
             Ok(_other) => expr,
             Err(_) => cast(expr, DataType::Utf8), // In case of error, cast to string
         };
         let format = to_chrono_fmt(format);
-        Ok(expr_fn::to_date(vec![expr, format]))
-    } else {
-        Err(PlanError::invalid("to_date requires 1 or 2 arguments"))
-    }
-}
-
-fn try_to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    if input.arguments.len() == 1 {
-        let expr = input.arguments.one()?;
-        Ok(try_cast(expr, DataType::Date32))
-    } else if input.arguments.len() == 2 {
-        let (expr, format) = input.arguments.two()?;
-        if is_null_literal(&expr) || is_null_literal(&format) {
-            return Ok(lit(ScalarValue::Date32(None)));
+        if is_try {
+            Ok(ScalarUDF::from(SparkTryToDate::new()).call(vec![expr, format]))
+        } else {
+            Ok(expr_fn::to_date(vec![expr, format]))
         }
-        let expr_type = expr.get_type(input.function_context.schema);
-        if let Ok(DataType::Timestamp(_, _)) = expr_type {
-            let expr = expr_fn::to_local_time(vec![expr]);
-            return Ok(try_cast(expr, DataType::Date32));
-        }
-        let expr = match expr_type {
-            Ok(_other) => expr,
-            Err(_) => cast(expr, DataType::Utf8),
-        };
-        let format = to_chrono_fmt(format);
-        Ok(ScalarUDF::from(SparkTryToDate::new()).call(vec![expr, format]))
     } else {
-        Err(PlanError::invalid("try_to_date requires 1 or 2 arguments"))
+        Err(PlanError::invalid(if is_try {
+            "try_to_date requires 1 or 2 arguments"
+        } else {
+            "to_date requires 1 or 2 arguments"
+        }))
     }
 }
 
@@ -1038,8 +1030,8 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             }),
         ),
         ("timestampdiff", F::custom(datediff)),
-        ("to_date", F::custom(to_date)),
-        ("try_to_date", F::custom(try_to_date)),
+        ("to_date", F::custom(|input| to_date(input, false))),
+        ("try_to_date", F::custom(|input| to_date(input, true))),
         ("to_time", F::var_arg(to_time)),
         (
             "to_timestamp",
