@@ -2,7 +2,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
-use arrow_pyarrow::{FromPyArrow, ToPyArrow};
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::{RecordBatchStream, SendableRecordBatchStream};
@@ -13,6 +12,7 @@ use pyo3::exceptions::{PyRuntimeError, PyStopIteration};
 use pyo3::prelude::PyAnyMethods;
 use pyo3::{pyclass, pymethods, IntoPyObject, Py, PyAny, PyRef, PyRefMut, PyResult, Python};
 use sail_common_datafusion::array::record_batch::cast_record_batch_positionally;
+use sail_pyarrow::{FromPyArrow, ToPyArrow};
 use tokio::runtime::Handle;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot};
