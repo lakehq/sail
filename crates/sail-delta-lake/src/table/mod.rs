@@ -54,8 +54,8 @@ use crate::delta_log::resolve_version_timestamp;
 pub use crate::kernel::snapshot::DeltaSnapshot;
 use crate::kernel::transaction::CommitBuilder;
 use crate::kernel::{
-    CatalogManagedCommitFile, CatalogManagedCommitSet, DeltaOperation, DeltaSnapshotConfig,
-    SaveMode,
+    catalog_managed_commit_file_name, CatalogManagedCommitFile, CatalogManagedCommitSet,
+    DeltaOperation, DeltaSnapshotConfig, SaveMode,
 };
 use crate::logical::table_source::DeltaTableSource;
 use crate::options::gen::DeltaReadOptions;
@@ -623,19 +623,6 @@ async fn staged_catalog_managed_commit_file(
                 "Multiple staged Delta commits found for catalog-managed version {version}"
             )),
         ))),
-    }
-}
-
-fn catalog_managed_commit_file_name(path: &str) -> String {
-    let path = path.trim_start_matches('/');
-    if let Some(index) = path.find("_delta_log/") {
-        path[index + "_delta_log/".len()..].to_string()
-    } else if let Some(index) = path.find("_staged_commits/") {
-        path[index..].to_string()
-    } else if path.starts_with("_staged_commits/") {
-        path.to_string()
-    } else {
-        format!("_staged_commits/{path}")
     }
 }
 

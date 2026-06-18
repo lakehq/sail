@@ -7,7 +7,7 @@ pub use crate::kernel::log_segment::{
     list_log_segment_files as kernel_list_log_segment_files, LogSegmentFiles,
     LogSegmentResolveOptions,
 };
-use crate::kernel::CatalogManagedCommitSet;
+use crate::kernel::{catalog_managed_commit_file_name, CatalogManagedCommitSet};
 use crate::spec::{parse_commit_version, parse_compacted_json_versions, parse_version_prefix};
 
 /// List Delta log files up to `max_version`, using the planner-local cache when available.
@@ -139,7 +139,7 @@ fn merge_catalog_managed_commits_for_planner(
     for commit in &catalog_managed_commits.commits {
         by_version.insert(
             commit.version,
-            catalog_managed_commit_filename(&commit.file_name),
+            catalog_managed_commit_file_name(&commit.file_name),
         );
     }
     files.commit_files = by_version.into_values().collect();
@@ -157,17 +157,4 @@ fn merge_catalog_managed_commits_for_planner(
 
 fn parse_log_file_version(file: &str) -> Option<i64> {
     file.rsplit('/').next().and_then(parse_version_prefix)
-}
-
-fn catalog_managed_commit_filename(file_name: &str) -> String {
-    let file_name = file_name.trim_start_matches('/');
-    if let Some(index) = file_name.find("_delta_log/") {
-        file_name[index + "_delta_log/".len()..].to_string()
-    } else if let Some(index) = file_name.find("_staged_commits/") {
-        file_name[index..].to_string()
-    } else if file_name.starts_with("_staged_commits/") {
-        file_name.to_string()
-    } else {
-        format!("_staged_commits/{file_name}")
-    }
 }
