@@ -1,7 +1,6 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use chrono::prelude::*;
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
@@ -21,7 +20,7 @@ use sail_sql_analyzer::parser as sail_parser;
 
 use crate::functions_nested_utils::*;
 use crate::functions_utils::make_scalar_function;
-use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
+use crate::scalar::datetime::format::DateTimeFormat;
 
 const DEFAULT_SESSION_TIMEZONE: &str = "UTC";
 
@@ -46,7 +45,7 @@ pub struct SparkFromCSV {
 #[derive(Debug)]
 struct SparkFromCSVOptions {
     sep: String,
-    timestamp_format: String,
+    timestamp_format: DateTimeFormat,
 }
 
 impl SparkFromCSVOptions {
@@ -55,8 +54,7 @@ impl SparkFromCSVOptions {
     pub const SEP_DEFAULT: &'static str = ",";
     pub const TIMESTAMP_FORMAT_OPTION: &'static str = "timestampFormat";
 
-    // ISO 8601. // This format is the Rust chrono crate format equivalent of the Scala/Java Spark format
-    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "%Y-%m-%d %H:%M:%S";
+    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd HH:mm:ss";
 
     /// Build `SparkFromCSVOptions` from a DataFusion `MapArray` of key-value pairs.
     fn from_map(map: &MapArray) -> Result<Self> {
@@ -66,9 +64,12 @@ impl SparkFromCSVOptions {
 
         let timestamp_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
-            .map(spark_datetime_format_to_chrono_strftime)
+            .map(DateTimeFormat::parse)
             .transpose()?
-            .unwrap_or(Self::TIMESTAMP_FORMAT_DEFAULT.to_string());
+            .unwrap_or_else(|| {
+                DateTimeFormat::parse(Self::TIMESTAMP_FORMAT_DEFAULT)
+                    .expect("default timestamp format should be valid")
+            });
 
         Ok(Self {
             sep,
@@ -82,7 +83,8 @@ impl Default for SparkFromCSVOptions {
     fn default() -> Self {
         Self {
             sep: Self::SEP_DEFAULT.to_string(),
-            timestamp_format: Self::TIMESTAMP_FORMAT_DEFAULT.to_string(),
+            timestamp_format: DateTimeFormat::parse(Self::TIMESTAMP_FORMAT_DEFAULT)
+                .expect("default timestamp format should be valid"),
         }
     }
 }
@@ -319,9 +321,7 @@ fn parse_csv_line_to_scalar_values(
 /// Parses a timestamp from a string value using a specified format.
 ///
 /// This function attempts to parse the input string `value` into a timestamp,
-/// using the format specified in `options`. If the input contains both date
-/// and time, `NaiveDateTime::parse_from_str` is used. If the input contains
-/// only a date, `NaiveDate::parse_from_str` is used instead.
+/// using the Java-compatible format specified in `options`.
 ///
 /// # Parameters
 /// - `data_type`: The data type of the timestamp, used to ensure proper conversion.
@@ -352,20 +352,22 @@ fn parse_timestamp(
         }
     };
 
-    let format = options.timestamp_format.as_str();
-    let naive_datetime = if let Ok(datetime) = NaiveDateTime::parse_from_str(value, format) {
-        datetime
-    } else if let Ok(date) = NaiveDate::parse_from_str(value, format) {
-        // `from_csv` accepts date-only inputs for timestamp columns.
-        let Some(datetime) = date.and_hms_opt(0, 0, 0) else {
-            return exec_err!("Failed to parse timestamp '{value}': invalid date");
-        };
-        datetime
-    } else {
-        return exec_err!("Failed to parse timestamp '{value}' with format '{format}'");
-    };
+    let parsed = options
+        .timestamp_format
+        .parse_datetime_value(value)
+        .map_err(|e| {
+            DataFusionError::Execution(format!("Failed to parse timestamp '{value}': {e}"))
+        })?;
+    let naive_datetime = parsed.datetime;
 
-    let utc_datetime = if let Some(tz) = timezone.as_ref() {
+    let utc_datetime = if let Some(offset) = parsed.offset {
+        parsed
+            .datetime
+            .and_local_timezone(offset)
+            .single()
+            .map(|x| x.to_utc())
+            .ok_or_else(|| DataFusionError::Execution("cannot apply parsed offset".to_string()))?
+    } else if let Some(tz) = timezone.as_ref() {
         let tz: Tz = tz
             .as_ref()
             .parse()

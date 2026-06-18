@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::NaiveDate;
 use datafusion::arrow::array::{Array, ArrayRef, MapArray, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{plan_err, DataFusionError, Result};
@@ -11,7 +11,7 @@ use datafusion_functions::downcast_arg;
 use datafusion_functions::utils::make_scalar_function;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
-use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
+use crate::scalar::datetime::format::DateTimeFormat;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkSchemaOfCsv {
@@ -153,14 +153,15 @@ impl ScalarUDFImpl for SparkSchemaOfCsv {
 #[derive(Debug)]
 struct SparkSchemaOfCsvOptions {
     sep: String,
-    timestamp_format: String,
+    timestamp_format: DateTimeFormat,
 }
 
 impl Default for SparkSchemaOfCsvOptions {
     fn default() -> Self {
         Self {
             sep: ",".to_string(),
-            timestamp_format: "%Y-%m-%d %H:%M:%S".to_string(),
+            timestamp_format: DateTimeFormat::parse("yyyy-MM-dd HH:mm:ss")
+                .expect("default timestamp format should be valid"),
         }
     }
 }
@@ -203,7 +204,7 @@ impl SparkSchemaOfCsvOptions {
             match key {
                 "sep" | "delimiter" => options.sep = value.to_string(),
                 "timestampFormat" => {
-                    options.timestamp_format = spark_datetime_format_to_chrono_strftime(value)?;
+                    options.timestamp_format = DateTimeFormat::parse(value)?;
                 }
                 // Silently ignore unrecognised options, matching Spark's behaviour.
                 _ => {}
@@ -260,7 +261,7 @@ fn infer_csv_field_type(value: &str, options: &SparkSchemaOfCsvOptions) -> &'sta
     if value.contains(['.', 'e', 'E']) && value.parse::<f64>().is_ok() {
         return "DOUBLE";
     }
-    if NaiveDateTime::parse_from_str(value, &options.timestamp_format).is_ok() {
+    if options.timestamp_format.parse_datetime_value(value).is_ok() {
         return "TIMESTAMP";
     }
     if NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok() {

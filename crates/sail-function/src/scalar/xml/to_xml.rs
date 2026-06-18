@@ -10,7 +10,7 @@ use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signatur
 use datafusion_expr_common::signature::Volatility;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
-use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
+use crate::scalar::datetime::format::DateTimeFormat;
 
 /// Spark-compatible `to_xml` UDF. Serializes a StructArray into XML strings.
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -28,9 +28,9 @@ struct SparkToXmlOptions {
     /// If Some(s), nulls are emitted as <field>s</field>. If None, they are omitted.
     null_value: Option<String>,
     declaration: String,
-    timestamp_ltz_format: Option<String>,
-    timestamp_ntz_format: String,
-    date_format: String,
+    timestamp_ltz_format: Option<DateTimeFormat>,
+    timestamp_ntz_format: DateTimeFormat,
+    date_format: DateTimeFormat,
     session_timezone: String,
 }
 
@@ -51,10 +51,10 @@ impl SparkToXmlOptions {
     pub const TIMESTAMP_NTZ_FORMAT_OPTION: &'static str = "timestampNTZFormat";
     pub const DATE_FORMAT_OPTION: &'static str = "dateFormat";
 
-    // Standard Spark strftime defaults
-    pub const TIMESTAMP_LTZ_FORMAT_DEFAULT: &'static str = "%Y-%m-%dT%H:%M:%S%.3f%:z";
-    pub const TIMESTAMP_NTZ_FORMAT_DEFAULT: &'static str = "%Y-%m-%dT%H:%M:%S%.3f";
-    pub const DATE_FORMAT_DEFAULT: &'static str = "%Y-%m-%d";
+    // Standard Spark Java DateTimeFormatter defaults
+    pub const TIMESTAMP_LTZ_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSSXXX";
+    pub const TIMESTAMP_NTZ_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSS";
+    pub const DATE_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd";
 
     fn from_map(map: &MapArray, session_timezone: &str) -> Result<Self> {
         let row_tag = find_key_value(map, Self::ROW_TAG_OPTION)
@@ -91,20 +91,26 @@ impl SparkToXmlOptions {
 
         let timestamp_ltz_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
-            .map(spark_datetime_format_to_chrono_strftime)
+            .map(DateTimeFormat::parse)
             .transpose()?;
 
         let timestamp_ntz_format = find_key_value(map, Self::TIMESTAMP_NTZ_FORMAT_OPTION)
             .as_deref()
-            .map(spark_datetime_format_to_chrono_strftime)
+            .map(DateTimeFormat::parse)
             .transpose()?
-            .unwrap_or_else(|| Self::TIMESTAMP_NTZ_FORMAT_DEFAULT.to_string());
+            .unwrap_or_else(|| {
+                DateTimeFormat::parse(Self::TIMESTAMP_NTZ_FORMAT_DEFAULT)
+                    .expect("default timestamp NTZ format should be valid")
+            });
 
         let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
             .as_deref()
-            .map(spark_datetime_format_to_chrono_strftime)
+            .map(DateTimeFormat::parse)
             .transpose()?
-            .unwrap_or_else(|| Self::DATE_FORMAT_DEFAULT.to_string());
+            .unwrap_or_else(|| {
+                DateTimeFormat::parse(Self::DATE_FORMAT_DEFAULT)
+                    .expect("default date format should be valid")
+            });
 
         Ok(Self {
             row_tag,
@@ -143,8 +149,10 @@ impl Default for SparkToXmlOptions {
             null_value: None,
             declaration: Self::DECLARATION_DEFAULT.to_string(),
             timestamp_ltz_format: None,
-            timestamp_ntz_format: Self::TIMESTAMP_NTZ_FORMAT_DEFAULT.to_string(),
-            date_format: Self::DATE_FORMAT_DEFAULT.to_string(),
+            timestamp_ntz_format: DateTimeFormat::parse(Self::TIMESTAMP_NTZ_FORMAT_DEFAULT)
+                .expect("default timestamp NTZ format should be valid"),
+            date_format: DateTimeFormat::parse(Self::DATE_FORMAT_DEFAULT)
+                .expect("default date format should be valid"),
             session_timezone: "UTC".to_string(),
         }
     }
@@ -701,7 +709,7 @@ fn format_field_to_xml(
                 chrono::NaiveDate::from_num_days_from_ce_opt(days + 719_163).ok_or_else(|| {
                     DataFusionError::Execution(format!("Date32 value out of range: {days}"))
                 })?;
-            Ok(naive.format(&options.date_format).to_string())
+            format_date_xml(naive, &options.date_format)
         }
         DataType::Date64 => {
             let millis = array.as_primitive::<Date64Type>().value(row_idx);
@@ -710,7 +718,7 @@ fn format_field_to_xml(
                 .ok_or_else(|| {
                     DataFusionError::Execution(format!("Date64 value out of range: {millis}"))
                 })?;
-            Ok(naive.format(&options.date_format).to_string())
+            format_date_xml(naive, &options.date_format)
         }
         DataType::Decimal128(_, scale) => {
             let raw = array.as_primitive::<Decimal128Type>().value(row_idx);
@@ -721,6 +729,26 @@ fn format_field_to_xml(
             scalar_to_display_string(&scalar)
         }
     }
+}
+
+fn format_date_xml(date: chrono::NaiveDate, format: &DateTimeFormat) -> Result<String> {
+    use crate::scalar::datetime::format::{DateTimeFormatInput, TimePrecision, TimestampKind};
+
+    let datetime = date.and_hms_opt(0, 0, 0).ok_or_else(|| {
+        DataFusionError::Execution("Failed to create datetime from date".to_string())
+    })?;
+
+    let input = DateTimeFormatInput {
+        datetime,
+        timezone: None,
+        zone_id: None,
+        timestamp_kind: TimestampKind::Normal,
+        precision: TimePrecision::Second,
+    };
+
+    format
+        .format(input)
+        .map_err(|e| DataFusionError::Execution(format!("Failed to format date: {e}")))
 }
 
 fn format_decimal128(raw: i128, scale: u32) -> String {
@@ -800,7 +828,7 @@ fn format_timestamp_field(
 
     let secs = micros.div_euclid(1_000_000);
     let nanos = (micros.rem_euclid(1_000_000) * 1_000) as u32;
-    let is_default_format = options.timestamp_ltz_format.is_none();
+    let _is_default_format = options.timestamp_ltz_format.is_none();
 
     if tz_opt.is_some() {
         let tz: Tz = options.session_timezone.parse().map_err(|e| {
@@ -813,20 +841,37 @@ fn format_timestamp_field(
             DataFusionError::Execution(format!("Timestamp out of range: {micros}"))
         })?;
         let local_dt = utc_dt.with_timezone(&tz);
-        if is_default_format {
-            // Default Spark: ISO 8601 with Z suffix for UTC
-            Ok(local_dt
-                .format(SparkToXmlOptions::TIMESTAMP_LTZ_FORMAT_DEFAULT)
-                .to_string()
-                .replace("+00:00", "Z"))
-        } else {
-            let fmt = options.timestamp_ltz_format.as_deref().ok_or_else(|| {
-                DataFusionError::Internal(
-                    "timestamp_ltz_format missing despite non-default path".to_string(),
-                )
-            })?;
 
-            Ok(local_dt.format(fmt).to_string())
+        use chrono::Offset;
+
+        use crate::scalar::datetime::format::{
+            DateTimeFormatInput, TimePrecision, TimeZoneDisplay, TimestampKind,
+        };
+
+        let offset = local_dt.offset().fix();
+        let input = DateTimeFormatInput {
+            datetime: local_dt.naive_local(),
+            timezone: Some(TimeZoneDisplay {
+                offset,
+                name: Some(&options.session_timezone),
+            }),
+            zone_id: Some(&options.session_timezone),
+            timestamp_kind: TimestampKind::Normal,
+            precision: TimePrecision::Microsecond,
+        };
+
+        if let Some(ref fmt) = options.timestamp_ltz_format {
+            Ok(fmt.format(input).map_err(|e| {
+                DataFusionError::Execution(format!("Failed to format timestamp: {e}"))
+            })?)
+        } else {
+            // Use default format
+            let default_fmt =
+                DateTimeFormat::parse(SparkToXmlOptions::TIMESTAMP_LTZ_FORMAT_DEFAULT)
+                    .expect("default timestamp LTZ format should be valid");
+            Ok(default_fmt.format(input).map_err(|e| {
+                DataFusionError::Execution(format!("Failed to format timestamp: {e}"))
+            })?)
         }
     } else {
         let naive = DateTime::from_timestamp(secs, nanos)
@@ -834,7 +879,21 @@ fn format_timestamp_field(
             .ok_or_else(|| {
                 DataFusionError::Execution(format!("Timestamp out of range: {micros}"))
             })?;
-        Ok(naive.format(&options.timestamp_ntz_format).to_string())
+
+        use crate::scalar::datetime::format::{DateTimeFormatInput, TimePrecision, TimestampKind};
+
+        let input = DateTimeFormatInput {
+            datetime: naive,
+            timezone: None,
+            zone_id: None,
+            timestamp_kind: TimestampKind::Normal,
+            precision: TimePrecision::Microsecond,
+        };
+
+        Ok(options
+            .timestamp_ntz_format
+            .format(input)
+            .map_err(|e| DataFusionError::Execution(format!("Failed to format timestamp: {e}")))?)
     }
 }
 

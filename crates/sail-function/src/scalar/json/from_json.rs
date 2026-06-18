@@ -22,7 +22,7 @@ use serde_json::Value;
 
 use crate::functions_nested_utils::*;
 use crate::functions_utils::make_scalar_function;
-use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
+use crate::scalar::datetime::format::DateTimeFormat;
 
 /// UDF implementation of `from_json`, similar to Spark's `from_json`.
 /// This function parses a column of JSON strings using a specified schema
@@ -47,29 +47,35 @@ pub struct SparkFromJson {
 /// Configuration options for the `from_json` function.
 #[derive(Debug)]
 struct SparkFromJsonOptions {
-    timestamp_format: String,
-    date_format: String,
+    timestamp_format: DateTimeFormat,
+    date_format: DateTimeFormat,
 }
 
 impl SparkFromJsonOptions {
     pub const TIMESTAMP_FORMAT_OPTION: &'static str = "timestampFormat";
     pub const DATE_FORMAT_OPTION: &'static str = "dateFormat";
-    // Default formats matching Spark's behavior
-    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "%Y-%m-%d %H:%M:%S";
-    pub const DATE_FORMAT_DEFAULT: &'static str = "%Y-%m-%d";
+    // Default formats matching Spark's behavior (Java DateTimeFormatter patterns)
+    pub const TIMESTAMP_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd HH:mm:ss";
+    pub const DATE_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd";
 
     fn from_map(map: &MapArray) -> Result<Self> {
         let timestamp_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
-            .map(spark_datetime_format_to_chrono_strftime)
+            .map(DateTimeFormat::parse)
             .transpose()?
-            .unwrap_or_else(|| Self::TIMESTAMP_FORMAT_DEFAULT.to_string());
+            .unwrap_or_else(|| {
+                DateTimeFormat::parse(Self::TIMESTAMP_FORMAT_DEFAULT)
+                    .expect("default timestamp format should be valid")
+            });
 
         let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
             .as_deref()
-            .map(spark_datetime_format_to_chrono_strftime)
+            .map(DateTimeFormat::parse)
             .transpose()?
-            .unwrap_or_else(|| Self::DATE_FORMAT_DEFAULT.to_string());
+            .unwrap_or_else(|| {
+                DateTimeFormat::parse(Self::DATE_FORMAT_DEFAULT)
+                    .expect("default date format should be valid")
+            });
 
         Ok(Self {
             timestamp_format,
@@ -81,8 +87,10 @@ impl SparkFromJsonOptions {
 impl Default for SparkFromJsonOptions {
     fn default() -> Self {
         Self {
-            timestamp_format: Self::TIMESTAMP_FORMAT_DEFAULT.to_string(),
-            date_format: Self::DATE_FORMAT_DEFAULT.to_string(),
+            timestamp_format: DateTimeFormat::parse(Self::TIMESTAMP_FORMAT_DEFAULT)
+                .expect("default timestamp format should be valid"),
+            date_format: DateTimeFormat::parse(Self::DATE_FORMAT_DEFAULT)
+                .expect("default date format should be valid"),
         }
     }
 }
@@ -928,12 +936,8 @@ fn parse_date32(
     options: &SparkFromJsonOptions,
 ) -> Result<<Date32Type as ArrowPrimitiveType>::Native> {
     let format = &options.date_format;
-    let naive_date = NaiveDate::parse_from_str(s, format).map_err(|e| {
-        DataFusionError::Execution(format!(
-            "Failed to parse date '{s}' with format '{format}': {e}"
-        ))
-    })?;
-    Ok(Date32Type::from_naive_date(naive_date))
+    let parsed = format.parse_datetime_value(s)?;
+    Ok(Date32Type::from_naive_date(parsed.datetime.date()))
 }
 
 fn parse_timestamp(
@@ -942,21 +946,23 @@ fn parse_timestamp(
     options: &SparkFromJsonOptions,
 ) -> Result<DateTime<Utc>> {
     let format = &options.timestamp_format;
-    let naive_datetime = if let Ok(datetime) = NaiveDateTime::parse_from_str(s, format) {
-        datetime
-    } else if let Ok(date) = NaiveDate::parse_from_str(s, format) {
-        let Some(datetime) = date.and_hms_opt(0, 0, 0) else {
-            return exec_err!("Failed to parse timestamp '{s}': invalid date");
-        };
-        datetime
+    let parsed = format.parse_datetime_value(s)?;
+
+    let datetime = if let Some(offset) = parsed.offset {
+        parsed
+            .datetime
+            .and_local_timezone(offset)
+            .single()
+            .map(|x| x.to_utc())
+            .ok_or_else(|| DataFusionError::Execution("cannot apply parsed offset".to_string()))?
     } else {
-        return exec_err!("Failed to parse timestamp '{s}' with format '{format}'");
+        let tz: Tz = timezone.as_ref().parse().map_err(|e| {
+            DataFusionError::Execution(format!("Invalid timezone '{timezone}': {e}"))
+        })?;
+        localize_with_fallback(&tz, &parsed.datetime)?
     };
-    let tz: Tz = timezone
-        .as_ref()
-        .parse()
-        .map_err(|e| DataFusionError::Execution(format!("Invalid timezone '{timezone}': {e}")))?;
-    localize_with_fallback(&tz, &naive_datetime)
+
+    Ok(datetime)
 }
 
 /// Parses a schema string into an Arrow DataType. The schema may be a bare field list
