@@ -647,17 +647,18 @@ fn append_xml_field(
     options: &SparkFromXmlOptions,
     session_timezone: &str,
 ) -> Result<()> {
-    if !options.attribute_prefix.is_empty()
-        && field_name.starts_with(options.attribute_prefix.as_str())
-    {
-        let attr_name = &field_name[options.attribute_prefix.len()..];
-        let text = find_attribute(xot, parent, attr_name);
-        return append_text(text.as_deref(), builder, options, session_timezone);
-    }
-
     if field_name == options.value_tag {
         let text = element_text_content(xot, parent);
         return append_text(text.as_deref(), builder, options, session_timezone);
+    }
+
+    let attr_name = field_name.strip_prefix(options.attribute_prefix.as_str());
+    if let Some(attr_name) = attr_name {
+        if let Some(val) = find_attribute(xot, parent, attr_name) {
+            return append_text(Some(val.as_str()), builder, options, session_timezone);
+        } else if !options.attribute_prefix.is_empty() {
+            return append_text(None, builder, options, session_timezone);
+        }
     }
 
     let matches: Vec<xot::Node> = child_elements_named(xot, parent, field_name);
@@ -872,11 +873,7 @@ fn element_text_content(xot: &xot::Xot, node: xot::Node) -> Option<String> {
             }
         })
         .collect();
-    if text.is_empty() {
-        None
-    } else {
-        Some(text)
-    }
+    Some(text)
 }
 
 fn find_attribute(xot: &xot::Xot, node: xot::Node, attr_name: &str) -> Option<String> {
