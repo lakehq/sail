@@ -56,7 +56,7 @@ impl TimestampParser {
             Err(_e) if safe => return Ok(None),
             Err(e) => return Err(exec_datafusion_err!("{e}")),
         };
-        self.localize(datetime, &timezone, safe)
+        self.localize(datetime, timezone, safe)
     }
 
     fn string_to_microseconds_with_format(
