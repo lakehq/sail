@@ -534,15 +534,13 @@ impl CatalogProvider for UnityCatalogProvider {
             partition_by,
             sort_by,
             bucket_by,
-            if_not_exists,
-            replace,
-            replace_error_if_absent: _,
+            mode,
             properties,
             is_external,
             is_write_precondition: _,
         } = options;
 
-        if replace {
+        if mode.is_replace() {
             return Err(CatalogError::NotSupported(
                 "Open source Unity Catalog does not support REPLACE option".to_string(),
             ));
@@ -578,7 +576,7 @@ impl CatalogProvider for UnityCatalogProvider {
             .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
 
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
-        if !is_external && if_not_exists {
+        if !is_external && mode.ignore_if_exists() {
             match self.get_table(database, table).await {
                 Ok(status) => return Ok(status),
                 Err(CatalogError::NotFound(_, _)) => {}
@@ -712,7 +710,7 @@ impl CatalogProvider for UnityCatalogProvider {
                 self.table_info_to_table_status(table_info, &catalog_name, &schema_name)
             }
             Err(progenitor_client::Error::UnexpectedResponse(response))
-                if response.status().as_u16() == 409 && if_not_exists =>
+                if response.status().as_u16() == 409 && mode.ignore_if_exists() =>
             {
                 self.get_table(database, table).await
             }

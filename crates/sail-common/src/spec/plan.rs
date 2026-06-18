@@ -890,11 +890,33 @@ pub struct TableDefinition {
     pub sort_by: Vec<SortOrder>,
     pub bucket_by: Option<SaveBucketBy>,
     pub cluster_by: Vec<ObjectName>,
-    pub if_not_exists: bool,
-    pub replace: bool,
-    pub replace_error_if_absent: bool,
+    pub mode: CreateTableMode,
     pub options: Vec<(String, String)>,
     pub properties: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CreateTableMode {
+    #[default]
+    Create,
+    CreateIfNotExists,
+    CreateOrReplace,
+    Replace,
+}
+
+impl CreateTableMode {
+    pub fn ignore_if_exists(self) -> bool {
+        matches!(self, Self::CreateIfNotExists)
+    }
+
+    pub fn is_replace(self) -> bool {
+        matches!(self, Self::CreateOrReplace | Self::Replace)
+    }
+
+    pub fn replace_requires_existing(self) -> bool {
+        matches!(self, Self::Replace)
+    }
 }
 
 /// Returns whether a non-empty path or location is specified,

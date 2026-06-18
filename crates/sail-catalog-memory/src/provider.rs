@@ -5,8 +5,8 @@ use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
     plain_lakehouse_create_table_metadata_requirement, AlterTableOptions, CatalogProvider,
     CreateDatabaseOptions, CreateTableColumnOptions, CreateTableMetadataRequirement,
-    CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
-    DropTableOptions, DropViewOptions, Namespace,
+    CreateTableMode, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
+    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
@@ -181,9 +181,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             partition_by,
             sort_by,
             bucket_by,
-            if_not_exists,
-            replace,
-            replace_error_if_absent,
+            mode,
             properties,
             is_external,
             is_write_precondition: _,
@@ -193,17 +191,19 @@ impl CatalogProvider for MemoryCatalogProvider {
             CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
         })?;
         if let Some(status) = db.tables.get(table) {
-            if if_not_exists {
-                return Ok(status.clone());
-            } else if replace {
-                db.tables.remove(table);
-            } else {
-                return Err(CatalogError::AlreadyExists(
-                    CatalogObject::Table,
-                    table.to_string(),
-                ));
+            match mode {
+                CreateTableMode::CreateIfNotExists => return Ok(status.clone()),
+                CreateTableMode::CreateOrReplace | CreateTableMode::Replace => {
+                    db.tables.remove(table);
+                }
+                CreateTableMode::Create => {
+                    return Err(CatalogError::AlreadyExists(
+                        CatalogObject::Table,
+                        table.to_string(),
+                    ));
+                }
             }
-        } else if replace && replace_error_if_absent {
+        } else if mode.replace_requires_existing() {
             return Err(CatalogError::NotFound(
                 CatalogObject::Table,
                 table.to_string(),

@@ -35,9 +35,7 @@ impl PlanResolver<'_> {
             sort_by,
             bucket_by,
             cluster_by,
-            if_not_exists,
-            replace,
-            replace_error_if_absent,
+            mode,
             options,
             properties,
         } = definition;
@@ -87,9 +85,7 @@ impl PlanResolver<'_> {
                 partition_by,
                 sort_by,
                 bucket_by,
-                if_not_exists,
-                replace,
-                replace_error_if_absent,
+                mode,
                 properties,
                 is_external,
                 is_write_precondition: false,
@@ -118,9 +114,7 @@ impl PlanResolver<'_> {
             sort_by,
             bucket_by,
             cluster_by,
-            if_not_exists,
-            replace,
-            replace_error_if_absent,
+            mode,
             options,
             properties,
         } = definition;
@@ -188,14 +182,15 @@ impl PlanResolver<'_> {
         }
 
         // Set write mode based on create-or-replace / if-not-exists semantics.
-        let write_mode = if replace {
-            WriteMode::Replace {
-                error_if_absent: replace_error_if_absent,
-            }
-        } else if if_not_exists {
-            WriteMode::IgnoreIfExists
-        } else {
-            WriteMode::ErrorIfExists
+        let write_mode = match mode {
+            spec::CreateTableMode::Create => WriteMode::ErrorIfExists,
+            spec::CreateTableMode::CreateIfNotExists => WriteMode::IgnoreIfExists,
+            spec::CreateTableMode::CreateOrReplace => WriteMode::Replace {
+                error_if_absent: false,
+            },
+            spec::CreateTableMode::Replace => WriteMode::Replace {
+                error_if_absent: true,
+            },
         };
         let partition_by = self.resolve_write_partition_by_expressions(partition_by_exprs)?;
         let builder = WritePlanBuilder::new()

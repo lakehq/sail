@@ -22,8 +22,9 @@ use sail_catalog::lakehouse::{
 };
 use sail_catalog::provider::{
     AlterTableOptions, CatalogPartitionField, CatalogProvider, CreateDatabaseOptions,
-    CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
-    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
+    CreateTableColumnOptions, CreateTableMode, CreateTableOptions, CreateViewColumnOptions,
+    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    PartitionTransform,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
 use sail_common_datafusion::catalog::managed::METADATA_LOCATION_KEY;
@@ -1110,9 +1111,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             partition_by,
             sort_by,
             bucket_by,
-            if_not_exists,
-            replace,
-            replace_error_if_absent: _,
+            mode,
             properties,
             is_external: _,
             is_write_precondition: _,
@@ -1126,13 +1125,13 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
         let (client, catalog_config) = self.load_client_and_merged_config().await?;
 
-        if if_not_exists {
+        if mode.ignore_if_exists() {
             if let Ok(existing) = self.get_table(database, table).await {
                 return Ok(existing);
             }
         }
 
-        if replace {
+        if mode.is_replace() {
             return Err(CatalogError::NotSupported(
                 "Replace table is not supported yet".to_string(),
             ));
@@ -2060,9 +2059,7 @@ mod tests {
             partition_by: vec![],
             sort_by: vec![],
             bucket_by: None,
-            if_not_exists: false,
-            replace: false,
-            replace_error_if_absent: false,
+            mode: CreateTableMode::Create,
             properties: vec![],
             is_external: false,
             is_write_precondition: true,

@@ -16,7 +16,8 @@ use sail_catalog::error::CatalogError;
 use sail_catalog::lakehouse::LakehouseCreateRequest;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{
-    CatalogPartitionField, CreateTableColumnOptions, CreateTableOptions, PartitionTransform,
+    CatalogPartitionField, CreateTableColumnOptions, CreateTableMode, CreateTableOptions,
+    PartitionTransform,
 };
 use sail_common::spec::{self, DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID};
 use sail_common_datafusion::catalog::{
@@ -407,11 +408,16 @@ impl PlanResolver<'_> {
                         ));
                     }
                     let table_location = find_path_in_options(&sink_info.options);
-                    let (if_not_exists, replace, replace_error_if_absent) = match &mode {
-                        WriteMode::Append { .. } => (true, false, false),
-                        WriteMode::Replace { error_if_absent } => (false, true, *error_if_absent),
+                    let create_mode = match &mode {
+                        WriteMode::Append { .. } => CreateTableMode::CreateIfNotExists,
+                        WriteMode::Replace {
+                            error_if_absent: true,
+                        } => CreateTableMode::Replace,
+                        WriteMode::Replace {
+                            error_if_absent: false,
+                        } => CreateTableMode::CreateOrReplace,
                         // ErrorIfExists or IgnoreIfExists
-                        _ => (false, false, false),
+                        _ => CreateTableMode::Create,
                     };
                     let columns = input
                         .schema()
@@ -466,9 +472,7 @@ impl PlanResolver<'_> {
                         partition_by,
                         sort_by,
                         bucket_by,
-                        if_not_exists,
-                        replace,
-                        replace_error_if_absent,
+                        mode: create_mode,
                         properties,
                         is_external: table_is_external || write_options_had_location,
                         is_write_precondition: true,

@@ -241,7 +241,7 @@ fn should_fallback_to_table_input(has_custom_endpoint: bool, error: &str) -> boo
 pub(crate) fn validate_iceberg_create_table_options(
     options: &CreateTableOptions,
 ) -> CatalogResult<()> {
-    if options.replace {
+    if options.mode.is_replace() {
         return Err(CatalogError::NotSupported(
             "AWS Glue catalog does not support REPLACE".to_string(),
         ));
@@ -288,9 +288,7 @@ fn validate_iceberg_options(options: CreateTableOptions) -> CatalogResult<Valida
         partition_by,
         sort_by: _,
         bucket_by: _,
-        if_not_exists,
-        replace: _,
-        replace_error_if_absent: _,
+        mode,
         properties,
         is_external: _,
         is_write_precondition: _,
@@ -310,7 +308,7 @@ fn validate_iceberg_options(options: CreateTableOptions) -> CatalogResult<Valida
         columns,
         location,
         partition_by,
-        if_not_exists,
+        if_not_exists: mode.ignore_if_exists(),
         properties: final_properties,
     })
 }

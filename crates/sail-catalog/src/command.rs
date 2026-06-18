@@ -306,7 +306,7 @@ impl CatalogCommand {
                 display.bools().to_record_batch(vec![true])?
             }
             CatalogCommand::CreateTable { table, options } => {
-                let existed_before = if options.if_not_exists {
+                let existed_before = if options.mode.ignore_if_exists() {
                     match manager.get_table_or_view(&table).await {
                         Ok(_) => true,
                         Err(CatalogError::NotFound(_, _)) => false,
@@ -661,15 +661,15 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
     mut options: CreateTableOptions,
 ) -> CatalogResult<Option<(CreateTableOptions, LakehouseCreatePlan)>> {
     match manager.get_table_or_view(table).await {
-        Ok(_) if options.if_not_exists => return Ok(None),
-        Ok(_) if !options.replace => {
+        Ok(_) if options.mode.ignore_if_exists() => return Ok(None),
+        Ok(_) if !options.mode.is_replace() => {
             return Err(CatalogError::AlreadyExists(
                 CatalogObject::Table,
                 table.join("."),
             ));
         }
         Ok(_) => {}
-        Err(CatalogError::NotFound(_, _)) if options.replace && options.replace_error_if_absent => {
+        Err(CatalogError::NotFound(_, _)) if options.mode.replace_requires_existing() => {
             return Err(CatalogError::NotFound(
                 CatalogObject::Table,
                 table.join("."),
@@ -709,7 +709,7 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
         options.comment.clone(),
         options.partition_by.clone(),
         options.properties.clone(),
-        options.replace,
+        options.mode.is_replace(),
         context.as_deref().cloned(),
     )
     .await?;

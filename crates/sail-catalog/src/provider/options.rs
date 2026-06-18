@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::DataType;
 use datafusion_expr::LogicalPlan;
+pub use sail_common::spec::CreateTableMode;
 pub use sail_common_datafusion::catalog::{CatalogPartitionField, PartitionTransform};
 use sail_common_datafusion::catalog::{
     CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableConstraint, CatalogTableSort,
@@ -34,10 +35,8 @@ pub struct CreateTableOptions {
     pub partition_by: Vec<CatalogPartitionField>,
     pub sort_by: Vec<CatalogTableSort>,
     pub bucket_by: Option<CatalogTableBucketBy>,
-    pub if_not_exists: bool,
-    pub replace: bool,
     #[serde(default)]
-    pub replace_error_if_absent: bool,
+    pub mode: CreateTableMode,
     pub properties: Vec<(String, String)>,
     pub is_external: bool,
     #[serde(default)]

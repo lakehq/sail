@@ -14,7 +14,7 @@
 
 use arrow::datatypes::DataType;
 use sail_catalog::provider::{
-    CatalogProvider, CreateTableColumnOptions, CreateTableOptions, Namespace,
+    CatalogProvider, CreateTableColumnOptions, CreateTableMode, CreateTableOptions, Namespace,
 };
 use sail_catalog_glue::GlueCatalogProvider;
 use testcontainers::{ContainerAsync, GenericImage};
@@ -45,9 +45,7 @@ pub fn simple_table_options(columns: Vec<CreateTableColumnOptions>) -> CreateTab
         partition_by: vec![],
         sort_by: vec![],
         bucket_by: None,
-        if_not_exists: false,
-        replace: false,
-        replace_error_if_absent: false,
+        mode: CreateTableMode::Create,
         properties: vec![],
         is_external: true,
         is_write_precondition: false,

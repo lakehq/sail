@@ -164,11 +164,21 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             if like.is_some() {
                 return Err(SqlError::todo("LIKE in CREATE TABLE"));
             }
+            if or_replace.is_some() && if_not_exists.is_some() {
+                return Err(SqlError::invalid(
+                    "CREATE OR REPLACE TABLE cannot be used with IF NOT EXISTS",
+                ));
+            }
+            let mode = if or_replace.is_some() {
+                spec::CreateTableMode::CreateOrReplace
+            } else if if_not_exists.is_some() {
+                spec::CreateTableMode::CreateIfNotExists
+            } else {
+                spec::CreateTableMode::Create
+            };
             let definition = TableDefinition {
                 external: external.is_some(),
-                or_replace: or_replace.is_some(),
-                replace_error_if_absent: false,
-                if_not_exists: if_not_exists.is_some(),
+                mode,
                 using: using.map(|(_, x)| x),
                 columns,
                 clauses: clauses.try_into()?,
@@ -199,9 +209,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
         } => {
             let definition = TableDefinition {
                 external: external.is_some(),
-                or_replace: true,
-                replace_error_if_absent: true,
-                if_not_exists: false,
+                mode: spec::CreateTableMode::Replace,
                 using: using.map(|(_, x)| x),
                 columns,
                 clauses: clauses.try_into()?,
@@ -1217,9 +1225,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
 
 struct TableDefinition {
     external: bool,
-    or_replace: bool,
-    replace_error_if_absent: bool,
-    if_not_exists: bool,
+    mode: spec::CreateTableMode,
     using: Option<Ident>,
     columns: Option<ColumnDefinitionList>,
     clauses: CreateTableClauses,
@@ -1231,9 +1237,7 @@ fn from_ast_table_definition(
 ) -> SqlResult<(spec::TableDefinition, Option<Box<QueryPlan>>)> {
     let TableDefinition {
         external,
-        or_replace,
-        replace_error_if_absent,
-        if_not_exists,
+        mode,
         using,
         columns,
         clauses:
@@ -1340,9 +1344,7 @@ fn from_ast_table_definition(
         sort_by,
         bucket_by,
         cluster_by,
-        if_not_exists,
-        replace: or_replace,
-        replace_error_if_absent,
+        mode,
         options,
         properties: properties.into_iter().flatten().collect(),
     };

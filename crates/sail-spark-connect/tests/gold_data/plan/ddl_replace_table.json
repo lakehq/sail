@@ -249,8 +249,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -284,8 +283,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": [
                 [
@@ -361,8 +359,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [
                 [
                   "a",
@@ -419,8 +416,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -497,8 +493,7 @@
                   "b"
                 ]
               ],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -584,8 +579,7 @@
                   "ts"
                 ]
               ],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -644,8 +638,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -709,8 +702,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -778,8 +770,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -848,8 +839,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -907,8 +897,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -976,8 +965,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -1045,8 +1033,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -1113,8 +1100,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -1182,8 +1168,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -1237,8 +1222,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -1303,8 +1287,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -1389,8 +1372,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -1491,8 +1473,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -1558,8 +1539,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -1621,8 +1601,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -1673,8 +1652,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -1730,8 +1708,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -1798,8 +1775,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -1851,8 +1827,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -1908,8 +1883,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -2051,8 +2025,7 @@
                   "a"
                 ]
               ],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -2118,8 +2091,7 @@
                   "a"
                 ]
               ],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -2194,8 +2166,7 @@
                 "numBuckets": 5
               },
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -2251,8 +2222,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -2308,8 +2278,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -2365,8 +2334,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": [
                 [
@@ -2427,8 +2395,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -2484,8 +2451,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -2541,8 +2507,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -2598,8 +2563,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -2655,8 +2619,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -2712,8 +2675,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -2769,8 +2731,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -2826,8 +2787,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -2883,8 +2843,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -2940,8 +2899,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -2997,8 +2955,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -3054,8 +3011,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -3111,8 +3067,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -3168,8 +3123,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -3225,8 +3179,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -3282,8 +3235,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -3339,8 +3291,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -3396,8 +3347,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -3453,8 +3403,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -3510,8 +3459,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -3567,8 +3515,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -3624,8 +3571,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -3681,8 +3627,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -3738,8 +3683,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -3795,8 +3739,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -3852,8 +3795,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -3909,8 +3851,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -3966,8 +3907,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -4023,8 +3963,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -4080,8 +4019,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -4137,8 +4075,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
@@ -4194,8 +4131,7 @@
               "sortBy": [],
               "bucketBy": null,
               "clusterBy": [],
-              "ifNotExists": false,
-              "replace": true,
+              "mode": "replace",
               "options": [],
               "properties": []
             },
