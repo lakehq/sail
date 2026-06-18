@@ -5,11 +5,11 @@ use datafusion::arrow::array::{Array, ArrayRef, Time64MicrosecondArray};
 use datafusion::arrow::compute::{cast_with_options, CastOptions};
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
-use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result};
+use datafusion_common::{exec_datafusion_err, exec_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions::utils::make_scalar_function;
 
-use crate::error::invalid_arg_count_exec_err;
+use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 
 const DEFAULT_TIME_FORMATS: &[&str] = &[
     "%H:%M:%S%.f",
@@ -108,7 +108,8 @@ impl SparkTime {
     ) -> Result<ArrayRef> {
         if value_arr.len() != format_arr.len() {
             return exec_err!(
-                "to_time: value array length ({}) does not match format array length ({})",
+                "{}: value array length ({}) does not match format array length ({})",
+                if is_try { "try_to_time" } else { "to_time" },
                 value_arr.len(),
                 format_arr.len()
             );
@@ -149,10 +150,11 @@ impl SparkTime {
                     fmt.data_type(),
                     DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
                 ) {
-                    return exec_err!(
-                        "to_time format argument must be a string, got {}",
-                        fmt.data_type()
-                    );
+                    return Err(unsupported_data_type_exec_err(
+                        if is_try { "try_to_time" } else { "to_time" },
+                        "STRING",
+                        fmt.data_type(),
+                    ));
                 }
                 Self::parse_value_with_format_array(value_arr, fmt, is_try)
             }
@@ -195,10 +197,11 @@ impl ScalarUDFImpl for SparkTime {
             | DataType::Timestamp(_, _)
             | DataType::Null => {}
             other => {
-                return plan_err!(
-                    "{}: value argument must be string, time, timestamp or null, got {other}",
-                    self.name()
-                );
+                return Err(unsupported_data_type_exec_err(
+                    self.name(),
+                    "STRING, TIME, TIMESTAMP or NULL",
+                    other,
+                ));
             }
         }
         let mut coerced = arg_types.to_vec();
@@ -210,10 +213,7 @@ impl ScalarUDFImpl for SparkTime {
                 // erroring on the `Null` type.
                 DataType::Null => coerced[1] = DataType::Utf8,
                 other => {
-                    return plan_err!(
-                        "{}: format argument must be a string, got {other}",
-                        self.name()
-                    );
+                    return Err(unsupported_data_type_exec_err(self.name(), "STRING", other));
                 }
             }
         }

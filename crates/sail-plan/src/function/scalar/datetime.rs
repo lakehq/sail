@@ -408,7 +408,10 @@ fn time_with_try(input: ScalarFunctionInput, is_try: bool) -> PlanResult<Expr> {
         let format = to_chrono_fmt(format);
         Ok(udf.call(vec![expr, format]))
     } else {
-        Err(PlanError::invalid("to_time requires 1 or 2 arguments"))
+        let name = if is_try { "try_to_time" } else { "to_time" };
+        Err(PlanError::invalid(format!(
+            "{name} requires 1 or 2 arguments"
+        )))
     }
 }
 
