@@ -8,7 +8,6 @@ use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{self, Expr};
 use datafusion_expr::{cast, lit, try_cast, when, BinaryExpr, ExprSchemable, Operator, ScalarUDF};
 use datafusion_functions::core::expr_ext::FieldAccessor;
-use datafusion_functions::expr_fn::to_time;
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use sail_common::datetime::time_unit_to_multiplier;
@@ -21,6 +20,7 @@ use sail_function::scalar::datetime::spark_make_time::SparkMakeTime;
 use sail_function::scalar::datetime::spark_make_timestamp_ntz::SparkMakeTimestampNtz;
 use sail_function::scalar::datetime::spark_make_ym_interval::SparkMakeYmInterval;
 use sail_function::scalar::datetime::spark_next_day::SparkNextDay;
+use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
@@ -383,6 +383,32 @@ fn to_timestamp(input: ScalarFunctionInput, timestamp_ntz: bool) -> PlanResult<E
         ))
     } else {
         Err(PlanError::invalid("to_timestamp requires 1 or 2 arguments"))
+    }
+}
+
+fn to_time(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    time_with_try(input, false)
+}
+
+fn try_to_time(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    time_with_try(input, true)
+}
+
+/// Shared `to_time` / `try_to_time` planner. Routes through `SparkTime`, which
+/// parses strings (with an optional chrono format) or casts time/timestamp args.
+/// `to_time` errors on failure (Spark's `ToTime` is ANSI-invariant); `try_to_time`
+/// (`is_try`) returns NULL.
+fn time_with_try(input: ScalarFunctionInput, is_try: bool) -> PlanResult<Expr> {
+    let udf = ScalarUDF::from(SparkTime::new(is_try));
+    if input.arguments.len() == 1 {
+        Ok(udf.call(input.arguments))
+    } else if input.arguments.len() == 2 {
+        let (expr, format) = input.arguments.two()?;
+        let expr = cast(expr, DataType::Utf8);
+        let format = to_chrono_fmt(format);
+        Ok(udf.call(vec![expr, format]))
+    } else {
+        Err(PlanError::invalid("to_time requires 1 or 2 arguments"))
     }
 }
 
@@ -1013,7 +1039,8 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ),
         ("timestampdiff", F::custom(datediff)),
         ("to_date", F::custom(to_date)),
-        ("to_time", F::var_arg(to_time)),
+        ("to_time", F::custom(to_time)),
+        ("try_to_time", F::custom(try_to_time)),
         (
             "to_timestamp",
             F::custom(|input| {
