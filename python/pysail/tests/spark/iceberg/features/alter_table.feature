@@ -33,6 +33,7 @@ Feature: Iceberg ALTER TABLE SET/UNSET TBLPROPERTIES
           📄 *.parquet
         📂 metadata
           📄 *.metadata.json
+          📄 *.metadata.json
           📄 snap-*.avro
         """
 

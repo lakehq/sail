@@ -5,9 +5,10 @@ use pilota::{AHashMap, FastStr};
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::hive_format::HiveCatalogFormat;
 use sail_catalog::provider::{
-    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
-    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
-    PartitionTransform,
+    plain_lakehouse_create_table_metadata_requirement, AlterTableOptions, CatalogProvider,
+    CreateDatabaseOptions, CreateTableMetadataRequirement, CreateTableOptions, CreateViewOptions,
+    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
+    TableFormatCreateMetadataMode,
 };
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
@@ -826,6 +827,37 @@ impl HmsCatalogProvider {
     }
 }
 
+fn validate_create_table_options(options: &CreateTableOptions) -> CatalogResult<()> {
+    if options.replace {
+        return Err(CatalogError::NotSupported(
+            "Hive Metastore catalog does not support REPLACE".to_string(),
+        ));
+    }
+    if !options.constraints.is_empty() {
+        return Err(CatalogError::NotSupported(
+            "Hive Metastore catalog does not support constraints for generic tables".to_string(),
+        ));
+    }
+    if !options.sort_by.is_empty() {
+        return Err(CatalogError::NotSupported(
+            "Hive Metastore catalog does not support SORT BY for generic tables".to_string(),
+        ));
+    }
+    if options.bucket_by.is_some() {
+        return Err(CatalogError::NotSupported(
+            "Hive Metastore catalog does not support BUCKET BY for generic tables".to_string(),
+        ));
+    }
+    if options.partition_by.iter().any(|field| {
+        field.transform.is_some() && field.transform != Some(PartitionTransform::Identity)
+    }) {
+        return Err(CatalogError::NotSupported(
+            "Hive Metastore catalog only supports identity partition columns".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 #[async_trait::async_trait]
 impl CatalogProvider for HmsCatalogProvider {
     fn get_name(&self) -> &str {
@@ -1000,41 +1032,8 @@ impl CatalogProvider for HmsCatalogProvider {
     ) -> CatalogResult<TableStatus> {
         let format = options.format.trim().to_lowercase();
 
-        if options.replace {
-            return Err(CatalogError::NotSupported(
-                "Hive Metastore catalog does not support REPLACE".to_string(),
-            ));
-        }
-        if !options.constraints.is_empty() {
-            return Err(CatalogError::NotSupported(
-                "Hive Metastore catalog does not support constraints for generic tables"
-                    .to_string(),
-            ));
-        }
-        if !options.sort_by.is_empty() {
-            return Err(CatalogError::NotSupported(
-                "Hive Metastore catalog does not support SORT BY for generic tables".to_string(),
-            ));
-        }
-        if options.bucket_by.is_some() {
-            return Err(CatalogError::NotSupported(
-                "Hive Metastore catalog does not support BUCKET BY for generic tables".to_string(),
-            ));
-        }
-        if options.partition_by.iter().any(|field| {
-            field.transform.is_some() && field.transform != Some(PartitionTransform::Identity)
-        }) {
-            return Err(CatalogError::NotSupported(
-                "Hive Metastore catalog only supports identity partition columns".to_string(),
-            ));
-        }
+        validate_create_table_options(&options)?;
         let db_name = validate_namespace(database)?;
-        if format == "iceberg" && !options.is_write_precondition {
-            return Err(CatalogError::NotSupported(
-                "Hive Metastore catalog does not support plain CREATE TABLE USING ICEBERG yet"
-                    .to_string(),
-            ));
-        }
         let format = HiveCatalogFormat::from_format(&format)?;
         let partition_columns: Vec<String> = options
             .partition_by
@@ -1065,6 +1064,20 @@ impl CatalogProvider for HmsCatalogProvider {
 
         self.create_hms_table(database, table, hms_table, options.if_not_exists)
             .await
+    }
+
+    fn create_table_metadata_requirement(
+        &self,
+        options: &CreateTableOptions,
+    ) -> CatalogResult<CreateTableMetadataRequirement> {
+        validate_create_table_options(options)?;
+        if options.format.eq_ignore_ascii_case("iceberg") && !options.is_write_precondition {
+            Ok(CreateTableMetadataRequirement::TableFormat {
+                mode: TableFormatCreateMetadataMode::CatalogCoordinated,
+            })
+        } else {
+            Ok(plain_lakehouse_create_table_metadata_requirement(options))
+        }
     }
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
@@ -1246,101 +1259,12 @@ mod tests {
 
     use std::time::Duration;
 
-    use arrow::datatypes::DataType;
     use pilota::{AHashMap, FastStr};
     use sail_catalog::error::{CatalogError, CatalogObject};
-    use sail_catalog::provider::{
-        AlterTableOptions, CatalogProvider, CreateTableColumnOptions, CreateTableOptions, Namespace,
-    };
-    use sail_common::runtime::RuntimeHandle;
+    use sail_catalog::provider::AlterTableOptions;
     use sail_common_hms::hms::Table;
 
-    use super::{HmsCatalogConfig, HmsCatalogProvider};
-
-    #[tokio::test]
-    async fn test_create_table_requires_write_precondition_for_iceberg_format() {
-        let runtime = RuntimeHandle::new(
-            tokio::runtime::Handle::current(),
-            tokio::runtime::Handle::current(),
-        );
-        let provider = HmsCatalogProvider::new(
-            "hms".to_string(),
-            HmsCatalogConfig {
-                uris: vec!["127.0.0.1:9083".to_string()],
-                thrift_transport: None,
-                auth: None,
-                kerberos_service_principal: None,
-                min_sasl_qop: None,
-                connect_timeout_secs: None,
-            },
-            runtime,
-        )
-        .unwrap();
-
-        let error = provider
-            .create_table(
-                &Namespace::try_from(vec!["default"]).unwrap(),
-                "items",
-                CreateTableOptions {
-                    columns: vec![CreateTableColumnOptions {
-                        name: "id".to_string(),
-                        data_type: DataType::Int64,
-                        nullable: false,
-                        comment: None,
-                        default: None,
-                        generated_always_as: None,
-                        identity: None,
-                    }],
-                    comment: None,
-                    constraints: vec![],
-                    location: None,
-                    format: "iceberg".to_string(),
-                    partition_by: vec![],
-                    sort_by: vec![],
-                    bucket_by: None,
-                    if_not_exists: false,
-                    replace: false,
-                    properties: vec![],
-                    is_external: true,
-                    is_write_precondition: false,
-                },
-            )
-            .await
-            .unwrap_err();
-        assert!(matches!(error, CatalogError::NotSupported(_)));
-
-        let error = provider
-            .create_table(
-                &Namespace::try_from(vec!["default"]).unwrap(),
-                "items",
-                CreateTableOptions {
-                    columns: vec![CreateTableColumnOptions {
-                        name: "id".to_string(),
-                        data_type: DataType::Int64,
-                        nullable: false,
-                        comment: None,
-                        default: None,
-                        generated_always_as: None,
-                        identity: None,
-                    }],
-                    comment: None,
-                    constraints: vec![],
-                    location: None,
-                    format: "iceberg".to_string(),
-                    partition_by: vec![],
-                    sort_by: vec![],
-                    bucket_by: None,
-                    if_not_exists: false,
-                    replace: false,
-                    properties: vec![],
-                    is_external: true,
-                    is_write_precondition: true,
-                },
-            )
-            .await
-            .unwrap_err();
-        assert!(!matches!(error, CatalogError::NotSupported(_)));
-    }
+    use super::HmsCatalogConfig;
 
     #[test]
     fn test_build_drop_table_request_without_purge_preserves_data() {

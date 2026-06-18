@@ -175,7 +175,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         let TemporaryViewSource { format, options } = source;
         let info = TableInfo {
-            catalog_table: None,
+            lakehouse_table: None,
             columns,
             location: None,
             format: format.clone(),

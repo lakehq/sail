@@ -8,10 +8,16 @@ use sail_common::config::CatalogCacheConfig;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 
 use crate::error::{CatalogError, CatalogResult};
+use crate::lakehouse::{
+    BeginTableAccessRequest, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
+    LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan,
+    LakehouseCreateRequest, LakehouseResolvedTable, LakehouseScanPlanningRequest,
+    LakehouseScanPlanningResponse, ResolveLakehouseTableRequest, TableAccessSession,
+};
 use crate::provider::{
-    AlterTableOptions, CatalogProvider, CommitTableOptions, CreateDatabaseOptions,
+    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
     CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
-    GetTableCommitsOptions, GetTableCommitsResponse, Namespace,
+    Namespace,
 };
 
 #[derive(Clone)]
@@ -272,6 +278,89 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
         Ok(status)
     }
 
+    fn create_table_metadata_requirement(
+        &self,
+        options: &CreateTableOptions,
+    ) -> CatalogResult<CreateTableMetadataRequirement> {
+        self.inner.create_table_metadata_requirement(options)
+    }
+
+    fn lakehouse_capabilities(&self) -> Vec<LakehouseCapability> {
+        self.inner.lakehouse_capabilities()
+    }
+
+    async fn resolve_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        self.inner
+            .resolve_lakehouse_table(database, table, request)
+            .await
+    }
+
+    async fn plan_lakehouse_create(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseCreateRequest,
+    ) -> CatalogResult<LakehouseCreatePlan> {
+        self.inner
+            .plan_lakehouse_create(database, table, request)
+            .await
+    }
+
+    async fn begin_table_access(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: BeginTableAccessRequest,
+    ) -> CatalogResult<TableAccessSession> {
+        self.inner
+            .begin_table_access(database, table, request)
+            .await
+    }
+
+    async fn plan_lakehouse_scan(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseScanPlanningRequest,
+    ) -> CatalogResult<LakehouseScanPlanningResponse> {
+        self.inner
+            .plan_lakehouse_scan(database, table, request)
+            .await
+    }
+
+    async fn commit_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseCommitRequest,
+    ) -> CatalogResult<LakehouseCommitOutcome> {
+        let outcome = self
+            .inner
+            .commit_lakehouse_table(database, table, request)
+            .await?;
+        if let Some(c) = self.table_cache.as_ref() {
+            let c: &Cache<Namespace, Vec<TableStatus>> = c;
+            c.invalidate(database).await;
+        }
+        Ok(outcome)
+    }
+
+    async fn get_delta_ratified_commits(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: DeltaRatifiedCommitRequest,
+    ) -> CatalogResult<DeltaRatifiedCommitResponse> {
+        self.inner
+            .get_delta_ratified_commits(database, table, request)
+            .await
+    }
+
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
         self.inner.get_table(database, table).await
     }
@@ -317,29 +406,6 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
             c.invalidate(database).await;
         }
         Ok(())
-    }
-
-    async fn commit_table(
-        &self,
-        database: &Namespace,
-        table: &str,
-        options: CommitTableOptions,
-    ) -> CatalogResult<TableStatus> {
-        let status = self.inner.commit_table(database, table, options).await?;
-        if let Some(c) = self.table_cache.as_ref() {
-            let c: &Cache<Namespace, Vec<TableStatus>> = c;
-            c.invalidate(database).await;
-        }
-        Ok(status)
-    }
-
-    async fn get_table_commits(
-        &self,
-        database: &Namespace,
-        table: &str,
-        options: GetTableCommitsOptions,
-    ) -> CatalogResult<GetTableCommitsResponse> {
-        self.inner.get_table_commits(database, table, options).await
     }
 
     async fn create_view(
@@ -394,22 +460,56 @@ impl<P: CatalogProvider + ?Sized + 'static> CatalogProvider for CachingCatalogPr
 #[expect(clippy::unwrap_used)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
 
-    use sail_common_datafusion::catalog::{DatabaseStatus, TableKind, TableStatus};
+    use sail_common_datafusion::catalog::{
+        CatalogProviderId, CatalogTableIdentity, CommitAuthority, DatabaseStatus,
+        LakehouseAuthority, LakehouseExecutionContext, LakehouseFormat, LakehouseOperation,
+        MetadataPointerAuthority, ScanAuthority, TableKind, TableLifecycle, TableStatus,
+    };
 
     use super::*;
+    use crate::lakehouse::TableAccessPurpose;
     use crate::provider::{CreateDatabaseOptions, CreateTableOptions, Namespace};
 
     struct MockProvider {
         db_calls: AtomicUsize,
         table_calls: AtomicUsize,
         view_calls: AtomicUsize,
+        access_calls: AtomicUsize,
+        scan_calls: AtomicUsize,
+        commit_calls: AtomicUsize,
+        delta_commit_calls: AtomicUsize,
+        last_commit_format: Mutex<Option<String>>,
+    }
+
+    impl MockProvider {
+        fn new() -> Self {
+            Self {
+                db_calls: AtomicUsize::new(0),
+                table_calls: AtomicUsize::new(0),
+                view_calls: AtomicUsize::new(0),
+                access_calls: AtomicUsize::new(0),
+                scan_calls: AtomicUsize::new(0),
+                commit_calls: AtomicUsize::new(0),
+                delta_commit_calls: AtomicUsize::new(0),
+                last_commit_format: Mutex::new(None),
+            }
+        }
     }
 
     #[async_trait::async_trait]
     impl CatalogProvider for MockProvider {
         fn get_name(&self) -> &str {
             "mock"
+        }
+
+        fn lakehouse_capabilities(&self) -> Vec<LakehouseCapability> {
+            vec![
+                LakehouseCapability::TableAccessSessions,
+                LakehouseCapability::CatalogCommit,
+                LakehouseCapability::DeltaRatifiedCommits,
+            ]
         }
 
         async fn create_database(
@@ -480,6 +580,69 @@ mod tests {
                     properties: vec![],
                     is_external: false,
                 },
+            })
+        }
+
+        async fn begin_table_access(
+            &self,
+            _database: &Namespace,
+            _table: &str,
+            request: BeginTableAccessRequest,
+        ) -> CatalogResult<TableAccessSession> {
+            self.access_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(TableAccessSession {
+                reference: sail_common_datafusion::catalog::TableAccessSessionRef {
+                    fingerprint: format!("{:?}", request.purpose),
+                },
+                capability_fingerprint: request.context.capability_fingerprint.clone(),
+                context: request.context,
+                expires_at_ms: Some(123),
+                credential_scope: Some("test-scope".to_string()),
+            })
+        }
+
+        async fn plan_lakehouse_scan(
+            &self,
+            _database: &Namespace,
+            _table: &str,
+            request: LakehouseScanPlanningRequest,
+        ) -> CatalogResult<LakehouseScanPlanningResponse> {
+            self.scan_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(LakehouseScanPlanningResponse {
+                authority: request.context.scan,
+                files: Some(request.filters),
+                residual_filter: None,
+                payload: Some(serde_json::json!({
+                    "projection": request.projection,
+                    "limit": request.limit,
+                })),
+            })
+        }
+
+        async fn commit_lakehouse_table(
+            &self,
+            _database: &Namespace,
+            _table: &str,
+            request: LakehouseCommitRequest,
+        ) -> CatalogResult<LakehouseCommitOutcome> {
+            self.commit_calls.fetch_add(1, Ordering::SeqCst);
+            *self.last_commit_format.lock().unwrap() = Some(request.format.clone());
+            Ok(LakehouseCommitOutcome::Committed {
+                context: request.context,
+                payload: request.payload,
+            })
+        }
+
+        async fn get_delta_ratified_commits(
+            &self,
+            _database: &Namespace,
+            _table: &str,
+            request: DeltaRatifiedCommitRequest,
+        ) -> CatalogResult<DeltaRatifiedCommitResponse> {
+            self.delta_commit_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(DeltaRatifiedCommitResponse {
+                latest_table_version: request.start_version,
+                commits: vec![],
             })
         }
 
@@ -600,13 +763,32 @@ mod tests {
         }
     }
 
+    fn mock_provider() -> Arc<MockProvider> {
+        Arc::new(MockProvider::new())
+    }
+
+    fn test_lakehouse_context() -> LakehouseExecutionContext {
+        LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("mock".to_string()),
+            vec!["cat".to_string(), "db1".to_string(), "t1".to_string()],
+            CatalogTableIdentity {
+                table_id: Some("table-id".to_string()),
+                table_uri: Some("file:///tmp/table".to_string()),
+            },
+            LakehouseOperation::Write,
+            LakehouseFormat::Delta,
+            LakehouseAuthority::CatalogAuthoritative {
+                lifecycle: TableLifecycle::Managed,
+                pointer: MetadataPointerAuthority::DeltaRatifiedCommits,
+                commit: CommitAuthority::DeltaRatifiedCommit,
+            },
+            ScanAuthority::ClientTableFormat,
+        )
+    }
+
     #[tokio::test]
     async fn test_caching_behavior() {
-        let mock = std::sync::Arc::new(MockProvider {
-            db_calls: AtomicUsize::new(0),
-            table_calls: AtomicUsize::new(0),
-            view_calls: AtomicUsize::new(0),
-        });
+        let mock = mock_provider();
         let config = CatalogCacheConfig {
             database_cache_type: sail_common::config::CacheType::Session,
             database_cache_size: Some(10),
@@ -764,11 +946,7 @@ mod tests {
             ..Default::default()
         };
         // Use a dummy provider to get a bundle
-        let mock = Arc::new(MockProvider {
-            db_calls: AtomicUsize::new(0),
-            table_calls: AtomicUsize::new(0),
-            view_calls: AtomicUsize::new(0),
-        });
+        let mock = mock_provider();
         let provider = CachingCatalogProvider::new(mock, config, None);
         let bundle = provider.get_cache_bundle();
 
@@ -783,11 +961,7 @@ mod tests {
     }
     #[tokio::test]
     async fn test_cache_config_normalization() {
-        let mock = std::sync::Arc::new(MockProvider {
-            db_calls: AtomicUsize::new(0),
-            table_calls: AtomicUsize::new(0),
-            view_calls: AtomicUsize::new(0),
-        });
+        let mock = mock_provider();
         // Config with 0 values - should be treated as unbounded
         let config = CatalogCacheConfig {
             database_cache_type: sail_common::config::CacheType::Session,
@@ -810,5 +984,94 @@ mod tests {
         // Second call - should hit cache (meaning max_capacity(0) was NOT applied)
         provider.list_databases(None).await.unwrap();
         assert_eq!(mock.db_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn test_lakehouse_methods_forward_and_commit_invalidates_table_cache() {
+        let mock = mock_provider();
+        let config = CatalogCacheConfig {
+            table_cache_type: sail_common::config::CacheType::Session,
+            table_cache_size: Some(10),
+            table_cache_ttl_secs: Some(60),
+            ..Default::default()
+        };
+        let provider = CachingCatalogProvider::new(mock.clone(), config, None);
+        let ns = Namespace::try_from(vec!["db1"]).unwrap();
+        let context = test_lakehouse_context();
+
+        let tables = provider.list_tables(&ns).await.unwrap();
+        assert_eq!(tables.len(), 1);
+        assert_eq!(mock.table_calls.load(Ordering::SeqCst), 1);
+
+        let access = provider
+            .begin_table_access(
+                &ns,
+                "t1",
+                BeginTableAccessRequest {
+                    context: context.clone(),
+                    purpose: TableAccessPurpose::DataRead,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(access.context, context);
+        assert_eq!(access.reference.fingerprint, "DataRead");
+        assert_eq!(mock.access_calls.load(Ordering::SeqCst), 1);
+
+        let scan = provider
+            .plan_lakehouse_scan(
+                &ns,
+                "t1",
+                LakehouseScanPlanningRequest {
+                    context: context.clone(),
+                    filters: vec![serde_json::json!({"op": "always_true"})],
+                    projection: Some(vec!["id".to_string()]),
+                    limit: Some(5),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(scan.authority, ScanAuthority::ClientTableFormat);
+        assert_eq!(mock.scan_calls.load(Ordering::SeqCst), 1);
+
+        let delta_commits = provider
+            .get_delta_ratified_commits(
+                &ns,
+                "t1",
+                DeltaRatifiedCommitRequest {
+                    context: context.clone(),
+                    table_uri: "file:///tmp/table".to_string(),
+                    start_version: 7,
+                    end_version: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(delta_commits.latest_table_version, 7);
+        assert_eq!(mock.delta_commit_calls.load(Ordering::SeqCst), 1);
+
+        let outcome = provider
+            .commit_lakehouse_table(
+                &ns,
+                "t1",
+                LakehouseCommitRequest {
+                    context: context.clone(),
+                    format: "delta".to_string(),
+                    requirements: vec![],
+                    updates: vec![],
+                    payload: Some(serde_json::json!({"ok": true})),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(outcome, LakehouseCommitOutcome::Committed { .. }));
+        assert_eq!(mock.commit_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            mock.last_commit_format.lock().unwrap().as_deref(),
+            Some("delta")
+        );
+
+        let _ = provider.list_tables(&ns).await.unwrap();
+        assert_eq!(mock.table_calls.load(Ordering::SeqCst), 2);
     }
 }

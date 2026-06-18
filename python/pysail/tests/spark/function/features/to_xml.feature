@@ -83,7 +83,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | result |
-        | true   |    
+        | true   |
 
   Rule: NULL handling
 
@@ -349,7 +349,7 @@ Feature: to_xml converts a struct value to an XML string
         """
       Then query result
         | has_time | has_plus | has_z |
-        | true     | false    | false |    
+        | true     | false    | false |
 
   Rule: Decimal and special values
 

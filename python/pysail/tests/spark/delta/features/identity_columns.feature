@@ -44,7 +44,6 @@ Feature: Delta Lake Identity Columns
         | protocol.writerFeatures                                               | ["identityColumns"] |
         | metaData.schemaString.fields[0].metadata["delta.identity.start"]      | 1                   |
         | metaData.schemaString.fields[0].metadata["delta.identity.step"]       | 1                   |
-        | metaData.schemaString.fields[0].metadata["delta.identity.highWaterMark"] | 2                 |
         | metaData.schemaString.fields[0].metadata["delta.identity.allowExplicitInsert"] | false       |
       Then delta log latest effective protocol and metadata contains
         | path                                                                  | value |

@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 
 use datafusion_common::{DataFusionError, Result};
+use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::OptionLayer;
 use sail_common_datafusion::variant::DEFAULT_VARIANT_INFERENCE_NODE_BUDGET;
 use serde::{Deserialize, Serialize};
@@ -45,6 +46,7 @@ pub struct IcebergWriterExecOptions {
     pub write_data_path: Option<String>,
     pub write_folder_storage_path: Option<String>,
     pub table_properties: Vec<(String, String)>,
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
     pub shred_variants: bool,
     pub shred_variants_explicit: bool,
     pub variant_inference_buffer_size: usize,
@@ -59,6 +61,7 @@ impl Default for IcebergWriterExecOptions {
             write_data_path: None,
             write_folder_storage_path: None,
             table_properties: vec![],
+            lakehouse_table: None,
             shred_variants: false,
             shred_variants_explicit: false,
             variant_inference_buffer_size: 100,
@@ -75,6 +78,7 @@ impl From<IcebergWriteOptions> for IcebergWriterExecOptions {
             write_data_path: options.write_data_path,
             write_folder_storage_path: options.write_folder_storage_path,
             table_properties: vec![],
+            lakehouse_table: None,
             shred_variants: options.shred_variants,
             shred_variants_explicit: false,
             variant_inference_buffer_size: options.variant_inference_buffer_size,

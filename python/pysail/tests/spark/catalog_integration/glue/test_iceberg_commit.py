@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 import urllib.parse
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
@@ -15,6 +17,9 @@ if TYPE_CHECKING:
 
 
 pytestmark = pytest.mark.catalog_integration
+UUID_METADATA_FILE_PATTERN = re.compile(
+    r"^\d{5}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.metadata\.json$"
+)
 
 
 def _glue_parameters(moto_endpoint: str, database: str, table: str) -> dict[str, str]:
@@ -55,6 +60,25 @@ def _metadata_filename(location: str) -> str:
     return PurePosixPath(urllib.parse.urlparse(location).path).name
 
 
+def _assert_uuid_metadata_location(location: str, expected_version: int | None = None) -> None:
+    filename = _metadata_filename(location)
+    assert UUID_METADATA_FILE_PATTERN.match(filename), filename
+    if expected_version is not None:
+        assert filename.startswith(f"{expected_version:05}-"), filename
+
+
+def _load_metadata_json(location: str) -> dict:
+    parsed = urllib.parse.urlparse(location)
+    assert parsed.scheme == "file", location
+    return json.loads(Path(urllib.parse.unquote(parsed.path)).read_text(encoding="utf-8"))
+
+
+def _current_schema_field_names(metadata: dict) -> list[str]:
+    current_schema_id = metadata["current-schema-id"]
+    current_schema = next(schema for schema in metadata["schemas"] if schema["schema-id"] == current_schema_id)
+    return [field["name"] for field in current_schema["fields"]]
+
+
 def test_ctas_records_glue_iceberg_metadata_location(
     glue_spark: SparkSession,
     moto_endpoint: str,
@@ -79,7 +103,7 @@ def test_ctas_records_glue_iceberg_metadata_location(
 
         metadata_location = _metadata_location(moto_endpoint, database, table)
         assert metadata_location.startswith(location)
-        assert not _metadata_filename(metadata_location).startswith("v")
+        _assert_uuid_metadata_location(metadata_location)
 
         rows = glue_spark.sql(f"SELECT id, name FROM {table_fqn}").collect()
         assert [(row.id, row.name) for row in rows] == [(1, "a")]
@@ -111,20 +135,161 @@ def test_insert_advances_glue_iceberg_metadata_location(
             LOCATION '{location}'
             """
         )
+        created_location = _metadata_location(moto_endpoint, database, table)
+        assert created_location.startswith(location)
+        _assert_uuid_metadata_location(created_location, 0)
+        created_metadata = _load_metadata_json(created_location)
+        assert created_metadata["current-snapshot-id"] == -1
+        assert created_metadata["snapshots"] == []
+        rows = glue_spark.sql(f"SELECT id, name FROM {table_fqn}").collect()
+        assert rows == []
 
         glue_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a'), (2, 'b')")
         first_location = _metadata_location(moto_endpoint, database, table)
+        assert first_location != created_location
         assert first_location.startswith(location)
-        assert not _metadata_filename(first_location).startswith("v")
+        _assert_uuid_metadata_location(first_location, 1)
+        first_metadata = _load_metadata_json(first_location)
+        assert len(first_metadata["metadata-log"]) == 1
+        assert first_metadata["metadata-log"][0]["metadata-file"] == created_location
 
         glue_spark.sql(f"INSERT INTO {table_fqn} VALUES (3, 'c')")
         second_location = _metadata_location(moto_endpoint, database, table)
         assert second_location != first_location
         assert second_location.startswith(location)
-        assert not _metadata_filename(second_location).startswith("v")
+        _assert_uuid_metadata_location(second_location, 2)
+        second_metadata = _load_metadata_json(second_location)
+        assert [entry["metadata-file"] for entry in second_metadata["metadata-log"]] == [
+            created_location,
+            first_location,
+        ]
 
         rows = glue_spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
         assert [(row.id, row.name) for row in rows] == [(1, "a"), (2, "b"), (3, "c")]
+    finally:
+        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        glue_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+
+
+def test_merge_schema_append_advances_glue_iceberg_metadata_location(
+    glue_spark: SparkSession,
+    moto_endpoint: str,
+    tmp_path: Path,
+) -> None:
+    database = "glue_iceberg_merge_schema_db"
+    table = "merge_schema_t"
+    table_fqn = f"{database}.{table}"
+    location = (tmp_path / "merge_schema_t").as_uri()
+
+    glue_spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
+    try:
+        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        glue_spark.sql(
+            f"""
+            CREATE TABLE {table_fqn} (
+              id INT,
+              name STRING
+            )
+            USING ICEBERG
+            LOCATION '{location}'
+            """
+        )
+        glue_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a')")
+        before_location = _metadata_location(moto_endpoint, database, table)
+        _assert_uuid_metadata_location(before_location, 1)
+
+        evolved = glue_spark.createDataFrame([(2, "b", 20)], schema="id INT, name STRING, age INT")
+        (evolved.write.format("iceberg").mode("append").option("mergeSchema", "true").saveAsTable(table_fqn))
+
+        after_location = _metadata_location(moto_endpoint, database, table)
+        assert after_location != before_location
+        assert after_location.startswith(location)
+        _assert_uuid_metadata_location(after_location, 2)
+        after_metadata = _load_metadata_json(after_location)
+        assert after_metadata["metadata-log"][-1]["metadata-file"] == before_location
+        assert _current_schema_field_names(after_metadata) == ["id", "name", "age"]
+
+        rows = glue_spark.sql(f"SELECT id, name, age FROM {table_fqn} ORDER BY id").collect()
+        assert [(row.id, row.name, row.age) for row in rows] == [(1, "a", None), (2, "b", 20)]
+    finally:
+        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        glue_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+
+
+def test_insert_overwrite_advances_glue_iceberg_metadata_location(
+    glue_spark: SparkSession,
+    moto_endpoint: str,
+    tmp_path: Path,
+) -> None:
+    database = "glue_iceberg_overwrite_db"
+    table = "overwrite_t"
+    table_fqn = f"{database}.{table}"
+    location = (tmp_path / "overwrite_t").as_uri()
+
+    glue_spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
+    try:
+        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        glue_spark.sql(
+            f"""
+            CREATE TABLE {table_fqn} (
+              id INT,
+              name STRING
+            )
+            USING ICEBERG
+            LOCATION '{location}'
+            """
+        )
+        created_location = _metadata_location(moto_endpoint, database, table)
+        _assert_uuid_metadata_location(created_location, 0)
+
+        glue_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'old'), (2, 'old')")
+        before_overwrite_location = _metadata_location(moto_endpoint, database, table)
+        _assert_uuid_metadata_location(before_overwrite_location, 1)
+
+        glue_spark.sql(f"INSERT OVERWRITE TABLE {table_fqn} VALUES (3, 'new'), (4, 'new')")
+        after_overwrite_location = _metadata_location(moto_endpoint, database, table)
+        assert after_overwrite_location != before_overwrite_location
+        assert after_overwrite_location.startswith(location)
+        _assert_uuid_metadata_location(after_overwrite_location, 2)
+        after_metadata = _load_metadata_json(after_overwrite_location)
+        assert [entry["metadata-file"] for entry in after_metadata["metadata-log"]] == [
+            created_location,
+            before_overwrite_location,
+        ]
+        assert after_metadata["snapshots"][-1]["summary"]["operation"] == "overwrite"
+
+        rows = glue_spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
+        assert [(row.id, row.name) for row in rows] == [(3, "new"), (4, "new")]
+    finally:
+        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        glue_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+
+
+def test_create_table_validation_runs_before_glue_iceberg_metadata_materialization(
+    glue_spark: SparkSession,
+    tmp_path: Path,
+) -> None:
+    database = "glue_iceberg_rejected_create_db"
+    table = "bucket_t"
+    table_fqn = f"{database}.{table}"
+    table_path = tmp_path / table
+
+    glue_spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
+    try:
+        with pytest.raises(Exception, match="BUCKET BY"):
+            glue_spark.sql(
+                f"""
+                CREATE TABLE {table_fqn} (
+                  id INT,
+                  name STRING
+                )
+                USING ICEBERG
+                LOCATION '{table_path.as_uri()}'
+                CLUSTERED BY (id) INTO 4 BUCKETS
+                """
+            )
+
+        assert not (table_path / "metadata").exists()
     finally:
         glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
         glue_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
@@ -171,7 +336,9 @@ def test_sail_reads_and_appends_glue_iceberg_table_with_jvm_style_marker(
         glue_spark.sql(f"INSERT INTO {table_fqn} VALUES (2, 'b')")
         second_location = _metadata_location(moto_endpoint, database, table)
         assert second_location != first_location
-        assert not _metadata_filename(second_location).startswith("v")
+        _assert_uuid_metadata_location(second_location)
+        second_metadata = _load_metadata_json(second_location)
+        assert second_metadata["metadata-log"][-1]["metadata-file"] == first_location
 
         rows = glue_spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
         assert [(row.id, row.name) for row in rows] == [(1, "a"), (2, "b")]
@@ -206,7 +373,7 @@ def test_glue_rejects_stale_iceberg_metadata_location_update(
         glue_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a')")
         current_location = _metadata_location(moto_endpoint, database, table)
 
-        with pytest.raises(Exception, match="base metadata location"):
+        with pytest.raises(Exception, match="catalog-managed Iceberg tables"):
             glue_spark.sql(
                 f"""
                 ALTER TABLE {table_fqn}
