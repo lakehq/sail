@@ -116,9 +116,10 @@ pub(crate) async fn create_iceberg_table(
                         table.to_string(),
                     ))
                 }
-            } else if provider.has_custom_endpoint()
-                || should_fallback_to_table_input(&service_err.to_string())
-            {
+            } else if should_fallback_to_table_input(
+                provider.has_custom_endpoint(),
+                &service_err.to_string(),
+            ) {
                 create_iceberg_table_via_table_input(provider, client, database, table, options)
                     .await
             } else {
@@ -224,7 +225,10 @@ async fn create_iceberg_table_via_table_input(
     }
 }
 
-fn should_fallback_to_table_input(error: &str) -> bool {
+fn should_fallback_to_table_input(has_custom_endpoint: bool, error: &str) -> bool {
+    if !has_custom_endpoint {
+        return false;
+    }
     let error = error.to_ascii_lowercase();
     error.contains("opentableformat")
         || error.contains("open_table_format")
@@ -402,5 +406,38 @@ fn partition_transform_to_string(field: &CatalogPartitionField) -> (String, Stri
         Some(PartitionTransform::Truncate(w)) => {
             (format!("truncate[{w}]"), format!("{}_trunc", field.column))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn real_glue_open_table_format_errors_do_not_fallback() {
+        assert!(
+            !should_fallback_to_table_input(false, "OpenTableFormatInput is not supported"),
+            "real AWS Glue OpenTableFormat failures must not use generic TableInput fallback"
+        );
+    }
+
+    #[test]
+    fn custom_endpoint_known_open_table_format_errors_fallback() {
+        assert!(should_fallback_to_table_input(
+            true,
+            "OpenTableFormatInput is not implemented"
+        ));
+        assert!(should_fallback_to_table_input(
+            true,
+            "unknown parameter: open_table_format_input"
+        ));
+    }
+
+    #[test]
+    fn custom_endpoint_unrelated_errors_do_not_fallback() {
+        assert!(!should_fallback_to_table_input(
+            true,
+            "AccessDeniedException: not authorized to create table"
+        ));
     }
 }
