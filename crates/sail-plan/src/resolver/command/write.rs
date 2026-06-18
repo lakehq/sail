@@ -120,6 +120,7 @@ pub(super) struct WritePlanBuilder {
     partition_by: Vec<CatalogPartitionField>,
     bucket_by: Option<spec::SaveBucketBy>,
     sort_by: Vec<spec::SortOrder>,
+    write_sort_by: Vec<Sort>,
     cluster_by: Vec<spec::ObjectName>,
     options: Vec<Vec<(String, String)>>,
     table_properties: Vec<(String, String)>,
@@ -136,6 +137,7 @@ impl WritePlanBuilder {
             partition_by: vec![],
             bucket_by: None,
             sort_by: vec![],
+            write_sort_by: vec![],
             cluster_by: vec![],
             options: vec![],
             table_properties: vec![],
@@ -177,6 +179,11 @@ impl WritePlanBuilder {
         self
     }
 
+    pub fn with_write_sort_by(mut self, write_sort_by: Vec<Sort>) -> Self {
+        self.write_sort_by = write_sort_by;
+        self
+    }
+
     pub fn with_cluster_by(mut self, cluster_by: Vec<spec::ObjectName>) -> Self {
         self.cluster_by = cluster_by;
         self
@@ -215,6 +222,7 @@ impl PlanResolver<'_> {
             partition_by,
             bucket_by,
             sort_by,
+            write_sort_by,
             cluster_by,
             options,
             table_properties,
@@ -231,15 +239,20 @@ impl PlanResolver<'_> {
             return Err(PlanError::todo("CLUSTER BY for write"));
         }
         let input_schema = input.schema().inner().clone();
+        let resolved_sort_by = self
+            .resolve_sort_orders(sort_by.clone(), true, input.schema(), state)
+            .await?;
         let mut write_format = format.unwrap_or_default();
         let mut sink_info = SinkInfo {
             input: input.clone(),
             // The mode will be set later so the value here is just a placeholder.
             mode: SinkMode::ErrorIfExists,
             partition_by: partition_by.clone(),
-            sort_order: self
-                .resolve_sort_orders(sort_by.clone(), true, input.schema(), state)
-                .await?,
+            sort_order: if resolved_sort_by.is_empty() {
+                write_sort_by
+            } else {
+                resolved_sort_by
+            },
             bucket_by: self.resolve_write_bucket_by(bucket_by.clone())?,
             options: options
                 .into_iter()
