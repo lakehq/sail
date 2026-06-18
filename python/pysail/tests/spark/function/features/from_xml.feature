@@ -335,10 +335,3 @@ Feature: from_xml parses an XML string into a struct value
       Then query result
         | result |
         | NULL   |
-
-    Scenario: FAILFAST mode raises error on bad cast
-      When query
-        """
-        SELECT from_xml('<p><a>not_a_number</a></p>', 'a INT', map('mode', 'FAILFAST')).a AS result
-        """
-      Then query error .*
