@@ -149,6 +149,16 @@ pub fn is_variant_arrow_field(field: &Field) -> bool {
     field.extension_type_name() == Some(VariantType::NAME)
 }
 
+pub fn with_variant_extension_if_marked_storage(field: Field) -> Field {
+    if is_marked_variant_storage_type(field.data_type())
+        && field.extension_type_name() != Some(VariantType::NAME)
+    {
+        field.with_extension_type(VariantType)
+    } else {
+        field
+    }
+}
+
 pub fn is_variant_storage_field(field: &Field) -> bool {
     let has_variant_extension = field.extension_type_name() == Some(VariantType::NAME)
         && field.try_extension_type::<VariantType>().is_ok();
@@ -199,6 +209,10 @@ pub fn is_variant_storage_type(data_type: &DataType) -> bool {
         .iter()
         .any(|field| field.name() == VARIANT_TYPED_VALUE_FIELD_NAME);
     has_metadata && (has_value || has_typed_value)
+}
+
+pub fn variant_storage_types_equivalent(left: &DataType, right: &DataType) -> bool {
+    is_variant_storage_type(left) && is_variant_storage_type(right)
 }
 
 pub fn is_shredded_variant_storage_type(data_type: &DataType) -> bool {

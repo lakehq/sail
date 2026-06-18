@@ -29,14 +29,14 @@ use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::{DataFusionError, Result};
 use object_store::ObjectStore;
 use sail_catalog::manager::CatalogManager;
-use sail_catalog::provider::GetTableCommitsOptions;
 use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
 };
-use sail_common_datafusion::catalog::TableColumnStatus;
+use sail_common_datafusion::catalog::{LakehouseExecutionContext, TableColumnStatus};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
 
+use crate::catalog::coordinator::DeltaCatalogCommitCoordinator;
 use crate::catalog_managed::{
     catalog_managed_delta_table, metadata_with_catalog_managed, protocol_with_catalog_managed,
     CatalogManagedDeltaTable,
@@ -271,10 +271,10 @@ pub async fn create_delta_source(
     table_url: Url,
     schema: Option<Schema>,
     options: DeltaReadOptions,
-    catalog_table: Option<Vec<String>>,
+    lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> Result<Arc<dyn datafusion::logical_expr::TableSource>> {
     let (snapshot, log_store, scan_config) =
-        load_delta_read_state(ctx, table_url, schema, options, false, catalog_table).await?;
+        load_delta_read_state(ctx, table_url, schema, options, false, lakehouse_table).await?;
 
     Ok(Arc::new(DeltaTableSource::try_new(
         snapshot,
@@ -289,10 +289,10 @@ pub async fn infer_delta_logical_schema(
     table_url: Url,
     schema: Option<Schema>,
     options: DeltaReadOptions,
-    catalog_table: Option<Vec<String>>,
+    lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> Result<SchemaRef> {
     let (schema, _) =
-        infer_delta_logical_metadata(ctx, table_url, schema, options, catalog_table).await?;
+        infer_delta_logical_metadata(ctx, table_url, schema, options, lakehouse_table).await?;
     Ok(schema)
 }
 
@@ -302,10 +302,10 @@ pub async fn infer_delta_logical_metadata(
     table_url: Url,
     schema: Option<Schema>,
     options: DeltaReadOptions,
-    catalog_table: Option<Vec<String>>,
+    lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> Result<(SchemaRef, Vec<(String, String)>)> {
     let (snapshot, _log_store, scan_config) =
-        load_delta_read_state(ctx, table_url, schema, options, true, catalog_table).await?;
+        load_delta_read_state(ctx, table_url, schema, options, true, lakehouse_table).await?;
 
     let schema = df_logical_schema(
         snapshot.as_ref(),
@@ -517,7 +517,7 @@ where
 
 async fn load_catalog_managed_commits<C>(
     ctx: &C,
-    catalog_table: &[String],
+    lakehouse_table: &LakehouseExecutionContext,
     table_url: &Url,
     version_as_of: Option<i64>,
 ) -> Result<CatalogManagedCommitSet>
@@ -531,23 +531,20 @@ where
         });
     }
 
-    let manager = ctx.extension::<CatalogManager>()?;
+    let catalog_table = lakehouse_table.catalog_table();
+    let coordinator = DeltaCatalogCommitCoordinator::new(ctx, catalog_table);
     let mut start_version = 1;
     let mut commits = Vec::new();
 
     let latest_table_version = loop {
-        let response = manager
-            .get_table_commits(
-                catalog_table,
-                GetTableCommitsOptions {
-                    format: "delta".to_string(),
-                    table_uri: table_url.to_string(),
-                    start_version,
-                    end_version: version_as_of,
-                },
+        let response = coordinator
+            .get_ratified_commits(
+                lakehouse_table,
+                table_url.to_string(),
+                start_version,
+                version_as_of,
             )
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            .await?;
 
         let latest_table_version = response.latest_table_version;
         if let Some(version) = version_as_of {
@@ -596,7 +593,7 @@ where
 
 pub(crate) async fn load_catalog_managed_commits_for_snapshot<C>(
     ctx: &C,
-    catalog_table: &[String],
+    lakehouse_table: &LakehouseExecutionContext,
     table_url: &Url,
     log_store: LogStoreRef,
     version_as_of: Option<i64>,
@@ -604,6 +601,24 @@ pub(crate) async fn load_catalog_managed_commits_for_snapshot<C>(
 where
     C: SessionExtensionAccessor + ?Sized,
 {
+    let catalog_table = lakehouse_table.catalog_table();
+    if load_catalog_managed_delta_bootstrap_info(ctx, catalog_table)
+        .await?
+        .is_some()
+    {
+        match log_store.get_latest_version(-1).await {
+            Ok(_) => {}
+            Err(DeltaError::MissingVersion) => {
+                bootstrap_catalog_managed_delta_table(ctx, catalog_table, table_url, log_store)
+                    .await?;
+            }
+            Err(err) => return Err(DataFusionError::from(err)),
+        }
+        return Ok(Some(
+            load_catalog_managed_commits(ctx, lakehouse_table, table_url, version_as_of).await?,
+        ));
+    }
+
     let mut detector = DeltaTable::new(
         log_store.clone(),
         DeltaSnapshotConfig {
@@ -615,7 +630,7 @@ where
         Ok(()) => {
             if protocol_is_catalog_managed(detector.snapshot()?.protocol()) {
                 Ok(Some(
-                    load_catalog_managed_commits(ctx, catalog_table, table_url, version_as_of)
+                    load_catalog_managed_commits(ctx, lakehouse_table, table_url, version_as_of)
                         .await?,
                 ))
             } else {
@@ -627,7 +642,7 @@ where
                 .await?
             {
                 Ok(Some(
-                    load_catalog_managed_commits(ctx, catalog_table, table_url, version_as_of)
+                    load_catalog_managed_commits(ctx, lakehouse_table, table_url, version_as_of)
                         .await?,
                 ))
             } else {
@@ -644,7 +659,7 @@ async fn load_delta_read_state(
     schema: Option<Schema>,
     options: DeltaReadOptions,
     metadata_only: bool,
-    catalog_table: Option<Vec<String>>,
+    lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> Result<(Arc<DeltaSnapshot>, LogStoreRef, DeltaScanConfig)> {
     let url = ListingTableUrl::try_new(table_url.clone(), None)?;
     let object_store = ctx.runtime_env().object_store(&url)?;
@@ -652,11 +667,11 @@ async fn load_delta_read_state(
     let log_store =
         create_logstore_with_object_store(object_store, table_url.clone(), storage_config)?;
 
-    let catalog_managed_commits = match catalog_table.as_deref() {
-        Some(catalog_table) => {
+    let catalog_managed_commits = match lakehouse_table.as_ref() {
+        Some(lakehouse_table) => {
             load_catalog_managed_commits_for_snapshot(
                 &ctx,
-                catalog_table,
+                lakehouse_table,
                 &table_url,
                 log_store.clone(),
                 options.version_as_of,

@@ -12,7 +12,9 @@ data:
   last-sequence-number: 1
   last-updated-ms: <timestamp>
   location: file://<root>/iceberg_variant_schema_evolution/
-  metadata-log: []
+  metadata-log:
+  - metadata-file: <tmp>/iceberg_variant_schema_evolution/metadata/v1.metadata.json
+    timestamp-ms: <timestamp>
   partition-specs:
   - fields: []
     spec-id: 0
@@ -25,7 +27,7 @@ data:
   - fields:
     - id: 1
       name: id
-      required: true
+      required: false
       type: int
     schema-id: 0
     type: struct
@@ -60,6 +62,8 @@ data:
   metadata-log:
   - metadata-file: <tmp>/iceberg_variant_schema_evolution/metadata/v1.metadata.json
     timestamp-ms: <timestamp>
+  - metadata-file: <tmp>/iceberg_variant_schema_evolution/metadata/v2.metadata.json
+    timestamp-ms: <timestamp>
   next-row-id: 2
   partition-specs:
   - fields: []
@@ -73,14 +77,14 @@ data:
   - fields:
     - id: 1
       name: id
-      required: true
+      required: false
       type: int
     schema-id: 0
     type: struct
   - fields:
     - id: 1
       name: id
-      required: true
+      required: false
       type: int
     - id: 2
       name: payload
@@ -164,7 +168,9 @@ data:
   last-sequence-number: 1
   last-updated-ms: <timestamp>
   location: file://<root>/iceberg_variant/
-  metadata-log: []
+  metadata-log:
+  - metadata-file: <tmp>/iceberg_variant/metadata/v1.metadata.json
+    timestamp-ms: <timestamp>
   next-row-id: 1
   partition-specs:
   - fields: []
@@ -178,11 +184,11 @@ data:
   - fields:
     - id: 1
       name: id
-      required: true
+      required: false
       type: int
     - id: 2
       name: payload
-      required: true
+      required: false
       type: variant
     schema-id: 0
     type: struct

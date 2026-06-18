@@ -610,7 +610,7 @@ message DeltaWriterExecNode {
   PhysicalSinkMode sink_mode = 7;
   map<string, string> metadata_configuration = 8;
   DeltaWriteContext write_context = 9;
-  repeated string catalog_table = 10;
+  string lakehouse_table_json = 10;
 }
 
 message DeltaCommitExecNode {
@@ -622,7 +622,7 @@ message DeltaCommitExecNode {
   PhysicalSinkMode sink_mode = 6;
   optional string user_metadata = 7;
   DeltaCommitContext commit_context = 8;
-  repeated string catalog_table = 9;
+  string lakehouse_table_json = 9;
 }
 
 message DeltaScanByAddsExecNode {
@@ -636,7 +636,7 @@ message DeltaScanByAddsExecNode {
   optional bytes pushdown_filter = 8;
   int64 version = 9;
   optional bytes statistics = 10;
-  repeated string catalog_table = 11;
+  string lakehouse_table_json = 11;
   // TODO: Consider snapshot hints (partition columns, kernel schema) to avoid worker log reads.
 }
 
@@ -800,11 +800,13 @@ message IcebergWriterExecNode {
   bool table_exists = 5;
   string options = 6;
   bytes logical_input_schema = 7;
+  string lakehouse_table_json = 8;
 }
 
 message IcebergCommitExecNode {
   bytes input = 1;
   string table_url = 2;
+  string lakehouse_table_json = 3;
 }
 
 message IcebergManifestScanExecNode {

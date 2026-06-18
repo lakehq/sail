@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, date, datetime
 
 import pandas as pd
@@ -72,6 +73,150 @@ class TestDeltaIO:
             )
         finally:
             spark.sql("DROP TABLE IF EXISTS my_delta")
+
+    def test_delta_io_create_table_materializes_empty_log(self, spark, tmp_path):
+        delta_path = tmp_path / "delta_empty_table"
+        table_name = "delta_empty_materialized_test"
+
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+        try:
+            spark.sql(
+                f"""
+                CREATE TABLE {table_name} (
+                  id INT,
+                  name STRING
+                )
+                USING DELTA
+                LOCATION '{escape_sql_string_literal(str(delta_path))}'
+                """
+            )
+
+            commit0 = delta_path / "_delta_log" / "00000000000000000000.json"
+            assert commit0.exists()
+            actions = [json.loads(line) for line in commit0.read_text(encoding="utf-8").splitlines()]
+            assert any("protocol" in action for action in actions)
+            assert any("metaData" in action for action in actions)
+            assert not any("add" in action for action in actions)
+            assert spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect() == []  # noqa: S608
+
+            spark.sql(f"INSERT INTO {table_name} VALUES (1, 'one')")  # noqa: S608
+            commit1 = delta_path / "_delta_log" / "00000000000000000001.json"
+            assert commit1.exists()
+            assert spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect() == [  # noqa: S608
+                Row(id=1, name="one")
+            ]
+        finally:
+            spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+    def test_delta_io_create_table_if_not_exists_does_not_materialize_new_location(self, spark, tmp_path):
+        delta_path = tmp_path / "delta_if_not_exists_table"
+        alternate_path = tmp_path / "delta_if_not_exists_alternate"
+        table_name = "delta_if_not_exists_materialized_test"
+
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+        try:
+            spark.sql(
+                f"""
+                CREATE TABLE {table_name} (
+                  id INT,
+                  name STRING
+                )
+                USING DELTA
+                LOCATION '{escape_sql_string_literal(str(delta_path))}'
+                """
+            )
+            assert (delta_path / "_delta_log" / "00000000000000000000.json").exists()
+
+            spark.sql(
+                f"""
+                CREATE TABLE IF NOT EXISTS {table_name} (
+                  id INT,
+                  name STRING
+                )
+                USING DELTA
+                LOCATION '{escape_sql_string_literal(str(alternate_path))}'
+                """
+            )
+
+            assert not (alternate_path / "_delta_log").exists()
+        finally:
+            spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+    def test_delta_io_create_table_rejects_mismatched_existing_log_schema(self, spark, tmp_path):
+        delta_path = tmp_path / "delta_existing_schema"
+        table_name = "delta_existing_schema_mismatch_test"
+
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+        spark.createDataFrame([Row(id=1, name="one")]).write.format("delta").save(str(delta_path))
+        try:
+            with pytest.raises(Exception, match="different schema"):
+                spark.sql(
+                    f"""
+                    CREATE TABLE {table_name} (
+                      id STRING,
+                      name STRING
+                    )
+                    USING DELTA
+                    LOCATION '{escape_sql_string_literal(str(delta_path))}'
+                    """
+                )
+        finally:
+            spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+    def test_delta_io_create_table_rejects_mismatched_existing_log_nullability(self, spark, tmp_path):
+        delta_path = tmp_path / "delta_existing_nullability"
+        table_name = "delta_existing_nullability_mismatch_test"
+
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+        spark.createDataFrame([Row(id=1, name="one")]).write.format("delta").save(str(delta_path))
+        try:
+            with pytest.raises(Exception, match=r"different schema.*nullable"):
+                spark.sql(
+                    f"""
+                    CREATE TABLE {table_name} (
+                      id BIGINT NOT NULL,
+                      name STRING
+                    )
+                    USING DELTA
+                    LOCATION '{escape_sql_string_literal(str(delta_path))}'
+                    """
+                )
+        finally:
+            spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+    def test_delta_io_create_or_replace_existing_table_reaches_catalog_provider(self, spark, tmp_path):
+        delta_path = tmp_path / "delta_replace_existing"
+        table_name = "delta_create_or_replace_existing_test"
+
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+        try:
+            spark.sql(
+                f"""
+                CREATE TABLE {table_name} (
+                  id BIGINT,
+                  name STRING
+                )
+                USING DELTA
+                LOCATION '{escape_sql_string_literal(str(delta_path))}'
+                """
+            )
+            spark.sql(f"INSERT INTO {table_name} VALUES (1, 'one')")  # noqa: S608
+
+            spark.sql(
+                f"""
+                CREATE OR REPLACE TABLE {table_name} (
+                  id BIGINT,
+                  name STRING
+                )
+                USING DELTA
+                LOCATION '{escape_sql_string_literal(str(delta_path))}'
+                """
+            )
+
+            rows = spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect()  # noqa: S608
+            assert rows == [Row(id=1, name="one")]
+        finally:
+            spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
     def test_delta_io_append_mode(self, spark, delta_test_data, tmp_path):
         """Test Delta Lake append mode"""

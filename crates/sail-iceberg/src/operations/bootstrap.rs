@@ -15,6 +15,7 @@
 /// This module provides utilities for bootstrapping Iceberg tables when:
 /// 1. The table metadata file doesn't exist (new table)
 /// 2. The table metadata exists but has no current snapshot (e.g., after CREATE TABLE)
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -39,8 +40,6 @@ use crate::utils::WritePathMode;
 /// Strategy for persisting metadata during bootstrap
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PersistStrategy {
-    /// Overwrite the existing metadata file in place (for syncing with external catalogs)
-    InPlace,
     /// Generate and write a new version of the metadata file (standard Iceberg approach)
     NewVersion,
     /// Generate and write a new UUID-style metadata file for catalog-backed tables.
@@ -306,11 +305,89 @@ pub async fn bootstrap_new_table_with_style(
     })
 }
 
+pub async fn bootstrap_empty_table_metadata(
+    table_url: &Url,
+    store_ctx: &StoreContext,
+    iceberg_schema: IcebergSchema,
+    partition_spec: PartitionSpec,
+    table_properties: &[(String, String)],
+    metadata_style: NewTableMetadataStyle,
+) -> Result<BootstrapResult> {
+    let (format_version, table_properties) =
+        crate::properties::metadata_properties_from_table_properties(table_properties)?;
+    let format_version = format_version.max(format_version_for_schema(&iceberg_schema));
+    let commit_timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
+
+    let mut table_meta = TableMetadata {
+        format_version,
+        table_uuid: None,
+        location: table_url.to_string(),
+        last_sequence_number: 0,
+        last_updated_ms: commit_timestamp_ms,
+        last_column_id: iceberg_schema.highest_field_id(),
+        schemas: vec![iceberg_schema.clone()],
+        current_schema_id: iceberg_schema.schema_id(),
+        partition_specs: vec![partition_spec.clone()],
+        default_spec_id: partition_spec.spec_id(),
+        last_partition_id: partition_spec.highest_field_id().unwrap_or(0),
+        properties: table_properties,
+        current_snapshot_id: Some(-1),
+        next_row_id: (format_version >= FormatVersion::V3).then_some(0),
+        encryption_keys: vec![],
+        snapshots: vec![],
+        snapshot_log: vec![],
+        metadata_log: vec![],
+        sort_orders: vec![],
+        default_sort_order_id: None,
+        refs: HashMap::new(),
+        statistics: vec![],
+        partition_statistics: vec![],
+    };
+    table_meta.ensure_required_format_fields();
+
+    let new_meta_json = table_meta
+        .to_json()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let file_extension = metadata_file_extension_from_properties(&table_meta.properties)?;
+    let (new_meta_rel, hint) = match metadata_style {
+        NewTableMetadataStyle::Hadoop => (format!("metadata/v1{file_extension}"), "1".to_string()),
+        NewTableMetadataStyle::Uuid => {
+            let file = format!("00000-{}{}", uuid::Uuid::new_v4(), file_extension);
+            (format!("metadata/{file}"), file)
+        }
+    };
+    let new_meta_bytes = encode_metadata_file(&new_meta_rel, &new_meta_json)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let meta_path = object_store::path::Path::from(new_meta_rel.as_str());
+    store_ctx
+        .prefixed
+        .put(
+            &meta_path,
+            object_store::PutPayload::from(Bytes::from(new_meta_bytes)),
+        )
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    let hint_path = object_store::path::Path::from("metadata/version-hint.text");
+    store_ctx
+        .prefixed
+        .put(
+            &hint_path,
+            object_store::PutPayload::from(Bytes::from(hint.into_bytes())),
+        )
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    Ok(BootstrapResult {
+        table_metadata: table_meta,
+        metadata_file: new_meta_rel,
+    })
+}
+
 /// Bootstrap the first snapshot for an existing table that has no current snapshot
 ///
 /// This is used when a table was created via CREATE TABLE but has no data yet.
 /// The persist_strategy determines how the metadata is written:
-/// - InPlace: Overwrites the existing metadata file (for external catalog sync)
 /// - NewVersion: Creates a new metadata version (standard Iceberg)
 /// - NewUuidVersion: Creates a new UUID-style metadata version for catalog-backed tables
 pub async fn bootstrap_first_snapshot(
@@ -319,6 +396,7 @@ pub async fn bootstrap_first_snapshot(
     commit_info: &IcebergCommitInfo,
     mut table_meta: TableMetadata,
     latest_meta_path: &str,
+    previous_metadata_file: Option<&str>,
     persist_strategy: PersistStrategy,
 ) -> Result<BootstrapResult> {
     let schema_iceberg = table_meta
@@ -350,6 +428,14 @@ pub async fn bootstrap_first_snapshot(
         timestamp_ms: commit_timestamp_ms,
         snapshot_id: snapshot.snapshot_id(),
     });
+    table_meta
+        .metadata_log
+        .push(crate::spec::metadata::table_metadata::MetadataLog {
+            timestamp_ms: commit_timestamp_ms,
+            metadata_file: previous_metadata_file
+                .unwrap_or(latest_meta_path)
+                .to_string(),
+        });
     table_meta.last_sequence_number = 1;
     table_meta.last_updated_ms = commit_timestamp_ms;
     if let Some(added_rows) = snapshot.added_rows {
@@ -380,51 +466,6 @@ pub async fn bootstrap_first_snapshot(
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let metadata_file = match persist_strategy {
-        PersistStrategy::InPlace => {
-            // Overwrite the existing metadata file in place
-            let rel_name = if latest_meta_path.starts_with(&table_url.to_string()) {
-                latest_meta_path
-                    .strip_prefix(&table_url.to_string())
-                    .unwrap_or("metadata/00000.metadata.json")
-                    .to_string()
-            } else if let Some(fname) = latest_meta_path.rsplit('/').next() {
-                format!("metadata/{}", fname)
-            } else {
-                "metadata/00000.metadata.json".to_string()
-            };
-            let new_meta_bytes = encode_metadata_file(&rel_name, &new_meta_json)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let rel_path = object_store::path::Path::from(rel_name.as_str());
-            store_ctx
-                .prefixed
-                .put(
-                    &rel_path,
-                    object_store::PutPayload::from(Bytes::from(new_meta_bytes)),
-                )
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-            // Extract metadata filename for version-hint
-            let metadata_filename = if let Some(fname) = rel_name.rsplit('/').next() {
-                fname.to_string()
-            } else {
-                rel_name.clone()
-            };
-
-            // Write version-hint
-            let hint_path = object_store::path::Path::from("metadata/version-hint.text");
-            store_ctx
-                .prefixed
-                .put(
-                    &hint_path,
-                    object_store::PutPayload::from(Bytes::from(
-                        metadata_filename.as_bytes().to_vec(),
-                    )),
-                )
-                .await
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            rel_name
-        }
         PersistStrategy::NewVersion | PersistStrategy::NewUuidVersion => {
             // Create a new metadata version
             let version = metadata_file_version_from_path(latest_meta_path)
@@ -440,7 +481,6 @@ pub async fn bootstrap_first_snapshot(
                     let file = format!("{version:05}-{}{}", uuid::Uuid::new_v4(), file_extension);
                     (format!("metadata/{file}"), file)
                 }
-                PersistStrategy::InPlace => unreachable!(),
             };
             let new_meta_bytes = encode_metadata_file(&new_meta_rel, &new_meta_json)
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;

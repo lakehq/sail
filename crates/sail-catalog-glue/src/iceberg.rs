@@ -234,49 +234,62 @@ fn should_fallback_to_table_input(error: &str) -> bool {
 }
 
 /// Validates CreateTableOptions for Iceberg tables.
-fn validate_iceberg_options(options: CreateTableOptions) -> CatalogResult<ValidatedIcebergOptions> {
-    let CreateTableOptions {
-        columns,
-        comment,
-        constraints,
-        location,
-        format: _,
-        partition_by,
-        sort_by,
-        bucket_by,
-        if_not_exists,
-        replace,
-        properties,
-        is_external,
-        is_write_precondition: _,
-    } = options;
-
-    if replace {
+pub(crate) fn validate_iceberg_create_table_options(
+    options: &CreateTableOptions,
+) -> CatalogResult<()> {
+    if options.replace {
         return Err(CatalogError::NotSupported(
             "AWS Glue catalog does not support REPLACE".to_string(),
         ));
     }
-    if !constraints.is_empty() {
+    if !options.constraints.is_empty() {
         return Err(CatalogError::NotSupported(
             "AWS Glue catalog does not support CONSTRAINT".to_string(),
         ));
     }
-    if !sort_by.is_empty() {
+    if !options.sort_by.is_empty() {
         return Err(CatalogError::NotSupported(
             "AWS Glue catalog does not support SORT BY".to_string(),
         ));
     }
-    if bucket_by.is_some() {
+    if options.bucket_by.is_some() {
         return Err(CatalogError::NotSupported(
             "AWS Glue catalog does not support BUCKET BY".to_string(),
         ));
     }
 
-    if !is_external {
+    if !options.is_external {
         return Err(CatalogError::InvalidArgument(
             "Location is required for Iceberg tables".to_string(),
         ));
     }
+
+    if options.location.is_none() {
+        return Err(CatalogError::InvalidArgument(
+            "Location is required for Iceberg tables".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_iceberg_options(options: CreateTableOptions) -> CatalogResult<ValidatedIcebergOptions> {
+    validate_iceberg_create_table_options(&options)?;
+    let CreateTableOptions {
+        columns,
+        comment,
+        constraints: _,
+        location,
+        format: _,
+        partition_by,
+        sort_by: _,
+        bucket_by: _,
+        if_not_exists,
+        replace: _,
+        properties,
+        is_external: _,
+        is_write_precondition: _,
+    } = options;
 
     let location = location.ok_or_else(|| {
         CatalogError::InvalidArgument("Location is required for Iceberg tables".to_string())

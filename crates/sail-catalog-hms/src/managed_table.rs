@@ -63,6 +63,8 @@ pub(crate) async fn alter_table_with_lock(
 ) -> CatalogResult<()> {
     let (_, client) = provider.current_client().await?;
     let lock_id = acquire_table_lock(&client, db_name, table_name).await?;
+    // TODO: Distinguish HMS lock/heartbeat/alter failures that make commit
+    // state unknown from ordinary conflicts or external errors.
     let result = async {
         let mut hms_table = HmsCatalogProvider::get_table_with_client(
             &client,

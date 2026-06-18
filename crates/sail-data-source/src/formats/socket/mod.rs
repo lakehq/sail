@@ -36,7 +36,7 @@ impl TableFormat for SocketTableFormat {
     ) -> Result<Arc<dyn TableSource>> {
         let SourceInfo {
             paths: _,
-            catalog_table: _,
+            lakehouse_table: _,
             schema,
             constraints,
             partition_by,

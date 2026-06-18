@@ -4,7 +4,9 @@ use datafusion_common::{DFSchemaRef, ToDFSchema};
 use datafusion_expr::LogicalPlan;
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::{TableKind, TableStatus};
+use sail_common_datafusion::catalog::{
+    LakehouseExecutionContext, LakehouseOperation, TableKind, TableStatus,
+};
 use sail_common_datafusion::datasource::{
     DeleteInfo, OptionLayer, SourceInfo, TableFormatRegistry,
 };
@@ -68,6 +70,7 @@ impl PlanResolver<'_> {
             table_name,
             path: info.location,
             condition,
+            lakehouse_table: info.lakehouse_table,
             options: vec![OptionLayer::TablePropertyList {
                 items: info.properties,
             }],
@@ -108,12 +111,20 @@ impl PlanResolver<'_> {
 
         let location =
             location.ok_or_else(|| PlanError::unsupported("DELETE on tables without location"))?;
+        let lakehouse_table = self
+            .resolve_lakehouse_table_context(
+                table_name,
+                LakehouseOperation::Read,
+                Some(&format),
+                vec![],
+            )
+            .await?;
 
         let schema = if columns.is_empty() && format.eq_ignore_ascii_case("DELTA") {
             // Schema is not in catalog, try to infer from data source
             let source_info = SourceInfo {
                 paths: vec![location.clone()],
-                catalog_table: Some(table_name.to_vec()),
+                lakehouse_table: Some(lakehouse_table.clone()),
                 schema: None,
                 constraints: Default::default(),
                 partition_by: vec![],
@@ -140,6 +151,7 @@ impl PlanResolver<'_> {
             format,
             schema,
             properties,
+            lakehouse_table: Some(lakehouse_table.for_operation(LakehouseOperation::Write)),
         })
     }
 }
@@ -149,4 +161,5 @@ struct TableInfo {
     format: String,
     schema: DFSchemaRef,
     properties: Vec<(String, String)>,
+    lakehouse_table: Option<LakehouseExecutionContext>,
 }
