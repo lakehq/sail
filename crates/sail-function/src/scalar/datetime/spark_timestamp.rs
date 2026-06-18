@@ -211,16 +211,14 @@ impl ScalarUDFImpl for SparkTimestamp {
             ));
         }
         match &arg_types[0] {
-            DataType::Utf8
-            | DataType::LargeUtf8
-            | DataType::Utf8View
-            | DataType::Date32
-            | DataType::Timestamp(_, _)
-            | DataType::Null => {}
+            // String-only, matching the kernel (which parses strings) and the
+            // sibling parsers `SparkDate`/`SparkTime`. The planner casts/handles
+            // DATE/TIMESTAMP inputs directly, so they never reach this UDF.
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Null => {}
             other => {
                 return Err(unsupported_data_type_exec_err(
                     self.name(),
-                    "STRING, DATE, TIMESTAMP or NULL",
+                    "STRING or NULL",
                     other,
                 ));
             }

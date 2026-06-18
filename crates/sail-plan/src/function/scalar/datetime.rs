@@ -417,7 +417,15 @@ fn timestamp_with_try(
         let udf = ScalarUDF::from(SparkTimestamp::try_new(timezone, ansi_mode, is_try)?);
         Ok(udf.call(vec![cast(expr, DataType::Utf8), to_chrono_fmt(format)]))
     } else {
-        Err(PlanError::invalid("to_timestamp requires 1 or 2 arguments"))
+        let name = match (is_try, timestamp_ntz) {
+            (false, false) => "to_timestamp",
+            (true, false) => "try_to_timestamp",
+            (false, true) => "to_timestamp_ntz",
+            (true, true) => "try_to_timestamp_ntz",
+        };
+        Err(PlanError::invalid(format!(
+            "{name} requires 1 or 2 arguments"
+        )))
     }
 }
 
