@@ -359,6 +359,27 @@ fn effective_catalog_commit_end_version(
     )
 }
 
+#[cfg(test)]
+fn next_catalog_commit_start_version(
+    current_start_version: i64,
+    effective_end_version: i64,
+    versions: impl IntoIterator<Item = i64>,
+) -> DeltaResult<Option<i64>> {
+    let Some(page_max_version) = versions.into_iter().max() else {
+        return Ok(None);
+    };
+    if page_max_version < current_start_version {
+        return Err(DeltaTableError::generic(format!(
+            "Catalog-managed Delta commit page ended at version {page_max_version}, before requested start version {current_start_version}"
+        )));
+    }
+    if page_max_version >= effective_end_version {
+        Ok(None)
+    } else {
+        Ok(Some(page_max_version + 1))
+    }
+}
+
 fn is_missing_delta_log_error(error: &DeltaTableError) -> bool {
     matches!(
         error,

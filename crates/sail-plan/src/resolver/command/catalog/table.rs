@@ -37,6 +37,7 @@ impl PlanResolver<'_> {
             cluster_by,
             if_not_exists,
             replace,
+            replace_error_if_absent,
             options,
             properties,
         } = definition;
@@ -88,6 +89,7 @@ impl PlanResolver<'_> {
                 bucket_by,
                 if_not_exists,
                 replace,
+                replace_error_if_absent,
                 properties,
                 is_external,
                 is_write_precondition: false,
@@ -118,6 +120,7 @@ impl PlanResolver<'_> {
             cluster_by,
             if_not_exists,
             replace,
+            replace_error_if_absent,
             options,
             properties,
         } = definition;
@@ -187,7 +190,7 @@ impl PlanResolver<'_> {
         // Set write mode based on create-or-replace / if-not-exists semantics.
         let write_mode = if replace {
             WriteMode::Replace {
-                error_if_absent: false,
+                error_if_absent: replace_error_if_absent,
             }
         } else if if_not_exists {
             WriteMode::IgnoreIfExists

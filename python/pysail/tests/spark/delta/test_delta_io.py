@@ -252,6 +252,47 @@ class TestDeltaIO:
         finally:
             spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
+    def test_delta_io_replace_table_missing_errors_without_materializing_log(self, spark, tmp_path):
+        delta_path = tmp_path / "delta_replace_missing"
+        table_name = "delta_replace_missing_test"
+
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+        try:
+            with pytest.raises(Exception, match=r"(?i)(not found|does not exist|table_or_view_not_found)"):
+                spark.sql(
+                    f"""
+                    REPLACE TABLE {table_name} (
+                      id BIGINT
+                    )
+                    USING DELTA
+                    LOCATION '{escape_sql_string_literal(str(delta_path))}'
+                    """
+                )
+
+            assert not (delta_path / "_delta_log").exists()
+        finally:
+            spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+    def test_delta_io_replace_table_as_select_missing_errors_without_materializing_log(self, spark, tmp_path):
+        delta_path = tmp_path / "delta_replace_as_select_missing"
+        table_name = "delta_replace_as_select_missing_test"
+
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+        try:
+            with pytest.raises(Exception, match=r"(?i)(not found|does not exist|table_or_view_not_found)"):
+                spark.sql(
+                    f"""
+                    REPLACE TABLE {table_name}
+                    USING DELTA
+                    LOCATION '{escape_sql_string_literal(str(delta_path))}'
+                    AS SELECT 1 AS id
+                    """
+                )
+
+            assert not (delta_path / "_delta_log").exists()
+        finally:
+            spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
     def test_delta_io_append_mode(self, spark, delta_test_data, tmp_path):
         """Test Delta Lake append mode"""
         delta_path = tmp_path / "delta_table"

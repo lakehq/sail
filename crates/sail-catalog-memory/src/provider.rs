@@ -183,6 +183,7 @@ impl CatalogProvider for MemoryCatalogProvider {
             bucket_by,
             if_not_exists,
             replace,
+            replace_error_if_absent,
             properties,
             is_external,
             is_write_precondition: _,
@@ -202,6 +203,11 @@ impl CatalogProvider for MemoryCatalogProvider {
                     table.to_string(),
                 ));
             }
+        } else if replace && replace_error_if_absent {
+            return Err(CatalogError::NotFound(
+                CatalogObject::Table,
+                table.to_string(),
+            ));
         }
         let columns = columns
             .into_iter()

@@ -167,6 +167,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             let definition = TableDefinition {
                 external: external.is_some(),
                 or_replace: or_replace.is_some(),
+                replace_error_if_absent: false,
                 if_not_exists: if_not_exists.is_some(),
                 using: using.map(|(_, x)| x),
                 columns,
@@ -199,6 +200,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             let definition = TableDefinition {
                 external: external.is_some(),
                 or_replace: true,
+                replace_error_if_absent: true,
                 if_not_exists: false,
                 using: using.map(|(_, x)| x),
                 columns,
@@ -1216,6 +1218,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
 struct TableDefinition {
     external: bool,
     or_replace: bool,
+    replace_error_if_absent: bool,
     if_not_exists: bool,
     using: Option<Ident>,
     columns: Option<ColumnDefinitionList>,
@@ -1229,6 +1232,7 @@ fn from_ast_table_definition(
     let TableDefinition {
         external,
         or_replace,
+        replace_error_if_absent,
         if_not_exists,
         using,
         columns,
@@ -1338,6 +1342,7 @@ fn from_ast_table_definition(
         cluster_by,
         if_not_exists,
         replace: or_replace,
+        replace_error_if_absent,
         options,
         properties: properties.into_iter().flatten().collect(),
     };

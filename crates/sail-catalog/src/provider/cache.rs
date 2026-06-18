@@ -845,6 +845,7 @@ mod tests {
             bucket_by: None,
             if_not_exists: false,
             replace: false,
+            replace_error_if_absent: false,
             properties: vec![],
             is_external: false,
             is_write_precondition: false,

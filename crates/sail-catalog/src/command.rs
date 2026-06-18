@@ -669,6 +669,12 @@ async fn prepare_create_table_storage_metadata<C: SessionExtensionAccessor>(
             ));
         }
         Ok(_) => {}
+        Err(CatalogError::NotFound(_, _)) if options.replace && options.replace_error_if_absent => {
+            return Err(CatalogError::NotFound(
+                CatalogObject::Table,
+                table.join("."),
+            ));
+        }
         Err(CatalogError::NotFound(_, _)) => {}
         Err(err) => return Err(err),
     }

@@ -407,13 +407,11 @@ impl PlanResolver<'_> {
                         ));
                     }
                     let table_location = find_path_in_options(&sink_info.options);
-                    let (if_not_exists, replace) = if matches!(mode, WriteMode::Append { .. }) {
-                        (true, false)
-                    } else if matches!(mode, WriteMode::Replace { .. }) {
-                        (false, true)
-                    } else {
+                    let (if_not_exists, replace, replace_error_if_absent) = match &mode {
+                        WriteMode::Append { .. } => (true, false, false),
+                        WriteMode::Replace { error_if_absent } => (false, true, *error_if_absent),
                         // ErrorIfExists or IgnoreIfExists
-                        (false, false)
+                        _ => (false, false, false),
                     };
                     let columns = input
                         .schema()
@@ -470,6 +468,7 @@ impl PlanResolver<'_> {
                         bucket_by,
                         if_not_exists,
                         replace,
+                        replace_error_if_absent,
                         properties,
                         is_external: table_is_external || write_options_had_location,
                         is_write_precondition: true,

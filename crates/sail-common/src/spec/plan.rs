@@ -892,6 +892,7 @@ pub struct TableDefinition {
     pub cluster_by: Vec<ObjectName>,
     pub if_not_exists: bool,
     pub replace: bool,
+    pub replace_error_if_absent: bool,
     pub options: Vec<(String, String)>,
     pub properties: Vec<(String, String)>,
 }

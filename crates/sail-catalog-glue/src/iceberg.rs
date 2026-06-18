@@ -290,6 +290,7 @@ fn validate_iceberg_options(options: CreateTableOptions) -> CatalogResult<Valida
         bucket_by: _,
         if_not_exists,
         replace: _,
+        replace_error_if_absent: _,
         properties,
         is_external: _,
         is_write_precondition: _,

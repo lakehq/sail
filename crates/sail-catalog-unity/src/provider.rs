@@ -536,6 +536,7 @@ impl CatalogProvider for UnityCatalogProvider {
             bucket_by,
             if_not_exists,
             replace,
+            replace_error_if_absent: _,
             properties,
             is_external,
             is_write_precondition: _,

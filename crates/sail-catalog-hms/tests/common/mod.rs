@@ -123,6 +123,7 @@ pub fn simple_table_options_with_format(
         bucket_by: None,
         if_not_exists: false,
         replace: false,
+        replace_error_if_absent: false,
         properties: vec![],
         is_external: true,
         is_write_precondition: false,
