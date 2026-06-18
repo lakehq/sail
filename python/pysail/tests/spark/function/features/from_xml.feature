@@ -47,6 +47,15 @@ Feature: from_xml parses an XML string into a struct value
         | result |
         | 43     |
 
+    Scenario: Parse FLOAT field
+      When query
+        """
+        SELECT from_xml('<p><x>3.5</x></p>', 'x FLOAT').x AS result
+        """
+      Then query result
+        | result |
+        | 3.5    |    
+
   Rule: Root tag is ignored
 
     Scenario: Root tag name does not affect parsing
@@ -326,3 +335,10 @@ Feature: from_xml parses an XML string into a struct value
       Then query result
         | result |
         | NULL   |
+
+    Scenario: FAILFAST mode raises error on bad cast
+      When query
+        """
+        SELECT from_xml('<p><a>not_a_number</a></p>', 'a INT', map('mode', 'FAILFAST')).a AS result
+        """
+      Then query error .*
