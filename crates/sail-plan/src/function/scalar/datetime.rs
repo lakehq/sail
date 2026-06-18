@@ -264,7 +264,7 @@ fn to_chrono_fmt(format: Expr) -> Expr {
 fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if input.arguments.len() == 1 {
         // If format is not supplied, the function is a synonym for cast(expr AS DATE).
-        crate::function::scalar::conversion::cast_to_date(input)
+        crate::function::scalar::conversion::cast_to_date(input, false)
     } else if input.arguments.len() == 2 {
         let (expr, format) = input.arguments.two()?;
         let expr_type = expr.get_type(input.function_context.schema);
@@ -285,8 +285,7 @@ fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
 
 fn try_to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if input.arguments.len() == 1 {
-        let expr = input.arguments.one()?;
-        Ok(try_cast(expr, DataType::Date32))
+        crate::function::scalar::conversion::cast_to_date(input, true)
     } else if input.arguments.len() == 2 {
         let (expr, format) = input.arguments.two()?;
         if is_null_literal(&expr) || is_null_literal(&format) {
