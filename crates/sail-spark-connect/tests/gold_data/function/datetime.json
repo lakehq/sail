@@ -3142,7 +3142,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_make_interval"
+        "success": "ok"
       }
     },
     {
@@ -3164,7 +3164,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_make_interval"
+        "success": "ok"
       }
     },
     {
@@ -3186,7 +3186,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_make_interval"
+        "success": "ok"
       }
     },
     {
@@ -3208,7 +3208,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_make_interval"
+        "success": "ok"
       }
     },
     {
