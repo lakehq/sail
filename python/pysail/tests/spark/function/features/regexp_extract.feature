@@ -67,6 +67,24 @@ Feature: regexp_extract() extracts regex capture groups from strings
       | result |
       | 15     |
 
+    Scenario: regexp_extract returns empty string for unmatched optional group
+      When query
+      """
+      SELECT regexp_extract('aaaac', '(a+)(b)?(c)', 2) AS result
+      """
+      Then query result
+      | result |
+      |        |
+
+    Scenario: regexp_extract preserves later groups after unmatched optional group
+      When query
+      """
+      SELECT regexp_extract('aaaac', '(a+)(b)?(c)', 3) AS result
+      """
+      Then query result
+      | result |
+      | c      |
+
   Rule: No match and edge cases
 
     Scenario: regexp_extract returns empty string when no match
