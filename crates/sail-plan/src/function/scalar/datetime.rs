@@ -25,7 +25,6 @@ use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
-use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
@@ -362,54 +361,63 @@ fn is_null_literal(expr: &Expr) -> bool {
 }
 
 fn to_timestamp(input: ScalarFunctionInput, timestamp_ntz: bool) -> PlanResult<Expr> {
-    let data_type = timestamp_data_type(&input, timestamp_ntz);
-    if input.arguments.len() == 1 {
-        let expr = input.arguments.one()?;
-        let expr = match expr.get_type(input.function_context.schema)? {
-            DataType::Timestamp(_, Some(_)) => expr_fn::to_local_time(vec![expr]),
-            _ => expr,
-        };
-        Ok(cast(expr, data_type))
-    } else if input.arguments.len() == 2 {
-        let null = timestamp_null(&input, timestamp_ntz);
-        let (expr, format) = input.arguments.two()?;
-        if is_null_literal(&expr) || is_null_literal(&format) {
-            return Ok(null);
-        }
-        let format = to_chrono_fmt(format);
-        Ok(cast(
-            expr_fn::to_timestamp_micros(vec![expr, format]),
-            data_type,
-        ))
-    } else {
-        Err(PlanError::invalid("to_timestamp requires 1 or 2 arguments"))
-    }
+    timestamp_with_try(input, timestamp_ntz, false)
 }
 
 fn try_to_timestamp(input: ScalarFunctionInput, timestamp_ntz: bool) -> PlanResult<Expr> {
+    timestamp_with_try(input, timestamp_ntz, true)
+}
+
+/// Shared `to_timestamp` / `try_to_timestamp` (+ `_ntz`) planner.
+///
+/// The 1-arg form goes through `cast` / `try_cast`, which route strings to
+/// `SparkTimestamp` (honoring ANSI for the strict variant) and cast other types.
+/// The 2-arg form parses the value with the given format via `SparkTimestamp`.
+fn timestamp_with_try(
+    input: ScalarFunctionInput,
+    timestamp_ntz: bool,
+    is_try: bool,
+) -> PlanResult<Expr> {
     let data_type = timestamp_data_type(&input, timestamp_ntz);
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
+    let timezone = if timestamp_ntz {
+        None
+    } else {
+        Some(input.function_context.plan_config.session_timezone.clone())
+    };
     if input.arguments.len() == 1 {
         let expr = input.arguments.one()?;
-        let expr = match expr.get_type(input.function_context.schema)? {
-            DataType::Timestamp(_, Some(_)) => expr_fn::to_local_time(vec![expr]),
-            _ => expr,
-        };
-        Ok(try_cast(expr, data_type))
+        let expr_type = expr.get_type(input.function_context.schema)?;
+        if matches!(
+            expr_type,
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+        ) {
+            // Strings parse through SparkTimestamp, which honors ANSI (errors
+            // under ANSI, NULL otherwise) for the strict variant.
+            let udf = ScalarUDF::from(SparkTimestamp::try_new(timezone, ansi_mode, is_try)?);
+            Ok(udf.call(vec![expr]))
+        } else {
+            // Timestamp-with-tz is re-based to the session zone; other types cast.
+            let expr = match expr_type {
+                DataType::Timestamp(_, Some(_)) => expr_fn::to_local_time(vec![expr]),
+                _ => expr,
+            };
+            if is_try {
+                Ok(try_cast(expr, data_type))
+            } else {
+                Ok(cast(expr, data_type))
+            }
+        }
     } else if input.arguments.len() == 2 {
         let null = timestamp_null(&input, timestamp_ntz);
         let (expr, format) = input.arguments.two()?;
         if is_null_literal(&expr) || is_null_literal(&format) {
             return Ok(null);
         }
-        let format = to_chrono_fmt(format);
-        Ok(cast(
-            ScalarUDF::from(SparkTryToTimestamp::new()).call(vec![expr, format]),
-            data_type,
-        ))
+        let udf = ScalarUDF::from(SparkTimestamp::try_new(timezone, ansi_mode, is_try)?);
+        Ok(udf.call(vec![cast(expr, DataType::Utf8), to_chrono_fmt(format)]))
     } else {
-        Err(PlanError::invalid(
-            "try_to_timestamp requires 1 or 2 arguments",
-        ))
+        Err(PlanError::invalid("to_timestamp requires 1 or 2 arguments"))
     }
 }
 
@@ -482,8 +490,8 @@ fn ntz_timestamp_and_unit(
         }
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
             let unit = TimeUnit::Microsecond;
-            let is_try = !ansi_mode;
-            let ts = ScalarUDF::from(SparkTimestamp::try_new(None, is_try)?).call(vec![ts]);
+            let ts =
+                ScalarUDF::from(SparkTimestamp::try_new(None, ansi_mode, false)?).call(vec![ts]);
             Ok((ts, unit))
         }
         x => Err(PlanError::invalid(format!(
