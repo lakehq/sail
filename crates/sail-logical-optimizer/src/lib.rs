@@ -3,7 +3,9 @@ use std::sync::Arc;
 use datafusion::optimizer::{Analyzer, AnalyzerRule, Optimizer, OptimizerRule};
 
 mod lateral_join;
+mod resolve_lambda_variables;
 pub use lateral_join::DecorrelateLateralProjection;
+pub use resolve_lambda_variables::ResolveLambdaVariables;
 
 pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
     let Analyzer {
@@ -27,5 +29,9 @@ pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
     let mut custom: Vec<Arc<dyn OptimizerRule + Send + Sync>> =
         vec![Arc::new(DecorrelateLateralProjection::new())];
     custom.extend(rules);
+    // `ResolveLambdaVariables` must run after the built-in rules: constant
+    // folding can change the type or nullability of higher-order function
+    // arguments, and the lambda variable fields must be refreshed to match.
+    custom.push(Arc::new(ResolveLambdaVariables::new()));
     custom
 }
