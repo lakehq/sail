@@ -8,6 +8,7 @@ use datafusion_expr::{expr, lit, HigherOrderUDF, LambdaParametersProgress, Value
 use datafusion_functions_nested::expr_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
+use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -21,8 +22,17 @@ static SPARK_ARRAY_FILTER_INDEX_FIRST_UDF: LazyLock<Arc<HigherOrderUDF>> = LazyL
     ))
 });
 
+static SPARK_ARRAY_TRANSFORM_UDF: LazyLock<Arc<HigherOrderUDF>> =
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayTransform::new())));
+
+static SPARK_ARRAY_TRANSFORM_INDEX_FIRST_UDF: LazyLock<Arc<HigherOrderUDF>> = LazyLock::new(|| {
+    Arc::new(HigherOrderUDF::new_from_impl(
+        SparkArrayTransform::new_index_first(),
+    ))
+});
+
 pub(crate) fn is_higher_order_function(name: &str) -> bool {
-    matches!(name, "filter")
+    matches!(name, "filter" | "transform")
 }
 
 /// Returns the lambda parameter fields of a built-in higher-order function, one
@@ -35,6 +45,7 @@ pub(crate) fn get_lambda_parameters(
 ) -> PlanResult<Vec<Vec<FieldRef>>> {
     let udf = match function_name {
         "filter" => &SPARK_ARRAY_FILTER_UDF,
+        "transform" => &SPARK_ARRAY_TRANSFORM_UDF,
         other => {
             return Err(PlanError::internal(format!(
                 "not a higher-order function: {other}"
@@ -68,24 +79,32 @@ fn lambda_body_uses_param(body: &expr::Expr, param: &str) -> PlanResult<bool> {
     Ok(found)
 }
 
-fn filter(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+/// Builds a `(array, lambda)` higher-order function expression supporting Spark's
+/// optional 0-based index parameter `(x, i) -> ...`.
+///
+/// The physical lambda evaluation batch contains all declared parameters, while
+/// the body is projected to the columns it actually uses; the two only line up
+/// when the used parameters form a prefix of the declared ones. An index-only
+/// lambda `(x, i) -> p(i)` is therefore rewritten to `i -> p(i)` over the
+/// `udf_index_first` instance, whose lambda parameters are `[index, element]`.
+fn array_lambda_with_index(
+    name: &str,
+    input: ScalarFunctionInput,
+    udf: &LazyLock<Arc<HigherOrderUDF>>,
+    udf_index_first: &LazyLock<Arc<HigherOrderUDF>>,
+) -> PlanResult<expr::Expr> {
     let (array, lambda) = input.arguments.two()?;
     let expr::Expr::Lambda(lambda) = lambda else {
-        return Err(PlanError::AnalysisError(
-            "`filter` expects a lambda function as its second argument".to_string(),
-        ));
+        return Err(PlanError::AnalysisError(format!(
+            "`{name}` expects a lambda function as its second argument"
+        )));
     };
     if lambda.params.len() > 2 {
         return Err(PlanError::AnalysisError(format!(
-            "`filter` expects a lambda function with 1 or 2 parameters, got {}",
+            "`{name}` expects a lambda function with 1 or 2 parameters, got {}",
             lambda.params.len()
         )));
     }
-    // The physical lambda evaluation batch contains all declared parameters, while
-    // the body is projected to the columns it actually uses; the two only line up
-    // when the used parameters form a prefix of the declared ones. An index-only
-    // lambda `(x, i) -> p(i)` is therefore rewritten to `i -> p(i)` over an
-    // instance whose lambda parameters are `[index, element]`.
     let (func, lambda) = if lambda.params.len() == 2
         && !lambda_body_uses_param(&lambda.body, &lambda.params[0])?
         && lambda_body_uses_param(&lambda.body, &lambda.params[1])?
@@ -93,19 +112,37 @@ fn filter(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         let Lambda { params, body } = lambda;
         let (_element, index) = params.two()?;
         (
-            Arc::clone(&SPARK_ARRAY_FILTER_INDEX_FIRST_UDF),
+            Arc::clone(udf_index_first),
             Lambda {
                 params: vec![index],
                 body,
             },
         )
     } else {
-        (Arc::clone(&SPARK_ARRAY_FILTER_UDF), lambda)
+        (Arc::clone(udf), lambda)
     };
     Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
         func,
         vec![array, expr::Expr::Lambda(lambda)],
     )))
+}
+
+fn filter(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    array_lambda_with_index(
+        "filter",
+        input,
+        &SPARK_ARRAY_FILTER_UDF,
+        &SPARK_ARRAY_FILTER_INDEX_FIRST_UDF,
+    )
+}
+
+fn transform(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    array_lambda_with_index(
+        "transform",
+        input,
+        &SPARK_ARRAY_TRANSFORM_UDF,
+        &SPARK_ARRAY_TRANSFORM_INDEX_FIRST_UDF,
+    )
 }
 
 /// Spark's array_sort always puts NULLs last, regardless of sort direction
@@ -156,7 +193,7 @@ pub(super) fn list_built_in_lambda_functions() -> Vec<(&'static str, ScalarFunct
         ("map_filter", F::unknown("map_filter")),
         ("map_zip_with", F::unknown("map_zip_with")),
         ("reduce", F::unknown("reduce")),
-        ("transform", F::unknown("transform")),
+        ("transform", F::custom(transform)),
         ("transform_keys", F::unknown("transform_keys")),
         ("transform_values", F::unknown("transform_values")),
         ("zip_with", F::unknown("zip_with")),
