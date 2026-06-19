@@ -1,5 +1,6 @@
 pub mod data_type;
 pub mod expression;
+pub mod graph;
 pub mod identifier;
 pub mod keywords;
 pub mod literal;

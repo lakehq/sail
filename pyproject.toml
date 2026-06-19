@@ -125,6 +125,7 @@ env.CI.installer = "uv"
 [tool.hatch.envs.default.scripts]
 # The scripts can be inherited by other environments.
 install-pysail = "\"{env:HATCH_UV}\" pip install pysail --no-index -f target/wheels --force-reinstall"
+graph-smoke = "pytest python/pysail/tests/spark/test_graph.py -q"
 
 [tool.hatch.envs.coverage]
 template = "default"

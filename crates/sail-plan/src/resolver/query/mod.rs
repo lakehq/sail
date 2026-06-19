@@ -12,6 +12,7 @@ mod column_op;
 mod cte;
 mod dedup;
 mod filter;
+mod graph;
 mod join;
 mod lateral;
 mod lateral_join;
@@ -360,6 +361,7 @@ impl PlanResolver<'_> {
             QueryNode::NamedWindows { input, windows } => {
                 self.resolve_named_windows(*input, windows, state).await?
             }
+            QueryNode::Graph(graph) => self.resolve_query_graph(graph, state).await?,
         };
         self.verify_query_plan(&plan, state)?;
         self.register_schema_with_plan_id(&plan, plan_id, state)?;

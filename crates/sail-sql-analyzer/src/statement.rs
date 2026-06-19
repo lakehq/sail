@@ -28,6 +28,7 @@ use crate::expression::{
     expr_with_default_column_values, from_ast_expression, from_ast_identifier_list,
     from_ast_object_name,
 };
+use crate::graph::from_ast_graph_query;
 use crate::query::from_ast_query;
 use crate::value::from_ast_string;
 
@@ -36,6 +37,10 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
     match statement {
         Statement::Query(query) => {
             let plan = from_ast_query(query)?;
+            Ok(spec::Plan::Query(plan))
+        }
+        Statement::GraphQuery(query) => {
+            let plan = from_ast_graph_query(query)?;
             Ok(spec::Plan::Query(plan))
         }
         Statement::SetCatalog {

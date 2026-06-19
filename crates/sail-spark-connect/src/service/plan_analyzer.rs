@@ -250,6 +250,7 @@ fn is_streaming_query_node(node: &spec::QueryNode) -> bool {
         | spec::QueryNode::Range(_)
         | spec::QueryNode::Empty { .. }
         | spec::QueryNode::Values(_)
+        | spec::QueryNode::Graph(_)
         | spec::QueryNode::CommonInlineUserDefinedTableFunction(_) => false,
         // single required input
         spec::QueryNode::Filter { input, .. }

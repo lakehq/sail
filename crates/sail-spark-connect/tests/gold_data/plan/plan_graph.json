@@ -1,0 +1,683 @@
+{
+  "tests": [
+    {
+      "input": "MATCH (a:Person)-[e:KNOWS]->(b:Person) WHERE a.age = '42' RETURN a.id, e.label, b.name ORDER BY b.name LIMIT 10",
+      "output": {
+        "success": {
+          "query": {
+            "graph": {
+              "patterns": [
+                {
+                  "start": {
+                    "variable": "a",
+                    "label": "Person",
+                    "properties": []
+                  },
+                  "steps": [
+                    {
+                      "direction": "outgoing",
+                      "edge": {
+                        "variable": "e",
+                        "label": "KNOWS",
+                        "properties": []
+                      },
+                      "target": {
+                        "variable": "b",
+                        "label": "Person",
+                        "properties": []
+                      }
+                    }
+                  ]
+                }
+              ],
+              "predicates": [
+                {
+                  "unresolvedFunction": {
+                    "functionName": [
+                      "=="
+                    ],
+                    "arguments": [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "a",
+                            "age"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      },
+                      {
+                        "literal": {
+                          "utf8": {
+                            "value": "42"
+                          }
+                        }
+                      }
+                    ],
+                    "namedArguments": [],
+                    "isDistinct": false,
+                    "isUserDefinedFunction": false,
+                    "isInternal": null,
+                    "ignoreNulls": null,
+                    "filter": null,
+                    "orderBy": null
+                  }
+                }
+              ],
+              "returns": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a",
+                      "id"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "e",
+                      "label"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b",
+                      "name"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
+              ],
+              "order": [
+                {
+                  "child": {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "b",
+                        "name"
+                      ],
+                      "planId": null,
+                      "isMetadataColumn": false
+                    }
+                  },
+                  "direction": "unspecified",
+                  "nullOrdering": "unspecified"
+                }
+              ],
+              "skip": null,
+              "limit": {
+                "literal": {
+                  "int32": {
+                    "value": 10
+                  }
+                }
+              }
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "MATCH (b:Person)<-[e:KNOWS]-(a:Person) RETURN b.id",
+      "output": {
+        "success": {
+          "query": {
+            "graph": {
+              "patterns": [
+                {
+                  "start": {
+                    "variable": "b",
+                    "label": "Person",
+                    "properties": []
+                  },
+                  "steps": [
+                    {
+                      "direction": "incoming",
+                      "edge": {
+                        "variable": "e",
+                        "label": "KNOWS",
+                        "properties": []
+                      },
+                      "target": {
+                        "variable": "a",
+                        "label": "Person",
+                        "properties": []
+                      }
+                    }
+                  ]
+                }
+              ],
+              "predicates": [],
+              "returns": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b",
+                      "id"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
+              ],
+              "order": [],
+              "skip": null,
+              "limit": null
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "MATCH (a:Person)-[e:KNOWS]-(b:Person) RETURN b.id",
+      "output": {
+        "success": {
+          "query": {
+            "graph": {
+              "patterns": [
+                {
+                  "start": {
+                    "variable": "a",
+                    "label": "Person",
+                    "properties": []
+                  },
+                  "steps": [
+                    {
+                      "direction": "undirected",
+                      "edge": {
+                        "variable": "e",
+                        "label": "KNOWS",
+                        "properties": []
+                      },
+                      "target": {
+                        "variable": "b",
+                        "label": "Person",
+                        "properties": []
+                      }
+                    }
+                  ]
+                }
+              ],
+              "predicates": [],
+              "returns": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b",
+                      "id"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
+              ],
+              "order": [],
+              "skip": null,
+              "limit": null
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "MATCH (a:Person)-->(b:Person) RETURN b.id",
+      "output": {
+        "success": {
+          "query": {
+            "graph": {
+              "patterns": [
+                {
+                  "start": {
+                    "variable": "a",
+                    "label": "Person",
+                    "properties": []
+                  },
+                  "steps": [
+                    {
+                      "direction": "outgoing",
+                      "edge": {
+                        "variable": null,
+                        "label": null,
+                        "properties": []
+                      },
+                      "target": {
+                        "variable": "b",
+                        "label": "Person",
+                        "properties": []
+                      }
+                    }
+                  ]
+                }
+              ],
+              "predicates": [],
+              "returns": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b",
+                      "id"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
+              ],
+              "order": [],
+              "skip": null,
+              "limit": null
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "MATCH (b:Person)<--(a:Person) RETURN b.id",
+      "output": {
+        "success": {
+          "query": {
+            "graph": {
+              "patterns": [
+                {
+                  "start": {
+                    "variable": "b",
+                    "label": "Person",
+                    "properties": []
+                  },
+                  "steps": [
+                    {
+                      "direction": "incoming",
+                      "edge": {
+                        "variable": null,
+                        "label": null,
+                        "properties": []
+                      },
+                      "target": {
+                        "variable": "a",
+                        "label": "Person",
+                        "properties": []
+                      }
+                    }
+                  ]
+                }
+              ],
+              "predicates": [],
+              "returns": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b",
+                      "id"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
+              ],
+              "order": [],
+              "skip": null,
+              "limit": null
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "MATCH (a:Person)--(b:Person) RETURN b.id",
+      "output": {
+        "success": {
+          "query": {
+            "graph": {
+              "patterns": [
+                {
+                  "start": {
+                    "variable": "a",
+                    "label": "Person",
+                    "properties": []
+                  },
+                  "steps": [
+                    {
+                      "direction": "undirected",
+                      "edge": {
+                        "variable": null,
+                        "label": null,
+                        "properties": []
+                      },
+                      "target": {
+                        "variable": "b",
+                        "label": "Person",
+                        "properties": []
+                      }
+                    }
+                  ]
+                }
+              ],
+              "predicates": [],
+              "returns": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b",
+                      "id"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
+              ],
+              "order": [],
+              "skip": null,
+              "limit": null
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "MATCH (a:Person)-[e:KNOWS]->(b:Person), (b)<-[f:KNOWS]-(d:Document) RETURN a.id, b.id, d.id, e.id, f.id",
+      "output": {
+        "success": {
+          "query": {
+            "graph": {
+              "patterns": [
+                {
+                  "start": {
+                    "variable": "a",
+                    "label": "Person",
+                    "properties": []
+                  },
+                  "steps": [
+                    {
+                      "direction": "outgoing",
+                      "edge": {
+                        "variable": "e",
+                        "label": "KNOWS",
+                        "properties": []
+                      },
+                      "target": {
+                        "variable": "b",
+                        "label": "Person",
+                        "properties": []
+                      }
+                    }
+                  ]
+                },
+                {
+                  "start": {
+                    "variable": "b",
+                    "label": null,
+                    "properties": []
+                  },
+                  "steps": [
+                    {
+                      "direction": "incoming",
+                      "edge": {
+                        "variable": "f",
+                        "label": "KNOWS",
+                        "properties": []
+                      },
+                      "target": {
+                        "variable": "d",
+                        "label": "Document",
+                        "properties": []
+                      }
+                    }
+                  ]
+                }
+              ],
+              "predicates": [],
+              "returns": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a",
+                      "id"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b",
+                      "id"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "d",
+                      "id"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "e",
+                      "id"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "f",
+                      "id"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
+              ],
+              "order": [],
+              "skip": null,
+              "limit": null
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "MATCH (a:Person {age: '42'})-[e:KNOWS {since: '2020'}]->(b:Person {name: 'Bob'}) RETURN a.id, e.id, b.name",
+      "output": {
+        "success": {
+          "query": {
+            "graph": {
+              "patterns": [
+                {
+                  "start": {
+                    "variable": "a",
+                    "label": "Person",
+                    "properties": [
+                      {
+                        "key": "age",
+                        "value": {
+                          "literal": {
+                            "utf8": {
+                              "value": "42"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "steps": [
+                    {
+                      "direction": "outgoing",
+                      "edge": {
+                        "variable": "e",
+                        "label": "KNOWS",
+                        "properties": [
+                          {
+                            "key": "since",
+                            "value": {
+                              "literal": {
+                                "utf8": {
+                                  "value": "2020"
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "target": {
+                        "variable": "b",
+                        "label": "Person",
+                        "properties": [
+                          {
+                            "key": "name",
+                            "value": {
+                              "literal": {
+                                "utf8": {
+                                  "value": "Bob"
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              ],
+              "predicates": [],
+              "returns": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a",
+                      "id"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "e",
+                      "id"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b",
+                      "name"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
+              ],
+              "order": [],
+              "skip": null,
+              "limit": null
+            },
+            "planId": null
+          }
+        }
+      }
+    },
+    {
+      "input": "MATCH (a:Person)-->(b:Person) RETURN b.id ORDER BY b.id SKIP 1 LIMIT ALL",
+      "output": {
+        "success": {
+          "query": {
+            "graph": {
+              "patterns": [
+                {
+                  "start": {
+                    "variable": "a",
+                    "label": "Person",
+                    "properties": []
+                  },
+                  "steps": [
+                    {
+                      "direction": "outgoing",
+                      "edge": {
+                        "variable": null,
+                        "label": null,
+                        "properties": []
+                      },
+                      "target": {
+                        "variable": "b",
+                        "label": "Person",
+                        "properties": []
+                      }
+                    }
+                  ]
+                }
+              ],
+              "predicates": [],
+              "returns": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b",
+                      "id"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                }
+              ],
+              "order": [
+                {
+                  "child": {
+                    "unresolvedAttribute": {
+                      "name": [
+                        "b",
+                        "id"
+                      ],
+                      "planId": null,
+                      "isMetadataColumn": false
+                    }
+                  },
+                  "direction": "unspecified",
+                  "nullOrdering": "unspecified"
+                }
+              ],
+              "skip": {
+                "literal": {
+                  "int32": {
+                    "value": 1
+                  }
+                }
+              },
+              "limit": null
+            },
+            "planId": null
+          }
+        }
+      }
+    }
+  ]
+}

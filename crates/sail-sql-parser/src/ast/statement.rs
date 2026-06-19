@@ -4,6 +4,7 @@ use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
 use crate::ast;
 use crate::ast::data_type::DataType;
 use crate::ast::expression::{BooleanLiteral, Expr, OrderDirection};
+use crate::ast::graph::GraphQuery;
 use crate::ast::identifier::{table_ident, Ident, ObjectName};
 use crate::ast::keywords::{
     Add, After, All, Alter, Always, Analyze, And, As, Buckets, By, Cache, Cascade, Catalog,
@@ -33,6 +34,7 @@ use crate::token::TokenLabel;
 #[parser(dependency = "(Statement, Query, Expr, DataType)", label = TokenLabel::Statement)]
 pub enum Statement {
     Query(#[parser(function = |(_, q, _, _), _| q)] Query),
+    GraphQuery(#[parser(function = |(_, _, e, _), o| compose(e, o))] GraphQuery),
     SetCatalog {
         set: Set,
         catalog: Catalog,

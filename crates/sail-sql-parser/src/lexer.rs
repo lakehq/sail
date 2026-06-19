@@ -36,6 +36,7 @@ where
     E: ParserExtra<'a, I> + 'a,
 {
     just("--")
+        .and_is(choice((just("-->"), just("--("))).not())
         .ignore_then(none_of("\n\r").repeated())
         .map_with(|(), e| (Token::SingleLineComment { raw: e.slice() }, e.span()))
 }

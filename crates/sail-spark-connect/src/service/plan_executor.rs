@@ -669,3 +669,233 @@ pub(crate) async fn handle_execute_register_datasource(
         Box::pin(stream::iter(output)),
     ))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::io::Cursor;
+    use std::sync::Arc;
+
+    use datafusion::arrow::array::RecordBatch;
+    use datafusion::arrow::error::ArrowError;
+    use datafusion::arrow::ipc::reader::StreamReader;
+    use datafusion::arrow::util::display::{ArrayFormatter, FormatOptions};
+    use pyo3::Python;
+    use sail_common::config::AppConfig;
+    use sail_common::runtime::RuntimeManager;
+    use tonic::codegen::tokio_stream::StreamExt;
+    use uuid::Uuid;
+
+    use super::*;
+    use crate::session_manager::create_spark_session_manager;
+    use crate::spark::connect::execute_plan_response::ResponseType;
+    use crate::spark::connect::relation::RelType;
+    use crate::spark::connect::{execute_plan_response, Relation, SqlCommand as SparkSqlCommand};
+
+    fn executor_metadata() -> ExecutorMetadata {
+        ExecutorMetadata {
+            operation_id: Uuid::new_v4().to_string(),
+            tags: vec![],
+            reattachable: false,
+        }
+    }
+
+    fn sql_command(sql: &str) -> SparkSqlCommand {
+        #[expect(deprecated)]
+        SparkSqlCommand {
+            sql: sql.to_string(),
+            args: HashMap::new(),
+            pos_args: vec![],
+            named_arguments: HashMap::new(),
+            pos_arguments: vec![],
+            input: None,
+        }
+    }
+
+    async fn execute_sql_command(ctx: &SessionContext, sql: &str) -> SparkResult<Option<Relation>> {
+        let mut stream =
+            handle_execute_sql_command(ctx, sql_command(sql), executor_metadata()).await?;
+        while let Some(response) = stream.next().await {
+            let response = response.map_err(|e| SparkError::internal(e.to_string()))?;
+            if let Some(ResponseType::SqlCommandResult(result)) = response.response_type {
+                return Ok(result.relation);
+            }
+        }
+        Ok(None)
+    }
+
+    async fn execute_relation(
+        ctx: &SessionContext,
+        relation: Relation,
+    ) -> SparkResult<Vec<String>> {
+        let mut stream = handle_execute_relation(ctx, relation, executor_metadata()).await?;
+        let mut batches = vec![];
+        while let Some(response) = stream.next().await {
+            let response = response.map_err(|e| SparkError::internal(e.to_string()))?;
+            if let Some(ResponseType::ArrowBatch(execute_plan_response::ArrowBatch {
+                data, ..
+            })) = response.response_type
+            {
+                batches.extend(decode_arrow_batches(data)?);
+            }
+        }
+        format_record_batches(batches)
+    }
+
+    fn decode_arrow_batches(data: Vec<u8>) -> SparkResult<Vec<RecordBatch>> {
+        let reader = StreamReader::try_new(Cursor::new(data), None)?;
+        reader
+            .collect::<Result<Vec<_>, ArrowError>>()
+            .map_err(Into::into)
+    }
+
+    fn format_record_batches(batches: Vec<RecordBatch>) -> SparkResult<Vec<String>> {
+        let options = FormatOptions::default();
+        let mut output = vec![];
+        for batch in batches {
+            if batch.num_rows() == 0 {
+                continue;
+            }
+            let formatters = batch
+                .columns()
+                .iter()
+                .map(|column| ArrayFormatter::try_new(column, &options))
+                .collect::<Result<Vec<_>, ArrowError>>()?;
+            for row in 0..batch.num_rows() {
+                let line = formatters
+                    .iter()
+                    .map(|formatter| formatter.value(row).try_to_string())
+                    .collect::<Result<Vec<_>, ArrowError>>()?
+                    .join("\t");
+                output.push(line);
+            }
+        }
+        Ok(output)
+    }
+
+    #[test]
+    fn test_execute_cypher_sql_command_relation() -> Result<(), Box<dyn std::error::Error>> {
+        Python::initialize();
+        let config = Arc::new(AppConfig::load()?);
+        let runtime = RuntimeManager::try_new(&config.runtime)?;
+        let handle = runtime.handle();
+        let manager = handle
+            .primary()
+            .block_on(async { create_spark_session_manager(config, handle.clone()) })?;
+        let ctx = handle
+            .primary()
+            .block_on(manager.get_or_create_session_context("graph".to_string(), "".to_string()))?;
+
+        handle.primary().block_on(async {
+            execute_sql_command(
+                &ctx,
+                "CREATE OR REPLACE TEMPORARY VIEW grust_nodes AS \
+                 SELECT * FROM VALUES \
+                 ('1', 'Person', '{\"age\":\"42\",\"name\":\"Alice\"}'), \
+                 ('2', 'Person', '{\"age\":\"31\",\"name\":\"Bob\"}'), \
+                 ('3', 'Document', '{\"age\":\"42\",\"name\":\"Paper\"}') \
+                 AS tab(id, label, props)",
+            )
+            .await?;
+            execute_sql_command(
+                &ctx,
+                "CREATE OR REPLACE TEMPORARY VIEW grust_edges AS \
+                 SELECT * FROM VALUES \
+                 ('edge-key-1', 'edge-1', '1', 'Person', '2', 'Person', 'KNOWS', '{\"since\":\"2020\"}'), \
+                 ('edge-key-2', 'edge-2', '2', 'Person', '1', 'Person', 'LIKES', '{\"since\":\"2021\"}'), \
+                 ('edge-key-3', 'edge-3', '3', 'Document', '2', 'Person', 'KNOWS', '{\"since\":\"2022\"}') \
+                 AS tab(edge_key, id, src_id, src_label, dst_id, dst_label, edge_type, props)",
+            )
+            .await?;
+
+            async fn assert_cypher_rows(
+                ctx: &SessionContext,
+                sql: &str,
+                expected: Vec<&str>,
+            ) -> SparkResult<()> {
+                let relation = execute_sql_command(ctx, sql)
+                    .await?
+                    .ok_or_else(|| SparkError::internal("missing SQL command relation"))?;
+                assert!(matches!(relation.rel_type, Some(RelType::Sql(_))));
+
+                let rows = execute_relation(ctx, relation).await?;
+                assert_eq!(rows, expected);
+                Ok(())
+            }
+
+            assert_cypher_rows(
+                &ctx,
+                "MATCH (a:Person)-[e:KNOWS]->(b:Person) \
+                 WHERE a.age = '42' \
+                 RETURN a.id, e.id, e.edge_key, e.label, b.name \
+                 ORDER BY b.name \
+                 LIMIT 10",
+                vec!["1\tedge-1\tedge-key-1\tKNOWS\tBob"],
+            )
+            .await?;
+            assert_cypher_rows(
+                &ctx,
+                "MATCH (a:Person {age: '42'})-[e:KNOWS {since: '2020'}]->(b:Person {name: 'Bob'}) \
+                 RETURN a.id, e.id, b.name",
+                vec!["1\tedge-1\tBob"],
+            )
+            .await?;
+            assert_cypher_rows(
+                &ctx,
+                "MATCH (a:Person)-->(b:Person) \
+                 WHERE a.age = '42' \
+                 RETURN b.name \
+                 ORDER BY b.name \
+                 LIMIT 10",
+                vec!["Bob"],
+            )
+            .await?;
+            assert_cypher_rows(
+                &ctx,
+                "MATCH (a:Person)-->(b:Person) \
+                 RETURN b.name \
+                 ORDER BY b.name \
+                 SKIP 1 \
+                 LIMIT ALL",
+                vec!["Bob"],
+            )
+            .await?;
+            assert_cypher_rows(
+                &ctx,
+                "MATCH (a)<-[e]-(b) \
+                 RETURN a.id, e.id, b.id \
+                 ORDER BY e.id",
+                vec!["2\tedge-1\t1", "1\tedge-2\t2", "2\tedge-3\t3"],
+            )
+            .await?;
+            assert_cypher_rows(
+                &ctx,
+                "MATCH (a)-[e]-(b) \
+                 RETURN a.id, e.id, b.id \
+                 ORDER BY e.id, a.id",
+                vec![
+                    "1\tedge-1\t2",
+                    "2\tedge-1\t1",
+                    "1\tedge-2\t2",
+                    "2\tedge-2\t1",
+                    "2\tedge-3\t3",
+                    "3\tedge-3\t2",
+                ],
+            )
+            .await?;
+            assert_cypher_rows(
+                &ctx,
+                "MATCH (a:Person)-[e:KNOWS]->(b:Person), (b)<-[f:KNOWS]-(d:Document) \
+                 WHERE a.age = '42' \
+                 RETURN a.id, b.name, d.name, e.id, f.id \
+                 ORDER BY d.name \
+                 LIMIT 10",
+                vec!["1\tBob\tPaper\tedge-1\tedge-3"],
+            )
+            .await?;
+            Ok::<_, SparkError>(())
+        })?;
+
+        Ok(())
+    }
+}

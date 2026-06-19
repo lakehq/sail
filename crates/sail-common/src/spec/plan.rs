@@ -281,6 +281,64 @@ pub enum QueryNode {
         join_condition: Option<Expr>,
         join_type: JoinType,
     },
+    Graph(GraphQuery),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphQuery {
+    pub patterns: Vec<GraphPathPattern>,
+    pub predicates: Vec<Expr>,
+    pub returns: Vec<Expr>,
+    pub order: Vec<SortOrder>,
+    pub skip: Option<Expr>,
+    pub limit: Option<Expr>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphPathPattern {
+    pub start: GraphNodePattern,
+    pub steps: Vec<GraphPatternStep>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphPatternStep {
+    pub direction: GraphDirection,
+    pub edge: GraphEdgePattern,
+    pub target: GraphNodePattern,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphNodePattern {
+    pub variable: Option<Identifier>,
+    pub label: Option<Identifier>,
+    pub properties: Vec<GraphProperty>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphEdgePattern {
+    pub variable: Option<Identifier>,
+    pub label: Option<Identifier>,
+    pub properties: Vec<GraphProperty>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphProperty {
+    pub key: Identifier,
+    pub value: Expr,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GraphDirection {
+    Outgoing,
+    Incoming,
+    Undirected,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
