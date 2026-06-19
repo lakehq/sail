@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from pysail.tests.spark.hms.conftest import _reference_catalog_table
+from pysail.tests.spark.catalog.hms.conftest import _reference_catalog_table
 
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession

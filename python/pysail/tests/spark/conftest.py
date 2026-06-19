@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import doctest
 import os
+import platform
 import re
 import time
 from dataclasses import dataclass
@@ -20,9 +21,10 @@ from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 SAIL_ONLY = doctest.register_optionflag("SAIL_ONLY")
 
 INTEGRATION_TEST_PATHS = [
-    Path(__file__).parent / "catalog_integration",
-    Path(__file__).parent / "glue",
-    Path(__file__).parent / "hms",
+    Path(__file__).parent / "catalog" / "glue",
+    Path(__file__).parent / "catalog" / "hms",
+    Path(__file__).parent / "catalog" / "iceberg_rest",
+    Path(__file__).parent / "catalog" / "unity",
 ]
 
 
@@ -165,6 +167,9 @@ def session_timezone(spark, request):
 
 @pytest.fixture
 def local_timezone(request):
+    if platform.system() == "Windows":
+        pytest.skip("`time.tzset()` is not available on Windows")
+
     tz = os.environ.get("TZ")
     os.environ["TZ"] = request.param
     time.tzset()

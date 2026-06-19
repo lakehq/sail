@@ -1,5 +1,4 @@
 import datetime
-import platform
 from decimal import Decimal
 
 import pytest
@@ -14,7 +13,6 @@ from pysail.testing.spark.utils.sql import any_of
     [("America/Los_Angeles", "America/Los_Angeles")],
     indirect=["session_timezone", "local_timezone"],
 )
-@pytest.mark.skipif(platform.system() == "Windows", reason="`time.tzset()` is not available on Windows")
 def test_plus(spark, session_timezone, local_timezone):  # noqa: ARG001
     assert spark.sql("SELECT 1 + 2 AS result").collect() == [Row(result=3)]
     assert spark.sql("SELECT DATE'2025-02-26' + INTERVAL '2' MONTH AS result").collect() == [
@@ -35,7 +33,6 @@ def test_plus(spark, session_timezone, local_timezone):  # noqa: ARG001
     [("America/Los_Angeles", "America/Los_Angeles")],
     indirect=["session_timezone", "local_timezone"],
 )
-@pytest.mark.skipif(platform.system() == "Windows", reason="`time.tzset()` is not available on Windows")
 def test_minus(spark, session_timezone, local_timezone):  # noqa: ARG001
     assert spark.sql("SELECT 2 - 1 AS result").collect() == [Row(result=1)]
     assert spark.sql("SELECT TIMESTAMP'2025-02-26 12:15:29' - INTERVAL '3' SECOND AS result").collect() == [

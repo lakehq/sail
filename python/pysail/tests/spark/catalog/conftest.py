@@ -1,6 +1,6 @@
-"""Shared fixtures for catalog integration tests.
+"""Shared fixtures for catalog tests.
 
-Each sub-directory (glue/, iceberg_rest/, unity/) provides fixtures that
+Each integration sub-directory provides fixtures that
 spin up the relevant infrastructure containers and a dedicated Sail server.
 
 These tests are marked with ``@pytest.mark.integration`` and are
@@ -101,7 +101,7 @@ def spark(request: pytest.FixtureRequest) -> SparkSession:
     When tests are collected from an installed package outside pytest's rootdir,
     nested conftest fixtures can become visible globally. In that case this
     fixture may be used by non-catalog tests too, so it must fall back to the
-    default Spark session unless the requesting test is under catalog_integration.
+    default Spark session unless the requesting test is under a catalog backend.
     """
     test_path = Path(str(request.node.fspath)).resolve()
     this_dir = Path(__file__).parent.resolve()

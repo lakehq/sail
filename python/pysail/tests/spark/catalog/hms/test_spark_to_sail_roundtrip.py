@@ -10,7 +10,7 @@ from __future__ import annotations
 from pyspark.sql import SparkSession
 from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
-from pysail.tests.spark.hms.conftest import (
+from pysail.tests.spark.catalog.hms.conftest import (
     _assert_schema_matrix_rows,
     _assert_schema_matrix_shape,
     _describe_column_comments,
