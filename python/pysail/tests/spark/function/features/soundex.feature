@@ -1,4 +1,3 @@
-@soundex
 Feature: soundex() returns the Soundex code of a string
 
   Rule: Basic usage

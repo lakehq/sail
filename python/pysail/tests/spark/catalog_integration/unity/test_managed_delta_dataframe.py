@@ -5,15 +5,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import pytest
-
 from pysail.tests.spark.catalog_integration.unity.conftest import _unity_delta_commit_info, _unity_table_info
 
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession
-
-
-pytestmark = pytest.mark.catalog_integration
 
 
 def test_dataframe_append_and_merge_schema_are_unity_managed(

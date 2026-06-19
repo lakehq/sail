@@ -7,7 +7,6 @@ permission issues on CI.
 
 from __future__ import annotations
 
-import pytest
 from pyspark.sql import SparkSession
 from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
@@ -17,8 +16,6 @@ from pysail.tests.spark.hms.conftest import (
     _describe_column_comments,
     _describe_extended_properties,
 )
-
-pytestmark = pytest.mark.catalog_integration
 
 
 def _assert_sail_describes_spark_table(

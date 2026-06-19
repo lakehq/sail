@@ -1,4 +1,4 @@
-@variant @spark-4
+@spark-4
 Feature: Variant type functions (parse_json, is_variant_null, variant_get)
 
   Rule: parse_json + variant_get roundtrip

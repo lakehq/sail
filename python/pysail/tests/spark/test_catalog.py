@@ -77,7 +77,7 @@ class TestListTables:
         metadata_marker = next(row for row in rows if row.col_name == "# Detailed Table Information")
         assert metadata_marker.data_type == ""
 
-    @pytest.mark.catalog_integration
+    @pytest.mark.integration
     def test_persistent_table_defaults_to_managed(self, spark):
         """Persistent tables without an explicit location are managed."""
         table_name = "test_external_default"
@@ -97,7 +97,7 @@ class TestListTables:
         finally:
             spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
-    @pytest.mark.catalog_integration
+    @pytest.mark.integration
     def test_persistent_table_with_location_is_external(self, spark, tmp_path):
         """Persistent table created with LOCATION surfaces EXTERNAL type."""
         table_name = "test_external_with_location"

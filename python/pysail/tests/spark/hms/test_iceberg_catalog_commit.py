@@ -16,7 +16,6 @@ if TYPE_CHECKING:
     from pyspark.sql import SparkSession
 
 
-pytestmark = pytest.mark.catalog_integration
 UUID_METADATA_FILE_PATTERN = re.compile(
     r"^\d{5}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.metadata\.json$"
 )
