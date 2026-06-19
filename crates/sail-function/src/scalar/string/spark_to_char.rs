@@ -133,7 +133,7 @@ fn spark_to_char_impl(args: &[ArrayRef], ansi_mode: bool) -> Result<ArrayRef> {
     // The values buffer is sized in BYTES: each formatted row is ~`format.len()`
     // chars (the format is foldable, so one estimate fits every row), which is a
     // tight data-driven estimate instead of a magic average.
-    let mut builder = StringBuilder::with_capacity(num_rows, num_rows * format.len());
+    let mut builder = StringBuilder::with_capacity(num_rows, num_rows.saturating_mul(format.len()));
     for value in values {
         match value {
             None => builder.append_null(),
