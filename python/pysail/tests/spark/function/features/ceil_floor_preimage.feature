@@ -1,4 +1,3 @@
-@ceil_floor_preimage
 Feature: ceil() / floor() — preimage hook (filter pushdown)
 
   # SparkFloor implements `fn preimage`: `floor(x) = N` ⟺ `x ∈ [N, N+1)`.

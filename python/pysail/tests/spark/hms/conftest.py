@@ -27,26 +27,6 @@ if TYPE_CHECKING:
 pytest.skip("not working", allow_module_level=True)
 
 
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Auto-mark HMS tests and deselect them unless explicitly opted in."""
-    this_dir = os.path.dirname(os.path.abspath(__file__))
-    markexpr = config.getoption("markexpr") or ""
-
-    remaining: list[pytest.Item] = []
-    deselected: list[pytest.Item] = []
-    for item in items:
-        if str(item.fspath).startswith(this_dir):
-            item.add_marker(pytest.mark.catalog_integration)
-            if not markexpr:
-                deselected.append(item)
-                continue
-        remaining.append(item)
-
-    if deselected:
-        config.hook.pytest_deselected(items=deselected)
-        items[:] = remaining
-
-
 # ---------------------------------------------------------------------------
 # Override the parent's autouse spark_doctest fixture so it does not
 # start a default in-memory-catalog Sail server.

@@ -3,10 +3,10 @@
 Each sub-directory (glue/, iceberg_rest/, unity/) provides fixtures that
 spin up the relevant infrastructure containers and a dedicated Sail server.
 
-These tests are marked with ``@pytest.mark.catalog_integration`` and are
-**deselected by default**. To run them, pass ``-m catalog_integration``::
+These tests are marked with ``@pytest.mark.integration`` and are
+**deselected by default**. To run them, pass ``-m integration``::
 
-    hatch run pytest -m catalog_integration
+    hatch run pytest -m integration
 """
 
 from __future__ import annotations
@@ -109,34 +109,3 @@ def spark(request: pytest.FixtureRequest) -> SparkSession:
         if test_path.is_relative_to(this_dir / name):
             return request.getfixturevalue(fixture_name)
     return request.getfixturevalue("default_spark")
-
-
-def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    """Auto-mark catalog integration tests and deselect them unless explicitly opted in.
-
-    Tests under this directory are tagged with the ``catalog_integration`` marker.
-    When the user does not pass a ``-m`` marker expression, these tests are
-    deselected so that a bare ``pytest`` invocation does not attempt to spin up
-    external services. When ``-m`` is supplied (for example ``-m catalog_integration``
-    or ``-m 'not catalog_integration'``), pytest's built-in marker filter applies
-    and this hook performs no additional deselection.
-
-    The ``spark`` fixture above also guards bare ``pytest --pyargs <package>``
-    runs where pytest may load installed-package conftests outside its rootdir.
-    """
-    this_dir = os.path.dirname(os.path.abspath(__file__))
-    markexpr = config.getoption("markexpr") or ""
-
-    remaining: list[pytest.Item] = []
-    deselected: list[pytest.Item] = []
-    for item in items:
-        if str(item.fspath).startswith(this_dir):
-            item.add_marker(pytest.mark.catalog_integration)
-            if not markexpr:
-                deselected.append(item)
-                continue
-        remaining.append(item)
-
-    if deselected:
-        config.hook.pytest_deselected(items=deselected)
-        items[:] = remaining

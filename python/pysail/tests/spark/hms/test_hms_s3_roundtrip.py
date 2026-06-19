@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import pytest
 from pyspark.sql import SparkSession
 
 from pysail.tests.spark.hms.conftest import (
@@ -11,8 +10,6 @@ from pysail.tests.spark.hms.conftest import (
     _reference_catalog_table,
     _scala_option_to_string,
 )
-
-pytestmark = pytest.mark.catalog_integration
 
 _S3_WAREHOUSE_PREFIX = "s3://hms-warehouse"
 
