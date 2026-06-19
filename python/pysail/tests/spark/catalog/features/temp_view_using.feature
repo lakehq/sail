@@ -1,4 +1,3 @@
-@temp_view_using
 Feature: Data source temporary views
 
   Background:

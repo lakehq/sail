@@ -7,7 +7,6 @@ from pandas.testing import assert_frame_equal
 from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.types import Row
 
-from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.files import assert_file_lifecycle, get_data_files
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
@@ -505,11 +504,8 @@ class TestDeltaIO:
         delta_path = tmp_path / "delta_table"
         delta_table_path = f"{delta_path}"
 
-        # Skip for JVM Spark as error handling may differ
-        if not is_jvm_spark():
-            # Try to read non-existent Delta table
-            with pytest.raises(Exception, match=r".*"):
-                spark.read.format("delta").load(delta_table_path).collect()
+        with pytest.raises(Exception, match=r".*"):
+            spark.read.format("delta").load(delta_table_path).collect()
 
         # Create table and try again
         test_data = [Row(id=1, name="test")]

@@ -1,4 +1,3 @@
-@negative
 Feature: unary minus (negative) honors ANSI overflow semantics
 
   Rule: Negating the minimum integral value overflows

@@ -3,10 +3,6 @@
 
 from __future__ import annotations
 
-import pytest
-
-pytestmark = pytest.mark.catalog_integration
-
 
 def test_hms_list_default_database(hms_s3_spark):
     """Sail connected to HMS should see at least the ``default`` database.

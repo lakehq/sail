@@ -1,4 +1,4 @@
-@parse_json @spark-4
+@spark-4
 Feature: parse_json (strict version; errors on invalid JSON)
 
   Rule: Valid JSON parsing
