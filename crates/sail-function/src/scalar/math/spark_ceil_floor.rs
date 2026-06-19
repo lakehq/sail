@@ -200,7 +200,7 @@ fn ceil_floor_simplify<T: ScalarUDFImpl + 'static>(
     }
     // Idempotence: floor(floor(x)) = floor(x), ceil(ceil(x)) = ceil(x).
     if let Expr::ScalarFunction(ref func) = arg {
-        if func.func.inner().downcast_ref::<T>().is_some() && func.args.len() == 1 {
+        if func.func.inner().is::<T>() && func.args.len() == 1 {
             return Ok(ExprSimplifyResult::Simplified(arg));
         }
     }

@@ -216,6 +216,7 @@ Feature: Iceberg Partition Transforms
             📄 *.parquet
         📂 metadata
           📄 *.metadata.json
+          📄 *.metadata.json
           📄 snap-*.avro
         """
       When query
@@ -517,6 +518,7 @@ Feature: Iceberg Partition Transforms
             📂 category=B
               📄 *.parquet
         📂 metadata
+          📄 *.metadata.json
           📄 *.metadata.json
           📄 snap-*.avro
         """

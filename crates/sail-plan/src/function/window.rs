@@ -4,7 +4,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field};
 use datafusion::functions_aggregate::{
     approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
-    correlation, count, covariance, grouping, median, min_max, regr, stddev, sum, variance,
+    correlation, count, covariance, grouping, median, min_max, stddev, sum, variance,
 };
 use datafusion::functions_nested::string::array_to_string;
 use datafusion::functions_window::cume_dist::cume_dist_udwf;
@@ -32,6 +32,7 @@ use sail_function::aggregate::max_min_by::{MaxByFunction, MinByFunction};
 use sail_function::aggregate::mode::ModeFunction;
 use sail_function::aggregate::percentile::PercentileFunction;
 use sail_function::aggregate::product::ProductFunction;
+use sail_function::aggregate::regr::{Regr, RegrType};
 use sail_function::aggregate::skewness::SkewnessFunc;
 use sail_function::aggregate::theta_sketch::{
     ThetaIntersectionAggFunction, ThetaSketchAggFunction, ThetaUnionAggFunction,
@@ -739,15 +740,47 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ("percentile_cont", F::unknown("percentile_cont")),
         ("percentile_disc", F::unknown("percentile_disc")),
         ("product", F::custom(product)),
-        ("regr_avgx", F::aggregate(regr::regr_avgx_udaf)),
-        ("regr_avgy", F::aggregate(regr::regr_avgy_udaf)),
-        ("regr_count", F::aggregate(regr::regr_count_udaf)),
-        ("regr_intercept", F::aggregate(regr::regr_intercept_udaf)),
-        ("regr_r2", F::aggregate(regr::regr_r2_udaf)),
-        ("regr_slope", F::aggregate(regr::regr_slope_udaf)),
-        ("regr_sxx", F::aggregate(regr::regr_sxx_udaf)),
-        ("regr_sxy", F::aggregate(regr::regr_sxy_udaf)),
-        ("regr_syy", F::aggregate(regr::regr_syy_udaf)),
+        (
+            "regr_avgx",
+            F::aggregate(|| Arc::new(AggregateUDF::from(Regr::new(RegrType::AvgX, "regr_avgx")))),
+        ),
+        (
+            "regr_avgy",
+            F::aggregate(|| Arc::new(AggregateUDF::from(Regr::new(RegrType::AvgY, "regr_avgy")))),
+        ),
+        (
+            "regr_count",
+            F::aggregate(|| Arc::new(AggregateUDF::from(Regr::new(RegrType::Count, "regr_count")))),
+        ),
+        (
+            "regr_intercept",
+            F::aggregate(|| {
+                Arc::new(AggregateUDF::from(Regr::new(
+                    RegrType::Intercept,
+                    "regr_intercept",
+                )))
+            }),
+        ),
+        (
+            "regr_r2",
+            F::aggregate(|| Arc::new(AggregateUDF::from(Regr::new(RegrType::R2, "regr_r2")))),
+        ),
+        (
+            "regr_slope",
+            F::aggregate(|| Arc::new(AggregateUDF::from(Regr::new(RegrType::Slope, "regr_slope")))),
+        ),
+        (
+            "regr_sxx",
+            F::aggregate(|| Arc::new(AggregateUDF::from(Regr::new(RegrType::Sxx, "regr_sxx")))),
+        ),
+        (
+            "regr_sxy",
+            F::aggregate(|| Arc::new(AggregateUDF::from(Regr::new(RegrType::Sxy, "regr_sxy")))),
+        ),
+        (
+            "regr_syy",
+            F::aggregate(|| Arc::new(AggregateUDF::from(Regr::new(RegrType::Syy, "regr_syy")))),
+        ),
         ("skewness", F::custom(skewness)),
         ("some", F::aggregate(bool_and_or::bool_or_udaf)),
         ("std", F::aggregate(stddev::stddev_udaf)),

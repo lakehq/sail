@@ -464,6 +464,16 @@ def block_published_delta_commit_path(version: int, location_var: str, variables
     commit_path.mkdir(parents=True)
 
 
+@given(parsers.parse("published Delta commit for version {version:d} in {location_var} is invalid JSON"))
+def write_invalid_published_delta_commit(version: int, location_var: str, variables: dict) -> None:
+    location = variables.get(location_var)
+    assert location is not None, f"Variable {location_var!r} not found"
+
+    commit_path = _delta_commit_file(Path(location.path), version)
+    commit_path.parent.mkdir(parents=True, exist_ok=True)
+    commit_path.write_text("{not valid delta json\n", encoding="utf-8")
+
+
 @then(parsers.parse("Delta commit for version {version:d} in {location_var} has catalog-managed commit info"))
 def delta_commit_has_catalog_managed_commit_info(version: int, location_var: str, variables: dict) -> None:
     location = variables.get(location_var)

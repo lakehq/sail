@@ -46,6 +46,9 @@ Feature: Delta Lake Checkpoint
         📄 00000000000000000001.checkpoint.parquet
         📄 00000000000000000001.crc
         📄 00000000000000000001.json
+        📄 00000000000000000002.checkpoint.parquet
+        📄 00000000000000000002.crc
+        📄 00000000000000000002.json
         📄 _last_checkpoint
         """
 
@@ -130,6 +133,8 @@ Feature: Delta Lake Checkpoint
         📄 00000000000000000006.checkpoint.parquet
         📄 00000000000000000006.crc
         📄 00000000000000000006.json
+        📄 00000000000000000007.crc
+        📄 00000000000000000007.json
         📄 _last_checkpoint
         """
 
@@ -225,6 +230,8 @@ Feature: Delta Lake Checkpoint
         📄 00000000000000000002.checkpoint.parquet
         📄 00000000000000000002.crc
         📄 00000000000000000002.json
+        📄 00000000000000000003.crc
+        📄 00000000000000000003.json
         📄 _last_checkpoint
         """
 
@@ -299,6 +306,8 @@ Feature: Delta Lake Checkpoint
         📄 00000000000000000004.checkpoint.parquet
         📄 00000000000000000004.crc
         📄 00000000000000000004.json
+        📄 00000000000000000005.crc
+        📄 00000000000000000005.json
         📄 _last_checkpoint
         """
 
@@ -469,6 +478,8 @@ Feature: Delta Lake Checkpoint
         📄 00000000000000000003.json
         📄 00000000000000000004.crc
         📄 00000000000000000004.json
+        📄 00000000000000000005.crc
+        📄 00000000000000000005.json
         📄 _last_checkpoint
         """
       Then query plan matches snapshot

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use datafusion_common::arrow::datatypes::Field;
+use datafusion_common::arrow::datatypes::{Field, FieldRef};
 use datafusion_common::{DFSchemaRef, ScalarValue, TableReference};
 use datafusion_expr::LogicalPlan;
 use sail_common::spec;
@@ -85,6 +85,13 @@ pub(super) struct PlanResolverState {
     /// Positional parameter values available for IDENTIFIER clause evaluation.
     /// Set alongside `param_values` when resolving a `WithParameters` query node.
     positional_param_values: Vec<ScalarValue>,
+    /// Stack of in-scope lambda parameter frames (innermost last).
+    /// Each frame holds the declared parameter names of one enclosing lambda
+    /// function, along with the parameter field when the enclosing
+    /// higher-order function provides it.
+    lambda_param_scopes: Vec<Vec<(String, Option<FieldRef>)>>,
+    /// The named windows defined in the current query, keyed by window name.
+    windows: HashMap<String, spec::Window>,
 }
 
 impl Default for PlanResolverState {
@@ -105,6 +112,8 @@ impl PlanResolverState {
             config: PlanResolverStateConfig::default(),
             param_values: HashMap::new(),
             positional_param_values: Vec::new(),
+            lambda_param_scopes: Vec::new(),
+            windows: HashMap::new(),
         }
     }
 
@@ -136,6 +145,14 @@ impl PlanResolverState {
     /// This is similar to [`Self::register_field_name`] but the field is marked as hidden.
     pub fn register_hidden_field_name(&mut self, name: impl Into<String>) -> String {
         self.register_field_info(name, true)
+    }
+
+    /// Sets the display name of an already-registered field. Used to give a
+    /// materialized column (e.g. an unnested `window` column) a referenceable name.
+    pub fn set_field_name(&mut self, field_id: &str, name: impl Into<String>) {
+        if let Some(info) = self.fields.get_mut(field_id) {
+            info.name = name.into();
+        }
     }
 
     pub fn register_field(&mut self, field: impl AsRef<Field>) -> String {
@@ -246,6 +263,17 @@ impl PlanResolverState {
         ConfigScope::new(self)
     }
 
+    pub fn set_windows(
+        &mut self,
+        windows: HashMap<String, spec::Window>,
+    ) -> HashMap<String, spec::Window> {
+        std::mem::replace(&mut self.windows, windows)
+    }
+
+    pub fn get_window(&self, name: &str) -> Option<&spec::Window> {
+        self.windows.get(name)
+    }
+
     // TODO:
     //  1. It's unclear which `PySparkUdfType`s rely on the `arrow_use_large_var_types` config.
     //     While searching through the Spark codebase provides insight into this config's usage,
@@ -271,6 +299,31 @@ impl PlanResolverState {
     /// Returns the positional parameter value at the given 0-based index, if any.
     pub fn get_positional_param_value(&self, index: usize) -> Option<&ScalarValue> {
         self.positional_param_values.get(index)
+    }
+
+    /// Enters a scope where the given lambda function parameters are in scope.
+    /// The frame is popped when the scope is dropped.
+    pub fn enter_lambda_scope(
+        &mut self,
+        params: Vec<(String, Option<FieldRef>)>,
+    ) -> LambdaScope<'_> {
+        LambdaScope::new(self, params)
+    }
+
+    /// Resolves a name against the in-scope lambda parameters, innermost first.
+    /// Returns the declared spelling of the parameter so that the emitted
+    /// lambda variable matches the lambda parameter list exactly, along with
+    /// the parameter field if known.
+    pub fn resolve_lambda_parameter(&self, name: &str) -> Option<(&str, Option<&FieldRef>)> {
+        self.lambda_param_scopes
+            .iter()
+            .rev()
+            .find_map(|frame| frame.iter().find(|(p, _)| p.eq_ignore_ascii_case(name)))
+            .map(|(p, f)| (p.as_str(), f.as_ref()))
+    }
+
+    pub fn in_lambda_scope(&self) -> bool {
+        !self.lambda_param_scopes.is_empty()
     }
 
     /// Enters a scope where named and positional parameter values are set.
@@ -418,6 +471,28 @@ impl<'a> ConfigScope<'a> {
 impl Drop for ConfigScope<'_> {
     fn drop(&mut self) {
         self.state.config = std::mem::take(&mut self.previous_config);
+    }
+}
+
+/// Scope for the parameter names of a lambda function being resolved.
+pub(crate) struct LambdaScope<'a> {
+    state: &'a mut PlanResolverState,
+}
+
+impl<'a> LambdaScope<'a> {
+    fn new(state: &'a mut PlanResolverState, params: Vec<(String, Option<FieldRef>)>) -> Self {
+        state.lambda_param_scopes.push(params);
+        Self { state }
+    }
+
+    pub(crate) fn state(&mut self) -> &mut PlanResolverState {
+        self.state
+    }
+}
+
+impl Drop for LambdaScope<'_> {
+    fn drop(&mut self) {
+        self.state.lambda_param_scopes.pop();
     }
 }
 

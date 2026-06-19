@@ -2,16 +2,16 @@ use std::sync::Arc;
 
 use datafusion_common::{JoinType, TableReference};
 use datafusion_expr::utils::{expr_to_columns, split_conjunction};
-use datafusion_expr::{build_join_schema, Expr, Extension, LogicalPlan, SubqueryAlias};
+use datafusion_expr::{build_join_schema, Expr, LogicalPlan, SubqueryAlias};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::TableKind;
+use sail_common_datafusion::catalog::{LakehouseOperation, TableKind};
 use sail_common_datafusion::column_features::ColumnFeatures;
-use sail_common_datafusion::datasource::OptionLayer;
+use sail_common_datafusion::datasource::{MergeInfo, OptionLayer, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_logical_plan::merge::{
-    MergeAssignment, MergeIntoNode, MergeIntoOptions, MergeMatchedAction, MergeMatchedClause,
+    MergeAssignment, MergeIntoOptions, MergeMatchedAction, MergeMatchedClause,
     MergeNotMatchedBySourceAction, MergeNotMatchedBySourceClause, MergeNotMatchedByTargetAction,
     MergeNotMatchedByTargetClause, MergeTargetInfo,
 };
@@ -132,6 +132,7 @@ impl PlanResolver<'_> {
             )
             .await?;
 
+        let target_format = target_metadata.format.clone();
         let options = MergeIntoOptions {
             target_alias: target_alias_string,
             source_alias: source_alias_string,
@@ -152,14 +153,20 @@ impl PlanResolver<'_> {
             check_constraint_exprs,
         };
 
-        Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(MergeIntoNode::new(
-                Arc::new(target_plan),
-                Arc::new(source_plan),
-                options,
-                merge_schema,
-            )),
-        }))
+        let registry = self.ctx.extension::<TableFormatRegistry>()?;
+        let format = registry.get(&target_format)?;
+        let session_state = self.ctx.state();
+        Ok(format
+            .create_merger(
+                &session_state,
+                MergeInfo {
+                    target: Arc::new(target_plan),
+                    source: Arc::new(source_plan),
+                    options,
+                    input_schema: merge_schema,
+                },
+            )
+            .await?)
     }
 
     async fn resolve_merge_source(
@@ -510,12 +517,22 @@ impl PlanResolver<'_> {
                 let location = location.ok_or_else(|| {
                     PlanError::invalid(format!("table does not have a location: {table:?}"))
                 })?;
+                let table_name: Vec<String> = table.clone().into();
+                let lakehouse_table = self
+                    .resolve_lakehouse_table_context(
+                        &table_name,
+                        LakehouseOperation::Write,
+                        Some(&format),
+                        vec![],
+                    )
+                    .await?;
                 Ok(MergeTargetInfo {
-                    table_name: table.clone().into(),
+                    table_name,
                     format,
                     location,
                     partition_by: partition_by.into_iter().map(|field| field.column).collect(),
                     options: vec![OptionLayer::TablePropertyList { items: properties }],
+                    lakehouse_table: Some(lakehouse_table),
                 })
             }
             _ => Err(PlanError::unsupported(

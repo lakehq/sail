@@ -67,6 +67,10 @@ impl PlanError {
     pub fn internal(message: impl Into<String>) -> Self {
         PlanError::InternalError(message.into())
     }
+
+    pub fn analysis(message: impl Into<String>) -> Self {
+        PlanError::AnalysisError(message.into())
+    }
 }
 
 impl From<CommonError> for PlanError {
@@ -89,6 +93,19 @@ impl From<CatalogError> for PlanError {
             e @ CatalogError::AlreadyExists(_, _) => PlanError::AnalysisError(e.to_string()),
             CatalogError::Conflict(message) => PlanError::AnalysisError(message),
             CatalogError::NotSupported(message) => PlanError::NotSupported(message),
+            CatalogError::UnsupportedCapability(message) => PlanError::NotSupported(message),
+            CatalogError::Unauthorized(message)
+            | CatalogError::Forbidden(message)
+            | CatalogError::AuthExpired(message)
+            | CatalogError::RateLimited(message)
+            | CatalogError::ResourceExhausted(message)
+            | CatalogError::ReadOnly(message)
+            | CatalogError::StaleMetadata(message)
+            | CatalogError::CommitStateUnknown(message)
+            | CatalogError::CredentialUnavailable(message)
+            | CatalogError::ConversionLag(message)
+            | CatalogError::ConversionFailed(message)
+            | CatalogError::RemoteProtocol(message) => PlanError::AnalysisError(message),
             CatalogError::Internal(message) => PlanError::InternalError(message),
             CatalogError::External(message) => PlanError::AnalysisError(message),
         }

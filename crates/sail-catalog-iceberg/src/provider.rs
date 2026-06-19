@@ -11,20 +11,25 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::Arc;
 
 use percent_encoding::percent_decode_str;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
+use sail_catalog::lakehouse::{
+    BeginTableAccessRequest, LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest,
+    TableAccessSession,
+};
 use sail_catalog::provider::{
-    AlterTableOptions, CatalogPartitionField, CatalogProvider, CommitTableOptions,
-    CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions,
-    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
-    PartitionTransform,
+    AlterTableOptions, CatalogPartitionField, CatalogProvider, CreateDatabaseOptions,
+    CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
+    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
 use sail_common_datafusion::catalog::managed::METADATA_LOCATION_KEY;
 use sail_common_datafusion::catalog::{
-    CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort, DatabaseStatus,
+    CapabilityFingerprint, CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
+    DatabaseStatus, IcebergRestTableSessionRef, ScanAuthority, TableAccessSessionRef,
     TableColumnStatus, TableKind, TableStatus,
 };
 use sail_iceberg::utils::partition_transform::catalog_partition_field_from_iceberg;
@@ -45,6 +50,9 @@ pub const REST_CATALOG_PROP_PREFIX: &str = "prefix";
 pub const REST_CATALOG_PROP_NAMESPACE_SEPARATOR: &str = "namespace-separator";
 
 const REST_CATALOG_DEFAULT_NAMESPACE_SEPARATOR: &str = "\x1F";
+const REST_ACCESS_DELEGATION_VENDED_CREDENTIALS: &str = "vended-credentials";
+const REST_TABLE_SCAN_PLANNING_MODE_KEY: &str = "scan-planning-mode";
+const REST_REMOTE_SIGNING_ENABLED_KEY: &str = "s3.remote-signing-enabled";
 
 // TODO: Further properties and configurations may be needed from:
 //  - https://iceberg.apache.org/docs/nightly/configuration/#catalog-properties
@@ -239,16 +247,67 @@ impl IcebergRestCatalogProvider {
         Ok(result)
     }
 
+    async fn load_table_result_with(
+        &self,
+        client: &ApiClient,
+        catalog_config: &RestCatalogConfig,
+        database: &Namespace,
+        table: &str,
+        access_delegation: Option<&str>,
+    ) -> CatalogResult<crate::models::LoadTableResult> {
+        client
+            .catalog_api_api()
+            .load_table(
+                &Self::namespace_string(catalog_config, database)?,
+                table,
+                access_delegation,
+                None,
+                None,
+                Self::catalog_prefix(catalog_config),
+            )
+            .await
+            .map_err(|e| match e {
+                apis::Error::ResponseError(apis::ResponseContent { status, .. })
+                    if status == 404 =>
+                {
+                    CatalogError::NotFound(
+                        CatalogObject::Table,
+                        format!(
+                            "{}.{}",
+                            quote_namespace_if_needed(database),
+                            quote_name_if_needed(table)
+                        ),
+                    )
+                }
+                _ => CatalogError::External(format!(
+                    "Failed to load table {}.{}: {e}",
+                    quote_namespace_if_needed(database),
+                    quote_name_if_needed(table),
+                )),
+            })
+    }
+
+    async fn load_table_result(
+        &self,
+        database: &Namespace,
+        table: &str,
+    ) -> CatalogResult<crate::models::LoadTableResult> {
+        let (client, catalog_config) = self.load_client_and_merged_config().await?;
+        self.load_table_result_with(client, catalog_config, database, table, None)
+            .await
+    }
+
     async fn commit_table_request(
         &self,
         database: &Namespace,
         table: &str,
-        options: CommitTableOptions,
+        format: &str,
+        requirements: Vec<serde_json::Value>,
+        updates: Vec<serde_json::Value>,
     ) -> CatalogResult<crate::models::CommitTableResponse> {
-        if !options.format.eq_ignore_ascii_case("iceberg") {
+        if !format.eq_ignore_ascii_case("iceberg") {
             return Err(CatalogError::NotSupported(format!(
-                "Iceberg REST catalog cannot commit '{}' tables",
-                options.format
+                "Iceberg REST catalog cannot commit '{format}' tables",
             )));
         }
 
@@ -271,8 +330,8 @@ impl IcebergRestCatalogProvider {
                 "namespace": Vec::<String>::from(database.clone()),
                 "name": table,
             },
-            "requirements": options.requirements,
-            "updates": options.updates,
+            "requirements": requirements,
+            "updates": updates,
         });
 
         let mut request = client_config.client.post(uri);
@@ -316,6 +375,24 @@ impl IcebergRestCatalogProvider {
                 quote_namespace_if_needed(database),
                 quote_name_if_needed(table)
             )))
+        } else if status == reqwest::StatusCode::UNAUTHORIZED {
+            Err(CatalogError::Unauthorized(format!(
+                "Iceberg REST catalog commit unauthorized for {}.{}: {content}",
+                quote_namespace_if_needed(database),
+                quote_name_if_needed(table)
+            )))
+        } else if status == reqwest::StatusCode::FORBIDDEN {
+            Err(CatalogError::Forbidden(format!(
+                "Iceberg REST catalog commit forbidden for {}.{}: {content}",
+                quote_namespace_if_needed(database),
+                quote_name_if_needed(table)
+            )))
+        } else if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            Err(CatalogError::RateLimited(format!(
+                "Iceberg REST catalog commit rate limited for {}.{}: {content}",
+                quote_namespace_if_needed(database),
+                quote_name_if_needed(table)
+            )))
         } else {
             Err(CatalogError::External(format!(
                 "Failed to commit Iceberg table {}.{}: status {status}: {content}",
@@ -325,6 +402,110 @@ impl IcebergRestCatalogProvider {
         }
     }
 
+    fn normalize_scan_planning_mode(value: &str) -> CatalogResult<String> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "client" => Ok("client".to_string()),
+            "server" => Ok("server".to_string()),
+            other => Err(CatalogError::InvalidArgument(format!(
+                "Invalid Iceberg REST {REST_TABLE_SCAN_PLANNING_MODE_KEY}: {other}"
+            ))),
+        }
+    }
+
+    fn effective_scan_planning_mode(
+        table_config: Option<&HashMap<String, String>>,
+        catalog_config: &RestCatalogConfig,
+    ) -> CatalogResult<Option<String>> {
+        table_config
+            .and_then(|config| config.get(REST_TABLE_SCAN_PLANNING_MODE_KEY))
+            .or_else(|| catalog_config.props.get(REST_TABLE_SCAN_PLANNING_MODE_KEY))
+            .map(|value| Self::normalize_scan_planning_mode(value))
+            .transpose()
+    }
+
+    fn remote_signing_enabled(
+        table_config: Option<&HashMap<String, String>>,
+        catalog_config: &RestCatalogConfig,
+    ) -> bool {
+        table_config
+            .and_then(|config| config.get(REST_REMOTE_SIGNING_ENABLED_KEY))
+            .or_else(|| catalog_config.props.get(REST_REMOTE_SIGNING_ENABLED_KEY))
+            .map(|value| value.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    }
+
+    fn hash_string_map(map: &HashMap<String, String>, hasher: &mut impl Hasher) {
+        let mut entries = map.iter().collect::<Vec<_>>();
+        entries.sort_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key));
+        for (key, value) in entries {
+            key.hash(hasher);
+            value.hash(hasher);
+        }
+    }
+
+    fn rest_table_session_fingerprint(
+        &self,
+        database: &Namespace,
+        table: &str,
+        scan_planning_mode: Option<&str>,
+        remote_signing_enabled: bool,
+        result: &crate::models::LoadTableResult,
+    ) -> String {
+        let mut hasher = DefaultHasher::new();
+        self.name.hash(&mut hasher);
+        Vec::<String>::from(database.clone()).hash(&mut hasher);
+        table.hash(&mut hasher);
+        result.metadata_location.hash(&mut hasher);
+        result.metadata.table_uuid.hash(&mut hasher);
+        scan_planning_mode.hash(&mut hasher);
+        remote_signing_enabled.hash(&mut hasher);
+        if let Some(config) = result.config.as_ref() {
+            Self::hash_string_map(config, &mut hasher);
+        }
+        if let Some(credentials) = result.storage_credentials.as_ref() {
+            let mut summaries = credentials
+                .iter()
+                .map(|credential| {
+                    let mut credential_hasher = DefaultHasher::new();
+                    credential.prefix.hash(&mut credential_hasher);
+                    Self::hash_string_map(&credential.config, &mut credential_hasher);
+                    (credential.prefix.as_str(), credential_hasher.finish())
+                })
+                .collect::<Vec<_>>();
+            summaries.sort_by(|(left_prefix, _), (right_prefix, _)| left_prefix.cmp(right_prefix));
+            summaries.hash(&mut hasher);
+        }
+        format!("iceberg-rest:{:016x}", hasher.finish())
+    }
+
+    fn rest_table_session_ref(
+        &self,
+        database: &Namespace,
+        table: &str,
+        catalog_config: &RestCatalogConfig,
+        result: &crate::models::LoadTableResult,
+    ) -> CatalogResult<IcebergRestTableSessionRef> {
+        let config = result.config.as_ref();
+        let credentials = result.storage_credentials.as_deref();
+        let scan_planning_mode = Self::effective_scan_planning_mode(config, catalog_config)?;
+        let remote_signing_enabled = Self::remote_signing_enabled(config, catalog_config);
+        let fingerprint = self.rest_table_session_fingerprint(
+            database,
+            table,
+            scan_planning_mode.as_deref(),
+            remote_signing_enabled,
+            result,
+        );
+        Ok(IcebergRestTableSessionRef {
+            fingerprint,
+            scan_planning_mode,
+            storage_credential_count: credentials
+                .map(|credentials| credentials.len())
+                .unwrap_or(0),
+            remote_signing_enabled,
+        })
+    }
+
     /// Converts an Iceberg REST API table load result into a catalog `TableStatus`.
     fn load_table_result_to_status(
         &self,
@@ -332,10 +513,9 @@ impl IcebergRestCatalogProvider {
         database: &Namespace,
         result: crate::models::LoadTableResult,
     ) -> CatalogResult<TableStatus> {
-        // TODO: Do we want to do anything with:
-        //  - `result.config``
-        //  - `result.storage_credentials`
-        //  - Unused fields in `TableMetadata`?
+        // Table-specific config and storage credentials are access-session state, not
+        // display table properties.
+        // TODO: Preserve unused fields in `TableMetadata` when Sail exposes them.
         let crate::models::TableMetadata {
             format_version,
             table_uuid,
@@ -675,6 +855,13 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         &self.name
     }
 
+    fn lakehouse_capabilities(&self) -> Vec<LakehouseCapability> {
+        vec![
+            LakehouseCapability::TableAccessSessions,
+            LakehouseCapability::IcebergRestCommit,
+        ]
+    }
+
     async fn create_database(
         &self,
         database: &Namespace,
@@ -885,14 +1072,12 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         table: &str,
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
-        let (client, catalog_config) = self.load_client_and_merged_config().await?;
-
         let CreateTableOptions {
             columns,
             comment,
             constraints,
             location,
-            format: _, // TODO: What to do with format?
+            format,
             partition_by,
             sort_by,
             bucket_by,
@@ -902,6 +1087,14 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             is_external: _,
             is_write_precondition: _,
         } = options;
+
+        if !format.eq_ignore_ascii_case("iceberg") {
+            return Err(CatalogError::NotSupported(format!(
+                "Iceberg REST catalog cannot create '{format}' tables"
+            )));
+        }
+
+        let (client, catalog_config) = self.load_client_and_merged_config().await?;
 
         if if_not_exists {
             if let Ok(existing) = self.get_table(database, table).await {
@@ -985,37 +1178,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
     }
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
-        let (client, catalog_config) = self.load_client_and_merged_config().await?;
-        let result = client
-            .catalog_api_api()
-            .load_table(
-                &Self::namespace_string(catalog_config, database)?,
-                table,
-                None,
-                None,
-                None,
-                Self::catalog_prefix(catalog_config),
-            )
-            .await
-            .map_err(|e| match e {
-                apis::Error::ResponseError(apis::ResponseContent { status, .. })
-                    if status == 404 =>
-                {
-                    CatalogError::NotFound(
-                        CatalogObject::Table,
-                        format!(
-                            "{}.{}",
-                            quote_namespace_if_needed(database),
-                            quote_name_if_needed(table)
-                        ),
-                    )
-                }
-                _ => CatalogError::External(format!(
-                    "Failed to load table {}.{}: {e}",
-                    quote_namespace_if_needed(database),
-                    quote_name_if_needed(table),
-                )),
-            })?;
+        let result = self.load_table_result(database, table).await?;
         self.load_table_result_to_status(table, database, result)
     }
 
@@ -1096,20 +1259,82 @@ impl CatalogProvider for IcebergRestCatalogProvider {
         ))
     }
 
-    async fn commit_table(
+    async fn commit_lakehouse_table(
         &self,
         database: &Namespace,
         table: &str,
-        options: CommitTableOptions,
-    ) -> CatalogResult<TableStatus> {
-        let response = self.commit_table_request(database, table, options).await?;
-        let result = crate::models::LoadTableResult {
-            metadata_location: Some(response.metadata_location),
-            metadata: response.metadata,
-            config: None,
-            storage_credentials: None,
+        request: LakehouseCommitRequest,
+    ) -> CatalogResult<LakehouseCommitOutcome> {
+        let LakehouseCommitRequest {
+            context,
+            format,
+            requirements,
+            updates,
+            payload,
+        } = request;
+        let response = self
+            .commit_table_request(database, table, &format, requirements, updates)
+            .await?;
+        let payload = match payload {
+            Some(payload) => Some(payload),
+            None => Some(serde_json::to_value(response).map_err(|e| {
+                CatalogError::External(format!("Failed to serialize commit response: {e}"))
+            })?),
         };
-        self.load_table_result_to_status(table, database, result)
+        Ok(LakehouseCommitOutcome::Committed { context, payload })
+    }
+
+    async fn begin_table_access(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: BeginTableAccessRequest,
+    ) -> CatalogResult<TableAccessSession> {
+        let BeginTableAccessRequest {
+            mut context,
+            purpose: _,
+        } = request;
+        let (client, catalog_config) = self.load_client_and_merged_config().await?;
+        let result = self
+            .load_table_result_with(
+                client,
+                catalog_config,
+                database,
+                table,
+                Some(REST_ACCESS_DELEGATION_VENDED_CREDENTIALS),
+            )
+            .await?;
+        // TODO: Convert preserved REST table-session credentials into operation-scoped
+        // FileIO/object-store access instead of only fingerprinting the session.
+        let rest_session = self.rest_table_session_ref(database, table, catalog_config, &result)?;
+        if rest_session.scan_planning_mode.as_deref() == Some("server") {
+            context.scan = ScanAuthority::IcebergRestServerSide;
+        } else {
+            context.scan = ScanAuthority::ClientTableFormat;
+        }
+        let reference = TableAccessSessionRef {
+            fingerprint: rest_session.fingerprint.clone(),
+        };
+        context.access_session = Some(reference.clone());
+        context.rest_session = Some(rest_session.clone());
+        context.capability_fingerprint = CapabilityFingerprint(format!(
+            "{}:{}",
+            context.capability_fingerprint.0, rest_session.fingerprint
+        ));
+        let credential_scope = (rest_session.storage_credential_count > 0).then(|| {
+            format!(
+                "iceberg-rest:{}.{}",
+                quote_namespace_if_needed(database),
+                table
+            )
+        });
+        Ok(TableAccessSession {
+            reference,
+            context: context.clone(),
+            expires_at_ms: None,
+            credential_scope,
+            capability_fingerprint: context.capability_fingerprint,
+        })
     }
 
     async fn create_view(
@@ -1694,7 +1919,13 @@ fn parse_unary_sort_transform(
 #[expect(clippy::unwrap_used, clippy::panic)]
 #[cfg(test)]
 mod tests {
-    use wiremock::matchers::{method, path, query_param, query_param_is_missing};
+    use sail_catalog::lakehouse::TableAccessPurpose;
+    use sail_common_datafusion::catalog::{
+        CatalogProviderId, CatalogTableIdentity, CommitAuthority, LakehouseAuthority,
+        LakehouseExecutionContext, LakehouseFormat, LakehouseOperation, MetadataPointerAuthority,
+        TableLifecycle,
+    };
+    use wiremock::matchers::{header, method, path, query_param, query_param_is_missing};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
@@ -2651,6 +2882,111 @@ mod tests {
     async fn test_get_table() {
         test_get_table_impl(None).await;
         test_get_table_impl(Some("test")).await;
+    }
+
+    #[tokio::test]
+    async fn begin_table_access_preserves_rest_session_hints_without_secret_values() {
+        let ctx = TestContext::new(Some("test")).await;
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/db1/tables/table1")))
+            .and(header(
+                "X-Iceberg-Access-Delegation",
+                REST_ACCESS_DELEGATION_VENDED_CREDENTIALS,
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "metadata-location": "s3://bucket/table/metadata/v1.metadata.json",
+                "metadata": {
+                    "format-version": 2,
+                    "table-uuid": "12345678-1234-1234-1234-123456789012",
+                    "location": "s3://bucket/table",
+                    "current-schema-id": 0,
+                    "schemas": [
+                        {
+                            "type": "struct",
+                            "schema-id": 0,
+                            "fields": [
+                                {
+                                    "id": 1,
+                                    "name": "id",
+                                    "required": true,
+                                    "type": "long"
+                                }
+                            ]
+                        }
+                    ]
+                },
+                "config": {
+                    "scan-planning-mode": "server",
+                    "token": "session-token-secret",
+                    "s3.remote-signing-enabled": "true"
+                },
+                "storage-credentials": [
+                    {
+                        "prefix": "s3://credential-bucket/private-prefix",
+                        "config": {
+                            "s3.access-key-id": "AKIA-SECRET",
+                            "s3.secret-access-key": "storage-secret"
+                        }
+                    }
+                ]
+            })))
+            .expect(1)
+            .mount(&ctx.server)
+            .await;
+
+        let context = LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("test".to_string()),
+            vec!["test".to_string(), "db1".to_string(), "table1".to_string()],
+            CatalogTableIdentity {
+                table_id: None,
+                table_uri: Some("s3://bucket/table".to_string()),
+            },
+            LakehouseOperation::Read,
+            LakehouseFormat::Iceberg,
+            LakehouseAuthority::CatalogAuthoritative {
+                lifecycle: TableLifecycle::External,
+                pointer: MetadataPointerAuthority::IcebergRest,
+                commit: CommitAuthority::IcebergRestCommit,
+            },
+            ScanAuthority::ClientTableFormat,
+        );
+
+        let session = ctx
+            .catalog
+            .begin_table_access(
+                &namespace,
+                "table1",
+                BeginTableAccessRequest {
+                    context,
+                    purpose: TableAccessPurpose::DataRead,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(session.context.scan, ScanAuthority::IcebergRestServerSide);
+        let rest_session = session.context.rest_session.as_ref().unwrap();
+        assert_eq!(rest_session.scan_planning_mode.as_deref(), Some("server"));
+        assert_eq!(rest_session.storage_credential_count, 1);
+        assert!(rest_session.remote_signing_enabled);
+        assert_eq!(
+            session.reference.fingerprint,
+            session.context.access_session.as_ref().unwrap().fingerprint
+        );
+        assert_eq!(session.reference.fingerprint, rest_session.fingerprint);
+
+        let serialized = serde_json::to_string(&session.context).unwrap();
+        assert!(!serialized.contains("s3://bucket/table/metadata/v1.metadata.json"));
+        assert!(!serialized.contains("s3://credential-bucket/private-prefix"));
+        assert!(!serialized.contains("s3.remote-signing-enabled"));
+        assert!(!serialized.contains("s3.access-key-id"));
+        assert!(!serialized.contains("s3.secret-access-key"));
+        assert!(!serialized.contains("token"));
+        assert!(!serialized.contains("session-token-secret"));
+        assert!(!serialized.contains("AKIA-SECRET"));
+        assert!(!serialized.contains("storage-secret"));
     }
 
     async fn test_get_view_impl(name: Option<&str>) {
