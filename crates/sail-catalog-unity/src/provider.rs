@@ -16,10 +16,15 @@ use std::str::FromStr;
 use arrow::datatypes::DataType;
 use reqwest::header::HeaderValue;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
+use sail_catalog::lakehouse::{
+    DeltaRatifiedCommit, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
+    LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest,
+    LakehouseCreateMaterialization, LakehouseCreatePlan, LakehouseCreateRequest,
+};
 use sail_catalog::provider::{
-    AlterTableOptions, CatalogProvider, CommitTableOptions, CreateDatabaseOptions,
-    CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
-    GetTableCommitsOptions, GetTableCommitsResponse, Namespace, TableCommitInfo,
+    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
+    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    TableFormatCreateMetadataMode,
 };
 use sail_catalog::utils::{get_property, quote_namespace_if_needed};
 use sail_common_datafusion::catalog::delta::{
@@ -828,30 +833,65 @@ impl CatalogProvider for UnityCatalogProvider {
         Ok(())
     }
 
-    async fn commit_table(
+    fn lakehouse_capabilities(&self) -> Vec<LakehouseCapability> {
+        vec![
+            LakehouseCapability::CatalogCommit,
+            LakehouseCapability::DeltaRatifiedCommits,
+        ]
+    }
+
+    async fn plan_lakehouse_create(
         &self,
         database: &Namespace,
         table: &str,
-        options: CommitTableOptions,
-    ) -> CatalogResult<TableStatus> {
-        if !options.format.eq_ignore_ascii_case("delta") {
+        request: LakehouseCreateRequest,
+    ) -> CatalogResult<LakehouseCreatePlan> {
+        let mut plan = sail_catalog::lakehouse::plan_lakehouse_create_from_requirement(
+            self.get_name(),
+            request.catalog_table,
+            &request.options,
+            sail_catalog::provider::CreateTableMetadataRequirement::None,
+            &self.lakehouse_capabilities(),
+        );
+        let _ = (database, table);
+        if request.options.format.eq_ignore_ascii_case("delta") && !request.options.is_external {
+            plan.materialization = LakehouseCreateMaterialization::AfterCatalogTableFormat {
+                mode: TableFormatCreateMetadataMode::CatalogCoordinated,
+            };
+        }
+        Ok(plan)
+    }
+
+    async fn commit_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseCommitRequest,
+    ) -> CatalogResult<LakehouseCommitOutcome> {
+        let LakehouseCommitRequest {
+            context,
+            format,
+            requirements,
+            updates,
+            payload,
+        } = request;
+        if !format.eq_ignore_ascii_case("delta") {
             return Err(CatalogError::NotSupported(format!(
-                "Unity Catalog commit for {} tables",
-                options.format
+                "Unity Catalog commit for {format} tables"
             )));
         }
-        if !options.requirements.is_empty() {
+        if !requirements.is_empty() {
             return Err(CatalogError::NotSupported(
                 "Unity Catalog Delta commits do not support generic commit requirements"
                     .to_string(),
             ));
         }
-        let [update] = options.updates.as_slice() else {
+        let [update] = updates.as_slice() else {
             return Err(CatalogError::InvalidArgument(
                 "Unity Catalog Delta commit expects exactly one update payload".to_string(),
             ));
         };
-        let request: types::DeltaCommit = serde_json::from_value(update.clone()).map_err(|e| {
+        let commit: types::DeltaCommit = serde_json::from_value(update.clone()).map_err(|e| {
             CatalogError::InvalidArgument(format!("Invalid Delta commit payload: {e}"))
         })?;
 
@@ -860,14 +900,15 @@ impl CatalogProvider for UnityCatalogProvider {
             .await
             .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
 
-        match client.commit().body(request).send().await {
-            Ok(_) => self.get_table(database, table).await,
+        let _ = (database, table);
+        match client.commit().body(commit).send().await {
+            Ok(_) => Ok(LakehouseCommitOutcome::Committed { context, payload }),
             // The OSS Unity Catalog server currently returns a plain "200 OK" body
             // for Delta commits even though the OpenAPI spec declares a JSON response.
             Err(progenitor_client::Error::InvalidResponsePayload(bytes, _))
                 if bytes.as_ref() == b"200 OK" =>
             {
-                self.get_table(database, table).await
+                Ok(LakehouseCommitOutcome::Committed { context, payload })
             }
             Err(e) if e.status().is_some_and(|status| status.as_u16() == 409) => Err(
                 CatalogError::Conflict(format!("Unity Catalog Delta commit conflict: {e}")),
@@ -877,6 +918,15 @@ impl CatalogProvider for UnityCatalogProvider {
                     "Unity Catalog Delta commit invalid argument: {e}"
                 )))
             }
+            Err(e) if e.status().is_some_and(|status| status.as_u16() == 401) => Err(
+                CatalogError::Unauthorized(format!("Unity Catalog Delta commit unauthorized: {e}")),
+            ),
+            Err(e) if e.status().is_some_and(|status| status.as_u16() == 403) => Err(
+                CatalogError::Forbidden(format!("Unity Catalog Delta commit forbidden: {e}")),
+            ),
+            Err(e) if e.status().is_some_and(|status| status.as_u16() == 429) => Err(
+                CatalogError::RateLimited(format!("Unity Catalog Delta commit rate limited: {e}")),
+            ),
             Err(e) if e.status().is_some_and(|status| status.as_u16() == 501) => Err(
                 CatalogError::NotSupported("Unity Catalog Delta commit endpoint".to_string()),
             ),
@@ -886,19 +936,12 @@ impl CatalogProvider for UnityCatalogProvider {
         }
     }
 
-    async fn get_table_commits(
+    async fn get_delta_ratified_commits(
         &self,
         database: &Namespace,
         table: &str,
-        options: GetTableCommitsOptions,
-    ) -> CatalogResult<GetTableCommitsResponse> {
-        if !options.format.eq_ignore_ascii_case("delta") {
-            return Err(CatalogError::NotSupported(format!(
-                "Unity Catalog commit discovery for {} tables",
-                options.format
-            )));
-        }
-
+        request: DeltaRatifiedCommitRequest,
+    ) -> CatalogResult<DeltaRatifiedCommitResponse> {
         let status = self.get_table(database, table).await?;
         let (format, location, properties) = match &status.kind {
             TableKind::Table {
@@ -919,15 +962,15 @@ impl CatalogProvider for UnityCatalogProvider {
             )));
         }
         let table_uri = if let Some(location) = location {
-            if location.trim_end_matches('/') != options.table_uri.trim_end_matches('/') {
+            if location.trim_end_matches('/') != request.table_uri.trim_end_matches('/') {
                 return Err(CatalogError::InvalidArgument(format!(
                     "Unity Catalog Delta commit discovery table URI mismatch: catalog location `{location}`, requested `{}`",
-                    options.table_uri
+                    request.table_uri
                 )));
             }
             location.clone()
         } else {
-            options.table_uri
+            request.table_uri
         };
         let table_id = unity_table_id_value(
             properties
@@ -941,8 +984,8 @@ impl CatalogProvider for UnityCatalogProvider {
         })?;
 
         let request = types::DeltaGetCommits {
-            end_version: options.end_version,
-            start_version: options.start_version,
+            end_version: request.end_version,
+            start_version: request.start_version,
             table_id: table_id.to_string(),
             table_uri,
         };
@@ -956,12 +999,12 @@ impl CatalogProvider for UnityCatalogProvider {
         match client.get_commits().body(request).send().await {
             Ok(response) => {
                 let response = response.into_inner();
-                Ok(GetTableCommitsResponse {
+                Ok(DeltaRatifiedCommitResponse {
                     latest_table_version: response.latest_table_version,
                     commits: response
                         .commits
                         .into_iter()
-                        .map(|commit| TableCommitInfo {
+                        .map(|commit| DeltaRatifiedCommit {
                             version: commit.version,
                             timestamp: commit.timestamp,
                             file_name: commit.file_name,

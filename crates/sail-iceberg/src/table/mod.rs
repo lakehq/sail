@@ -96,6 +96,22 @@ impl Table {
 
     /// Build an Iceberg table provider that reflects the requested snapshot options.
     pub fn to_provider(&self, options: &IcebergReadOptions) -> Result<IcebergTableProvider> {
+        if self.metadata.current_snapshot().is_none()
+            && options.snapshot_id.is_none()
+            && options.use_ref.is_none()
+            && options.timestamp_as_of.is_none()
+        {
+            let schema = self.metadata.current_schema().cloned().ok_or_else(|| {
+                DataFusionError::Plan("No current schema found in table metadata".to_string())
+            })?;
+            let provider = IcebergTableProvider::new_empty(
+                self.table_url.to_string(),
+                schema,
+                self.metadata.partition_specs.clone(),
+                self.metadata.default_spec_id,
+            )?;
+            return Ok(provider.with_metadata_as_data_read(options.metadata_as_data_read));
+        }
         let (schema, snapshot, partition_specs) = self.scan_state(options)?;
         let provider = IcebergTableProvider::new(
             self.table_url.to_string(),

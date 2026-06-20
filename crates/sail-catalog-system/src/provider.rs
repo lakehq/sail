@@ -73,6 +73,7 @@ impl SystemCatalogProvider {
                 columns,
                 comment: Some(t.description().to_string()),
                 properties: vec![],
+                source: None,
             },
         };
         Ok(status)

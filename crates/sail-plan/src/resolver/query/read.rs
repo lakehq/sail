@@ -9,7 +9,7 @@ use datafusion_expr::{Expr, LogicalPlan, SubqueryAlias, TableScan, TableSource, 
 use rand::{rng, RngExt};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::{TableColumnStatus, TableKind};
+use sail_common_datafusion::catalog::{LakehouseOperation, TableColumnStatus, TableKind};
 use sail_common_datafusion::datasource::{OptionLayer, SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
@@ -106,7 +106,15 @@ impl PlanResolver<'_> {
                     .await?;
                 let info = SourceInfo {
                     paths: location.map(|x| vec![x]).unwrap_or_default(),
-                    catalog_table: Some(reference.clone()),
+                    lakehouse_table: Some(
+                        self.resolve_lakehouse_table_context(
+                            &reference,
+                            LakehouseOperation::Read,
+                            Some(&format),
+                            vec![],
+                        )
+                        .await?,
+                    ),
                     schema: Some(schema),
                     constraints,
                     partition_by: partition_by.into_iter().map(|field| field.column).collect(),
@@ -120,6 +128,7 @@ impl PlanResolver<'_> {
                             items: temporal_options,
                         },
                     ],
+                    read_case_sensitive: self.config.case_sensitive,
                 };
                 let registry = self.ctx.extension::<TableFormatRegistry>()?;
                 let table_source = registry
@@ -458,7 +467,7 @@ impl PlanResolver<'_> {
         };
         let info = SourceInfo {
             paths,
-            catalog_table: None,
+            lakehouse_table: None,
             schema,
             constraints: Default::default(),
             partition_by: vec![],
@@ -468,6 +477,7 @@ impl PlanResolver<'_> {
             options: vec![OptionLayer::OptionList {
                 items: options.into_iter().collect(),
             }],
+            read_case_sensitive: self.config.case_sensitive,
         };
         let registry = self.ctx.extension::<TableFormatRegistry>()?;
         let table_source = registry

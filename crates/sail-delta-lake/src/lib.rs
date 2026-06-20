@@ -10,6 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod catalog;
 mod catalog_managed;
 pub mod conversion;
 pub mod datasource;
@@ -22,7 +23,6 @@ pub mod operations;
 pub mod options;
 pub mod physical;
 pub mod physical_plan;
-pub mod planner;
 pub mod schema;
 pub mod session_extension;
 pub mod spec;

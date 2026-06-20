@@ -28,7 +28,7 @@ use datafusion_common::{internal_err, DataFusionError, Result};
 use futures::stream::once;
 use futures::StreamExt;
 use parquet::file::properties::WriterProperties;
-use sail_common_datafusion::catalog::CatalogPartitionField;
+use sail_common_datafusion::catalog::{CatalogPartitionField, LakehouseExecutionContext};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
@@ -148,6 +148,10 @@ impl IcebergWriterExec {
 
     pub fn options(&self) -> &IcebergWriterExecOptions {
         &self.options
+    }
+
+    pub fn lakehouse_table(&self) -> Option<&LakehouseExecutionContext> {
+        self.options.lakehouse_table.as_ref()
     }
 
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
@@ -599,6 +603,7 @@ impl ExecutionPlan for IcebergWriterExec {
                 },
                 requirements: commit_requirements,
                 table_properties: options.table_properties,
+                lakehouse_table: options.lakehouse_table,
                 schema: commit_schema.clone(),
                 partition_spec: if !table_exists
                     || matches!(schema_mode, Some(SchemaMode::Overwrite))

@@ -10,6 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub(crate) mod catalog_support;
 pub mod datasource;
 pub mod error;
 pub mod io;

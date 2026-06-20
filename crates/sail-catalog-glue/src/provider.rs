@@ -9,9 +9,9 @@ use aws_sdk_glue::Client;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::hive_format::HiveDetectedFormat;
 use sail_catalog::provider::{
-    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
-    CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions,
-    DropViewOptions, Namespace,
+    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
+    CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
+    DropTableOptions, DropViewOptions, Namespace, TableFormatCreateMetadataMode,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
@@ -116,6 +116,8 @@ impl GlueCatalogProvider {
 
         let format = if iceberg::is_iceberg_parameters(table.parameters()) {
             "iceberg".to_string()
+        } else if let Some(provider) = table_provider_format(table.parameters()) {
+            provider
         } else {
             HiveDetectedFormat::detect(
                 storage
@@ -349,6 +351,17 @@ impl GlueCatalogProvider {
     }
 }
 
+fn table_provider_format(parameters: Option<&HashMap<String, String>>) -> Option<String> {
+    let provider = parameters?
+        .get(hive::SPARK_DATASOURCE_PROVIDER_KEY)?
+        .trim()
+        .to_ascii_lowercase();
+    Some(match provider.as_str() {
+        "deltalake" => "delta".to_string(),
+        _ => provider,
+    })
+}
+
 #[async_trait::async_trait]
 impl CatalogProvider for GlueCatalogProvider {
     fn get_name(&self) -> &str {
@@ -533,6 +546,31 @@ impl CatalogProvider for GlueCatalogProvider {
         }
     }
 
+    fn create_table_metadata_requirement(
+        &self,
+        options: &CreateTableOptions,
+    ) -> CatalogResult<CreateTableMetadataRequirement> {
+        if options.format.eq_ignore_ascii_case("iceberg") {
+            iceberg::validate_iceberg_create_table_options(options)?;
+        } else {
+            hive::validate_hive_create_table_options(options)?;
+        }
+        if self.has_custom_endpoint()
+            && options.format.eq_ignore_ascii_case("iceberg")
+            && !options.is_write_precondition
+        {
+            Ok(CreateTableMetadataRequirement::TableFormat {
+                mode: TableFormatCreateMetadataMode::CatalogCoordinated,
+            })
+        } else if options.format.eq_ignore_ascii_case("delta") && !options.is_write_precondition {
+            Ok(CreateTableMetadataRequirement::TableFormat {
+                mode: TableFormatCreateMetadataMode::PathManaged,
+            })
+        } else {
+            Ok(CreateTableMetadataRequirement::None)
+        }
+    }
+
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
         let client = self.get_client().await?;
         let database_name = Self::database_name(database)?;
@@ -691,6 +729,8 @@ impl CatalogProvider for GlueCatalogProvider {
             .database_name(&database_name)
             .table_input(table_input);
         if let Some(version_id) = table_value.version_id() {
+            // TODO: Promote Glue optimistic version conflicts and Lake Formation
+            // governance/credential modes into typed lakehouse commit outcomes.
             update_table = update_table.version_id(version_id.to_string());
         }
         let result = update_table.send().await;
@@ -886,5 +926,52 @@ impl CatalogProvider for GlueCatalogProvider {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::panic, clippy::unwrap_used)]
+
+    use std::collections::HashMap;
+
+    use aws_sdk_glue::types::{SerDeInfo, StorageDescriptor, Table};
+    use sail_common_datafusion::catalog::TableKind;
+
+    use super::{GlueCatalogConfig, GlueCatalogProvider};
+    use crate::hive;
+
+    #[test]
+    fn table_to_status_prefers_delta_provider_over_parquet_storage() {
+        let provider = GlueCatalogProvider::new("glue".to_string(), GlueCatalogConfig::default());
+        let storage = StorageDescriptor::builder()
+            .input_format("org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat")
+            .output_format("org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat")
+            .serde_info(
+                SerDeInfo::builder()
+                    .serialization_library(
+                        "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe",
+                    )
+                    .build(),
+            )
+            .location("s3://bucket/delta_t")
+            .build();
+        let table = Table::builder()
+            .name("delta_t")
+            .storage_descriptor(storage)
+            .set_parameters(Some(HashMap::from([(
+                hive::SPARK_DATASOURCE_PROVIDER_KEY.to_string(),
+                "deltalake".to_string(),
+            )])))
+            .build()
+            .unwrap();
+
+        let status = provider
+            .table_to_status(&vec!["db".to_string()].try_into().unwrap(), &table)
+            .unwrap();
+        let TableKind::Table { format, .. } = status.kind else {
+            panic!("expected table");
+        };
+        assert_eq!(format, "delta");
     }
 }

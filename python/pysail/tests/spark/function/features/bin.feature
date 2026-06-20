@@ -1,4 +1,3 @@
-@bin
 Feature: bin converts integral values to binary strings
 
   Rule: String arguments follow Spark cast semantics

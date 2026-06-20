@@ -1,0 +1,20 @@
+>>> spark.sql("select url_decode('https%3A%2F%2Fspark.apache.org')").show(truncate=False)
++------------------------------------------+
+|url_decode(https%3A%2F%2Fspark.apache.org)|
++------------------------------------------+
+|https://spark.apache.org                  |
++------------------------------------------+
+
+>>> spark.sql("select url_decode('inva lid://user:pass@host/file\\;param?query\\;p2')").show(truncate=False)
++---------------------------------------------------------+
+|url_decode(inva lid://user:pass@host/file;param?query;p2)|
++---------------------------------------------------------+
+|inva lid://user:pass@host/file;param?query;p2            |
++---------------------------------------------------------+
+
+>>> spark.sql("select url_decode(null)").show(truncate=False)
++----------------+
+|url_decode(NULL)|
++----------------+
+|NULL            |
++----------------+

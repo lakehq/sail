@@ -5,7 +5,7 @@ use datafusion_expr::utils::{expr_to_columns, split_conjunction};
 use datafusion_expr::{build_join_schema, Expr, LogicalPlan, SubqueryAlias};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::TableKind;
+use sail_common_datafusion::catalog::{LakehouseOperation, TableKind};
 use sail_common_datafusion::column_features::ColumnFeatures;
 use sail_common_datafusion::datasource::{MergeInfo, OptionLayer, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -517,12 +517,22 @@ impl PlanResolver<'_> {
                 let location = location.ok_or_else(|| {
                     PlanError::invalid(format!("table does not have a location: {table:?}"))
                 })?;
+                let table_name: Vec<String> = table.clone().into();
+                let lakehouse_table = self
+                    .resolve_lakehouse_table_context(
+                        &table_name,
+                        LakehouseOperation::Write,
+                        Some(&format),
+                        vec![],
+                    )
+                    .await?;
                 Ok(MergeTargetInfo {
-                    table_name: table.clone().into(),
+                    table_name,
                     format,
                     location,
                     partition_by: partition_by.into_iter().map(|field| field.column).collect(),
                     options: vec![OptionLayer::TablePropertyList { items: properties }],
+                    lakehouse_table: Some(lakehouse_table),
                 })
             }
             _ => Err(PlanError::unsupported(

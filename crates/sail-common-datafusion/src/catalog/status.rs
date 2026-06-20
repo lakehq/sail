@@ -3,6 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::LogicalPlan;
+use serde::{Deserialize, Serialize};
 
 use crate::catalog::{
     CatalogPartitionField, CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
@@ -66,13 +67,30 @@ pub enum TableKind {
         columns: Vec<TableColumnStatus>,
         comment: Option<String>,
         properties: Vec<(String, String)>,
+        /// The data source backing the view, if it was created with `USING`.
+        source: Option<TemporaryViewSource>,
     },
     GlobalTemporaryView {
         plan: Arc<LogicalPlan>,
         columns: Vec<TableColumnStatus>,
         comment: Option<String>,
         properties: Vec<(String, String)>,
+        /// The data source backing the view, if it was created with `USING`.
+        source: Option<TemporaryViewSource>,
     },
+}
+
+/// The data source backing a temporary view created with
+/// `CREATE TEMPORARY VIEW ... USING <format> OPTIONS (...)`.
+///
+/// This is the write target for `INSERT INTO`/`INSERT OVERWRITE` against the view:
+///   - The rows are written to the view's backing data source location, matching Spark behavior.
+///   - It is `None` for temporary views defined by an `AS` query, which are not insertable.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct TemporaryViewSource {
+    pub format: String,
+    /// The data source options, including the `path` entry.
+    pub options: Vec<(String, String)>,
 }
 
 impl TableKind {
