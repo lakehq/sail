@@ -3,7 +3,6 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn::{coalesce, nvl};
 use datafusion::functions_nested::expr_fn;
-use datafusion::functions_nested::position::array_position as datafusion_array_position;
 use datafusion_common::ScalarValue;
 use datafusion_expr::{cast, expr, is_null, lit, not, or, when, ExprSchemable, ScalarUDF};
 use datafusion_functions_nested::make_array::make_array;
@@ -11,6 +10,7 @@ use datafusion_functions_nested::string::ArrayToString;
 use datafusion_spark::function::array::expr_fn as array_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::array_intersect::ArrayIntersect;
+use sail_function::scalar::array::array_position::SparkArrayPosition;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
@@ -155,23 +155,6 @@ fn array_contains(array: expr::Expr, element: expr::Expr) -> PlanResult<expr::Ex
 
 fn array_contains_all(array: expr::Expr, element: expr::Expr) -> expr::Expr {
     nvl(expr_fn::array_has_all(array, element), lit(false))
-}
-
-fn array_position(array: expr::Expr, element: expr::Expr) -> PlanResult<expr::Expr> {
-    Ok(coalesce(vec![
-        datafusion_array_position(
-            // datafusion panics if from_index > array_len
-            // So if the inner array_len == 0, search in NULL array instead
-            when(
-                expr_fn::cardinality(array.clone()).gt(lit(0)),
-                array.clone(),
-            )
-            .end()?,
-            element,
-            lit(1_i32),
-        ),
-        when(array.clone().is_not_null(), lit(0_i32)).end()?,
-    ]))
 }
 
 fn array_insert(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
@@ -404,7 +387,7 @@ pub(super) fn list_built_in_array_functions() -> Vec<(&'static str, ScalarFuncti
         ("array_join", F::udf(ArrayToString::new())),
         ("array_max", F::udf(ArrayMax::new())),
         ("array_min", F::udf(ArrayMin::new())),
-        ("array_position", F::binary(array_position)),
+        ("array_position", F::udf(SparkArrayPosition::new())),
         ("array_prepend", F::custom(array_prepend)),
         ("array_remove", F::binary(expr_fn::array_remove_all)),
         ("array_repeat", F::custom(array_repeat)),
