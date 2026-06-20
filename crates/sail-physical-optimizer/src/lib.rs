@@ -26,13 +26,11 @@ use crate::collect_left::RewriteCollectLeftHashJoin;
 use crate::explicit_repartition::RewriteExplicitRepartition;
 use crate::join_reorder::JoinReorder;
 pub use crate::join_reorder::JoinReorderOptions;
-use crate::wrap_higher_order::WrapHigherOrderFunctions;
 
 mod barrier;
 mod collect_left;
 mod explicit_repartition;
 mod join_reorder;
-mod wrap_higher_order;
 
 #[derive(Debug, Clone, Default)]
 pub struct PhysicalOptimizerOptions {
@@ -72,10 +70,6 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(RewriteExplicitRepartition::new()));
     rules.push(Arc::new(RewriteCollectLeftHashJoin::new()));
     rules.push(Arc::new(EnforceBarrierPartitioning::new()));
-    // Wrap higher-order function expressions so they can be serialized for
-    // distributed execution. Runs after SanityCheckPlan-relevant rewrites but
-    // before the final sanity check validates the wrapped plan.
-    rules.push(Arc::new(WrapHigherOrderFunctions::new()));
     rules.push(Arc::new(SanityCheckPlan::new()));
 
     rules

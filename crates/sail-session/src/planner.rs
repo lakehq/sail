@@ -68,6 +68,7 @@ impl QueryPlanner for ExtensionQueryPlanner {
         for rewriter in rewriters {
             logical_plan = rewriter.rewrite(logical_plan)?.data
         }
+        logical_plan = logical_plan.resolve_lambda_variables()?.data; // CHECK HERE: Move this.
         let extension_planners: Vec<Arc<dyn ExtensionPlanner + Send + Sync>> = vec![
             Arc::new(DeltaPhysicalPlanner),
             Arc::new(IcebergPhysicalPlanner),

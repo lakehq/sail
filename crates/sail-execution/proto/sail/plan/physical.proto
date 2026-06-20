@@ -81,14 +81,8 @@ message CastColumnExprNode {
   bytes target_schema = 2;
 }
 
-// A Spark higher-order function (e.g. `filter`). The argument expressions
-// (including the lambda) are carried as the extension node's `inputs`.
-// `input_schema` is the schema the inner expression was planned against,
-// needed to rebuild it. `udf` identifies the concrete higher-order function,
-// following the same one-variant-per-function pattern as `ExtendedScalarUdf`.
 message HigherOrderFunctionExprNode {
-  bytes input_schema = 1;
-  HigherOrderUdf udf = 2;
+  HigherOrderUdf udf = 1;
 }
 
 message HigherOrderUdf {
@@ -114,16 +108,12 @@ message SparkArrayFilterUdf {
   bool index_first = 1;
 }
 
-// A lambda function. Its body is carried as the extension node's single input.
 message LambdaExprNode {
   repeated string params = 1;
 }
 
-// A reference to a lambda parameter, resolved to a position in the (extended)
-// schema with its field type.
 message LambdaVariableExprNode {
   uint64 index = 1;
-  bytes field = 2;
 }
 
 message ExtendedScalarUdf {

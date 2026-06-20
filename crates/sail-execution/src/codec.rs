@@ -4,7 +4,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
-use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema, TimeUnit};
 use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::common::{
     plan_datafusion_err, plan_err, Constraint, Constraints, JoinSide, Result, ScalarValue,
@@ -24,7 +24,8 @@ use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{
-    AggregateUDF, AggregateUDFImpl, HigherOrderUDF, ScalarUDF, ScalarUDFImpl, WindowUDF,
+    AggregateUDF, AggregateUDFImpl, HigherOrderUDF, LambdaParametersProgress, ScalarUDF,
+    ScalarUDFImpl, ValueOrLambda, WindowUDF,
 };
 use datafusion::physical_expr::equivalence::{EquivalenceClass, EquivalenceGroup};
 use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable};
@@ -45,15 +46,16 @@ use datafusion_proto::physical_plan::from_proto::{
     parse_protobuf_file_scan_schema, parse_protobuf_partitioning,
 };
 use datafusion_proto::physical_plan::to_proto::{
-    serialize_file_scan_config, serialize_partitioning, serialize_physical_expr,
+    serialize_file_scan_config, serialize_partitioning, serialize_physical_expr_with_converter,
     serialize_physical_sort_exprs,
 };
 use datafusion_proto::physical_plan::{
-    AsExecutionPlan, DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
-    PhysicalPlanDecodeContext,
+    AsExecutionPlan, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
+    PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf::{
-    JoinType as ProtoJoinType, PhysicalPlanNode, PhysicalSortExprNode,
+    physical_expr_node, JoinType as ProtoJoinType, PhysicalExprNode, PhysicalExtensionExprNode,
+    PhysicalPlanNode, PhysicalSortExprNode,
 };
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use datafusion_spark::function::array::shuffle::SparkShuffle;
@@ -249,7 +251,6 @@ use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
-use sail_physical_plan::higher_order::DistributedHigherOrderExpr;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
