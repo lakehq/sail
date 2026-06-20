@@ -37,7 +37,9 @@
           wheel
         ]);
 
-        protobuf3 = pkgs.protobuf_21;
+        # Use the default (latest) protobuf to stay aligned with CI, which
+        # installs the latest protoc via `arduino/setup-protoc`.
+        protobuf3 = pkgs.protobuf;
 
         # Rust toolchain used both in the dev shell and for `nix build`.
         # We carve out a minimal toolchain (no rustfmt) for the package build so
@@ -69,7 +71,7 @@
             rustForBuild
             pkg-config
             protobuf3
-          ]) ++ lib.optionals isLinux [ pkgs.gcc ];
+          ]) ++ lib.optionals isLinux [ pkgs.gcc pkgs.mold ];
 
           buildInputs = lib.optionals isLinux [ pkgs.stdenv.cc.cc.lib ];
 
@@ -80,6 +82,12 @@
 
           PROTOC = "${protobuf3}/bin/protoc";
           PYO3_PYTHON = "${pkgs.python313}/bin/python";
+
+          # Link with mold inside the Nix sandbox too (the dev shell already
+          # does this). Only speeds up linking; the resulting binary is
+          # unchanged. sccache is intentionally omitted — it can't work in the
+          # network-less, isolated sandbox.
+          RUSTFLAGS = lib.optionalString isLinux "-C link-arg=-fuse-ld=mold";
 
           # The wheel embeds CLI bins; tests live outside the package.
           doCheck = false;
