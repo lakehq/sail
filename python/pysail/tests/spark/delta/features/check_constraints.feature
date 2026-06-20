@@ -1,6 +1,5 @@
 Feature: Delta Lake CHECK Constraints
 
-  @sail-only
   Rule: CHECK constraints are enforced on writes
 
     Background:
@@ -140,7 +139,6 @@ Feature: Delta Lake CHECK Constraints
         | metaData.schemaString.fields[0].name    |
         | metaData.schemaString.fields[0].nullable |
 
-  @sail-only
   Rule: CHECK constraints are recorded in Delta protocol metadata
 
     Background:
@@ -170,7 +168,6 @@ Feature: Delta Lake CHECK Constraints
         | protocol.minWriterVersion                              |
         | metaData.configuration['delta.constraints.positive_id'] |
 
-  @sail-only
   Rule: MERGE respects CHECK constraints
 
     Background:

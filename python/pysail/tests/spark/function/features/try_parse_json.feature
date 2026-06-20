@@ -1,4 +1,4 @@
-@try_parse_json @spark-4
+@spark-4
 Feature: try_parse_json comprehensive tests
 
   Rule: Argument count validation

@@ -123,7 +123,6 @@ Feature: Delta Lake Default Columns
         DROP TABLE IF EXISTS delta_default_col_meta
         """
 
-    @sail-only
     Scenario: Default columns enable allowColumnDefaults and CURRENT_DEFAULT metadata
       Given statement template
         """
@@ -154,7 +153,6 @@ Feature: Delta Lake Default Columns
         DROP TABLE IF EXISTS delta_default_col_errors
         """
 
-    @sail-only
     Scenario: DEFAULT cannot be used inside an expression
       Given statement template
         """

@@ -1,0 +1,29 @@
+Tests for `to_varchar`.
+
+`to_varchar` follows the same formatting behavior as the underlying formatter.
+
+>>> from pyspark.sql.functions import lit, to_varchar
+
+>>> df = spark.createDataFrame([(78.12,)], ["e"])
+>>> df.select(to_varchar(df.e, lit("$99.99")).alias("r")).collect()
+[Row(r='$78.12')]
+
+>>> def c(expr):
+...     return spark.sql(f"SELECT {expr} AS r").collect()[0]["r"]
+>>> def err(expr):
+...     try:
+...         spark.sql(f"SELECT {expr} AS r").collect()
+...         print("no error")
+...     except Exception:
+...         print("error")
+
+>>> c("to_varchar(454, '999')")
+'454'
+>>> c("to_varchar(78.12, '$99.99')")
+'$78.12'
+>>> c("to_varchar(-12454.8, '99G999D9S')")
+'12,454.8-'
+>>> err("to_varchar(454, 'PR999')")
+error
+>>> c("to_varchar(encode('Spark SQL', 'utf-8'), 'hex')")  # doctest: +SAIL_ONLY
+'537061726B2053514C'
