@@ -7,13 +7,14 @@ use arrow::array::{
 };
 use arrow::buffer::{NullBuffer, ScalarBuffer};
 use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Date32Type, Decimal128Type, Float32Type, Float64Type, Int16Type,
-    Int32Type, Int64Type, Int8Type, TimestampMicrosecondType,
+    ArrowPrimitiveType, DataType, Date32Type, Decimal128Type, Field, Float32Type, Float64Type,
+    Int16Type, Int32Type, Int64Type, Int8Type, TimestampMicrosecondType,
 };
 use datafusion::common::{exec_err, DataFusionError, Result as DataFusionResult, ScalarValue};
 use datafusion::logical_expr::{
-    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
+    ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
+use datafusion_expr::type_coercion::binary::comparison_coercion;
 use num::Float;
 
 #[derive(Debug, Hash, Eq, PartialEq)]
@@ -30,7 +31,7 @@ impl Default for SparkArrayPosition {
 impl SparkArrayPosition {
     pub fn new() -> Self {
         Self {
-            signature: Signature::new(TypeSignature::Any(2), Volatility::Immutable),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -50,6 +51,59 @@ impl ScalarUDFImpl for SparkArrayPosition {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> DataFusionResult<ColumnarValue> {
         spark_array_position(&args.args)
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> DataFusionResult<Vec<DataType>> {
+        if arg_types.len() != 2 {
+            return exec_err!("array_position function takes exactly two arguments");
+        }
+
+        let element_type = &arg_types[1];
+        let (array_type, element_type) = match &arg_types[0] {
+            DataType::List(field)
+            | DataType::ListView(field)
+            | DataType::FixedSizeList(field, _) => {
+                let element_type = coerced_element_type(field.data_type(), element_type)?;
+                (
+                    DataType::List(Arc::new(Field::new_list_field(
+                        element_type.clone(),
+                        field.is_nullable(),
+                    ))),
+                    element_type,
+                )
+            }
+            DataType::LargeList(field) | DataType::LargeListView(field) => {
+                let element_type = coerced_element_type(field.data_type(), element_type)?;
+                (
+                    DataType::LargeList(Arc::new(Field::new_list_field(
+                        element_type.clone(),
+                        field.is_nullable(),
+                    ))),
+                    element_type,
+                )
+            }
+            array_type => {
+                return exec_err!("array_position does not support type '{array_type:?}'");
+            }
+        };
+
+        Ok(vec![array_type, element_type])
+    }
+}
+
+fn coerced_element_type(left: &DataType, right: &DataType) -> DataFusionResult<DataType> {
+    if left == right {
+        Ok(left.clone())
+    } else if left.is_null() {
+        Ok(right.clone())
+    } else if right.is_null() {
+        Ok(left.clone())
+    } else {
+        comparison_coercion(left, right).ok_or_else(|| {
+            DataFusionError::Plan(format!(
+                "array_position does not support element types '{left:?}' and '{right:?}'"
+            ))
+        })
     }
 }
 
@@ -125,6 +179,7 @@ fn generic_array_position<O: OffsetSizeTrait>(
         }
         DataType::Utf8 => position_string::<O, i32>(list_array, offsets, values, element),
         DataType::LargeUtf8 => position_string::<O, i64>(list_array, offsets, values, element),
+        DataType::Utf8View => position_string_view::<O>(list_array, offsets, values, element),
         // Fallback to ScalarValue for complex types (nested arrays, etc.)
         _ => position_fallback::<O>(list_array, offsets, values, element),
     }
@@ -261,6 +316,36 @@ fn position_string<O: OffsetSizeTrait, S: OffsetSizeTrait>(
 ) -> Result<ArrayRef, DataFusionError> {
     let values_typed = values.as_string::<S>();
     let element_typed = element.as_string::<S>();
+    let num_rows = list_array.len();
+    let nulls = combined_nulls(list_array.nulls(), element.nulls());
+    let mut result = vec![0i64; num_rows];
+
+    for (row_index, w) in offsets.windows(2).enumerate() {
+        if nulls.as_ref().is_some_and(|n| n.is_null(row_index)) {
+            continue;
+        }
+        let start = w[0].as_usize();
+        let end = w[1].as_usize();
+        let search_val = element_typed.value(row_index);
+        for i in start..end {
+            if !values_typed.is_null(i) && values_typed.value(i) == search_val {
+                result[row_index] = (i - start + 1) as i64;
+                break;
+            }
+        }
+    }
+
+    Ok(Arc::new(Int64Array::new(ScalarBuffer::from(result), nulls)))
+}
+
+fn position_string_view<O: OffsetSizeTrait>(
+    list_array: &GenericListArray<O>,
+    offsets: &arrow::buffer::OffsetBuffer<O>,
+    values: &ArrayRef,
+    element: &ArrayRef,
+) -> Result<ArrayRef, DataFusionError> {
+    let values_typed = values.as_string_view();
+    let element_typed = element.as_string_view();
     let num_rows = list_array.len();
     let nulls = combined_nulls(list_array.nulls(), element.nulls());
     let mut result = vec![0i64; num_rows];
