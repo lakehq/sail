@@ -1,4 +1,5 @@
 pub mod array_intersect;
+pub mod array_position;
 pub mod arrays_zip;
 pub mod lambda_utils;
 pub mod spark_array;

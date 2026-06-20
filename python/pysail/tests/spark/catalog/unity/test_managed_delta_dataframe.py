@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from pysail.tests.spark.catalog_integration.unity.conftest import _unity_delta_commit_info, _unity_table_info
+from pysail.tests.spark.catalog.unity.conftest import _unity_delta_commit_info, _unity_table_info
 
 if TYPE_CHECKING:
     from pyspark.sql import SparkSession

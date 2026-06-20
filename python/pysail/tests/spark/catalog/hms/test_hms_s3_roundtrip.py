@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from pyspark.sql import SparkSession
 
-from pysail.tests.spark.hms.conftest import (
+from pysail.tests.spark.catalog.hms.conftest import (
     _describe_extended_properties,
     _reference_catalog_table,
     _scala_option_to_string,

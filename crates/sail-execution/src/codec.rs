@@ -126,6 +126,7 @@ use sail_function::aggregate::theta_sketch::{
 };
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::scalar::array::array_intersect::ArrayIntersect;
+use sail_function::scalar::array::array_position::SparkArrayPosition;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
@@ -2334,6 +2335,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "array_intersect" | "list_intersect" => {
                 Ok(Arc::new(ScalarUDF::from(ArrayIntersect::new())))
             }
+            "spark_array_position" | "array_position" => {
+                Ok(Arc::new(ScalarUDF::from(SparkArrayPosition::new())))
+            }
             "spark_array_compact" => Ok(Arc::new(ScalarUDF::from(SparkArrayCompact::new()))),
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
             "format_string" => Ok(Arc::new(ScalarUDF::from(FormatStringFunc::new()))),
@@ -2512,6 +2516,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<ArrayMax>()
             || node_inner.is::<ArrayMin>()
             || node_inner.is::<ArrayIntersect>()
+            || node_inner.is::<SparkArrayPosition>()
             || node_inner.is::<SparkArrayCompact>()
             || node_inner.is::<BitmapCount>()
             || node_inner.is::<FormatStringFunc>()

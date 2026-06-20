@@ -21,7 +21,7 @@ from testcontainers.core.container import DockerContainer
 from testcontainers.core.waiting_utils import wait_for_logs
 
 from pysail.testing.spark.steps.sql import PathWrapper
-from pysail.tests.spark.catalog_integration.conftest import (
+from pysail.tests.spark.catalog.conftest import (
     create_spark_session,
     start_sail_server,
     stop_sail_server,
