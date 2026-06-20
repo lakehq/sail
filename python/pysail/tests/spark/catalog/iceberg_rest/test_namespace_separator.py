@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from pysail.tests.spark.catalog_integration.iceberg_rest.conftest import (
+from pysail.tests.spark.catalog.iceberg_rest.conftest import (
     NESSIE_NAMESPACE_SEPARATOR,
 )
 

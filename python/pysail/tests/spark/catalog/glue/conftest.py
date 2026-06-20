@@ -9,7 +9,7 @@ import pytest
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.waiting_utils import wait_for_logs
 
-from pysail.tests.spark.catalog_integration.conftest import (
+from pysail.tests.spark.catalog.conftest import (
     create_spark_session,
     start_sail_server,
     stop_sail_server,
@@ -52,7 +52,10 @@ def glue_spark(moto_endpoint: str) -> Generator[SparkSession, None, None]:
         },
     )
     spark = create_spark_session(remote, "glue_catalog_test")
+    spark.sql("CREATE DATABASE IF NOT EXISTS test_db")
     yield spark
+    with contextlib.suppress(Exception):
+        spark.sql("DROP DATABASE IF EXISTS test_db CASCADE")
     with contextlib.suppress(Exception):
         spark.stop()
     stop_sail_server(server, saved_env)
