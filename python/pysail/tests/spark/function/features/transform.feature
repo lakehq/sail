@@ -109,11 +109,11 @@ Feature: transform higher-order function
     Scenario: Transform integers to strings via cast
       When query
         """
-        SELECT transform(array(1, 2, 3), x -> cast(x as string)) AS result
+        SELECT transform(array(1, 2, 3), x -> concat(cast(x as string), "s")) AS result
         """
       Then query result
-        | result    |
-        | [1, 2, 3] |
+        | result       |
+        | [1s, 2s, 3s] |
 
     Scenario: Transform integers to bigint
       When query
@@ -202,15 +202,15 @@ Feature: transform higher-order function
         | result            |
         | [apple0, banana1] |
 
-    Scenario: Transform empty string array
+    Scenario: Transform array containing an empty string preserves length
       When query
         """
-        SELECT transform(arr, x -> upper(x)) AS result
+        SELECT size(transform(arr, x -> upper(x))) AS result
         FROM VALUES (array("")) AS t(arr)
         """
       Then query result
         | result |
-        | []     |
+        | 1      |
 
   Rule: Null handling
 
