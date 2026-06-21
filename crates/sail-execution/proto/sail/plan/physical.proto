@@ -92,19 +92,19 @@ message LambdaVariableExprNode {
 }
 
 message HigherOrderUDFExprNode {
-  HigherOrderUdf udf = 1;
+  HigherOrderUDF udf = 1;
   string name = 2;
   repeated bytes args = 3;
   optional bytes function_definition = 4;
 }
 
-message HigherOrderUdf {
-  oneof UdfKind {
-    SparkArrayFilterUdf filter = 1;
+message HigherOrderUDF {
+  oneof HigherOrderUDFKind {
+    SparkArrayFilterUDF filter = 1;
   }
 }
 
-message SparkArrayFilterUdf {
+message SparkArrayFilterUDF {
   // True when the lambda parameters are `[index, element]` (an index-only
   // lambda rewritten by the planner) instead of `[element, index]`.
   //

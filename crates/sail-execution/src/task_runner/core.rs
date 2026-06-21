@@ -1,6 +1,16 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::codec::codec::RemoteExecutionCodec;
+use crate::codec::physical_proto_converter::RemotePhysicalProtoConverter;
+use crate::driver::TaskStatus;
+use crate::error::{ExecutionError, ExecutionResult};
+use crate::id::{TaskKey, TaskKeyDisplay};
+use crate::plan::{ShuffleReadExec, ShuffleWriteExec, StageInputExec};
+use crate::stream_accessor::{StreamAccessor, StreamAccessorMessage};
+use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
+use crate::task_runner::monitor::TaskMonitor;
+use crate::task_runner::{TaskRunner, TaskRunnerMessage};
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::internal_err;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -20,16 +30,6 @@ use sail_server::actor::{Actor, ActorContext};
 use sail_telemetry::telemetry::global_metrics;
 use sail_telemetry::{trace_execution_plan, TracingExecOptions};
 use tokio::sync::oneshot;
-
-use crate::codec::RemoteExecutionCodec;
-use crate::driver::TaskStatus;
-use crate::error::{ExecutionError, ExecutionResult};
-use crate::id::{TaskKey, TaskKeyDisplay};
-use crate::plan::{ShuffleReadExec, ShuffleWriteExec, StageInputExec};
-use crate::stream_accessor::{StreamAccessor, StreamAccessorMessage};
-use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
-use crate::task_runner::monitor::TaskMonitor;
-use crate::task_runner::{TaskRunner, TaskRunnerMessage};
 
 impl TaskRunner {
     pub fn new() -> Self {
@@ -86,7 +86,11 @@ impl TaskRunner {
         T::Message: TaskRunnerMessage + StreamAccessorMessage,
     {
         let plan = PhysicalPlanNode::decode(definition.plan.as_ref())?;
-        let plan = plan.try_into_physical_plan(&context, self.codec.as_ref())?;
+        let plan = plan.try_into_physical_plan_with_converter(
+            &context,
+            self.codec.as_ref(),
+            &RemotePhysicalProtoConverter {},
+        )?;
         let plan = self.rewrite_parquet_adapters(plan)?;
         let plan = self.rewrite_shuffle(
             ctx,

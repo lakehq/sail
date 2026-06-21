@@ -5,13 +5,14 @@ mod state;
 mod topology;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use datafusion_proto::physical_plan::{PhysicalExtensionCodec, PhysicalProtoConverterExtension};
 use indexmap::IndexMap;
 pub use options::JobSchedulerOptions;
 use sail_common_datafusion::error::CommonErrorCause;
 pub use state::TaskState;
 
-use crate::codec::RemoteExecutionCodec;
+use crate::codec::codec::RemoteExecutionCodec;
+use crate::codec::physical_proto_converter::RemotePhysicalProtoConverter;
 use crate::driver::job_scheduler::state::JobDescriptor;
 use crate::driver::output::JobOutputHandle;
 use crate::id::{IdGenerator, JobId, TaskKey, TaskStreamKey};

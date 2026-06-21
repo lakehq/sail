@@ -3,11 +3,12 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::execution::TaskContext;
 use datafusion::physical_expr::Partitioning;
-use datafusion_proto::physical_plan::from_proto::parse_physical_expr;
-use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use datafusion_proto::physical_plan::from_proto::parse_physical_expr_with_converter;
+use datafusion_proto::physical_plan::{PhysicalExtensionCodec, PhysicalPlanDecodeContext};
 use datafusion_proto::protobuf::PhysicalExprNode;
 use prost::Message;
 
+use crate::codec::physical_proto_converter::RemotePhysicalProtoConverter;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskReadLocation;
@@ -611,11 +612,12 @@ impl TaskOutput {
                 let keys = keys
                     .iter()
                     .map(|k| {
-                        parse_physical_expr(
+                        let decode_ctx = PhysicalPlanDecodeContext::new(ctx, codec);
+                        parse_physical_expr_with_converter(
                             &PhysicalExprNode::decode(k.as_ref())?,
-                            ctx,
                             schema,
-                            codec,
+                            &decode_ctx,
+                            &RemotePhysicalProtoConverter {},
                         )
                         .map_err(|e| e.into())
                     })
