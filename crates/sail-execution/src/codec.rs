@@ -50,8 +50,8 @@ use datafusion_proto::physical_plan::to_proto::{
     serialize_physical_sort_exprs,
 };
 use datafusion_proto::physical_plan::{
-    AsExecutionPlan, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
-    PhysicalProtoConverterExtension,
+    AsExecutionPlan, DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
+    PhysicalPlanDecodeContext, PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf::{
     physical_expr_node, JoinType as ProtoJoinType, PhysicalExprNode, PhysicalExtensionExprNode,
@@ -454,10 +454,7 @@ impl RemotePhysicalProtoConverter {
             .map(|(index, input)| {
                 if let Some((params, body)) = lambda_proto_parts(input)? {
                     let fields = param_sets.get(lambda_index).ok_or_else(|| {
-                        plan_datafusion_err!(
-                            "missing lambda parameter fields for `{}`",
-                            fun.name()
-                        )
+                        plan_datafusion_err!("missing lambda parameter fields for `{}`", fun.name())
                     })?;
                     lambda_index += 1;
 
@@ -465,9 +462,9 @@ impl RemotePhysicalProtoConverter {
                     let body = self.proto_to_physical_expr(body, &schema, ctx)?;
                     Ok(Arc::new(LambdaExpr::try_new(params, body)?) as Arc<dyn PhysicalExpr>)
                 } else {
-                    decoded_values[index]
-                        .clone()
-                        .ok_or_else(|| plan_datafusion_err!("missing decoded higher-order argument"))
+                    decoded_values[index].clone().ok_or_else(|| {
+                        plan_datafusion_err!("missing decoded higher-order argument")
+                    })
                 }
             })
             .collect::<Result<Vec<_>>>()?;
@@ -486,8 +483,10 @@ pub(crate) fn encode_physical_plan_for_remote(
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Vec<u8>> {
     let converter = RemotePhysicalProtoConverter;
-    Ok(PhysicalPlanNode::try_from_physical_plan_with_converter(plan, codec, &converter)?
-        .encode_to_vec())
+    Ok(
+        PhysicalPlanNode::try_from_physical_plan_with_converter(plan, codec, &converter)?
+            .encode_to_vec(),
+    )
 }
 
 pub(crate) fn decode_physical_plan_for_remote(
@@ -506,7 +505,9 @@ pub(crate) fn encode_physical_expr_for_remote(
     codec: &dyn PhysicalExtensionCodec,
 ) -> Result<Vec<u8>> {
     let converter = RemotePhysicalProtoConverter;
-    Ok(converter.physical_expr_to_proto(expr, codec)?.encode_to_vec())
+    Ok(converter
+        .physical_expr_to_proto(expr, codec)?
+        .encode_to_vec())
 }
 
 pub(crate) fn decode_physical_expr_for_remote(
@@ -554,7 +555,9 @@ fn decode_remote_expr_kind(
     Ok(Some((expr_kind, extension.inputs.as_slice())))
 }
 
-fn lambda_proto_parts(proto: &PhysicalExprNode) -> Result<Option<(Vec<String>, &PhysicalExprNode)>> {
+fn lambda_proto_parts(
+    proto: &PhysicalExprNode,
+) -> Result<Option<(Vec<String>, &PhysicalExprNode)>> {
     match decode_remote_expr_kind(proto)? {
         Some((ExprKind::Lambda(node), inputs)) => {
             let [body] = inputs else {
