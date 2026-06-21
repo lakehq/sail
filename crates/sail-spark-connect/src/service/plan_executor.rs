@@ -736,7 +736,9 @@ async fn cleanup_cached_relation(
     relation: CachedRelation,
 ) -> SparkResult<()> {
     match relation.into_cleanup() {
-        Some(CachedRelationCleanup::LocalPath(path)) => cleanup_checkpoint_path(ctx, &path).await,
+        Some(CachedRelationCleanup::ObjectStorePath(path)) => {
+            cleanup_checkpoint_path(ctx, &path).await
+        }
         None => Ok(()),
     }
 }

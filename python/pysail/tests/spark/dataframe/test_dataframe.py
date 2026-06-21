@@ -33,10 +33,10 @@ def _assert_checkpoint_source_result(df):
     )
 
 
-def _checkpoint_parquet_files(path):
+def _checkpoint_arrow_files(path):
     if not path.exists():
         return []
-    return list(path.rglob("*.parquet"))
+    return list(path.rglob("*.arrow"))
 
 
 def _uuid_values(df):
@@ -138,7 +138,7 @@ def test_dataframe_checkpoint(spark, tmp_path):
     spark.conf.set("spark.checkpoint.dir", str(checkpoint_path))
     try:
         checkpointed = df.checkpoint()
-        assert _checkpoint_parquet_files(checkpoint_path)
+        assert _checkpoint_arrow_files(checkpoint_path)
         shutil.rmtree(source_path)
 
         _assert_checkpoint_source_result(checkpointed)
@@ -191,9 +191,9 @@ def test_dataframe_checkpoint_lazy(spark, tmp_path):
     spark.conf.set("spark.checkpoint.dir", str(checkpoint_path))
     try:
         checkpointed = df.checkpoint(eager=False)
-        assert not _checkpoint_parquet_files(checkpoint_path)
+        assert not _checkpoint_arrow_files(checkpoint_path)
         assert checkpointed.count() == _CHECKPOINT_SOURCE_ROW_COUNT
-        assert _checkpoint_parquet_files(checkpoint_path)
+        assert _checkpoint_arrow_files(checkpoint_path)
         shutil.rmtree(source_path)
 
         _assert_checkpoint_source_result(checkpointed)

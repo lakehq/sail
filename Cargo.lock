@@ -7578,7 +7578,6 @@ dependencies = [
  "lazy_static",
  "lexical-core",
  "object_store",
- "parquet",
  "parquet-variant",
  "parquet-variant-compute",
  "parquet-variant-json",

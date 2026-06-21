@@ -6,13 +6,13 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::{provider_as_source, MemTable};
 use datafusion::execution::disk_manager::RefCountedTempFile;
+use datafusion::execution::options::ArrowReadOptions;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::{ParquetReadOptions, SessionContext};
+use datafusion::prelude::SessionContext;
 use datafusion_common::{internal_datafusion_err, DataFusionError, Result, TableReference};
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
 use futures::{StreamExt, TryStreamExt};
 use object_store::ObjectStoreExt;
-use parquet::arrow::async_writer::{AsyncArrowWriter, ParquetObjectWriter};
 use sail_common::spec;
 
 use crate::array::record_batch::{read_record_batches, write_record_batches};
@@ -22,7 +22,7 @@ use crate::session::job::JobService;
 
 #[derive(Debug, Clone)]
 pub enum CachedRelationCleanup {
-    LocalPath(String),
+    ObjectStorePath(String),
 }
 
 #[derive(Debug, Clone)]
@@ -95,7 +95,7 @@ impl CachedRelation {
         let data = materialize_reliable_checkpoint(ctx, plan, path).await?;
         Ok(Self {
             data: Arc::new(tokio::sync::Mutex::new(data)),
-            cleanup: None,
+            cleanup: Some(CachedRelationCleanup::ObjectStorePath(path.to_string())),
         })
     }
 
@@ -121,6 +121,7 @@ impl CachedRelation {
         fields: Option<Vec<String>>,
         path: String,
     ) -> Self {
+        let cleanup_path = path.clone();
         Self {
             data: Arc::new(tokio::sync::Mutex::new(CachedRelationData::Pending(
                 CachedRelationPending {
@@ -129,7 +130,7 @@ impl CachedRelation {
                     target: CachedRelationPendingTarget::Reliable { path },
                 },
             ))),
-            cleanup: None,
+            cleanup: Some(CachedRelationCleanup::ObjectStorePath(cleanup_path)),
         }
     }
 
@@ -382,8 +383,8 @@ async fn materialize_reliable_checkpoint(
         let _ = cleanup_checkpoint_path(ctx, path).await;
         return Err(error);
     }
-    let read_options = ParquetReadOptions::new().schema(schema.as_ref());
-    let df = ctx.read_parquet(path, read_options).await?;
+    let read_options = ArrowReadOptions::default().schema(schema.as_ref());
+    let df = ctx.read_arrow(path, read_options).await?;
     let (_, read_plan) = df.into_parts();
     Ok(CachedRelationData::LogicalPlan(Arc::new(read_plan)))
 }
@@ -445,23 +446,77 @@ async fn write_reliable_checkpoint(
     let store = ctx
         .runtime_env()
         .object_store(checkpoint_url.object_store())?;
-    let file_path = checkpoint_url.prefix().clone().join("part-00000.parquet");
-    let object_writer = ParquetObjectWriter::new(store, file_path);
-    let mut writer = AsyncArrowWriter::try_new(object_writer, schema.clone(), None)
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let service = ctx.extension::<JobService>()?;
     let mut stream = service.runner().execute(ctx, plan).await?;
+    let mut batches = vec![];
     while let Some(batch) = stream.next().await {
-        writer
-            .write(&batch?)
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        batches.push(batch?);
     }
-    writer
-        .close()
+    let bytes = write_record_batches(&batches, schema.as_ref())?;
+    let file_path = checkpoint_url.prefix().clone().join("part-00000.arrow");
+    store
+        .put(&file_path, bytes.into())
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::*;
+
+    #[test]
+    fn pending_reliable_checkpoint_tracks_cleanup_path() -> Result<()> {
+        let path = "memory://checkpoint-root/session/relation".to_string();
+        let plan = LogicalPlanBuilder::empty(false).build()?;
+        let relation =
+            CachedRelation::new_pending_reliable_checkpoint(Arc::new(plan), None, path.clone());
+
+        match relation.into_cleanup() {
+            Some(CachedRelationCleanup::ObjectStorePath(actual)) => {
+                assert_eq!(actual, path);
+            }
+            other => panic!("unexpected cleanup value: {other:?}"),
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cleanup_checkpoint_path_deletes_prefix_files() -> Result<()> {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| internal_datafusion_err!("{e}"))?
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "sail-common-datafusion-checkpoint-cleanup-{suffix}"
+        ));
+        let checkpoint = root.join("checkpoint");
+        let nested = checkpoint.join("nested");
+        tokio::fs::create_dir_all(&nested)
+            .await
+            .map_err(DataFusionError::IoError)?;
+        tokio::fs::write(checkpoint.join("part-00000.arrow"), b"checkpoint")
+            .await
+            .map_err(DataFusionError::IoError)?;
+        tokio::fs::write(nested.join("part-00001.arrow"), b"checkpoint")
+            .await
+            .map_err(DataFusionError::IoError)?;
+        tokio::fs::write(root.join("outside.arrow"), b"outside")
+            .await
+            .map_err(DataFusionError::IoError)?;
+
+        let ctx = SessionContext::new();
+        cleanup_checkpoint_path(&ctx, checkpoint.to_string_lossy().as_ref()).await?;
+
+        assert!(!checkpoint.join("part-00000.arrow").exists());
+        assert!(!nested.join("part-00001.arrow").exists());
+        assert!(root.join("outside.arrow").exists());
+
+        let _ = tokio::fs::remove_dir_all(root).await;
+        Ok(())
+    }
 }

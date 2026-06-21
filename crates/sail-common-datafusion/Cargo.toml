@@ -29,7 +29,6 @@ parquet-variant-compute = { workspace = true }
 parquet-variant = { workspace = true }
 parquet-variant-json = { workspace = true }
 object_store = { workspace = true }
-parquet = { workspace = true }
 tokio = { workspace = true }
 serde_arrow = { workspace = true }
 
