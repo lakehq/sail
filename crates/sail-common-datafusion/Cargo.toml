@@ -8,7 +8,6 @@ workspace = true
 
 [dependencies]
 sail-common = { path = "../sail-common" }
-sail-object-store = { path = "../sail-object-store" }
 
 chrono = { workspace = true }
 ryu = { workspace = true }

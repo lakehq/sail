@@ -13,6 +13,7 @@ from pysail.testing.spark.utils.common import is_jvm_spark
 
 _CHECKPOINT_SOURCE_MAX_ID = 2
 _CHECKPOINT_SOURCE_ROW_COUNT = 2
+_CHECKPOINT_DEEP_PLAN_ROW_COUNT = 10
 
 
 def _read_checkpoint_source(spark, path):
@@ -159,6 +160,22 @@ def test_dataframe_checkpoint(spark, tmp_path):
         spark.conf.unset("spark.checkpoint.dir")
 
 
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific object-store checkpoint URL")
+def test_dataframe_checkpoint_with_memory_object_store(spark, tmp_path):
+    source_path = tmp_path / "source"
+    df = _read_checkpoint_source(spark, source_path)
+    spark.conf.set("spark.checkpoint.dir", "memory:///dataframe-checkpoint-test")
+    try:
+        checkpointed = df.checkpoint()
+        checkpointed_plan = normalize_plan_text(checkpointed._explain_string())  # noqa: SLF001
+        assert "DataSourceExec" in checkpointed_plan
+
+        shutil.rmtree(source_path)
+        _assert_checkpoint_source_result(checkpointed)
+    finally:
+        spark.conf.unset("spark.checkpoint.dir")
+
+
 @pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific missing checkpoint dir coverage")
 def test_dataframe_checkpoint_requires_directory(spark_session_factory):
     spark = spark_session_factory()
@@ -212,6 +229,20 @@ def test_dataframe_checkpoint_lazy(spark, tmp_path):
         _assert_checkpoint_source_result(checkpointed)
     finally:
         spark.conf.unset("spark.checkpoint.dir")
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific physical plan names and stack configuration")
+def test_dataframe_local_checkpoint_deep_plan_explain_truncates(spark):
+    df = spark.range(0, _CHECKPOINT_DEEP_PLAN_ROW_COUNT)
+    for i in range(20):
+        df = df.withColumn(f"value_{i}", col("id") + lit(i)).filter(col("id") >= 0)
+
+    checkpointed = df.localCheckpoint()
+    checkpointed_plan = normalize_plan_text(checkpointed._explain_string())  # noqa: SLF001
+
+    assert checkpointed.count() == _CHECKPOINT_DEEP_PLAN_ROW_COUNT
+    assert "RangeExec" not in checkpointed_plan
+    assert "DataSourceExec" in checkpointed_plan
 
 
 @pytest.mark.parametrize(

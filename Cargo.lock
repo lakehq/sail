@@ -7590,7 +7590,6 @@ dependencies = [
  "regex",
  "ryu",
  "sail-common",
- "sail-object-store",
  "serde",
  "serde_arrow",
  "serde_json",

@@ -22,11 +22,11 @@ use datafusion_expr::{Expr, Extension, LogicalPlan, UserDefinedLogicalNodeCore};
 use futures::StreamExt;
 use object_store::ObjectMeta;
 use sail_common::spec;
-use sail_object_store::{delete_object_store_prefix, resolve_object_store_path};
 
 use crate::array::record_batch::{read_record_batches, write_record_batches};
 use crate::extension::{SessionExtension, SessionExtensionAccessor};
 use crate::rename::physical_plan::rename_physical_plan;
+use crate::session::checkpoint::CheckpointStoreService;
 use crate::session::job::JobService;
 
 #[derive(Debug, Clone)]
@@ -495,14 +495,22 @@ async fn materialize_reliable_checkpoint(
     path: &str,
 ) -> Result<CachedRelationData> {
     let schema = plan.schema();
-    let (object_store_url, object_meta) = match write_reliable_checkpoint(ctx, plan, path).await {
-        Ok(file) => file,
+    let service = ctx.extension::<CheckpointStoreService>()?;
+    let checkpoint = match service
+        .write_reliable_checkpoint(ctx, plan, path, Arc::clone(&schema))
+        .await
+    {
+        Ok(checkpoint) => checkpoint,
         Err(error) => {
             let _ = cleanup_checkpoint_path(ctx, path).await;
             return Err(error);
         }
     };
-    let physical_plan = create_arrow_checkpoint_scan(object_store_url, object_meta, &schema)?;
+    let physical_plan = create_arrow_checkpoint_scan(
+        checkpoint.object_store_url().clone(),
+        checkpoint.object_meta().to_vec(),
+        &schema,
+    )?;
     Ok(CachedRelationData::Materialized(
         CachedRelationMaterialized::Physical {
             schema,
@@ -513,22 +521,29 @@ async fn materialize_reliable_checkpoint(
 
 fn create_arrow_checkpoint_scan(
     object_store_url: ObjectStoreUrl,
-    object_meta: ObjectMeta,
+    object_meta: Vec<ObjectMeta>,
     schema: &SchemaRef,
 ) -> Result<Arc<dyn ExecutionPlan>> {
+    if object_meta.is_empty() {
+        return Err(internal_datafusion_err!(
+            "reliable checkpoint did not produce any files"
+        ));
+    }
     let source = ArrowSource::new_stream_file_source(TableSchema::new(Arc::clone(schema), vec![]));
+    let file_groups = object_meta
+        .into_iter()
+        .map(|object_meta| FileGroup::new(vec![PartitionedFile::new_from_meta(object_meta)]))
+        .collect();
     let config = FileScanConfigBuilder::new(object_store_url, Arc::new(source))
-        .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new_from_meta(
-            object_meta,
-        )])])
+        .with_file_groups(file_groups)
         .with_statistics(Statistics::new_unknown(schema))
         .build();
     Ok(DataSourceExec::from_data_source(config))
 }
 
 pub async fn cleanup_checkpoint_path(ctx: &SessionContext, path: &str) -> Result<()> {
-    let runtime_env = ctx.runtime_env();
-    delete_object_store_prefix(runtime_env.as_ref(), path).await
+    let service = ctx.extension::<CheckpointStoreService>()?;
+    service.cleanup_checkpoint_path(ctx, path).await
 }
 
 async fn collect_checkpoint_partitions(
@@ -556,35 +571,15 @@ async fn write_disk_partition(ctx: &SessionContext, bytes: &[u8]) -> Result<RefC
     Ok(file)
 }
 
-async fn write_reliable_checkpoint(
-    ctx: &SessionContext,
-    plan: Arc<dyn ExecutionPlan>,
-    path: &str,
-) -> Result<(ObjectStoreUrl, ObjectMeta)> {
-    let schema = plan.schema();
-    let runtime_env = ctx.runtime_env();
-    let checkpoint_path = resolve_object_store_path(runtime_env.as_ref(), path)?;
-
-    let service = ctx.extension::<JobService>()?;
-    let mut stream = service.runner().execute(ctx, plan).await?;
-    let mut batches = vec![];
-    while let Some(batch) = stream.next().await {
-        batches.push(batch?);
-    }
-    let bytes = write_record_batches(&batches, schema.as_ref())?;
-    let file_path = checkpoint_path.child("part-00000.arrow");
-    let object_meta = checkpoint_path.put_bytes(&file_path, bytes).await?;
-
-    Ok((checkpoint_path.object_store_url().clone(), object_meta))
-}
-
 #[cfg(test)]
 mod tests {
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::Mutex;
 
+    use async_trait::async_trait;
     use datafusion_expr::LogicalPlanBuilder;
 
     use super::*;
+    use crate::session::checkpoint::{CheckpointStore, ReliableCheckpoint};
 
     #[test]
     fn pending_reliable_checkpoint_tracks_cleanup_path() -> Result<()> {
@@ -606,38 +601,49 @@ mod tests {
         Ok(())
     }
 
+    #[derive(Default)]
+    struct TestCheckpointStore {
+        cleanup_paths: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl CheckpointStore for TestCheckpointStore {
+        async fn write_reliable_checkpoint(
+            &self,
+            _ctx: &SessionContext,
+            _plan: Arc<dyn ExecutionPlan>,
+            _path: &str,
+            _schema: SchemaRef,
+        ) -> Result<ReliableCheckpoint> {
+            Err(internal_datafusion_err!(
+                "test store does not write checkpoints"
+            ))
+        }
+
+        async fn cleanup_checkpoint_path(&self, _ctx: &SessionContext, path: &str) -> Result<()> {
+            self.cleanup_paths
+                .lock()
+                .map_err(|e| internal_datafusion_err!("{e}"))?
+                .push(path.to_string());
+            Ok(())
+        }
+    }
+
     #[tokio::test]
-    async fn cleanup_checkpoint_path_deletes_prefix_files() -> Result<()> {
-        let suffix = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_err(|e| internal_datafusion_err!("{e}"))?
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!(
-            "sail-common-datafusion-checkpoint-cleanup-{suffix}"
-        ));
-        let checkpoint = root.join("checkpoint");
-        let nested = checkpoint.join("nested");
-        tokio::fs::create_dir_all(&nested)
-            .await
-            .map_err(DataFusionError::IoError)?;
-        tokio::fs::write(checkpoint.join("part-00000.arrow"), b"checkpoint")
-            .await
-            .map_err(DataFusionError::IoError)?;
-        tokio::fs::write(nested.join("part-00001.arrow"), b"checkpoint")
-            .await
-            .map_err(DataFusionError::IoError)?;
-        tokio::fs::write(root.join("outside.arrow"), b"outside")
-            .await
-            .map_err(DataFusionError::IoError)?;
+    async fn cleanup_checkpoint_path_delegates_to_store() -> Result<()> {
+        let store = Arc::new(TestCheckpointStore::default());
+        let config = datafusion::prelude::SessionConfig::new()
+            .with_extension(Arc::new(CheckpointStoreService::new(store.clone())));
+        let ctx = SessionContext::new_with_config(config);
+        let path = "memory:///checkpoint-root/session/relation";
 
-        let ctx = SessionContext::new();
-        cleanup_checkpoint_path(&ctx, checkpoint.to_string_lossy().as_ref()).await?;
+        cleanup_checkpoint_path(&ctx, path).await?;
 
-        assert!(!checkpoint.join("part-00000.arrow").exists());
-        assert!(!nested.join("part-00001.arrow").exists());
-        assert!(root.join("outside.arrow").exists());
-
-        let _ = tokio::fs::remove_dir_all(root).await;
+        let paths = store
+            .cleanup_paths
+            .lock()
+            .map_err(|e| internal_datafusion_err!("{e}"))?;
+        assert_eq!(paths.as_slice(), &[path.to_string()]);
         Ok(())
     }
 }
