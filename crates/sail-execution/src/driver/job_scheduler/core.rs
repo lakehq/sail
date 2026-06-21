@@ -1,6 +1,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use chrono::Utc;
+use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_plan::display::DisplayableExecutionPlan;
+use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use indexmap::{IndexMap, IndexSet};
+use log::{debug, warn};
+use prost::Message;
+use sail_common_datafusion::error::CommonErrorCause;
+use sail_python_udf::error::PyErrExtractor;
+use sail_server::actor::ActorContext;
+
 use crate::driver::job_scheduler::state::{
     JobDescriptor, JobState, StageState, TaskAttemptDescriptor, TaskRegionState, TaskState,
 };
@@ -21,16 +32,6 @@ use crate::task::definition::{
 use crate::task::scheduling::{
     TaskAssignment, TaskAssignmentGetter, TaskOutputKind, TaskRegion, TaskSet, TaskSetEntry,
 };
-use chrono::Utc;
-use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_plan::display::DisplayableExecutionPlan;
-use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
-use indexmap::{IndexMap, IndexSet};
-use log::{debug, warn};
-use prost::Message;
-use sail_common_datafusion::error::CommonErrorCause;
-use sail_python_udf::error::PyErrExtractor;
-use sail_server::actor::ActorContext;
 
 impl JobScheduler {
     fn next_job_id(&mut self) -> ExecutionResult<JobId> {

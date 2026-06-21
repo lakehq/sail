@@ -1,15 +1,16 @@
 use std::sync::Arc;
 
+use datafusion::arrow::datatypes::Schema;
+use datafusion::execution::TaskContext;
+use datafusion::physical_expr::Partitioning;
+use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::proto::decode::try_decode_physical_expr;
 use crate::stream::reader::TaskReadLocation;
 use crate::stream::writer::{LocalStreamStorage, TaskWriteLocation};
 use crate::task::gen;
-use datafusion::arrow::datatypes::Schema;
-use datafusion::execution::TaskContext;
-use datafusion::physical_expr::Partitioning;
-use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 
 #[derive(Debug, Clone)]
 pub struct TaskDefinition {

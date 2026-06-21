@@ -1,5 +1,4 @@
 use std::fmt::{Debug, Formatter};
-
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{FieldRef, Schema};
@@ -15,7 +14,6 @@ use datafusion_proto::physical_plan::{
 use datafusion_proto::protobuf::{
     physical_expr_node, PhysicalExprNode, PhysicalExtensionExprNode, PhysicalPlanNode,
 };
-
 use prost::Message;
 
 use crate::plan::gen::extended_physical_expr_node::ExprKind;

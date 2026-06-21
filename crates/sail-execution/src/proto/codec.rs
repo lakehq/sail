@@ -10,7 +10,6 @@ use datafusion::common::{
     plan_datafusion_err, plan_err, Constraint, Constraints, JoinSide, Result, ScalarValue,
     Statistics,
 };
-use datafusion::config::ConfigOptions;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::{
@@ -24,13 +23,13 @@ use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{
-    AggregateUDF, AggregateUDFImpl, HigherOrderUDF, ScalarUDF, ScalarUDFImpl, WindowUDF,
+    AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF,
 };
 use datafusion::physical_expr::equivalence::{EquivalenceClass, EquivalenceGroup};
 use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable};
 use datafusion::physical_expr::{
-    AcrossPartitions, ConstExpr, EquivalenceProperties, HigherOrderFunctionExpr, LexOrdering,
-    LexRequirement, Partitioning, PhysicalExpr, PhysicalSortExpr,
+    AcrossPartitions, ConstExpr, EquivalenceProperties, LexOrdering, LexRequirement, Partitioning,
+    PhysicalExpr, PhysicalSortExpr,
 };
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
@@ -41,8 +40,8 @@ use datafusion::physical_plan::work_table::WorkTableExec;
 use datafusion::physical_plan::{ExecutionPlan, PlanProperties};
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
 use datafusion_proto::physical_plan::from_proto::{
-    parse_physical_expr, parse_physical_sort_exprs, parse_protobuf_file_scan_config,
-    parse_protobuf_file_scan_schema, parse_protobuf_partitioning,
+    parse_physical_sort_exprs, parse_protobuf_file_scan_config, parse_protobuf_file_scan_schema,
+    parse_protobuf_partitioning,
 };
 use datafusion_proto::physical_plan::to_proto::{
     serialize_file_scan_config, serialize_partitioning, serialize_physical_sort_exprs,
@@ -278,8 +277,8 @@ use crate::plan::gen::{
 };
 use crate::plan::{gen, StageInputExec};
 use crate::proto::decode::{
-    try_decode_field_ref, try_decode_higher_order_udf, try_decode_message,
-    try_decode_physical_plan, try_decode_schema,
+    try_decode_field_ref, try_decode_message, try_decode_physical_expr, try_decode_physical_plan,
+    try_decode_schema,
 };
 use crate::proto::encode::{
     try_encode_field_ref, try_encode_message, try_encode_physical_expr, try_encode_physical_plan,
@@ -388,7 +387,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     projection.map(|x| x.columns.into_iter().map(|c| c as usize).collect());
                 let filters = filters
                     .iter()
-                    .map(|expr| parse_physical_expr(&try_decode_message(expr)?, ctx, &schema, self))
+                    .map(|expr| try_decode_physical_expr(ctx, self, expr, &schema))
                     .collect::<Result<Vec<_>>>()?;
                 let fetch = fetch.map(|x| x as usize);
                 let node = SystemTableExec::try_new(table, projection, filters, fetch)?;
@@ -567,29 +566,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let on = on
                     .into_iter()
                     .map(|join_on| {
-                        let left = parse_physical_expr(
-                            &try_decode_message(&join_on.left)?,
-                            ctx,
-                            &left.schema(),
-                            self,
-                        )?;
-                        let right = parse_physical_expr(
-                            &try_decode_message(&join_on.right)?,
-                            ctx,
-                            &right.schema(),
-                            self,
-                        )?;
+                        let left =
+                            try_decode_physical_expr(ctx, self, &join_on.left, &left.schema())?;
+                        let right =
+                            try_decode_physical_expr(ctx, self, &join_on.right, &right.schema())?;
                         Ok((left, right))
                     })
                     .collect::<Result<_>>()?;
                 let filter = if let Some(join_filter) = filter {
                     let schema = try_decode_schema(&join_filter.schema)?;
-                    let expression = parse_physical_expr(
-                        &try_decode_message(&join_filter.expression)?,
-                        ctx,
-                        &schema,
-                        self,
-                    )?;
+                    let expression =
+                        try_decode_physical_expr(ctx, self, &join_filter.expression, &schema)?;
                     let column_indices = join_filter
                         .column_indices
                         .into_iter()
@@ -763,12 +750,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .transpose()
                     .map_err(|_| plan_datafusion_err!("invalid limit for DeltaScanByAddsExec"))?;
                 let pushdown_filter = if let Some(pred_bytes) = pushdown_filter {
-                    let predicate = parse_physical_expr(
-                        &try_decode_message(&pred_bytes)?,
-                        ctx,
-                        &output_schema,
-                        self,
-                    )?;
+                    let predicate =
+                        try_decode_physical_expr(ctx, self, &pred_bytes, &output_schema)?;
                     Some(predicate)
                 } else {
                     None
@@ -813,12 +796,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let predicate = if let Some(pred_bytes) = predicate {
                     let empty_schema = Arc::new(Schema::empty());
                     let schema = table_schema.as_ref().unwrap_or(&empty_schema);
-                    Some(parse_physical_expr(
-                        &try_decode_message(&pred_bytes)?,
-                        ctx,
-                        schema,
-                        self,
-                    )?)
+                    Some(try_decode_physical_expr(ctx, self, &pred_bytes, schema)?)
                 } else {
                     None
                 };
@@ -1032,12 +1010,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             NodeKind::StreamFilter(gen::StreamFilterExecNode { input, predicate }) => {
                 let input = try_decode_physical_plan(ctx, self, &input)?;
-                let predicate = parse_physical_expr(
-                    &try_decode_message(&predicate)?,
-                    ctx,
-                    &input.schema(),
-                    self,
-                )?;
+                let predicate = try_decode_physical_expr(ctx, self, &predicate, &input.schema())?;
                 Ok(Arc::new(StreamFilterExec::try_new(input, predicate)?))
             }
             NodeKind::StreamSourceAdapter(gen::StreamSourceAdapterExecNode { input }) => {
@@ -1104,12 +1077,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
                 let table_schema = Arc::new(try_decode_schema(&table_schema)?);
-                let condition = parse_physical_expr(
-                    &try_decode_message(&condition)?,
-                    ctx,
-                    &table_schema,
-                    self,
-                )?;
+                let condition = try_decode_physical_expr(ctx, self, &condition, &table_schema)?;
                 let operation = if let Some(s) = operation_json.as_ref() {
                     Some(
                         serde_json::from_str::<DeltaOperation>(s)
@@ -1836,7 +1804,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let physical_sort_expr_nodes = sort_order
                     .physical_sort_expr_nodes
                     .into_iter()
-                    .map(|x| try_encode_message(x))
+                    .map(try_encode_message)
                     .collect::<Result<_>>()?;
                 Some(gen::PhysicalSortExprNodeCollection {
                     physical_sort_expr_nodes,
@@ -3657,7 +3625,7 @@ impl RemoteExecutionCodec {
         )?;
         let lex_ordering = lex_ordering
             .into_iter()
-            .map(|x| try_encode_message(x))
+            .map(try_encode_message)
             .collect::<Result<_>>()?;
         Ok(gen::LexOrdering {
             values: lex_ordering,
@@ -3729,7 +3697,7 @@ impl RemoteExecutionCodec {
         let gen::EquivalenceClass { exprs } = class;
         let exprs = exprs
             .iter()
-            .map(|expr| parse_physical_expr(&try_decode_message(expr)?, ctx, schema, self))
+            .map(|expr| try_decode_physical_expr(ctx, self, expr, schema))
             .collect::<Result<Vec<_>>>()?;
         // The constants are set by the equivalence properties, so we do nothing here.
         Ok(EquivalenceClass::new(exprs))
@@ -3759,7 +3727,7 @@ impl RemoteExecutionCodec {
             expr,
             across_partitions,
         } = const_expr;
-        let expr = parse_physical_expr(&try_decode_message(expr)?, ctx, schema, self)?;
+        let expr = try_decode_physical_expr(ctx, self, expr, schema)?;
         let across_partitions = match across_partitions {
             Some(x) => self.try_decode_constant_across_partitions(x)?,
             None => return plan_err!("missing constant expression across partitions"),
