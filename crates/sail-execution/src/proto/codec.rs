@@ -3097,6 +3097,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 })?;
                 Ok(Arc::new(LambdaVariable::new(index, field)))
             }
+            other => plan_err!("Unsupported physical expr node: {other:?}"),
         }
     }
 
