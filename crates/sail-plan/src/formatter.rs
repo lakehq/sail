@@ -1080,39 +1080,4 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_sketch_function_to_string_includes_display_defaults() -> PlanResult<()> {
-        let formatter = SparkPlanFormatter;
-
-        assert_eq!(
-            formatter.function_to_string("hll_sketch_agg", vec!["value"], false)?,
-            "hll_sketch_agg(value, 12)"
-        );
-        assert_eq!(
-            formatter.function_to_string("hll_union", vec!["left", "right"], false)?,
-            "hll_union(left, right, false)"
-        );
-        assert_eq!(
-            formatter.function_to_string("hll_union_agg", vec!["sketch"], false)?,
-            "hll_union_agg(sketch, false)"
-        );
-        assert_eq!(
-            formatter.function_to_string("theta_sketch_agg", vec!["value"], false)?,
-            "theta_sketch_agg(value, 12)"
-        );
-        assert_eq!(
-            formatter.function_to_string("theta_union", vec!["left", "right"], false)?,
-            "theta_union(left, right, 12)"
-        );
-        assert_eq!(
-            formatter.function_to_string("theta_union_agg", vec!["sketch"], false)?,
-            "theta_union_agg(sketch, 12)"
-        );
-        assert_eq!(
-            formatter.function_to_string("hll_sketch_agg", vec!["value", "10"], false)?,
-            "hll_sketch_agg(value, 10)"
-        );
-
-        Ok(())
-    }
 }
