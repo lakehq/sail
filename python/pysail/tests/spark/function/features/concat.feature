@@ -1,4 +1,3 @@
-@concat
 Feature: concat function
 
   Rule: Basic concatenation
@@ -584,3 +583,106 @@ Feature: concat function
       Then query result
         | result |
         | NULL   |
+
+  Rule: Nested concat
+
+    Scenario: nested concat with string constants folds to single value
+      When query
+        """
+        SELECT concat(concat('a', 'b'), 'c') AS result
+        """
+      Then query result
+        | result |
+        | abc    |
+
+    Scenario: nested concat with column does not flatten but returns correct result
+      When query
+        """
+        SELECT concat(concat(v, 'b'), 'c') AS result
+        FROM VALUES ('a') AS t(v)
+        """
+      Then query result
+        | result |
+        | abc    |
+
+  Rule: Single-argument simplify edge cases
+
+    Scenario: single timestamp column coerced to string
+      When query
+        """
+        SELECT concat(ts) AS result
+        FROM VALUES (TIMESTAMP '2024-01-15 12:00:00') AS t(ts)
+        """
+      Then query result
+        | result              |
+        | 2024-01-15 12:00:00 |
+
+    Scenario: single timestamp column with microseconds
+      When query
+        """
+        SELECT concat(ts) AS result
+        FROM VALUES (TIMESTAMP '2024-01-15 12:00:00.123456') AS t(ts)
+        """
+      Then query result
+        | result                     |
+        | 2024-01-15 12:00:00.123456 |
+
+    Scenario: single timestamp column explicit cast matches bare column
+      When query
+        """
+        SELECT concat(CAST(ts AS STRING)) AS result
+        FROM VALUES (TIMESTAMP '2024-01-15 12:00:00') AS t(ts)
+        """
+      Then query result
+        | result              |
+        | 2024-01-15 12:00:00 |
+
+    Scenario: single INT column coerced to string
+      When query
+        """
+        SELECT concat(n) AS result
+        FROM VALUES (42) AS t(n)
+        """
+      Then query result
+        | result |
+        | 42     |
+
+    Scenario: single DOUBLE column coerced to string
+      When query
+        """
+        SELECT concat(d) AS result
+        FROM VALUES (3.14) AS t(d)
+        """
+      Then query result
+        | result |
+        | 3.14   |
+
+    Scenario: single BOOLEAN column coerced to string
+      When query
+        """
+        SELECT concat(b) AS result
+        FROM VALUES (true) AS t(b)
+        """
+      Then query result
+        | result |
+        | true   |
+
+    Scenario: single NULL timestamp column returns NULL
+      When query
+        """
+        SELECT concat(ts) AS result
+        FROM VALUES (CAST(NULL AS TIMESTAMP)) AS t(ts)
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: single TIMESTAMP_NTZ column coerced to string
+      When query
+        """
+        SELECT concat(ts) AS result
+        FROM VALUES (TIMESTAMP_NTZ '2024-01-15 12:00:00') AS t(ts)
+        """
+      Then query result
+        | result              |
+        | 2024-01-15 12:00:00 |

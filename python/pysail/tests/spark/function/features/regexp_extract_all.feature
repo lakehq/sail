@@ -40,6 +40,15 @@ Feature: regexp_extract_all() extracts all regex capture group matches from stri
       | result     |
       | [1, 2, 14] |
 
+    Scenario: regexp_extract_all without idx renders the synthesized idx=1 in the column name
+      When query
+      """
+      SELECT regexp_extract_all('1a 2b 14m', r'([0-9]+)([a-z]+)')
+      """
+      Then query result
+      | regexp_extract_all(1a 2b 14m, ([0-9]+)([a-z]+), 1) |
+      | [1, 2, 14]                                         |
+
   Rule: No match and edge cases
 
     Scenario: regexp_extract_all returns empty array when no match
@@ -50,6 +59,15 @@ Feature: regexp_extract_all() extracts all regex capture group matches from stri
       Then query result
       | result |
       | []     |
+
+    Scenario: regexp_extract_all returns empty strings for unmatched optional groups
+      When query
+      """
+      SELECT to_json(regexp_extract_all('aaaac aaabc', r'(a+)(b)?(c)', 2)) AS result
+      """
+      Then query result
+      | result   |
+      | ["","b"] |
 
   Rule: NULL handling
 

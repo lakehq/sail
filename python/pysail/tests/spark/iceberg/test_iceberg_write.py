@@ -7,6 +7,7 @@ import pytest
 from pandas.testing import assert_frame_equal
 from pyiceberg.partitioning import PartitionField, PartitionSpec
 from pyiceberg.schema import Schema
+from pyiceberg.table import StaticTable
 from pyiceberg.transforms import IdentityTransform
 from pyiceberg.types import (
     DecimalType,
@@ -180,8 +181,11 @@ def test_iceberg_append_bootstrap_first_snapshot(spark, sql_catalog):
         expected = pd.DataFrame({"id": [10, 20], "value": ["x", "y"]})
         assert_frame_equal(result_df.toPandas(), expected.astype(result_df.toPandas().dtypes))
 
+        static_table = StaticTable.from_metadata(table.location())
+        assert static_table.current_snapshot() is not None
+
         table.refresh()
-        assert table.current_snapshot() is not None
+        assert table.current_snapshot() is None
     finally:
         sql_catalog.drop_table(identifier)
 

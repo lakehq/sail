@@ -37,7 +37,7 @@ SELECT current_catalog()
 SHOW TABLES
 ```
 
-In the next few pages, we will explore the different catalog providers supported by Sail and how to configure them.
+The next few pages describe the different catalog providers supported by Sail and how to configure them.
 
 ## Common Options
 

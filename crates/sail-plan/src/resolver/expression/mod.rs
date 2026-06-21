@@ -49,6 +49,15 @@ impl NamedExpr {
                         .collect()
                 })
                 .unwrap_or(vec![]),
+            expr::Expr::Literal(_literal, field_metadata) => field_metadata
+                .as_ref()
+                .map(|x| {
+                    x.inner()
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect()
+                })
+                .unwrap_or(vec![]),
             _ => vec![],
         };
         Self {
@@ -145,7 +154,7 @@ impl PlanResolver<'_> {
                 function,
                 arguments,
             } => {
-                self.resolve_expression_lambda_function(*function, arguments, schema, state)
+                self.resolve_expression_lambda_function(*function, arguments, None, schema, state)
                     .await
             }
             Expr::Window {
@@ -188,6 +197,7 @@ impl PlanResolver<'_> {
                 self.resolve_expression_call_function(function_name, arguments, schema, state)
                     .await
             }
+            Expr::DefaultColumnValue => self.resolve_expression_default_column_value(),
             Expr::Placeholder(placeholder) => {
                 self.resolve_expression_placeholder(placeholder).await
             }
@@ -405,6 +415,7 @@ mod tests {
     use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
     use sail_catalog::provider::CatalogProvider;
     use sail_catalog_memory::MemoryCatalogProvider;
+    use sail_common::geoarrow::extension::GeoArrowWkbType;
     use sail_common::spec;
     use sail_common_datafusion::catalog::display::DefaultCatalogDisplay;
     use sail_common_datafusion::session::plan::PlanService;
@@ -596,10 +607,14 @@ mod tests {
         let metadata: Vec<(String, String)> = result.metadata.iter().as_slice().to_vec();
         let metadata_map: HashMap<_, _> = metadata.clone().into_iter().collect();
 
-        assert_metadata_value(&metadata_map, spec::EXTENSION_TYPE_NAME_KEY, "geoarrow.wkb");
         assert_metadata_value(
             &metadata_map,
-            spec::EXTENSION_TYPE_METADATA_KEY,
+            arrow_schema::extension::EXTENSION_TYPE_NAME_KEY,
+            GeoArrowWkbType::NAME,
+        );
+        assert_metadata_value(
+            &metadata_map,
+            arrow_schema::extension::EXTENSION_TYPE_METADATA_KEY,
             r#"{"crs":"SRID:0"}"#,
         );
 
@@ -636,10 +651,14 @@ mod tests {
         let metadata: Vec<(String, String)> = result.metadata.iter().as_slice().to_vec();
         let metadata_map: HashMap<_, _> = metadata.clone().into_iter().collect();
 
-        assert_metadata_value(&metadata_map, spec::EXTENSION_TYPE_NAME_KEY, "geoarrow.wkb");
         assert_metadata_value(
             &metadata_map,
-            spec::EXTENSION_TYPE_METADATA_KEY,
+            arrow_schema::extension::EXTENSION_TYPE_NAME_KEY,
+            GeoArrowWkbType::NAME,
+        );
+        assert_metadata_value(
+            &metadata_map,
+            arrow_schema::extension::EXTENSION_TYPE_METADATA_KEY,
             r#"{"crs":"OGC:CRS84","edges":"spherical"}"#,
         );
 

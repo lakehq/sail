@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -10,6 +9,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::string::concat::ConcatFunc;
 use datafusion_common::utils::list_ndims;
 use datafusion_common::{plan_err, ExprSchema, Result, ScalarValue};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     ColumnarValue, Expr, ExprSchemable, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
@@ -39,10 +39,6 @@ impl SparkConcat {
 }
 
 impl ScalarUDFImpl for SparkConcat {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_concat"
     }
@@ -60,29 +56,31 @@ impl ScalarUDFImpl for SparkConcat {
             .iter()
             .any(|arg_type| matches!(arg_type, DataType::List(_)))
         {
-            let mut expr_type = DataType::Null;
+            let mut expr_type: Option<DataType> = None;
             let mut max_dims = 0;
             for arg_type in arg_types {
                 match arg_type {
                     DataType::List(field) => {
                         if !field.data_type().equals_datatype(&DataType::Null) {
                             let dims = list_ndims(arg_type);
-                            expr_type = match max_dims.cmp(&dims) {
-                                Ordering::Greater => expr_type,
+                            expr_type = Some(match max_dims.cmp(&dims) {
+                                Ordering::Greater => expr_type.unwrap_or_else(|| arg_type.clone()),
                                 Ordering::Equal => {
-                                    if expr_type == DataType::Null {
-                                        arg_type.clone()
-                                    } else if !expr_type.equals_datatype(arg_type) {
-                                        return plan_err!("It is not possible to concatenate arrays of different types. Expected: {expr_type}, got: {arg_type}");
+                                    if let Some(expr_type) = expr_type {
+                                        merge_list_types(&expr_type, arg_type).ok_or_else(|| {
+                                            datafusion_common::plan_datafusion_err!(
+                                                "It is not possible to concatenate arrays of different types. Expected: {expr_type}, got: {arg_type}"
+                                            )
+                                        })?
                                     } else {
-                                        expr_type
+                                        arg_type.clone()
                                     }
                                 }
                                 Ordering::Less => {
                                     max_dims = dims;
                                     arg_type.clone()
                                 }
-                            };
+                            });
                         }
                     }
                     _ => {
@@ -93,11 +91,7 @@ impl ScalarUDFImpl for SparkConcat {
                 }
             }
             // All arrays had Null element type (e.g. array() + array()) — keep as List(Null)
-            if expr_type == DataType::Null {
-                Ok(arg_types[0].clone())
-            } else {
-                Ok(expr_type)
-            }
+            Ok(expr_type.unwrap_or_else(|| arg_types[0].clone()))
         } else if arg_types
             .iter()
             .all(|arg_type| matches!(arg_type, DataType::Binary))
@@ -119,6 +113,35 @@ impl ScalarUDFImpl for SparkConcat {
                 })
                 .unwrap_or(&DataType::Utf8)
                 .clone())
+        }
+    }
+
+    fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        if args.len() != 1 {
+            return Ok(ExprSimplifyResult::Original(args));
+        }
+        let mut args = args;
+        let arg = args.remove(0);
+        // `FixedSizeList` and `LargeList` are intentionally omitted: `return_type`
+        // does not recognize them as array inputs (it falls through to `Utf8`),
+        // so the invoke path coerces them to strings. Returning the argument
+        // unchanged here would break the type contract advertised by
+        // `return_type`. Numeric, timestamp, and other non-string scalars are
+        // also excluded so the invoke path can apply Spark-specific coercions
+        // (e.g. timestamp formatting via `spark_format_timestamp_str`).
+        if matches!(
+            info.get_data_type(&arg)?,
+            DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Utf8View
+                | DataType::Binary
+                | DataType::LargeBinary
+                | DataType::BinaryView
+                | DataType::List(_)
+        ) {
+            Ok(ExprSimplifyResult::Simplified(arg))
+        } else {
+            Ok(ExprSimplifyResult::Original(vec![arg]))
         }
     }
 
@@ -163,9 +186,10 @@ impl ScalarUDFImpl for SparkConcat {
             .iter()
             .any(|arg| matches!(arg.data_type(), DataType::List(_)))
         {
-            // Cast arrays with Null element type to the return type for proper concatenation
-            // This handles cases like concat(array(), array(1, 2, 3)) where the first array
-            // has type List(Null) and needs to be cast to List(Int32)
+            // Cast arrays with Null element type to the return type for proper
+            // concatenation. This handles cases like `concat(array(), array(1, 2, 3))`
+            // where the first array has type `List(Null)` and needs to be cast to
+            // `List(Int32)` so `ArrayConcat` can merge them.
             let casted_args = cast_list_columnar_values(args.args, return_type)?;
             let casted_scalar_args = ScalarFunctionArgs {
                 args: casted_args,
@@ -292,8 +316,9 @@ fn spark_format_timestamp_array(
     Ok(Arc::new(result))
 }
 
-/// Cast list arrays with Null element type to the target list type.
-/// This is needed for concatenating empty arrays with typed arrays.
+/// Cast list arrays to the target list type.
+/// This is needed for concatenating empty arrays and arrays that only differ by
+/// element nullability.
 fn cast_list_columnar_values(
     values: Vec<ColumnarValue>,
     target_type: &DataType,
@@ -301,14 +326,8 @@ fn cast_list_columnar_values(
     values
         .into_iter()
         .map(|value| {
-            let needs_cast = match &value {
-                ColumnarValue::Scalar(s) => {
-                    matches!(s.data_type(), DataType::List(f) if f.data_type() == &DataType::Null)
-                }
-                ColumnarValue::Array(a) => {
-                    matches!(a.data_type(), DataType::List(f) if f.data_type() == &DataType::Null)
-                }
-            };
+            let value_type = value.data_type();
+            let needs_cast = matches!(value_type, DataType::List(_)) && value_type != *target_type;
             if needs_cast {
                 match value {
                     ColumnarValue::Scalar(scalar) => {
@@ -324,4 +343,26 @@ fn cast_list_columnar_values(
             }
         })
         .collect()
+}
+
+fn merge_list_types(left: &DataType, right: &DataType) -> Option<DataType> {
+    match (left, right) {
+        (DataType::List(left), DataType::List(right)) => {
+            let data_type =
+                merge_list_types(left.data_type(), right.data_type()).or_else(|| {
+                    // Leaf list item types may only differ by field/nullability metadata.
+                    left.data_type()
+                        .equals_datatype(right.data_type())
+                        .then(|| left.data_type().clone())
+                })?;
+            Some(DataType::List(Arc::new(
+                left.as_ref()
+                    .clone()
+                    .with_data_type(data_type)
+                    .with_nullable(left.is_nullable() || right.is_nullable()),
+            )))
+        }
+        _ if left.equals_datatype(right) => Some(left.clone()),
+        _ => None,
+    }
 }

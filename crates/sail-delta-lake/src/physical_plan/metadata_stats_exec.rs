@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt;
 use std::io::Cursor;
 use std::sync::Arc;
@@ -140,10 +139,6 @@ impl DeltaMetadataStatsExec {
 impl ExecutionPlan for DeltaMetadataStatsExec {
     fn name(&self) -> &'static str {
         "DeltaMetadataStatsExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

@@ -25,15 +25,17 @@ use crate::s3::get_s3_object_store;
 struct ObjectStoreKey {
     scheme: String,
     authority: String,
+    session_fingerprint: Option<String>,
 }
 
 impl ObjectStoreKey {
-    fn new(url: &Url) -> Self {
+    fn new(url: &Url, session_fingerprint: Option<&str>) -> Self {
         let key = Self {
             scheme: url.scheme().to_string(),
             authority: url.authority().to_string(),
+            session_fingerprint: session_fingerprint.map(ToString::to_string),
         };
-        debug!("ObjectStoreKey::new({url}) = {key:?}");
+        debug!("ObjectStoreKey::new({url}, {session_fingerprint:?}) = {key:?}");
         key
     }
 }
@@ -51,10 +53,35 @@ impl DynamicObjectStoreRegistry {
             ObjectStoreKey {
                 scheme: "file".to_string(),
                 authority: "".to_string(),
+                session_fingerprint: None,
             },
             Arc::new(LoggingObjectStore::new(Arc::new(LocalFileSystem::new()))),
         );
         Self { stores, runtime }
+    }
+
+    pub fn register_session_store(
+        &self,
+        url: &Url,
+        session_fingerprint: &str,
+        store: Arc<dyn ObjectStore>,
+    ) -> Option<Arc<dyn ObjectStore>> {
+        let key = ObjectStoreKey::new(url, Some(session_fingerprint));
+        self.stores.insert(key, store)
+    }
+
+    pub fn get_store_with_session(
+        &self,
+        url: &Url,
+        session_fingerprint: Option<&str>,
+    ) -> Result<Arc<dyn ObjectStore>> {
+        if let Some(session_fingerprint) = session_fingerprint {
+            let key = ObjectStoreKey::new(url, Some(session_fingerprint));
+            if let Some(store) = self.stores.get(&key) {
+                return Ok(store.clone());
+            }
+        }
+        self.get_store(url)
     }
 }
 
@@ -64,12 +91,12 @@ impl ObjectStoreRegistry for DynamicObjectStoreRegistry {
         url: &Url,
         store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
-        let key = ObjectStoreKey::new(url);
+        let key = ObjectStoreKey::new(url, None);
         self.stores.insert(key, store)
     }
 
     fn get_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
-        let key = ObjectStoreKey::new(url);
+        let key = ObjectStoreKey::new(url, None);
 
         // Use entry API for atomic get-or-insert
         let store = self
@@ -88,7 +115,7 @@ impl ObjectStoreRegistry for DynamicObjectStoreRegistry {
 }
 
 fn get_dynamic_object_store(url: &Url) -> object_store::Result<Arc<dyn ObjectStore>> {
-    let key = ObjectStoreKey::new(url);
+    let key = ObjectStoreKey::new(url, None);
     let store: Arc<dyn ObjectStore> = match key.scheme.as_str() {
         #[cfg(feature = "hdfs")]
         "hdfs" => Arc::new(
@@ -183,4 +210,60 @@ pub async fn get_http_object_store(url: String) -> object_store::Result<HttpStor
         },
     );
     builder.build()
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::execution::object_store::ObjectStoreRegistry;
+    use object_store::memory::InMemory;
+    use object_store::ObjectStore;
+    use sail_common::runtime::RuntimeHandle;
+    use tokio::runtime::Handle;
+    use url::Url;
+
+    use super::{DynamicObjectStoreRegistry, ObjectStoreKey};
+
+    #[test]
+    fn object_store_key_separates_session_fingerprints() {
+        let url = Url::parse("s3://bucket/table/path").unwrap();
+
+        let no_session = ObjectStoreKey::new(&url, None);
+        let session_a = ObjectStoreKey::new(&url, Some("session-a"));
+        let session_b = ObjectStoreKey::new(&url, Some("session-b"));
+
+        assert_ne!(no_session, session_a);
+        assert_ne!(session_a, session_b);
+    }
+
+    #[tokio::test]
+    async fn registry_prefers_registered_session_store() {
+        let handle = Handle::current();
+        let runtime = RuntimeHandle::new(handle.clone(), handle);
+        let registry = DynamicObjectStoreRegistry::new(runtime);
+        let url = Url::parse("file:///tmp/sail-object-store-session-test").unwrap();
+        let store_a: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let store_b: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+
+        registry.register_session_store(&url, "session-a", store_a.clone());
+        registry.register_session_store(&url, "session-b", store_b.clone());
+
+        let resolved_a = registry
+            .get_store_with_session(&url, Some("session-a"))
+            .unwrap();
+        let resolved_b = registry
+            .get_store_with_session(&url, Some("session-b"))
+            .unwrap();
+
+        assert!(Arc::ptr_eq(&resolved_a, &store_a));
+        assert!(Arc::ptr_eq(&resolved_b, &store_b));
+
+        let fallback = registry
+            .get_store_with_session(&url, Some("unknown"))
+            .unwrap();
+        let default_store = registry.get_store(&url).unwrap();
+        assert!(Arc::ptr_eq(&fallback, &default_store));
+    }
 }

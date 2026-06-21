@@ -3,7 +3,6 @@ Test Delta Lake schema handling (mergeSchema, overwriteSchema, evolution) in Sai
 """
 
 import json
-import platform
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
@@ -235,7 +234,6 @@ class TestDeltaSchemaHandling:
         [("America/Los_Angeles", "America/Los_Angeles")],
         indirect=True,
     )
-    @pytest.mark.skipif(platform.system() == "Windows", reason="`time.tzset()` is not available on Windows")
     def test_delta_schema_timestamp_partition_with_session_timezone(
         self, spark, tmp_path, session_timezone, local_timezone
     ):

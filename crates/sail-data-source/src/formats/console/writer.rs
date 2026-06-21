@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::io::Write;
 use std::sync::Arc;
 
@@ -50,10 +49,6 @@ impl DisplayAs for ConsoleSinkExec {
 impl ExecutionPlan for ConsoleSinkExec {
     fn name(&self) -> &str {
         Self::static_name()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

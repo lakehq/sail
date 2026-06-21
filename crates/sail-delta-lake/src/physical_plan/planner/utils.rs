@@ -32,6 +32,7 @@ use datafusion_functions_nested::extract::array_element_udf;
 use datafusion_functions_nested::map_extract::map_extract_udf;
 use datafusion_physical_expr::expressions::Column as PhysicalColumn;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
+use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 use url::Url;
 
 use super::context::PlannerContext;
@@ -43,8 +44,7 @@ use crate::datasource::{
 use crate::options::DeltaLogReplayStrategy;
 use crate::physical_plan::{
     create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaLogReplayExec,
-    DeltaPhysicalExprAdapterFactory, DeltaWriterExec, DeltaWriterExecOptions, COL_LOG_IS_REMOVE,
-    COL_LOG_VERSION, COL_REPLAY_PATH,
+    DeltaWriterExec, DeltaWriterExecOptions, COL_LOG_IS_REMOVE, COL_LOG_VERSION, COL_REPLAY_PATH,
 };
 use crate::spec::fields::{
     FIELD_NAME_MODIFICATION_TIME, FIELD_NAME_PATH, FIELD_NAME_SIZE, FIELD_NAME_STATS,
@@ -144,13 +144,15 @@ pub fn build_standard_write_layers(
         plan,
         ctx.table_url().clone(),
         DeltaWriterExecOptions::from(ctx.options().clone())
-            .with_generation_expressions(ctx.generation_expressions().clone()),
+            .with_generation_expressions(ctx.generation_expressions().clone())
+            .with_identity_columns(ctx.identity_columns().clone()),
         ctx.metadata_configuration().clone(),
         ctx.partition_columns().to_vec(),
         sink_mode.clone(),
         ctx.table_exists(),
         writer_schema,
         write_context.clone(),
+        ctx.lakehouse_table().cloned(),
     )?);
 
     // DeltaCommitExec is single-partition; gather writer partitions first.
@@ -165,6 +167,7 @@ pub fn build_standard_write_layers(
         sink_mode.clone(),
         ctx.options().user_metadata.clone(),
         write_context.commit_context.clone(),
+        ctx.lakehouse_table().cloned(),
     )))
 }
 
@@ -309,7 +312,7 @@ async fn build_log_replay_pipeline_with_files(
         );
 
         let replay: Arc<dyn ExecutionPlan> = if let Some(filter) = options.log_filter {
-            let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
+            let adapter_factory = Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {});
             let adapter = adapter_factory
                 .create(filter.table_schema, replay.schema())
                 .map_err(|e| DataFusionError::External(Box::new(e)))?;
@@ -671,7 +674,7 @@ async fn build_log_replay_pipeline_with_files(
     };
 
     let replay: Arc<dyn ExecutionPlan> = if let Some(filter) = options.log_filter {
-        let adapter_factory = Arc::new(DeltaPhysicalExprAdapterFactory {});
+        let adapter_factory = Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {});
         let adapter = adapter_factory
             .create(filter.table_schema, replay.schema())
             .map_err(|e| DataFusionError::External(Box::new(e)))?;

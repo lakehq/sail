@@ -1,5 +1,6 @@
+use chumsky::prelude::*;
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{DataFusionError, ScalarValue};
+use datafusion_common::ScalarValue;
 use datafusion_expr::{cast, expr, lit, when, Expr, ScalarUDF};
 use datafusion_functions::unicode::expr_fn as unicode_fn;
 use datafusion_spark::expr_fn::json_tuple as df_json_tuple;
@@ -14,21 +15,82 @@ use sail_function::scalar::json::{
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionBuilder as F, ScalarFunctionInput};
 
+/// Parse a Spark `get_json_object` JSONPath into the literal arguments for
+/// `json_as_text`: a `Utf8` literal per object key and an `Int64` literal per
+/// array index (which `json_as_text` then reads as `JsonPath::Key` /
+/// `JsonPath::Index` respectively).
+///
+/// Supports the subset Spark accepts: a leading `$`, dot notation (`.key`),
+/// single-quoted bracket notation (`['key']`, which allows keys containing
+/// dots), and array indexing (`[0]`). A bare `$` selects the whole document
+/// (empty key list). Wildcards (`[*]`) and double-quoted brackets are not
+/// supported — Spark returns NULL for the latter — so they parse as `None`,
+/// letting the caller emit a NULL result like Spark.
+fn parse_json_path(path: &str) -> Option<Vec<expr::Expr>> {
+    json_path_parser().parse(path).into_result().ok()
+}
+
+/// Chumsky grammar for the `get_json_object` JSONPath subset, mirroring
+/// `spark_variant_path_parser` used by `variant_get`. Each path segment maps to
+/// one literal `Expr`: a `Utf8` literal for an object key, an `Int64` literal
+/// for an array index. Any path Spark rejects fails the parse (→ `None`).
+fn json_path_parser<'src>(
+) -> impl Parser<'src, &'src str, Vec<expr::Expr>, extra::Err<Rich<'src, char>>> {
+    // `.key` — a run of characters other than `.` or `[`.
+    let dot_key = just('.')
+        .ignore_then(
+            none_of(['.', '['])
+                .repeated()
+                .at_least(1)
+                .collect::<String>(),
+        )
+        .map(lit);
+
+    // `['key']` — single-quoted (may contain dots). Double-quoted brackets are
+    // not accepted, matching Spark (which returns NULL for them).
+    let bracket_key = just('[')
+        .ignore_then(just('\''))
+        .ignore_then(none_of('\'').repeated().collect::<String>())
+        .then_ignore(just('\''))
+        .then_ignore(just(']'))
+        .map(lit);
+
+    // `[0]` — array index.
+    let index = just('[')
+        .ignore_then(text::int(10).try_map(|digits: &str, span| {
+            digits
+                .parse::<i64>()
+                .map(lit)
+                .map_err(|e| Rich::custom(span, e.to_string()))
+        }))
+        .then_ignore(just(']'));
+
+    just('$')
+        .ignore_then(
+            choice((dot_key, bracket_key, index))
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .then_ignore(end())
+}
+
 fn get_json_object(expr: expr::Expr, path: expr::Expr) -> PlanResult<expr::Expr> {
     let paths: Vec<expr::Expr> = match path {
-        expr::Expr::Literal(ScalarValue::Utf8(Some(value)), _metadata)
-            if value.starts_with("$.") =>
-        {
-            Ok::<_, DataFusionError>(value.replacen("$.", "", 1).split(".").map(lit).collect())
+        expr::Expr::Literal(ScalarValue::Utf8(Some(value)), _metadata) => {
+            match parse_json_path(&value) {
+                // Spark returns NULL for paths it cannot parse (including the empty string and paths not anchored at `$`).
+                Some(keys) => keys,
+                None => return Ok(lit(ScalarValue::Utf8(None))),
+            }
         }
         // FIXME: json_as_text_udf for array of paths with subpaths is not implemented, so only top level keys supported
-        _ => Ok(vec![when(
+        _ => vec![when(
             path.clone().like(lit("$.%")),
             unicode_fn::substr(path, lit(3)),
         )
         .when(lit(true), lit(""))
-        .end()?]),
-    }?;
+        .end()?],
+    };
     let mut args = Vec::with_capacity(1 + paths.len());
     args.push(expr);
     args.extend(paths);

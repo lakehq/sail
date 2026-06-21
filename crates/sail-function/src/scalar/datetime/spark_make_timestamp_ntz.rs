@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use chrono::{Duration, NaiveDate};
@@ -33,10 +32,6 @@ impl SparkMakeTimestampNtz {
 }
 
 impl ScalarUDFImpl for SparkMakeTimestampNtz {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_make_timestamp_ntz"
     }

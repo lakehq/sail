@@ -11,8 +11,8 @@ Feature: Iceberg Basic IO
     Scenario: Create a new table and append data
       Given statement template
         """
-        CREATE TABLE test_table (id INT, data STRING) 
-        USING iceberg 
+        CREATE TABLE test_table (id INT, data STRING)
+        USING iceberg
         LOCATION {{ location.uri }}
         """
       Given statement
@@ -29,6 +29,31 @@ Feature: Iceberg Basic IO
         | id | data |
         | 1  | a    |
         | 2  | b    |
+
+    Scenario: CTAS catalog table records metadata location
+      Given final statement
+        """
+        DROP TABLE IF EXISTS iceberg_catalog_ctas_table
+        """
+      Given statement template
+        """
+        CREATE TABLE iceberg_catalog_ctas_table
+        USING iceberg
+        LOCATION {{ location.uri }}
+        AS SELECT 1 AS id
+        """
+      When query
+        """
+        DESCRIBE EXTENDED iceberg_catalog_ctas_table
+        """
+      Then query result row where "col_name" is "Table Properties" has "data_type" containing "metadata_location="
+      When query
+        """
+        SELECT * FROM iceberg_catalog_ctas_table
+        """
+      Then query result
+        | id |
+        | 1  |
 
     Scenario: Multiple inserts create multiple snapshots
       Given statement template
@@ -72,8 +97,8 @@ Feature: Iceberg Basic IO
         """
         INSERT INTO test_table VALUES (2, 'second')
         """
-      Then iceberg latest metadata file is v2.metadata.json
-      Then iceberg version hint is 2
+      Then iceberg latest metadata file is v3.metadata.json
+      Then iceberg version hint is 3
       When query
         """
         SELECT * FROM test_table ORDER BY id
@@ -99,8 +124,8 @@ Feature: Iceberg Basic IO
         """
         INSERT INTO test_table VALUES (2, 'second')
         """
-      Then iceberg latest metadata file is v2.metadata.json
-      Then iceberg version hint is 2
+      Then iceberg latest metadata file is v3.metadata.json
+      Then iceberg version hint is 3
       When query
         """
         SELECT * FROM test_table ORDER BY id
@@ -134,6 +159,7 @@ Feature: Iceberg Basic IO
         📂 data
           📄 *.parquet
         📂 metadata
+          📄 *.metadata.json
           📄 *.metadata.json
           📄 snap-*.avro
         """

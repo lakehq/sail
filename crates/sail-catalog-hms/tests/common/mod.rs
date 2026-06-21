@@ -96,6 +96,7 @@ pub fn col(name: &str, data_type: DataType) -> CreateTableColumnOptions {
         comment: None,
         default: None,
         generated_always_as: None,
+        identity: None,
     }
 }
 
@@ -124,6 +125,7 @@ pub fn simple_table_options_with_format(
         replace: false,
         properties: vec![],
         is_external: true,
+        is_write_precondition: false,
     }
 }
 

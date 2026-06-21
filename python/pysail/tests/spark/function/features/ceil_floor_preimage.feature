@@ -1,4 +1,3 @@
-@ceil_floor_preimage
 Feature: ceil() / floor() — preimage hook (filter pushdown)
 
   # SparkFloor implements `fn preimage`: `floor(x) = N` ⟺ `x ∈ [N, N+1)`.
@@ -384,6 +383,7 @@ Feature: ceil() / floor() — preimage hook (filter pushdown)
         """
       Then query plan matches snapshot
 
+  @sail-only
   Rule: Simplify + preimage interaction — ceil(ceil(x)) chains correctly
 
     Scenario: ceil(ceil(x)) collapses to ceil(x) then preimage applies

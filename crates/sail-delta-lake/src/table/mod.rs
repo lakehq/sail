@@ -18,6 +18,7 @@
 
 // [Credit]: https://github.com/delta-io/delta-rs/blob/1f0b4d0965a85400c1effc6e9b4c7ebbb6795978/crates/core/src/table/mod.rs
 
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
@@ -25,23 +26,45 @@ use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result};
 use object_store::ObjectStore;
+use sail_catalog::manager::CatalogManager;
+use sail_common_datafusion::catalog::delta::{
+    DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
+};
+use sail_common_datafusion::catalog::{LakehouseExecutionContext, TableColumnStatus};
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
 
+use crate::catalog::coordinator::DeltaCatalogCommitCoordinator;
+use crate::catalog_managed::{
+    catalog_managed_delta_table, metadata_with_catalog_managed, protocol_with_catalog_managed,
+    CatalogManagedDeltaTable,
+};
 use crate::datasource::{df_logical_schema, DeltaScanConfig};
 pub mod features;
 pub use features::{
     ChangeDataFeedSupport, ChangeDataFeedToken, ColumnMappingToken, DeletionVectorToken,
     EnabledRowTrackingToken, RowTrackingToken, SupportedRowTrackingToken,
 };
-use sail_data_source::options::gen::DeltaReadOptions;
 
 use crate::delta_log::resolve_version_timestamp;
 pub use crate::kernel::snapshot::DeltaSnapshot;
-use crate::kernel::DeltaSnapshotConfig;
+use crate::kernel::transaction::CommitBuilder;
+use crate::kernel::{
+    CatalogManagedCommitFile, CatalogManagedCommitSet, DeltaOperation, DeltaSnapshotConfig,
+    SaveMode,
+};
 use crate::logical::table_source::DeltaTableSource;
-use crate::spec::{DeltaError, DeltaError as DeltaTableError, DeltaResult};
+use crate::options::gen::DeltaReadOptions;
+use crate::schema::{
+    metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
+    schema_has_column_defaults, schema_has_generated_columns, schema_has_identity_columns,
+};
+use crate::spec::{
+    contains_timestampntz_arrow, contains_variant_arrow, CommitAction, DeltaError,
+    DeltaError as DeltaTableError, DeltaResult, Protocol, StructType, TableFeature,
+};
 use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
 
 /// In memory representation of a Delta Table
@@ -225,7 +248,7 @@ pub(crate) async fn create_delta_table_with_object_store(
     Ok(table)
 }
 
-fn create_logstore_with_object_store(
+pub(crate) fn create_logstore_with_object_store(
     object_store: Arc<dyn ObjectStore>,
     location: Url,
     storage_config: StorageConfig,
@@ -248,9 +271,10 @@ pub async fn create_delta_source(
     table_url: Url,
     schema: Option<Schema>,
     options: DeltaReadOptions,
+    lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> Result<Arc<dyn datafusion::logical_expr::TableSource>> {
     let (snapshot, log_store, scan_config) =
-        load_delta_read_state(ctx, table_url, schema, options, false).await?;
+        load_delta_read_state(ctx, table_url, schema, options, false, lakehouse_table).await?;
 
     Ok(Arc::new(DeltaTableSource::try_new(
         snapshot,
@@ -265,18 +289,368 @@ pub async fn infer_delta_logical_schema(
     table_url: Url,
     schema: Option<Schema>,
     options: DeltaReadOptions,
+    lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> Result<SchemaRef> {
-    let (snapshot, _log_store, scan_config) =
-        load_delta_read_state(ctx, table_url, schema, options, true).await?;
+    let (schema, _) =
+        infer_delta_logical_metadata(ctx, table_url, schema, options, lakehouse_table).await?;
+    Ok(schema)
+}
 
-    Ok(df_logical_schema(
+/// Infers the Delta logical schema and table configuration for planning.
+pub async fn infer_delta_logical_metadata(
+    ctx: &dyn Session,
+    table_url: Url,
+    schema: Option<Schema>,
+    options: DeltaReadOptions,
+    lakehouse_table: Option<LakehouseExecutionContext>,
+) -> Result<(SchemaRef, Vec<(String, String)>)> {
+    let (snapshot, _log_store, scan_config) =
+        load_delta_read_state(ctx, table_url, schema, options, true, lakehouse_table).await?;
+
+    let schema = df_logical_schema(
         snapshot.as_ref(),
         &scan_config.file_column_name,
         &scan_config.row_index_column_name,
         &scan_config.commit_version_column_name,
         &scan_config.commit_timestamp_column_name,
         scan_config.schema,
-    )?)
+    )?;
+    let properties = snapshot
+        .metadata()
+        .configuration()
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
+    Ok((schema, properties))
+}
+
+fn delta_read_snapshot_config(
+    metadata_only: bool,
+    options: &DeltaReadOptions,
+) -> DeltaSnapshotConfig {
+    if metadata_only || options.metadata_as_data_read {
+        DeltaSnapshotConfig {
+            require_files: false,
+            ..Default::default()
+        }
+    } else {
+        Default::default()
+    }
+}
+
+fn protocol_is_catalog_managed(protocol: &Protocol) -> bool {
+    protocol.has_reader_feature(&TableFeature::CatalogManaged)
+        || protocol.has_writer_feature(&TableFeature::CatalogManaged)
+}
+
+fn effective_catalog_commit_end_version(
+    latest_table_version: i64,
+    requested_end_version: Option<i64>,
+) -> Option<i64> {
+    if latest_table_version < 1 {
+        return None;
+    }
+    Some(
+        requested_end_version
+            .map(|version| version.min(latest_table_version))
+            .unwrap_or(latest_table_version),
+    )
+}
+
+fn next_catalog_commit_start_version(
+    start_version: i64,
+    effective_end_version: i64,
+    commit_versions: impl IntoIterator<Item = i64>,
+) -> Result<Option<i64>> {
+    let Some(max_version) = commit_versions.into_iter().max() else {
+        return Ok(None);
+    };
+
+    if max_version < start_version {
+        return Err(DataFusionError::External(Box::new(
+            DeltaTableError::generic(format!(
+                "Unity Catalog Delta commit discovery returned only commit versions before requested start version {start_version}"
+            )),
+        )));
+    }
+
+    Ok((max_version < effective_end_version).then_some(max_version + 1))
+}
+
+fn is_missing_delta_log_error(error: &DeltaTableError) -> bool {
+    matches!(
+        error,
+        DeltaTableError::InvalidTableLocation(message)
+            if message.contains("No commit files found in _delta_log")
+    )
+}
+
+async fn load_catalog_managed_delta_bootstrap_info<C>(
+    ctx: &C,
+    catalog_table: &[String],
+) -> Result<Option<CatalogManagedDeltaTable>>
+where
+    C: SessionExtensionAccessor + ?Sized,
+{
+    let manager = ctx.extension::<CatalogManager>()?;
+    let status = manager
+        .get_table(catalog_table)
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    Ok(catalog_managed_delta_table(status.kind))
+}
+
+fn is_unity_catalog_response_property(key: &str) -> bool {
+    let lower = key.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "comment"
+            | "created_at"
+            | "created_by"
+            | "owner"
+            | "table_type"
+            | "updated_at"
+            | "updated_by"
+    ) || key.eq_ignore_ascii_case(DELTA_UNITY_TABLE_ID_KEY)
+        || key.eq_ignore_ascii_case(DELTA_UNITY_TABLE_ID_LEGACY_KEY)
+}
+
+fn delta_bootstrap_configuration(properties: Vec<(String, String)>) -> HashMap<String, String> {
+    properties
+        .into_iter()
+        .filter(|(key, _)| !is_unity_catalog_response_property(key))
+        .collect()
+}
+
+fn catalog_managed_bootstrap_actions(
+    info: CatalogManagedDeltaTable,
+    table_url: &Url,
+) -> Result<(Vec<CommitAction>, DeltaOperation)> {
+    let CatalogManagedDeltaTable {
+        columns,
+        comment,
+        location,
+        partition_by,
+        properties,
+        table_id,
+    } = info;
+    let arrow_schema = Arc::new(Schema::new(
+        columns
+            .iter()
+            .map(TableColumnStatus::field)
+            .collect::<Vec<_>>(),
+    ));
+    let normalized_schema = normalize_delta_schema(&arrow_schema);
+    let kernel_schema = StructType::try_from(normalized_schema.as_ref())
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let partition_columns = partition_by
+        .into_iter()
+        .map(|field| {
+            if field.transform.is_some() {
+                return Err(DataFusionError::Plan(
+                    "partition transforms are not supported for Unity Delta bootstrap".to_string(),
+                ));
+            }
+            Ok(field.column)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let configuration = delta_bootstrap_configuration(properties);
+    let protocol = protocol_for_create(
+        false,
+        contains_timestampntz_arrow(normalized_schema.as_ref()),
+        false,
+        schema_has_generated_columns(&kernel_schema),
+        schema_has_column_defaults(&kernel_schema),
+        schema_has_identity_columns(&kernel_schema),
+        contains_variant_arrow(normalized_schema.as_ref()),
+        &configuration,
+    )
+    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let protocol = protocol_with_catalog_managed(&protocol);
+    let mut metadata = metadata_for_create_with_struct_type(
+        kernel_schema,
+        partition_columns,
+        Utc::now().timestamp_millis(),
+        configuration,
+    )
+    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    if let Some(comment) = comment {
+        metadata = metadata.with_description(comment);
+    }
+    let metadata = metadata_with_catalog_managed(metadata, &table_id);
+    let operation = DeltaOperation::Create {
+        mode: SaveMode::ErrorIfExists,
+        location: location.unwrap_or_else(|| table_url.to_string()),
+        protocol: Box::new(protocol.clone()),
+        metadata: Box::new(metadata.clone()),
+    };
+
+    Ok((
+        vec![
+            CommitAction::Protocol(protocol),
+            CommitAction::Metadata(metadata),
+        ],
+        operation,
+    ))
+}
+
+async fn bootstrap_catalog_managed_delta_table<C>(
+    ctx: &C,
+    catalog_table: &[String],
+    table_url: &Url,
+    log_store: LogStoreRef,
+) -> Result<bool>
+where
+    C: SessionExtensionAccessor + ?Sized,
+{
+    let Some(info) = load_catalog_managed_delta_bootstrap_info(ctx, catalog_table).await? else {
+        return Ok(false);
+    };
+    let (actions, operation) = catalog_managed_bootstrap_actions(info, table_url)?;
+    CommitBuilder::default()
+        .with_actions(actions)
+        .build(None, log_store, operation)
+        .await
+        .map(|_| true)
+        .map_err(|e| DataFusionError::External(Box::new(e)))
+}
+
+async fn load_catalog_managed_commits<C>(
+    ctx: &C,
+    lakehouse_table: &LakehouseExecutionContext,
+    table_url: &Url,
+    version_as_of: Option<i64>,
+) -> Result<CatalogManagedCommitSet>
+where
+    C: SessionExtensionAccessor + ?Sized,
+{
+    if matches!(version_as_of, Some(version) if version < 1) {
+        return Ok(CatalogManagedCommitSet {
+            latest_table_version: version_as_of.unwrap_or(0),
+            commits: Vec::new(),
+        });
+    }
+
+    let catalog_table = lakehouse_table.catalog_table();
+    let coordinator = DeltaCatalogCommitCoordinator::new(ctx, catalog_table);
+    let mut start_version = 1;
+    let mut commits = Vec::new();
+
+    let latest_table_version = loop {
+        let response = coordinator
+            .get_ratified_commits(
+                lakehouse_table,
+                table_url.to_string(),
+                start_version,
+                version_as_of,
+            )
+            .await?;
+
+        let latest_table_version = response.latest_table_version;
+        if let Some(version) = version_as_of {
+            if latest_table_version >= 0 && version > latest_table_version {
+                return Err(DataFusionError::External(Box::new(DeltaTableError::generic(
+                    format!(
+                        "Catalog-managed Delta table latest ratified version is {latest_table_version}, but version {version} was requested"
+                    ),
+                ))));
+            }
+        }
+
+        let effective_end_version =
+            effective_catalog_commit_end_version(latest_table_version, version_as_of);
+        let response_commits = response.commits;
+        let next_start_version = match effective_end_version {
+            Some(end_version) => next_catalog_commit_start_version(
+                start_version,
+                end_version,
+                response_commits.iter().map(|commit| commit.version),
+            )?,
+            None => None,
+        };
+
+        commits.extend(response_commits.into_iter().filter_map(|commit| {
+            if effective_end_version.is_some_and(|end_version| commit.version > end_version) {
+                return None;
+            }
+            Some(CatalogManagedCommitFile {
+                version: commit.version,
+                file_name: commit.file_name,
+            })
+        }));
+
+        match next_start_version {
+            Some(next_start_version) => start_version = next_start_version,
+            None => break latest_table_version,
+        }
+    };
+
+    Ok(CatalogManagedCommitSet {
+        latest_table_version,
+        commits,
+    })
+}
+
+pub(crate) async fn load_catalog_managed_commits_for_snapshot<C>(
+    ctx: &C,
+    lakehouse_table: &LakehouseExecutionContext,
+    table_url: &Url,
+    log_store: LogStoreRef,
+    version_as_of: Option<i64>,
+) -> Result<Option<CatalogManagedCommitSet>>
+where
+    C: SessionExtensionAccessor + ?Sized,
+{
+    let catalog_table = lakehouse_table.catalog_table();
+    if load_catalog_managed_delta_bootstrap_info(ctx, catalog_table)
+        .await?
+        .is_some()
+    {
+        match log_store.get_latest_version(-1).await {
+            Ok(_) => {}
+            Err(DeltaError::MissingVersion) => {
+                bootstrap_catalog_managed_delta_table(ctx, catalog_table, table_url, log_store)
+                    .await?;
+            }
+            Err(err) => return Err(DataFusionError::from(err)),
+        }
+        return Ok(Some(
+            load_catalog_managed_commits(ctx, lakehouse_table, table_url, version_as_of).await?,
+        ));
+    }
+
+    let mut detector = DeltaTable::new(
+        log_store.clone(),
+        DeltaSnapshotConfig {
+            require_files: false,
+            ..Default::default()
+        },
+    );
+    match detector.load().await {
+        Ok(()) => {
+            if protocol_is_catalog_managed(detector.snapshot()?.protocol()) {
+                Ok(Some(
+                    load_catalog_managed_commits(ctx, lakehouse_table, table_url, version_as_of)
+                        .await?,
+                ))
+            } else {
+                Ok(None)
+            }
+        }
+        Err(err) if is_missing_delta_log_error(&err) => {
+            if bootstrap_catalog_managed_delta_table(ctx, catalog_table, table_url, log_store)
+                .await?
+            {
+                Ok(Some(
+                    load_catalog_managed_commits(ctx, lakehouse_table, table_url, version_as_of)
+                        .await?,
+                ))
+            } else {
+                Err(DataFusionError::from(err))
+            }
+        }
+        Err(err) => Err(DataFusionError::from(err)),
+    }
 }
 
 async fn load_delta_read_state(
@@ -285,6 +659,7 @@ async fn load_delta_read_state(
     schema: Option<Schema>,
     options: DeltaReadOptions,
     metadata_only: bool,
+    lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> Result<(Arc<DeltaSnapshot>, LogStoreRef, DeltaScanConfig)> {
     let url = ListingTableUrl::try_new(table_url.clone(), None)?;
     let object_store = ctx.runtime_env().object_store(&url)?;
@@ -292,16 +667,22 @@ async fn load_delta_read_state(
     let log_store =
         create_logstore_with_object_store(object_store, table_url.clone(), storage_config)?;
 
-    // Create a new DeltaTable instance but do not load it yet.
-    // For metadata-as-data reads, avoid eagerly loading active file metadata on the driver.
-    let table_config = if metadata_only || options.metadata_as_data_read {
-        DeltaSnapshotConfig {
-            require_files: false,
-            ..Default::default()
+    let catalog_managed_commits = match lakehouse_table.as_ref() {
+        Some(lakehouse_table) => {
+            load_catalog_managed_commits_for_snapshot(
+                &ctx,
+                lakehouse_table,
+                &table_url,
+                log_store.clone(),
+                options.version_as_of,
+            )
+            .await?
         }
-    } else {
-        Default::default()
+        None => None,
     };
+
+    let mut table_config = delta_read_snapshot_config(metadata_only, &options);
+    table_config.catalog_managed_commits = catalog_managed_commits;
     let mut deltalake_table = DeltaTable::new(log_store.clone(), table_config);
 
     // Load the table state according to the provided time travel options.
@@ -363,7 +744,15 @@ async fn find_version_for_timestamp(
     datetime: DateTime<Utc>,
 ) -> DeltaResult<i64> {
     let log_store = table.log_store();
-    let latest_version = log_store.get_latest_version(0).await?;
+    let latest_version = match table
+        .config
+        .catalog_managed_commits
+        .as_ref()
+        .and_then(|commits| commits.latest_replay_version())
+    {
+        Some(version) => version,
+        None => log_store.get_latest_version(0).await?,
+    };
     if table.version() != Some(latest_version) {
         table.load_version(latest_version).await?;
     }
@@ -440,4 +829,45 @@ fn parse_timestamp_as_of(timestamp: &str) -> DeltaResult<DateTime<Utc>> {
     Err(DeltaTableError::generic(format!(
         "Invalid timestamp string: {timestamp}. Supported formats are: RFC3339 (e.g. '2024-01-02T03:04:05Z'), '%Y-%m-%d %H:%M:%S%.f', '%Y-%m-%dT%H:%M:%S%.f', '%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S'.{detail}",
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{effective_catalog_commit_end_version, next_catalog_commit_start_version};
+
+    #[test]
+    fn effective_catalog_commit_end_version_caps_requested_version() {
+        assert_eq!(effective_catalog_commit_end_version(10, None), Some(10));
+        assert_eq!(effective_catalog_commit_end_version(10, Some(7)), Some(7));
+        assert_eq!(effective_catalog_commit_end_version(3, Some(7)), Some(3));
+        assert_eq!(effective_catalog_commit_end_version(0, None), None);
+        assert_eq!(effective_catalog_commit_end_version(-1, None), None);
+    }
+
+    #[test]
+    fn next_catalog_commit_start_version_advances_from_page_max() {
+        assert!(matches!(
+            next_catalog_commit_start_version(1, 10, [5, 1, 3]),
+            Ok(Some(6))
+        ));
+        assert!(matches!(
+            next_catalog_commit_start_version(6, 10, [10, 8, 6]),
+            Ok(None)
+        ));
+        assert!(matches!(
+            next_catalog_commit_start_version(6, 10, []),
+            Ok(None)
+        ));
+    }
+
+    #[test]
+    fn next_catalog_commit_start_version_rejects_non_progressing_page() {
+        let result = next_catalog_commit_start_version(6, 10, [1, 5]);
+        assert!(result.is_err());
+        let error = result.err().map(|error| error.to_string());
+        assert!(matches!(
+            error.as_deref(),
+            Some(message) if message.contains("before requested start version 6")
+        ));
+    }
 }
