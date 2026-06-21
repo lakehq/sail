@@ -13,10 +13,9 @@ pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
         function_rewrites: _,
         rules: built_in_rules,
     } = Analyzer::default();
-
-    let mut rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![];
+    let mut rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> =
+        vec![Arc::new(ResolveLambdaVariables)];
     rules.extend(built_in_rules);
-    rules.push(Arc::new(ResolveLambdaVariables));
     rules
 }
 

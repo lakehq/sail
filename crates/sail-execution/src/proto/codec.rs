@@ -4268,6 +4268,37 @@ mod tests {
         assert_same_result(&physical, decoded_expr, schema_ref, vec![Arc::new(list)])
     }
 
+    #[test]
+    fn test_hash_output_partitioning_decodes_higher_order_key() -> Result<()> {
+        use crate::task::definition::{TaskOutput, TaskOutputDistribution, TaskOutputLocator};
+
+        let (physical, schema_ref, list) = build_filter()?;
+        let codec = RemoteExecutionCodec;
+        let key = try_encode_physical_expr(&codec, &physical)?.encode_to_vec();
+        let output = TaskOutput {
+            distribution: TaskOutputDistribution::Hash {
+                keys: vec![Arc::from(key)],
+                channels: 4,
+            },
+            locator: TaskOutputLocator::Local { replicas: 1 },
+        };
+
+        let ctx = TaskContext::default();
+        let partitioning = output
+            .partitioning(&ctx, &schema_ref, &codec)
+            .map_err(|e| plan_datafusion_err!("{e}"))?;
+
+        let Partitioning::Hash(keys, channels) = partitioning else {
+            return plan_err!("expected hash partitioning");
+        };
+        assert_eq!(channels, 4);
+        let [decoded] = keys.as_slice() else {
+            return plan_err!("expected one hash key, got {}", keys.len());
+        };
+        as_hof(decoded)?;
+        assert_same_result(&physical, decoded, schema_ref, vec![Arc::new(list)])
+    }
+
     /// `filter(arr, v -> v > threshold)` where the lambda captures an OUTER
     /// column (`threshold`). Proves the captured `Column(threshold)` and the
     /// two-column input schema survive encode/decode.

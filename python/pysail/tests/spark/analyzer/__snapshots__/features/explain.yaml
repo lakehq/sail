@@ -39,6 +39,9 @@ data:
             Projection: column1 AS #0, column2 AS #1
               Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
   
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+  
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
   
@@ -49,9 +52,6 @@ data:
           Projection: #0 AS #2, #1 AS #3
             Projection: column1 AS #0, column2 AS #1
               Values: (Int32(1), Int32(2)), (Int32(1), Int32(3))
-  
-    logical_plan after resolve_lambda_variables:
-    SAME TEXT AS ABOVE
   
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
