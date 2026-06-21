@@ -127,6 +127,9 @@ data:
     logical_plan after type_coercion:
     SAME TEXT AS ABOVE
   
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+  
     analyzed_logical_plan:
     SAME TEXT AS ABOVE
   
@@ -2210,9 +2213,6 @@ data:
     SAME TEXT AS ABOVE
   
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-  
-    physical_plan after wrap_higher_order_functions:
     SAME TEXT AS ABOVE
   
     physical_plan after SanityCheckPlan:
