@@ -340,6 +340,18 @@ SKIPPED_SPARK_TESTS = [
         keywords=["pyspark.sql.functions.java_method"],
         reason="JVM-dependent test",
     ),
+    TestMarker(
+        keywords=["test_parity_dataframe.py", "test_local_checkpoint_dataframe"],
+        reason="JVM physical plan assertion; checkpoint behavior is covered by PySail tests",
+    ),
+    TestMarker(
+        keywords=["test_connect_basic.py", "test_garbage_collection_checkpoint"],
+        reason="JVM Spark Connect dataFrameCache internals",
+    ),
+    TestMarker(
+        keywords=["test_connect_basic.py", "test_garbage_collection_derived_checkpoint"],
+        reason="JVM Spark Connect dataFrameCache internals",
+    ),
     # We skip all the streaming tests since some of them are slow,
     # and some of them test behaviors that are tied to the specific JVM implementation
     # of Spark Structured Streaming.
