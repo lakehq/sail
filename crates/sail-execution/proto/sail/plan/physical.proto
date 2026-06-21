@@ -94,8 +94,17 @@ message HigherOrderFunctionExprNode {
 message HigherOrderUdf {
   oneof UdfKind {
     SparkArrayFilterUdf filter = 1;
+    SparkArrayExistsUdf exists = 2;
+    SparkArrayForallUdf forall = 3;
   }
 }
+
+// `exists(array, predicate)` — no fields: the lambda always takes a single
+// (element) parameter, so there is no index-first variant to encode.
+message SparkArrayExistsUdf {}
+
+// `forall(array, predicate)` — same single-(element)-parameter shape as exists.
+message SparkArrayForallUdf {}
 
 message SparkArrayFilterUdf {
   // True when the lambda parameters are `[index, element]` (an index-only

@@ -130,7 +130,9 @@ use sail_function::scalar::array::array_position::SparkArrayPosition;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
+use sail_function::scalar::array::spark_array_exists::SparkArrayExists;
 use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
+use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
 use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_function::scalar::array::spark_sequence::SparkSequence;
@@ -3183,6 +3185,10 @@ impl RemoteExecutionCodec {
             HigherOrderUdfKind::Filter(gen::SparkArrayFilterUdf {
                 index_first: filter.is_index_first(),
             })
+        } else if udf_inner.downcast_ref::<SparkArrayExists>().is_some() {
+            HigherOrderUdfKind::Exists(gen::SparkArrayExistsUdf {})
+        } else if udf_inner.downcast_ref::<SparkArrayForall>().is_some() {
+            HigherOrderUdfKind::Forall(gen::SparkArrayForallUdf {})
         } else {
             return plan_err!("unsupported higher-order function: {}", hof.name());
         };
@@ -3208,6 +3214,12 @@ impl RemoteExecutionCodec {
                 } else {
                     Arc::new(HigherOrderUDF::new_from_impl(SparkArrayFilter::new()))
                 }
+            }
+            HigherOrderUdfKind::Exists(gen::SparkArrayExistsUdf {}) => {
+                Arc::new(HigherOrderUDF::new_from_impl(SparkArrayExists::new()))
+            }
+            HigherOrderUdfKind::Forall(gen::SparkArrayForallUdf {}) => {
+                Arc::new(HigherOrderUDF::new_from_impl(SparkArrayForall::new()))
             }
         })
     }
@@ -4350,6 +4362,138 @@ mod tests {
             .is_some());
 
         // Both exprs must evaluate identically.
+        let batch = RecordBatch::try_new(Arc::clone(&schema_ref), vec![Arc::new(list)])?;
+        let original_result = wrapped.evaluate(&batch)?.into_array(1)?;
+        let decoded_result = decoded.evaluate(&batch)?.into_array(1)?;
+        assert_eq!(&original_result, &decoded_result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_distributed_exists_higher_order_expr() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Array, Int32Array, ListArray, RecordBatch};
+        use datafusion::arrow::buffer::OffsetBuffer;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{col, lambda, lit, Expr, HigherOrderUDF};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::array::spark_array_exists::SparkArrayExists;
+        use sail_physical_plan::higher_order::wrap_distributed_higher_order;
+
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let list = ListArray::new(
+            list_field,
+            OffsetBuffer::<i32>::from_lengths(vec![3]),
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            None,
+        );
+        let schema = Schema::new(vec![Field::new("arr", list.data_type().clone(), true)]);
+        let dfschema = DFSchema::from_unqualified_fields(
+            vec![Field::new("arr", list.data_type().clone(), true)].into(),
+            HashMap::new(),
+        )?;
+        let body = Expr::LambdaVariable(LambdaVariable::new(
+            "v".to_string(),
+            Some(Arc::new(Field::new("v", DataType::Int32, true))),
+        ))
+        .gt(lit(2i32));
+        let func = Arc::new(HigherOrderUDF::new_from_impl(SparkArrayExists::new()));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            func,
+            vec![col("arr"), lambda(["v"], body)],
+        ));
+        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+        let schema_ref: SchemaRef = Arc::new(schema);
+        let wrapped = wrap_distributed_higher_order(physical, &schema_ref)?;
+        assert!(wrapped
+            .downcast_ref::<DistributedHigherOrderExpr>()
+            .is_some());
+
+        // Serialize -> encode bytes -> decode bytes (prove the wire path).
+        let codec = RemoteExecutionCodec;
+        let proto = serialize_physical_expr(&wrapped, &codec)?;
+        let bytes = proto.encode_to_vec();
+        let proto2 = datafusion_proto::protobuf::PhysicalExprNode::decode(bytes.as_slice())
+            .map_err(|e| plan_datafusion_err!("failed to decode PhysicalExprNode: {e}"))?;
+
+        let ctx = TaskContext::default();
+        let decoded = parse_physical_expr(&proto2, &ctx, &schema_ref, &codec)?;
+        assert!(decoded
+            .downcast_ref::<DistributedHigherOrderExpr>()
+            .is_some());
+
+        // Both exprs must evaluate identically (exists(arr, v -> v > 2) -> [true]).
+        let batch = RecordBatch::try_new(Arc::clone(&schema_ref), vec![Arc::new(list)])?;
+        let original_result = wrapped.evaluate(&batch)?.into_array(1)?;
+        let decoded_result = decoded.evaluate(&batch)?.into_array(1)?;
+        assert_eq!(&original_result, &decoded_result);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_distributed_forall_higher_order_expr() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Array, Int32Array, ListArray, RecordBatch};
+        use datafusion::arrow::buffer::OffsetBuffer;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{col, lambda, lit, Expr, HigherOrderUDF};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
+        use sail_physical_plan::higher_order::wrap_distributed_higher_order;
+
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let list = ListArray::new(
+            list_field,
+            OffsetBuffer::<i32>::from_lengths(vec![3]),
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            None,
+        );
+        let schema = Schema::new(vec![Field::new("arr", list.data_type().clone(), true)]);
+        let dfschema = DFSchema::from_unqualified_fields(
+            vec![Field::new("arr", list.data_type().clone(), true)].into(),
+            HashMap::new(),
+        )?;
+        let body = Expr::LambdaVariable(LambdaVariable::new(
+            "v".to_string(),
+            Some(Arc::new(Field::new("v", DataType::Int32, true))),
+        ))
+        .gt(lit(0i32));
+        let func = Arc::new(HigherOrderUDF::new_from_impl(SparkArrayForall::new()));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            func,
+            vec![col("arr"), lambda(["v"], body)],
+        ));
+        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+        let schema_ref: SchemaRef = Arc::new(schema);
+        let wrapped = wrap_distributed_higher_order(physical, &schema_ref)?;
+        assert!(wrapped
+            .downcast_ref::<DistributedHigherOrderExpr>()
+            .is_some());
+
+        // Serialize -> encode bytes -> decode bytes (prove the wire path).
+        let codec = RemoteExecutionCodec;
+        let proto = serialize_physical_expr(&wrapped, &codec)?;
+        let bytes = proto.encode_to_vec();
+        let proto2 = datafusion_proto::protobuf::PhysicalExprNode::decode(bytes.as_slice())
+            .map_err(|e| plan_datafusion_err!("failed to decode PhysicalExprNode: {e}"))?;
+
+        let ctx = TaskContext::default();
+        let decoded = parse_physical_expr(&proto2, &ctx, &schema_ref, &codec)?;
+        assert!(decoded
+            .downcast_ref::<DistributedHigherOrderExpr>()
+            .is_some());
+
+        // Both exprs must evaluate identically (forall(arr, v -> v > 0) -> [true]).
         let batch = RecordBatch::try_new(Arc::clone(&schema_ref), vec![Arc::new(list)])?;
         let original_result = wrapped.evaluate(&batch)?.into_array(1)?;
         let decoded_result = decoded.evaluate(&batch)?.into_array(1)?;

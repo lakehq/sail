@@ -7,7 +7,9 @@ use datafusion_expr::expr::{HigherOrderFunction, Lambda};
 use datafusion_expr::{expr, lit, HigherOrderUDF, LambdaParametersProgress, ValueOrLambda};
 use datafusion_functions_nested::expr_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::array::spark_array_exists::SparkArrayExists;
 use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
+use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -21,8 +23,14 @@ static SPARK_ARRAY_FILTER_INDEX_FIRST_UDF: LazyLock<Arc<HigherOrderUDF>> = LazyL
     ))
 });
 
+static SPARK_ARRAY_EXISTS_UDF: LazyLock<Arc<HigherOrderUDF>> =
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayExists::new())));
+
+static SPARK_ARRAY_FORALL_UDF: LazyLock<Arc<HigherOrderUDF>> =
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayForall::new())));
+
 pub(crate) fn is_higher_order_function(name: &str) -> bool {
-    matches!(name, "filter")
+    matches!(name, "filter" | "exists" | "forall")
 }
 
 /// Returns the lambda parameter fields of a built-in higher-order function, one
@@ -35,6 +43,8 @@ pub(crate) fn get_lambda_parameters(
 ) -> PlanResult<Vec<Vec<FieldRef>>> {
     let udf = match function_name {
         "filter" => &SPARK_ARRAY_FILTER_UDF,
+        "exists" => &SPARK_ARRAY_EXISTS_UDF,
+        "forall" => &SPARK_ARRAY_FORALL_UDF,
         other => {
             return Err(PlanError::internal(format!(
                 "not a higher-order function: {other}"
@@ -108,6 +118,48 @@ fn filter(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     )))
 }
 
+fn exists(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (array, lambda) = input.arguments.two()?;
+    let expr::Expr::Lambda(lambda) = lambda else {
+        return Err(PlanError::AnalysisError(
+            "`exists` expects a lambda function as its second argument".to_string(),
+        ));
+    };
+    // Spark's `exists` lambda takes exactly one parameter (the element); there is
+    // no index variant, so no index-first rewrite is needed.
+    if lambda.params.len() != 1 {
+        return Err(PlanError::AnalysisError(format!(
+            "`exists` expects a lambda function with 1 parameter, got {}",
+            lambda.params.len()
+        )));
+    }
+    Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
+        Arc::clone(&SPARK_ARRAY_EXISTS_UDF),
+        vec![array, expr::Expr::Lambda(lambda)],
+    )))
+}
+
+fn forall(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let (array, lambda) = input.arguments.two()?;
+    let expr::Expr::Lambda(lambda) = lambda else {
+        return Err(PlanError::AnalysisError(
+            "`forall` expects a lambda function as its second argument".to_string(),
+        ));
+    };
+    // Spark's `forall` lambda takes exactly one parameter (the element); there is
+    // no index variant, so no index-first rewrite is needed.
+    if lambda.params.len() != 1 {
+        return Err(PlanError::AnalysisError(format!(
+            "`forall` expects a lambda function with 1 parameter, got {}",
+            lambda.params.len()
+        )));
+    }
+    Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
+        Arc::clone(&SPARK_ARRAY_FORALL_UDF),
+        vec![array, expr::Expr::Lambda(lambda)],
+    )))
+}
+
 /// Spark's array_sort always puts NULLs last, regardless of sort direction
 /// https://spark.apache.org/docs/latest/api/sql/index.html#array_sort
 fn array_sort_spark(array: expr::Expr, asc: expr::Expr) -> PlanResult<expr::Expr> {
@@ -150,9 +202,9 @@ pub(super) fn list_built_in_lambda_functions() -> Vec<(&'static str, ScalarFunct
     vec![
         ("aggregate", F::unknown("aggregate")),
         ("array_sort", F::custom(array_sort)),
-        ("exists", F::unknown("exists")),
+        ("exists", F::custom(exists)),
         ("filter", F::custom(filter)),
-        ("forall", F::unknown("forall")),
+        ("forall", F::custom(forall)),
         ("map_filter", F::unknown("map_filter")),
         ("map_zip_with", F::unknown("map_zip_with")),
         ("reduce", F::unknown("reduce")),
