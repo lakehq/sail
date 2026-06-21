@@ -5,8 +5,7 @@ use chrono::Utc;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
-use datafusion_proto::physical_plan::to_proto::serialize_physical_expr;
-use datafusion_proto::physical_plan::AsExecutionPlan;
+use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use datafusion_proto::protobuf::PhysicalPlanNode;
 use indexmap::{IndexMap, IndexSet};
 use log::{debug, warn};
@@ -15,6 +14,7 @@ use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::ActorContext;
 
+use crate::codec::physical_proto_converter::RemotePhysicalProtoConverter;
 use crate::driver::job_scheduler::state::{
     JobDescriptor, JobState, StageState, TaskAttemptDescriptor, TaskRegionState, TaskState,
 };
@@ -528,9 +528,12 @@ impl JobScheduler {
             )));
         };
 
-        let plan =
-            PhysicalPlanNode::try_from_physical_plan(stage.plan.clone(), self.codec.as_ref())?
-                .encode_to_vec();
+        let plan = PhysicalPlanNode::try_from_physical_plan_with_converter(
+            stage.plan.clone(),
+            self.codec.as_ref(),
+            &RemotePhysicalProtoConverter {},
+        )?
+        .encode_to_vec();
         let inputs = stage
             .inputs
             .iter()
@@ -682,8 +685,12 @@ impl JobScheduler {
                 let keys = keys
                     .iter()
                     .map(|expr| {
-                        let expr =
-                            serialize_physical_expr(expr, self.codec.as_ref())?.encode_to_vec();
+                        let expr = serialize_physical_expr_with_converter(
+                            expr,
+                            self.codec.as_ref(),
+                            &RemotePhysicalProtoConverter {},
+                        )?
+                        .encode_to_vec();
                         Ok(Arc::from(expr))
                     })
                     .collect::<ExecutionResult<Vec<Arc<[u8]>>>>()?;
