@@ -109,7 +109,7 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
                     node.relation_id()
                 ))
             })?;
-            relation.to_physical_plan().await?
+            relation.to_physical_plan(node.relation_id()).await?
         } else if let Some(node) = node.as_any().downcast_ref::<RangeNode>() {
             let schema = UserDefinedLogicalNode::schema(node).inner().clone();
             let projection = (0..schema.fields().len()).collect();

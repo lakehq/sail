@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::sync::{Arc, RwLock};
@@ -8,7 +9,13 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::datasource::physical_plan::ArrowSource;
 use datafusion::execution::disk_manager::RefCountedTempFile;
 use datafusion::execution::object_store::ObjectStoreUrl;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use datafusion::physical_plan::{
+    collect_partitioned, with_new_children_if_necessary, DisplayAs, DisplayFormatType,
+    ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+};
 use datafusion::prelude::SessionContext;
 use datafusion_common::{
     internal_datafusion_err, DFSchema, DFSchemaRef, DataFusionError, Result, Statistics,
@@ -19,15 +26,13 @@ use datafusion_datasource::memory::MemorySourceConfig;
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::{PartitionedFile, TableSchema};
 use datafusion_expr::{Expr, Extension, LogicalPlan, UserDefinedLogicalNodeCore};
-use futures::StreamExt;
+use futures::future::BoxFuture;
 use object_store::ObjectMeta;
 use sail_common::spec;
 
 use crate::array::record_batch::{read_record_batches, write_record_batches};
 use crate::extension::{SessionExtension, SessionExtensionAccessor};
-use crate::rename::physical_plan::rename_physical_plan;
-use crate::session::checkpoint::CheckpointStoreService;
-use crate::session::job::JobService;
+use crate::session::checkpoint::{CheckpointStoreService, ReliableCheckpoint};
 
 #[derive(Debug, Clone)]
 pub enum CachedRelationCleanup {
@@ -112,9 +117,9 @@ enum CachedRelationData {
 #[derive(Debug, Clone)]
 enum CachedRelationMaterialized {
     Local(CachedRelationLocalMaterialized),
-    Physical {
+    Reliable {
         schema: SchemaRef,
-        plan: Arc<dyn ExecutionPlan>,
+        checkpoint: ReliableCheckpoint,
     },
 }
 
@@ -134,8 +139,7 @@ struct CachedRelationDiskPartition {
 
 #[derive(Debug, Clone)]
 struct CachedRelationPending {
-    plan: Arc<LogicalPlan>,
-    fields: Option<Vec<String>>,
+    plan: Arc<dyn ExecutionPlan>,
     target: CachedRelationPendingTarget,
 }
 
@@ -143,6 +147,85 @@ struct CachedRelationPending {
 enum CachedRelationPendingTarget {
     Local { storage_level: spec::StorageLevel },
     Reliable { path: String },
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingCachedRelationExec {
+    relation_id: String,
+    relation: CachedRelation,
+    properties: Arc<PlanProperties>,
+}
+
+impl PendingCachedRelationExec {
+    fn new(relation_id: String, relation: CachedRelation, plan: Arc<dyn ExecutionPlan>) -> Self {
+        let schema = plan.schema();
+        let partition_count = plan.output_partitioning().partition_count();
+        let properties = Arc::new(PlanProperties::new(
+            EquivalenceProperties::new(schema),
+            Partitioning::UnknownPartitioning(partition_count),
+            EmissionType::Final,
+            Boundedness::Bounded,
+        ));
+        Self {
+            relation_id,
+            relation,
+            properties,
+        }
+    }
+
+    pub fn relation_id(&self) -> &str {
+        &self.relation_id
+    }
+
+    async fn materialize(&self, ctx: &SessionContext) -> Result<Arc<dyn ExecutionPlan>> {
+        self.relation.materialize_pending(ctx).await
+    }
+}
+
+impl DisplayAs for PendingCachedRelationExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut Formatter) -> std::fmt::Result {
+        write!(
+            f,
+            "PendingCachedRelationExec: relation_id={}",
+            self.relation_id
+        )
+    }
+}
+
+impl ExecutionPlan for PendingCachedRelationExec {
+    fn name(&self) -> &str {
+        "PendingCachedRelationExec"
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        &self.properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        vec![]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if !children.is_empty() {
+            return Err(internal_datafusion_err!(
+                "PendingCachedRelationExec should have no children"
+            ));
+        }
+        Ok(self)
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        Err(internal_datafusion_err!(
+            "PendingCachedRelationExec should be materialized before execution"
+        ))
+    }
 }
 
 impl CachedRelation {
@@ -180,15 +263,13 @@ impl CachedRelation {
     }
 
     pub fn new_pending_local_checkpoint(
-        plan: Arc<LogicalPlan>,
-        fields: Option<Vec<String>>,
+        plan: Arc<dyn ExecutionPlan>,
         storage_level: spec::StorageLevel,
     ) -> Self {
         Self {
             data: Arc::new(tokio::sync::Mutex::new(CachedRelationData::Pending(
                 CachedRelationPending {
                     plan,
-                    fields,
                     target: CachedRelationPendingTarget::Local { storage_level },
                 },
             ))),
@@ -196,17 +277,12 @@ impl CachedRelation {
         }
     }
 
-    pub fn new_pending_reliable_checkpoint(
-        plan: Arc<LogicalPlan>,
-        fields: Option<Vec<String>>,
-        path: String,
-    ) -> Self {
+    pub fn new_pending_reliable_checkpoint(plan: Arc<dyn ExecutionPlan>, path: String) -> Self {
         let cleanup_path = path.clone();
         Self {
             data: Arc::new(tokio::sync::Mutex::new(CachedRelationData::Pending(
                 CachedRelationPending {
                     plan,
-                    fields,
                     target: CachedRelationPendingTarget::Reliable { path },
                 },
             ))),
@@ -214,28 +290,37 @@ impl CachedRelation {
         }
     }
 
-    pub async fn to_logical_plan(
-        &self,
-        ctx: &SessionContext,
-        relation_id: &str,
-    ) -> Result<LogicalPlan> {
-        let mut data = self.data.lock().await;
-        if let CachedRelationData::Pending(pending) = &*data {
-            *data = pending.materialize(ctx).await?;
-        }
+    pub async fn to_logical_plan(&self, relation_id: &str) -> Result<LogicalPlan> {
+        let data = self.data.lock().await;
         match &*data {
             CachedRelationData::LogicalPlan(plan) => Ok(plan.as_ref().clone()),
             CachedRelationData::Materialized(materialized) => {
                 materialized.to_logical_plan(relation_id)
             }
-            CachedRelationData::Pending(_) => Err(internal_datafusion_err!(
-                "cached relation materialization did not complete"
-            )),
+            CachedRelationData::Pending(pending) => pending.to_logical_plan(relation_id),
         }
     }
 
-    pub async fn to_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
+    pub async fn to_physical_plan(&self, relation_id: &str) -> Result<Arc<dyn ExecutionPlan>> {
         let data = self.data.lock().await;
+        match &*data {
+            CachedRelationData::Materialized(materialized) => materialized.to_physical_plan().await,
+            CachedRelationData::LogicalPlan(_) => Err(internal_datafusion_err!(
+                "cached relation is not materialized as a physical plan"
+            )),
+            CachedRelationData::Pending(pending) => Ok(Arc::new(PendingCachedRelationExec::new(
+                relation_id.to_string(),
+                self.clone(),
+                Arc::clone(&pending.plan),
+            ))),
+        }
+    }
+
+    async fn materialize_pending(&self, ctx: &SessionContext) -> Result<Arc<dyn ExecutionPlan>> {
+        let mut data = self.data.lock().await;
+        if let CachedRelationData::Pending(pending) = &*data {
+            *data = pending.materialize(ctx).await?;
+        }
         match &*data {
             CachedRelationData::Materialized(materialized) => materialized.to_physical_plan().await,
             CachedRelationData::LogicalPlan(_) => Err(internal_datafusion_err!(
@@ -263,12 +348,16 @@ impl CachedRelationRegistry {
             .relations
             .write()
             .map_err(|e| internal_datafusion_err!("{e}"))?;
-        if relations.insert(relation_id.clone(), relation).is_some() {
-            return Err(internal_datafusion_err!(
-                "cached relation already exists: {relation_id}"
-            ));
+        match relations.entry(relation_id) {
+            Entry::Occupied(entry) => Err(internal_datafusion_err!(
+                "cached relation already exists: {}",
+                entry.key()
+            )),
+            Entry::Vacant(entry) => {
+                entry.insert(relation);
+                Ok(())
+            }
         }
-        Ok(())
     }
 
     pub fn get(&self, relation_id: &str) -> Result<Option<CachedRelation>> {
@@ -286,6 +375,14 @@ impl CachedRelationRegistry {
             .map_err(|e| internal_datafusion_err!("{e}"))?;
         Ok(relations.remove(relation_id))
     }
+
+    pub fn drain(&self) -> Result<Vec<CachedRelation>> {
+        let mut relations = self
+            .relations
+            .write()
+            .map_err(|e| internal_datafusion_err!("{e}"))?;
+        Ok(relations.drain().map(|(_, relation)| relation).collect())
+    }
 }
 
 impl SessionExtension for CachedRelationRegistry {
@@ -296,8 +393,7 @@ impl SessionExtension for CachedRelationRegistry {
 
 impl CachedRelationPending {
     async fn materialize(&self, ctx: &SessionContext) -> Result<CachedRelationData> {
-        let physical_plan =
-            create_physical_plan(ctx, self.plan.as_ref().clone(), self.fields.as_ref()).await?;
+        let physical_plan = materialize_cached_relations(ctx, Arc::clone(&self.plan)).await?;
         match &self.target {
             CachedRelationPendingTarget::Local { storage_level } => {
                 materialize_local_checkpoint(ctx, physical_plan, storage_level.clone()).await
@@ -307,13 +403,22 @@ impl CachedRelationPending {
             }
         }
     }
+
+    fn to_logical_plan(&self, relation_id: &str) -> Result<LogicalPlan> {
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CachedRelationNode::try_new(
+                relation_id.to_string(),
+                self.plan.schema(),
+            )?),
+        }))
+    }
 }
 
 impl CachedRelationMaterialized {
     fn schema(&self) -> SchemaRef {
         match self {
             Self::Local(local) => Arc::clone(&local.schema),
-            Self::Physical { schema, .. } => Arc::clone(schema),
+            Self::Reliable { schema, .. } => Arc::clone(schema),
         }
     }
 
@@ -329,7 +434,11 @@ impl CachedRelationMaterialized {
     async fn to_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
         match self {
             Self::Local(local) => local.to_physical_plan().await,
-            Self::Physical { plan, .. } => Ok(Arc::clone(plan)),
+            Self::Reliable { schema, checkpoint } => create_arrow_checkpoint_scan(
+                checkpoint.object_store_url().clone(),
+                checkpoint.object_meta().to_vec(),
+                schema,
+            ),
         }
     }
 }
@@ -456,23 +565,22 @@ impl CachedRelationDiskPartition {
     }
 }
 
-async fn create_physical_plan(
-    ctx: &SessionContext,
-    plan: LogicalPlan,
-    fields: Option<&Vec<String>>,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    let df = ctx.execute_logical_plan(plan).await?;
-    let (session_state, plan) = df.into_parts();
-    let plan = session_state.optimize(&plan)?;
-    let plan = session_state
-        .query_planner()
-        .create_physical_plan(&plan, &session_state)
-        .await?;
-    if let Some(fields) = fields {
-        rename_physical_plan(plan, fields)
-    } else {
-        Ok(plan)
-    }
+pub fn materialize_cached_relations<'a>(
+    ctx: &'a SessionContext,
+    plan: Arc<dyn ExecutionPlan>,
+) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+    Box::pin(async move {
+        let mut children = Vec::with_capacity(plan.children().len());
+        for child in plan.children() {
+            children.push(materialize_cached_relations(ctx, Arc::clone(child)).await?);
+        }
+        let plan = with_new_children_if_necessary(plan, children)?;
+        if let Some(pending) = plan.downcast_ref::<PendingCachedRelationExec>() {
+            pending.materialize(ctx).await
+        } else {
+            Ok(plan)
+        }
+    })
 }
 
 async fn materialize_local_checkpoint(
@@ -480,6 +588,7 @@ async fn materialize_local_checkpoint(
     plan: Arc<dyn ExecutionPlan>,
     storage_level: spec::StorageLevel,
 ) -> Result<CachedRelationData> {
+    let plan = materialize_cached_relations(ctx, plan).await?;
     let schema = plan.schema();
     let partitions = collect_checkpoint_partitions(ctx, plan).await?;
     let materialized =
@@ -494,6 +603,7 @@ async fn materialize_reliable_checkpoint(
     plan: Arc<dyn ExecutionPlan>,
     path: &str,
 ) -> Result<CachedRelationData> {
+    let plan = materialize_cached_relations(ctx, plan).await?;
     let schema = plan.schema();
     let service = ctx.extension::<CheckpointStoreService>()?;
     let checkpoint = match service
@@ -506,16 +616,8 @@ async fn materialize_reliable_checkpoint(
             return Err(error);
         }
     };
-    let physical_plan = create_arrow_checkpoint_scan(
-        checkpoint.object_store_url().clone(),
-        checkpoint.object_meta().to_vec(),
-        &schema,
-    )?;
     Ok(CachedRelationData::Materialized(
-        CachedRelationMaterialized::Physical {
-            schema,
-            plan: physical_plan,
-        },
+        CachedRelationMaterialized::Reliable { schema, checkpoint },
     ))
 }
 
@@ -546,17 +648,28 @@ pub async fn cleanup_checkpoint_path(ctx: &SessionContext, path: &str) -> Result
     service.cleanup_checkpoint_path(ctx, path).await
 }
 
+pub async fn cleanup_cached_relation(ctx: &SessionContext, relation: CachedRelation) -> Result<()> {
+    match relation.into_cleanup() {
+        Some(CachedRelationCleanup::ObjectStorePath(path)) => {
+            cleanup_checkpoint_path(ctx, &path).await
+        }
+        None => Ok(()),
+    }
+}
+
+pub async fn cleanup_cached_relations(ctx: &SessionContext) -> Result<()> {
+    let relations = ctx.extension::<CachedRelationRegistry>()?.drain()?;
+    for relation in relations {
+        cleanup_cached_relation(ctx, relation).await?;
+    }
+    Ok(())
+}
+
 async fn collect_checkpoint_partitions(
     ctx: &SessionContext,
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Vec<Vec<RecordBatch>>> {
-    let service = ctx.extension::<JobService>()?;
-    let mut stream = service.runner().execute(ctx, plan).await?;
-    let mut batches = vec![];
-    while let Some(batch) = stream.next().await {
-        batches.push(batch?);
-    }
-    Ok(vec![batches])
+    collect_partitioned(plan, ctx.task_ctx()).await
 }
 
 async fn write_disk_partition(ctx: &SessionContext, bytes: &[u8]) -> Result<RefCountedTempFile> {
@@ -576,7 +689,8 @@ mod tests {
     use std::sync::Mutex;
 
     use async_trait::async_trait;
-    use datafusion_expr::LogicalPlanBuilder;
+    use datafusion::arrow::datatypes::Schema;
+    use datafusion::physical_plan::empty::EmptyExec;
 
     use super::*;
     use crate::session::checkpoint::{CheckpointStore, ReliableCheckpoint};
@@ -584,13 +698,41 @@ mod tests {
     #[test]
     fn pending_reliable_checkpoint_tracks_cleanup_path() -> Result<()> {
         let path = "memory://checkpoint-root/session/relation".to_string();
-        let plan = LogicalPlanBuilder::empty(false).build()?;
-        let relation =
-            CachedRelation::new_pending_reliable_checkpoint(Arc::new(plan), None, path.clone());
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+        let relation = CachedRelation::new_pending_reliable_checkpoint(plan, path.clone());
 
         match relation.into_cleanup() {
             Some(CachedRelationCleanup::ObjectStorePath(actual)) => {
                 assert_eq!(actual, path);
+            }
+            other => {
+                return Err(internal_datafusion_err!(
+                    "unexpected cleanup value: {other:?}"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn registry_insert_does_not_replace_existing_relation() -> Result<()> {
+        let registry = CachedRelationRegistry::default();
+        let first_path = "memory:///checkpoint-root/first".to_string();
+        let second_path = "memory:///checkpoint-root/second".to_string();
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+        let first =
+            CachedRelation::new_pending_reliable_checkpoint(Arc::clone(&plan), first_path.clone());
+        let second = CachedRelation::new_pending_reliable_checkpoint(plan, second_path);
+
+        registry.insert("relation".to_string(), first)?;
+        assert!(registry.insert("relation".to_string(), second).is_err());
+
+        let relation = registry.get("relation")?.ok_or_else(|| {
+            internal_datafusion_err!("cached relation missing after duplicate insert")
+        })?;
+        match relation.into_cleanup() {
+            Some(CachedRelationCleanup::ObjectStorePath(actual)) => {
+                assert_eq!(actual, first_path);
             }
             other => {
                 return Err(internal_datafusion_err!(

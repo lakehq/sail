@@ -1,4 +1,5 @@
 import shutil
+import time
 
 import pandas as pd
 import pytest
@@ -189,6 +190,62 @@ def test_dataframe_checkpoint_lazy(spark, tmp_path):
         )
     finally:
         spark.conf.unset("spark.checkpoint.dir")
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific lazy checkpoint explain behavior")
+def test_dataframe_checkpoint_lazy_explain_does_not_materialize(spark, tmp_path):
+    checkpoint_path = tmp_path / "checkpoints"
+    df = spark.range(0, 5).where(col("id") <= 2)  # noqa: PLR2004
+    spark.conf.set("spark.checkpoint.dir", str(checkpoint_path))
+    try:
+        checkpointed = df.checkpoint(eager=False)
+        checkpointed_plan = normalize_plan_text(checkpointed._explain_string())  # noqa: SLF001
+
+        assert "PendingCachedRelationExec" in checkpointed_plan
+        assert not list(checkpoint_path.rglob("*.arrow"))
+
+        assert checkpointed.count() == 3  # noqa: PLR2004
+        assert list(checkpoint_path.rglob("*.arrow"))
+
+        materialized_plan = normalize_plan_text(checkpointed._explain_string())  # noqa: SLF001
+        assert "PendingCachedRelationExec" not in materialized_plan
+        assert "DataSourceExec" in materialized_plan
+    finally:
+        spark.conf.unset("spark.checkpoint.dir")
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific checkpoint session cleanup")
+def test_dataframe_checkpoint_cleanup_on_session_stop(spark_session_factory, tmp_path):
+    spark = spark_session_factory()
+    checkpoint_path = tmp_path / "checkpoints"
+    spark.conf.set("spark.checkpoint.dir", str(checkpoint_path))
+
+    _checkpointed = spark.range(0, 5).checkpoint()
+    assert list(checkpoint_path.rglob("*.arrow"))
+
+    spark.stop()
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and list(checkpoint_path.rglob("*.arrow")):
+        time.sleep(0.1)
+    assert not list(checkpoint_path.rglob("*.arrow"))
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific checkpoint partition preservation")
+@pytest.mark.parametrize("local", [True, False], ids=["local", "reliable"])
+def test_dataframe_checkpoint_preserves_multiple_output_partitions(spark, tmp_path, local):
+    df = spark.range(0, 100, numPartitions=4).repartition(4)
+    if local:
+        checkpointed = df.localCheckpoint()
+    else:
+        checkpoint_path = tmp_path / "checkpoints"
+        spark.conf.set("spark.checkpoint.dir", str(checkpoint_path))
+        try:
+            checkpointed = df.checkpoint()
+        finally:
+            spark.conf.unset("spark.checkpoint.dir")
+
+    partition_ids = {row.pid for row in checkpointed.selectExpr("spark_partition_id() AS pid").distinct().collect()}
+    assert len(partition_ids) > 1
 
 
 @pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific physical plan names and stack configuration")

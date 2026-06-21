@@ -235,7 +235,7 @@ impl PlanResolver<'_> {
                 let relation = registry.get(&relation_id)?.ok_or_else(|| {
                     PlanError::invalid(format!("No DataFrame with id {relation_id} is found"))
                 })?;
-                let plan = relation.to_logical_plan(self.ctx, &relation_id).await?;
+                let plan = relation.to_logical_plan(&relation_id).await?;
                 let names = state.register_fields(plan.schema().inner().fields());
                 rename_logical_plan(plan, &names)?
             }

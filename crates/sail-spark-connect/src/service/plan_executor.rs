@@ -1,6 +1,5 @@
 use std::path::{Component, Path};
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use datafusion::arrow::compute::concat_batches;
@@ -12,12 +11,12 @@ use futures::stream;
 use log::{debug, warn};
 use sail_common::spec;
 use sail_common_datafusion::cached_relation::{
-    cleanup_checkpoint_path as cleanup_cached_checkpoint_path, CachedRelation,
-    CachedRelationCleanup, CachedRelationRegistry,
+    cleanup_cached_relation, cleanup_checkpoint_path as cleanup_cached_checkpoint_path,
+    CachedRelation, CachedRelationRegistry,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
-use sail_plan::{resolve_and_execute_plan, resolve_logical_plan};
+use sail_plan::{resolve_and_execute_plan, resolve_physical_plan};
 use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use tonic::codegen::tokio_stream::Stream;
 use tonic::Status;
@@ -549,7 +548,7 @@ pub(crate) async fn handle_execute_checkpoint_command(
     let plan: spec::Plan = relation.try_into()?;
     let relation_id = Uuid::new_v4().to_string();
     let (relation, cleanup_on_insert_error) = if eager {
-        let (physical_plan, _) = resolve_and_execute_plan(ctx, spark.plan_config()?, plan).await?;
+        let (physical_plan, _) = resolve_physical_plan(ctx, spark.plan_config()?, plan).await?;
         if local {
             (
                 CachedRelation::new_local_checkpoint(
@@ -568,24 +567,19 @@ pub(crate) async fn handle_execute_checkpoint_command(
             )
         }
     } else if local {
-        let named_plan = resolve_logical_plan(ctx, spark.plan_config()?, plan).await?;
+        let (physical_plan, _) = resolve_physical_plan(ctx, spark.plan_config()?, plan).await?;
         (
             CachedRelation::new_pending_local_checkpoint(
-                Arc::new(named_plan.plan),
-                named_plan.fields,
+                physical_plan,
                 storage_level.required("local checkpoint storage level")?,
             ),
             None,
         )
     } else {
         let path = checkpoint_path(&spark, &relation_id)?;
-        let named_plan = resolve_logical_plan(ctx, spark.plan_config()?, plan).await?;
+        let (physical_plan, _) = resolve_physical_plan(ctx, spark.plan_config()?, plan).await?;
         (
-            CachedRelation::new_pending_reliable_checkpoint(
-                Arc::new(named_plan.plan),
-                named_plan.fields,
-                path,
-            ),
+            CachedRelation::new_pending_reliable_checkpoint(physical_plan, path),
             None,
         )
     };
@@ -729,18 +723,6 @@ async fn cleanup_checkpoint_after_error(
 async fn cleanup_checkpoint_path(ctx: &SessionContext, path: &str) -> SparkResult<()> {
     cleanup_cached_checkpoint_path(ctx, path).await?;
     Ok(())
-}
-
-async fn cleanup_cached_relation(
-    ctx: &SessionContext,
-    relation: CachedRelation,
-) -> SparkResult<()> {
-    match relation.into_cleanup() {
-        Some(CachedRelationCleanup::ObjectStorePath(path)) => {
-            cleanup_checkpoint_path(ctx, &path).await
-        }
-        None => Ok(()),
-    }
 }
 
 pub(crate) async fn handle_interrupt_all(ctx: &SessionContext) -> SparkResult<Vec<String>> {

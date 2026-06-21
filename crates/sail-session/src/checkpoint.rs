@@ -2,14 +2,12 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::{execute_stream_partitioned, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 use futures::StreamExt;
 use sail_common_datafusion::array::record_batch::write_record_batches;
-use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::checkpoint::{CheckpointStore, ReliableCheckpoint};
-use sail_common_datafusion::session::job::JobService;
 use sail_object_store::{delete_object_store_prefix, resolve_object_store_path};
 
 #[derive(Debug, Default)]
@@ -26,17 +24,17 @@ impl CheckpointStore for ObjectStoreCheckpointStore {
     ) -> Result<ReliableCheckpoint> {
         let runtime_env = ctx.runtime_env();
         let checkpoint_path = resolve_object_store_path(runtime_env.as_ref(), path)?;
-        let service = ctx.extension::<JobService>()?;
-        let mut stream = service.runner().execute(ctx, plan).await?;
+        let streams = execute_stream_partitioned(plan, ctx.task_ctx())?;
         let mut files = vec![];
-        let mut file_index = 0usize;
 
-        while let Some(batch) = stream.next().await {
-            let batch = batch?;
-            let bytes = write_record_batches(&[batch], schema.as_ref())?;
+        for (file_index, mut stream) in streams.into_iter().enumerate() {
+            let mut batches = vec![];
+            while let Some(batch) = stream.next().await {
+                batches.push(batch?);
+            }
+            let bytes = write_record_batches(&batches, schema.as_ref())?;
             let file_path = checkpoint_path.child(&format!("part-{file_index:05}.arrow"));
             files.push(checkpoint_path.put_bytes(&file_path, bytes).await?);
-            file_index += 1;
         }
 
         if files.is_empty() {

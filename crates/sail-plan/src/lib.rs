@@ -7,6 +7,7 @@ use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::Result;
 use datafusion_expr::LogicalPlan;
 use sail_common::spec;
+use sail_common_datafusion::cached_relation::materialize_cached_relations;
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
 
 use crate::config::PlanConfig;
@@ -32,6 +33,16 @@ pub async fn execute_logical_plan(ctx: &SessionContext, plan: LogicalPlan) -> Re
 }
 
 pub async fn resolve_and_execute_plan(
+    ctx: &SessionContext,
+    config: Arc<PlanConfig>,
+    plan: spec::Plan,
+) -> PlanResult<(Arc<dyn ExecutionPlan>, Vec<StringifiedPlan>)> {
+    let (plan, info) = resolve_physical_plan(ctx, config, plan).await?;
+    let plan = materialize_cached_relations(ctx, plan).await?;
+    Ok((plan, info))
+}
+
+pub async fn resolve_physical_plan(
     ctx: &SessionContext,
     config: Arc<PlanConfig>,
     plan: spec::Plan,
