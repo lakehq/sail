@@ -97,6 +97,9 @@ data:
     logical_plan after optimize_projections:
     SAME TEXT AS ABOVE
   
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+  
     logical_plan:
     RowLevelWrite: command=Delete, target=delta_delete_explain_codegen, format=delta, condition=salary + 1 > 70000 AND ( department = 'Engineering' OR department = 'Marketing' ) AND active IS NOT NULL
   
