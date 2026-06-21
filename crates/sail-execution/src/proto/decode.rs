@@ -72,11 +72,11 @@ pub fn try_decode_physical_expr(
     buf: &[u8],
     schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    parse_physical_expr_with_converter(
+    let converter = RemotePhysicalProtoConverter;
+    converter.proto_to_physical_expr(
         &PhysicalExprNode::decode(buf)
             .map_err(|e| plan_datafusion_err!("failed to decode expr: {e}"))?,
         schema,
         &PhysicalPlanDecodeContext::new(ctx, codec),
-        &RemotePhysicalProtoConverter {},
     )
 }

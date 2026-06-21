@@ -3076,7 +3076,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 )))
             }
             ExprKind::HigherOrderUdf(node) => {
-                // CHECK HERE
                 let fun = Self::try_decode_higher_order_udf(node.udf)?;
                 let input_schema = try_decode_schema(&node.input_schema)?;
                 // TODO: The planner's `ConfigOptions` are not serialized.
@@ -3122,23 +3121,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 cast.target_field().as_ref(),
             )?;
             ExprKind::SchemaEvolutionCast(node)
-        } else if let Some(w) = node.downcast_ref::<HigherOrderFunctionExpr>() {
-            // CHECK HERE
-            ExprKind::HigherOrderUdf(HigherOrderUdfExprNode {
-                udf: Some(Self::try_encode_higher_order_udf(w)?),
-                input_schema: node.input_schema,
-            })
         } else if let Some(lambda) = node.downcast_ref::<LambdaExpr>() {
             ExprKind::Lambda(LambdaExprNode {
                 params: lambda.params().to_vec(),
-                body: try_encode_message(try_encode_physical_expr(self, node)?)?,
             })
         } else if let Some(var) = node.downcast_ref::<LambdaVariable>() {
             let index = var.index() as u32;
             let field = try_encode_schema(&Schema::new(vec![var.field().as_ref().clone()]))?;
             ExprKind::LambdaVariable(LambdaVariableExprNode { index, field })
         } else {
-            return plan_err!("unsupported physical expr extension");
+            return plan_err!("unsupported physical expr extension: {node}");
         };
 
         let node = ExtendedPhysicalExprNode {

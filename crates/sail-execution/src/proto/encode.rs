@@ -67,9 +67,6 @@ pub fn try_encode_physical_expr(
     codec: &dyn PhysicalExtensionCodec,
     expr: &Arc<dyn PhysicalExpr>,
 ) -> Result<PhysicalExprNode> {
-    Ok(serialize_physical_expr_with_converter(
-        expr,
-        codec,
-        &RemotePhysicalProtoConverter {},
-    )?)
+    let converter = RemotePhysicalProtoConverter;
+    Ok(converter.physical_expr_to_proto(expr, codec)?)
 }

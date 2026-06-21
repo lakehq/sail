@@ -83,7 +83,6 @@ message CastColumnExprNode {
 
 message LambdaExprNode {
   repeated string params = 1;
-  bytes body = 2;
 }
 
 message LambdaVariableExprNode {
