@@ -46,6 +46,7 @@ impl SystemCatalogProvider {
                 comment: Some(col.description.to_string()),
                 default: None,
                 generated_always_as: None,
+                identity: None,
                 is_partition: false,
                 is_bucket: false,
                 is_cluster: false,
@@ -72,6 +73,7 @@ impl SystemCatalogProvider {
                 columns,
                 comment: Some(t.description().to_string()),
                 properties: vec![],
+                source: None,
             },
         };
         Ok(status)

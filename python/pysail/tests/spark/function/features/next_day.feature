@@ -1,4 +1,3 @@
-@next_day
 Feature: next_day comprehensive tests
 
   Rule: Argument count validation

@@ -1,4 +1,3 @@
-@array_min_max
 Feature: array_min and array_max functions
 
   Rule: Basic usage

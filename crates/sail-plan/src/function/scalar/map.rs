@@ -3,10 +3,11 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, FieldRef, Fields};
 use datafusion::functions_nested::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{cast, expr, lit, ExprSchemable};
+use datafusion_expr::{cast, expr, lit, ExprSchemable, ScalarUDF};
 use datafusion_spark::function::map::map_from_arrays::MapFromArrays;
 use datafusion_spark::function::map::map_from_entries::MapFromEntries;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::map::map_entries::SparkMapEntries;
 use sail_function::scalar::map::str_to_map::StrToMap;
 
 use crate::error::{PlanError, PlanResult};
@@ -74,12 +75,8 @@ fn map_from_entries(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 }
 
 fn map_entries(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
-    let schema = input.function_context.schema;
     let map = input.arguments.one()?;
-    let value_contains_null = map_value_contains_null(&map.get_type(schema.as_ref())?);
-    let map = cast_map_value_nullability(map, schema, true)?;
-    let expr = expr_fn::map_entries(map);
-    cast_map_entries_value_nullability(expr, schema, value_contains_null)
+    Ok(ScalarUDF::from(SparkMapEntries::new()).call(vec![map]))
 }
 
 fn map_values(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {

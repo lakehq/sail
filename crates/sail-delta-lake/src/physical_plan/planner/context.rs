@@ -17,19 +17,20 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result};
 use object_store::ObjectStore;
+use sail_common_datafusion::catalog::{CatalogTableColumnIdentity, LakehouseExecutionContext};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
-use sail_data_source::options::gen::DeltaWriteOptions;
 use url::Url;
 
 use super::log_segment::LogSegmentFiles;
 use crate::kernel::DeltaSnapshotConfig;
+use crate::options::gen::DeltaWriteOptions;
 use crate::physical_plan::{
     prepare_delta_write_context, DeltaCommitContext, DeltaWriteContext, DeltaWriterExecOptions,
 };
 use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
 use crate::table::{
-    create_delta_table_with_object_store, open_table_with_object_store_and_table_config,
-    DeltaSnapshot, DeltaTable,
+    create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot, DeltaSnapshot,
+    DeltaTable,
 };
 
 /// Configuration shared by all Delta planners.
@@ -47,7 +48,18 @@ pub struct DeltaPlannerConfig {
     /// Delta commit (new tables) even when the physical planner strips the arrow
     /// field metadata set at logical-plan construction time.
     pub generation_expressions: HashMap<String, String>,
+    /// Column-level default expressions keyed by column name. Populated from
+    /// `CURRENT_DEFAULT` metadata attached to the write input's logical schema.
+    pub default_expressions: HashMap<String, String>,
+    /// Target catalog field nullability keyed by column name.
+    pub target_nullability: HashMap<String, bool>,
+    /// Logical schema override used for Delta metadata planning. It can carry
+    /// nullability/metadata that the physical plan schema cannot represent after
+    /// projection rewrites.
+    pub metadata_schema: Option<SchemaRef>,
+    pub identity_columns: HashMap<String, CatalogTableColumnIdentity>,
     pub table_snapshot: Option<Arc<DeltaSnapshot>>,
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
 }
 
 impl DeltaPlannerConfig {
@@ -67,7 +79,12 @@ impl DeltaPlannerConfig {
             table_schema_for_cond,
             table_exists,
             generation_expressions: HashMap::new(),
+            default_expressions: HashMap::new(),
+            target_nullability: HashMap::new(),
+            metadata_schema: None,
+            identity_columns: HashMap::new(),
             table_snapshot: None,
+            lakehouse_table: None,
         }
     }
 
@@ -79,8 +96,42 @@ impl DeltaPlannerConfig {
         self
     }
 
+    pub fn with_default_expressions(
+        mut self,
+        default_expressions: HashMap<String, String>,
+    ) -> Self {
+        self.default_expressions = default_expressions;
+        self
+    }
+
+    pub fn with_target_nullability(mut self, target_nullability: HashMap<String, bool>) -> Self {
+        self.target_nullability = target_nullability;
+        self
+    }
+
+    pub fn with_metadata_schema(mut self, metadata_schema: Option<SchemaRef>) -> Self {
+        self.metadata_schema = metadata_schema;
+        self
+    }
+
+    pub fn with_identity_columns(
+        mut self,
+        identity_columns: HashMap<String, CatalogTableColumnIdentity>,
+    ) -> Self {
+        self.identity_columns = identity_columns;
+        self
+    }
+
     pub fn with_table_snapshot(mut self, table_snapshot: Option<Arc<DeltaSnapshot>>) -> Self {
         self.table_snapshot = table_snapshot;
+        self
+    }
+
+    pub fn with_lakehouse_table(
+        mut self,
+        lakehouse_table: Option<LakehouseExecutionContext>,
+    ) -> Self {
+        self.lakehouse_table = lakehouse_table;
         self
     }
 }
@@ -139,8 +190,39 @@ impl<'a> PlannerContext<'a> {
         &self.config.generation_expressions
     }
 
+    pub fn default_expressions(&self) -> &HashMap<String, String> {
+        &self.config.default_expressions
+    }
+
+    pub fn target_nullability(&self) -> &HashMap<String, bool> {
+        &self.config.target_nullability
+    }
+
+    pub fn metadata_schema(&self) -> Option<&SchemaRef> {
+        self.config.metadata_schema.as_ref()
+    }
+
+    pub fn identity_columns(&self) -> &HashMap<String, CatalogTableColumnIdentity> {
+        &self.config.identity_columns
+    }
+
     pub fn table_snapshot(&self) -> Option<&Arc<DeltaSnapshot>> {
         self.config.table_snapshot.as_ref()
+    }
+
+    pub fn catalog_table(&self) -> Option<&[String]> {
+        self.config
+            .lakehouse_table
+            .as_ref()
+            .map(LakehouseExecutionContext::catalog_table)
+    }
+
+    pub fn catalog_table_vec(&self) -> Option<Vec<String>> {
+        self.catalog_table().map(<[String]>::to_vec)
+    }
+
+    pub fn lakehouse_table(&self) -> Option<&LakehouseExecutionContext> {
+        self.config.lakehouse_table.as_ref()
     }
 
     pub fn commit_context(&self) -> DeltaCommitContext {
@@ -156,7 +238,11 @@ impl<'a> PlannerContext<'a> {
         operation_override: Option<crate::kernel::DeltaOperation>,
     ) -> Result<DeltaWriteContext> {
         let options = DeltaWriterExecOptions::from(self.options().clone())
-            .with_generation_expressions(self.generation_expressions().clone());
+            .with_generation_expressions(self.generation_expressions().clone())
+            .with_default_expressions(self.default_expressions().clone())
+            .with_target_nullability(self.target_nullability().clone())
+            .with_identity_columns(self.identity_columns().clone());
+        let input_schema = self.metadata_schema().unwrap_or(input_schema);
         prepare_delta_write_context(
             self.table_url(),
             self.table_snapshot().map(|snapshot| snapshot.as_ref()),
@@ -230,14 +316,24 @@ impl<'a> PlannerContext<'a> {
             table.state = Some(Arc::clone(snapshot));
             Ok(table)
         } else {
-            open_table_with_object_store_and_table_config(
-                self.config.table_url.clone(),
-                object_store,
-                StorageConfig,
-                table_config,
-            )
-            .await
-            .map_err(|e| DataFusionError::External(Box::new(e)))
+            let log_store = self.log_store()?;
+            let mut table_config = table_config;
+            if let Some(lakehouse_table) = &self.config.lakehouse_table {
+                table_config.catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
+                    &self.session,
+                    lakehouse_table,
+                    &self.config.table_url,
+                    log_store.clone(),
+                    None,
+                )
+                .await?;
+            }
+            let mut table = DeltaTable::new(log_store, table_config);
+            table
+                .load()
+                .await
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+            Ok(table)
         }
     }
 }

@@ -1,0 +1,388 @@
+Tests for `to_char`.
+
+All expected values below were captured from JVM Spark. Numeric cases are
+verified identical on 3.5.7 and 4.1.1. Datetime and binary inputs are only
+supported by JVM Spark 4.x (3.5 requires a DECIMAL input), so those examples
+are marked SAIL_ONLY; their expected values were captured from JVM Spark
+4.1.1.
+
+>>> from pyspark.sql.functions import lit, to_char
+
+>>> df = spark.createDataFrame([(78.12,)], ["e"])
+>>> df.select(to_char(df.e, lit("$99.99")).alias("r")).collect()
+[Row(r='$78.12')]
+
+The helpers below evaluate a SQL expression and return the result value, or
+print "error" if the query fails. Error cases use the helper (instead of
+matching the exception text) because Sail and the two JVM Spark versions
+raise errors with different classes and messages.
+
+>>> def c(expr):
+...     return spark.sql(f"SELECT {expr} AS r").collect()[0]["r"]
+>>> def err(expr):
+...     try:
+...         spark.sql(f"SELECT {expr} AS r").collect()
+...         print("no error")
+...     except Exception:
+...         print("error")
+
+Digit sequences: '9' pads with spaces, '0' pads with zeros. A sequence
+starting with '0' before the decimal point zero-pads the whole sequence.
+
+>>> c("to_char(454, '999')")
+'454'
+>>> c("to_char(454, '9999')")
+' 454'
+>>> c("to_char(454, '99999')")
+'  454'
+>>> c("to_char(454, '0999')")
+'0454'
+>>> c("to_char(454, '00999')")
+'00454'
+>>> c("to_char(454, '0000')")
+'0454'
+>>> c("to_char(454, '90999')")
+'  454'
+>>> c("to_char(454, '99099')")
+'  454'
+>>> c("to_char(1, '9')")
+'1'
+>>> c("to_char(1, '0')")
+'1'
+
+Values with more digits than the format are replaced by '#' characters.
+
+>>> c("to_char(454, '99')")
+'##'
+>>> c("to_char(454, '00')")
+'##'
+>>> c("to_char(123.456, '999D9')")
+'###.#'
+>>> c("to_char(78.123, '99.9')")
+'##.#'
+>>> c("to_char(12345, '9,999')")
+'# ###'
+>>> c("to_char(0.05, '9.9')")
+'#.#'
+
+Zero values.
+
+>>> c("to_char(0, '9')")
+' '
+>>> c("to_char(0, '99')")
+'  '
+>>> c("to_char(0, '0')")
+'0'
+>>> c("to_char(0, '00')")
+'00'
+>>> c("to_char(0, '99.99')")
+' 0.00'
+>>> c("to_char(0, '00.00')")
+'00.00'
+>>> c("to_char(0, 'S99')")
+'  +'
+>>> c("to_char(0, '99S')")
+'+  '
+>>> c("to_char(0, '$99.99')")
+'$ 0.00'
+>>> c("to_char(0.0, '9.9')")
+'0.0'
+
+Decimal point ('.' or 'D').
+
+>>> c("to_char(78, '99.99')")
+'78.00'
+>>> c("to_char(78, '99.')")
+'78 '
+>>> c("to_char(78, '99D')")
+'78 '
+>>> c("to_char(0.45, '.99')")
+'.45'
+>>> c("to_char(0.45, 'D99')")
+'.45'
+>>> c("to_char(0.45, '9.99')")
+'0.45'
+>>> c("to_char(0.45, '99.99')")
+' 0.45'
+
+Grouping separators (',' or 'G').
+
+>>> c("to_char(12454, '99G999')")
+'12,454'
+>>> c("to_char(1234, '9,999')")
+'1,234'
+>>> c("to_char(1234, '9G999')")
+'1,234'
+>>> c("to_char(45, '9,999')")
+'   45'
+>>> c("to_char(45, '0,000')")
+'0,045'
+>>> c("to_char(1234567, '9,999,999')")
+'1,234,567'
+>>> c("to_char(1234567, '9999,999')")
+'1234,567'
+>>> c("to_char(12454, '99G99,9')")
+'12,45,4'
+>>> c("to_char(1234.56, '9,999.99')")
+'1,234.56'
+
+Currency sign.
+
+>>> c("to_char(78.12, '$99.99')")
+'$78.12'
+>>> c("to_char(78.12, '$00.00')")
+'$78.12'
+>>> c("to_char(-78.12, '$99.99')")
+'$78.12'
+>>> c("to_char(0.12, '$.99')")
+'$.12'
+
+'S' prints '+' or '-'; 'MI' prints '-' or a space. Signs stay adjacent to
+the digits when the digit sequence is space-padded.
+
+>>> c("to_char(454, 'S999')")
+'+454'
+>>> c("to_char(-454, 'S999')")
+'-454'
+>>> c("to_char(454, '999S')")
+'454+'
+>>> c("to_char(-454, '999S')")
+'454-'
+>>> c("to_char(-12454.8, '99G999D9S')")
+'12,454.8-'
+>>> c("to_char(-1, 'S9999')")
+'   -1'
+>>> c("to_char(1, 'S9999')")
+'   +1'
+>>> c("to_char(-1, 'S0000')")
+'-0001'
+>>> c("to_char(-454, 'S$999')")
+'-$454'
+>>> c("to_char(-78.12, 'S$99.99')")
+'-$78.12'
+>>> c("to_char(-78.12, '$99.99S')")
+'$78.12-'
+>>> c("to_char(454, 'MI999')")
+' 454'
+>>> c("to_char(-454, 'MI999')")
+'-454'
+>>> c("to_char(454, '999MI')")
+'454 '
+>>> c("to_char(-454, '999MI')")
+'454-'
+>>> c("to_char(-1, 'MI9999')")
+'   -1'
+>>> c("to_char(-1, '9999MI')")
+'   1-'
+
+'PR' wraps negative values in angle brackets; positive values get two
+trailing spaces.
+
+>>> c("to_char(454, '999PR')")
+'454  '
+>>> c("to_char(-454, '999PR')")
+'<454>'
+>>> c("to_char(-454, '9999PR')")
+' <454>'
+>>> c("to_char(-4, '9999PR')")
+'   <4>'
+>>> c("to_char(-78.12, '$99.99PR')")
+'<$78.12>'
+>>> c("to_char(-454, 'S999PR')")
+'<-454>'
+
+Sign and decimal point interaction. A decimal point left dangling at the
+end of the digits is replaced by a space.
+
+>>> c("to_char(-0.1, 'S9.9')")
+' -.1'
+>>> c("to_char(-0.1, '9.9S')")
+'0.1-'
+>>> c("to_char(-0.1, '9.9MI')")
+'0.1-'
+>>> c("to_char(0.1, '9.9S')")
+'0.1+'
+>>> c("to_char(78, '99.S')")
+'78+ '
+>>> c("to_char(-78, '99.S')")
+'78- '
+>>> c("to_char(-78, '99.PR')")
+'<78> '
+
+Without a sign token, the sign of a negative value is dropped.
+
+>>> c("to_char(-454, '999')")
+'454'
+>>> c("to_char(-12.34, '99.99')")
+'12.34'
+
+Trailing zeros of the decimal value beyond its significant digits are
+dropped before formatting, and the format pads with zeros after the
+decimal point.
+
+>>> c("to_char(CAST(78.12 AS DECIMAL(10,4)), '99.99')")
+'78.12'
+>>> c("to_char(CAST(78.1 AS DECIMAL(10,4)), '99.99')")
+'78.10'
+>>> c("to_char(CAST(78 AS DECIMAL(10,4)), '99.99')")
+'78.00'
+>>> c("to_char(CAST(0.5 AS DECIMAL(10,4)), '99.99')")
+' 0.50'
+>>> c("to_char(454.00, '000D00')")
+'454.00'
+>>> c("to_char(CAST(12454.8 AS DECIMAL(20,10)), '99G999D9S')")
+'12,454.8+'
+
+Floating-point inputs are converted like Spark casts them to decimals:
+DOUBLE to DECIMAL(30, 15) and FLOAT to DECIMAL(14, 7), based on the
+shortest decimal representation of the (widened) double value. Note that
+`CAST(78.12 AS FLOAT)` widens to the double 78.12000274658203, whose seven
+fractional digits 1200027 overflow the two fractional digits in the format.
+
+>>> c("to_char(78.12D, '$99.99')")
+'$78.12'
+>>> c("to_char(CAST(0.001 AS DOUBLE), '9.999')")
+'0.001'
+>>> c("to_char(CAST(0.1 AS DOUBLE), '9.9')")
+'0.1'
+>>> c("to_char(CAST(-12454.8 AS DOUBLE), '99G999D9S')")
+'12,454.8-'
+>>> c("to_char(CAST(0.12345678901234567 AS DOUBLE), '9.99999999999999999')")
+'0.12345678901234600'
+>>> c("to_char(CAST(1.5 AS FLOAT), '9.9')")
+'1.5'
+>>> c("to_char(CAST(78.12 AS FLOAT), '99.99')")
+'##.##'
+
+Integer inputs.
+
+>>> c("to_char(CAST(127 AS TINYINT), '999')")
+'127'
+>>> c("to_char(CAST(-32768 AS SMALLINT), 'S99999')")
+'-32768'
+>>> c("to_char(CAST(2147483647 AS INT), '9999999999')")
+'2147483647'
+>>> c("to_char(CAST(9223372036854775807 AS BIGINT), '9999999999999999999')")
+'9223372036854775807'
+
+String inputs are parsed as decimals.
+
+>>> c("to_char('78.12', '99.99')")
+'78.12'
+>>> c("to_char('454', '999')")
+'454'
+>>> c("to_char('-454', 'S999')")
+'-454'
+
+NULL handling: a NULL value or a NULL format yields NULL.
+
+>>> c("to_char(CAST(NULL AS DECIMAL(5,2)), '999')") is None
+True
+>>> c("to_char(CAST(NULL AS INT), '999')") is None
+True
+>>> c("to_char(454, CAST(NULL AS STRING))") is None
+True
+
+Large decimals beyond 64-bit unscaled values.
+
+>>> c("to_char(CAST('12345678901234567890123456789012345678' AS DECIMAL(38,0)), '99999999999999999999999999999999999999')")
+'12345678901234567890123456789012345678'
+>>> c("to_char(CAST('1234567890.0987654321' AS DECIMAL(38,18)), '9999999999.999999999999999999')")
+'1234567890.098765432100000000'
+
+The format string is case-insensitive.
+
+>>> c("to_char(-12454.8, '99g999d9s')")
+'12,454.8-'
+>>> c("to_char(-454, '999pr')")
+'<454>'
+>>> c("to_char(-454, 'mi999')")
+'-454'
+>>> c("to_char(78.12, '$99d99')")
+'$78.12'
+
+Invalid number formats raise an error.
+
+>>> err("to_char(454, '')")
+error
+>>> err("to_char(454, 'SS999')")
+error
+>>> err("to_char(454, '9.9.9')")
+error
+>>> err("to_char(454, '$$999')")
+error
+>>> err("to_char(454, '9$9')")
+error
+>>> err("to_char(454, '.99$')")
+error
+>>> err("to_char(78.12, '99.99$')")
+error
+>>> err("to_char(454, ',999')")
+error
+>>> err("to_char(454, '999,')")
+error
+>>> err("to_char(454, '9,,99')")
+error
+>>> err("to_char(454, '99.9,9')")
+error
+>>> err("to_char(454, 'PR999')")
+error
+>>> err("to_char(454, 'MI999MI')")
+error
+>>> err("to_char(454, 'x99')")
+error
+>>> err("to_char(454, '99x')")
+error
+>>> err("to_char(12.34, '99v99')")
+error
+>>> err("to_char(454, 'S')")
+error
+>>> err("to_char(454, '$')")
+error
+>>> err("to_char(454, 'MI')")
+error
+>>> err("to_char(454, 'PR')")
+error
+>>> err("to_char(454, '999PRMI')")
+error
+
+Datetime inputs use the Spark datetime pattern syntax. JVM Spark only
+supports this for 4.x, so these examples are skipped on JVM Spark; the
+expected values match JVM Spark 4.1.1.
+
+>>> c("to_char(date'2016-04-08', 'y')")  # doctest: +SAIL_ONLY
+'2016'
+>>> c("to_char(date'2022-04-08', 'yyyy-MM-dd')")  # doctest: +SAIL_ONLY
+'2022-04-08'
+>>> c("to_char(timestamp'2016-04-08 13:14:15', 'yyyy-MM-dd HH:mm:ss')")  # doctest: +SAIL_ONLY
+'2016-04-08 13:14:15'
+>>> c("to_char(date'2022-04-08', 'MMM')")  # doctest: +SAIL_ONLY
+'Apr'
+>>> c("to_char(date'2022-04-08', 'E')")  # doctest: +SAIL_ONLY
+'Fri'
+>>> c("to_char(timestamp_ntz'2016-04-08 13:14:15', 'yyyy MM dd')")  # doctest: +SAIL_ONLY
+'2016 04 08'
+>>> c("to_char(CAST(NULL AS DATE), 'yyyy')") is None  # doctest: +SAIL_ONLY
+True
+
+Binary inputs support the 'base64', 'hex', and 'utf-8' formats
+(case-insensitive, surrounding whitespace ignored). JVM Spark only
+supports this for 4.x, so these examples are skipped on JVM Spark; the
+expected values match JVM Spark 4.1.1.
+
+>>> c("to_char(encode('Spark SQL', 'utf-8'), 'base64')")  # doctest: +SAIL_ONLY
+'U3BhcmsgU1FM'
+>>> c("to_char(encode('Spark SQL', 'utf-8'), 'hex')")  # doctest: +SAIL_ONLY
+'537061726B2053514C'
+>>> c("to_char(encode('abc', 'utf-8'), 'utf-8')")  # doctest: +SAIL_ONLY
+'abc'
+>>> c("to_char(encode('Spark SQL', 'utf-8'), 'BASE64')")  # doctest: +SAIL_ONLY
+'U3BhcmsgU1FM'
+>>> c("to_char(encode('Spark SQL', 'utf-8'), ' hex ')")  # doctest: +SAIL_ONLY
+'537061726B2053514C'
+>>> c("to_char(encode('abc', 'utf-8'), 'UTF-8')")  # doctest: +SAIL_ONLY
+'abc'
+>>> err("to_char(encode('abc', 'utf-8'), 'foo')")  # doctest: +SAIL_ONLY
+error
+>>> err("to_char(encode('abc', 'utf-8'), CAST(NULL AS STRING))")  # doctest: +SAIL_ONLY
+error

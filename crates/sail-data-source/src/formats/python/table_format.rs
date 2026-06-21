@@ -8,12 +8,17 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::datasource::provider_as_source;
-use datafusion::logical_expr::TableSource;
+use datafusion::execution::SessionState;
+use datafusion::logical_expr::{Extension, LogicalPlan, TableSource, UserDefinedLogicalNode};
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::Result;
+use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
+use datafusion_common::{internal_err, DFSchema, DFSchemaRef, Result};
+use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
+use educe::Educe;
 use sail_common_datafusion::datasource::{
-    OptionLayer, SinkInfo, SourceInfo, TableFormat, TableFormatRegistry,
+    OptionLayer, SinkInfo, SinkMode, SourceInfo, TableFormat, TableFormatRegistry,
 };
+use sail_common_datafusion::utils::items::ItemTaker;
 
 use super::datasource::PythonDataSource;
 use super::discovery::DATA_SOURCE_REGISTRY;
@@ -200,18 +205,12 @@ impl TableFormat for PythonTableFormat {
         Ok(provider_as_source(Arc::new(provider)))
     }
 
-    async fn create_writer(
-        &self,
-        _ctx: &dyn Session,
-        info: SinkInfo,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        use sail_common_datafusion::datasource::PhysicalSinkMode;
-
+    async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
         let SinkInfo {
             input,
             mode,
             partition_by,
-            mut options,
+            options,
             ..
         } = info;
 
@@ -227,65 +226,139 @@ impl TableFormat for PythonTableFormat {
         // The path (if any) is already present in options under the "path" key,
         // so it will be forwarded to the Python DataSource via self.options["path"]
         // in __init__ (matches PySpark behavior). No additional injection needed.
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(PythonWriteNode::new(
+                Arc::new(input),
+                self.name.clone(),
+                self.pickled_class.clone(),
+                mode,
+                options,
+            )),
+        }))
+    }
+}
 
-        // Map save mode to overwrite bool (PySpark convention).
-        // PySpark's DataSource.writer(schema, overwrite) only receives a boolean:
-        //   Overwrite variants → True, everything else → False.
-        // ErrorIfExists and IgnoreIfExists are pre-write semantics that PySpark
-        // handles at the catalog level for managed tables. For Python datasources
-        // that manage their own storage, the mode is passed as an option so the
-        // datasource can implement its own existence checks if desired.
-        let overwrite = matches!(
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Educe)]
+#[educe(PartialOrd)]
+pub struct PythonWriteNode {
+    input: Arc<LogicalPlan>,
+    name: String,
+    pickled_class: Option<Vec<u8>>,
+    mode: SinkMode,
+    options: Vec<OptionLayer>,
+    #[educe(PartialOrd(ignore))]
+    schema: DFSchemaRef,
+}
+
+impl PythonWriteNode {
+    fn new(
+        input: Arc<LogicalPlan>,
+        name: String,
+        pickled_class: Option<Vec<u8>>,
+        mode: SinkMode,
+        options: Vec<OptionLayer>,
+    ) -> Self {
+        Self {
+            input,
+            name,
+            pickled_class,
             mode,
-            PhysicalSinkMode::Overwrite
-                | PhysicalSinkMode::OverwriteIf { .. }
-                | PhysicalSinkMode::OverwritePartitions
-        );
+            options,
+            schema: Arc::new(DFSchema::empty()),
+        }
+    }
+}
 
-        // Pass the save mode as an option for datasources that need it
-        let mode_str = match &mode {
-            PhysicalSinkMode::ErrorIfExists => "error",
-            PhysicalSinkMode::IgnoreIfExists => "ignore",
-            PhysicalSinkMode::Append => "append",
-            PhysicalSinkMode::Overwrite => "overwrite",
-            PhysicalSinkMode::OverwriteIf { .. } => "overwrite",
-            PhysicalSinkMode::OverwritePartitions => "overwrite",
+impl UserDefinedLogicalNodeCore for PythonWriteNode {
+    fn name(&self) -> &str {
+        "PythonWrite"
+    }
+
+    fn inputs(&self) -> Vec<&LogicalPlan> {
+        vec![self.input.as_ref()]
+    }
+
+    fn schema(&self) -> &DFSchemaRef {
+        &self.schema
+    }
+
+    fn expressions(&self) -> Vec<Expr> {
+        vec![]
+    }
+
+    fn fmt_for_explain(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "PythonWrite: name={}", self.name)
+    }
+
+    fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
+        exprs.zero()?;
+        Ok(Self {
+            input: Arc::new(inputs.one()?),
+            name: self.name.clone(),
+            pickled_class: self.pickled_class.clone(),
+            mode: self.mode.clone(),
+            options: self.options.clone(),
+            schema: self.schema.clone(),
+        })
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct PythonPhysicalPlanner;
+
+#[async_trait]
+impl ExtensionPlanner for PythonPhysicalPlanner {
+    async fn plan_extension(
+        &self,
+        _planner: &dyn PhysicalPlanner,
+        node: &dyn UserDefinedLogicalNode,
+        _logical_inputs: &[&LogicalPlan],
+        physical_inputs: &[Arc<dyn ExecutionPlan>],
+        _session_state: &SessionState,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let Some(node) = node.as_any().downcast_ref::<PythonWriteNode>() else {
+            return Ok(None);
         };
-        options.push(OptionLayer::OptionList {
-            items: vec![("mode".to_string(), mode_str.to_string())],
-        });
-
-        // Create datasource and get writer using the same executor configuration
-        // path as write execution for consistent Python datasource behavior.
-        let opaque_options: Vec<HashMap<String, String>> = options
+        let [input] = physical_inputs else {
+            return internal_err!("PythonWriteNode requires exactly one physical input");
+        };
+        let overwrite = matches!(
+            node.mode,
+            SinkMode::Overwrite | SinkMode::OverwriteIf { .. } | SinkMode::OverwritePartitions
+        );
+        let opaque_options: Vec<HashMap<String, String>> = node
+            .options
+            .clone()
             .into_iter()
             .map(|l| l.into_opaque_options())
             .collect();
-        let datasource = self.create_datasource(&opaque_options)?;
+        let table_format = PythonTableFormat {
+            name: node.name.clone(),
+            pickled_class: node.pickled_class.clone(),
+        };
+        let datasource = table_format.create_datasource(&opaque_options)?;
         let executor: Arc<dyn super::executor::PythonExecutor> =
             Arc::new(InProcessExecutor::from_app_config());
         let schema = input.schema();
         let expected_partitions = input.properties().partitioning.partition_count();
-
         let writer_plan = executor
             .get_writer(datasource.command(), &schema, overwrite)
             .await?;
-
         let pickled_writer = writer_plan.pickled_writer;
         let write_exec: Arc<dyn ExecutionPlan> =
             Arc::new(super::write_exec::PythonDataSourceWriteExec::new(
-                input,
+                input.clone(),
                 pickled_writer.clone(),
                 writer_plan.is_arrow,
             ));
 
-        Ok(Arc::new(
+        Ok(Some(Arc::new(
             super::commit_exec::PythonDataSourceWriteCommitExec::new(
                 write_exec,
                 pickled_writer,
                 expected_partitions,
             ),
-        ))
+        )))
     }
 }
 

@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -10,6 +9,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::string::concat::ConcatFunc;
 use datafusion_common::utils::list_ndims;
 use datafusion_common::{plan_err, ExprSchema, Result, ScalarValue};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     ColumnarValue, Expr, ExprSchemable, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
@@ -39,10 +39,6 @@ impl SparkConcat {
 }
 
 impl ScalarUDFImpl for SparkConcat {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_concat"
     }
@@ -120,6 +116,35 @@ impl ScalarUDFImpl for SparkConcat {
         }
     }
 
+    fn simplify(&self, args: Vec<Expr>, info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        if args.len() != 1 {
+            return Ok(ExprSimplifyResult::Original(args));
+        }
+        let mut args = args;
+        let arg = args.remove(0);
+        // `FixedSizeList` and `LargeList` are intentionally omitted: `return_type`
+        // does not recognize them as array inputs (it falls through to `Utf8`),
+        // so the invoke path coerces them to strings. Returning the argument
+        // unchanged here would break the type contract advertised by
+        // `return_type`. Numeric, timestamp, and other non-string scalars are
+        // also excluded so the invoke path can apply Spark-specific coercions
+        // (e.g. timestamp formatting via `spark_format_timestamp_str`).
+        if matches!(
+            info.get_data_type(&arg)?,
+            DataType::Utf8
+                | DataType::LargeUtf8
+                | DataType::Utf8View
+                | DataType::Binary
+                | DataType::LargeBinary
+                | DataType::BinaryView
+                | DataType::List(_)
+        ) {
+            Ok(ExprSimplifyResult::Simplified(arg))
+        } else {
+            Ok(ExprSimplifyResult::Original(vec![arg]))
+        }
+    }
+
     fn is_nullable(&self, args: &[Expr], schema: &dyn ExprSchema) -> bool {
         if args.is_empty() {
             true
@@ -161,9 +186,10 @@ impl ScalarUDFImpl for SparkConcat {
             .iter()
             .any(|arg| matches!(arg.data_type(), DataType::List(_)))
         {
-            // Cast arrays with Null element type to the return type for proper concatenation
-            // This handles cases like concat(array(), array(1, 2, 3)) where the first array
-            // has type List(Null) and needs to be cast to List(Int32)
+            // Cast arrays with Null element type to the return type for proper
+            // concatenation. This handles cases like `concat(array(), array(1, 2, 3))`
+            // where the first array has type `List(Null)` and needs to be cast to
+            // `List(Int32)` so `ArrayConcat` can merge them.
             let casted_args = cast_list_columnar_values(args.args, return_type)?;
             let casted_scalar_args = ScalarFunctionArgs {
                 args: casted_args,

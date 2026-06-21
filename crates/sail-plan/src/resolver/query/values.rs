@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, Fields};
+use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{DFSchema, DFSchemaRef};
 use datafusion_expr::{cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection};
 use sail_common::spec;
@@ -28,60 +28,20 @@ impl PlanResolver<'_> {
             Ok::<_, PlanError>(results)
         }
         .await?;
-        let column_nullability = Self::resolve_values_nullability(&values, &schema)?;
         let plan = LogicalPlanBuilder::values(values)?.build()?;
-        let columns = plan.schema().columns();
-        let names = columns
-            .iter()
-            .enumerate()
-            .map(|(i, _)| state.register_field_name(format!("col{}", i + 1)))
-            .collect::<Vec<_>>();
-        let expr = columns
-            .into_iter()
-            .zip(names.iter())
-            .map(|(col, name)| Expr::Column(col).alias(name.clone()))
-            .collect::<Vec<_>>();
-        let fields = plan
+        let expr = plan
             .schema()
-            .fields()
-            .iter()
-            .zip(names)
-            .zip(column_nullability)
-            .map(|((field, name), nullable)| {
-                Arc::new(
-                    field
-                        .as_ref()
-                        .clone()
-                        .with_name(name)
-                        .with_nullable(nullable),
-                )
+            .columns()
+            .into_iter()
+            .enumerate()
+            .map(|(i, col)| {
+                Expr::Column(col).alias(state.register_field_name(format!("col{}", i + 1)))
             })
             .collect::<Vec<_>>();
-        let projection_schema = Arc::new(DFSchema::from_unqualified_fields(
-            Fields::from(fields),
-            plan.schema().metadata().clone(),
-        )?);
-        Ok(LogicalPlan::Projection(Projection::try_new_with_schema(
+        Ok(LogicalPlan::Projection(Projection::try_new(
             expr,
             Arc::new(plan),
-            projection_schema,
         )?))
-    }
-
-    fn resolve_values_nullability(
-        values: &[Vec<Expr>],
-        schema: &DFSchemaRef,
-    ) -> PlanResult<Vec<bool>> {
-        let Some(first) = values.first() else {
-            return Ok(vec![]);
-        };
-        let mut nullability = vec![false; first.len()];
-        for value in values {
-            for (idx, expr) in value.iter().enumerate() {
-                nullability[idx] |= expr.nullable(schema)?;
-            }
-        }
-        Ok(nullability)
     }
 
     fn resolve_values_nan_types(
@@ -93,11 +53,9 @@ impl PlanResolver<'_> {
             value.iter().enumerate().for_each(|(idx, expr)| {
                 if let Expr::Cast(cast) = expr {
                     if let Expr::Literal(sv, _) = cast.expr.as_ref() {
-                        if let Some(true) = sv
-                            .try_as_str()
-                            .flatten()
-                            .map(|s| s.to_uppercase() == "NAN" && cast.data_type.is_numeric())
-                        {
+                        if let Some(true) = sv.try_as_str().flatten().map(|s| {
+                            s.to_uppercase() == "NAN" && cast.field.data_type().is_numeric()
+                        }) {
                             nan_positions.insert(idx);
                         }
                     }

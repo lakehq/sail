@@ -1,6 +1,5 @@
 Feature: Delta Lake Checkpoint
 
-  @sail-only
   Rule: Checkpoint parquet and _last_checkpoint files are created at the configured interval
 
     Background:
@@ -46,10 +45,12 @@ Feature: Delta Lake Checkpoint
         📄 00000000000000000001.checkpoint.parquet
         📄 00000000000000000001.crc
         📄 00000000000000000001.json
+        📄 00000000000000000002.checkpoint.parquet
+        📄 00000000000000000002.crc
+        📄 00000000000000000002.json
         📄 _last_checkpoint
         """
 
-  @sail-only
   Rule: Multiple checkpoints are created after repeated writes with interval three
 
     Background:
@@ -130,10 +131,11 @@ Feature: Delta Lake Checkpoint
         📄 00000000000000000006.checkpoint.parquet
         📄 00000000000000000006.crc
         📄 00000000000000000006.json
+        📄 00000000000000000007.crc
+        📄 00000000000000000007.json
         📄 _last_checkpoint
         """
 
-  @sail-only
   Rule: Table remains readable from checkpoint when a JSON commit log is deleted
 
     Background:
@@ -171,7 +173,6 @@ Feature: Delta Lake Checkpoint
         | 2  |
         | 3  |
 
-  @sail-only
   Rule: Expired remove actions are pruned from checkpoint parquet based on table properties
 
     Background:
@@ -225,10 +226,11 @@ Feature: Delta Lake Checkpoint
         📄 00000000000000000002.checkpoint.parquet
         📄 00000000000000000002.crc
         📄 00000000000000000002.json
+        📄 00000000000000000003.crc
+        📄 00000000000000000003.json
         📄 _last_checkpoint
         """
 
-  @sail-only
   Rule: Expired Delta log files are cleaned up after checkpoint creation when enabled by table properties
 
     Background:
@@ -299,10 +301,11 @@ Feature: Delta Lake Checkpoint
         📄 00000000000000000004.checkpoint.parquet
         📄 00000000000000000004.crc
         📄 00000000000000000004.json
+        📄 00000000000000000005.crc
+        📄 00000000000000000005.json
         📄 _last_checkpoint
         """
 
-  @sail-only
   Rule: Expired Delta log cleanup honors in-commit timestamps
 
     Background:
@@ -375,7 +378,6 @@ Feature: Delta Lake Checkpoint
         📄 _last_checkpoint
         """
 
-  @sail-only
   Rule: EXPLAIN shows checkpoint parquet in metadata-as-data log replay
 
     Background:
@@ -409,7 +411,6 @@ Feature: Delta Lake Checkpoint
         """
       Then query plan matches snapshot
 
-  @sail-only
   Rule: EXPLAIN shows checkpoint parquet together with later JSON log commits
 
     Background:
@@ -469,6 +470,8 @@ Feature: Delta Lake Checkpoint
         📄 00000000000000000003.json
         📄 00000000000000000004.crc
         📄 00000000000000000004.json
+        📄 00000000000000000005.crc
+        📄 00000000000000000005.json
         📄 _last_checkpoint
         """
       Then query plan matches snapshot

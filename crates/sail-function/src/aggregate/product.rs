@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::{Debug, Formatter};
 
 use datafusion::arrow::array::{ArrayRef, Float64Array};
@@ -62,10 +61,6 @@ impl ProductFunction {
 }
 
 impl AggregateUDFImpl for ProductFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "product"
     }

@@ -10,15 +10,23 @@ use sail_catalog::provider::{
     Namespace,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
+use sail_common_datafusion::catalog::iceberg::{
+    is_iceberg_table_properties, ICEBERG_TABLE_TYPE_KEY, ICEBERG_TABLE_TYPE_VALUE,
+};
 use sail_common_datafusion::catalog::{
     identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
+};
+use sail_common_datafusion::column_features::{
+    ColumnFeatureKey, ColumnFeatures, ColumnFeaturesBuilder,
+};
+use sail_common_hms::hms::{
+    Database, FieldSchema, PrincipalType, SerDeInfo, StorageDescriptor, Table,
 };
 
 use crate::data_type::{
     arrow_to_hive_type, hive_type_to_arrow, spark_struct_json_from_fields,
     spark_struct_json_to_fields,
 };
-use crate::hms::{Database, FieldSchema, PrincipalType, SerDeInfo, StorageDescriptor, Table};
 
 pub(crate) const COMMENT_KEY: &str = "comment";
 pub(crate) const EXTERNAL_KEY: &str = "EXTERNAL";
@@ -89,15 +97,19 @@ pub(crate) fn table_to_status(
     let location = storage
         .and_then(|sd| sd.location.as_ref())
         .map(ToString::to_string);
-    let format = table_provider_format(table.parameters.as_ref()).unwrap_or_else(|| {
-        detect_hms_logical_format(
-            storage
-                .and_then(|sd| sd.serde_info.as_ref())
-                .and_then(|serde| serde.serialization_lib.as_deref()),
-            storage.and_then(|sd| sd.input_format.as_deref()),
-            storage.and_then(|sd| sd.output_format.as_deref()),
-        )
-    });
+    let format = if is_iceberg_table_parameters(table.parameters.as_ref()) {
+        ICEBERG_TABLE_TYPE_VALUE.to_string()
+    } else {
+        table_provider_format(table.parameters.as_ref()).unwrap_or_else(|| {
+            detect_hms_logical_format(
+                storage
+                    .and_then(|sd| sd.serde_info.as_ref())
+                    .and_then(|serde| serde.serialization_lib.as_deref()),
+                storage.and_then(|sd| sd.input_format.as_deref()),
+                storage.and_then(|sd| sd.output_format.as_deref()),
+            )
+        })
+    };
     let partition_by = table
         .partition_keys
         .as_ref()
@@ -197,14 +209,23 @@ pub(crate) fn build_generic_table(
     let (regular_columns, partition_keys) = build_columns(columns, &partition_columns)?;
     let mut parameters = vec_to_map(properties);
     insert_comment(&mut parameters, comment);
+    let table_parameters = parameters.get_or_insert_with(AHashMap::new);
     if format.logical_format.eq_ignore_ascii_case("delta") {
-        parameters.get_or_insert_with(AHashMap::new).insert(
+        table_parameters.insert(
             FastStr::from_static_str(SPARK_DATASOURCE_PROVIDER_KEY),
             FastStr::from_static_str("delta"),
         );
+    } else if format
+        .logical_format
+        .eq_ignore_ascii_case(ICEBERG_TABLE_TYPE_VALUE)
+    {
+        table_parameters.insert(
+            FastStr::from_static_str(ICEBERG_TABLE_TYPE_KEY),
+            FastStr::from_static_str(ICEBERG_TABLE_TYPE_VALUE),
+        );
     }
 
-    parameters.get_or_insert_with(AHashMap::new).insert(
+    table_parameters.insert(
         FastStr::from_static_str(EXTERNAL_KEY),
         FastStr::from_static_str(EXTERNAL_TRUE),
     );
@@ -261,6 +282,20 @@ pub(crate) fn inject_spark_metadata(
         .iter()
         .map(|col| {
             let mut metadata = std::collections::HashMap::new();
+            if let Some(expr) = &col.generated_always_as {
+                metadata.extend(
+                    ColumnFeaturesBuilder::new()
+                        .with_generation_expression(expr.clone())
+                        .build(),
+                );
+            }
+            if let Some(expr) = &col.default {
+                metadata.extend(
+                    ColumnFeaturesBuilder::new()
+                        .with_current_default(expr.clone())
+                        .build(),
+                );
+            }
             if let Some(comment) = &col.comment {
                 metadata.insert("comment".to_string(), comment.clone());
             }
@@ -271,9 +306,7 @@ pub(crate) fn inject_spark_metadata(
     let schema_json = serde_json::to_string(&schema_value).map_err(|e| {
         CatalogError::External(format!("Failed to serialize Spark schema JSON: {e}"))
     })?;
-    for (key, value) in split_large_table_prop(SPARK_SCHEMA_KEY, &schema_json, 4000) {
-        parameters.insert(FastStr::from_string(key), FastStr::from_string(value));
-    }
+    write_large_table_prop(parameters, SPARK_SCHEMA_KEY, &schema_json);
 
     if !partition_columns.is_empty() {
         parameters.insert(
@@ -299,6 +332,80 @@ pub(crate) fn inject_spark_metadata(
     );
 
     Ok(())
+}
+
+pub(crate) fn alter_spark_column_default(
+    table: &mut Table,
+    column_path: &[String],
+    default: Option<String>,
+) -> CatalogResult<()> {
+    let [column_name] = column_path else {
+        return Err(CatalogError::NotSupported(
+            "Hive Metastore catalog does not support altering nested column defaults".to_string(),
+        ));
+    };
+    let Some(schema) = read_large_table_prop(table.parameters.as_ref(), SPARK_SCHEMA_KEY)? else {
+        return Ok(());
+    };
+    // Edit the stored schema JSON surgically instead of rebuilding it, so
+    // that the metadata of all other columns (including keys written by
+    // foreign engines, such as `EXISTS_DEFAULT`) is preserved verbatim.
+    let mut schema_value: serde_json::Value = serde_json::from_str(&schema)
+        .map_err(|e| CatalogError::External(format!("Failed to parse Spark schema JSON: {e}")))?;
+    let fields = schema_value
+        .get_mut("fields")
+        .and_then(serde_json::Value::as_array_mut)
+        .ok_or_else(|| CatalogError::External("Spark schema JSON is missing fields".to_string()))?;
+    let Some(field) = fields.iter_mut().find(|field| {
+        field
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|name| name.eq_ignore_ascii_case(column_name))
+    }) else {
+        return Err(CatalogError::InvalidArgument(format!(
+            "Column '{column_name}' does not exist"
+        )));
+    };
+    let metadata = field
+        .as_object_mut()
+        .ok_or_else(|| CatalogError::External("Spark schema field must be an object".to_string()))?
+        .entry("metadata")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| {
+            CatalogError::External("Spark schema field metadata must be an object".to_string())
+        })?;
+    let key = ColumnFeatureKey::CurrentDefault.as_str();
+    match default {
+        Some(default) => {
+            metadata.insert(key.to_string(), serde_json::Value::String(default));
+        }
+        None => {
+            metadata.remove(key);
+        }
+    }
+    let schema_json = serde_json::to_string(&schema_value).map_err(|e| {
+        CatalogError::External(format!("Failed to serialize Spark schema JSON: {e}"))
+    })?;
+    let parameters = table.parameters.get_or_insert_with(AHashMap::new);
+    write_large_table_prop(parameters, SPARK_SCHEMA_KEY, &schema_json);
+    Ok(())
+}
+
+/// Writes a potentially large table property, replacing any existing plain
+/// or chunked values for the key. Removing stale keys matters for
+/// correctness since `read_large_table_prop` prefers the plain key, which
+/// would otherwise shadow rewritten chunks.
+fn write_large_table_prop(parameters: &mut AHashMap<FastStr, FastStr>, key: &str, value: &str) {
+    let num_parts_prefix = format!("{key}.numParts");
+    let part_prefix = format!("{key}.part.");
+    parameters.retain(|k, _| {
+        let k = k.as_str();
+        k != key && !k.starts_with(&num_parts_prefix) && !k.starts_with(&part_prefix)
+    });
+    for (k, v) in split_large_table_prop(key, value, 4000) {
+        parameters.insert(FastStr::from_string(k), FastStr::from_string(v));
+    }
 }
 
 pub(crate) fn build_view(
@@ -369,6 +476,16 @@ fn table_provider_format(parameters: Option<&AHashMap<FastStr, FastStr>>) -> Opt
     Some(match provider.as_str() {
         "deltalake" => "delta".to_string(),
         _ => provider,
+    })
+}
+
+fn is_iceberg_table_parameters(parameters: Option<&AHashMap<FastStr, FastStr>>) -> bool {
+    parameters.is_some_and(|properties| {
+        is_iceberg_table_properties(
+            properties
+                .iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        )
     })
 }
 
@@ -492,16 +609,20 @@ fn columns_from_spark_properties(
     };
     let columns = spark_struct_json_to_fields(&schema)?
         .into_iter()
-        .map(|field| TableColumnStatus {
-            name: field.name().to_string(),
-            data_type: field.data_type().clone(),
-            nullable: field.is_nullable(),
-            comment: field.metadata().get(COMMENT_KEY).cloned(),
-            default: None,
-            generated_always_as: None,
-            is_partition: false,
-            is_bucket: false,
-            is_cluster: false,
+        .map(|field| {
+            let features = ColumnFeatures::from_field(&field);
+            TableColumnStatus {
+                name: field.name().to_string(),
+                data_type: field.data_type().clone(),
+                nullable: field.is_nullable(),
+                comment: field.metadata().get(COMMENT_KEY).cloned(),
+                default: features.current_default(),
+                generated_always_as: features.generation_expression(),
+                identity: features.identity(),
+                is_partition: false,
+                is_bucket: false,
+                is_cluster: false,
+            }
         })
         .collect();
     Ok(Some(columns))
@@ -668,6 +789,7 @@ fn field_schema_to_status(
         comment: field.comment.as_ref().map(ToString::to_string),
         default: None,
         generated_always_as: None,
+        identity: None,
         is_partition,
         is_bucket: false,
         is_cluster: false,
@@ -711,13 +833,13 @@ mod tests {
     use sail_catalog::provider::{
         CreateTableColumnOptions, CreateViewColumnOptions, CreateViewOptions,
     };
+    use sail_common_hms::hms::{FieldSchema, SerDeInfo, StorageDescriptor, Table};
 
     use super::{
         build_generic_table, build_view, columns_from_spark_properties, database_to_status,
         inject_spark_metadata, is_view_table, map_to_vec, validate_namespace, GenericTableFormat,
         COMMENT_KEY, SPARK_DATASOURCE_PROVIDER_KEY, SPARK_SCHEMA_KEY, VIRTUAL_VIEW_TYPE,
     };
-    use crate::hms::{FieldSchema, SerDeInfo, StorageDescriptor, Table};
 
     #[test]
     fn test_validate_namespace_rejects_nested_namespaces() {
@@ -727,7 +849,7 @@ mod tests {
 
     #[test]
     fn test_database_to_status_reads_properties() {
-        let database = crate::hms::Database {
+        let database = sail_common_hms::hms::Database {
             name: Some("default".into()),
             description: Some("test".into()),
             parameters: Some([("k".into(), "v".into())].into_iter().collect()),
@@ -753,6 +875,7 @@ mod tests {
                 comment: None,
                 default: None,
                 generated_always_as: None,
+                identity: None,
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
@@ -790,6 +913,7 @@ mod tests {
                 comment: None,
                 default: None,
                 generated_always_as: None,
+                identity: None,
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
@@ -820,6 +944,7 @@ mod tests {
                 comment: None,
                 default: None,
                 generated_always_as: None,
+                identity: None,
             }],
             vec!["missing_partition".to_string()],
             Some("s3://warehouse/items".to_string()),
@@ -852,6 +977,7 @@ mod tests {
                 comment: None,
                 default: None,
                 generated_always_as: None,
+                identity: None,
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
@@ -874,6 +1000,41 @@ mod tests {
     }
 
     #[test]
+    fn test_table_to_status_detects_jvm_iceberg_table_type_case_insensitive() {
+        let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
+        let table = build_generic_table(
+            "default",
+            "items",
+            vec![CreateTableColumnOptions {
+                name: "id".to_string(),
+                data_type: DataType::Int64,
+                nullable: false,
+                comment: None,
+                default: None,
+                generated_always_as: None,
+                identity: None,
+            }],
+            vec![],
+            Some("s3://warehouse/items".to_string()),
+            GenericTableFormat {
+                logical_format: "parquet",
+                storage: &HiveStorageFormat::parquet(),
+            },
+            None,
+            vec![("table_type".to_string(), "ICEBERG".to_string())],
+        )
+        .unwrap();
+
+        let status = super::table_to_status("hms", &namespace, &table).unwrap();
+        match status.kind {
+            sail_common_datafusion::catalog::TableKind::Table { format, .. } => {
+                assert_eq!(format, "iceberg");
+            }
+            other => panic!("expected table, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_table_to_status_converts_partition_columns_to_identity_fields() {
         let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
         let table = build_generic_table(
@@ -887,6 +1048,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
                 CreateTableColumnOptions {
                     name: "day".to_string(),
@@ -895,6 +1057,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
             ],
             vec!["day".to_string()],
@@ -936,6 +1099,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
                 CreateTableColumnOptions {
                     name: "day".to_string(),
@@ -944,6 +1108,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
             ],
             vec!["day".to_string()],
@@ -967,6 +1132,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
                 CreateTableColumnOptions {
                     name: "day".to_string(),
@@ -975,6 +1141,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
             ],
             &["day".to_string()],
@@ -995,6 +1162,199 @@ mod tests {
     }
 
     #[test]
+    fn test_spark_metadata_round_trips_column_features() {
+        let columns = vec![
+            CreateTableColumnOptions {
+                name: "id".to_string(),
+                data_type: DataType::Int64,
+                nullable: false,
+                comment: Some("pk".to_string()),
+                default: Some("42".to_string()),
+                generated_always_as: None,
+                identity: None,
+            },
+            CreateTableColumnOptions {
+                name: "text".to_string(),
+                data_type: DataType::Utf8,
+                nullable: true,
+                comment: None,
+                default: Some("'hello'".to_string()),
+                generated_always_as: None,
+                identity: None,
+            },
+            CreateTableColumnOptions {
+                name: "gen".to_string(),
+                data_type: DataType::Int64,
+                nullable: true,
+                comment: None,
+                default: None,
+                generated_always_as: Some("id + 1".to_string()),
+                identity: None,
+            },
+        ];
+        let mut table = build_generic_table(
+            "default",
+            "items",
+            columns.clone(),
+            vec![],
+            Some("s3://warehouse/items".to_string()),
+            GenericTableFormat {
+                logical_format: "parquet",
+                storage: &HiveStorageFormat::parquet(),
+            },
+            None,
+            vec![],
+        )
+        .unwrap();
+        inject_spark_metadata(&mut table, &columns, &[], "parquet").unwrap();
+
+        let columns = columns_from_spark_properties(table.parameters.as_ref())
+            .unwrap()
+            .expect("expected Spark schema metadata");
+        assert_eq!(columns[0].name, "id");
+        assert_eq!(columns[0].comment.as_deref(), Some("pk"));
+        assert_eq!(columns[0].default.as_deref(), Some("42"));
+        assert_eq!(columns[1].name, "text");
+        assert_eq!(columns[1].default.as_deref(), Some("'hello'"));
+        assert_eq!(columns[2].name, "gen");
+        assert_eq!(columns[2].generated_always_as.as_deref(), Some("id + 1"));
+    }
+
+    #[test]
+    fn test_columns_from_spark_properties_reads_foreign_spark_defaults() {
+        // Spark serializes the full `StructField.metadata` object, so a table
+        // created by Spark with column defaults carries `CURRENT_DEFAULT` (and
+        // `EXISTS_DEFAULT`) in the schema JSON. The default may be SQL text
+        // (`'hello'`) or a JSON-encoded string (`"hello"`), which is decoded.
+        let schema_json = concat!(
+            r#"{"type":"struct","fields":["#,
+            r#"{"name":"a","type":"string","nullable":true,"#,
+            r#""metadata":{"CURRENT_DEFAULT":"'hello'","EXISTS_DEFAULT":"'hello'"}},"#,
+            r#"{"name":"b","type":"string","nullable":true,"#,
+            r#""metadata":{"CURRENT_DEFAULT":"\"hello\""}}]}"#,
+        );
+        let parameters: AHashMap<FastStr, FastStr> = [(
+            FastStr::from_static_str(SPARK_SCHEMA_KEY),
+            FastStr::from_string(schema_json.to_string()),
+        )]
+        .into_iter()
+        .collect();
+
+        let columns = columns_from_spark_properties(Some(&parameters))
+            .unwrap()
+            .expect("expected Spark schema metadata");
+        assert_eq!(columns[0].name, "a");
+        assert_eq!(columns[0].default.as_deref(), Some("'hello'"));
+        assert_eq!(columns[1].name, "b");
+        // The JSON-encoded string is decoded; the write path interprets the
+        // bare word as a string literal value rather than a column reference.
+        assert_eq!(columns[1].default.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn test_alter_spark_column_default_preserves_other_features() {
+        let columns = vec![
+            CreateTableColumnOptions {
+                name: "id".to_string(),
+                data_type: DataType::Int64,
+                nullable: false,
+                comment: Some("pk".to_string()),
+                default: None,
+                generated_always_as: None,
+                identity: None,
+            },
+            CreateTableColumnOptions {
+                name: "gen".to_string(),
+                data_type: DataType::Int64,
+                nullable: true,
+                comment: None,
+                default: None,
+                generated_always_as: Some("id + 1".to_string()),
+                identity: None,
+            },
+        ];
+        let mut table = build_generic_table(
+            "default",
+            "items",
+            columns.clone(),
+            vec![],
+            Some("s3://warehouse/items".to_string()),
+            GenericTableFormat {
+                logical_format: "parquet",
+                storage: &HiveStorageFormat::parquet(),
+            },
+            None,
+            vec![],
+        )
+        .unwrap();
+        inject_spark_metadata(&mut table, &columns, &[], "parquet").unwrap();
+
+        super::alter_spark_column_default(&mut table, &["id".to_string()], Some("42".to_string()))
+            .unwrap();
+
+        let columns = columns_from_spark_properties(table.parameters.as_ref())
+            .unwrap()
+            .expect("expected Spark schema metadata");
+        assert_eq!(columns[0].default.as_deref(), Some("42"));
+        assert_eq!(columns[0].comment.as_deref(), Some("pk"));
+        assert_eq!(columns[1].generated_always_as.as_deref(), Some("id + 1"));
+
+        super::alter_spark_column_default(&mut table, &["id".to_string()], None).unwrap();
+        let columns = columns_from_spark_properties(table.parameters.as_ref())
+            .unwrap()
+            .expect("expected Spark schema metadata");
+        assert_eq!(columns[0].default, None);
+        assert_eq!(columns[1].generated_always_as.as_deref(), Some("id + 1"));
+    }
+
+    #[test]
+    fn test_alter_spark_column_default_preserves_foreign_metadata() {
+        let schema_json = concat!(
+            r#"{"type":"struct","fields":["#,
+            r#"{"name":"a","type":"string","nullable":true,"#,
+            r#""metadata":{"CURRENT_DEFAULT":"'old'","EXISTS_DEFAULT":"'old'"}},"#,
+            r#"{"name":"b","type":"string","nullable":true,"#,
+            r#""metadata":{"CURRENT_DEFAULT":"\"hello\"","EXISTS_DEFAULT":"\"hello\""}}]}"#,
+        );
+        let mut table = Table {
+            parameters: Some(
+                [(
+                    FastStr::from_static_str(SPARK_SCHEMA_KEY),
+                    FastStr::from_string(schema_json.to_string()),
+                )]
+                .into_iter()
+                .collect(),
+            ),
+            ..Default::default()
+        };
+
+        super::alter_spark_column_default(
+            &mut table,
+            &["a".to_string()],
+            Some("'new'".to_string()),
+        )
+        .unwrap();
+
+        let schema = super::read_large_table_prop(table.parameters.as_ref(), SPARK_SCHEMA_KEY)
+            .unwrap()
+            .expect("expected Spark schema metadata");
+        let value: serde_json::Value = serde_json::from_str(&schema).unwrap();
+        let fields = value.get("fields").unwrap().as_array().unwrap();
+        // The altered column gets the new default and keeps its existence
+        // default.
+        assert_eq!(
+            fields[0].get("metadata").unwrap(),
+            &serde_json::json!({"CURRENT_DEFAULT": "'new'", "EXISTS_DEFAULT": "'old'"})
+        );
+        // The other column's metadata is preserved verbatim, including the
+        // JSON-encoded default representation.
+        assert_eq!(
+            fields[1].get("metadata").unwrap(),
+            &serde_json::json!({"CURRENT_DEFAULT": "\"hello\"", "EXISTS_DEFAULT": "\"hello\""})
+        );
+    }
+
+    #[test]
     fn test_table_to_status_uses_spark_schema_and_hides_internal_properties() {
         let namespace = sail_catalog::provider::Namespace::try_from(vec!["default"]).unwrap();
         let mut table = build_generic_table(
@@ -1008,6 +1368,7 @@ mod tests {
                     comment: Some("pk".to_string()),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
                 CreateTableColumnOptions {
                     name: "day".to_string(),
@@ -1016,6 +1377,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
             ],
             vec!["day".to_string()],
@@ -1039,6 +1401,7 @@ mod tests {
                     comment: Some("pk".to_string()),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
                 CreateTableColumnOptions {
                     name: "day".to_string(),
@@ -1047,6 +1410,7 @@ mod tests {
                     comment: None,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
             ],
             &["day".to_string()],
@@ -1554,6 +1918,7 @@ mod tests {
                     comment: Some("primary key".to_string()),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
                 CreateTableColumnOptions {
                     name: "payload".to_string(),
@@ -1599,6 +1964,7 @@ mod tests {
                     comment: Some("nested payload".to_string()),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
                 CreateTableColumnOptions {
                     name: "category".to_string(),
@@ -1607,6 +1973,7 @@ mod tests {
                     comment: Some("category partition".to_string()),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
                 CreateTableColumnOptions {
                     name: "event_date".to_string(),
@@ -1615,6 +1982,7 @@ mod tests {
                     comment: Some("date partition".to_string()),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                 },
             ],
             vec!["category".to_string(), "event_date".to_string()],
@@ -1636,6 +2004,7 @@ mod tests {
                 comment: Some("primary key".to_string()),
                 default: None,
                 generated_always_as: None,
+                identity: None,
             },
             CreateTableColumnOptions {
                 name: "payload".to_string(),
@@ -1681,6 +2050,7 @@ mod tests {
                 comment: Some("nested payload".to_string()),
                 default: None,
                 generated_always_as: None,
+                identity: None,
             },
             CreateTableColumnOptions {
                 name: "category".to_string(),
@@ -1689,6 +2059,7 @@ mod tests {
                 comment: Some("category partition".to_string()),
                 default: None,
                 generated_always_as: None,
+                identity: None,
             },
             CreateTableColumnOptions {
                 name: "event_date".to_string(),
@@ -1697,6 +2068,7 @@ mod tests {
                 comment: Some("date partition".to_string()),
                 default: None,
                 generated_always_as: None,
+                identity: None,
             },
         ];
 
@@ -1794,6 +2166,7 @@ mod tests {
                 comment: None,
                 default: None,
                 generated_always_as: None,
+                identity: None,
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),
@@ -1824,6 +2197,7 @@ mod tests {
                 comment: None,
                 default: None,
                 generated_always_as: None,
+                identity: None,
             }],
             vec![],
             Some("s3://warehouse/items".to_string()),

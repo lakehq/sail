@@ -345,6 +345,14 @@ impl PlanFormatter for SparkPlanFormatter {
                 let values = values.iter().collect::<Vec<_>>().one()?;
                 literal_list_to_string("array", values.as_deref())
             }
+            ScalarValue::ListView(values) => {
+                let values = values.iter().collect::<Vec<_>>().one()?;
+                literal_list_to_string("array", values.as_deref())
+            }
+            ScalarValue::LargeListView(values) => {
+                let values = values.iter().collect::<Vec<_>>().one()?;
+                literal_list_to_string("array", values.as_deref())
+            }
             ScalarValue::Struct(values) => {
                 let fields = values
                     .fields()
@@ -484,6 +492,8 @@ impl PlanFormatter for SparkPlanFormatter {
                 Ok(result)
             }
             "timestamp" | "date" => Ok(arguments.one()?.to_string()),
+            // Spark always names the time window column `window`.
+            "window" => Ok("window".to_string()),
             "to_unix_timestamp" => {
                 let mut argv = arguments.clone();
                 if argv.len() == 1 {
@@ -520,6 +530,25 @@ impl PlanFormatter for SparkPlanFormatter {
                 let (arg, _) = arguments.at_least_one()?;
                 Ok(format!("{name}({arg})"))
             }
+            "mode" => {
+                let name = name.to_lowercase();
+                // Spark hides the optional `deterministic` flag in the column name:
+                // `mode(col)` when it is false or absent, and the WITHIN GROUP form
+                // when it is true.
+                // The "lowest"/"highest" sentinels come from the plan resolver rewrite
+                // of `mode() WITHIN GROUP (ORDER BY col)`. Spark displays its internal
+                // reverse flag rather than the original sort direction, so an ascending
+                // query is named DESC and a descending query is named without a
+                // direction.
+                let (arg, rest) = arguments.at_least_one()?;
+                match rest.first() {
+                    Some(&"true") | Some(&"lowest") => {
+                        Ok(format!("{name}() WITHIN GROUP (ORDER BY {arg} DESC)"))
+                    }
+                    Some(&"highest") => Ok(format!("{name}() WITHIN GROUP (ORDER BY {arg})")),
+                    _ => Ok(format!("{name}({arg})")),
+                }
+            }
             "from_json" => {
                 let (arg, rest) = arguments.at_least_one()?;
                 // In Spark, from_json with a MAP schema uses "entries" as the display name.
@@ -539,7 +568,8 @@ impl PlanFormatter for SparkPlanFormatter {
                 }
                 Ok(format!("{name}({arg})"))
             }
-            "from_csv" | "to_csv" | "any_value" | "first_value" | "last_value" => {
+            "from_csv" | "schema_of_csv" | "schema_of_json" | "to_csv" | "to_json"
+            | "any_value" | "first_value" | "last_value" => {
                 let (arg, _) = arguments.at_least_one()?;
                 Ok(format!("{name}({arg})"))
             }

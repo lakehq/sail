@@ -8,8 +8,11 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::helpers::pruned_partition_list;
+use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use datafusion::execution::cache::cache_manager::CachedFileMetadata;
+use datafusion::execution::cache::TableScopedPath;
 use datafusion::execution::SessionState;
+use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
 use datafusion::logical_expr::{Expr, LogicalPlan, TableScan, UserDefinedLogicalNode};
 use datafusion::physical_expr::create_lex_ordering;
@@ -18,16 +21,22 @@ use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::stats::Precision;
-use datafusion_common::{project_schema, Statistics};
+use datafusion_common::{internal_err, plan_err, project_schema, Statistics};
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::source::DataSourceExec;
+use datafusion_datasource::ListingTableUrl;
 use futures::{future, stream, Stream, StreamExt};
 use object_store::ObjectStore;
+use sail_common_datafusion::datasource::create_sort_order;
+use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
+use sail_physical_plan::barrier::BarrierExec;
 
-use crate::listing::source::ListingScanInput;
+use crate::listing::delete::FileDeleteExec;
+use crate::listing::source::{ListingScanInput, ListingSinkInput};
 use crate::listing::table::ListingTableSource;
 use crate::listing::utils::can_be_evaluated_for_partition_pruning;
+use crate::listing::write::{FileWriteNode, FileWriteOptions};
 
 /// Result of a file listing operation for listing table scans.
 #[derive(Debug)]
@@ -41,18 +50,29 @@ struct ListFilesResult {
 ///
 /// Plans `ListingTableSource` table scans directly without an intermediate `TableProvider`.
 #[derive(Debug, Default)]
-pub struct ListingTablePhysicalPlanner;
+pub struct ListingPhysicalPlanner;
 
 #[async_trait]
-impl ExtensionPlanner for ListingTablePhysicalPlanner {
+impl ExtensionPlanner for ListingPhysicalPlanner {
     async fn plan_extension(
         &self,
         _planner: &dyn PhysicalPlanner,
-        _node: &dyn UserDefinedLogicalNode,
-        _logical_inputs: &[&LogicalPlan],
-        _physical_inputs: &[Arc<dyn ExecutionPlan>],
-        _session_state: &SessionState,
+        node: &dyn UserDefinedLogicalNode,
+        logical_inputs: &[&LogicalPlan],
+        physical_inputs: &[Arc<dyn ExecutionPlan>],
+        session_state: &SessionState,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
+        if let Some(node) = node.as_any().downcast_ref::<FileWriteNode>() {
+            let [logical_input] = logical_inputs else {
+                return internal_err!("FileWriteNode requires exactly one logical input");
+            };
+            let [physical_input] = physical_inputs else {
+                return internal_err!("FileWriteNode requires exactly one physical input");
+            };
+            return plan_file_write(session_state, logical_input, physical_input.clone(), node)
+                .await
+                .map(Some);
+        }
         Ok(None)
     }
 
@@ -62,7 +82,7 @@ impl ExtensionPlanner for ListingTablePhysicalPlanner {
         scan: &TableScan,
         session_state: &SessionState,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
-        let Some(source) = scan.source.as_any().downcast_ref::<ListingTableSource>() else {
+        let Some(source) = scan.source.downcast_ref::<ListingTableSource>() else {
             return Ok(None);
         };
 
@@ -170,6 +190,64 @@ impl ExtensionPlanner for ListingTablePhysicalPlanner {
             .await?;
 
         Ok(Some(DataSourceExec::from_data_source(config)))
+    }
+}
+
+async fn plan_file_write(
+    session_state: &SessionState,
+    logical_input: &LogicalPlan,
+    physical_input: Arc<dyn ExecutionPlan>,
+    node: &FileWriteNode,
+) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+    if is_flow_event_schema(logical_input.schema().as_arrow()) {
+        return plan_err!("cannot write streaming data to listing table");
+    }
+    let FileWriteOptions {
+        format,
+        url,
+        overwrite,
+        partition_by,
+        sort_by,
+    } = node.options();
+    let table_path = ListingTableUrl::try_new(url.clone(), None)?;
+    let object_store_url = table_path.object_store();
+    // We do not need to specify the exact data type for partition columns,
+    // since the type is inferred from the record batch during writing.
+    let table_partition_cols = partition_by
+        .iter()
+        .map(|field| (field.column.clone(), DataType::Null))
+        .collect::<Vec<_>>();
+    let conf = FileSinkConfig {
+        original_url: url.to_string(),
+        object_store_url: object_store_url.clone(),
+        file_group: Default::default(),
+        table_paths: vec![table_path.clone()],
+        output_schema: physical_input.schema(),
+        table_partition_cols,
+        insert_op: InsertOp::Append,
+        keep_partition_by_columns: false,
+        file_extension: String::new(),
+        file_output_mode: FileOutputMode::Automatic,
+    };
+    let sort_order = create_sort_order(session_state, sort_by.clone(), logical_input.schema())?;
+    let plan = format
+        .sink(
+            session_state,
+            ListingSinkInput {
+                input: physical_input,
+                sink: conf,
+                sort_order,
+            },
+        )
+        .await?;
+    if *overwrite {
+        let delete = Arc::new(FileDeleteExec::new(
+            object_store_url,
+            table_path.prefix().clone(),
+        ));
+        Ok(Arc::new(BarrierExec::new(vec![delete], plan)))
+    } else {
+        Ok(plan)
     }
 }
 
@@ -350,12 +428,25 @@ async fn do_collect_statistics_and_ordering(
     store: &Arc<dyn ObjectStore>,
     part_file: &datafusion_datasource::PartitionedFile,
 ) -> datafusion_common::Result<(Arc<Statistics>, Option<LexOrdering>)> {
-    let path = &part_file.object_meta.location;
     let meta = &part_file.object_meta;
+    let file_schema = source.config().schema.file_schema();
     let file_statistic_cache = ctx.runtime_env().cache_manager.get_file_statistic_cache();
+    let cache_key = TableScopedPath {
+        table: Some(statistics_cache_table_ref(
+            part_file.table_reference.as_ref(),
+            file_schema.as_ref(),
+        )),
+        path: meta.location.clone(),
+    };
 
-    if let Some(cached) = file_statistic_cache.as_ref().and_then(|x| x.get(path)) {
-        if cached.is_valid_for(meta) {
+    if let Some(cached) = file_statistic_cache
+        .as_ref()
+        .and_then(|x| x.get(&cache_key))
+    {
+        // Skip a cached entry whose column count differs to avoid an out-of-bounds panic
+        if cached.is_valid_for(meta)
+            && cached.statistics.column_statistics.len() == file_schema.fields().len()
+        {
             return Ok((Arc::clone(&cached.statistics), cached.ordering.clone()));
         }
     }
@@ -375,7 +466,7 @@ async fn do_collect_statistics_and_ordering(
 
     file_statistic_cache.as_ref().map(|x| {
         x.put(
-            path,
+            &cache_key,
             CachedFileMetadata::new(
                 meta.clone(),
                 Arc::clone(&statistics),
@@ -385,6 +476,28 @@ async fn do_collect_statistics_and_ordering(
     });
 
     Ok((statistics, file_meta.ordering))
+}
+
+fn statistics_cache_table_ref(
+    table: Option<&datafusion_common::TableReference>,
+    schema: &arrow::datatypes::Schema,
+) -> datafusion_common::TableReference {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+
+    for field in schema.fields() {
+        std::hash::Hash::hash(field.name(), &mut hasher);
+        std::hash::Hash::hash(&field.data_type().to_string(), &mut hasher);
+        std::hash::Hash::hash(&field.is_nullable(), &mut hasher);
+    }
+
+    let table = table
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "listing".to_string());
+
+    datafusion_common::TableReference::bare(format!(
+        "{table}_{:016x}",
+        std::hash::Hasher::finish(&hasher)
+    ))
 }
 
 async fn get_files_with_limit(

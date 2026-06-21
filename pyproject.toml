@@ -1,6 +1,6 @@
 [project]
 name = "pysail"
-version = "0.6.3"
+version = "0.6.4"
 description = "Sail Python library"
 authors = [
     { name = "LakeSail", email = "hello@lakesail.com" },
@@ -32,12 +32,10 @@ classifiers = [
 [project.optional-dependencies]
 test = [
     # The dependencies for testing the installed package.
-    # PySpark 4.1.0 does not work on Windows.
-    #   https://issues.apache.org/jira/browse/SPARK-54745
-    "pyspark-client>=4.0,<4.2,!=4.1.0",
+    "pyspark-client==4.1.1",
     "pandas<3",
     "duckdb>=1.0,<2",
-    "pytest>=8.4,<9",
+    "pytest>=9.1,<10",
     "pytest-bdd>=8.1,<9",
     "syrupy>=5.0,<6",
     "jinja2>=3.1,<4",
@@ -98,7 +96,7 @@ dependencies = [
     "pyspark[connect]==4.1.1",
     "ibis-framework>=12,<13",
     "pandas<3",
-    "pytest>=8.4,<9",
+    "pytest>=9.1,<10",
     "pytest-bdd>=8.1,<9",
     "syrupy>=5.0,<6",
     "jinja2>=3.1,<4",
@@ -154,7 +152,7 @@ installer = "pip"
 skip-install = true
 dependencies = [
     "pandas<3",
-    "pytest>=8.4,<9",
+    "pytest>=9.1,<10",
     "pytest-bdd>=8.1,<9",
     "syrupy>=5.0,<6",
     "jinja2>=3.1,<4",

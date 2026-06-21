@@ -144,13 +144,15 @@ pub fn build_standard_write_layers(
         plan,
         ctx.table_url().clone(),
         DeltaWriterExecOptions::from(ctx.options().clone())
-            .with_generation_expressions(ctx.generation_expressions().clone()),
+            .with_generation_expressions(ctx.generation_expressions().clone())
+            .with_identity_columns(ctx.identity_columns().clone()),
         ctx.metadata_configuration().clone(),
         ctx.partition_columns().to_vec(),
         sink_mode.clone(),
         ctx.table_exists(),
         writer_schema,
         write_context.clone(),
+        ctx.lakehouse_table().cloned(),
     )?);
 
     // DeltaCommitExec is single-partition; gather writer partitions first.
@@ -165,6 +167,7 @@ pub fn build_standard_write_layers(
         sink_mode.clone(),
         ctx.options().user_metadata.clone(),
         write_context.commit_context.clone(),
+        ctx.lakehouse_table().cloned(),
     )))
 }
 

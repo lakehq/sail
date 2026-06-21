@@ -1,4 +1,3 @@
-use core::any::type_name;
 use std::sync::Arc;
 
 use chrono::prelude::*;
@@ -104,10 +103,6 @@ impl SparkFromJson {
 }
 
 impl ScalarUDFImpl for SparkFromJson {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
     fn name(&self) -> &str {
         Self::FROM_JSON_NAME
     }
