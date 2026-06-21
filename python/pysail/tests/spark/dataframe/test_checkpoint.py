@@ -8,7 +8,12 @@ from pyspark import StorageLevel
 from pyspark.sql.functions import col, lit
 
 from pysail.testing.spark.steps.plan import normalize_plan_text
-from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
+
+pytestmark = pytest.mark.skipif(
+    pyspark_version() < (4,),
+    reason="checkpoint and localCheckpoint require PySpark Connect 4+",
+)
 
 
 def test_dataframe_local_checkpoint_survives_source_removal(spark, tmp_path):
