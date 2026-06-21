@@ -70,7 +70,7 @@ message ExtendedPhysicalPlanNode {
 message ExtendedPhysicalExprNode {
   oneof ExprKind {
     CastColumnExprNode schema_evolution_cast = 1;
-    HigherOrderFunctionExprNode higher_order_function = 2;
+    HigherOrderUDFExprNode higher_order_udf = 2;
     LambdaExprNode lambda = 3;
     LambdaVariableExprNode lambda_variable = 4;
   }
@@ -81,8 +81,21 @@ message CastColumnExprNode {
   bytes target_schema = 2;
 }
 
-message HigherOrderFunctionExprNode {
+message LambdaExprNode {
+  repeated string params = 1;
+  bytes body = 2;
+}
+
+message LambdaVariableExprNode {
+  uint32 index = 1;
+  bytes field = 2;
+}
+
+message HigherOrderUDFExprNode {
   HigherOrderUdf udf = 1;
+  string name = 2;
+  repeated bytes args = 3;
+  optional bytes function_definition = 4;
 }
 
 message HigherOrderUdf {
@@ -106,14 +119,6 @@ message SparkArrayFilterUdf {
   // dedicated upstream issue exists yet (worth filing). Once fixed upstream, the
   // `index_first` rewrite and this field can be removed.
   bool index_first = 1;
-}
-
-message LambdaExprNode {
-  repeated string params = 1;
-}
-
-message LambdaVariableExprNode {
-  uint64 index = 1;
 }
 
 message ExtendedScalarUdf {
