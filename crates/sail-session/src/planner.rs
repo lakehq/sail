@@ -11,6 +11,8 @@ use datafusion_common::{internal_err, DFSchema};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
 use datafusion_physical_expr::{create_physical_sort_exprs, Partitioning};
 use sail_catalog_system::planner::SystemTablePhysicalPlanner;
+use sail_common_datafusion::cached_relation::{CachedRelationNode, CachedRelationRegistry};
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_rewriter::LogicalRewriter;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
 use sail_common_datafusion::streaming::event::schema::{
@@ -98,8 +100,17 @@ impl ExtensionPlanner for ExtensionPhysicalPlanner {
         session_state: &SessionState,
     ) -> datafusion_common::Result<Option<Arc<dyn ExecutionPlan>>> {
         let plan: Arc<dyn ExecutionPlan> = if let Some(node) =
-            node.as_any().downcast_ref::<RangeNode>()
+            node.as_any().downcast_ref::<CachedRelationNode>()
         {
+            let registry = session_state.extension::<CachedRelationRegistry>()?;
+            let relation = registry.get(node.relation_id())?.ok_or_else(|| {
+                datafusion_common::DataFusionError::Internal(format!(
+                    "No DataFrame with id {} is found",
+                    node.relation_id()
+                ))
+            })?;
+            relation.to_physical_plan().await?
+        } else if let Some(node) = node.as_any().downcast_ref::<RangeNode>() {
             let schema = UserDefinedLogicalNode::schema(node).inner().clone();
             let projection = (0..schema.fields().len()).collect();
             Arc::new(RangeExec::try_new(

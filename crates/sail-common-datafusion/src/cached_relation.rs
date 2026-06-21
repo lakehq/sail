@@ -1,19 +1,28 @@
+use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::fmt::Formatter;
 use std::sync::{Arc, RwLock};
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::datasource::{provider_as_source, MemTable};
+use datafusion::datasource::physical_plan::ArrowSource;
 use datafusion::execution::disk_manager::RefCountedTempFile;
-use datafusion::execution::options::ArrowReadOptions;
+use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
-use datafusion_common::{internal_datafusion_err, DataFusionError, Result, TableReference};
-use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
-use futures::{StreamExt, TryStreamExt};
-use object_store::ObjectStoreExt;
+use datafusion_common::{
+    internal_datafusion_err, DFSchema, DFSchemaRef, DataFusionError, Result, Statistics,
+};
+use datafusion_datasource::file_groups::FileGroup;
+use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+use datafusion_datasource::memory::MemorySourceConfig;
+use datafusion_datasource::source::DataSourceExec;
+use datafusion_datasource::{PartitionedFile, TableSchema};
+use datafusion_expr::{Expr, Extension, LogicalPlan, UserDefinedLogicalNodeCore};
+use futures::StreamExt;
+use object_store::ObjectMeta;
 use sail_common::spec;
+use sail_object_store::{delete_object_store_prefix, resolve_object_store_path};
 
 use crate::array::record_batch::{read_record_batches, write_record_batches};
 use crate::extension::{SessionExtension, SessionExtensionAccessor};
@@ -23,6 +32,68 @@ use crate::session::job::JobService;
 #[derive(Debug, Clone)]
 pub enum CachedRelationCleanup {
     ObjectStorePath(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub struct CachedRelationNode {
+    relation_id: String,
+    schema: DFSchemaRef,
+}
+
+impl CachedRelationNode {
+    fn try_new(relation_id: String, schema: SchemaRef) -> Result<Self> {
+        let schema = Arc::new(DFSchema::try_from(schema.as_ref().clone())?);
+        Ok(Self {
+            relation_id,
+            schema,
+        })
+    }
+
+    pub fn relation_id(&self) -> &str {
+        &self.relation_id
+    }
+}
+
+impl PartialOrd for CachedRelationNode {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.relation_id.partial_cmp(&other.relation_id)
+    }
+}
+
+impl UserDefinedLogicalNodeCore for CachedRelationNode {
+    fn name(&self) -> &str {
+        "CachedRelation"
+    }
+
+    fn inputs(&self) -> Vec<&LogicalPlan> {
+        vec![]
+    }
+
+    fn schema(&self) -> &DFSchemaRef {
+        &self.schema
+    }
+
+    fn expressions(&self) -> Vec<Expr> {
+        vec![]
+    }
+
+    fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "CachedRelation: relation_id={}", self.relation_id)
+    }
+
+    fn with_exprs_and_inputs(&self, exprs: Vec<Expr>, inputs: Vec<LogicalPlan>) -> Result<Self> {
+        if !exprs.is_empty() {
+            return Err(internal_datafusion_err!(
+                "CachedRelation does not support expressions"
+            ));
+        }
+        if !inputs.is_empty() {
+            return Err(internal_datafusion_err!(
+                "CachedRelation does not support inputs"
+            ));
+        }
+        Ok(self.clone())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -39,7 +110,16 @@ enum CachedRelationData {
 }
 
 #[derive(Debug, Clone)]
-struct CachedRelationMaterialized {
+enum CachedRelationMaterialized {
+    Local(CachedRelationLocalMaterialized),
+    Physical {
+        schema: SchemaRef,
+        plan: Arc<dyn ExecutionPlan>,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct CachedRelationLocalMaterialized {
     schema: SchemaRef,
     memory_partitions: Option<Arc<Vec<Vec<RecordBatch>>>>,
     serialized_memory_partitions: Option<Arc<Vec<Vec<u8>>>>,
@@ -146,8 +226,21 @@ impl CachedRelation {
         match &*data {
             CachedRelationData::LogicalPlan(plan) => Ok(plan.as_ref().clone()),
             CachedRelationData::Materialized(materialized) => {
-                materialized.to_logical_plan(relation_id).await
+                materialized.to_logical_plan(relation_id)
             }
+            CachedRelationData::Pending(_) => Err(internal_datafusion_err!(
+                "cached relation materialization did not complete"
+            )),
+        }
+    }
+
+    pub async fn to_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
+        let data = self.data.lock().await;
+        match &*data {
+            CachedRelationData::Materialized(materialized) => materialized.to_physical_plan().await,
+            CachedRelationData::LogicalPlan(_) => Err(internal_datafusion_err!(
+                "cached relation is not materialized as a physical plan"
+            )),
             CachedRelationData::Pending(_) => Err(internal_datafusion_err!(
                 "cached relation materialization did not complete"
             )),
@@ -217,6 +310,31 @@ impl CachedRelationPending {
 }
 
 impl CachedRelationMaterialized {
+    fn schema(&self) -> SchemaRef {
+        match self {
+            Self::Local(local) => Arc::clone(&local.schema),
+            Self::Physical { schema, .. } => Arc::clone(schema),
+        }
+    }
+
+    fn to_logical_plan(&self, relation_id: &str) -> Result<LogicalPlan> {
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CachedRelationNode::try_new(
+                relation_id.to_string(),
+                self.schema(),
+            )?),
+        }))
+    }
+
+    async fn to_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
+        match self {
+            Self::Local(local) => local.to_physical_plan().await,
+            Self::Physical { plan, .. } => Ok(Arc::clone(plan)),
+        }
+    }
+}
+
+impl CachedRelationLocalMaterialized {
     async fn try_new(
         ctx: &SessionContext,
         schema: SchemaRef,
@@ -288,16 +406,12 @@ impl CachedRelationMaterialized {
         })
     }
 
-    async fn to_logical_plan(&self, relation_id: &str) -> Result<LogicalPlan> {
+    async fn to_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
         let _ = &self.storage_level;
         let partitions = self.load_partitions().await?;
-        let table = MemTable::try_new(Arc::clone(&self.schema), partitions)?;
-        LogicalPlanBuilder::scan(
-            TableReference::bare(format!("__sail_cached_relation_{relation_id}")),
-            provider_as_source(Arc::new(table)),
-            None,
-        )?
-        .build()
+        let plan: Arc<dyn ExecutionPlan> =
+            MemorySourceConfig::try_new_exec(&partitions, Arc::clone(&self.schema), None)?;
+        Ok(plan)
     }
 
     async fn load_partitions(&self) -> Result<Vec<Vec<RecordBatch>>> {
@@ -369,8 +483,10 @@ async fn materialize_local_checkpoint(
     let schema = plan.schema();
     let partitions = collect_checkpoint_partitions(ctx, plan).await?;
     let materialized =
-        CachedRelationMaterialized::try_new(ctx, schema, partitions, storage_level).await?;
-    Ok(CachedRelationData::Materialized(materialized))
+        CachedRelationLocalMaterialized::try_new(ctx, schema, partitions, storage_level).await?;
+    Ok(CachedRelationData::Materialized(
+        CachedRelationMaterialized::Local(materialized),
+    ))
 }
 
 async fn materialize_reliable_checkpoint(
@@ -379,35 +495,40 @@ async fn materialize_reliable_checkpoint(
     path: &str,
 ) -> Result<CachedRelationData> {
     let schema = plan.schema();
-    if let Err(error) = write_reliable_checkpoint(ctx, plan, path).await {
-        let _ = cleanup_checkpoint_path(ctx, path).await;
-        return Err(error);
-    }
-    let read_options = ArrowReadOptions::default().schema(schema.as_ref());
-    let df = ctx.read_arrow(path, read_options).await?;
-    let (_, read_plan) = df.into_parts();
-    Ok(CachedRelationData::LogicalPlan(Arc::new(read_plan)))
+    let (object_store_url, object_meta) = match write_reliable_checkpoint(ctx, plan, path).await {
+        Ok(file) => file,
+        Err(error) => {
+            let _ = cleanup_checkpoint_path(ctx, path).await;
+            return Err(error);
+        }
+    };
+    let physical_plan = create_arrow_checkpoint_scan(object_store_url, object_meta, &schema)?;
+    Ok(CachedRelationData::Materialized(
+        CachedRelationMaterialized::Physical {
+            schema,
+            plan: physical_plan,
+        },
+    ))
+}
+
+fn create_arrow_checkpoint_scan(
+    object_store_url: ObjectStoreUrl,
+    object_meta: ObjectMeta,
+    schema: &SchemaRef,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let source = ArrowSource::new_stream_file_source(TableSchema::new(Arc::clone(schema), vec![]));
+    let config = FileScanConfigBuilder::new(object_store_url, Arc::new(source))
+        .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new_from_meta(
+            object_meta,
+        )])])
+        .with_statistics(Statistics::new_unknown(schema))
+        .build();
+    Ok(DataSourceExec::from_data_source(config))
 }
 
 pub async fn cleanup_checkpoint_path(ctx: &SessionContext, path: &str) -> Result<()> {
-    let checkpoint_dir = format!("{}/", path.trim_end_matches('/'));
-    let checkpoint_url = ListingTableUrl::parse(&checkpoint_dir)?;
-    let store = ctx
-        .runtime_env()
-        .object_store(checkpoint_url.object_store())?;
-    let prefix = checkpoint_url.prefix().clone();
-    let files = store
-        .list(Some(&prefix))
-        .try_collect::<Vec<_>>()
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    for file in files {
-        match store.delete(&file.location).await {
-            Ok(()) | Err(object_store::Error::NotFound { .. }) => {}
-            Err(error) => return Err(DataFusionError::External(Box::new(error))),
-        }
-    }
-    Ok(())
+    let runtime_env = ctx.runtime_env();
+    delete_object_store_prefix(runtime_env.as_ref(), path).await
 }
 
 async fn collect_checkpoint_partitions(
@@ -439,13 +560,10 @@ async fn write_reliable_checkpoint(
     ctx: &SessionContext,
     plan: Arc<dyn ExecutionPlan>,
     path: &str,
-) -> Result<()> {
+) -> Result<(ObjectStoreUrl, ObjectMeta)> {
     let schema = plan.schema();
-    let checkpoint_dir = format!("{}/", path.trim_end_matches('/'));
-    let checkpoint_url = ListingTableUrl::parse(&checkpoint_dir)?;
-    let store = ctx
-        .runtime_env()
-        .object_store(checkpoint_url.object_store())?;
+    let runtime_env = ctx.runtime_env();
+    let checkpoint_path = resolve_object_store_path(runtime_env.as_ref(), path)?;
 
     let service = ctx.extension::<JobService>()?;
     let mut stream = service.runner().execute(ctx, plan).await?;
@@ -454,18 +572,17 @@ async fn write_reliable_checkpoint(
         batches.push(batch?);
     }
     let bytes = write_record_batches(&batches, schema.as_ref())?;
-    let file_path = checkpoint_url.prefix().clone().join("part-00000.arrow");
-    store
-        .put(&file_path, bytes.into())
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let file_path = checkpoint_path.child("part-00000.arrow");
+    let object_meta = checkpoint_path.put_bytes(&file_path, bytes).await?;
 
-    Ok(())
+    Ok((checkpoint_path.object_store_url().clone(), object_meta))
 }
 
 #[cfg(test)]
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    use datafusion_expr::LogicalPlanBuilder;
 
     use super::*;
 
@@ -480,7 +597,11 @@ mod tests {
             Some(CachedRelationCleanup::ObjectStorePath(actual)) => {
                 assert_eq!(actual, path);
             }
-            other => panic!("unexpected cleanup value: {other:?}"),
+            other => {
+                return Err(internal_datafusion_err!(
+                    "unexpected cleanup value: {other:?}"
+                ));
+            }
         }
         Ok(())
     }

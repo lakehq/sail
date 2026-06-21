@@ -8,6 +8,7 @@ from pyspark.sql import Row
 from pyspark.sql.functions import col, lit, row_number
 from pyspark.sql.window import Window
 
+from pysail.testing.spark.steps.plan import normalize_plan_text
 from pysail.testing.spark.utils.common import is_jvm_spark
 
 _CHECKPOINT_SOURCE_MAX_ID = 2
@@ -128,6 +129,18 @@ def test_dataframe_local_checkpoint_freezes_nondeterministic_values(spark, eager
     checkpointed = df.localCheckpoint(eager=eager)
 
     assert _uuid_values(checkpointed) == _uuid_values(checkpointed)
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific physical plan names")
+def test_dataframe_local_checkpoint_explain_truncates_plan(spark):
+    df = spark.range(0, 3).withColumn("value", lit(1)).filter("id >= 0")
+    original = normalize_plan_text(df._explain_string())  # noqa: SLF001
+    checkpointed = df.localCheckpoint()
+    checkpointed_plan = normalize_plan_text(checkpointed._explain_string())  # noqa: SLF001
+
+    assert "RangeExec" in original
+    assert "RangeExec" not in checkpointed_plan
+    assert "DataSourceExec" in checkpointed_plan
 
 
 @pytest.mark.skipif(is_jvm_spark(), reason="JVM Spark Connect requires checkpoint dir at session startup")
