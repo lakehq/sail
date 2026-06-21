@@ -3,7 +3,7 @@ mod monitor;
 
 use std::collections::HashMap;
 
-use datafusion_proto::physical_plan::{PhysicalExtensionCodec, PhysicalProtoConverterExtension};
+use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use sail_common_datafusion::error::CommonErrorCause;
 use tokio::sync::oneshot;
 
