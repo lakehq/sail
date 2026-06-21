@@ -1,5 +1,3 @@
-import os
-
 import pandas as pd
 import pyspark.sql.functions as F  # noqa: N812
 import pytest
@@ -7,29 +5,15 @@ from pandas.testing import assert_frame_equal
 from pyspark.sql.types import Row
 from pyspark.sql.window import Window
 
-from pysail.spark import SparkConnectServer
+from pysail.testing.spark.session import spark_connect_server
 from pysail.testing.spark.utils.common import is_jvm_spark
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def remote():
     """Override the global remote fixture to use local-cluster mode for this module."""
-    original_mode = os.environ.get("SAIL_MODE")
-    os.environ["SAIL_MODE"] = "local-cluster"
-
-    try:
-        server = SparkConnectServer("127.0.0.1", 0)
-        server.start(background=True)
-        address = server.listening_address
-        _, port = address
-        yield f"sc://localhost:{port}"
-        server.stop()
-    finally:
-        # Restore original environment
-        if original_mode is None:
-            os.environ.pop("SAIL_MODE", None)
-        else:
-            os.environ["SAIL_MODE"] = original_mode
+    with spark_connect_server(envs={"SAIL_MODE": "local-cluster"}) as server:
+        yield server.remote
 
 
 @pytest.fixture(scope="module")

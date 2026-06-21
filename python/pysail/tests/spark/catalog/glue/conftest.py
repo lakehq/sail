@@ -9,11 +9,7 @@ import pytest
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.waiting_utils import wait_for_logs
 
-from pysail.tests.spark.catalog.conftest import (
-    create_spark_session,
-    start_sail_server,
-    stop_sail_server,
-)
+from pysail.testing.spark.session import spark_connect_server
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -41,21 +37,24 @@ def moto_endpoint(moto_container: DockerContainer) -> str:
 
 
 @pytest.fixture(scope="module")
-def glue_spark(moto_endpoint: str) -> Generator[SparkSession, None, None]:
-    """Start Sail server with Glue catalog and create a Spark session."""
+def remote(moto_endpoint: str) -> Generator[str, None, None]:
+    """Start Sail server with Glue catalog."""
     catalog_config = f'[{{name="sail", type="glue", region="us-east-1", endpoint_url="{moto_endpoint}"}}]'
-    server, remote, saved_env = start_sail_server(
-        catalog_list=catalog_config,
-        extra_env={
+    with spark_connect_server(
+        envs={
+            "SAIL_CATALOG__LIST": catalog_config,
+            "SAIL_EXECUTION__DEFAULT_PARALLELISM": "4",
             "AWS_ACCESS_KEY_ID": "testing",
             "AWS_SECRET_ACCESS_KEY": "testing",
         },
-    )
-    spark = create_spark_session(remote, "glue_catalog_test")
+    ) as server:
+        yield server.remote
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _glue_test_database(spark: SparkSession) -> Generator[None, None, None]:
+    """Create the default database used by Glue catalog tests."""
     spark.sql("CREATE DATABASE IF NOT EXISTS test_db")
-    yield spark
+    yield
     with contextlib.suppress(Exception):
         spark.sql("DROP DATABASE IF EXISTS test_db CASCADE")
-    with contextlib.suppress(Exception):
-        spark.stop()
-    stop_sail_server(server, saved_env)

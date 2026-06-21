@@ -39,7 +39,11 @@ def pytest_configure(config):
 
 
 def configure_sail_environment():
-    """Configure environment variables for PySail tests."""
+    """Configure environment variables for PySail tests.
+
+    The runtime configuration options cannot be changed, so we must ensure that
+    the configuration is in place before the first server is created.
+    """
 
     module = "pysail._native"
 

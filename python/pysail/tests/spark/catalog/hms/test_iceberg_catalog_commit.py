@@ -69,90 +69,90 @@ def _assert_uuid_metadata_location(location: str, expected_version: int | None =
 
 
 def test_sail_insert_advances_hms_iceberg_metadata_location(
-    hms_s3_spark: SparkSession,
-    reference_spark_s3: SparkSession,
+    spark: SparkSession,
+    jvm_spark: SparkSession,
     hms_s3_database: str,
 ) -> None:
     table = "iceberg_commit"
     table_fqn = f"{hms_s3_database}.{table}"
 
-    hms_s3_spark.sql(
+    spark.sql(
         f"""
         CREATE TABLE {table_fqn}
         USING ICEBERG
         AS SELECT 1 AS id, 'a' AS name
         """
     )
-    first_location = _metadata_location(reference_spark_s3, hms_s3_database, table)
+    first_location = _metadata_location(jvm_spark, hms_s3_database, table)
     _assert_uuid_metadata_location(first_location, 0)
 
-    hms_s3_spark.sql(f"INSERT INTO {table_fqn} VALUES (2, 'b'), (3, 'c')")
-    second_location = _metadata_location(reference_spark_s3, hms_s3_database, table)
+    spark.sql(f"INSERT INTO {table_fqn} VALUES (2, 'b'), (3, 'c')")
+    second_location = _metadata_location(jvm_spark, hms_s3_database, table)
     assert second_location != first_location
     _assert_uuid_metadata_location(second_location, 1)
 
-    rows = hms_s3_spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
+    rows = spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
     assert [(row.id, row.name) for row in rows] == [(1, "a"), (2, "b"), (3, "c")]
 
 
 def test_sail_reads_and_appends_hms_iceberg_table_with_jvm_style_marker(
-    hms_s3_spark: SparkSession,
-    reference_spark_s3: SparkSession,
+    spark: SparkSession,
+    jvm_spark: SparkSession,
     hms_s3_database: str,
 ) -> None:
     table = "iceberg_jvm_marker"
     table_fqn = f"{hms_s3_database}.{table}"
 
-    hms_s3_spark.sql(
+    spark.sql(
         f"""
         CREATE TABLE {table_fqn}
         USING ICEBERG
         AS SELECT 1 AS id, 'a' AS name
         """
     )
-    first_location = _metadata_location(reference_spark_s3, hms_s3_database, table)
+    first_location = _metadata_location(jvm_spark, hms_s3_database, table)
 
-    properties = _catalog_properties(reference_spark_s3, hms_s3_database, table)
+    properties = _catalog_properties(jvm_spark, hms_s3_database, table)
     properties.pop("spark.sql.sources.provider", None)
     properties.pop("table_type", None)
     properties["TABLE_TYPE"] = "ICEBERG"
-    _set_catalog_properties(reference_spark_s3, hms_s3_database, table, properties)
-    properties = _catalog_properties(reference_spark_s3, hms_s3_database, table)
+    _set_catalog_properties(jvm_spark, hms_s3_database, table, properties)
+    properties = _catalog_properties(jvm_spark, hms_s3_database, table)
     assert properties.get("TABLE_TYPE") == "ICEBERG"
     assert "spark.sql.sources.provider" not in properties
     assert "table_type" not in properties
 
-    rows = hms_s3_spark.sql(f"SELECT id, name FROM {table_fqn}").collect()
+    rows = spark.sql(f"SELECT id, name FROM {table_fqn}").collect()
     assert [(row.id, row.name) for row in rows] == [(1, "a")]
 
-    hms_s3_spark.sql(f"INSERT INTO {table_fqn} VALUES (2, 'b')")
-    second_location = _metadata_location(reference_spark_s3, hms_s3_database, table)
+    spark.sql(f"INSERT INTO {table_fqn} VALUES (2, 'b')")
+    second_location = _metadata_location(jvm_spark, hms_s3_database, table)
     assert second_location != first_location
     _assert_uuid_metadata_location(second_location)
 
-    rows = hms_s3_spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
+    rows = spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
     assert [(row.id, row.name) for row in rows] == [(1, "a"), (2, "b")]
 
 
 def test_hms_rejects_stale_iceberg_metadata_location_update(
-    hms_s3_spark: SparkSession,
-    reference_spark_s3: SparkSession,
+    spark: SparkSession,
+    jvm_spark: SparkSession,
     hms_s3_database: str,
 ) -> None:
     table = "iceberg_stale_commit"
     table_fqn = f"{hms_s3_database}.{table}"
 
-    hms_s3_spark.sql(
+    spark.sql(
         f"""
         CREATE TABLE {table_fqn}
         USING ICEBERG
         AS SELECT 1 AS id, 'a' AS name
         """
     )
-    current_location = _metadata_location(reference_spark_s3, hms_s3_database, table)
+    current_location = _metadata_location(jvm_spark, hms_s3_database, table)
 
     with pytest.raises(Exception, match="catalog-managed Iceberg tables"):
-        hms_s3_spark.sql(
+        spark.sql(
             f"""
             ALTER TABLE {table_fqn}
             SET TBLPROPERTIES (
@@ -162,18 +162,18 @@ def test_hms_rejects_stale_iceberg_metadata_location_update(
             """
         )
 
-    assert _metadata_location(reference_spark_s3, hms_s3_database, table) == current_location
+    assert _metadata_location(jvm_spark, hms_s3_database, table) == current_location
 
 
 def test_hms_plain_iceberg_create_records_metadata_location(
-    hms_s3_spark: SparkSession,
-    reference_spark_s3: SparkSession,
+    spark: SparkSession,
+    jvm_spark: SparkSession,
     hms_s3_database: str,
 ) -> None:
     table = "iceberg_plain_create"
     table_fqn = f"{hms_s3_database}.{table}"
 
-    hms_s3_spark.sql(
+    spark.sql(
         f"""
         CREATE TABLE {table_fqn} (
           id INT,
@@ -182,18 +182,18 @@ def test_hms_plain_iceberg_create_records_metadata_location(
         USING ICEBERG
         """
     )
-    first_location = _metadata_location(reference_spark_s3, hms_s3_database, table)
+    first_location = _metadata_location(jvm_spark, hms_s3_database, table)
     _assert_uuid_metadata_location(first_location, 0)
 
-    rows = hms_s3_spark.sql(f"SELECT id, name FROM {table_fqn}").collect()
+    rows = spark.sql(f"SELECT id, name FROM {table_fqn}").collect()
     assert rows == []
-    rows = reference_spark_s3.sql(f"SELECT id, name FROM {table_fqn}").collect()
+    rows = jvm_spark.sql(f"SELECT id, name FROM {table_fqn}").collect()
     assert rows == []
 
-    hms_s3_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a')")
-    second_location = _metadata_location(reference_spark_s3, hms_s3_database, table)
+    spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a')")
+    second_location = _metadata_location(jvm_spark, hms_s3_database, table)
     assert second_location != first_location
     _assert_uuid_metadata_location(second_location, 1)
 
-    rows = reference_spark_s3.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
+    rows = jvm_spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
     assert [(row.id, row.name) for row in rows] == [(1, "a")]
