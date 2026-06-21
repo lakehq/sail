@@ -273,8 +273,8 @@ use crate::plan::gen::extended_stream_udf::StreamUdfKind;
 use crate::plan::gen::extended_window_udf::UdwfKind;
 use crate::plan::gen::{
     CastColumnExprNode, ExtendedAggregateUdf, ExtendedPhysicalExprNode, ExtendedPhysicalPlanNode,
-    ExtendedScalarUdf, ExtendedStreamUdf, ExtendedWindowUdf, HigherOrderUdfExprNode,
-    LambdaExprNode, LambdaVariableExprNode,
+    ExtendedScalarUdf, ExtendedStreamUdf, ExtendedWindowUdf, LambdaExprNode,
+    LambdaVariableExprNode,
 };
 use crate::plan::{gen, StageInputExec};
 use crate::proto::decode::{
@@ -282,8 +282,8 @@ use crate::proto::decode::{
     try_decode_physical_plan, try_decode_schema,
 };
 use crate::proto::encode::{
-    try_encode_field_ref, try_encode_message, try_encode_physical_expr,
-    try_encode_physical_plan, try_encode_schema,
+    try_encode_field_ref, try_encode_message, try_encode_physical_expr, try_encode_physical_plan,
+    try_encode_schema,
 };
 use crate::proto::physical_proto_converter::RemotePhysicalProtoConverter;
 
@@ -3077,24 +3077,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     None,
                 )))
             }
-            // HigherOrderUdf and Lambda are handled in physical_proto_converter.rs, but we leave it here for defensive programming.
-            ExprKind::HigherOrderUdf(node) => {
-                let fun = try_decode_higher_order_udf(node.udf)?;
-                if node.input_schema.is_empty() {
-                    return plan_err!(
-                        "higher-order UDF decode requires input_schema in RemoteExecutionCodec"
-                    );
-                }
-                let input_schema = try_decode_schema(&node.input_schema)?;
-                // TODO: The planner's `ConfigOptions` are not serialized.
-                //  Revisit when adding a function whose behavior depends on `ConfigOptions`.
-                Ok(Arc::new(HigherOrderFunctionExpr::try_new_with_schema(
-                    fun,
-                    inputs.to_vec(),
-                    &input_schema,
-                    Arc::new(ConfigOptions::default()),
-                )?))
-            }
+            // Lambdas are handled in physical_proto_converter.rs, but we leave it here for defensive programming.
             ExprKind::Lambda(node) => {
                 if inputs.len() != 1 {
                     return plan_err!("LambdaExpr expects exactly one input, got {}", inputs.len());
@@ -3118,7 +3101,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_encode_expr(&self, node: &Arc<dyn PhysicalExpr>, buf: &mut Vec<u8>) -> Result<()> {
-        // Lambda is handled in physical_proto_converter.rs, but we leave it here for defensive programming.
+        // Lambdas are handled in physical_proto_converter.rs, but we leave it here for defensive programming.
         let expr_kind = if let Some(cast) = node.downcast_ref::<SchemaEvolutionCastColumnExpr>() {
             let node = self.try_encode_cast_column_expr(
                 cast.input_field().as_ref(),
@@ -3131,10 +3114,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             })
         } else if let Some(var) = node.downcast_ref::<LambdaVariable>() {
             let index = u32::try_from(var.index()).map_err(|_| {
-                plan_datafusion_err!(
-                    "LambdaVariable index {} does not fit in u32",
-                    var.index()
-                )
+                plan_datafusion_err!("LambdaVariable index {} does not fit in u32", var.index())
             })?;
             let field = try_encode_field_ref(var.field())?;
             ExprKind::LambdaVariable(LambdaVariableExprNode { index, field })

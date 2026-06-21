@@ -103,10 +103,7 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
         }
         if let Some(var) = expr.downcast_ref::<LambdaVariable>() {
             let index = u32::try_from(var.index()).map_err(|_| {
-                plan_datafusion_err!(
-                    "LambdaVariable index {} does not fit in u32",
-                    var.index()
-                )
+                plan_datafusion_err!("LambdaVariable index {} does not fit in u32", var.index())
             })?;
             return extension_expr_to_proto(
                 expr,
@@ -137,7 +134,6 @@ impl RemotePhysicalProtoConverter {
             expr,
             ExprKind::HigherOrderUdf(HigherOrderUdfExprNode {
                 udf: Some(try_encode_higher_order_udf(hof)?),
-                input_schema: vec![],
             }),
             inputs,
         )
@@ -275,5 +271,5 @@ fn extend_lambda_schema(base: &Schema, params: &[String], fields: &[FieldRef]) -
     for (name, field) in params.iter().zip(fields) {
         output.push(Arc::new(field.as_ref().clone().with_name(name)));
     }
-    Schema::new(output)
+    Schema::new_with_metadata(output, base.metadata().clone())
 }
