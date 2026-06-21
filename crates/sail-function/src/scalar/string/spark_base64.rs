@@ -4,8 +4,9 @@ use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig, STAN
 use base64::engine::DecodePaddingMode;
 use base64::{alphabet, Engine as _};
 use datafusion::arrow::array::{
-    Array, BinaryArray, BinaryBuilder, BinaryViewArray, FixedSizeBinaryArray, LargeBinaryArray,
-    LargeBinaryBuilder, LargeStringArray, StringArray, StringViewArray,
+    Array, ArrayRef, BinaryArray, BinaryBuilder, BinaryViewArray, FixedSizeBinaryArray,
+    GenericStringBuilder, LargeBinaryArray, LargeBinaryBuilder, LargeStringArray, OffsetSizeTrait,
+    StringArray, StringViewArray,
 };
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result, ScalarValue};
@@ -123,7 +124,7 @@ impl ScalarUDFImpl for SparkBase64 {
                                 "Spark `base64`: Failed to downcast Expr to BinaryArray"
                             )
                         })?;
-                    Ok(encode_spark_base64_array(
+                    Ok(encode_spark_base64_array::<i32>(
                         array.len(),
                         |i| array.is_null(i),
                         |i| array.value(i),
@@ -138,7 +139,7 @@ impl ScalarUDFImpl for SparkBase64 {
                                 "Spark `base64`: Failed to downcast Expr to BinaryViewArray"
                             )
                         })?;
-                    Ok(encode_spark_base64_array(
+                    Ok(encode_spark_base64_array::<i32>(
                         array.len(),
                         |i| array.is_null(i),
                         |i| array.value(i),
@@ -153,7 +154,7 @@ impl ScalarUDFImpl for SparkBase64 {
                                 "Spark `base64`: Failed to downcast Expr to FixedSizeBinaryArray"
                             )
                         })?;
-                    Ok(encode_spark_base64_array(
+                    Ok(encode_spark_base64_array::<i32>(
                         array.len(),
                         |i| array.is_null(i),
                         |i| array.value(i),
@@ -168,7 +169,7 @@ impl ScalarUDFImpl for SparkBase64 {
                                 "Spark `base64`: Failed to downcast Expr to LargeBinaryArray"
                             )
                         })?;
-                    Ok(encode_spark_base64_array(
+                    Ok(encode_spark_base64_array::<i64>(
                         array.len(),
                         |i| array.is_null(i),
                         |i| array.value(i),
@@ -183,7 +184,7 @@ impl ScalarUDFImpl for SparkBase64 {
                                 "Spark `base64`: Failed to downcast Expr to StringArray"
                             )
                         })?;
-                    Ok(encode_spark_base64_array(
+                    Ok(encode_spark_base64_array::<i32>(
                         array.len(),
                         |i| array.is_null(i),
                         |i| array.value(i).as_bytes(),
@@ -198,7 +199,7 @@ impl ScalarUDFImpl for SparkBase64 {
                                 "Spark `base64`: Failed to downcast Expr to LargeStringArray"
                             )
                         })?;
-                    Ok(encode_spark_base64_array(
+                    Ok(encode_spark_base64_array::<i64>(
                         array.len(),
                         |i| array.is_null(i),
                         |i| array.value(i).as_bytes(),
@@ -213,13 +214,13 @@ impl ScalarUDFImpl for SparkBase64 {
                                 "Spark `base64`: Failed to downcast Expr to StringViewArray"
                             )
                         })?;
-                    Ok(encode_spark_base64_array(
+                    Ok(encode_spark_base64_array::<i32>(
                         array.len(),
                         |i| array.is_null(i),
                         |i| array.value(i).as_bytes(),
                     ))
                 }
-                DataType::Null => Ok(encode_spark_base64_array(
+                DataType::Null => Ok(encode_spark_base64_array::<i32>(
                     array.len(),
                     |_| true,
                     |_| &[],
@@ -228,18 +229,7 @@ impl ScalarUDFImpl for SparkBase64 {
                     exec_err!("Spark `base64`: Expr array must be BINARY or STRING, got array of type {other}")
                 }
             }
-            .map(|results| match args[0].data_type() {
-                DataType::Utf8
-                | DataType::Utf8View
-                | DataType::Binary
-                | DataType::FixedSizeBinary(_)
-                | DataType::BinaryView => ColumnarValue::Array(Arc::new(StringArray::from(results))),
-                DataType::LargeUtf8 | DataType::LargeBinary => {
-                    ColumnarValue::Array(Arc::new(LargeStringArray::from(results)))
-                }
-                DataType::Null => ColumnarValue::Array(Arc::new(StringArray::from(results))),
-                _ => unreachable!(),
-            }),
+            .map(ColumnarValue::Array),
             other => exec_err!("Spark `base64`: Expr must be BINARY or STRING, got {other:?}"),
         }
     }
@@ -272,20 +262,27 @@ impl SparkUnbase64 {
     }
 }
 
-fn encode_spark_base64_array<'a>(
+fn encode_spark_base64_array<'a, O: OffsetSizeTrait>(
     len: usize,
     is_null: impl Fn(usize) -> bool,
     value: impl Fn(usize) -> &'a [u8],
-) -> Vec<Option<String>> {
-    let mut results = Vec::with_capacity(len);
+) -> ArrayRef {
+    // base64 expands 3 input bytes into 4 output chars; without per-row input
+    // sizes, pre-size the values buffer with a small average to cut regrows.
+    // Encode into one reused `String` buffer (no per-row allocation) and append
+    // straight into the builder instead of collecting a `Vec<Option<String>>`.
+    let mut builder = GenericStringBuilder::<O>::with_capacity(len, len * 16);
+    let mut buf = String::new();
     for i in 0..len {
         if is_null(i) {
-            results.push(None);
+            builder.append_null();
         } else {
-            results.push(Some(STANDARD.encode(value(i))));
+            buf.clear();
+            STANDARD.encode_string(value(i), &mut buf);
+            builder.append_value(&buf);
         }
     }
-    results
+    Arc::new(builder.finish())
 }
 
 fn decode_spark_base64(value: &str) -> Result<Vec<u8>> {

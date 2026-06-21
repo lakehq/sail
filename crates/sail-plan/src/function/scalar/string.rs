@@ -26,6 +26,7 @@ use sail_function::scalar::string::spark_regexp_extract_all::{
 };
 use sail_function::scalar::string::spark_sentences::SparkSentences;
 use sail_function::scalar::string::spark_split::SparkSplit;
+use sail_function::scalar::string::spark_substr_binary::SparkSubstrBinary;
 use sail_function::scalar::string::spark_to_binary::{SparkToBinary, SparkTryToBinary};
 use sail_function::scalar::string::spark_to_char::SparkToChar;
 use sail_function::scalar::string::spark_to_number::SparkToNumber;
@@ -48,6 +49,50 @@ fn regexp_substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(array_element(matches, lit(1i64)))
 }
 
+/// Extracts the integer value from a non-null integer literal expression.
+fn literal_as_i64(e: &expr::Expr) -> Option<i64> {
+    match e {
+        expr::Expr::Literal(ScalarValue::Int8(Some(n)), _) => Some(i64::from(*n)),
+        expr::Expr::Literal(ScalarValue::Int16(Some(n)), _) => Some(i64::from(*n)),
+        expr::Expr::Literal(ScalarValue::Int32(Some(n)), _) => Some(i64::from(*n)),
+        expr::Expr::Literal(ScalarValue::Int64(Some(n)), _) => Some(*n),
+        _ => None,
+    }
+}
+
+fn adjust_substr_position(
+    string_len: expr::Expr,
+    position: expr::Expr,
+    length_opt: Option<expr::Expr>,
+) -> PlanResult<(expr::Expr, Option<expr::Expr>)> {
+    match &position {
+        expr::Expr::Literal(ScalarValue::Int64(Some(n)), _) if *n > 0 => Ok((position, length_opt)),
+        expr::Expr::Literal(ScalarValue::Int32(Some(n)), _) if *n > 0 => Ok((position, length_opt)),
+        expr::Expr::Literal(ScalarValue::Int64(Some(0)), _)
+        | expr::Expr::Literal(ScalarValue::Int32(Some(0)), _) => Ok((lit(1i64), length_opt)),
+        _ => {
+            let effective_start = when(position.clone().gt(lit(0i64)), position.clone())
+                .when(position.clone().eq(lit(0i64)), lit(1i64))
+                .otherwise(cast(string_len, DataType::Int64) + position.clone() + lit(1i64))?;
+            let clamped = expr_fn::greatest(vec![effective_start.clone(), lit(1i64)]);
+            let length_opt = match length_opt {
+                Some(length) => Some(
+                    when(
+                        effective_start.clone().lt(lit(1i64)),
+                        expr_fn::greatest(vec![
+                            length.clone() + effective_start - lit(1i64),
+                            lit(0i64),
+                        ]),
+                    )
+                    .otherwise(length)?,
+                ),
+                None => None,
+            };
+            Ok((clamped, length_opt))
+        }
+    }
+}
+
 fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let ScalarFunctionInput {
         mut arguments,
@@ -57,36 +102,111 @@ fn substr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let (string, position) = arguments
         .two()
         .map_err(|_| PlanError::invalid("substr requires 2 or 3 arguments"))?;
+
+    let string_type = string.get_type(function_context.schema)?;
+    if matches!(string_type, DataType::Binary | DataType::LargeBinary) {
+        // Cast position to Int64: coerces FLOAT/DOUBLE/STRING and all integer subtypes.
+        let pos_i64 = cast(position, DataType::Int64);
+        // SparkSubstrBinary handles all Spark position semantics internally (1-based, pos=0,
+        // negative pos from end, overshoot adjustment, negative length, NULL propagation).
+        let binary = cast(string, DataType::Binary);
+        let length_opt = length_opt.map(|l| cast(l, DataType::Int64));
+        let udf = ScalarUDF::from(SparkSubstrBinary::new());
+        let args = match length_opt {
+            Some(length) => vec![binary, pos_i64, length],
+            None => vec![binary, pos_i64],
+        };
+        return Ok(udf.call(args));
+    }
+
     let string = cast_to_logical_string_or_try(string, function_context.schema, false)?;
-    // Spark uses 1-based indexing, but treats pos=0 the same as pos=1 (start of string).
-    // For negative positions, Spark counts from the end of the string.
-    // DataFusion follows the SQL standard where pos=0 reduces the effective length by 1,
-    // and pos<0 reduces even more. We convert Spark's semantics to DataFusion's:
-    // - pos > 0: use as-is (1-based from start)
-    // - pos = 0: use 1 (same behavior as pos=1 in Spark)
-    // - pos < 0: use greatest(char_length(str) + pos + 1, 1) (absolute position from end)
-    // For literal positive positions (the common case), we skip the CASE WHEN to keep plans clean.
-    let position = match &position {
-        expr::Expr::Literal(ScalarValue::Int64(Some(n)), _) if *n > 0 => position,
-        expr::Expr::Literal(ScalarValue::Int32(Some(n)), _) if *n > 0 => position,
-        expr::Expr::Literal(ScalarValue::Int64(Some(0)), _)
-        | expr::Expr::Literal(ScalarValue::Int32(Some(0)), _) => lit(1i64),
-        _ => when(position.clone().gt(lit(0i64)), position.clone())
-            .when(position.clone().eq(lit(0i64)), lit(1i64))
-            .otherwise(expr_fn::greatest(vec![
-                cast(expr_fn::char_length(string.clone()), DataType::Int64)
-                    + position.clone()
-                    + lit(1i64),
-                lit(1i64),
-            ]))?,
-    };
+
+    // Fast path: constant non-null positive position (and non-negative length if present).
+    // adjust_substr_position is a no-op for pos >= 1, negative length can't happen with a
+    // literal >= 0, and a non-null literal never needs a NULL guard. Avoids generating a
+    // CASE WHEN tree for the common case (e.g. substr(col, 1, 30) in TPC-DS queries).
+    if let Some(pos_val) = literal_as_i64(&position) {
+        if pos_val >= 1 {
+            match length_opt {
+                None => return Ok(cast(expr_fn::substr(string, position), DataType::Utf8)),
+                Some(ref len_expr) if literal_as_i64(len_expr).is_some_and(|l| l >= 0) => {
+                    return Ok(cast(
+                        expr_fn::substring(string, position, len_expr.clone()),
+                        DataType::Utf8,
+                    ));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // Save original position before casting, for the NULL-propagation guard below.
+    let original_position = position.clone();
+
+    // Cast position to Int64: coerces FLOAT/DOUBLE/STRING (truncating toward zero) and
+    // narrows all integer subtypes. BIGINT overflow (value > INT32_MAX) is a separate
+    // known limitation; DataFusion does not raise CAST_OVERFLOW on the Int64 cast path.
+    let position = cast(position, DataType::Int64);
+
+    // Clamp negative length to 0 — Spark returns empty string, DataFusion raises an error.
+    // Cast to Int64 first to ensure consistent types in the CASE WHEN expression.
+    let length_opt = length_opt.map(|l| {
+        let l_i64 = cast(l, DataType::Int64);
+        when(l_i64.clone().lt(lit(0i64)), lit(0i64))
+            .otherwise(l_i64)
+            .unwrap_or_else(|_| lit(0i64))
+    });
+
+    // Spark uses 1-based indexing, treating pos=0 as pos=1 and negative pos as
+    // counting from the end. For the 3-arg form, when pos overshoots the start
+    // (effective_start < 1), the length must be reduced by the overshoot so the
+    // endpoint stays correct — otherwise we'd return too many characters.
+    let string_len = expr_fn::char_length(string.clone());
+    let (position, length_opt) = adjust_substr_position(string_len, position, length_opt)?;
     let substr_res = match length_opt {
         Some(length) => expr_fn::substring(string, position, length),
         None => expr_fn::substr(string, position),
     };
+
+    // NULL position must propagate to NULL result. greatest(NULL, 1) returns 1 in DataFusion
+    // (matches Spark's greatest semantics), so we must guard explicitly.
+    let result =
+        when(original_position.is_null(), lit(ScalarValue::Utf8(None))).otherwise(substr_res)?;
+
     // TODO: Spark client throws "UNEXPECTED EXCEPTION: ArrowInvalid('Unrecognized type: 24')"
     //  when the return type is Utf8View.
-    Ok(cast(substr_res, DataType::Utf8))
+    Ok(cast(result, DataType::Utf8))
+}
+
+/// Spark `left(string, n)`: returns the leftmost n characters.
+/// For negative n, Spark returns empty string. DataFusion removes from the end.
+fn spark_left(string: expr::Expr, length: expr::Expr) -> expr::Expr {
+    let len = cast(length, DataType::Int64);
+    when(len.clone().lt(lit(0i64)), lit(""))
+        .otherwise(expr_fn::left(string, len))
+        .unwrap_or_else(|_| lit(""))
+}
+
+/// Spark `right(string, n)`: returns the rightmost n characters.
+/// For negative n, Spark returns empty string. DataFusion removes from the start.
+fn spark_right(string: expr::Expr, length: expr::Expr) -> expr::Expr {
+    let len = cast(length, DataType::Int64);
+    when(len.clone().lt(lit(0i64)), lit(""))
+        .otherwise(expr_fn::right(string, len))
+        .unwrap_or_else(|_| lit(""))
+}
+
+/// Spark `char(n)` / `chr(n)`: returns the character for the given codepoint.
+/// For invalid codepoints (negative or > max unicode), Spark returns empty string.
+/// DataFusion throws an error for invalid codepoints.
+fn spark_chr(codepoint: expr::Expr) -> expr::Expr {
+    let cp = cast(codepoint, DataType::Int64);
+    when(
+        cp.clone().lt(lit(1i64)).or(cp.clone().gt(lit(0x10FFFFi64))),
+        lit(""),
+    )
+    .otherwise(expr_fn::chr(cp))
+    .unwrap_or_else(|_| lit(""))
 }
 
 fn overlay(mut args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
@@ -296,10 +416,10 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("base64", F::udf(SparkBase64::new())),
         ("bit_length", F::custom(bit_length)),
         ("btrim", F::var_arg(expr_fn::btrim)),
-        ("char", F::unary(expr_fn::chr)),
+        ("char", F::unary(spark_chr)),
         ("char_length", F::unary(expr_fn::char_length)),
         ("character_length", F::unary(expr_fn::char_length)),
-        ("chr", F::unary(expr_fn::chr)),
+        ("chr", F::unary(spark_chr)),
         ("collate", F::unknown("collate")),
         ("collation", F::unknown("collation")),
         ("concat_ws", F::udf(SparkConcatWs::new())),
@@ -315,7 +435,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("instr", F::binary(expr_fn::instr)),
         ("is_valid_utf8", F::custom(is_valid_utf8)),
         ("lcase", F::custom(lower)),
-        ("left", F::binary(expr_fn::left)),
+        ("left", F::binary(spark_left)),
         ("len", F::unary(expr_fn::length)),
         ("length", F::unary(expr_fn::length)),
         ("levenshtein", F::udf(Levenshtein::new())),
@@ -340,7 +460,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("regexp_substr", F::custom(regexp_substr)),
         ("repeat", F::binary(expr_fn::repeat)),
         ("replace", F::var_arg(replace)),
-        ("right", F::binary(expr_fn::right)),
+        ("right", F::binary(spark_right)),
         ("rpad", F::var_arg(expr_fn::rpad)),
         ("rtrim", F::var_arg(rev_args(expr_fn::rtrim))),
         ("sentences", F::udf(SparkSentences::new())),
