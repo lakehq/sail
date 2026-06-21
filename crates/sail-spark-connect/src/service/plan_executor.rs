@@ -11,8 +11,7 @@ use futures::stream;
 use log::{debug, warn};
 use sail_common::spec;
 use sail_common_datafusion::cached_relation::{
-    cleanup_cached_relation, cleanup_checkpoint_path as cleanup_cached_checkpoint_path,
-    CachedRelation, CachedRelationRegistry,
+    cleanup_cached_relation, cleanup_checkpoint_path, CachedRelation, CachedRelationRegistry,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
@@ -718,11 +717,6 @@ async fn cleanup_checkpoint_after_error(
             "checkpoint failed: {error}; additionally failed to clean checkpoint path {path}: {cleanup_error}"
         )),
     }
-}
-
-async fn cleanup_checkpoint_path(ctx: &SessionContext, path: &str) -> SparkResult<()> {
-    cleanup_cached_checkpoint_path(ctx, path).await?;
-    Ok(())
 }
 
 pub(crate) async fn handle_interrupt_all(ctx: &SessionContext) -> SparkResult<Vec<String>> {

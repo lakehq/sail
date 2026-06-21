@@ -73,7 +73,7 @@ def test_dataframe_checkpoint(spark, tmp_path):
     spark.conf.set("spark.checkpoint.dir", str(checkpoint_path))
     try:
         checkpointed = df.checkpoint()
-        assert list(checkpoint_path.rglob("*.arrow"))
+        assert any(checkpoint_path.rglob("*.arrow"))
         shutil.rmtree(source_path)
 
         assert_frame_equal(
@@ -175,9 +175,9 @@ def test_dataframe_checkpoint_lazy(spark, tmp_path):
     spark.conf.set("spark.checkpoint.dir", str(checkpoint_path))
     try:
         checkpointed = df.checkpoint(eager=False)
-        assert not list(checkpoint_path.rglob("*.arrow"))
+        assert not any(checkpoint_path.rglob("*.arrow"))
         assert checkpointed.count() == 2  # noqa: PLR2004
-        assert list(checkpoint_path.rglob("*.arrow"))
+        assert any(checkpoint_path.rglob("*.arrow"))
         shutil.rmtree(source_path)
 
         assert_frame_equal(
@@ -202,10 +202,10 @@ def test_dataframe_checkpoint_lazy_explain_does_not_materialize(spark, tmp_path)
         checkpointed_plan = normalize_plan_text(checkpointed._explain_string())  # noqa: SLF001
 
         assert "PendingCachedRelationExec" in checkpointed_plan
-        assert not list(checkpoint_path.rglob("*.arrow"))
+        assert not any(checkpoint_path.rglob("*.arrow"))
 
         assert checkpointed.count() == 3  # noqa: PLR2004
-        assert list(checkpoint_path.rglob("*.arrow"))
+        assert any(checkpoint_path.rglob("*.arrow"))
 
         materialized_plan = normalize_plan_text(checkpointed._explain_string())  # noqa: SLF001
         assert "PendingCachedRelationExec" not in materialized_plan
@@ -221,13 +221,13 @@ def test_dataframe_checkpoint_cleanup_on_session_stop(spark_session_factory, tmp
     spark.conf.set("spark.checkpoint.dir", str(checkpoint_path))
 
     _checkpointed = spark.range(0, 5).checkpoint()
-    assert list(checkpoint_path.rglob("*.arrow"))
+    assert any(checkpoint_path.rglob("*.arrow"))
 
     spark.stop()
     deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and list(checkpoint_path.rglob("*.arrow")):
+    while time.monotonic() < deadline and any(checkpoint_path.rglob("*.arrow")):
         time.sleep(0.1)
-    assert not list(checkpoint_path.rglob("*.arrow"))
+    assert not any(checkpoint_path.rglob("*.arrow"))
 
 
 @pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific checkpoint partition preservation")

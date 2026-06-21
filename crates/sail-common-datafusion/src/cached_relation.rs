@@ -35,7 +35,7 @@ use crate::extension::{SessionExtension, SessionExtensionAccessor};
 use crate::session::checkpoint::{CheckpointStoreService, ReliableCheckpoint};
 
 #[derive(Debug, Clone)]
-pub enum CachedRelationCleanup {
+enum CachedRelationCleanup {
     ObjectStorePath(String),
 }
 
@@ -109,7 +109,6 @@ pub struct CachedRelation {
 
 #[derive(Debug, Clone)]
 enum CachedRelationData {
-    LogicalPlan(Arc<LogicalPlan>),
     Materialized(CachedRelationMaterialized),
     Pending(CachedRelationPending),
 }
@@ -129,7 +128,6 @@ struct CachedRelationLocalMaterialized {
     memory_partitions: Option<Arc<Vec<Vec<RecordBatch>>>>,
     serialized_memory_partitions: Option<Arc<Vec<Vec<u8>>>>,
     disk_partitions: Option<Arc<Vec<CachedRelationDiskPartition>>>,
-    storage_level: Option<spec::StorageLevel>,
 }
 
 #[derive(Debug, Clone)]
@@ -150,7 +148,7 @@ enum CachedRelationPendingTarget {
 }
 
 #[derive(Debug, Clone)]
-pub struct PendingCachedRelationExec {
+struct PendingCachedRelationExec {
     relation_id: String,
     relation: CachedRelation,
     properties: Arc<PlanProperties>,
@@ -171,10 +169,6 @@ impl PendingCachedRelationExec {
             relation,
             properties,
         }
-    }
-
-    pub fn relation_id(&self) -> &str {
-        &self.relation_id
     }
 
     async fn materialize(&self, ctx: &SessionContext) -> Result<Arc<dyn ExecutionPlan>> {
@@ -229,15 +223,6 @@ impl ExecutionPlan for PendingCachedRelationExec {
 }
 
 impl CachedRelation {
-    pub fn new(plan: Arc<LogicalPlan>, cleanup: Option<CachedRelationCleanup>) -> Self {
-        Self {
-            data: Arc::new(tokio::sync::Mutex::new(CachedRelationData::LogicalPlan(
-                plan,
-            ))),
-            cleanup,
-        }
-    }
-
     pub async fn new_local_checkpoint(
         ctx: &SessionContext,
         plan: Arc<dyn ExecutionPlan>,
@@ -293,7 +278,6 @@ impl CachedRelation {
     pub async fn to_logical_plan(&self, relation_id: &str) -> Result<LogicalPlan> {
         let data = self.data.lock().await;
         match &*data {
-            CachedRelationData::LogicalPlan(plan) => Ok(plan.as_ref().clone()),
             CachedRelationData::Materialized(materialized) => {
                 materialized.to_logical_plan(relation_id)
             }
@@ -305,9 +289,6 @@ impl CachedRelation {
         let data = self.data.lock().await;
         match &*data {
             CachedRelationData::Materialized(materialized) => materialized.to_physical_plan().await,
-            CachedRelationData::LogicalPlan(_) => Err(internal_datafusion_err!(
-                "cached relation is not materialized as a physical plan"
-            )),
             CachedRelationData::Pending(pending) => Ok(Arc::new(PendingCachedRelationExec::new(
                 relation_id.to_string(),
                 self.clone(),
@@ -323,16 +304,13 @@ impl CachedRelation {
         }
         match &*data {
             CachedRelationData::Materialized(materialized) => materialized.to_physical_plan().await,
-            CachedRelationData::LogicalPlan(_) => Err(internal_datafusion_err!(
-                "cached relation is not materialized as a physical plan"
-            )),
             CachedRelationData::Pending(_) => Err(internal_datafusion_err!(
                 "cached relation materialization did not complete"
             )),
         }
     }
 
-    pub fn into_cleanup(self) -> Option<CachedRelationCleanup> {
+    fn into_cleanup(self) -> Option<CachedRelationCleanup> {
         self.cleanup
     }
 }
@@ -393,13 +371,13 @@ impl SessionExtension for CachedRelationRegistry {
 
 impl CachedRelationPending {
     async fn materialize(&self, ctx: &SessionContext) -> Result<CachedRelationData> {
-        let physical_plan = materialize_cached_relations(ctx, Arc::clone(&self.plan)).await?;
         match &self.target {
             CachedRelationPendingTarget::Local { storage_level } => {
-                materialize_local_checkpoint(ctx, physical_plan, storage_level.clone()).await
+                materialize_local_checkpoint(ctx, Arc::clone(&self.plan), storage_level.clone())
+                    .await
             }
             CachedRelationPendingTarget::Reliable { path } => {
-                materialize_reliable_checkpoint(ctx, physical_plan, path).await
+                materialize_reliable_checkpoint(ctx, Arc::clone(&self.plan), path).await
             }
         }
     }
@@ -511,12 +489,10 @@ impl CachedRelationLocalMaterialized {
             memory_partitions,
             serialized_memory_partitions,
             disk_partitions,
-            storage_level: Some(storage_level),
         })
     }
 
     async fn to_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
-        let _ = &self.storage_level;
         let partitions = self.load_partitions().await?;
         let plan: Arc<dyn ExecutionPlan> =
             MemorySourceConfig::try_new_exec(&partitions, Arc::clone(&self.schema), None)?;
