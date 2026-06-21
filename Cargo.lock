@@ -8215,6 +8215,7 @@ dependencies = [
  "quote",
  "regex",
  "sail-common",
+ "sail-common-datafusion",
  "serde",
  "serde_yaml",
  "syn 2.0.118",

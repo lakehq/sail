@@ -29,6 +29,7 @@ use fastrace::Span;
 use fastrace_futures::StreamExt;
 use futures::Stream;
 use pin_project_lite::pin_project;
+use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::common::{KeyValue, SpanAttribute};
 use crate::execution::metrics::MetricEmitter;
@@ -148,9 +149,7 @@ impl ExecutionPlan for TracingExec {
         self: Arc<Self>,
         children: Vec<Arc<dyn ExecutionPlan>>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let [child] = children.try_into().map_err(|_| {
-            datafusion::common::internal_datafusion_err!("TracingExec requires exactly one child")
-        })?;
+        let child = children.one()?;
         Ok(Arc::new(TracingExec::new(child, self.options.clone())))
     }
 
