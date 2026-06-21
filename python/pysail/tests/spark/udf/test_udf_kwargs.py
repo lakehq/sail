@@ -1,12 +1,13 @@
 import pandas as pd
-import pyspark
 import pytest
 from pandas.testing import assert_frame_equal
 from pyspark.sql.functions import array, col, lit, udf, udtf
 from pyspark.sql.types import ArrayType, DataType, IntegerType, LongType, Row, StringType, StructType
 
+from pysail.testing.spark.utils.common import pyspark_version
+
 pytestmark = pytest.mark.skipif(
-    int(pyspark.__version__.split(".")[0]) < 4,  # noqa: PLR2004
+    pyspark_version() < (4,),
     reason="UDF/UDTF keyword arguments require PySpark 4+",
 )
 
@@ -120,7 +121,7 @@ def test_udtf_row_output_invalid_scalar_raises_pickle_exception():
 
 
 @pytest.mark.skipif(
-    tuple(int(x) for x in pyspark.__version__.split(".")[:2]) < (4, 1),
+    pyspark_version() < (4, 1),
     reason="Arrow UDTF tests require PySpark 4.1+",
 )
 def test_arrow_udtf_type_conversion_error_class_is_preserved():
@@ -136,7 +137,7 @@ def test_arrow_udtf_type_conversion_error_class_is_preserved():
 
 
 @pytest.mark.skipif(
-    tuple(int(x) for x in pyspark.__version__.split(".")[:2]) < (4, 1),
+    pyspark_version() < (4, 1),
     reason="UDTF analyze tests require PySpark 4.1+",
 )
 def test_udtf_analyze_preserves_array_type():
@@ -160,7 +161,7 @@ def test_udtf_analyze_preserves_array_type():
 
 
 @pytest.mark.skipif(
-    tuple(int(x) for x in pyspark.__version__.split(".")[:2]) < (4, 1),
+    pyspark_version() < (4, 1),
     reason="UDTF table arguments require PySpark 4.1+",
 )
 def test_udtf_analyze_marks_table_argument(spark):
