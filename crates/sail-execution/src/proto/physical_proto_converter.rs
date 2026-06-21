@@ -216,50 +216,6 @@ impl RemotePhysicalProtoConverter {
     }
 }
 
-pub(crate) fn encode_physical_plan_for_remote(
-    plan: Arc<dyn ExecutionPlan>,
-    codec: &dyn PhysicalExtensionCodec,
-) -> Result<Vec<u8>> {
-    let converter = RemotePhysicalProtoConverter;
-    Ok(
-        PhysicalPlanNode::try_from_physical_plan_with_converter(plan, codec, &converter)?
-            .encode_to_vec(),
-    )
-}
-
-pub(crate) fn decode_physical_plan_for_remote(
-    buf: &[u8],
-    ctx: &TaskContext,
-    codec: &dyn PhysicalExtensionCodec,
-) -> Result<Arc<dyn ExecutionPlan>> {
-    let plan = PhysicalPlanNode::decode(buf)
-        .map_err(|e| plan_datafusion_err!("failed to decode plan: {e}"))?;
-    let converter = RemotePhysicalProtoConverter;
-    plan.try_into_physical_plan_with_converter(ctx, codec, &converter)
-}
-
-pub(crate) fn encode_physical_expr_for_remote(
-    expr: &Arc<dyn PhysicalExpr>,
-    codec: &dyn PhysicalExtensionCodec,
-) -> Result<Vec<u8>> {
-    let converter = RemotePhysicalProtoConverter;
-    Ok(converter
-        .physical_expr_to_proto(expr, codec)?
-        .encode_to_vec())
-}
-
-pub(crate) fn decode_physical_expr_for_remote(
-    buf: &[u8],
-    ctx: &TaskContext,
-    schema: &Schema,
-    codec: &dyn PhysicalExtensionCodec,
-) -> Result<Arc<dyn PhysicalExpr>> {
-    let proto = PhysicalExprNode::decode(buf)
-        .map_err(|e| plan_datafusion_err!("failed to decode expr: {e}"))?;
-    let converter = RemotePhysicalProtoConverter;
-    converter.proto_to_physical_expr(&proto, schema, &PhysicalPlanDecodeContext::new(ctx, codec))
-}
-
 fn extension_expr_to_proto(
     expr: &Arc<dyn PhysicalExpr>,
     expr_kind: ExprKind,

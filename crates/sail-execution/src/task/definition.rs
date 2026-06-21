@@ -1,19 +1,15 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::Schema;
-use datafusion::execution::TaskContext;
-use datafusion::physical_expr::Partitioning;
-use datafusion_proto::physical_plan::from_proto::parse_physical_expr_with_converter;
-use datafusion_proto::physical_plan::{PhysicalExtensionCodec, PhysicalPlanDecodeContext};
-use datafusion_proto::protobuf::PhysicalExprNode;
-use prost::Message;
-
-use crate::codec::physical_proto_converter::RemotePhysicalProtoConverter;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
+use crate::proto::decode::try_decode_physical_expr;
 use crate::stream::reader::TaskReadLocation;
 use crate::stream::writer::{LocalStreamStorage, TaskWriteLocation};
 use crate::task::gen;
+use datafusion::arrow::datatypes::Schema;
+use datafusion::execution::TaskContext;
+use datafusion::physical_expr::Partitioning;
+use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 
 #[derive(Debug, Clone)]
 pub struct TaskDefinition {
@@ -612,14 +608,8 @@ impl TaskOutput {
                 let keys = keys
                     .iter()
                     .map(|k| {
-                        let decode_ctx = PhysicalPlanDecodeContext::new(ctx, codec);
-                        parse_physical_expr_with_converter(
-                            &PhysicalExprNode::decode(k.as_ref())?,
-                            schema,
-                            &decode_ctx,
-                            &RemotePhysicalProtoConverter {},
-                        )
-                        .map_err(|e| e.into())
+                        try_decode_physical_expr(ctx, codec, k.as_ref(), schema)
+                            .map_err(|e| e.into())
                     })
                     .collect::<ExecutionResult<Vec<_>>>()?;
                 Ok(Partitioning::Hash(keys, *channels))

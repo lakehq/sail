@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::codec::codec::RemoteExecutionCodec;
-use crate::codec::physical_proto_converter::RemotePhysicalProtoConverter;
 use crate::driver::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskKey, TaskKeyDisplay};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec, StageInputExec};
+use crate::proto::codec::RemoteExecutionCodec;
+use crate::proto::decode::try_decode_physical_plan;
 use crate::stream_accessor::{StreamAccessor, StreamAccessorMessage};
 use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
 use crate::task_runner::monitor::TaskMonitor;
@@ -19,10 +19,7 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
-use datafusion_proto::physical_plan::AsExecutionPlan;
-use datafusion_proto::protobuf::PhysicalPlanNode;
 use log::debug;
-use prost::Message;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 use sail_python_udf::error::PyErrExtractor;
@@ -85,12 +82,8 @@ impl TaskRunner {
     where
         T::Message: TaskRunnerMessage + StreamAccessorMessage,
     {
-        let plan = PhysicalPlanNode::decode(definition.plan.as_ref())?;
-        let plan = plan.try_into_physical_plan_with_converter(
-            &context,
-            self.codec.as_ref(),
-            &RemotePhysicalProtoConverter {},
-        )?;
+        let plan =
+            try_decode_physical_plan(&context, self.codec.as_ref(), definition.plan.as_ref())?;
         let plan = self.rewrite_parquet_adapters(plan)?;
         let plan = self.rewrite_shuffle(
             ctx,

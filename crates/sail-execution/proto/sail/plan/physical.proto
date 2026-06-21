@@ -93,9 +93,7 @@ message LambdaVariableExprNode {
 
 message HigherOrderUDFExprNode {
   HigherOrderUDF udf = 1;
-  string name = 2;
-  repeated bytes args = 3;
-  optional bytes function_definition = 4;
+  bytes input_schema = 2;
 }
 
 message HigherOrderUDF {
