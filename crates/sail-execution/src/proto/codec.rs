@@ -124,7 +124,6 @@ use sail_function::scalar::array::array_position::SparkArrayPosition;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
-use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
 use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_function::scalar::array::spark_sequence::SparkSequence;
@@ -272,16 +271,19 @@ use crate::plan::gen::extended_physical_plan_node::NodeKind;
 use crate::plan::gen::extended_scalar_udf::UdfKind;
 use crate::plan::gen::extended_stream_udf::StreamUdfKind;
 use crate::plan::gen::extended_window_udf::UdwfKind;
-use crate::plan::gen::higher_order_udf::HigherOrderUdfKind;
 use crate::plan::gen::{
     CastColumnExprNode, ExtendedAggregateUdf, ExtendedPhysicalExprNode, ExtendedPhysicalPlanNode,
     ExtendedScalarUdf, ExtendedStreamUdf, ExtendedWindowUdf, HigherOrderUdfExprNode,
     LambdaExprNode, LambdaVariableExprNode,
 };
 use crate::plan::{gen, StageInputExec};
-use crate::proto::decode::{try_decode_message, try_decode_physical_plan, try_decode_schema};
+use crate::proto::decode::{
+    try_decode_field_ref, try_decode_higher_order_udf, try_decode_message,
+    try_decode_physical_plan, try_decode_schema,
+};
 use crate::proto::encode::{
-    try_encode_message, try_encode_physical_expr, try_encode_physical_plan, try_encode_schema,
+    try_encode_field_ref, try_encode_message, try_encode_physical_expr,
+    try_encode_physical_plan, try_encode_schema,
 };
 use crate::proto::physical_proto_converter::RemotePhysicalProtoConverter;
 
@@ -3075,8 +3077,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     None,
                 )))
             }
+            // HigherOrderUdf and Lambda are handled in physical_proto_converter.rs, but we leave it here for defensive programming.
             ExprKind::HigherOrderUdf(node) => {
-                let fun = Self::try_decode_higher_order_udf(node.udf)?;
+                let fun = try_decode_higher_order_udf(node.udf)?;
+                if node.input_schema.is_empty() {
+                    return plan_err!(
+                        "higher-order UDF decode requires input_schema in RemoteExecutionCodec"
+                    );
+                }
                 let input_schema = try_decode_schema(&node.input_schema)?;
                 // TODO: The planner's `ConfigOptions` are not serialized.
                 //  Revisit when adding a function whose behavior depends on `ConfigOptions`.
@@ -3097,12 +3105,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 )?))
             }
             ExprKind::LambdaVariable(node) => {
-                let schema = try_decode_schema(&node.field)?;
-                let field = schema
-                    .fields()
-                    .first()
-                    .ok_or_else(|| plan_datafusion_err!("LambdaVariable missing field"))?
-                    .clone();
+                let field = try_decode_field_ref(&node.field)?;
                 let index = usize::try_from(node.index).map_err(|_| {
                     plan_datafusion_err!(
                         "LambdaVariable index {} does not fit in usize",
@@ -3115,6 +3118,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_encode_expr(&self, node: &Arc<dyn PhysicalExpr>, buf: &mut Vec<u8>) -> Result<()> {
+        // Lambda is handled in physical_proto_converter.rs, but we leave it here for defensive programming.
         let expr_kind = if let Some(cast) = node.downcast_ref::<SchemaEvolutionCastColumnExpr>() {
             let node = self.try_encode_cast_column_expr(
                 cast.input_field().as_ref(),
@@ -3126,8 +3130,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 params: lambda.params().to_vec(),
             })
         } else if let Some(var) = node.downcast_ref::<LambdaVariable>() {
-            let index = var.index() as u32;
-            let field = try_encode_schema(&Schema::new(vec![var.field().as_ref().clone()]))?;
+            let index = u32::try_from(var.index()).map_err(|_| {
+                plan_datafusion_err!(
+                    "LambdaVariable index {} does not fit in u32",
+                    var.index()
+                )
+            })?;
+            let field = try_encode_field_ref(var.field())?;
             ExprKind::LambdaVariable(LambdaVariableExprNode { index, field })
         } else {
             return plan_err!("unsupported physical expr extension: {node}");
@@ -3142,44 +3151,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
 }
 
 impl RemoteExecutionCodec {
-    /// Encodes the concrete higher-order UDF of `hof` using a one-variant-per-function
-    /// `oneof` (the same pattern as `ExtendedScalarUdf`). Add a branch here for each
-    /// new higher-order function (`transform`, `exists`, `forall`, ...).
-    fn try_encode_higher_order_udf(hof: &HigherOrderFunctionExpr) -> Result<gen::HigherOrderUdf> {
-        let udf_inner = hof.fun().inner().as_ref() as &dyn Any;
-        let udf_kind = if let Some(filter) = udf_inner.downcast_ref::<SparkArrayFilter>() {
-            HigherOrderUdfKind::Filter(gen::SparkArrayFilterUdf {
-                index_first: filter.is_index_first(),
-            })
-        } else {
-            return plan_err!("unsupported higher-order function: {}", hof.name());
-        };
-        Ok(gen::HigherOrderUdf {
-            higher_order_udf_kind: Some(udf_kind),
-        })
-    }
-
-    /// Rebuilds the higher-order UDF from its `oneof` encoding. The inverse of
-    /// [`Self::try_encode_higher_order_udf`].
-    fn try_decode_higher_order_udf(
-        udf: Option<gen::HigherOrderUdf>,
-    ) -> Result<Arc<HigherOrderUDF>> {
-        let udf_kind = udf
-            .and_then(|udf| udf.higher_order_udf_kind)
-            .ok_or_else(|| plan_datafusion_err!("missing higher-order function UDF"))?;
-        Ok(match udf_kind {
-            HigherOrderUdfKind::Filter(gen::SparkArrayFilterUdf { index_first }) => {
-                if index_first {
-                    Arc::new(HigherOrderUDF::new_from_impl(
-                        SparkArrayFilter::new_index_first(),
-                    ))
-                } else {
-                    Arc::new(HigherOrderUDF::new_from_impl(SparkArrayFilter::new()))
-                }
-            }
-        })
-    }
-
     #[expect(clippy::type_complexity)]
     fn try_decode_cast_column_expr(
         &self,

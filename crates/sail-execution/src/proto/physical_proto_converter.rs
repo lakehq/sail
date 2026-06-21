@@ -4,31 +4,26 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{FieldRef, Schema};
 use datafusion::common::{plan_datafusion_err, plan_err, Result};
-use datafusion::execution::TaskContext;
-use datafusion::logical_expr::{
-    AggregateUDFImpl, HigherOrderUDF, LambdaParametersProgress, ScalarUDFImpl, ValueOrLambda,
-};
+use datafusion::logical_expr::{LambdaParametersProgress, ValueOrLambda};
 use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable};
 use datafusion::physical_expr::{HigherOrderFunctionExpr, PhysicalExpr};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use datafusion_proto::physical_plan::{
-    DefaultPhysicalProtoConverter, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
-    PhysicalProtoConverterExtension,
+    PhysicalExtensionCodec, PhysicalPlanDecodeContext, PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf::{
     physical_expr_node, PhysicalExprNode, PhysicalExtensionExprNode, PhysicalPlanNode,
 };
 
 use prost::Message;
-use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 
-use crate::plan::gen;
 use crate::plan::gen::extended_physical_expr_node::ExprKind;
-use crate::plan::gen::higher_order_udf::HigherOrderUdfKind;
 use crate::plan::gen::{
     ExtendedPhysicalExprNode, HigherOrderUdfExprNode, LambdaExprNode, LambdaVariableExprNode,
 };
+use crate::proto::decode::try_decode_higher_order_udf;
+use crate::proto::encode::{try_encode_field_ref, try_encode_higher_order_udf};
 
 pub struct RemotePhysicalProtoConverter;
 
@@ -84,8 +79,12 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
                     .clone();
                 Ok(Arc::new(LambdaVariable::new(index, field)))
             }
-            Some((ExprKind::Lambda(_), _)) => {
-                plan_err!("lambda expressions must be decoded as higher-order function arguments")
+            Some((ExprKind::Lambda(node), inputs)) => {
+                let [body] = inputs else {
+                    return plan_err!("LambdaExpr expects exactly one input, got {}", inputs.len());
+                };
+                let body = self.proto_to_physical_expr(body, input_schema, ctx)?;
+                Ok(Arc::new(LambdaExpr::try_new(node.params, body)?))
             }
             _ => self.default_proto_to_physical_expr(proto, input_schema, ctx),
         }
@@ -103,10 +102,17 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
             return self.lambda_expr_to_proto(expr, lambda, codec);
         }
         if let Some(var) = expr.downcast_ref::<LambdaVariable>() {
+            let index = u32::try_from(var.index()).map_err(|_| {
+                plan_datafusion_err!(
+                    "LambdaVariable index {} does not fit in u32",
+                    var.index()
+                )
+            })?;
             return extension_expr_to_proto(
                 expr,
                 ExprKind::LambdaVariable(LambdaVariableExprNode {
-                    index: var.index() as u64,
+                    index,
+                    field: try_encode_field_ref(var.field())?,
                 }),
                 vec![],
             );
@@ -131,6 +137,7 @@ impl RemotePhysicalProtoConverter {
             expr,
             ExprKind::HigherOrderUdf(HigherOrderUdfExprNode {
                 udf: Some(try_encode_higher_order_udf(hof)?),
+                input_schema: vec![],
             }),
             inputs,
         )
@@ -269,35 +276,4 @@ fn extend_lambda_schema(base: &Schema, params: &[String], fields: &[FieldRef]) -
         output.push(Arc::new(field.as_ref().clone().with_name(name)));
     }
     Schema::new(output)
-}
-
-fn try_encode_higher_order_udf(hof: &HigherOrderFunctionExpr) -> Result<gen::HigherOrderUdf> {
-    let udf_inner = hof.fun().inner().as_ref() as &dyn std::any::Any;
-    let udf_kind = if let Some(filter) = udf_inner.downcast_ref::<SparkArrayFilter>() {
-        HigherOrderUdfKind::Filter(gen::SparkArrayFilterUdf {
-            index_first: filter.is_index_first(),
-        })
-    } else {
-        return plan_err!("unsupported higher-order function: {}", hof.name());
-    };
-    Ok(gen::HigherOrderUdf {
-        higher_order_udf_kind: Some(udf_kind),
-    })
-}
-
-fn try_decode_higher_order_udf(udf: Option<gen::HigherOrderUdf>) -> Result<Arc<HigherOrderUDF>> {
-    let udf_kind = udf
-        .and_then(|udf| udf.higher_order_udf_kind)
-        .ok_or_else(|| plan_datafusion_err!("missing higher-order function UDF"))?;
-    Ok(match udf_kind {
-        HigherOrderUdfKind::Filter(gen::SparkArrayFilterUdf { index_first }) => {
-            if index_first {
-                Arc::new(HigherOrderUDF::new_from_impl(
-                    SparkArrayFilter::new_index_first(),
-                ))
-            } else {
-                Arc::new(HigherOrderUDF::new_from_impl(SparkArrayFilter::new()))
-            }
-        }
-    })
 }

@@ -1,40 +1,22 @@
-use std::fmt::{Debug, Formatter};
-
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{Field, FieldRef, Schema};
-use datafusion::common::{plan_datafusion_err, plan_err, Result};
+use datafusion::common::{plan_datafusion_err, Result};
 use datafusion::execution::TaskContext;
-use datafusion::logical_expr::{
-    AggregateUDFImpl, HigherOrderUDF, LambdaParametersProgress, ScalarUDFImpl, ValueOrLambda,
-};
-use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable};
-use datafusion::physical_expr::{
-    AcrossPartitions, ConstExpr, EquivalenceProperties, HigherOrderFunctionExpr, LexOrdering,
-    LexRequirement, Partitioning, PhysicalExpr, PhysicalSortExpr,
-};
+use datafusion::logical_expr::HigherOrderUDF;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_proto::physical_plan::from_proto::{
-    parse_physical_expr_with_converter, parse_protobuf_partitioning,
-};
-use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
+use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
 use datafusion_proto::physical_plan::{
     PhysicalExtensionCodec, PhysicalPlanDecodeContext, PhysicalProtoConverterExtension,
 };
-use datafusion_proto::protobuf::{
-    physical_expr_node, PhysicalExprNode, PhysicalExtensionExprNode, PhysicalPlanNode,
-};
-
-use crate::plan::gen;
-use crate::plan::gen::extended_physical_expr_node::ExprKind;
-use crate::plan::gen::higher_order_udf::HigherOrderUdfKind;
-use crate::plan::gen::{
-    ExtendedPhysicalExprNode, HigherOrderUdfExprNode, LambdaExprNode, LambdaVariableExprNode,
-};
-use crate::proto::physical_proto_converter::RemotePhysicalProtoConverter;
-use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
+use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
 use prost::Message;
 use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
+
+use crate::plan::gen;
+use crate::plan::gen::higher_order_udf::HigherOrderUdfKind;
+use crate::proto::physical_proto_converter::RemotePhysicalProtoConverter;
 
 pub fn try_decode_message<M>(buf: &[u8]) -> Result<M>
 where
@@ -79,4 +61,23 @@ pub fn try_decode_physical_expr(
         schema,
         &PhysicalPlanDecodeContext::new(ctx, codec),
     )
+}
+
+pub fn try_decode_higher_order_udf(
+    udf: Option<gen::HigherOrderUdf>,
+) -> Result<Arc<HigherOrderUDF>> {
+    let udf_kind = udf
+        .and_then(|udf| udf.higher_order_udf_kind)
+        .ok_or_else(|| plan_datafusion_err!("missing higher-order function UDF"))?;
+    Ok(match udf_kind {
+        HigherOrderUdfKind::Filter(gen::SparkArrayFilterUdf { index_first }) => {
+            if index_first {
+                Arc::new(HigherOrderUDF::new_from_impl(
+                    SparkArrayFilter::new_index_first(),
+                ))
+            } else {
+                Arc::new(HigherOrderUDF::new_from_impl(SparkArrayFilter::new()))
+            }
+        }
+    })
 }

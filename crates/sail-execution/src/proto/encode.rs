@@ -1,40 +1,18 @@
-use std::fmt::{Debug, Formatter};
-
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{FieldRef, Schema};
-use datafusion::common::{plan_datafusion_err, plan_err, Result};
-use datafusion::execution::TaskContext;
-use datafusion::logical_expr::{
-    AggregateUDFImpl, HigherOrderUDF, LambdaParametersProgress, ScalarUDFImpl, ValueOrLambda,
-};
-use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable};
-use datafusion::physical_expr::{
-    AcrossPartitions, ConstExpr, EquivalenceProperties, HigherOrderFunctionExpr, LexOrdering,
-    LexRequirement, Partitioning, PhysicalExpr, PhysicalSortExpr,
-};
+use datafusion::common::{plan_err, Result};
+use datafusion::physical_expr::{HigherOrderFunctionExpr, PhysicalExpr};
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion_proto::physical_plan::to_proto::{
-    serialize_partitioning, serialize_physical_expr_with_converter,
-};
-use datafusion_proto::physical_plan::{
-    PhysicalExtensionCodec, PhysicalPlanDecodeContext, PhysicalProtoConverterExtension,
-};
-use datafusion_proto::protobuf::{
-    physical_expr_node, PhysicalExprNode, PhysicalExtensionExprNode, PhysicalPlanNode,
-};
+use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
+use datafusion_proto::physical_plan::{PhysicalExtensionCodec, PhysicalProtoConverterExtension};
+use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
+use prost::Message;
+use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 
 use crate::plan::gen;
-use crate::plan::gen::extended_physical_expr_node::ExprKind;
 use crate::plan::gen::higher_order_udf::HigherOrderUdfKind;
-use crate::plan::gen::{
-    ExtendedPhysicalExprNode, HigherOrderUdfExprNode, LambdaExprNode, LambdaVariableExprNode,
-};
 use crate::proto::physical_proto_converter::RemotePhysicalProtoConverter;
-use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
-use prost::Message;
-
-use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 
 pub fn try_encode_message<M>(message: M) -> Result<Vec<u8>>
 where
@@ -68,5 +46,19 @@ pub fn try_encode_physical_expr(
     expr: &Arc<dyn PhysicalExpr>,
 ) -> Result<PhysicalExprNode> {
     let converter = RemotePhysicalProtoConverter;
-    Ok(converter.physical_expr_to_proto(expr, codec)?)
+    converter.physical_expr_to_proto(expr, codec)
+}
+
+pub fn try_encode_higher_order_udf(hof: &HigherOrderFunctionExpr) -> Result<gen::HigherOrderUdf> {
+    let udf_inner = hof.fun().inner().as_ref() as &dyn std::any::Any;
+    let udf_kind = if let Some(filter) = udf_inner.downcast_ref::<SparkArrayFilter>() {
+        HigherOrderUdfKind::Filter(gen::SparkArrayFilterUdf {
+            index_first: filter.is_index_first(),
+        })
+    } else {
+        return plan_err!("unsupported higher-order function: {}", hof.name());
+    };
+    Ok(gen::HigherOrderUdf {
+        higher_order_udf_kind: Some(udf_kind),
+    })
 }
