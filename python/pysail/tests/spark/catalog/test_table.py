@@ -11,7 +11,7 @@ import pytest
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 
-@pytest.fixture
+@pytest.fixture(scope="module", autouse=True)
 def setup_view(spark):
     """Create a temporary view for testing."""
     spark.sql("SELECT 1 AS col").createOrReplaceTempView("test_view")
@@ -19,7 +19,6 @@ def setup_view(spark):
     spark.catalog.dropTempView("test_view")
 
 
-@pytest.mark.usefixtures("setup_view")
 def test_list_tables_returns_name(spark):
     """listTables returns table with 'name' field (mapped from tableName)."""
     tables = spark.catalog.listTables()
@@ -27,7 +26,6 @@ def test_list_tables_returns_name(spark):
     assert "test_view" in table_names
 
 
-@pytest.mark.usefixtures("setup_view")
 def test_list_tables_returns_table_type(spark):
     """listTables returns tableType in camelCase."""
     tables = spark.catalog.listTables()
@@ -35,7 +33,6 @@ def test_list_tables_returns_table_type(spark):
     assert test_table.tableType == "TEMPORARY"
 
 
-@pytest.mark.usefixtures("setup_view")
 def test_list_tables_returns_is_temporary(spark):
     """listTables returns isTemporary in camelCase."""
     tables = spark.catalog.listTables()
@@ -43,7 +40,6 @@ def test_list_tables_returns_is_temporary(spark):
     assert test_table.isTemporary is True
 
 
-@pytest.mark.usefixtures("setup_view")
 def test_show_tables_returns_spark_sql_shape(spark):
     """SHOW TABLES returns the Spark SQL 3-column output shape."""
     tables = spark.sql("SHOW TABLES")
@@ -53,7 +49,6 @@ def test_show_tables_returns_spark_sql_shape(spark):
     assert test_table.isTemporary is True
 
 
-@pytest.mark.usefixtures("setup_view")
 def test_show_table_extended_returns_spark_sql_shape(spark):
     """SHOW TABLE EXTENDED returns the Spark SQL 4-column output shape."""
     tables = spark.sql("SHOW TABLE EXTENDED LIKE 'test_view'")
@@ -73,7 +68,6 @@ def test_show_table_extended_returns_spark_sql_shape(spark):
         "DESCRIBE EXTENDED test_view",
     ],
 )
-@pytest.mark.usefixtures("setup_view")
 def test_describe_extended_accepts_long_and_short_forms(spark, sql):
     """DESCRIBE EXTENDED accepts both Spark table forms."""
     describe = spark.sql(sql)
@@ -88,7 +82,6 @@ def test_describe_extended_accepts_long_and_short_forms(spark, sql):
 
 
 @pytest.mark.integration
-@pytest.mark.usefixtures("setup_view")
 def test_persistent_table_defaults_to_managed(spark):
     """Persistent tables without an explicit location are managed."""
     table_name = "test_external_default"
@@ -110,7 +103,6 @@ def test_persistent_table_defaults_to_managed(spark):
 
 
 @pytest.mark.integration
-@pytest.mark.usefixtures("setup_view")
 def test_persistent_table_with_location_is_external(spark, tmp_path):
     """Persistent table created with LOCATION surfaces EXTERNAL type."""
     table_name = "test_external_with_location"
