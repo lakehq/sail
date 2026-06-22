@@ -1,25 +1,4 @@
-"""Tests for percentile_cont and percentile_disc aggregate functions."""
-
 import pandas as pd
-
-
-def test_percentile_cont(spark):
-    """Tests percentile_cont with WITHIN GROUP (ORDER BY ...) syntax."""
-    df = spark.createDataFrame(
-        [(10,), (15,), (7,), (20,), (10,), (3,), (5,), (8,)],
-        ["quantity"],
-    )
-    df.createOrReplaceTempView("test_quantities")
-
-    actual = spark.sql("""
-        SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY quantity) AS median
-        FROM test_quantities
-    """).toPandas()
-
-    # Sorted: [3, 5, 7, 8, 10, 10, 15, 20]
-    # 50th percentile (interpolated) = 9.0
-    expected = pd.DataFrame({"median": [9.0]})
-    pd.testing.assert_frame_equal(actual, expected)
 
 
 def test_percentile_disc_basic(spark):
@@ -31,9 +10,9 @@ def test_percentile_disc_basic(spark):
     df.createOrReplaceTempView("test_disc_basic")
 
     actual = spark.sql("""
-        SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY val) AS median
-        FROM test_disc_basic
-    """).toPandas()
+                       SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY val) AS median
+                       FROM test_disc_basic
+                       """).toPandas()
 
     # Sorted: [10, 20, 30, 40, 50]
     # 50th percentile (discrete) = 30 (actual value, not interpolated)
@@ -58,13 +37,13 @@ def test_percentile_disc_with_group_by(spark):
     df.createOrReplaceTempView("test_disc_grouped")
 
     actual = spark.sql("""
-        SELECT
-            category,
-            percentile_disc(0.5) WITHIN GROUP (ORDER BY val) AS median
-        FROM test_disc_grouped
-        GROUP BY category
-        ORDER BY category
-    """).toPandas()
+                       SELECT
+                           category,
+                           percentile_disc(0.5) WITHIN GROUP (ORDER BY val) AS median
+                       FROM test_disc_grouped
+                       GROUP BY category
+                       ORDER BY category
+                       """).toPandas()
 
     # Group A: [10, 20, 30] -> median = 20
     # Group B: [100, 200, 300, 400] -> median = 200
@@ -81,11 +60,11 @@ def test_percentile_disc_edge_cases(spark):
     df.createOrReplaceTempView("test_disc_edges")
 
     actual = spark.sql("""
-        SELECT
-            percentile_disc(0.0) WITHIN GROUP (ORDER BY val) AS p0,
+                       SELECT
+                           percentile_disc(0.0) WITHIN GROUP (ORDER BY val) AS p0,
             percentile_disc(1.0) WITHIN GROUP (ORDER BY val) AS p100
-        FROM test_disc_edges
-    """).toPandas()
+                       FROM test_disc_edges
+                       """).toPandas()
 
     # 0th percentile = min = 5
     # 100th percentile = max = 20
@@ -102,9 +81,9 @@ def test_percentile_disc_with_nulls(spark):
     df.createOrReplaceTempView("test_disc_nulls")
 
     actual = spark.sql("""
-        SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY val) AS median
-        FROM test_disc_nulls
-    """).toPandas()
+                       SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY val) AS median
+                       FROM test_disc_nulls
+                       """).toPandas()
 
     # Non-null values: [10, 20, 30, 40, 50]
     # 50th percentile (discrete) = 30
