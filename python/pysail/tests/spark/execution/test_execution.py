@@ -9,6 +9,13 @@ from pysail.testing.spark.session import spark_connect_server
 from pysail.testing.spark.utils.common import is_jvm_spark
 
 
+def _partition_count(df):
+    def counter(_iterator):
+        yield pd.DataFrame({"n": [1]})
+
+    return df.mapInPandas(counter, schema="n: long").count()
+
+
 @pytest.fixture(scope="module")
 def remote():
     """Override the global remote fixture to use local-cluster mode for this module."""
@@ -219,6 +226,29 @@ class TestLocalClusterExecution:
         assert coalesced_count == 1000  # noqa: PLR2004
         assert coalesced_sum == original_sum
 
+    def test_coalesce_plan_contains_dedicated_exec_in_cluster_mode(self, spark):
+        plan = spark.range(0, 12, 1, 4).coalesce(2)._explain_string()  # noqa: SLF001
+        assert "CoalesceExec" in plan
+
+    @pytest.mark.parametrize(
+        ("row_count", "input_partition_count", "output_partition_count", "expected_partition_count"),
+        [
+            (48, 4, 6, 4),
+            (48, 4, 2, 2),
+            (10, 2, 1, 1),
+        ],
+    )
+    def test_coalesce_partition_count_in_cluster_mode(
+        self,
+        spark,
+        row_count,
+        input_partition_count,
+        output_partition_count,
+        expected_partition_count,
+    ):
+        df = spark.range(0, row_count, 1, input_partition_count).coalesce(output_partition_count)
+        assert _partition_count(df) == expected_partition_count
+
     def test_coalesce_spark_parity_in_cluster_mode(self, spark):
         row_count = 48
         input_partition_count = 4
@@ -279,12 +309,31 @@ class TestLocalClusterExecution:
         assert actual_ids == list(range(20))
 
     def test_coalesce_hint_in_cluster_mode(self, spark):
-        row_count = 48
-        input_partition_count = 4
-
-        df = spark.range(0, row_count, 1, input_partition_count)
+        df = spark.range(0, 12, 1, 4).select("id", (F.col("id") % 3).alias("group"))
 
         actual = df.hint("COALESCE", 2).orderBy("id").toPandas()
         expected = df.orderBy("id").toPandas()
 
         assert_frame_equal(actual, expected)
+
+    @pytest.mark.parametrize(
+        ("output_partition_count", "expected_partition_count"),
+        [
+            (2, 2),
+            (6, 4),
+        ],
+    )
+    def test_coalesce_hint_partition_count_in_cluster_mode(
+        self,
+        spark,
+        output_partition_count,
+        expected_partition_count,
+    ):
+        df = spark.range(0, 48, 1, 4).hint("COALESCE", output_partition_count)
+        assert _partition_count(df) == expected_partition_count
+
+    @pytest.mark.parametrize("partition_count", [0, -1])
+    def test_coalesce_hint_rejects_non_positive_partition_count_in_cluster_mode(self, spark, partition_count):
+        df = spark.range(0, 10, 1, 2).hint("COALESCE", partition_count)
+        with pytest.raises(Exception, match="COALESCE hint requires at least one partition"):
+            df.count()
