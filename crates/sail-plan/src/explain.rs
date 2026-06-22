@@ -82,6 +82,7 @@ pub struct ExplainString {
 
 struct CollectedPlan {
     initial_logical: LogicalPlan,
+    analyzed_logical: LogicalPlan,
     optimized_logical: LogicalPlan,
     physical_plan: Option<Arc<dyn ExecutionPlan>>,
     physical_error: Option<String>,
@@ -91,6 +92,19 @@ struct CollectedPlan {
 impl CollectedPlan {
     fn logical_string(&self, plan: &LogicalPlan, plan_type: PlanType) -> String {
         plan.to_stringified(plan_type).plan.to_string()
+    }
+
+    fn logical_string_with_schema(&self, plan: &LogicalPlan, plan_type: PlanType) -> String {
+        let stringified_logical = self.logical_string(plan, plan_type);
+        let stringified_schema = plan
+            .schema()
+            .inner()
+            .fields()
+            .iter()
+            .map(|f| format!("{}: {}", f.name(), f.data_type()))
+            .collect::<Vec<String>>()
+            .join(", ");
+        format!("{}\n{}", stringified_schema, stringified_logical)
     }
 
     fn physical_string(
@@ -185,7 +199,7 @@ async fn collect_plan_with(
     stringified.push(analyzed_logical.to_stringified(PlanType::FinalAnalyzedLogicalPlan));
 
     let optimized_logical = session_state.optimizer().optimize(
-        analyzed_logical,
+        analyzed_logical.clone(),
         &session_state,
         |optimized_plan, optimizer| {
             let plan_type = PlanType::OptimizedLogicalPlan {
@@ -306,6 +320,7 @@ async fn collect_plan_with(
 
     Ok(CollectedPlan {
         initial_logical,
+        analyzed_logical,
         optimized_logical,
         physical_plan,
         physical_error,
@@ -390,6 +405,8 @@ async fn explain_from_collected(
 
     let logical_simple =
         collected.logical_string(&collected.initial_logical, PlanType::InitialLogicalPlan);
+    let logical_analyzed_schema =
+        collected.logical_string_with_schema(&collected.analyzed_logical, PlanType::FinalAnalyzedLogicalPlan);
     let logical_optimized =
         collected.logical_string(&collected.optimized_logical, PlanType::FinalLogicalPlan);
 
@@ -417,9 +434,8 @@ async fn explain_from_collected(
         }
         ExplainKind::Extended => [
             render_section("Parsed Logical Plan", &logical_simple),
-            // TODO: Spark expects distinct analyzed vs optimized plans
-            // Avoid duplicating the same plan until we can separate.
-            render_section("Analyzed Logical Plan", &logical_optimized),
+            render_section("Analyzed Logical Plan", &logical_analyzed_schema),
+            render_section("Optimized Logical Plan", &logical_optimized),
             render_section(
                 "Physical Plan",
                 if options.analyze {
