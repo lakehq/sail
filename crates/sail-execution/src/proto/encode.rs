@@ -1,0 +1,69 @@
+use std::sync::Arc;
+
+use datafusion::arrow::datatypes::{FieldRef, Schema};
+use datafusion::common::{plan_err, Result};
+use datafusion::physical_expr::{HigherOrderFunctionExpr, PhysicalExpr};
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
+use datafusion_proto::physical_plan::{PhysicalExtensionCodec, PhysicalProtoConverterExtension};
+use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
+use prost::Message;
+use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
+use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
+
+use crate::plan::gen;
+use crate::plan::gen::higher_order_udf::HigherOrderUdfKind;
+use crate::proto::converter::RemotePhysicalProtoConverter;
+
+pub fn try_encode_message<M>(message: M) -> Result<Vec<u8>>
+where
+    M: Message,
+{
+    Ok(message.encode_to_vec())
+}
+
+pub fn try_encode_schema(schema: &Schema) -> Result<Vec<u8>> {
+    try_encode_message::<gen_datafusion_common::Schema>(schema.try_into()?)
+}
+
+pub fn try_encode_field_ref(field: &FieldRef) -> Result<Vec<u8>> {
+    try_encode_message::<gen_datafusion_common::Field>(field.as_ref().try_into()?)
+}
+
+pub fn try_encode_physical_plan(
+    codec: &dyn PhysicalExtensionCodec,
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<Vec<u8>> {
+    Ok(PhysicalPlanNode::try_from_physical_plan_with_converter(
+        plan,
+        codec,
+        &RemotePhysicalProtoConverter {},
+    )?
+    .encode_to_vec())
+}
+
+pub fn try_encode_physical_expr(
+    codec: &dyn PhysicalExtensionCodec,
+    expr: &Arc<dyn PhysicalExpr>,
+) -> Result<PhysicalExprNode> {
+    let converter = RemotePhysicalProtoConverter;
+    converter.physical_expr_to_proto(expr, codec)
+}
+
+pub fn try_encode_higher_order_udf(hof: &HigherOrderFunctionExpr) -> Result<gen::HigherOrderUdf> {
+    let udf_inner = hof.fun().inner().as_ref() as &dyn std::any::Any;
+    let udf_kind = if let Some(filter) = udf_inner.downcast_ref::<SparkArrayFilter>() {
+        HigherOrderUdfKind::Filter(gen::SparkArrayFilterUdf {
+            index_first: filter.is_index_first(),
+        })
+    } else if let Some(transform) = udf_inner.downcast_ref::<SparkArrayTransform>() {
+        HigherOrderUdfKind::Transform(gen::SparkArrayTransformUdf {
+            index_first: transform.is_index_first(),
+        })
+    } else {
+        return plan_err!("unsupported higher-order function: {}", hof.name());
+    };
+    Ok(gen::HigherOrderUdf {
+        higher_order_udf_kind: Some(udf_kind),
+    })
+}

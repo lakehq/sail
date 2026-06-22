@@ -5,7 +5,6 @@ Uses the Unity Catalog OSS Docker image with its embedded H2 backend.
 
 from __future__ import annotations
 
-import contextlib
 import json
 import os
 import time
@@ -20,12 +19,8 @@ from pytest_bdd import given, parsers, then
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.waiting_utils import wait_for_logs
 
+from pysail.testing.spark.session import spark_connect_server
 from pysail.testing.spark.steps.sql import PathWrapper
-from pysail.tests.spark.catalog.conftest import (
-    create_spark_session,
-    start_sail_server,
-    stop_sail_server,
-)
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -110,26 +105,32 @@ def _create_unity_catalog(unity_rest_url: str, unity_storage_root: Path) -> None
 
 
 @pytest.fixture(scope="module")
-def unity_spark(
+def remote(
     unity_rest_url: str,
     _create_unity_catalog: None,
-    unity_storage_root: Path,
-) -> Generator[SparkSession, None, None]:
-    """Start Sail server with Unity catalog and create a Spark session."""
+) -> Generator[str, None, None]:
+    """Start Sail server with Unity catalog."""
     catalog_config = f'[{{name="sail", type="unity", uri="{unity_rest_url}", default_catalog="{DEFAULT_CATALOG}"}}]'
-    server, remote, saved_env = start_sail_server(
-        catalog_list=catalog_config,
-        extra_env={"UNITY_ALLOW_HTTP_URL": "true"},
-    )
-    spark = create_spark_session(remote, "unity_catalog_test")
+    del _create_unity_catalog
+    with spark_connect_server(
+        envs={
+            "SAIL_CATALOG__LIST": catalog_config,
+            "UNITY_ALLOW_HTTP_URL": "true",
+        },
+    ) as server:
+        yield server.remote
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _configure_unity_catalog_spark(
+    spark: SparkSession,
+    unity_storage_root: Path,
+):
+    """Configure the Spark session for Unity managed table storage."""
     spark.conf.set(
         "spark.sql.warehouse.dir",
         str(unity_storage_root / "warehouse"),
     )
-    yield spark
-    with contextlib.suppress(Exception):
-        spark.stop()
-    stop_sail_server(server, saved_env)
 
 
 def _qualified_table_name(table_name: str) -> str:

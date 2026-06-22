@@ -19,10 +19,10 @@ WAREHOUSE = "s3://icebergdata/demo"
 
 
 @pytest.fixture(scope="module", autouse=True)
-def namespace(iceberg_spark: SparkSession) -> Generator[None, None, None]:
-    iceberg_spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
+def namespace(spark: SparkSession) -> Generator[None, None, None]:
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
     yield
-    iceberg_spark.sql(f"DROP DATABASE IF EXISTS {NAMESPACE} CASCADE")
+    spark.sql(f"DROP DATABASE IF EXISTS {NAMESPACE} CASCADE")
 
 
 def _quote(value: str) -> str:
@@ -43,14 +43,14 @@ def _load_view_metadata(iceberg_rest_endpoint: str, view_name: str) -> dict[str,
 
 
 def _create_view(
-    iceberg_spark: SparkSession,
+    spark: SparkSession,
     view_name: str,
     *,
     definition: str = "SELECT 1 AS id",
     comment: str | None = None,
     properties: dict[str, str] | None = None,
 ) -> None:
-    iceberg_spark.sql(f"DROP VIEW IF EXISTS {NAMESPACE}.{view_name}")
+    spark.sql(f"DROP VIEW IF EXISTS {NAMESPACE}.{view_name}")
 
     clauses: list[str] = []
     if comment is not None:
@@ -62,7 +62,7 @@ def _create_view(
         clauses.append(f"TBLPROPERTIES ({props_sql})")
 
     clause_sql = (" " + " ".join(clauses)) if clauses else ""
-    iceberg_spark.sql(f"CREATE VIEW {NAMESPACE}.{view_name}{clause_sql} AS {definition}")
+    spark.sql(f"CREATE VIEW {NAMESPACE}.{view_name}{clause_sql} AS {definition}")
 
 
 def _current_view_version(metadata: dict[str, Any]) -> dict[str, Any]:
@@ -102,15 +102,15 @@ def _assert_spark_representation(metadata: dict[str, Any]) -> None:
     )
 
 
-def _collect_one_row(iceberg_spark: SparkSession, sql: str) -> dict[str, Any]:
-    rows = iceberg_spark.sql(sql).collect()
+def _collect_one_row(spark: SparkSession, sql: str) -> dict[str, Any]:
+    rows = spark.sql(sql).collect()
     assert len(rows) == 1
     return rows[0].asDict(recursive=True)
 
 
 @pytest.mark.parametrize("property_key", ["path", "location"])
 def test_create_view_uses_path_or_location_property_as_metadata_location(
-    iceberg_spark: SparkSession,
+    spark: SparkSession,
     iceberg_rest_endpoint: str,
     property_key: str,
 ) -> None:
@@ -122,9 +122,9 @@ def test_create_view_uses_path_or_location_property_as_metadata_location(
         "purpose": f"{property_key}-location-resolution",
     }
 
-    _create_view(iceberg_spark, view_name, definition=definition, properties=properties)
+    _create_view(spark, view_name, definition=definition, properties=properties)
 
-    assert _collect_one_row(iceberg_spark, f"SELECT * FROM {NAMESPACE}.{view_name}") == {  # noqa: S608
+    assert _collect_one_row(spark, f"SELECT * FROM {NAMESPACE}.{view_name}") == {  # noqa: S608
         "id": 7,
         "property_key": property_key,
     }
@@ -143,16 +143,16 @@ def test_create_view_uses_path_or_location_property_as_metadata_location(
 
 
 def test_create_view_without_path_or_location_property_uses_default_location(
-    iceberg_spark: SparkSession,
+    spark: SparkSession,
     iceberg_rest_endpoint: str,
 ) -> None:
     view_name = "default_location_view"
     definition = "SELECT 1 AS id, 'default' AS location_mode"
     properties = {"owner": "integration-test", "purpose": "default-location"}
 
-    _create_view(iceberg_spark, view_name, definition=definition, properties=properties)
+    _create_view(spark, view_name, definition=definition, properties=properties)
 
-    assert _collect_one_row(iceberg_spark, f"SELECT * FROM {NAMESPACE}.{view_name}") == {  # noqa: S608
+    assert _collect_one_row(spark, f"SELECT * FROM {NAMESPACE}.{view_name}") == {  # noqa: S608
         "id": 1,
         "location_mode": "default",
     }
@@ -167,15 +167,15 @@ def test_create_view_without_path_or_location_property_uses_default_location(
 
 
 def test_create_view_resolves_negative_one_schema_id_to_added_schema(
-    iceberg_spark: SparkSession,
+    spark: SparkSession,
     iceberg_rest_endpoint: str,
 ) -> None:
     view_name = "schema_id_sentinel_view"
     definition = "SELECT CAST(1 AS BIGINT) AS id, 'sail' AS engine, CAST(9.99 AS DECIMAL(10, 2)) AS price"
 
-    _create_view(iceberg_spark, view_name, definition=definition)
+    _create_view(spark, view_name, definition=definition)
 
-    assert _collect_one_row(iceberg_spark, f"SELECT * FROM {NAMESPACE}.{view_name}") == {  # noqa: S608
+    assert _collect_one_row(spark, f"SELECT * FROM {NAMESPACE}.{view_name}") == {  # noqa: S608
         "id": 1,
         "engine": "sail",
         "price": Decimal("9.99"),
@@ -194,7 +194,7 @@ def test_create_view_resolves_negative_one_schema_id_to_added_schema(
 
 
 def test_create_multiple_views_can_share_location_property(
-    iceberg_spark: SparkSession,
+    spark: SparkSession,
     iceberg_rest_endpoint: str,
 ) -> None:
     shared_location = f"{WAREHOUSE}/{NAMESPACE}/shared/location/for/views"
@@ -202,7 +202,7 @@ def test_create_multiple_views_can_share_location_property(
 
     for i, view_name in enumerate(view_names, start=1):
         _create_view(
-            iceberg_spark,
+            spark,
             view_name,
             definition=f"SELECT {i} AS id",
             properties={"location": shared_location},
@@ -218,4 +218,4 @@ def test_create_multiple_views_can_share_location_property(
         assert _current_view_version(metadata)["version-id"] == 1
         _assert_all_view_schema_ids_resolved(metadata)
         _assert_current_schema_fields(metadata, ["id"])
-        assert _collect_one_row(iceberg_spark, f"SELECT * FROM {NAMESPACE}.{view_name}") == {"id": i}  # noqa: S608
+        assert _collect_one_row(spark, f"SELECT * FROM {NAMESPACE}.{view_name}") == {"id": i}  # noqa: S608

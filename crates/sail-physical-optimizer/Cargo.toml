@@ -12,6 +12,3 @@ sail-physical-plan = { path = "../sail-physical-plan" }
 datafusion = { workspace = true }
 datafusion-physical-expr = { workspace = true }
 log = { workspace = true }
-
-[dev-dependencies]
-sail-function = { path = "../sail-function" }
