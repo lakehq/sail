@@ -1,3 +1,5 @@
+/// [CREDIT]: https://github.com/apache/datafusion/blob/f911d529a57b211eb44a98b253f97d839f60019f/datafusion/functions-nested/src/array_filter.rs
+///
 /// Spark-compatible `filter(array, lambda)` higher-order function.
 ///
 /// Adapted from `array_filter` in `datafusion-functions-nested` 54.0.0

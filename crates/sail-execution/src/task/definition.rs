@@ -3,13 +3,11 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::execution::TaskContext;
 use datafusion::physical_expr::Partitioning;
-use datafusion_proto::physical_plan::from_proto::parse_physical_expr;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
-use datafusion_proto::protobuf::PhysicalExprNode;
-use prost::Message;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
+use crate::proto::decode::try_decode_physical_expr;
 use crate::stream::reader::TaskReadLocation;
 use crate::stream::writer::{LocalStreamStorage, TaskWriteLocation};
 use crate::task::gen;
@@ -611,13 +609,8 @@ impl TaskOutput {
                 let keys = keys
                     .iter()
                     .map(|k| {
-                        parse_physical_expr(
-                            &PhysicalExprNode::decode(k.as_ref())?,
-                            ctx,
-                            schema,
-                            codec,
-                        )
-                        .map_err(|e| e.into())
+                        try_decode_physical_expr(ctx, codec, k.as_ref(), schema)
+                            .map_err(|e| e.into())
                     })
                     .collect::<ExecutionResult<Vec<_>>>()?;
                 Ok(Partitioning::Hash(keys, *channels))
