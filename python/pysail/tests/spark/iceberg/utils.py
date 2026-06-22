@@ -8,12 +8,16 @@ from pyiceberg.catalog import load_catalog
 from pyiceberg.io.pyarrow import PyArrowFileIO
 from pyiceberg.typedef import EMPTY_DICT, Properties
 
-
+_WINDOWS_DRIVE_PREFIX_LENGTH = 2
 _PYICEBERG_FILE_IO_IMPL = f"{__name__}.WindowsLocalPyArrowFileIO"
 
 
 def _preserve_encoded_windows_colons(path: str) -> str:
-    drive_prefix_len = 2 if len(path) >= 2 and path[0].isalpha() and path[1] == ":" else 0
+    drive_prefix_len = (
+        _WINDOWS_DRIVE_PREFIX_LENGTH
+        if len(path) >= _WINDOWS_DRIVE_PREFIX_LENGTH and path[0].isalpha() and path[1] == ":"
+        else 0
+    )
     return path[:drive_prefix_len] + path[drive_prefix_len:].replace(":", "%3A")
 
 
