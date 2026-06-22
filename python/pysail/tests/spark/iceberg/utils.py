@@ -7,8 +7,8 @@ from pyiceberg.catalog import load_catalog
 
 
 def create_sql_catalog(tmp_path: Path):
-    if platform.system() == "Windows":
-        pytest.skip("PyIceberg SQL catalog local file URIs are not portable on Windows")
+    # if platform.system() == "Windows":
+    #     pytest.skip("PyIceberg SQL catalog local file URIs are not portable on Windows")
 
     warehouse_path = tmp_path / "warehouse"
     warehouse_path.mkdir(parents=True, exist_ok=True)
