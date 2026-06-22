@@ -50,13 +50,13 @@ MOTO_ICEBERG_SKIP = "moto does not support Glue OpenTableFormatInput API for Ice
     ids=["years", "months", "days", "hours"],
 )
 def test_glue_partition_transform_time_based(
-    glue_spark, moto_endpoint, transform_name, transform_func, expected_transform_type
+    spark, moto_endpoint, transform_name, transform_func, expected_transform_type
 ):
     """Test time-based partition transforms via PySpark V2 API with Glue catalog."""
     table_name = f"t_{transform_name}"
 
     # Create dataframe with timestamp data
-    df = glue_spark.createDataFrame(
+    df = spark.createDataFrame(
         [(1, "2023-03-15 10:30:00"), (2, "2024-06-20 14:45:00")],
         schema="id INT, ts STRING",
     )
@@ -86,23 +86,23 @@ def test_glue_partition_transform_time_based(
         )
 
         # Verify data can be read back via table name
-        result = glue_spark.table(f"test_db.{table_name}").select("id").orderBy("id").collect()
+        result = spark.table(f"test_db.{table_name}").select("id").orderBy("id").collect()
         assert [r[0] for r in result] == [1, 2]
     finally:
-        glue_spark.sql(f"DROP TABLE IF EXISTS test_db.{table_name}")
+        spark.sql(f"DROP TABLE IF EXISTS test_db.{table_name}")
 
 
 @pytest.mark.skip(reason=MOTO_ICEBERG_SKIP)
 @pytest.mark.skipif(platform.system() == "Windows", reason="may not work on Windows")
 @pytest.mark.skipif(is_jvm_spark(), reason="Spark does not handle v1 and v2 tables properly")
 @pytest.mark.skipif(not HAS_PARTITIONING, reason="partitioning module not available in this Spark version")
-def test_glue_partition_transform_bucket(glue_spark, moto_endpoint):
+def test_glue_partition_transform_bucket(spark, moto_endpoint):
     """Test bucket partition transform via PySpark V2 API with Glue catalog."""
     table_name = "t_bucket"
     num_buckets = 10
 
     # Create dataframe
-    df = glue_spark.createDataFrame([(1, "a"), (2, "b"), (3, "c"), (4, "d")], schema="id INT, name STRING")
+    df = spark.createDataFrame([(1, "a"), (2, "b"), (3, "c"), (4, "d")], schema="id INT, name STRING")
 
     # Create table with bucket partition
     # Note: Glue catalog doesn't support OPTIONS, so we don't specify a location
@@ -129,7 +129,7 @@ def test_glue_partition_transform_bucket(glue_spark, moto_endpoint):
         assert spec.fields[0].transform.num_buckets == num_buckets
 
         # Verify data can be read back via table name
-        result = glue_spark.table(f"test_db.{table_name}").select("id").orderBy("id").collect()
+        result = spark.table(f"test_db.{table_name}").select("id").orderBy("id").collect()
         assert [r[0] for r in result] == [1, 2, 3, 4]
     finally:
-        glue_spark.sql(f"DROP TABLE IF EXISTS test_db.{table_name}")
+        spark.sql(f"DROP TABLE IF EXISTS test_db.{table_name}")

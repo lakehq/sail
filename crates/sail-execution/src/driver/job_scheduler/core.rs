@@ -5,9 +5,6 @@ use chrono::Utc;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
-use datafusion_proto::physical_plan::to_proto::serialize_physical_expr;
-use datafusion_proto::physical_plan::AsExecutionPlan;
-use datafusion_proto::protobuf::PhysicalPlanNode;
 use indexmap::{IndexMap, IndexSet};
 use log::{debug, warn};
 use prost::Message;
@@ -27,6 +24,7 @@ use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey};
 use crate::job_graph::{
     InputMode, JobGraph, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
 };
+use crate::proto::encode::{try_encode_physical_expr, try_encode_physical_plan};
 use crate::task::definition::{
     TaskDefinition, TaskInput, TaskInputKey, TaskInputLocator, TaskOutput, TaskOutputDistribution,
     TaskOutputLocator,
@@ -528,9 +526,7 @@ impl JobScheduler {
             )));
         };
 
-        let plan =
-            PhysicalPlanNode::try_from_physical_plan(stage.plan.clone(), self.codec.as_ref())?
-                .encode_to_vec();
+        let plan = try_encode_physical_plan(self.codec.as_ref(), stage.plan.clone())?;
         let inputs = stage
             .inputs
             .iter()
@@ -683,7 +679,7 @@ impl JobScheduler {
                     .iter()
                     .map(|expr| {
                         let expr =
-                            serialize_physical_expr(expr, self.codec.as_ref())?.encode_to_vec();
+                            try_encode_physical_expr(self.codec.as_ref(), expr)?.encode_to_vec();
                         Ok(Arc::from(expr))
                     })
                     .collect::<ExecutionResult<Vec<Arc<[u8]>>>>()?;

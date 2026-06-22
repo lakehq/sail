@@ -10,6 +10,9 @@ data:
     initial_logical_plan:
     RowLevelWrite: command=Delete, target=delta_delete_explain_codegen, format=delta, condition=salary + 1 > 70000 AND ( department = 'Engineering' OR department = 'Marketing' ) AND active IS NOT NULL
   
+    logical_plan after resolve_lambda_variables:
+    SAME TEXT AS ABOVE
+  
     logical_plan after resolve_grouping_function:
     SAME TEXT AS ABOVE
   
@@ -370,9 +373,6 @@ data:
     SAME TEXT AS ABOVE
   
     physical_plan after EnforceBarrierPartitioning:
-    SAME TEXT AS ABOVE
-  
-    physical_plan after wrap_higher_order_functions:
     SAME TEXT AS ABOVE
   
     physical_plan after SanityCheckPlan:

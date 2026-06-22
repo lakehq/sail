@@ -502,6 +502,18 @@ impl PlanFormatter for SparkPlanFormatter {
                 let args = argv.join(", ");
                 Ok(format!("{name}({args})"))
             }
+            "hll_sketch_agg" | "theta_sketch_agg" | "theta_union_agg" => Ok(
+                format_function_with_default_argument(name, arguments, 1, "12"),
+            ),
+            "hll_union" => Ok(format_function_with_default_argument(
+                name, arguments, 2, "false",
+            )),
+            "hll_union_agg" => Ok(format_function_with_default_argument(
+                name, arguments, 1, "false",
+            )),
+            "theta_union" => Ok(format_function_with_default_argument(
+                name, arguments, 2, "12",
+            )),
             "dateadd" => {
                 let arguments = arguments.join(", ");
                 Ok(format!("date_add({arguments})"))
@@ -718,6 +730,19 @@ fn append_start_pos_if_arglen_eq(
     };
     let args = args.join(", ");
     format!("{name}({args}{start_pos_str})")
+}
+
+fn format_function_with_default_argument(
+    name: &str,
+    mut arguments: Vec<&str>,
+    default_argument_count: usize,
+    default_argument: &'static str,
+) -> String {
+    if arguments.len() == default_argument_count {
+        arguments.push(default_argument);
+    }
+    let arguments = arguments.join(", ");
+    format!("{name}({arguments})")
 }
 
 fn format_decimal(value: &str, scale: i8) -> String {

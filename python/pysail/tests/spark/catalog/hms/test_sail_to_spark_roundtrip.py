@@ -7,6 +7,7 @@ permission issues on CI.
 
 from __future__ import annotations
 
+import pytest
 from pyspark.sql import SparkSession
 from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
@@ -42,15 +43,15 @@ def _assert_reference_spark_table(
 
 
 def test_sail_creates_spark_reads_parquet(
-    hms_s3_spark: SparkSession,
-    reference_spark_s3: SparkSession,
+    spark: SparkSession,
+    jvm_spark: SparkSession,
     hms_s3_database: str,
 ) -> None:
     """Sail creates an external Parquet table; reference Spark reads it back."""
     table = "roundtrip_parquet"
     table_fqn = f"{hms_s3_database}.{table}"
 
-    hms_s3_spark.sql(
+    spark.sql(
         f"""
         CREATE TABLE {table_fqn} (
           id INT COMMENT 'identifier',
@@ -60,40 +61,41 @@ def test_sail_creates_spark_reads_parquet(
         TBLPROPERTIES ('interop.owner' = 'sail')
         """
     )
-    hms_s3_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'alice'), (2, 'bob')")
+    spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'alice'), (2, 'bob')")
 
-    sail_rows = hms_s3_spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
+    sail_rows = spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
     assert len(sail_rows) == 2, f"Sail expected 2 rows, got {len(sail_rows)}"
 
     _assert_reference_spark_table(
-        reference_spark_s3,
+        jvm_spark,
         hms_s3_database,
         table,
         table_type="EXTERNAL",
     )
-    ref_rows = reference_spark_s3.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
+    ref_rows = jvm_spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
 
     assert len(ref_rows) == 2, f"Reference Spark expected 2 rows, got {len(ref_rows)}"
     assert ref_rows[0].id == 1 and ref_rows[0].name == "alice"
     assert ref_rows[1].id == 2 and ref_rows[1].name == "bob"
-    ref_properties = _describe_extended_properties(reference_spark_s3, table_fqn)
+    ref_properties = _describe_extended_properties(jvm_spark, table_fqn)
     assert ref_properties.get("Type") == "EXTERNAL"
     assert ref_properties.get("Provider", "").lower() == "parquet"
     assert "interop.owner=sail" in ref_properties.get("Table Properties", "")
     assert "spark.sql." not in ref_properties.get("Table Properties", "")
-    assert _describe_column_comments(reference_spark_s3, table_fqn)["id"] == "identifier"
+    assert _describe_column_comments(jvm_spark, table_fqn)["id"] == "identifier"
 
 
+@pytest.mark.xfail(reason="not yet working in Hive 4", strict=True)
 def test_sail_creates_spark_reads_schema_matrix_parquet(
-    hms_s3_spark: SparkSession,
-    reference_spark_s3: SparkSession,
+    spark: SparkSession,
+    jvm_spark: SparkSession,
     hms_s3_database: str,
 ) -> None:
     """Sail writes tricky supported Parquet types; Spark restores schema and values."""
     table = "roundtrip_schema_matrix"
     table_fqn = f"{hms_s3_database}.{table}"
 
-    hms_s3_spark.sql(
+    spark.sql(
         f"""
         CREATE TABLE {table_fqn} (
           id INT,
@@ -111,7 +113,7 @@ def test_sail_creates_spark_reads_schema_matrix_parquet(
         USING PARQUET
         """
     )
-    hms_s3_spark.sql(
+    spark.sql(
         f"""
         INSERT INTO {table_fqn} VALUES
           (
@@ -154,26 +156,26 @@ def test_sail_creates_spark_reads_schema_matrix_parquet(
     )
 
     _assert_reference_spark_table(
-        reference_spark_s3,
+        jvm_spark,
         hms_s3_database,
         table,
         table_type="EXTERNAL",
     )
-    _assert_schema_matrix_shape(reference_spark_s3, table_fqn)
-    ref_rows = reference_spark_s3.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
+    _assert_schema_matrix_shape(jvm_spark, table_fqn)
+    ref_rows = jvm_spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
     _assert_schema_matrix_rows(ref_rows)
 
 
 def test_sail_creates_spark_reads_timestamp_types_parquet(
-    hms_s3_spark: SparkSession,
-    reference_spark_s3: SparkSession,
+    spark: SparkSession,
+    jvm_spark: SparkSession,
     hms_s3_database: str,
 ) -> None:
     """Sail writes timestamp LTZ/NTZ columns; Spark restores schema and values."""
     table = "roundtrip_timestamp_types"
     table_fqn = f"{hms_s3_database}.{table}"
 
-    hms_s3_spark.sql(
+    spark.sql(
         f"""
         CREATE TABLE {table_fqn} (
           id INT,
@@ -183,7 +185,7 @@ def test_sail_creates_spark_reads_timestamp_types_parquet(
         USING PARQUET
         """
     )
-    hms_s3_spark.sql(
+    spark.sql(
         f"""
         INSERT INTO {table_fqn} VALUES
           (
@@ -195,24 +197,24 @@ def test_sail_creates_spark_reads_timestamp_types_parquet(
     )
 
     _assert_reference_spark_table(
-        reference_spark_s3,
+        jvm_spark,
         hms_s3_database,
         table,
         table_type="EXTERNAL",
     )
-    schema = reference_spark_s3.table(table_fqn).schema
+    schema = jvm_spark.table(table_fqn).schema
     fields = {field.name: field for field in schema.fields}
     assert fields["ts_ltz"].dataType.simpleString() == "timestamp"
     assert fields["ts_ntz"].dataType.simpleString() == "timestamp_ntz"
-    rows = reference_spark_s3.sql(
+    rows = jvm_spark.sql(
         f"SELECT id, CAST(ts_ltz AS STRING) AS ts_ltz, CAST(ts_ntz AS STRING) AS ts_ntz FROM {table_fqn}"
     ).collect()
     assert [(r.id, r.ts_ltz, r.ts_ntz) for r in rows] == [(1, "2024-01-02 03:04:05", "2024-01-02 03:04:05")]
 
 
 def test_sail_creates_spark_reads_parquet_with_explicit_location(
-    hms_s3_spark: SparkSession,
-    reference_spark_s3: SparkSession,
+    spark: SparkSession,
+    jvm_spark: SparkSession,
     hms_s3_database: str,
 ) -> None:
     """Sail creates an external Parquet table with S3 LOCATION; Spark reads it back."""
@@ -220,43 +222,43 @@ def test_sail_creates_spark_reads_parquet_with_explicit_location(
     table_fqn = f"{hms_s3_database}.{table}"
     location = f"s3://hms-warehouse/{hms_s3_database}/roundtrip_location_parquet"
 
-    hms_s3_spark.sql(f"CREATE TABLE {table_fqn} (id INT, name STRING) USING PARQUET LOCATION '{location}'")
-    hms_s3_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'alice'), (2, 'bob')")
+    spark.sql(f"CREATE TABLE {table_fqn} (id INT, name STRING) USING PARQUET LOCATION '{location}'")
+    spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'alice'), (2, 'bob')")
 
-    sail_rows = hms_s3_spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
+    sail_rows = spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
     assert len(sail_rows) == 2, f"Sail expected 2 rows, got {len(sail_rows)}"
 
     _assert_reference_spark_table(
-        reference_spark_s3,
+        jvm_spark,
         hms_s3_database,
         table,
         table_type="EXTERNAL",
     )
-    ref_rows = reference_spark_s3.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
+    ref_rows = jvm_spark.sql(f"SELECT * FROM {table_fqn} ORDER BY id").collect()
     assert len(ref_rows) == 2, f"Reference Spark expected 2 rows, got {len(ref_rows)}"
     assert ref_rows[0].id == 1 and ref_rows[0].name == "alice"
     assert ref_rows[1].id == 2 and ref_rows[1].name == "bob"
 
 
 def test_sail_unsets_table_properties_spark_observes_metadata_change(
-    hms_s3_spark: SparkSession,
-    reference_spark_s3: SparkSession,
+    spark: SparkSession,
+    jvm_spark: SparkSession,
     hms_s3_database: str,
 ) -> None:
     """Sail ALTER TABLE UNSET TBLPROPERTIES updates HMS metadata for Spark."""
     table = "roundtrip_unset_properties"
     table_fqn = f"{hms_s3_database}.{table}"
 
-    hms_s3_spark.sql(
+    spark.sql(
         f"""
         CREATE TABLE {table_fqn} (id INT, name STRING)
         USING PARQUET
         TBLPROPERTIES ('interop.keep' = 'yes', 'interop.drop' = 'remove')
         """
     )
-    hms_s3_spark.sql(f"ALTER TABLE {table_fqn} UNSET TBLPROPERTIES ('interop.drop')")
+    spark.sql(f"ALTER TABLE {table_fqn} UNSET TBLPROPERTIES ('interop.drop')")
 
-    ref_properties = _describe_extended_properties(reference_spark_s3, table_fqn)
+    ref_properties = _describe_extended_properties(jvm_spark, table_fqn)
     table_properties = ref_properties.get("Table Properties", "")
     assert "interop.keep=yes" in table_properties
     assert "interop.drop" not in table_properties
@@ -264,8 +266,8 @@ def test_sail_unsets_table_properties_spark_observes_metadata_change(
 
 
 def test_sail_creates_external_table_via_catalog_api(
-    hms_s3_spark: SparkSession,
-    reference_spark_s3: SparkSession,
+    spark: SparkSession,
+    jvm_spark: SparkSession,
     hms_s3_database: str,
 ) -> None:
     """Sail creates an external table via spark.catalog API; Spark reads it back as EXTERNAL."""
@@ -273,7 +275,7 @@ def test_sail_creates_external_table_via_catalog_api(
     table_fqn = f"{hms_s3_database}.{table}"
     location = f"s3://hms-warehouse/{hms_s3_database}/{table}"
 
-    hms_s3_spark.catalog.createTable(
+    spark.catalog.createTable(
         table_fqn,
         path=location,
         source="parquet",
@@ -286,19 +288,19 @@ def test_sail_creates_external_table_via_catalog_api(
     )
 
     _assert_reference_spark_table(
-        reference_spark_s3,
+        jvm_spark,
         hms_s3_database,
         table,
         table_type="EXTERNAL",
     )
-    ref_properties = _describe_extended_properties(reference_spark_s3, table_fqn)
+    ref_properties = _describe_extended_properties(jvm_spark, table_fqn)
     assert ref_properties.get("Type") == "EXTERNAL"
     assert ref_properties.get("Provider", "").lower() == "parquet"
 
 
 def test_sail_dataframe_writer_creates_spark_readable_external_table(
-    hms_s3_spark: SparkSession,
-    reference_spark_s3: SparkSession,
+    spark: SparkSession,
+    jvm_spark: SparkSession,
     hms_s3_database: str,
 ) -> None:
     """Sail DataFrame writer creates HMS metadata that Spark can read."""
@@ -306,34 +308,35 @@ def test_sail_dataframe_writer_creates_spark_readable_external_table(
     table_fqn = f"{hms_s3_database}.{table}"
     location = f"s3://hms-warehouse/{hms_s3_database}/{table}"
 
-    hms_s3_spark.createDataFrame([(1, "alice"), (2, "bob")], schema="id INT, name STRING").write.saveAsTable(
+    spark.createDataFrame([(1, "alice"), (2, "bob")], schema="id INT, name STRING").write.saveAsTable(
         table_fqn,
         path=location,
     )
 
     _assert_reference_spark_table(
-        reference_spark_s3,
+        jvm_spark,
         hms_s3_database,
         table,
         table_type="EXTERNAL",
     )
-    ref_properties = _describe_extended_properties(reference_spark_s3, table_fqn)
+    ref_properties = _describe_extended_properties(jvm_spark, table_fqn)
     assert ref_properties.get("Type") == "EXTERNAL"
     assert ref_properties.get("Provider", "").lower() == "parquet"
-    rows = reference_spark_s3.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
+    rows = jvm_spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
     assert [(row.id, row.name) for row in rows] == [(1, "alice"), (2, "bob")]
 
 
+@pytest.mark.xfail(reason="not yet working in Hive 4", strict=True)
 def test_sail_creates_spark_reads_mixed_complex_partitioned_parquet(
-    hms_s3_spark: SparkSession,
-    reference_spark_s3: SparkSession,
+    spark: SparkSession,
+    jvm_spark: SparkSession,
     hms_s3_database: str,
 ) -> None:
     """Sail writes mixed complex partitioned schema; Spark reads nested values and partitions."""
     table = "roundtrip_mixed_complex_partitioned"
     table_fqn = f"{hms_s3_database}.{table}"
 
-    hms_s3_spark.sql(
+    spark.sql(
         f"""
         CREATE TABLE {table_fqn} (
           id INT,
@@ -349,7 +352,7 @@ def test_sail_creates_spark_reads_mixed_complex_partitioned_parquet(
         PARTITIONED BY (category, event_date)
         """
     )
-    hms_s3_spark.sql(
+    spark.sql(
         f"""
         INSERT INTO {table_fqn} VALUES
           (
@@ -394,16 +397,16 @@ def test_sail_creates_spark_reads_mixed_complex_partitioned_parquet(
     )
 
     _assert_reference_spark_table(
-        reference_spark_s3,
+        jvm_spark,
         hms_s3_database,
         table,
         table_type="EXTERNAL",
     )
-    props = _describe_extended_properties(reference_spark_s3, table_fqn)
+    props = _describe_extended_properties(jvm_spark, table_fqn)
     assert props.get("Type") == "EXTERNAL"
     assert props.get("Provider", "").lower() == "parquet"
     assert props.get("Location")
-    retail = reference_spark_s3.sql(
+    retail = jvm_spark.sql(
         f"""
         SELECT
           id,
@@ -426,16 +429,16 @@ def test_sail_creates_spark_reads_mixed_complex_partitioned_parquet(
 
 
 def test_sail_creates_spark_reads_date_and_binary_parquet(
-    hms_s3_spark: SparkSession,
-    reference_spark_s3: SparkSession,
+    spark: SparkSession,
+    jvm_spark: SparkSession,
     hms_s3_database: str,
 ) -> None:
     """Sail writes DATE and BINARY values; Spark restores exact values."""
     table = "roundtrip_date_binary"
     table_fqn = f"{hms_s3_database}.{table}"
 
-    hms_s3_spark.sql(f"CREATE TABLE {table_fqn} (id INT, day DATE, payload BINARY) USING PARQUET")
-    hms_s3_spark.sql(
+    spark.sql(f"CREATE TABLE {table_fqn} (id INT, day DATE, payload BINARY) USING PARQUET")
+    spark.sql(
         f"""
         INSERT INTO {table_fqn} VALUES
           (1, DATE '2024-01-02', unhex('00FF10')),
@@ -444,12 +447,12 @@ def test_sail_creates_spark_reads_date_and_binary_parquet(
     )
 
     _assert_reference_spark_table(
-        reference_spark_s3,
+        jvm_spark,
         hms_s3_database,
         table,
         table_type="EXTERNAL",
     )
-    rows = reference_spark_s3.sql(
+    rows = jvm_spark.sql(
         f"SELECT id, CAST(day AS STRING) AS day, hex(payload) AS payload_hex FROM {table_fqn} ORDER BY id"
     ).collect()
     assert [(r.id, r.day, r.payload_hex) for r in rows] == [
