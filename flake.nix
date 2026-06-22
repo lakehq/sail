@@ -37,6 +37,17 @@
           wheel
         ]);
 
+        # Expose ONLY the `python3.11` binary so hatch reuses this Nix
+        # interpreter (with a valid LIBDIR/libpython) for the `test-ibis` env
+        # instead of downloading a relocatable standalone CPython whose baked-in
+        # `LIBDIR=/install/lib` makes the linker fail with
+        # `mold: fatal: library not found: python3.11`. A bare `pkgs.python311`
+        # would collide with python313 on shared bins (idle3, 2to3, ...).
+        python311bin = pkgs.runCommand "python311-bin" { } ''
+          mkdir -p $out/bin
+          ln -s ${pkgs.python311}/bin/python3.11 $out/bin/python3.11
+        '';
+
         # Use the default (latest) protobuf to stay aligned with CI, which
         # installs the latest protoc via `arduino/setup-protoc`.
         protobuf3 = pkgs.protobuf;
@@ -139,7 +150,7 @@
               mold
               sccache
             ])
-            ++ [ py protobuf3 ]
+            ++ [ py python311bin protobuf3 ]
             ++ lib.optionals isLinux [ pkgs.stdenv.cc.cc.lib pkgs.gcc ];
 
           env = [
@@ -380,8 +391,8 @@
               source "${pkgs.fzf}/share/fzf/completion.bash"
             fi
           '' + lib.optionalString isLinux ''
-            export LD_LIBRARY_PATH=${py}/lib:${pkgs.stdenv.cc.cc.lib}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
-            export RUSTFLAGS="-C link-arg=-fuse-ld=mold"
+            export LD_LIBRARY_PATH=${py}/lib:${pkgs.python311}/lib:${pkgs.stdenv.cc.cc.lib}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+            export RUSTFLAGS="-C link-arg=-fuse-ld=mold -C link-arg=-L${pkgs.python311}/lib"
             export RUSTC_WRAPPER="${pkgs.sccache}/bin/sccache"
           '';
         };
