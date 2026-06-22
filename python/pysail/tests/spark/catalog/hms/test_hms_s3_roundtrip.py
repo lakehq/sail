@@ -1,5 +1,5 @@
 # ruff: noqa: S608, TC002
-"""HMS interop tests for managed tables under S3 database locations."""
+"""HMS interop tests for tables under S3 database locations."""
 
 from __future__ import annotations
 
@@ -14,13 +14,13 @@ from pysail.tests.spark.catalog.hms.conftest import (
 _S3_WAREHOUSE_PREFIX = "s3://hms-warehouse"
 
 
-def _assert_sail_describes_s3_managed_table(
+def _assert_sail_describes_s3_table(
     spark: SparkSession,
     table_fqn: str,
     location_prefix: str,
 ) -> None:
     props = _describe_extended_properties(spark, table_fqn)
-    assert props["Type"] == "MANAGED"
+    assert props["Type"] == "EXTERNAL"
     assert props["Provider"].lower() == "parquet"
     assert props["Location"].startswith(location_prefix)
 
@@ -41,19 +41,19 @@ def _assert_reference_describes_s3_table(
         assert location.startswith(location_prefix)
 
 
-def test_s3_spark_creates_sail_reads_managed_parquet(
+def test_s3_spark_creates_sail_reads_parquet(
     jvm_spark: SparkSession,
     spark: SparkSession,
     hms_s3_database: str,
 ) -> None:
-    table = "spark_managed_parquet"
+    table = "spark_parquet"
     table_fqn = f"{hms_s3_database}.{table}"
     location_prefix = f"{_S3_WAREHOUSE_PREFIX}/{hms_s3_database}"
 
     jvm_spark.sql(f"CREATE TABLE {table_fqn} (id INT, name STRING) USING PARQUET")
     jvm_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'spark'), (2, 's3')")
 
-    _assert_sail_describes_s3_managed_table(spark, table_fqn, location_prefix)
+    _assert_sail_describes_s3_table(spark, table_fqn, location_prefix)
     rows = spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
     assert [(row.id, row.name) for row in rows] == [(1, "spark"), (2, "s3")]
 

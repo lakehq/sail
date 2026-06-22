@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 # HMS container
 # ---------------------------------------------------------------------------
 #
-_HMS_IMAGE = "apache/hive:3.1.3"
+_HMS_IMAGE = "apache/hive:4.0.0"
 _HMS_METASTORE_PORT = 9083
 _HMS_STARTUP_TIMEOUT = 180  # seconds
 # Use 127.0.0.1 explicitly instead of 'localhost' to avoid IPv6 resolution
@@ -298,8 +298,8 @@ def hms_s3_container(
     """Start a Hive Metastore container with S3A wiring for s3:// locations."""
     s3a_classpath = ":".join(
         [
-            "/opt/hadoop/share/hadoop/tools/lib/hadoop-aws-3.1.0.jar",
-            "/opt/hadoop/share/hadoop/tools/lib/aws-java-sdk-bundle-1.11.271.jar",
+            "/opt/hadoop/share/hadoop/tools/lib/hadoop-aws-3.3.6.jar",
+            "/opt/hadoop/share/hadoop/tools/lib/aws-java-sdk-bundle-1.12.367.jar",
         ]
     )
     container = DockerContainer(_HMS_IMAGE)

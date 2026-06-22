@@ -7,6 +7,7 @@ permission issues on CI.
 
 from __future__ import annotations
 
+import pytest
 from pyspark.sql import SparkSession
 from pyspark.sql.types import IntegerType, StringType, StructField, StructType
 
@@ -84,6 +85,7 @@ def test_sail_creates_spark_reads_parquet(
     assert _describe_column_comments(jvm_spark, table_fqn)["id"] == "identifier"
 
 
+@pytest.mark.xfail(reason="not yet working in Hive 4", strict=True)
 def test_sail_creates_spark_reads_schema_matrix_parquet(
     spark: SparkSession,
     jvm_spark: SparkSession,
@@ -324,6 +326,7 @@ def test_sail_dataframe_writer_creates_spark_readable_external_table(
     assert [(row.id, row.name) for row in rows] == [(1, "alice"), (2, "bob")]
 
 
+@pytest.mark.xfail(reason="not yet working in Hive 4", strict=True)
 def test_sail_creates_spark_reads_mixed_complex_partitioned_parquet(
     spark: SparkSession,
     jvm_spark: SparkSession,

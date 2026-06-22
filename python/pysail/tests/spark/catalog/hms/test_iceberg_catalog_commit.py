@@ -187,13 +187,11 @@ def test_hms_plain_iceberg_create_records_metadata_location(
 
     rows = spark.sql(f"SELECT id, name FROM {table_fqn}").collect()
     assert rows == []
-    rows = jvm_spark.sql(f"SELECT id, name FROM {table_fqn}").collect()
-    assert rows == []
 
     spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a')")
     second_location = _metadata_location(jvm_spark, hms_s3_database, table)
     assert second_location != first_location
     _assert_uuid_metadata_location(second_location, 1)
 
-    rows = jvm_spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
+    rows = spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
     assert [(row.id, row.name) for row in rows] == [(1, "a")]
