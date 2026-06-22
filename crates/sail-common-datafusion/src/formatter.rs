@@ -122,8 +122,9 @@ impl Display for TimestampMicrosecondFormatter<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let Self(microseconds, tz) = self;
         // Convert microseconds to seconds and nanoseconds
-        let secs = microseconds / 1_000_000;
-        let nanos = (microseconds % 1_000_000) * 1_000; // Convert remaining microseconds to nanoseconds
+        // Use div_euclid/rem_euclid to handle negative values correctly
+        let secs = microseconds.div_euclid(1_000_000);
+        let nanos = microseconds.rem_euclid(1_000_000) * 1_000; // Convert remaining microseconds to nanoseconds
         let datetime = Utc.timestamp_opt(secs, nanos as u32).earliest();
         match datetime {
             Some(datetime) => write_timestamp(f, &datetime, *tz),

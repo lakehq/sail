@@ -84,9 +84,9 @@ impl Default for ToJsonOptions {
     fn default() -> Self {
         Self {
             timestamp_format: DateTimeFormat::parse(Self::TIMESTAMP_FORMAT_DEFAULT)
-                .expect("default timestamp format should be valid"),
+                .unwrap_or_else(|_| panic!("default timestamp format should be valid")),
             date_format: DateTimeFormat::parse(Self::DATE_FORMAT_DEFAULT)
-                .expect("default date format should be valid"),
+                .unwrap_or_else(|_| panic!("default date format should be valid")),
         }
     }
 }

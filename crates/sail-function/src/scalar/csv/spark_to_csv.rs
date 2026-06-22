@@ -19,13 +19,13 @@ use crate::scalar::datetime::format::{
 lazy_static! {
     static ref DEFAULT_TIMESTAMP_FORMAT: DateTimeFormat =
         DateTimeFormat::parse(SparkToCsvOptions::TIMESTAMP_FORMAT_DEFAULT)
-            .expect("default timestamp format should be valid");
+            .unwrap_or_else(|_| panic!("default timestamp format should be valid"));
     static ref DEFAULT_DATE_FORMAT: DateTimeFormat =
         DateTimeFormat::parse(SparkToCsvOptions::DATE_FORMAT_DEFAULT)
-            .expect("default date format should be valid");
+            .unwrap_or_else(|_| panic!("default date format should be valid"));
     static ref DEFAULT_LTZ_FORMAT: DateTimeFormat =
         DateTimeFormat::parse("yyyy-MM-dd'T'HH:mm:ss.SSSXXX")
-            .expect("default timestamp LTZ format should be valid");
+            .unwrap_or_else(|_| panic!("default timestamp LTZ format should be valid"));
 }
 
 #[cfg(test)]

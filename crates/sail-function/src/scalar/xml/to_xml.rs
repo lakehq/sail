@@ -100,7 +100,7 @@ impl SparkToXmlOptions {
             .transpose()?
             .unwrap_or_else(|| {
                 DateTimeFormat::parse(Self::TIMESTAMP_NTZ_FORMAT_DEFAULT)
-                    .expect("default timestamp NTZ format should be valid")
+                    .unwrap_or_else(|_| panic!("default timestamp NTZ format should be valid"))
             });
 
         let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
@@ -109,7 +109,7 @@ impl SparkToXmlOptions {
             .transpose()?
             .unwrap_or_else(|| {
                 DateTimeFormat::parse(Self::DATE_FORMAT_DEFAULT)
-                    .expect("default date format should be valid")
+                    .unwrap_or_else(|_| panic!("default date format should be valid"))
             });
 
         Ok(Self {
@@ -150,9 +150,9 @@ impl Default for SparkToXmlOptions {
             declaration: Self::DECLARATION_DEFAULT.to_string(),
             timestamp_ltz_format: None,
             timestamp_ntz_format: DateTimeFormat::parse(Self::TIMESTAMP_NTZ_FORMAT_DEFAULT)
-                .expect("default timestamp NTZ format should be valid"),
+                .unwrap_or_else(|_| panic!("default timestamp NTZ format should be valid")),
             date_format: DateTimeFormat::parse(Self::DATE_FORMAT_DEFAULT)
-                .expect("default date format should be valid"),
+                .unwrap_or_else(|_| panic!("default date format should be valid")),
             session_timezone: "UTC".to_string(),
         }
     }
@@ -868,7 +868,7 @@ fn format_timestamp_field(
             // Use default format
             let default_fmt =
                 DateTimeFormat::parse(SparkToXmlOptions::TIMESTAMP_LTZ_FORMAT_DEFAULT)
-                    .expect("default timestamp LTZ format should be valid");
+                    .unwrap_or_else(|_| panic!("default timestamp LTZ format should be valid"));
             Ok(default_fmt.format(input).map_err(|e| {
                 DataFusionError::Execution(format!("Failed to format timestamp: {e}"))
             })?)

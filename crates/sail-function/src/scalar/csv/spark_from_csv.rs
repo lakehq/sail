@@ -471,7 +471,7 @@ fn parse_date(
             let days = naive_date
                 .signed_duration_since(
                     chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
-                        .expect("1970-01-01 should be valid"),
+                        .unwrap_or_else(|| panic!("1970-01-01 should be valid")),
                 )
                 .num_days() as i32;
             Ok(ScalarValue::Date32(Some(days)))
@@ -480,7 +480,7 @@ fn parse_date(
             let millis = naive_date
                 .signed_duration_since(
                     chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
-                        .expect("1970-01-01 should be valid"),
+                        .unwrap_or_else(|| panic!("1970-01-01 should be valid")),
                 )
                 .num_milliseconds();
             Ok(ScalarValue::Date64(Some(millis)))
