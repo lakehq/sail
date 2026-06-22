@@ -115,7 +115,6 @@ def remote(
     with spark_connect_server(
         envs={
             "SAIL_CATALOG__LIST": catalog_config,
-            "SAIL_EXECUTION__DEFAULT_PARALLELISM": "4",
             "UNITY_ALLOW_HTTP_URL": "true",
         },
     ) as server:

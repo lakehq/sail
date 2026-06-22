@@ -149,7 +149,6 @@ def remote(
     with spark_connect_server(
         envs={
             "SAIL_CATALOG__LIST": catalog_config,
-            "SAIL_EXECUTION__DEFAULT_PARALLELISM": "4",
             "AWS_ACCESS_KEY_ID": "admin",
             "AWS_SECRET_ACCESS_KEY": "password",
             "AWS_REGION": "us-east-1",

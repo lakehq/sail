@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextlib
-import importlib
 import os
 import uuid
 from dataclasses import dataclass
@@ -42,6 +41,8 @@ class _SparkSessionFactory:
 @contextlib.contextmanager
 def spark_connect_server(envs: Mapping[str, str] | None = None) -> Iterator[_ServerHandle]:
     """Create a Spark Connect server unless `SPARK_REMOTE` already points to one."""
+    from pysail.spark import SparkConnectServer  # noqa: PLC0415
+
     if remote := os.environ.get("SPARK_REMOTE"):
         if envs is not None:
             pytest.skip("the server from `SPARK_REMOTE` may not be compatible with the custom environment variables")
@@ -53,8 +54,7 @@ def spark_connect_server(envs: Mapping[str, str] | None = None) -> Iterator[_Ser
         for key, value in envs.items():
             mp.setenv(key, value)
 
-        spark_connect_server_type = importlib.import_module("pysail.spark").SparkConnectServer
-        server = spark_connect_server_type("127.0.0.1", 0)
+        server = SparkConnectServer("127.0.0.1", 0)
         server.start(background=True)
         _, port = server.listening_address
         try:

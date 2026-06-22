@@ -19,7 +19,7 @@ from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
 from testcontainers.core.waiting_utils import wait_for_logs
 
-from pysail.testing.spark.session import configure_spark_session, patch_spark_connect_session, spark_connect_server
+from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 
 if TYPE_CHECKING:
     from collections.abc import Generator
@@ -143,7 +143,7 @@ def _wait_for_port(host: str, port: int, timeout: float) -> None:
     raise TimeoutError(msg)
 
 
-def _wait_until_hms_catalog(remote_url: str, timeout: float) -> None:
+def _wait_for_hms_catalog_with_timeout(remote: str, timeout: float) -> None:
     """Block until Sail can successfully list HMS databases.
 
     We intentionally probe with ``SHOW DATABASES`` instead of an HMS-only
@@ -153,22 +153,17 @@ def _wait_until_hms_catalog(remote_url: str, timeout: float) -> None:
     deadline = time.monotonic() + timeout
     last_error = None
     while time.monotonic() < deadline:
-        spark = None
-        try:
-            spark = SparkSession.builder.remote(remote_url).appName("hms_smoke_readiness").create()
-            configure_spark_session(spark)
-            patch_spark_connect_session(spark)
-            spark.sql("SHOW DATABASES").collect()
-            return
-        except AnalysisException as exc:
-            last_error = exc
-            time.sleep(1)
-        except Exception as exc:  # noqa: BLE001
-            last_error = exc
-            time.sleep(1)
-        finally:
-            if spark is not None:
-                spark.stop()
+        with spark_session_factory(remote) as sessions:
+            spark = sessions.create()
+            try:
+                spark.sql("SHOW DATABASES").collect()
+                return
+            except AnalysisException as exc:
+                last_error = exc
+                time.sleep(1)
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+                time.sleep(1)
 
     raise TimeoutError(f"Sail HMS catalog did not become queryable within {timeout}s; last error: {last_error}")
 
@@ -360,7 +355,7 @@ def remote(
 
 @pytest.fixture(scope="module", autouse=True)
 def _wait_for_hms_catalog(remote: str) -> None:
-    _wait_until_hms_catalog(remote, 60)
+    _wait_for_hms_catalog_with_timeout(remote, 60)
 
 
 # ---------------------------------------------------------------------------
@@ -382,7 +377,7 @@ def jvm_spark(
     with _classic_spark_mode():
         builder = (
             SparkSession.builder.master("local[1]")
-            .appName("hms_jvm_spark_s3")
+            .appName("hms-jvm-s3")
             .config("spark.sql.catalogImplementation", "hive")
             .config(
                 "spark.hadoop.hive.metastore.uris",

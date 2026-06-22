@@ -43,7 +43,6 @@ def remote(moto_endpoint: str) -> Generator[str, None, None]:
     with spark_connect_server(
         envs={
             "SAIL_CATALOG__LIST": catalog_config,
-            "SAIL_EXECUTION__DEFAULT_PARALLELISM": "4",
             "AWS_ACCESS_KEY_ID": "testing",
             "AWS_SECRET_ACCESS_KEY": "testing",
         },
