@@ -1,17 +1,22 @@
+import platform
 from pathlib import Path
 
 import pandas as pd
+import pytest
 from pyiceberg.catalog import load_catalog
 
 
 def create_sql_catalog(tmp_path: Path):
+    if platform.system() == "Windows":
+        pytest.skip("PyIceberg SQL catalog local file URIs are not portable on Windows")
+
     warehouse_path = tmp_path / "warehouse"
     warehouse_path.mkdir(parents=True, exist_ok=True)
     catalog = load_catalog(
         "test_catalog",
         type="sql",
         uri=f"sqlite:///{tmp_path}/pyiceberg_catalog.db",
-        warehouse=f"file://{warehouse_path}",
+        warehouse=warehouse_path.as_uri(),
     )
     try:  # noqa: SIM105
         catalog.create_namespace("default")
