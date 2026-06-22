@@ -201,10 +201,18 @@ impl CatalogManager {
                 Err(CatalogError::NotFound(_, _)) => {}
                 Err(e) => return Err(e),
             }
-        }
-        if let [x @ .., name] = reference {
+        } else if let [x @ .., name] = reference {
             if self.state()?.is_global_temporary_view_database(x) {
                 return self.get_global_temporary_view(name.as_ref()).await;
+            }
+            // For qualified references that are not the global temporary view database,
+            // also try looking up the temporary view by just the name (the last part).
+            // This matches Spark behavior where temporary views can be accessed with
+            // qualified names such as `default.v1` when `v1` is a temporary view.
+            match self.get_temporary_view(name.as_ref()).await {
+                Ok(x) => return Ok(x),
+                Err(CatalogError::NotFound(_, _)) => {}
+                Err(e) => return Err(e),
             }
         }
         match self.get_table(reference).await {
