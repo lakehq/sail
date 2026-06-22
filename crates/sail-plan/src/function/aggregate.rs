@@ -3,9 +3,8 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field};
 use datafusion::functions_aggregate::{
-    approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
-    correlation, count, covariance, first_last, grouping, min_max, percentile_cont, stddev, sum,
-    variance,
+    approx_distinct, array_agg, average, bit_and_or_xor, bool_and_or, correlation, count,
+    covariance, first_last, grouping, min_max, percentile_cont, stddev, sum, variance,
 };
 use datafusion::functions_nested::string::array_to_string;
 use datafusion_common::ScalarValue;
@@ -15,6 +14,7 @@ use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::aggregate::approx_percentile::SparkApproxPercentile;
 use sail_function::aggregate::bitmap_and_agg::BitmapAndAggFunction;
 use sail_function::aggregate::bitmap_construct_agg::BitmapConstructAggFunction;
 use sail_function::aggregate::bitmap_or_agg::BitmapOrAggFunction;
@@ -528,6 +528,24 @@ fn median(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+/// Builds the Spark `approx_percentile` / `percentile_approx` aggregate.
+///
+/// Unlike DataFusion's `approx_percentile_cont`, the Spark variant accepts an
+/// array of percentiles (returning `array<double>`) as well as an optional
+/// integer accuracy argument.
+fn approx_percentile_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: Arc::new(AggregateUDF::from(SparkApproxPercentile::new())),
+        params: AggregateFunctionParams {
+            args: input.arguments,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
+        },
+    }))
+}
+
 fn percentile_exact(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(PercentileFunction::new())),
@@ -637,10 +655,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("any", F::default(bool_and_or::bool_or_udaf)),
         ("any_value", F::custom(first_value)),
         ("approx_count_distinct", F::custom(approx_count_distinct)),
-        (
-            "approx_percentile",
-            F::default(approx_percentile_cont::approx_percentile_cont_udaf),
-        ),
+        ("approx_percentile", F::custom(approx_percentile_agg)),
         ("array_agg", F::custom(array_agg_compacted)),
         ("avg", F::custom(avg)),
         ("bit_and", F::default(bit_and_or_xor::bit_and_udaf)),
@@ -694,10 +709,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("min_by", F::custom(min_by)),
         ("mode", F::custom(mode)),
         ("percentile", F::custom(percentile_exact)),
-        (
-            "percentile_approx",
-            F::default(approx_percentile_cont::approx_percentile_cont_udaf),
-        ),
+        ("percentile_approx", F::custom(approx_percentile_agg)),
         ("percentile_cont", F::custom(percentile_cont)),
         ("percentile_disc", F::custom(percentile_disc)),
         ("product", F::custom(product)),
