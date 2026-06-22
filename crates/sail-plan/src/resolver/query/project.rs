@@ -16,6 +16,7 @@ use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
+use crate::resolver::tree::rand::RandRewriter;
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 use crate::resolver::tree::window::WindowRewriter;
 use crate::resolver::tree::PlanRewriter;
@@ -35,6 +36,7 @@ impl PlanResolver<'_> {
         let schema = input.schema();
         let expr = self.resolve_named_expressions(expr, schema, state).await?;
         let (input, expr) = self.rewrite_wildcard(input, expr, state)?;
+        let (input, expr) = self.rewrite_projection::<RandRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
         let (input, expr) =
             self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
@@ -192,6 +194,20 @@ impl PlanResolver<'_> {
                 })
             })
             .collect::<PlanResult<Vec<_>>>()?;
+        Ok((rewriter.into_plan(), expr))
+    }
+
+    pub(super) fn rewrite_expr<'s, T>(
+        &self,
+        input: LogicalPlan,
+        expr: Expr,
+        state: &'s mut PlanResolverState,
+    ) -> PlanResult<(LogicalPlan, Expr)>
+    where
+        T: PlanRewriter<'s> + TreeNodeRewriter<Node = Expr>,
+    {
+        let mut rewriter = T::new_from_plan(input, state);
+        let expr = expr.rewrite(&mut rewriter)?.data;
         Ok((rewriter.into_plan(), expr))
     }
 

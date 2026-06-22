@@ -58,12 +58,12 @@ impl ScalarUDFImpl for Random {
 
         match seed {
             ColumnarValue::Scalar(scalar) => {
+                // Spark treats a literal NULL seed as a concrete seed of 0
+                // (so `rand(NULL)` equals `rand(0)`), not as "no seed".
                 let seed = match scalar {
                     ScalarValue::Int64(Some(value)) => *value,
                     ScalarValue::UInt64(Some(value)) => *value as i64,
-                    ScalarValue::Int64(None) | ScalarValue::UInt64(None) | ScalarValue::Null => {
-                        return invoke_no_seed(number_rows)
-                    }
+                    ScalarValue::Int64(None) | ScalarValue::UInt64(None) | ScalarValue::Null => 0,
                     _ => return exec_err!("`random` expects an integer seed, got {scalar}"),
                 };
                 let mut rng = SparkXorShiftRandom::new(seed);
@@ -79,28 +79,23 @@ impl ScalarUDFImpl for Random {
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.is_empty() {
-            Ok(vec![])
-        } else if arg_types.len() == 1 {
-            if arg_types[0].is_signed_integer() {
-                Ok(vec![DataType::Int64])
-            } else if arg_types[0].is_unsigned_integer() {
-                Ok(vec![DataType::UInt64])
-            } else if arg_types[0].is_null() {
-                Ok(vec![DataType::Null])
-            } else {
-                Err(unsupported_data_types_exec_err(
-                    "random",
-                    "Integer Type for seed",
-                    arg_types,
-                ))
-            }
-        } else {
-            Err(invalid_arg_count_exec_err(
+        match arg_types {
+            [] => Ok(vec![]),
+            // Spark accepts only INT or BIGINT; narrower/wider integers are
+            // rejected with DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE.
+            [DataType::Int32 | DataType::Int64] => Ok(vec![DataType::Int64]),
+            [DataType::UInt32 | DataType::UInt64] => Ok(vec![DataType::UInt64]),
+            [DataType::Null] => Ok(vec![DataType::Null]),
+            [_] => Err(unsupported_data_types_exec_err(
+                "random",
+                "INT or BIGINT type for seed",
+                arg_types,
+            )),
+            _ => Err(invalid_arg_count_exec_err(
                 "random",
                 (0, 1),
                 arg_types.len(),
-            ))
+            )),
         }
     }
 }

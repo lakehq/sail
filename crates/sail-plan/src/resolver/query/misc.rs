@@ -39,8 +39,11 @@ impl PlanResolver<'_> {
             num_partitions,
         } = range;
         let start = start.unwrap_or(0);
-        // TODO: use parallelism in Spark configuration as the default
-        let num_partitions = num_partitions.unwrap_or(1);
+        // Spark defaults the number of range partitions to the default parallelism,
+        // which Sail maps to DataFusion's `target_partitions`. Matching it is required
+        // for partition-aware operations (e.g. `rand`/`sampleBy`) to agree with Spark.
+        let num_partitions =
+            num_partitions.unwrap_or_else(|| self.ctx.copied_config().target_partitions().max(1));
         if num_partitions < 1 {
             return Err(PlanError::invalid(format!(
                 "invalid number of partitions: {num_partitions}"

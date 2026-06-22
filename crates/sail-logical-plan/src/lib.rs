@@ -3,6 +3,7 @@ pub mod check_constraints;
 pub mod map_partitions;
 pub mod merge;
 pub mod monotonic_id;
+pub mod rand;
 pub mod range;
 pub mod repartition;
 pub mod schema_pivot;

@@ -64,6 +64,7 @@ message ExtendedPhysicalPlanNode {
     DeletionVectorRowsWriterExecNode deletion_vector_rows_writer = 49;
     CoalesceExecNode coalesce = 50;
     FileDeleteExecNode file_delete = 51;
+    RandExecNode rand = 52;
   }
 }
 
@@ -783,6 +784,14 @@ message SparkPartitionIdExecNode {
 message CoalesceExecNode {
   bytes input = 1;
   uint64 output_partitions = 2;
+}
+
+message RandExecNode {
+  bytes input = 1;
+  string column_name = 2;
+  int64 seed = 3;
+  string mode = 4;
+  bytes schema = 5;
 }
 
 message RelaxedTzCastExecNode {
