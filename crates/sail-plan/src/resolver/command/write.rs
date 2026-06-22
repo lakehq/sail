@@ -120,6 +120,7 @@ pub(super) struct WritePlanBuilder {
     partition_by: Vec<CatalogPartitionField>,
     bucket_by: Option<spec::SaveBucketBy>,
     sort_by: Vec<spec::SortOrder>,
+    catalog_sort_by: Vec<CatalogTableSort>,
     cluster_by: Vec<spec::ObjectName>,
     options: Vec<Vec<(String, String)>>,
     table_properties: Vec<(String, String)>,
@@ -136,6 +137,7 @@ impl WritePlanBuilder {
             partition_by: vec![],
             bucket_by: None,
             sort_by: vec![],
+            catalog_sort_by: vec![],
             cluster_by: vec![],
             options: vec![],
             table_properties: vec![],
@@ -177,6 +179,11 @@ impl WritePlanBuilder {
         self
     }
 
+    pub fn with_catalog_sort_by(mut self, catalog_sort_by: Vec<CatalogTableSort>) -> Self {
+        self.catalog_sort_by = catalog_sort_by;
+        self
+    }
+
     pub fn with_cluster_by(mut self, cluster_by: Vec<spec::ObjectName>) -> Self {
         self.cluster_by = cluster_by;
         self
@@ -215,6 +222,7 @@ impl PlanResolver<'_> {
             partition_by,
             bucket_by,
             sort_by,
+            catalog_sort_by,
             cluster_by,
             options,
             table_properties,
@@ -452,7 +460,20 @@ impl PlanResolver<'_> {
                             _ => vec![],
                         })
                         .collect();
-                    let sort_by = self.resolve_catalog_table_sort(sort_by)?;
+                    let sort_by = if !catalog_sort_by.is_empty() {
+                        // Ensure the write produces globally sorted output matching the
+                        // declared file sort order, so SortExec elimination is safe.
+                        if file_write_options.sort_by.is_empty() {
+                            file_write_options.sort_by = catalog_sort_by
+                                .iter()
+                                .cloned()
+                                .map(datafusion_expr::expr::Sort::from)
+                                .collect();
+                        }
+                        catalog_sort_by
+                    } else {
+                        self.resolve_catalog_table_sort(sort_by)?
+                    };
                     let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
                     let catalog_table = table
                         .parts()

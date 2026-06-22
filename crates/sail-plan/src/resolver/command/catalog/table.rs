@@ -1,4 +1,5 @@
-use datafusion_expr::LogicalPlan;
+use datafusion_common::Column;
+use datafusion_expr::{Expr, LogicalPlan};
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{
@@ -177,7 +178,43 @@ impl PlanResolver<'_> {
         // Rename the input using names in the PlanResolverState, opaque field ID -> fieldInfo.name
         let input = self.resolve_query_plan(query, state).await?;
         let column_names = PlanResolver::get_field_names(input.schema(), state)?;
+
+        // If the top-level plan node is ORDER BY, record those columns in the catalog so
+        // that TableProvider::output_ordering() can report them when the table is read back.
+        // Check BEFORE rename_logical_plan (which wraps the plan in Projection, hiding Sort).
+        // Sort expressions reference internal field IDs; map them to user-visible column names
+        // using column_names which aligns with the schema's field order.
+        let catalog_sort_by: Vec<CatalogTableSort> = if let LogicalPlan::Sort(sort_plan) = &input {
+            let schema = sort_plan.input.schema();
+            // Only keep a safe prefix: stop at the first non-plain-column sort key.
+            // e.g. ORDER BY ceil(col), col would only record nothing (ceil is not a column),
+            // preventing the optimizer from incorrectly dropping a required SortExec.
+            sort_plan
+                .expr
+                .iter()
+                .take_while(|sort_expr| {
+                    matches!(sort_expr.expr, Expr::Column(Column { relation: None, .. }))
+                })
+                .filter_map(|sort_expr| {
+                    if let Expr::Column(Column { name, .. }) = &sort_expr.expr {
+                        let idx = schema.index_of_column_by_name(None, name)?;
+                        let user_name = column_names.get(idx)?.clone();
+                        Some(CatalogTableSort {
+                            column: user_name,
+                            ascending: sort_expr.asc,
+                            nulls_first: sort_expr.nulls_first,
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            vec![]
+        };
+
         let input = rename_logical_plan(input, &column_names)?;
+
         let format = self.resolve_catalog_table_format(file_format)?;
         let mut write_options = options;
         if let Some(location) = location {
@@ -203,6 +240,7 @@ impl PlanResolver<'_> {
             .with_mode(write_mode)
             .with_format(format)
             .with_partition_by(partition_by)
+            .with_catalog_sort_by(catalog_sort_by)
             .with_table_properties(properties)
             .with_table_is_external(is_external)
             .with_options(write_options);
@@ -437,12 +475,17 @@ impl PlanResolver<'_> {
                     spec::SortDirection::Ascending | spec::SortDirection::Unspecified => true,
                     spec::SortDirection::Descending => false,
                 };
-                if !matches!(null_ordering, spec::NullOrdering::Unspecified) {
-                    return Err(PlanError::unsupported(
-                        "sort column null ordering in CREATE TABLE statement",
-                    ));
-                }
-                Ok(CatalogTableSort { column, ascending })
+                let nulls_first = match null_ordering {
+                    spec::NullOrdering::NullsFirst => true,
+                    spec::NullOrdering::NullsLast => false,
+                    // Spark default: ASC → NULLS FIRST, DESC → NULLS LAST
+                    spec::NullOrdering::Unspecified => ascending,
+                };
+                Ok(CatalogTableSort {
+                    column,
+                    ascending,
+                    nulls_first,
+                })
             })
             .collect()
     }

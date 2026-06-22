@@ -1,0 +1,8 @@
+# serializer version: 1
+---
+name: "test_simple_presorted"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#1@0 as col]
+      DataSourceExec: file_groups={1 group: [[<tmp>/simple_presorted/<id>_0.zst.parquet]]}, projection=[col@0 as #1], file_type=parquet

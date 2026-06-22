@@ -66,6 +66,8 @@ impl From<CatalogTableBucketBy> for BucketBy {
 pub struct CatalogTableSort {
     pub column: String,
     pub ascending: bool,
+    #[serde(default)]
+    pub nulls_first: bool,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
@@ -78,7 +80,11 @@ pub struct CatalogTableColumnIdentity {
 
 impl From<CatalogTableSort> for expr::Sort {
     fn from(value: CatalogTableSort) -> Self {
-        let CatalogTableSort { column, ascending } = value;
+        let CatalogTableSort {
+            column,
+            ascending,
+            nulls_first,
+        } = value;
         expr::Sort {
             expr: expr::Expr::Column(Column {
                 relation: None,
@@ -86,7 +92,7 @@ impl From<CatalogTableSort> for expr::Sort {
                 spans: Default::default(),
             }),
             asc: ascending,
-            nulls_first: false,
+            nulls_first,
         }
     }
 }
