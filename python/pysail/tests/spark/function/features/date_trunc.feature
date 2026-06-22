@@ -34,7 +34,7 @@ Feature: DATE_TRUNC preserves timestamp type
       Then query schema
       """
       root
-       |-- result: timestamp_ntz (nullable = false)
+       |-- result: timestamp_ntz (nullable = true)
       """
 
     Scenario: date_trunc YEAR on timestamp values
@@ -45,7 +45,7 @@ Feature: DATE_TRUNC preserves timestamp type
       Then query schema
       """
       root
-       |-- result: timestamp (nullable = false)
+       |-- result: timestamp (nullable = true)
       """
       Then query result
       | result              |
@@ -59,7 +59,7 @@ Feature: DATE_TRUNC preserves timestamp type
       Then query schema
       """
       root
-       |-- result: timestamp (nullable = false)
+       |-- result: timestamp (nullable = true)
       """
       Then query result
       | result              |
@@ -73,7 +73,7 @@ Feature: DATE_TRUNC preserves timestamp type
       Then query schema
       """
       root
-       |-- result: timestamp (nullable = false)
+       |-- result: timestamp (nullable = true)
       """
       Then query result
       | result              |
@@ -87,7 +87,7 @@ Feature: DATE_TRUNC preserves timestamp type
       Then query schema
       """
       root
-       |-- result: timestamp (nullable = false)
+       |-- result: timestamp (nullable = true)
       """
       Then query result
       | result              |

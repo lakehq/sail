@@ -1,4 +1,4 @@
-@variant @spark-4
+@spark-4
 Feature: Variant type functions (parse_json, is_variant_null, variant_get)
 
   Rule: parse_json + variant_get roundtrip
@@ -807,6 +807,17 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
         | 42      |
         | NULL    |
         | {"a":1} |
+
+  Rule: Variant storage detection
+
+    Scenario: ordinary struct with Variant-shaped field names is not treated as Variant
+      When query
+        """
+        SELECT CAST(named_struct('metadata', X'01', 'value', X'02') AS STRING) IS NOT NULL AS result
+        """
+      Then query result
+        | result |
+        | true   |
 
   Rule: CAST to VARIANT
 

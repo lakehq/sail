@@ -8,8 +8,7 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::catalog::Session;
 use datafusion::datasource::provider_as_source;
-use datafusion::logical_expr::TableSource;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::logical_expr::{LogicalPlan, TableSource};
 use datafusion_common::{not_impl_err, plan_err, Result};
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 use sail_common_datafusion::streaming::source::StreamSourceTableProvider;
@@ -37,12 +36,14 @@ impl TableFormat for SocketTableFormat {
     ) -> Result<Arc<dyn TableSource>> {
         let SourceInfo {
             paths: _,
+            lakehouse_table: _,
             schema,
             constraints,
             partition_by,
             bucket_by,
             sort_order,
             options,
+            read_case_sensitive: _,
         } = info;
         if !constraints.deref().is_empty() {
             return plan_err!("the socket table format does not support constraints");
@@ -64,11 +65,7 @@ impl TableFormat for SocketTableFormat {
         )))
     }
 
-    async fn create_writer(
-        &self,
-        _ctx: &dyn Session,
-        _info: SinkInfo,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
+    async fn create_writer(&self, _ctx: &dyn Session, _info: SinkInfo) -> Result<LogicalPlan> {
         not_impl_err!("socket table format writer")
     }
 }

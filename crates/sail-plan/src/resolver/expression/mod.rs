@@ -154,7 +154,7 @@ impl PlanResolver<'_> {
                 function,
                 arguments,
             } => {
-                self.resolve_expression_lambda_function(*function, arguments, schema, state)
+                self.resolve_expression_lambda_function(*function, arguments, None, schema, state)
                     .await
             }
             Expr::Window {
@@ -197,6 +197,7 @@ impl PlanResolver<'_> {
                 self.resolve_expression_call_function(function_name, arguments, schema, state)
                     .await
             }
+            Expr::DefaultColumnValue => self.resolve_expression_default_column_value(),
             Expr::Placeholder(placeholder) => {
                 self.resolve_expression_placeholder(placeholder).await
             }

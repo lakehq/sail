@@ -16,6 +16,7 @@ from pyiceberg.partitioning import (
     YearTransform,
 )
 from pyiceberg.schema import Schema
+from pyiceberg.table import StaticTable
 from pyiceberg.types import DateType, IntegerType, NestedField, StringType, TimestampType
 
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
@@ -171,7 +172,7 @@ def test_partitioned_write_then_pyiceberg_read_all(spark, tmp_path, table_name, 
         df = spark.createDataFrame(rows, schema="number INT, letter STRING, ts TIMESTAMP, dt DATE")
         df.write.format("iceberg").mode("overwrite").save(table.location())
 
-        py_tbl = catalog.load_table(table_name)
+        py_tbl = StaticTable.from_metadata(table.location())
         actual = pyiceberg_to_pandas(py_tbl, sort_by="number")
 
         expected_letters = [

@@ -38,9 +38,9 @@ impl TreeNodeRewriter for RandRewriter<'_> {
         };
 
         let inner = func.inner();
-        let mode = if inner.as_any().downcast_ref::<Random>().is_some() {
+        let mode = if inner.downcast_ref::<Random>().is_some() {
             RandMode::Uniform
-        } else if inner.as_any().downcast_ref::<Randn>().is_some() {
+        } else if inner.downcast_ref::<Randn>().is_some() {
             RandMode::Gaussian
         } else {
             return Ok(Transformed::no(func.call(args)));

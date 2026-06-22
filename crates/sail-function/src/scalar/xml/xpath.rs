@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, ListBuilder, StringArray, StringBuilder};
@@ -30,10 +29,6 @@ impl Xpath {
 }
 
 impl ScalarUDFImpl for Xpath {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "xpath"
     }

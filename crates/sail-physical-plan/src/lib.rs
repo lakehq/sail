@@ -1,15 +1,13 @@
 pub mod barrier;
 pub mod catalog_command;
 pub mod coalesce;
-pub mod file_delete;
-pub mod file_write;
+pub mod higher_order;
 pub mod map_partitions;
 pub mod merge_cardinality_check;
 pub mod monotonic_id;
 pub mod rand;
 pub mod range;
 pub mod repartition;
-pub mod row_level_write;
 pub mod schema_pivot;
 pub mod show_string;
 pub mod spark_partition_id;

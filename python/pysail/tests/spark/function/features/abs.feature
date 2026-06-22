@@ -1,4 +1,3 @@
-@abs
 Feature: abs comprehensive tests
 
   Rule: Argument count validation
@@ -755,6 +754,7 @@ Feature: abs comprehensive tests
         | 5      |
         | 5      |
 
+  @sail-only
   Rule: simplify rewrite shape
     # Locks the simplify hook's dispatch (Int8/Int16/Int32/Int64/Interval/Duration
     # stay in SparkAbs invoke for ANSI handling; floats/decimals/null delegate

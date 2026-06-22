@@ -6,10 +6,11 @@ use datafusion::prelude::SessionContext;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams, WindowFunctionParams};
 use datafusion_expr::{
-    cast, expr, AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, ScalarUDFImpl,
+    cast, expr, lit, AggregateUDF, BinaryExpr, ExprSchemable, Operator, ScalarUDF, ScalarUDFImpl,
     WindowFrame, WindowFunctionDefinition, WindowUDF,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::sketch::{DEFAULT_HLL_LG_CONFIG_K, DEFAULT_THETA_LG_NOM_ENTRIES};
 
 use crate::config::PlanConfig;
 use crate::error::{IntoPlanResult, PlanError, PlanResult};
@@ -261,6 +262,7 @@ impl AggFunctionBuilder {
         Arc::new(f)
     }
 
+    #[expect(dead_code)]
     pub fn unknown(name: &str) -> AggFunction {
         let name = name.to_string();
         Arc::new(move |_| {
@@ -402,5 +404,81 @@ pub(crate) fn get_arguments_and_null_treatment(
         Ok((vec![expr], null_treatment))
     } else {
         Err(PlanError::invalid("requires 1 or 2 arguments"))
+    }
+}
+
+pub(crate) fn hll_args_with_default_lg(
+    arguments: Vec<expr::Expr>,
+    function_name: &str,
+) -> PlanResult<Vec<expr::Expr>> {
+    match arguments.len() {
+        1 => {
+            let value = arguments.one()?;
+            Ok(vec![value, lit(DEFAULT_HLL_LG_CONFIG_K)])
+        }
+        2 => {
+            let (value, lg_config_k) = arguments.two()?;
+            Ok(vec![value, cast(lg_config_k, DataType::Int32)])
+        }
+        count => Err(PlanError::invalid(format!(
+            "{function_name} requires 1 or 2 arguments, got {count}"
+        ))),
+    }
+}
+
+pub(crate) fn hll_union_args_with_default_allow_different_lg(
+    arguments: Vec<expr::Expr>,
+) -> PlanResult<Vec<expr::Expr>> {
+    match arguments.len() {
+        1 => {
+            let value = arguments.one()?;
+            Ok(vec![value, lit(false)])
+        }
+        2 => {
+            let (value, allow_different_lg_config_k) = arguments.two()?;
+            Ok(vec![
+                value,
+                cast(allow_different_lg_config_k, DataType::Boolean),
+            ])
+        }
+        count => Err(PlanError::invalid(format!(
+            "hll_union_agg requires 1 or 2 arguments, got {count}"
+        ))),
+    }
+}
+
+pub(crate) fn count_min_sketch_args(arguments: Vec<expr::Expr>) -> PlanResult<Vec<expr::Expr>> {
+    match arguments.len() {
+        4 => {
+            let (value, eps, confidence, seed) = arguments.four()?;
+            Ok(vec![
+                value,
+                cast(eps, DataType::Float64),
+                cast(confidence, DataType::Float64),
+                seed,
+            ])
+        }
+        count => Err(PlanError::invalid(format!(
+            "count_min_sketch requires 4 arguments, got {count}"
+        ))),
+    }
+}
+
+pub(crate) fn theta_args_with_default_lg(
+    arguments: Vec<expr::Expr>,
+    function_name: &str,
+) -> PlanResult<Vec<expr::Expr>> {
+    match arguments.len() {
+        1 => {
+            let value = arguments.one()?;
+            Ok(vec![value, lit(DEFAULT_THETA_LG_NOM_ENTRIES)])
+        }
+        2 => {
+            let (value, lg_nom_entries) = arguments.two()?;
+            Ok(vec![value, cast(lg_nom_entries, DataType::Int32)])
+        }
+        count => Err(PlanError::invalid(format!(
+            "{function_name} requires 1 or 2 arguments, got {count}"
+        ))),
     }
 }

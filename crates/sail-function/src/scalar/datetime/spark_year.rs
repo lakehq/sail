@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use chrono::{Datelike, NaiveDate};
@@ -37,10 +36,6 @@ impl SparkYear {
 }
 
 impl ScalarUDFImpl for SparkYear {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_year"
     }

@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -85,10 +84,6 @@ impl ExecutionPlan for RandExec {
         "RandExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
     }
@@ -134,8 +129,8 @@ impl ExecutionPlan for RandExec {
         )?))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
-        let mut stats = self.input.partition_statistics(partition)?;
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
+        let mut stats = Arc::unwrap_or_clone(self.input.partition_statistics(partition)?);
         let col_idx = self.schema.index_of(&self.column_name)?;
         let unknown_col_stats = ColumnStatistics::new_unknown();
         if col_idx <= stats.column_statistics.len() {
@@ -153,7 +148,7 @@ impl ExecutionPlan for RandExec {
             .num_rows
             .multiply(&Precision::Exact(std::mem::size_of::<f64>()));
         stats.total_byte_size = stats.total_byte_size.add(&added_bytes);
-        Ok(stats)
+        Ok(Arc::new(stats))
     }
 }
 

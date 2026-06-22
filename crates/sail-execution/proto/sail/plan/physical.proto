@@ -63,19 +63,68 @@ message ExtendedPhysicalPlanNode {
     DeletionVectorWriterExecNode deletion_vector_writer = 48;
     DeletionVectorRowsWriterExecNode deletion_vector_rows_writer = 49;
     CoalesceExecNode coalesce = 50;
-    RandExecNode rand = 51;
+    FileDeleteExecNode file_delete = 51;
+    RandExecNode rand = 52;
   }
 }
 
 message ExtendedPhysicalExprNode {
   oneof ExprKind {
-    DeltaCastColumnExprNode delta_cast = 1;
+    CastColumnExprNode schema_evolution_cast = 1;
+    HigherOrderFunctionExprNode higher_order_function = 2;
+    LambdaExprNode lambda = 3;
+    LambdaVariableExprNode lambda_variable = 4;
   }
 }
 
-message DeltaCastColumnExprNode {
+message CastColumnExprNode {
   bytes input_schema = 1;
   bytes target_schema = 2;
+}
+
+// A Spark higher-order function (e.g. `filter`). The argument expressions
+// (including the lambda) are carried as the extension node's `inputs`.
+// `input_schema` is the schema the inner expression was planned against,
+// needed to rebuild it. `udf` identifies the concrete higher-order function,
+// following the same one-variant-per-function pattern as `ExtendedScalarUdf`.
+message HigherOrderFunctionExprNode {
+  bytes input_schema = 1;
+  HigherOrderUdf udf = 2;
+}
+
+message HigherOrderUdf {
+  oneof UdfKind {
+    SparkArrayFilterUdf filter = 1;
+  }
+}
+
+message SparkArrayFilterUdf {
+  // True when the lambda parameters are `[index, element]` (an index-only
+  // lambda rewritten by the planner) instead of `[element, index]`.
+  //
+  // TODO: this flag exists only to work around a DataFusion 54 physical lambda
+  // alignment bug. `LambdaExpr::new` (datafusion-physical-expr 54,
+  // src/expressions/lambda.rs) collects the body's used column/variable indices,
+  // sorts them, and remaps the body to compact positions; the eval batch is
+  // built as `[captures..., all declared params]` and projected to those used
+  // indices. When an earlier declared param is unused and a later one is used
+  // (e.g. `(x, i) -> i % 2 = 0`), the remap misaligns and evaluation fails with
+  // "Field of physical LambdaVariable ... doesn't match batch field". No
+  // dedicated upstream issue exists yet (worth filing). Once fixed upstream, the
+  // `index_first` rewrite and this field can be removed.
+  bool index_first = 1;
+}
+
+// A lambda function. Its body is carried as the extension node's single input.
+message LambdaExprNode {
+  repeated string params = 1;
+}
+
+// A reference to a lambda parameter, resolved to a position in the (extended)
+// schema with its field type.
+message LambdaVariableExprNode {
+  uint64 index = 1;
+  bytes field = 2;
 }
 
 message ExtendedScalarUdf {
@@ -103,6 +152,14 @@ message ExtendedScalarUdf {
     SparkMakeTimestampNtzUdf spark_make_timestamp_ntz = 21;
     ConvertTzUdf convert_tz = 22;
     SparkToCsvUdf spark_to_csv = 23;
+    SparkPmodUdf spark_pmod = 24;
+    SparkParseJsonUdf spark_parse_json = 25;
+    SparkStructRenameUdf spark_struct_rename = 26;
+    SparkWindowBucketsUdf spark_window_buckets = 27;
+    SparkToCharUdf spark_to_char = 28;
+    SparkToXmlUdf spark_to_xml = 29;
+    SparkBinUdf spark_bin = 30;
+    SparkNegativeUdf spark_negative = 31;
   }
 }
 
@@ -159,6 +216,10 @@ message XpathTypedUdf {
   string name = 1;
 }
 
+message SparkToXmlUdf {
+    string session_timezone = 1;
+}
+
 message SparkUnixTimestampUdf {
   string timezone = 1;
 }
@@ -197,12 +258,40 @@ message SparkNextDayUdf {
   bool ansi_mode = 1;
 }
 
+message SparkWindowBucketsUdf {
+  int64 window_duration = 1;
+  int64 slide_duration = 2;
+  int64 start_time = 3;
+}
+
 message SparkAbsUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkBinUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkParseJsonUdf {
+  bool safe = 1;
+}
+
+message SparkPmodUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkNegativeUdf {
   bool ansi_mode = 1;
 }
 
 message SparkFromCsvUdf {
   string session_timezone = 1;
+}
+
+message SparkStructRenameUdf {
+  // The target data type (struct or container-of-struct), encoded as Arrow
+  // ArrowType protobuf bytes.
+  bytes target_type = 1;
 }
 
 message SparkToCsvUdf {
@@ -219,6 +308,10 @@ message SparkFromJsonUdf {
 
 message SparkToNumberUdf {
   bool safe = 1;
+}
+
+message SparkToCharUdf {
+  bool ansi_mode = 1;
 }
 
 message SparkMakeTimestampNtzUdf {
@@ -566,6 +659,7 @@ message DeltaWriterExecNode {
   PhysicalSinkMode sink_mode = 7;
   map<string, string> metadata_configuration = 8;
   DeltaWriteContext write_context = 9;
+  string lakehouse_table_json = 10;
 }
 
 message DeltaCommitExecNode {
@@ -577,6 +671,7 @@ message DeltaCommitExecNode {
   PhysicalSinkMode sink_mode = 6;
   optional string user_metadata = 7;
   DeltaCommitContext commit_context = 8;
+  string lakehouse_table_json = 9;
 }
 
 message DeltaScanByAddsExecNode {
@@ -590,6 +685,7 @@ message DeltaScanByAddsExecNode {
   optional bytes pushdown_filter = 8;
   int64 version = 9;
   optional bytes statistics = 10;
+  string lakehouse_table_json = 11;
   // TODO: Consider snapshot hints (partition columns, kernel schema) to avoid worker log reads.
 }
 
@@ -640,6 +736,11 @@ message TextSinkExecNode {
   bytes line_sep = 4;
   CompressionTypeVariant compression_type_variant = 5;
   optional PhysicalSortExprNodeCollection sort_order = 6;
+}
+
+message FileDeleteExecNode {
+  string object_store_url = 1;
+  string path = 2;
 }
 
 message StreamCollectorExecNode {
@@ -755,11 +856,14 @@ message IcebergWriterExecNode {
   PhysicalSinkMode sink_mode = 4;
   bool table_exists = 5;
   string options = 6;
+  bytes logical_input_schema = 7;
+  string lakehouse_table_json = 8;
 }
 
 message IcebergCommitExecNode {
   bytes input = 1;
   string table_url = 2;
+  string lakehouse_table_json = 3;
 }
 
 message IcebergManifestScanExecNode {

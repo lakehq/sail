@@ -3,10 +3,17 @@ from typing import TYPE_CHECKING
 import pytest
 from pyiceberg.table import Table
 
+from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.tests.spark.iceberg.utils import create_sql_catalog
 
 if TYPE_CHECKING:
     from pyiceberg.schema import Schema
+
+
+@pytest.fixture(scope="session", autouse=True)
+def skip_if_jvm_spark():
+    if is_jvm_spark():
+        pytest.skip("Iceberg tests for JVM Spark")
 
 
 @pytest.fixture

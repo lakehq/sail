@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::Float64Array;
@@ -30,10 +29,6 @@ impl Random {
 }
 
 impl ScalarUDFImpl for Random {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "random"
     }

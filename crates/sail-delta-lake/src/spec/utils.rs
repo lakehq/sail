@@ -21,6 +21,7 @@ use std::str::Utf8Error;
 use arrow_schema::extension::ExtensionType;
 use parquet_variant_compute::VariantType;
 use percent_encoding::{percent_decode_str, percent_encode, AsciiSet, CONTROLS};
+use sail_common_datafusion::variant::is_marked_variant_storage_type;
 
 use super::schema::{DataType, StructField};
 
@@ -137,6 +138,7 @@ pub(crate) fn contains_variant<'a>(mut fields: impl Iterator<Item = &'a StructFi
 pub(crate) fn contains_variant_arrow(schema: &datafusion::arrow::datatypes::Schema) -> bool {
     fn is_variant_field(field: &datafusion::arrow::datatypes::Field) -> bool {
         field.extension_type_name() == Some(VariantType::NAME)
+            || is_marked_variant_storage_type(field.data_type())
     }
 
     fn has_variant(field: &datafusion::arrow::datatypes::Field) -> bool {

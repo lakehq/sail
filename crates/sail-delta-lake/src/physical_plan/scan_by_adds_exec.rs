@@ -10,7 +10,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
@@ -31,6 +30,7 @@ use datafusion_common::{internal_err, DataFusionError, Result, Statistics};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
+use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
 use url::Url;
@@ -59,6 +59,7 @@ struct ScanByAddsStreamState {
     table_version: i64,
     output_schema: SchemaRef,
     scan_config: DeltaScanConfig,
+    lakehouse_table: Option<LakehouseExecutionContext>,
     limit: Option<usize>,
     pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
 
@@ -79,6 +80,7 @@ struct ScanByAddsStreamState {
 }
 
 impl ScanByAddsStreamState {
+    #[expect(clippy::too_many_arguments)]
     fn new(
         input: SendableRecordBatchStream,
         context: Arc<TaskContext>,
@@ -86,6 +88,7 @@ impl ScanByAddsStreamState {
         table_version: i64,
         output_schema: SchemaRef,
         scan_config: DeltaScanConfig,
+        lakehouse_table: Option<LakehouseExecutionContext>,
         limit: Option<usize>,
         pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
     ) -> Self {
@@ -96,6 +99,7 @@ impl ScanByAddsStreamState {
             table_version,
             output_schema,
             scan_config,
+            lakehouse_table,
             limit,
             pushdown_filter,
             table_opened: false,
@@ -118,17 +122,24 @@ impl ScanByAddsStreamState {
         }
         // Prefer a session-scoped cache. This avoids leaking state across sessions / RuntimeEnvs.
         // If the cache extension is not installed, fall back to no caching.
+        let lakehouse_table = self.lakehouse_table.as_ref();
         let cached = match self.context.as_ref().extension::<DeltaTableCache>() {
             Ok(cache) => {
                 cache
-                    .get(self.context.as_ref(), &self.table_url, self.table_version)
+                    .get(
+                        self.context.as_ref(),
+                        &self.table_url,
+                        self.table_version,
+                        lakehouse_table,
+                    )
                     .await?
             }
             Err(_) => {
                 load_table_uncached(
-                    self.context.runtime_env(),
+                    self.context.as_ref(),
                     &self.table_url,
                     self.table_version,
+                    lakehouse_table,
                 )
                 .await?
             }
@@ -582,6 +593,7 @@ pub struct DeltaScanByAddsExec {
     projection: Option<Vec<usize>>,
     limit: Option<usize>,
     pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
+    lakehouse_table: Option<LakehouseExecutionContext>,
     statistics: Statistics,
     cache: Arc<PlanProperties>,
 }
@@ -598,6 +610,7 @@ impl DeltaScanByAddsExec {
         projection: Option<Vec<usize>>,
         limit: Option<usize>,
         pushdown_filter: Option<Arc<dyn PhysicalExpr>>,
+        lakehouse_table: Option<LakehouseExecutionContext>,
     ) -> Self {
         let statistics = Statistics::new_unknown(output_schema.as_ref());
         let cache = Self::compute_properties(
@@ -614,6 +627,7 @@ impl DeltaScanByAddsExec {
             projection,
             limit,
             pushdown_filter,
+            lakehouse_table,
             statistics,
             cache,
         }
@@ -677,6 +691,16 @@ impl DeltaScanByAddsExec {
         self.pushdown_filter.as_ref()
     }
 
+    pub fn catalog_table(&self) -> Option<&[String]> {
+        self.lakehouse_table
+            .as_ref()
+            .map(LakehouseExecutionContext::catalog_table)
+    }
+
+    pub fn lakehouse_table(&self) -> Option<&LakehouseExecutionContext> {
+        self.lakehouse_table.as_ref()
+    }
+
     pub fn statistics(&self) -> &Statistics {
         &self.statistics
     }
@@ -695,10 +719,6 @@ impl DeltaScanByAddsExec {
 impl ExecutionPlan for DeltaScanByAddsExec {
     fn name(&self) -> &'static str {
         "DeltaScanByAddsExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -739,6 +759,7 @@ impl ExecutionPlan for DeltaScanByAddsExec {
         let table_version = self.version;
         let output_schema = self.schema();
         let scan_config = self.scan_config.clone();
+        let lakehouse_table = self.lakehouse_table.clone();
         let limit = self.limit;
         let pushdown_filter = self.pushdown_filter.clone();
         let state = ScanByAddsStreamState::new(
@@ -748,6 +769,7 @@ impl ExecutionPlan for DeltaScanByAddsExec {
             table_version,
             Arc::clone(&output_schema),
             scan_config,
+            lakehouse_table,
             limit,
             pushdown_filter,
         );
@@ -826,11 +848,11 @@ impl ExecutionPlan for DeltaScanByAddsExec {
         Ok(Box::pin(RecordBatchStreamAdapter::new(output_schema, s)))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         if partition.is_none() {
-            Ok(self.statistics.clone())
+            Ok(Arc::new(self.statistics.clone()))
         } else {
-            Ok(Statistics::new_unknown(self.schema().as_ref()))
+            Ok(Arc::new(Statistics::new_unknown(self.schema().as_ref())))
         }
     }
 }
@@ -994,6 +1016,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .with_table_statistics(Some(table_stats));
 
@@ -1044,6 +1067,7 @@ mod tests {
             table_schema,
             output_schema,
             crate::datasource::DeltaScanConfig::default(),
+            None,
             None,
             None,
             None,
