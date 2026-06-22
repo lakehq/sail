@@ -160,10 +160,9 @@ def _wait_for_hms_catalog_with_timeout(remote: str, timeout: float) -> None:
                 return
             except AnalysisException as exc:
                 last_error = exc
-                time.sleep(1)
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
-                time.sleep(1)
+        time.sleep(1)
 
     raise TimeoutError(f"Sail HMS catalog did not become queryable within {timeout}s; last error: {last_error}")
 

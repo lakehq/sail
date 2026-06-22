@@ -125,13 +125,12 @@ def remote(
 def _configure_unity_catalog_spark(
     spark: SparkSession,
     unity_storage_root: Path,
-) -> Generator[None, None, None]:
+):
     """Configure the Spark session for Unity managed table storage."""
     spark.conf.set(
         "spark.sql.warehouse.dir",
         str(unity_storage_root / "warehouse"),
     )
-    return
 
 
 def _qualified_table_name(table_name: str) -> str:
