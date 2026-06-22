@@ -291,7 +291,7 @@ pub(crate) fn catalog_requirements(
 }
 
 pub(crate) fn table_metadata_location(table_url: &Url, metadata_file: &str) -> Result<String> {
-    if Url::parse(metadata_file).is_ok() {
+    if crate::utils::parse_absolute_url(metadata_file).is_some() {
         return Ok(metadata_file.to_string());
     }
     Ok(table_url

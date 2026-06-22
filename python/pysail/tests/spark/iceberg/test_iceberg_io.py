@@ -95,6 +95,7 @@ def test_iceberg_io_read_with_sql(spark, iceberg_test_data, expected_pandas_df, 
 
 def test_iceberg_io_create_table_materializes_empty_metadata(spark, tmp_path):
     table_path = tmp_path / "iceberg_empty_table"
+    table_location = table_path.as_uri()
     table_name = "iceberg_empty_materialized_test"
 
     spark.sql(f"DROP TABLE IF EXISTS {table_name}")
@@ -106,7 +107,7 @@ def test_iceberg_io_create_table_materializes_empty_metadata(spark, tmp_path):
               name STRING
             )
             USING ICEBERG
-            LOCATION '{escape_sql_string_literal(str(table_path))}'
+            LOCATION '{escape_sql_string_literal(table_location)}'
             """
         )
 
@@ -137,6 +138,7 @@ def test_iceberg_io_create_table_materializes_empty_metadata(spark, tmp_path):
 
 def test_iceberg_io_create_or_replace_existing_table_adopts_metadata_location(spark, tmp_path):
     table_path = tmp_path / "iceberg_replace_existing"
+    table_location = table_path.as_uri()
     table_name = "iceberg_create_or_replace_existing_test"
 
     spark.sql(f"DROP TABLE IF EXISTS {table_name}")
@@ -148,7 +150,7 @@ def test_iceberg_io_create_or_replace_existing_table_adopts_metadata_location(sp
               name STRING
             )
             USING ICEBERG
-            LOCATION '{escape_sql_string_literal(str(table_path))}'
+            LOCATION '{escape_sql_string_literal(table_location)}'
             """
         )
         spark.sql(f"INSERT INTO {table_name} VALUES (1, 'one')")  # noqa: S608
@@ -160,7 +162,7 @@ def test_iceberg_io_create_or_replace_existing_table_adopts_metadata_location(sp
               name STRING
             )
             USING ICEBERG
-            LOCATION '{escape_sql_string_literal(str(table_path))}'
+            LOCATION '{escape_sql_string_literal(table_location)}'
             """
         )
 
@@ -173,6 +175,8 @@ def test_iceberg_io_create_or_replace_existing_table_adopts_metadata_location(sp
 def test_iceberg_io_create_table_if_not_exists_does_not_materialize_new_location(spark, tmp_path):
     table_path = tmp_path / "iceberg_if_not_exists_table"
     alternate_path = tmp_path / "iceberg_if_not_exists_alternate"
+    table_location = table_path.as_uri()
+    alternate_location = alternate_path.as_uri()
     table_name = "iceberg_if_not_exists_materialized_test"
 
     spark.sql(f"DROP TABLE IF EXISTS {table_name}")
@@ -184,7 +188,7 @@ def test_iceberg_io_create_table_if_not_exists_does_not_materialize_new_location
               name STRING
             )
             USING ICEBERG
-            LOCATION '{escape_sql_string_literal(str(table_path))}'
+            LOCATION '{escape_sql_string_literal(table_location)}'
             """
         )
         assert (table_path / "metadata" / "version-hint.text").exists()
@@ -196,7 +200,7 @@ def test_iceberg_io_create_table_if_not_exists_does_not_materialize_new_location
               name STRING
             )
             USING ICEBERG
-            LOCATION '{escape_sql_string_literal(str(alternate_path))}'
+            LOCATION '{escape_sql_string_literal(alternate_location)}'
             """
         )
 
@@ -207,6 +211,7 @@ def test_iceberg_io_create_table_if_not_exists_does_not_materialize_new_location
 
 def test_iceberg_io_create_table_rejects_existing_metadata_location(spark, tmp_path):
     table_path = tmp_path / "iceberg_existing_metadata"
+    table_location = table_path.as_uri()
     first_table = "iceberg_existing_metadata_first_test"
     second_table = "iceberg_existing_metadata_second_test"
 
@@ -220,7 +225,7 @@ def test_iceberg_io_create_table_rejects_existing_metadata_location(spark, tmp_p
               name STRING
             )
             USING ICEBERG
-            LOCATION '{escape_sql_string_literal(str(table_path))}'
+            LOCATION '{escape_sql_string_literal(table_location)}'
             """
         )
 
@@ -232,7 +237,7 @@ def test_iceberg_io_create_table_rejects_existing_metadata_location(spark, tmp_p
                   name STRING
                 )
                 USING ICEBERG
-                LOCATION '{escape_sql_string_literal(str(table_path))}'
+                LOCATION '{escape_sql_string_literal(table_location)}'
                 """
             )
     finally:
