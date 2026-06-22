@@ -14,9 +14,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-pytestmark = [
-    pytest.mark.skipif(pyspark_version() < (4,), reason="Variant SQL functions require PySpark 4+"),
-]
+pytestmark = pytest.mark.skipif(pyspark_version() < (4,), reason="Variant SQL functions require PySpark 4+")
 
 
 def _write_shredded_variant_delta_table(table_location: Path) -> None:

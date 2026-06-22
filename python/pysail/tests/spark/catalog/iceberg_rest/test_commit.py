@@ -22,10 +22,10 @@ UUID_METADATA_FILE_PATTERN = re.compile(
 
 
 @pytest.fixture(scope="module", autouse=True)
-def namespace(iceberg_spark: SparkSession) -> Generator[None, None, None]:
-    iceberg_spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
+def namespace(spark: SparkSession) -> Generator[None, None, None]:
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
     yield
-    iceberg_spark.sql(f"DROP DATABASE IF EXISTS {NAMESPACE} CASCADE")
+    spark.sql(f"DROP DATABASE IF EXISTS {NAMESPACE} CASCADE")
 
 
 def _load_table(iceberg_rest_endpoint: str, table_name: str) -> dict:
@@ -50,12 +50,12 @@ def _current_schema_field_names(metadata: dict) -> list[str]:
 
 
 def test_ctas_records_rest_catalog_metadata_location(
-    iceberg_spark: SparkSession,
+    spark: SparkSession,
     iceberg_rest_endpoint: str,
 ) -> None:
     table_name = "ctas_t"
-    iceberg_spark.sql(f"DROP TABLE IF EXISTS {NAMESPACE}.{table_name}")
-    iceberg_spark.sql(
+    spark.sql(f"DROP TABLE IF EXISTS {NAMESPACE}.{table_name}")
+    spark.sql(
         f"""
         CREATE TABLE {NAMESPACE}.{table_name}
         USING iceberg
@@ -69,17 +69,17 @@ def test_ctas_records_rest_catalog_metadata_location(
     _assert_uuid_metadata_location(metadata_location)
     assert table["metadata"]["current-snapshot-id"] is not None
 
-    rows = iceberg_spark.sql(f"SELECT id, name FROM {NAMESPACE}.{table_name}").collect()  # noqa: S608
+    rows = spark.sql(f"SELECT id, name FROM {NAMESPACE}.{table_name}").collect()  # noqa: S608
     assert [(row["id"], row["name"]) for row in rows] == [(1, "a")]
 
 
 def test_insert_advances_rest_catalog_metadata_location(
-    iceberg_spark: SparkSession,
+    spark: SparkSession,
     iceberg_rest_endpoint: str,
 ) -> None:
     table_name = "commit_t"
-    iceberg_spark.sql(f"DROP TABLE IF EXISTS {NAMESPACE}.{table_name}")
-    iceberg_spark.sql(
+    spark.sql(f"DROP TABLE IF EXISTS {NAMESPACE}.{table_name}")
+    spark.sql(
         f"""
         CREATE TABLE {NAMESPACE}.{table_name} (
           id INT,
@@ -94,10 +94,10 @@ def test_insert_advances_rest_catalog_metadata_location(
     _assert_uuid_metadata_location(before_location, 0)
     assert before["metadata"]["current-snapshot-id"] == -1
     assert before["metadata"]["snapshots"] == []
-    rows = iceberg_spark.sql(f"SELECT id, name FROM {NAMESPACE}.{table_name}").collect()  # noqa: S608
+    rows = spark.sql(f"SELECT id, name FROM {NAMESPACE}.{table_name}").collect()  # noqa: S608
     assert rows == []
 
-    iceberg_spark.sql(f"INSERT INTO {NAMESPACE}.{table_name} VALUES (1, 'a'), (2, 'b')")  # noqa: S608
+    spark.sql(f"INSERT INTO {NAMESPACE}.{table_name} VALUES (1, 'a'), (2, 'b')")  # noqa: S608
 
     after = _load_table(iceberg_rest_endpoint, table_name)
     after_location = after["metadata-location"]
@@ -108,7 +108,7 @@ def test_insert_advances_rest_catalog_metadata_location(
     assert len(after["metadata"]["metadata-log"]) == 1
     assert after["metadata"]["metadata-log"][0]["metadata-file"] == before_location
 
-    iceberg_spark.sql(f"INSERT INTO {NAMESPACE}.{table_name} VALUES (3, 'c')")  # noqa: S608
+    spark.sql(f"INSERT INTO {NAMESPACE}.{table_name} VALUES (3, 'c')")  # noqa: S608
     appended = _load_table(iceberg_rest_endpoint, table_name)
     assert appended["metadata-location"] != after_location
     _assert_uuid_metadata_location(appended["metadata-location"], 2)
@@ -117,18 +117,18 @@ def test_insert_advances_rest_catalog_metadata_location(
         after_location,
     ]
 
-    rows = iceberg_spark.sql(f"SELECT id, name FROM {NAMESPACE}.{table_name} ORDER BY id").collect()  # noqa: S608
+    rows = spark.sql(f"SELECT id, name FROM {NAMESPACE}.{table_name} ORDER BY id").collect()  # noqa: S608
     assert [(row["id"], row["name"]) for row in rows] == [(1, "a"), (2, "b"), (3, "c")]
 
 
 def test_merge_schema_append_advances_rest_catalog_metadata_location(
-    iceberg_spark: SparkSession,
+    spark: SparkSession,
     iceberg_rest_endpoint: str,
 ) -> None:
     table_name = "merge_schema_t"
     table_fqn = f"{NAMESPACE}.{table_name}"
-    iceberg_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-    iceberg_spark.sql(
+    spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+    spark.sql(
         f"""
         CREATE TABLE {table_fqn} (
           id INT,
@@ -137,12 +137,12 @@ def test_merge_schema_append_advances_rest_catalog_metadata_location(
         USING iceberg
         """
     )
-    iceberg_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a')")  # noqa: S608
+    spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a')")  # noqa: S608
     before = _load_table(iceberg_rest_endpoint, table_name)
     before_location = before["metadata-location"]
     _assert_uuid_metadata_location(before_location, 1)
 
-    evolved = iceberg_spark.createDataFrame([(2, "b", 20)], schema="id INT, name STRING, age INT")
+    evolved = spark.createDataFrame([(2, "b", 20)], schema="id INT, name STRING, age INT")
     (evolved.write.format("iceberg").mode("append").option("mergeSchema", "true").saveAsTable(table_fqn))
 
     after = _load_table(iceberg_rest_endpoint, table_name)
@@ -152,18 +152,18 @@ def test_merge_schema_append_advances_rest_catalog_metadata_location(
     assert after["metadata"]["metadata-log"][-1]["metadata-file"] == before_location
     assert _current_schema_field_names(after["metadata"]) == ["id", "name", "age"]
 
-    rows = iceberg_spark.sql(f"SELECT id, name, age FROM {table_fqn} ORDER BY id").collect()  # noqa: S608
+    rows = spark.sql(f"SELECT id, name, age FROM {table_fqn} ORDER BY id").collect()  # noqa: S608
     assert [(row["id"], row["name"], row["age"]) for row in rows] == [(1, "a", None), (2, "b", 20)]
 
 
 def test_insert_overwrite_advances_rest_catalog_metadata_location(
-    iceberg_spark: SparkSession,
+    spark: SparkSession,
     iceberg_rest_endpoint: str,
 ) -> None:
     table_name = "overwrite_t"
     table_fqn = f"{NAMESPACE}.{table_name}"
-    iceberg_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-    iceberg_spark.sql(
+    spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+    spark.sql(
         f"""
         CREATE TABLE {table_fqn} (
           id INT,
@@ -176,12 +176,12 @@ def test_insert_overwrite_advances_rest_catalog_metadata_location(
     created_location = created["metadata-location"]
     _assert_uuid_metadata_location(created_location, 0)
 
-    iceberg_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'old'), (2, 'old')")  # noqa: S608
+    spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'old'), (2, 'old')")  # noqa: S608
     before_overwrite = _load_table(iceberg_rest_endpoint, table_name)
     before_overwrite_location = before_overwrite["metadata-location"]
     _assert_uuid_metadata_location(before_overwrite_location, 1)
 
-    iceberg_spark.sql(f"INSERT OVERWRITE TABLE {table_fqn} VALUES (3, 'new'), (4, 'new')")  # noqa: S608
+    spark.sql(f"INSERT OVERWRITE TABLE {table_fqn} VALUES (3, 'new'), (4, 'new')")  # noqa: S608
     after_overwrite = _load_table(iceberg_rest_endpoint, table_name)
     after_overwrite_location = after_overwrite["metadata-location"]
     assert after_overwrite_location != before_overwrite_location
@@ -192,18 +192,18 @@ def test_insert_overwrite_advances_rest_catalog_metadata_location(
     ]
     assert after_overwrite["metadata"]["snapshots"][-1]["summary"]["operation"] == "overwrite"
 
-    rows = iceberg_spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()  # noqa: S608
+    rows = spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()  # noqa: S608
     assert [(row["id"], row["name"]) for row in rows] == [(3, "new"), (4, "new")]
 
 
 def test_rest_catalog_rejects_catalog_managed_iceberg_alter(
-    iceberg_spark: SparkSession,
+    spark: SparkSession,
     iceberg_rest_endpoint: str,
 ) -> None:
     table_name = "alter_reject_t"
     table_fqn = f"{NAMESPACE}.{table_name}"
-    iceberg_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-    iceberg_spark.sql(
+    spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+    spark.sql(
         f"""
         CREATE TABLE {table_fqn} (
           id INT
@@ -215,7 +215,7 @@ def test_rest_catalog_rejects_catalog_managed_iceberg_alter(
     before_location = before["metadata-location"]
 
     with pytest.raises(Exception, match="catalog-managed Iceberg tables"):
-        iceberg_spark.sql(
+        spark.sql(
             f"""
             ALTER TABLE {table_fqn}
             SET TBLPROPERTIES ('owner' = 'alice')
@@ -227,13 +227,13 @@ def test_rest_catalog_rejects_catalog_managed_iceberg_alter(
 
 
 def test_rest_catalog_rejects_non_iceberg_create_format(
-    iceberg_spark: SparkSession,
+    spark: SparkSession,
 ) -> None:
     table_name = "delta_bad_t"
-    iceberg_spark.sql(f"DROP TABLE IF EXISTS {NAMESPACE}.{table_name}")
+    spark.sql(f"DROP TABLE IF EXISTS {NAMESPACE}.{table_name}")
 
     with pytest.raises(Exception, match=r"(?i)Iceberg REST catalog cannot create 'delta' tables"):
-        iceberg_spark.sql(
+        spark.sql(
             f"""
             CREATE TABLE {NAMESPACE}.{table_name} (
               id INT

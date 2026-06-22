@@ -19,7 +19,7 @@ from pyiceberg.manifest import MANIFEST_LIST_FILE_SCHEMAS, ManifestContent, Part
 from pyspark.sql import Row
 from pytest_bdd import given, parsers, then
 
-from pysail.testing.spark.steps.delta_log import _get_by_path, _parse_expected_value
+from pysail.testing.spark.steps.delta import _get_by_path, _parse_expected_value
 
 if TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion

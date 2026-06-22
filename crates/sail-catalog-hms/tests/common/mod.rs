@@ -186,7 +186,7 @@ async fn shared_hms_container() -> &'static SharedHmsContainer {
         return shared;
     }
 
-    let container = GenericImage::new("apache/hive", "3.1.3")
+    let container = GenericImage::new("apache/hive", "4.0.0")
         .with_wait_for(WaitFor::seconds(1))
         .with_exposed_port(ContainerPort::Tcp(HIVE_METASTORE_PORT))
         .with_env_var("SERVICE_NAME", "metastore")
@@ -394,7 +394,7 @@ async fn shared_kerberos_infrastructure() -> &'static SharedKerberosInfrastructu
     fs::write(&core_site_path, core_site_xml())
         .unwrap_or_else(|error| panic!("write core-site.xml: {error}"));
 
-    let hms_container = GenericImage::new("apache/hive", "3.1.3")
+    let hms_container = GenericImage::new("apache/hive", "4.0.0")
         .with_exposed_port(ContainerPort::Tcp(HIVE_METASTORE_PORT))
         .with_network(&network_name)
         .with_container_name(format!("sail-krb-hms-{suffix}"))
