@@ -35,7 +35,7 @@ def _delta_actions(table_path: Path, version: int) -> list[dict]:
 
 
 def test_create_table_materializes_delta_log_and_marks_glue_provider(
-    glue_spark: SparkSession,
+    spark: SparkSession,
     moto_endpoint: str,
     tmp_path: Path,
 ) -> None:
@@ -45,10 +45,10 @@ def test_create_table_materializes_delta_log_and_marks_glue_provider(
     location_path = tmp_path / "delta_t"
     location = location_path.as_uri()
 
-    glue_spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
     try:
-        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-        glue_spark.sql(
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(
             f"""
             CREATE TABLE {table_fqn} (
               id INT,
@@ -67,21 +67,21 @@ def test_create_table_materializes_delta_log_and_marks_glue_provider(
         assert any("metaData" in action for action in actions)
         assert not any("add" in action for action in actions)
 
-        rows = glue_spark.sql(f"SELECT id, name FROM {table_fqn}").collect()
+        rows = spark.sql(f"SELECT id, name FROM {table_fqn}").collect()
         assert rows == []
 
-        glue_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a')")
+        spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a')")
         _delta_actions(location_path, 1)
 
-        rows = glue_spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
+        rows = spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
         assert [(row.id, row.name) for row in rows] == [(1, "a")]
     finally:
-        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-        glue_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
 
 
 def test_create_table_if_not_exists_does_not_materialize_new_delta_location(
-    glue_spark: SparkSession,
+    spark: SparkSession,
     moto_endpoint: str,
     tmp_path: Path,
 ) -> None:
@@ -91,10 +91,10 @@ def test_create_table_if_not_exists_does_not_materialize_new_delta_location(
     location_path = tmp_path / "delta_t"
     alternate_path = tmp_path / "delta_t_alternate"
 
-    glue_spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
     try:
-        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-        glue_spark.sql(
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(
             f"""
             CREATE TABLE {table_fqn} (
               id INT,
@@ -106,7 +106,7 @@ def test_create_table_if_not_exists_does_not_materialize_new_delta_location(
         )
         assert (location_path / "_delta_log" / "00000000000000000000.json").exists()
 
-        glue_spark.sql(
+        spark.sql(
             f"""
             CREATE TABLE IF NOT EXISTS {table_fqn} (
               id INT,
@@ -121,12 +121,12 @@ def test_create_table_if_not_exists_does_not_materialize_new_delta_location(
         parameters = _glue_parameters(moto_endpoint, database, table)
         assert parameters["spark.sql.sources.provider"] == "delta"
     finally:
-        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-        glue_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
 
 
 def test_ctas_materializes_delta_log_and_marks_glue_provider(
-    glue_spark: SparkSession,
+    spark: SparkSession,
     moto_endpoint: str,
     tmp_path: Path,
 ) -> None:
@@ -136,10 +136,10 @@ def test_ctas_materializes_delta_log_and_marks_glue_provider(
     location_path = tmp_path / "delta_ctas_t"
     location = location_path.as_uri()
 
-    glue_spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
     try:
-        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-        glue_spark.sql(
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(
             f"""
             CREATE TABLE {table_fqn}
             USING DELTA
@@ -156,8 +156,8 @@ def test_ctas_materializes_delta_log_and_marks_glue_provider(
         assert any("metaData" in action for action in actions)
         assert any("add" in action for action in actions)
 
-        rows = glue_spark.sql(f"SELECT id, name FROM {table_fqn}").collect()
+        rows = spark.sql(f"SELECT id, name FROM {table_fqn}").collect()
         assert [(row.id, row.name) for row in rows] == [(2, "b")]
     finally:
-        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-        glue_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
