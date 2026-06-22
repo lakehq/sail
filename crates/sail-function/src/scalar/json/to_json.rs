@@ -60,6 +60,7 @@ impl ToJsonOptions {
             .map(DateTimeFormat::parse)
             .transpose()?
             .unwrap_or_else(|| {
+                #[expect(clippy::expect_used)]
                 DateTimeFormat::parse(Self::TIMESTAMP_FORMAT_DEFAULT)
                     .expect("default timestamp format should be valid")
             });
@@ -69,6 +70,7 @@ impl ToJsonOptions {
             .map(DateTimeFormat::parse)
             .transpose()?
             .unwrap_or_else(|| {
+                #[expect(clippy::expect_used)]
                 DateTimeFormat::parse(Self::DATE_FORMAT_DEFAULT)
                     .expect("default date format should be valid")
             });
@@ -81,12 +83,13 @@ impl ToJsonOptions {
 }
 
 impl Default for ToJsonOptions {
+    #[expect(clippy::expect_used)]
     fn default() -> Self {
         Self {
             timestamp_format: DateTimeFormat::parse(Self::TIMESTAMP_FORMAT_DEFAULT)
-                .unwrap_or_else(|_| panic!("default timestamp format should be valid")),
+                .expect("default timestamp format should be valid"),
             date_format: DateTimeFormat::parse(Self::DATE_FORMAT_DEFAULT)
-                .unwrap_or_else(|_| panic!("default date format should be valid")),
+                .expect("default date format should be valid"),
         }
     }
 }

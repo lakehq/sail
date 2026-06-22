@@ -16,16 +16,28 @@ use crate::scalar::datetime::format::{
     DateTimeFormat, DateTimeFormatInput, TimePrecision, TimeZoneDisplay, TimestampKind,
 };
 
+fn default_timestamp_format() -> DateTimeFormat {
+    #[expect(clippy::expect_used)]
+    DateTimeFormat::parse(SparkToCsvOptions::TIMESTAMP_FORMAT_DEFAULT)
+        .expect("default timestamp format should be valid")
+}
+
+fn default_date_format() -> DateTimeFormat {
+    #[expect(clippy::expect_used)]
+    DateTimeFormat::parse(SparkToCsvOptions::DATE_FORMAT_DEFAULT)
+        .expect("default date format should be valid")
+}
+
+fn default_ltz_format() -> DateTimeFormat {
+    #[expect(clippy::expect_used)]
+    DateTimeFormat::parse("yyyy-MM-dd'T'HH:mm:ss.SSSXXX")
+        .expect("default timestamp LTZ format should be valid")
+}
+
 lazy_static! {
-    static ref DEFAULT_TIMESTAMP_FORMAT: DateTimeFormat =
-        DateTimeFormat::parse(SparkToCsvOptions::TIMESTAMP_FORMAT_DEFAULT)
-            .unwrap_or_else(|_| panic!("default timestamp format should be valid"));
-    static ref DEFAULT_DATE_FORMAT: DateTimeFormat =
-        DateTimeFormat::parse(SparkToCsvOptions::DATE_FORMAT_DEFAULT)
-            .unwrap_or_else(|_| panic!("default date format should be valid"));
-    static ref DEFAULT_LTZ_FORMAT: DateTimeFormat =
-        DateTimeFormat::parse("yyyy-MM-dd'T'HH:mm:ss.SSSXXX")
-            .unwrap_or_else(|_| panic!("default timestamp LTZ format should be valid"));
+    static ref DEFAULT_TIMESTAMP_FORMAT: DateTimeFormat = default_timestamp_format();
+    static ref DEFAULT_DATE_FORMAT: DateTimeFormat = default_date_format();
+    static ref DEFAULT_LTZ_FORMAT: DateTimeFormat = default_ltz_format();
 }
 
 #[cfg(test)]

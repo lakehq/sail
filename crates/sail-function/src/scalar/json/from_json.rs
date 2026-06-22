@@ -64,6 +64,7 @@ impl SparkFromJsonOptions {
             .map(DateTimeFormat::parse)
             .transpose()?
             .unwrap_or_else(|| {
+                #[expect(clippy::expect_used)]
                 DateTimeFormat::parse(Self::TIMESTAMP_FORMAT_DEFAULT)
                     .expect("default timestamp format should be valid")
             });
@@ -73,6 +74,7 @@ impl SparkFromJsonOptions {
             .map(DateTimeFormat::parse)
             .transpose()?
             .unwrap_or_else(|| {
+                #[expect(clippy::expect_used)]
                 DateTimeFormat::parse(Self::DATE_FORMAT_DEFAULT)
                     .expect("default date format should be valid")
             });
@@ -85,6 +87,7 @@ impl SparkFromJsonOptions {
 }
 
 impl Default for SparkFromJsonOptions {
+    #[expect(clippy::expect_used)]
     fn default() -> Self {
         Self {
             timestamp_format: DateTimeFormat::parse(Self::TIMESTAMP_FORMAT_DEFAULT)

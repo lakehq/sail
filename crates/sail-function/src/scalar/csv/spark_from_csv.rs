@@ -470,8 +470,8 @@ fn parse_date(
         DataType::Date32 => {
             let days = naive_date
                 .signed_duration_since(
-                    chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
-                        .unwrap_or_else(|| panic!("1970-01-01 should be valid")),
+                    #[expect(clippy::unwrap_used)]
+                    chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
                 )
                 .num_days() as i32;
             Ok(ScalarValue::Date32(Some(days)))
@@ -479,8 +479,8 @@ fn parse_date(
         DataType::Date64 => {
             let millis = naive_date
                 .signed_duration_since(
-                    chrono::NaiveDate::from_ymd_opt(1970, 1, 1)
-                        .unwrap_or_else(|| panic!("1970-01-01 should be valid")),
+                    #[expect(clippy::unwrap_used)]
+                    chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(),
                 )
                 .num_milliseconds();
             Ok(ScalarValue::Date64(Some(millis)))
