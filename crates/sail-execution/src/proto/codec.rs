@@ -3108,8 +3108,8 @@ impl RemoteExecutionCodec {
             );
         }
 
-        let input_schema = try_decode_schema(&input_schema)?;
-        let target_schema = try_decode_schema(&target_schema)?;
+        let input_schema = try_decode_schema(input_schema)?;
+        let target_schema = try_decode_schema(target_schema)?;
 
         let input_field = input_schema
             .fields()
@@ -3453,7 +3453,7 @@ impl RemoteExecutionCodec {
                 config,
             }) => {
                 let kind = self.try_decode_pyspark_map_iter_kind(*kind)?;
-                let output_schema = try_decode_schema(&output_schema)?;
+                let output_schema = try_decode_schema(output_schema)?;
                 let config = match config {
                     Some(config) => self.try_decode_pyspark_udf_config(config)?,
                     None => return plan_err!("missing config for PySparkMapIterUDF"),
@@ -3484,7 +3484,7 @@ impl RemoteExecutionCodec {
                     .iter()
                     .map(|x| self.try_decode_data_type(x))
                     .collect::<Result<Vec<_>>>()?;
-                let function_return_type = self.try_decode_data_type(&function_return_type)?;
+                let function_return_type = self.try_decode_data_type(function_return_type)?;
                 let function_output_names = if function_output_names.is_empty() {
                     None
                 } else {
