@@ -52,8 +52,11 @@ fn format_predefined(predefined: PredefinedFormatter, input: DateTimeFormatInput
     match predefined {
         PredefinedFormatter::BasicIsoDate => {
             let mut output = input.datetime.format("%Y%m%d").to_string();
-            if input.timezone.is_some() {
-                push_basic_offset(offset_seconds(input), &mut output);
+            // Only include offset if timezone is present and not UTC
+            if let Some(tz) = input.timezone {
+                if tz.offset.local_minus_utc() != 0 {
+                    push_basic_offset(offset_seconds(input), &mut output);
+                }
             }
             output
         }
@@ -279,7 +282,12 @@ fn format_items(
                 }
             }
             DateTimeItem::Optional(items) => {
+                let start_len = output.len();
                 format_items(items, input, locale, output)?;
+                let optional_content = &output[start_len..];
+                if is_all_zeros(optional_content) {
+                    output.truncate(start_len);
+                }
             }
             DateTimeItem::PadNext { width, pad_char } => {
                 pad_next = Some((*width, *pad_char));
@@ -287,6 +295,19 @@ fn format_items(
         }
     }
     Ok(())
+}
+
+fn is_all_zeros(s: &str) -> bool {
+    let mut has_digits = false;
+    for c in s.chars() {
+        if c.is_ascii_digit() {
+            has_digits = true;
+            if c != '0' {
+                return false;
+            }
+        }
+    }
+    has_digits
 }
 
 fn pad_string(value: &str, width: usize, pad_char: char) -> String {

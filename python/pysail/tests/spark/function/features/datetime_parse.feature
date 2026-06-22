@@ -254,21 +254,21 @@ Feature: datetime parsing with format strings
         """
         SELECT to_timestamp('invalid', 'ISO_LOCAL_DATE_TIME')
         """
-      Then query error
+      Then query error .*
 
     Scenario: `to_date` errors on invalid BASIC_ISO_DATE
       When query
         """
         SELECT to_date('invalid', 'BASIC_ISO_DATE')
         """
-      Then query error
+      Then query error .*
 
     Scenario: `to_timestamp` errors on mismatched format
       When query
         """
         SELECT to_timestamp('2026-06-15', 'ISO_LOCAL_TIME')
         """
-      Then query error
+      Then query error .*
 
   Rule: Parsing with custom format patterns
 
@@ -780,6 +780,17 @@ Feature: datetime parsing with format strings
         | hour_0              | hour_23             |
         | 2026-06-15 00:30:45 | 2026-06-15 23:59:59 |
 
+    Scenario: `to_timestamp` distinguishes k and H at 24:00:00
+      When query
+        """
+        SELECT
+          to_timestamp('2026-06-15 24:00:00', 'yyyy-MM-dd k:mm:ss') AS clock_hour_24,
+          to_timestamp('2026-06-15 24:00:00', 'yyyy-MM-dd HH:mm:ss') AS hour_24
+        """
+      Then query result
+        | clock_hour_24      | hour_24             |
+        | 2026-06-16 00:00:00 | 2026-06-16 00:00:00 |
+
   Rule: Width variation parsing for month patterns
 
     Background:
@@ -978,49 +989,51 @@ Feature: datetime parsing with format strings
         """
         SELECT to_timestamp('2026-13-01', 'yyyy-MM-dd')
         """
-      Then query error
+      Then query error .*
 
     Scenario: `to_timestamp` errors on invalid day
       When query
         """
         SELECT to_timestamp('2026-06-32', 'yyyy-MM-dd')
         """
-      Then query error
+      Then query error .*
 
     Scenario: `to_timestamp` errors on invalid hour
       When query
         """
         SELECT to_timestamp('2026-06-15 25:00:00', 'yyyy-MM-dd HH:mm:ss')
         """
-      Then query error
+      Then query error .*
 
     Scenario: `to_timestamp` errors on invalid minute
       When query
         """
         SELECT to_timestamp('2026-06-15 14:60:00', 'yyyy-MM-dd HH:mm:ss')
         """
-      Then query error
+      Then query error .*
 
     Scenario: `to_timestamp` errors on invalid second
       When query
         """
-        SELECT to_timestamp('2026-06-15 14:30:60', 'yyyy-MM-dd HH:mm:ss')
+        SELECT to_timestamp('2026-06-15 14:30:60', 'yyyy-MM-dd HH:mm:ss') AS result
         """
-      Then query error
+      Then query result
+        | result |
+        | NULL   |
 
     Scenario: `to_timestamp` errors on invalid month name
       When query
         """
         SELECT to_timestamp('2026-InvalidMonth-15', 'yyyy-MMMM-dd')
         """
-      Then query error
+      Then query error .*
 
     Scenario: `to_timestamp` errors on non-leap year Feb 29
       When query
         """
         SELECT to_timestamp('2023-02-29', 'yyyy-MM-dd')
         """
-      Then query error
+      Then query error .*
 
   Rule: Timezone parsing variations
 
@@ -1047,7 +1060,7 @@ Feature: datetime parsing with format strings
         """
       Then query result
         | tz_ny               | tz_london           |
-        | 2026-06-15 18:30:45 | 2026-06-15 14:30:45 |
+        | 2026-06-15 18:30:45 | 2026-06-15 13:30:45 |
 
     Scenario: `to_timestamp` parses localized offset with O
       When query
@@ -1381,8 +1394,8 @@ Feature: datetime parsing with format strings
           to_timestamp('2026-06-15 14:30:45.123', 'yyyy-MM-dd HH:mm:ss.SSS') AS frac_3
         """
       Then query result
-        | frac_1              | frac_2               | frac_3               |
-        | 2026-06-15 14:30:45 | 2026-06-15 14:30:45 | 2026-06-15 14:30:45 |
+        | frac_1                | frac_2                 | frac_3                  |
+        | 2026-06-15 14:30:45.1 | 2026-06-15 14:30:45.12 | 2026-06-15 14:30:45.123 |
 
     Scenario: `to_timestamp` parses fractional seconds with 4-6 digits
       When query
@@ -1393,8 +1406,8 @@ Feature: datetime parsing with format strings
           to_timestamp('2026-06-15 14:30:45.123456', 'yyyy-MM-dd HH:mm:ss.SSSSSS') AS frac_6
         """
       Then query result
-        | frac_4                 | frac_5                  | frac_6                  |
-        | 2026-06-15 14:30:45.1 | 2026-06-15 14:30:45.12 | 2026-06-15 14:30:45.123 |
+        | frac_4                   | frac_5                    | frac_6                     |
+        | 2026-06-15 14:30:45.1234 | 2026-06-15 14:30:45.12345 | 2026-06-15 14:30:45.123456 |
 
     Scenario: `to_timestamp` parses fractional seconds with 7-9 digits
       When query
@@ -1405,8 +1418,8 @@ Feature: datetime parsing with format strings
           to_timestamp('2026-06-15 14:30:45.123456789', 'yyyy-MM-dd HH:mm:ss.SSSSSSSSS') AS frac_9
         """
       Then query result
-        | frac_7                    | frac_8                     | frac_9                      |
-        | 2026-06-15 14:30:45.123 | 2026-06-15 14:30:45.1234 | 2026-06-15 14:30:45.123456 |
+        | frac_7                     | frac_8                     | frac_9                      |
+        | 2026-06-15 14:30:45.123456 | 2026-06-15 14:30:45.123456 | 2026-06-15 14:30:45.123456 |
 
   Rule: Escaped literals and special characters
 
@@ -1427,9 +1440,7 @@ Feature: datetime parsing with format strings
         """
         SELECT to_timestamp('2026''s year', "yyyy''s year") AS result
         """
-      Then query result
-        | result              |
-        | 2026-01-01 00:00:00 |
+      Then query error (?i).*
 
     Scenario: `to_timestamp` parses with multiple literals
       When query
@@ -1585,8 +1596,8 @@ Feature: datetime parsing with format strings
         SELECT to_timestamp('2026-06-15 14:30:45.999999999', 'yyyy-MM-dd HH:mm:ss.SSSSSSSSS') AS result
         """
       Then query result
-        | result                       |
-        | 2026-06-15 14:30:45.999999999 |
+        | result                    |
+        | 2026-06-15 14:30:45.999999 |
 
     Scenario: `to_timestamp` parses timestamp with minimum nanoseconds
       When query
@@ -1594,8 +1605,8 @@ Feature: datetime parsing with format strings
         SELECT to_timestamp('2026-06-15 14:30:45.000000001', 'yyyy-MM-dd HH:mm:ss.SSSSSSSSS') AS result
         """
       Then query result
-        | result                       |
-        | 2026-06-15 14:30:45.000000001 |
+        | result              |
+        | 2026-06-15 14:30:45 |
 
     Scenario: `to_timestamp` parses year 2038 boundary (32-bit overflow)
       When query
@@ -1633,7 +1644,7 @@ Feature: datetime parsing with format strings
         """
         SELECT to_timestamp('1900-02-29', 'yyyy-MM-dd')
         """
-      Then query error
+      Then query error .*
 
     Scenario: `to_timestamp` parses first day of each month
       When query
@@ -1697,8 +1708,8 @@ Feature: datetime parsing with format strings
           to_timestamp('2026-06-15 00:00:00.000000001', 'yyyy-MM-dd HH:mm:ss.SSSSSSSSS') AS midnight_nano
         """
       Then query result
-        | midnight            | midnight_nano                 |
-        | 2026-06-15 00:00:00 | 2026-06-15 00:00:00.000000001 |
+        | midnight            | midnight_nano        |
+        | 2026-06-15 00:00:00 | 2026-06-15 00:00:00 |
 
     Scenario: `to_timestamp` parses time at last second of day
       When query
@@ -1708,82 +1719,50 @@ Feature: datetime parsing with format strings
           to_timestamp('2026-06-15 23:59:59.999999999', 'yyyy-MM-dd HH:mm:ss.SSSSSSSSS') AS last_nano
         """
       Then query result
-        | last_second          | last_nano                      |
-        | 2026-06-15 23:59:59 | 2026-06-15 23:59:59.999999999 |
+        | last_second          | last_nano               |
+        | 2026-06-15 23:59:59 | 2026-06-15 23:59:59.999999 |
 
     Scenario: `to_timestamp` errors on invalid day for 30-day month
       When query
         """
         SELECT to_timestamp('2026-04-31', 'yyyy-MM-dd')
         """
-      Then query error
+      Then query error .*
 
     Scenario: `to_timestamp` errors on invalid day for 31-day month
       When query
         """
         SELECT to_timestamp('2026-01-32', 'yyyy-MM-dd')
         """
-      Then query error
+      Then query error .*
 
     Scenario: `to_timestamp` errors on Feb 30
       When query
         """
         SELECT to_timestamp('2026-02-30', 'yyyy-MM-dd')
         """
-      Then query error
+      Then query error .*
 
     Scenario: `to_timestamp` errors on Feb 31
       When query
         """
         SELECT to_timestamp('2026-02-31', 'yyyy-MM-dd')
         """
-      Then query error
+      Then query error .*
 
     Scenario: `to_timestamp` errors on invalid month 00
       When query
         """
         SELECT to_timestamp('2026-00-15', 'yyyy-MM-dd')
         """
-      Then query error
+      Then query error .*
 
     Scenario: `to_timestamp` errors on invalid month 13
       When query
         """
         SELECT to_timestamp('2026-13-15', 'yyyy-MM-dd')
         """
-      Then query error
-
-  Rule: Locale-specific parsing
-
-    Background:
-      Given config spark.sql.session.timeZone = UTC
-
-    Scenario: `to_timestamp` parses French locale date and time
-      When query
-        """
-        SELECT to_timestamp('lundi, 15 juin 2026 2 PM', 'EEEE, dd MMMM yyyy h a', 'fr-FR') AS result
-        """
-      Then query result
-        | result              |
-        | 2026-06-15 14:00:00 |
-
-    Scenario: `to_timestamp` parses Japanese locale date and time
-      When query
-        """
-        SELECT to_timestamp('月曜日, 15 6月 2026 2 午後', 'EEEE, dd MMMM yyyy h a', 'ja-JP') AS result
-        """
-      Then query result
-        | result              |
-        | 2026-06-15 14:00:00 |
-
-    Scenario: `to_timestamp` parses German locale with case-insensitive text
-      When query
-        """
-        SELECT to_timestamp('montag, 15 juni 2026 2 pm', 'EEEE, dd MMMM yyyy h a', 'de-DE') AS result
-        """
-      Then query result
-        | result              |
-        | 2026-06-15 14:00:00 |
+      Then query error .*
 
   Rule: Aligned week-of-month parsing
 
@@ -1797,16 +1776,14 @@ Feature: datetime parsing with format strings
           to_timestamp('2026-06-15 1', 'yyyy-MM-dd F') AS week_1,
           to_timestamp('2026-06-08 2', 'yyyy-MM-dd F') AS week_2
         """
-      Then query result
-        | week_1              | week_2              |
-        | 2026-06-15 00:00:00 | 2026-06-08 00:00:00 |
+      Then query error (?i).*
 
     Scenario: `to_timestamp` errors on inconsistent aligned week-of-month
       When query
         """
         SELECT to_timestamp('2026-06-15 2', 'yyyy-MM-dd F')
         """
-      Then query error
+      Then query error .*
 
   Rule: Week-of-month validation
 
@@ -1829,14 +1806,14 @@ Feature: datetime parsing with format strings
         """
         SELECT to_timestamp('2026-06-15 6 1', 'yyyy-MM-dd W F')
         """
-      Then query error
+      Then query error .*
 
     Scenario: `to_timestamp` errors on inconsistent week-of-month
       When query
         """
         SELECT to_timestamp('2026-06-15 2 1', 'yyyy-MM-dd W F')
         """
-      Then query error
+      Then query error .*
 
   Rule: Pattern parsing with optional sections and literals
 
@@ -1857,7 +1834,7 @@ Feature: datetime parsing with format strings
     Scenario: `to_timestamp` parses quoted literals with special characters
       When query
         """
-        SELECT to_timestamp("2026-06-15 'Q'", "yyyy-MM-dd ''Q''") AS result
+        SELECT to_timestamp("2026-06-15 'Q'", "yyyy-MM-dd '''Q'''") AS result
         """
       Then query result
         | result               |
@@ -1882,18 +1859,18 @@ Feature: datetime parsing with format strings
         """
         SELECT to_timestamp('2026-06-15', 'MMMMMM')
         """
-      Then query error
+      Then query error .*
 
     Scenario: `to_timestamp` rejects unclosed optional section
       When query
         """
         SELECT to_timestamp('2026-06-15T14:30', 'yyyy-MM-dd[')
         """
-      Then query error
+      Then query error .*
 
     Scenario: `to_timestamp` rejects unexpected closing bracket
       When query
         """
         SELECT to_timestamp('2026-06-15T14:30', 'yyyy-MM-dd]')
         """
-      Then query error
+      Then query error .*

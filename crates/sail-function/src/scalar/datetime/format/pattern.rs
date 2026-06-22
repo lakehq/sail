@@ -13,7 +13,6 @@ pub struct DateTimeFormat {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LocaleSpec {
     Default,
-    Identifier(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -37,21 +36,17 @@ impl Default for ResolverStyle {
 
 impl DateTimeFormat {
     pub fn parse(pattern: &str) -> Result<Self> {
-        Self::parse_with_locale(pattern, LocaleSpec::Default)
-    }
-
-    pub fn parse_with_locale(pattern: &str, locale: LocaleSpec) -> Result<Self> {
         if let Some(predefined) = PredefinedFormatter::from_name(pattern) {
             let mut format = parse_datetime_pattern(predefined.base_pattern())?;
             if predefined.uses_variable_fraction() {
                 make_fraction_width_variable(&mut format.items);
             }
             format.predefined = Some(predefined);
-            format.locale = locale;
+            format.locale = LocaleSpec::Default;
             return Ok(format);
         }
         let mut format = parse_datetime_pattern(pattern)?;
-        format.locale = locale;
+        format.locale = LocaleSpec::Default;
         Ok(format)
     }
 }
@@ -191,7 +186,7 @@ pub(crate) enum DateTimeField {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub(crate) enum FieldStyle {
     Numeric,
     TextShort,
@@ -203,7 +198,7 @@ pub(crate) enum FieldStyle {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub(crate) enum SignStyle {
     Normal,
     Never,
@@ -221,7 +216,7 @@ pub(crate) struct FractionSpec {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub(crate) enum FractionField {
     NanoOfSecond,
     NanoOfDay,

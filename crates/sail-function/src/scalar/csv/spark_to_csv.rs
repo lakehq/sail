@@ -8,12 +8,25 @@ use datafusion::error::{DataFusionError, Result};
 use datafusion_common::{exec_err, plan_err, ScalarValue};
 use datafusion_expr::{ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::Volatility;
+use lazy_static::lazy_static;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
 
 use crate::functions_utils::make_scalar_function;
 use crate::scalar::datetime::format::{
     DateTimeFormat, DateTimeFormatInput, TimePrecision, TimeZoneDisplay, TimestampKind,
 };
+
+lazy_static! {
+    static ref DEFAULT_TIMESTAMP_FORMAT: DateTimeFormat =
+        DateTimeFormat::parse(SparkToCsvOptions::TIMESTAMP_FORMAT_DEFAULT)
+            .expect("default timestamp format should be valid");
+    static ref DEFAULT_DATE_FORMAT: DateTimeFormat =
+        DateTimeFormat::parse(SparkToCsvOptions::DATE_FORMAT_DEFAULT)
+            .expect("default date format should be valid");
+    static ref DEFAULT_LTZ_FORMAT: DateTimeFormat =
+        DateTimeFormat::parse("yyyy-MM-dd'T'HH:mm:ss.SSSXXX")
+            .expect("default timestamp LTZ format should be valid");
+}
 
 #[cfg(test)]
 const DEFAULT_SESSION_TIMEZONE: &str = "UTC";
@@ -115,19 +128,13 @@ impl SparkToCsvOptions {
             .as_deref()
             .map(DateTimeFormat::parse)
             .transpose()?
-            .unwrap_or_else(|| {
-                DateTimeFormat::parse(Self::TIMESTAMP_FORMAT_DEFAULT)
-                    .expect("default timestamp format should be valid")
-            });
+            .unwrap_or_else(|| DEFAULT_TIMESTAMP_FORMAT.clone());
 
         let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
             .as_deref()
             .map(DateTimeFormat::parse)
             .transpose()?
-            .unwrap_or_else(|| {
-                DateTimeFormat::parse(Self::DATE_FORMAT_DEFAULT)
-                    .expect("default date format should be valid")
-            });
+            .unwrap_or_else(|| DEFAULT_DATE_FORMAT.clone());
 
         Ok(Self {
             sep,
@@ -159,10 +166,8 @@ impl Default for SparkToCsvOptions {
             empty_value: Self::EMPTY_VALUE_DEFAULT.to_string(),
             ignore_leading_whitespace: true,
             ignore_trailing_whitespace: true,
-            timestamp_format: DateTimeFormat::parse(Self::TIMESTAMP_FORMAT_DEFAULT)
-                .expect("default timestamp format should be valid"),
-            date_format: DateTimeFormat::parse(Self::DATE_FORMAT_DEFAULT)
-                .expect("default date format should be valid"),
+            timestamp_format: DEFAULT_TIMESTAMP_FORMAT.clone(),
+            date_format: DEFAULT_DATE_FORMAT.clone(),
         }
     }
 }
@@ -373,8 +378,6 @@ fn format_timestamp_field(
 
     let secs = micros.div_euclid(1_000_000);
     let nanos = (micros.rem_euclid(1_000_000) * 1_000) as u32;
-    let default_ltz_format = DateTimeFormat::parse("yyyy-MM-dd'T'HH:mm:ss.SSSXXX")
-        .expect("default timestamp LTZ format should be valid");
 
     if tz_opt.is_some() {
         // TIMESTAMP LTZ — localize to session timezone and emit offset
@@ -398,7 +401,7 @@ fn format_timestamp_field(
             precision: TimePrecision::Microsecond,
         };
         if options.timestamp_format == SparkToCsvOptions::default().timestamp_format {
-            default_ltz_format.format(input)
+            DEFAULT_LTZ_FORMAT.format(input)
         } else {
             options.timestamp_format.format(input)
         }

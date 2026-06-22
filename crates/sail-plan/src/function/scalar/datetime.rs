@@ -315,7 +315,7 @@ fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
         // If format is not supplied, the function is a synonym for cast(expr AS DATE).
         crate::function::scalar::conversion::cast_to_date(input)
     } else if input.arguments.len() == 2 {
-        let (expr, format) = input.arguments.two()?;
+        let expr = input.arguments[0].clone();
         let expr_type = expr.get_type(input.function_context.schema);
         if let Ok(DataType::Timestamp(_, _)) = expr_type {
             let expr = expr_fn::to_local_time(vec![expr]);
@@ -325,7 +325,9 @@ fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
             Ok(_other) => expr,
             Err(_) => cast(expr, DataType::Utf8), // In case of error, cast to string
         };
-        Ok(ScalarUDF::from(SparkDate::new(false)).call(vec![expr, format]))
+        let mut arguments = input.arguments;
+        arguments[0] = expr;
+        Ok(ScalarUDF::from(SparkDate::new(false)).call(arguments))
     } else {
         Err(PlanError::invalid("to_date requires 1 or 2 arguments"))
     }
@@ -343,13 +345,17 @@ fn unix_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
         Ok(ScalarUDF::from(SparkUnixTimestamp::new(timezone)).call(vec![expr, format]))
     } else {
         Err(PlanError::invalid(
-            "unix_timestamp requires 1 or 2 arguments",
+            "unix_timestamp requires 0, 1, or 2 arguments",
         ))
     }
 }
 
 fn to_unix_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     if input.arguments.is_empty() {
+        Err(PlanError::invalid(
+            "to_unix_timestamp requires 1 or 2 arguments",
+        ))
+    } else if input.arguments.len() > 2 {
         Err(PlanError::invalid(
             "to_unix_timestamp requires 1 or 2 arguments",
         ))
@@ -370,7 +376,11 @@ fn next_day(input: ScalarFunctionInput) -> PlanResult<Expr> {
 }
 
 pub(super) fn date_format(expr: Expr, format: Expr) -> Expr {
-    ScalarUDF::from(SparkDateFormat::new()).call(vec![expr, format])
+    date_format_with_args(vec![expr, format])
+}
+
+fn date_format_with_args(arguments: Vec<Expr>) -> Expr {
+    ScalarUDF::from(SparkDateFormat::new()).call(arguments)
 }
 
 fn timestamp_data_type(input: &ScalarFunctionInput, timestamp_ntz: bool) -> DataType {
@@ -406,10 +416,10 @@ fn to_timestamp(input: ScalarFunctionInput, timestamp_ntz: bool) -> PlanResult<E
         Ok(cast(expr, data_type))
     } else if input.arguments.len() == 2 {
         let null = timestamp_null(&input, timestamp_ntz);
-        let (expr, format) = input.arguments.two()?;
-        if is_null_literal(&expr) || is_null_literal(&format) {
+        if input.arguments.iter().any(is_null_literal) {
             return Ok(null);
         }
+        let arguments = input.arguments;
         let expr = ScalarUDF::from(SparkTimestamp::try_new(
             match &data_type {
                 DataType::Timestamp(_, timezone) => timezone.clone(),
@@ -417,7 +427,7 @@ fn to_timestamp(input: ScalarFunctionInput, timestamp_ntz: bool) -> PlanResult<E
             },
             false,
         )?)
-        .call(vec![expr, format]);
+        .call(arguments);
         Ok(cast(expr, data_type))
     } else {
         Err(PlanError::invalid("to_timestamp requires 1 or 2 arguments"))
@@ -435,10 +445,10 @@ fn try_to_timestamp(input: ScalarFunctionInput, timestamp_ntz: bool) -> PlanResu
         Ok(try_cast(expr, data_type))
     } else if input.arguments.len() == 2 {
         let null = timestamp_null(&input, timestamp_ntz);
-        let (expr, format) = input.arguments.two()?;
-        if is_null_literal(&expr) || is_null_literal(&format) {
+        if input.arguments.iter().any(is_null_literal) {
             return Ok(null);
         }
+        let arguments = input.arguments;
         Ok(cast(
             ScalarUDF::from(SparkTimestamp::try_new(
                 match &data_type {
@@ -447,7 +457,7 @@ fn try_to_timestamp(input: ScalarFunctionInput, timestamp_ntz: bool) -> PlanResu
                 },
                 true,
             )?)
-            .call(vec![expr, format]),
+            .call(arguments),
             data_type,
         ))
     } else {
@@ -963,7 +973,13 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             F::custom(|input| interval_arithmetic(input, "days", Operator::Plus)),
         ),
         ("date_diff", F::custom(datediff)),
-        ("date_format", F::binary(date_format)),
+        (
+            "date_format",
+            F::custom(|input| match input.arguments.len() {
+                2 => Ok(date_format_with_args(input.arguments)),
+                _ => Err(PlanError::invalid("date_format requires 2 arguments")),
+            }),
+        ),
         ("date_from_unix_date", F::cast(DataType::Date32)),
         ("date_part", F::binary(date_part)),
         (

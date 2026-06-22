@@ -16,6 +16,8 @@ pub enum DefaultTimestampType {
 pub struct PlanConfig {
     /// The time zone of the session.
     pub session_timezone: Arc<str>,
+    /// The locale of the session.
+    pub session_locale: Arc<str>,
     /// The default timestamp type.
     pub default_timestamp_type: DefaultTimestampType,
     /// Whether to use large variable types in Arrow.
@@ -48,6 +50,7 @@ impl Default for PlanConfig {
     fn default() -> Self {
         Self {
             session_timezone: Arc::from("UTC"),
+            session_locale: Arc::from("en-US"),
             default_timestamp_type: DefaultTimestampType::TimestampLtz,
             arrow_use_large_var_types: false,
             pyspark_udf_config: Arc::new(PySparkUdfConfig::default()),

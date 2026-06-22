@@ -1,5 +1,5 @@
-mod locale;
 mod formatting;
+mod locale;
 mod parser;
 mod parsing;
 mod pattern;

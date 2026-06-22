@@ -1,5 +1,5 @@
 use chrono::format::Parsed;
-use chrono::{Datelike, FixedOffset, NaiveDate, NaiveDateTime, Weekday};
+use chrono::{Datelike, Duration, FixedOffset, NaiveDate, NaiveDateTime, Timelike, Weekday};
 use datafusion_common::{exec_datafusion_err, Result};
 
 use super::locale::LocaleData;
@@ -8,10 +8,11 @@ use super::pattern::{
     FractionSpec, ZoneField, ZoneSpec,
 };
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParsedDateTime {
     pub datetime: NaiveDateTime,
     pub offset: Option<FixedOffset>,
+    pub timezone: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -26,11 +27,16 @@ struct ParseState {
     aligned_week_of_month: Option<u32>,
     milli_of_day: Option<u32>,
     nano_of_day: Option<u64>,
+    timezone: Option<String>,
+    /// Flag indicating hour was 24 (midnight of next day)
+    hour_24: Option<bool>,
+    leap_second: bool,
 }
 
 impl DateTimeFormat {
     pub fn parse_datetime_value(&self, value: &str) -> Result<ParsedDateTime> {
         let mut state = ParseState::default();
+        let value = value.trim();
         let mut position = parse_items(&self.items, value, 0, self.locale.data(), &mut state)?;
         position = parse_optional_zone_region(value, position);
         if position != value.len() {
@@ -84,7 +90,44 @@ fn parse_items(
                 let snapshot = state.clone();
                 match parse_items(items, value, position, locale, state) {
                     Ok(next) => position = next,
-                    Err(_) => *state = snapshot,
+                    Err(_) => {
+                        *state = snapshot.clone();
+                        // Try partial literal matching for the first item
+                        if let Some(DateTimeItem::Literal(literal)) = items.first() {
+                            // Try to find a suffix of the literal that matches
+                            let mut matched = false;
+                            for i in 0..literal.len() {
+                                let suffix = &literal[i..];
+                                if value[position..].starts_with(suffix) {
+                                    // Found matching suffix, parse rest of optional items
+                                    let new_position = position + suffix.len();
+                                    match parse_items(
+                                        &items[1..],
+                                        value,
+                                        new_position,
+                                        locale,
+                                        state,
+                                    ) {
+                                        Ok(next) => {
+                                            position = next;
+                                            matched = true;
+                                            break;
+                                        }
+                                        Err(_) => {
+                                            *state = snapshot.clone();
+                                        }
+                                    }
+                                }
+                            }
+                            // Also try the original special case for single space
+                            if !matched && literal == " " {
+                                match parse_items(&items[1..], value, position, locale, state) {
+                                    Ok(next) => position = next,
+                                    Err(_) => *state = snapshot,
+                                }
+                            }
+                        }
+                    }
                 }
             }
             DateTimeItem::PadNext { .. } => {
@@ -96,6 +139,12 @@ fn parse_items(
 }
 
 fn consume_literal(value: &str, position: usize, literal: &str) -> Result<usize> {
+    if literal == " " {
+        let next = skip_padding(value, position);
+        if next > position {
+            return Ok(next);
+        }
+    }
     if value[position..].starts_with(literal) {
         Ok(position + literal.len())
     } else {
@@ -120,7 +169,14 @@ fn parse_quarter(
     state: &mut ParseState,
 ) -> Result<usize> {
     let (next, quarter) = match count {
-        1 | 2 => parse_number(value, position, number_bounds(count, 1))?,
+        1 | 2 => {
+            let position = if value[position..].starts_with('Q') {
+                position + 1
+            } else {
+                position
+            };
+            parse_number(value, position, number_bounds(count, 1))?
+        }
         3 => {
             let (_, quarter) = consume_literal(value, position, "Q")
                 .and_then(|next| parse_number(value, next, (1, 1)))?;
@@ -203,7 +259,16 @@ fn parse_fraction(
     Ok((next, (fraction as u32) * 10u32.pow(scale as u32)))
 }
 
-fn parse_era(value: &str, position: usize, locale: &LocaleData, state: &mut ParseState) -> Result<usize> {
+fn parse_era(
+    value: &str,
+    position: usize,
+    locale: &LocaleData,
+    state: &mut ParseState,
+) -> Result<usize> {
+    if starts_with_ignore_case(&value[position..], "CE") {
+        state.era_bc = Some(false);
+        return Ok(position + 2);
+    }
     let choices = [
         (locale.eras_full[0], true),
         (locale.eras_full[1], false),
@@ -243,7 +308,12 @@ fn parse_month(
         })
 }
 
-fn parse_weekday_text(value: &str, position: usize, locale: &LocaleData, state: &mut ParseState) -> Result<usize> {
+fn parse_weekday_text(
+    value: &str,
+    position: usize,
+    locale: &LocaleData,
+    state: &mut ParseState,
+) -> Result<usize> {
     parse_text(value, position, &locale.weekdays_full)
         .or_else(|_| parse_text(value, position, &locale.weekdays_short))
         .and_then(|(next, index)| {
@@ -252,7 +322,12 @@ fn parse_weekday_text(value: &str, position: usize, locale: &LocaleData, state: 
         })
 }
 
-fn parse_am_pm(value: &str, position: usize, locale: &LocaleData, state: &mut ParseState) -> Result<usize> {
+fn parse_am_pm(
+    value: &str,
+    position: usize,
+    locale: &LocaleData,
+    state: &mut ParseState,
+) -> Result<usize> {
     if starts_with_ignore_case(&value[position..], locale.am_pm[0]) {
         state.set_ampm(false)?;
         Ok(position + locale.am_pm[0].len())
@@ -277,7 +352,14 @@ fn parse_text(value: &str, position: usize, choices: &[&str]) -> Result<(usize, 
 }
 
 fn starts_with_ignore_case(value: &str, prefix: &str) -> bool {
-    value.len() >= prefix.len() && value[..prefix.len()].to_lowercase() == prefix.to_lowercase()
+    let mut value_chars = value.chars();
+    prefix.chars().all(|prefix_char| match value_chars.next() {
+        Some(value_char) => {
+            value_char.eq_ignore_ascii_case(&prefix_char)
+                || value_char.to_lowercase().eq(prefix_char.to_lowercase())
+        }
+        None => false,
+    })
 }
 
 fn parse_offset(
@@ -287,11 +369,14 @@ fn parse_offset(
     zero_z: bool,
 ) -> Result<(usize, FixedOffset)> {
     if zero_z && value[position..].starts_with('Z') {
-        return Ok((position + 1, FixedOffset::east_opt(0).unwrap()));
+        let offset = FixedOffset::east_opt(0)
+            .ok_or_else(|| exec_datafusion_err!("invalid UTC offset seconds: 0"))?;
+        return Ok((position + 1, offset));
     }
     let colon = count >= 3;
     let include_seconds = count >= 4;
-    parse_numeric_offset(value, position, colon, include_seconds)
+    let require_minutes = count != 1;
+    parse_numeric_offset(value, position, colon, include_seconds, require_minutes)
 }
 
 fn parse_localized_offset(value: &str, position: usize) -> Result<(usize, FixedOffset)> {
@@ -304,7 +389,7 @@ fn parse_localized_offset(value: &str, position: usize) -> Result<(usize, FixedO
     if next == value.len() || !matches!(value.as_bytes().get(next), Some(b'+') | Some(b'-')) {
         return Ok((next, FixedOffset::east_opt(0).unwrap()));
     }
-    parse_numeric_offset(value, next, value[next..].contains(':'), false)
+    parse_numeric_offset(value, next, value[next..].contains(':'), false, true)
 }
 
 fn parse_numeric_offset(
@@ -312,6 +397,7 @@ fn parse_numeric_offset(
     position: usize,
     colon: bool,
     include_seconds: bool,
+    require_minutes: bool,
 ) -> Result<(usize, FixedOffset)> {
     let sign = match value.as_bytes().get(position) {
         Some(b'+') => 1,
@@ -323,6 +409,12 @@ fn parse_numeric_offset(
         }
     };
     let (mut next, hours) = parse_number(value, position + 1, (2, 2))?;
+    if !require_minutes && !matches!(value.as_bytes().get(next), Some(b'0'..=b'9') | Some(b':')) {
+        let total = sign * hours * 3600;
+        let offset = FixedOffset::east_opt(total)
+            .ok_or_else(|| exec_datafusion_err!("invalid datetime offset seconds: {total}"))?;
+        return Ok((next, offset));
+    }
     if colon {
         next = consume_literal(value, next, ":")?;
     }
@@ -343,7 +435,7 @@ fn parse_numeric_offset(
     Ok((next, offset))
 }
 
-fn parse_zone_name(value: &str, position: usize) -> Result<usize> {
+fn parse_zone_name(value: &str, position: usize) -> Result<(usize, String)> {
     let mut next = position;
     for ch in value[position..].chars() {
         if ch.is_ascii_alphanumeric() || matches!(ch, '/' | '_' | '-' | '+') {
@@ -357,7 +449,7 @@ fn parse_zone_name(value: &str, position: usize) -> Result<usize> {
             "expected timezone name at byte offset {position}"
         ))
     } else {
-        Ok(next)
+        Ok((next, value[position..next].to_string()))
     }
 }
 
@@ -425,15 +517,30 @@ impl ParseState {
     fn resolve(mut self) -> Result<ParsedDateTime> {
         self.resolve_sail_fields()?;
         self.apply_defaults()?;
-        let date = self
+        let add_day = self.hour_24.unwrap_or(false);
+        let mut date = self
             .parsed
             .to_naive_date()
             .map_err(|e| exec_datafusion_err!("invalid parsed date: {e}"))?;
+        if add_day {
+            date = date.succ_opt().unwrap_or(date);
+        }
         validate_week_of_month(&self, date)?;
-        let time = self
-            .parsed
-            .to_naive_time()
-            .map_err(|e| exec_datafusion_err!("invalid parsed time: {e}"))?;
+        let mut datetime = date.and_time(
+            self.parsed
+                .to_naive_time()
+                .map_err(|e| exec_datafusion_err!("invalid parsed time: {e}"))?,
+        );
+        if self.leap_second {
+            if datetime.hour() != 23 || datetime.minute() != 59 {
+                return Err(exec_datafusion_err!(
+                    "Invalid value for SecondOfMinute (valid leap second must be 23:59:60)"
+                ));
+            }
+            datetime += Duration::seconds(1);
+        }
+        let date = datetime.date();
+        let time = datetime.time();
         let offset = self
             .parsed
             .offset
@@ -446,6 +553,7 @@ impl ParseState {
         Ok(ParsedDateTime {
             datetime: date.and_time(time),
             offset,
+            timezone: self.timezone,
         })
     }
 
@@ -477,6 +585,14 @@ impl ParseState {
         }
 
         if let Some(hour) = self.clock_hour_of_day {
+            if !(1..=24).contains(&hour) {
+                return Err(exec_datafusion_err!(
+                    "Invalid value for ClockHourOfDay (valid values 1 - 24): {hour}"
+                ));
+            }
+            if hour == 24 {
+                self.hour_24 = Some(true);
+            }
             self.set_hour(if hour == 24 { 0 } else { hour as i32 })?;
         }
         if let Some(hour) = self.hour_of_ampm {
@@ -493,6 +609,18 @@ impl ParseState {
         if self.parsed.year.is_none() && self.parsed.isoyear.is_none() {
             self.set_year(1970)?;
         }
+        // Convert quarter to month if quarter is set and month is not
+        // Chrono's to_naive_date() doesn't handle quarter resolution, so we must convert it manually
+        if let Some(quarter) = self.parsed.quarter() {
+            if self.parsed.month.is_none() {
+                // Quarter 1 -> January (month 1)
+                // Quarter 2 -> April (month 4)
+                // Quarter 3 -> July (month 7)
+                // Quarter 4 -> October (month 10)
+                let month = (quarter - 1) * 3 + 1;
+                self.set_month(month as i32)?;
+            }
+        }
         if self.parsed.month.is_none()
             && self.parsed.ordinal.is_none()
             && self.parsed.isoweek.is_none()
@@ -507,7 +635,11 @@ impl ParseState {
             && self.parsed.week_from_mon.is_none()
             && self.parsed.week_from_sun.is_none()
         {
-            self.set_day(1)?;
+            let day = self
+                .week_of_month
+                .map(|week| (week - 1) * 7 + 1)
+                .unwrap_or(1);
+            self.set_day(day as i32)?;
         }
         if self.parsed.hour_div_12.is_none() && self.parsed.hour_mod_12.is_none() {
             self.set_hour(0)?;
@@ -641,11 +773,14 @@ fn parse_field_spec(
 ) -> Result<usize> {
     match spec.kind {
         DateTimeField::Era => parse_era(value, position, locale, state),
-        DateTimeField::YearOfEra => parse_number(value, position, number_bounds(spec.width, 10))
-            .map(|(next, year)| {
-                state.year_of_era = Some(expand_year(year, spec.width));
-                next
-            }),
+        DateTimeField::YearOfEra => {
+            parse_signed_number(value, position, number_bounds(spec.width, 10)).and_then(
+                |(next, year)| {
+                    state.year_of_era = Some(expand_year(year, spec.width));
+                    Ok(next)
+                },
+            )
+        }
         DateTimeField::ProlepticYear => {
             parse_signed_number(value, position, number_bounds(spec.width, 10)).and_then(
                 |(next, year)| {
@@ -693,7 +828,13 @@ fn parse_field_spec(
         DateTimeField::AmPmOfDay => parse_am_pm(value, position, locale, state),
         DateTimeField::HourOfDay => parse_number(value, position, number_bounds(spec.width, 2))
             .and_then(|(next, hour)| {
-                state.set_hour(hour)?;
+                if hour == 24 {
+                    // Hour 24 means midnight of the next day
+                    state.hour_24 = Some(true);
+                    state.set_hour(0)?;
+                } else {
+                    state.set_hour(hour)?;
+                }
                 Ok(next)
             }),
         DateTimeField::ClockHourOfDay => {
@@ -715,13 +856,28 @@ fn parse_field_spec(
         }
         DateTimeField::MinuteOfHour => parse_number(value, position, number_bounds(spec.width, 2))
             .and_then(|(next, minute)| {
+                if !(0..60).contains(&minute) {
+                    return Err(exec_datafusion_err!(
+                        "Invalid value for MinuteOfHour (valid values 0 - 59): {minute}"
+                    ));
+                }
                 state.set_minute(minute)?;
                 Ok(next)
             }),
         DateTimeField::SecondOfMinute => {
             parse_number(value, position, number_bounds(spec.width, 2)).and_then(
                 |(next, second)| {
-                    state.set_second(second)?;
+                    if !(0..=60).contains(&second) {
+                        return Err(exec_datafusion_err!(
+                            "Invalid value for SecondOfMinute (valid values 0 - 60): {second}"
+                        ));
+                    }
+                    if second == 60 {
+                        state.leap_second = true;
+                        state.set_second(59)?;
+                    } else {
+                        state.set_second(second)?;
+                    }
                     Ok(next)
                 },
             )
@@ -787,6 +943,14 @@ fn parse_zone_spec(
                 Ok(next)
             })
         }
-        ZoneField::ZoneId | ZoneField::ZoneName => parse_zone_name(value, position),
+        ZoneField::ZoneId | ZoneField::ZoneName => {
+            parse_zone_name(value, position).map(|(next, timezone)| {
+                state.timezone = Some(match timezone.as_str() {
+                    "GMT" => "UTC".to_string(),
+                    _ => timezone,
+                });
+                next
+            })
+        }
     }
 }

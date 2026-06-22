@@ -239,8 +239,9 @@ fn get_or_parse_format<'a>(
     cache: &'a mut HashMap<String, DateTimeFormat>,
     pattern: &str,
 ) -> Result<&'a DateTimeFormat> {
-    if !cache.contains_key(pattern) {
-        cache.insert(pattern.to_string(), DateTimeFormat::parse(pattern)?);
+    let cache_key = pattern.to_string();
+    if !cache.contains_key(&cache_key) {
+        cache.insert(cache_key.clone(), DateTimeFormat::parse(pattern)?);
     }
-    Ok(cache.get(pattern).expect("datetime format was inserted"))
+    Ok(cache.get(&cache_key).expect("datetime format was inserted"))
 }

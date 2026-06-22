@@ -31,6 +31,10 @@ fn parse_items(chars: &[char], position: &mut usize, optional: bool) -> Result<V
                 flush_literal(&mut items, &mut literal);
                 literal.push_str(&parse_quoted_literal(chars, position)?);
             }
+            'T' => {
+                literal.push(ch);
+                *position += 1;
+            }
             '[' => {
                 flush_literal(&mut items, &mut literal);
                 *position += 1;
@@ -58,7 +62,7 @@ fn parse_items(chars: &[char], position: &mut usize, optional: bool) -> Result<V
                 });
             }
             ch if ch.is_ascii_alphabetic() => {
-                flush_literal(&mut items, &mut literal);
+                // Try to parse as a pattern field
                 let symbol = ch;
                 let token_start = *position;
                 *position += 1;
@@ -66,9 +70,19 @@ fn parse_items(chars: &[char], position: &mut usize, optional: bool) -> Result<V
                     *position += 1;
                 }
                 let count = *position - token_start;
-                validate_width(symbol, count)?;
-                let field_item = build_field_item(symbol, count)?;
-                items.push(field_item);
+
+                // Check if this is a valid pattern letter
+                if validate_width(symbol, count).is_ok() {
+                    flush_literal(&mut items, &mut literal);
+                    let field_item = build_field_item(symbol, count)?;
+                    items.push(field_item);
+                } else {
+                    // Not a valid pattern letter, treat as literal text
+                    // Reset position and collect as literal
+                    *position = token_start;
+                    literal.push(ch);
+                    *position += 1;
+                }
             }
             _ => {
                 literal.push(ch);
@@ -338,7 +352,7 @@ fn build_field_item(symbol: char, count: usize) -> Result<DateTimeItem> {
         'S' => Ok(DateTimeItem::Fraction(FractionSpec {
             field: FractionField::NanoOfSecond,
             min_width: count,
-            max_width: count,
+            max_width: 9,
             decimal_point: false,
         })),
         'A' => Ok(DateTimeItem::Field(DateTimeFieldSpec {

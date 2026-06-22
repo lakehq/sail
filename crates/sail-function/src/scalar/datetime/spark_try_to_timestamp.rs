@@ -8,6 +8,7 @@ use crate::scalar::datetime::spark_timestamp::SparkTimestamp;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTryToTimestamp {
+    timezone: Option<Arc<str>>,
     signature: Signature,
 }
 
@@ -19,9 +20,18 @@ impl Default for SparkTryToTimestamp {
 
 impl SparkTryToTimestamp {
     pub fn new() -> Self {
+        Self::try_new(None)
+    }
+
+    pub fn try_new(timezone: Option<Arc<str>>) -> Self {
         Self {
+            timezone,
             signature: Signature::variadic_any(Volatility::Immutable),
         }
+    }
+
+    pub fn timezone(&self) -> Option<&str> {
+        self.timezone.as_deref()
     }
 }
 
@@ -50,7 +60,7 @@ impl ScalarUDFImpl for SparkTryToTimestamp {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         // Delegate to SparkTimestamp with is_try=true
         // This will return NULL on parse failure instead of raising an error
-        let spark_timestamp = SparkTimestamp::try_new(None, true)?;
+        let spark_timestamp = SparkTimestamp::try_new(self.timezone.clone(), true)?;
         spark_timestamp.invoke_with_args(args)
     }
 }

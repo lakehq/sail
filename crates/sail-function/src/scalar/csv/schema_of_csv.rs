@@ -154,14 +154,20 @@ impl ScalarUDFImpl for SparkSchemaOfCsv {
 struct SparkSchemaOfCsvOptions {
     sep: String,
     timestamp_format: DateTimeFormat,
+    date_format: DateTimeFormat,
+    timezone: Option<String>,
 }
 
 impl Default for SparkSchemaOfCsvOptions {
+    #[expect(clippy::expect_used)]
     fn default() -> Self {
         Self {
             sep: ",".to_string(),
             timestamp_format: DateTimeFormat::parse("yyyy-MM-dd HH:mm:ss")
                 .expect("default timestamp format should be valid"),
+            date_format: DateTimeFormat::parse("yyyy-MM-dd")
+                .expect("default date format should be valid"),
+            timezone: None,
         }
     }
 }
@@ -205,6 +211,12 @@ impl SparkSchemaOfCsvOptions {
                 "sep" | "delimiter" => options.sep = value.to_string(),
                 "timestampFormat" => {
                     options.timestamp_format = DateTimeFormat::parse(value)?;
+                }
+                "dateFormat" => {
+                    options.date_format = DateTimeFormat::parse(value)?;
+                }
+                "timeZone" => {
+                    options.timezone = Some(value.to_string());
                 }
                 // Silently ignore unrecognised options, matching Spark's behaviour.
                 _ => {}
@@ -264,6 +276,10 @@ fn infer_csv_field_type(value: &str, options: &SparkSchemaOfCsvOptions) -> &'sta
     if options.timestamp_format.parse_datetime_value(value).is_ok() {
         return "TIMESTAMP";
     }
+    if options.date_format.parse_datetime_value(value).is_ok() {
+        return "DATE";
+    }
+    // Fallback to ISO date format if dateFormat doesn't match
     if NaiveDate::parse_from_str(value, "%Y-%m-%d").is_ok() {
         return "DATE";
     }
