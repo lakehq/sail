@@ -1469,12 +1469,7 @@ fn build_merge_projection(
     let target_exprs_by_name: HashMap<String, Expr> = target_schema
         .fields()
         .iter()
-        .map(|f| {
-            (
-                f.name().to_ascii_lowercase(),
-                Expr::Column(Column::from_name(f.name().clone())),
-            )
-        })
+        .map(|f| (f.name().clone(), Expr::Column(Column::from_name(f.name()))))
         .collect();
 
     let source_exprs_by_name: HashMap<String, Expr> = source_schema
@@ -1588,10 +1583,10 @@ fn build_merge_projection(
         }
         let name = field.name();
         let default_expr = target_exprs_by_name
-            .get(&name.to_ascii_lowercase())
+            .get(name)
             .cloned()
             .unwrap_or_else(|| lit(ScalarValue::Null));
-        let case_branches = cases.get(name).cloned().unwrap_or_default();
+        let case_branches = cases.remove(name).unwrap_or_default();
 
         let expr = if case_branches.is_empty() {
             default_expr
