@@ -70,7 +70,7 @@ message ExtendedPhysicalPlanNode {
 message ExtendedPhysicalExprNode {
   oneof ExprKind {
     CastColumnExprNode schema_evolution_cast = 1;
-    HigherOrderUDFExprNode higher_order_udf = 2;
+    HigherOrderUdfExprNode higher_order_udf = 2;
     LambdaExprNode lambda = 3;
     LambdaVariableExprNode lambda_variable = 4;
   }
@@ -90,17 +90,17 @@ message LambdaVariableExprNode {
   bytes field = 2;
 }
 
-message HigherOrderUDFExprNode {
-  HigherOrderUDF udf = 1;
+message HigherOrderUdfExprNode {
+  HigherOrderUdf udf = 1;
 }
 
-message HigherOrderUDF {
-  oneof HigherOrderUDFKind {
-    SparkArrayFilterUDF filter = 1;
+message HigherOrderUdf {
+  oneof HigherOrderUdfKind {
+    SparkArrayFilterUdf filter = 1;
   }
 }
 
-message SparkArrayFilterUDF {
+message SparkArrayFilterUdf {
   // True when the lambda parameters are `[index, element]` (an index-only
   // lambda rewritten by the planner) instead of `[element, index]`.
   //

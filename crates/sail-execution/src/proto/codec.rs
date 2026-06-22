@@ -276,6 +276,7 @@ use crate::plan::gen::{
     LambdaVariableExprNode,
 };
 use crate::plan::{gen, StageInputExec};
+use crate::proto::converter::RemotePhysicalProtoConverter;
 use crate::proto::decode::{
     try_decode_field_ref, try_decode_message, try_decode_physical_expr, try_decode_physical_plan,
     try_decode_schema,
@@ -284,7 +285,6 @@ use crate::proto::encode::{
     try_encode_field_ref, try_encode_message, try_encode_physical_expr, try_encode_physical_plan,
     try_encode_schema,
 };
-use crate::proto::physical_proto_converter::RemotePhysicalProtoConverter;
 
 pub struct RemoteExecutionCodec;
 
@@ -3045,7 +3045,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     None,
                 )))
             }
-            // Lambdas are handled in physical_proto_converter.rs, but we leave it here for defensive programming.
+            // Lambdas are handled in converter.rs, but we leave it here for defensive programming.
             ExprKind::Lambda(node) => {
                 if inputs.len() != 1 {
                     return plan_err!("LambdaExpr expects exactly one input, got {}", inputs.len());
@@ -3070,7 +3070,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     }
 
     fn try_encode_expr(&self, node: &Arc<dyn PhysicalExpr>, buf: &mut Vec<u8>) -> Result<()> {
-        // Lambdas are handled in physical_proto_converter.rs, but we leave it here for defensive programming.
+        // Lambdas are handled in converter.rs, but we leave it here for defensive programming.
         let expr_kind = if let Some(cast) = node.downcast_ref::<SchemaEvolutionCastColumnExpr>() {
             let node = self.try_encode_cast_column_expr(
                 cast.input_field().as_ref(),

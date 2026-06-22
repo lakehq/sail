@@ -12,7 +12,7 @@ use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 
 use crate::plan::gen;
 use crate::plan::gen::higher_order_udf::HigherOrderUdfKind;
-use crate::proto::physical_proto_converter::RemotePhysicalProtoConverter;
+use crate::proto::converter::RemotePhysicalProtoConverter;
 
 pub fn try_encode_message<M>(message: M) -> Result<Vec<u8>>
 where
