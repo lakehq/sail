@@ -2444,7 +2444,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_make_dt_interval" | "make_dt_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeDtInterval::new())))
             }
-            "spark_make_interval" | "make_interval" => {
+            "spark_make_interval" | "make_interval" | "try_make_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeInterval::new())))
             }
             "spark_make_ym_interval" | "make_ym_interval" => {
