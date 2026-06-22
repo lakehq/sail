@@ -164,7 +164,10 @@ impl RemotePhysicalProtoConverter {
         input_schema: &Schema,
         ctx: &PhysicalPlanDecodeContext<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        let fun = try_decode_higher_order_udf(node.udf)?;
+        let udf = node
+            .udf
+            .ok_or_else(|| plan_datafusion_err!("missing higher-order function UDF"))?;
+        let fun = try_decode_higher_order_udf(&udf)?;
         let mut decoded_values = Vec::with_capacity(inputs.len());
         let mut value_or_lambda = Vec::with_capacity(inputs.len());
 
