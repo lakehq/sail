@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field};
 use datafusion_common::{Column, DFSchemaRef, TableReference};
-use datafusion_expr::expr::ScalarFunction;
+use datafusion_expr::expr::{LambdaVariable, ScalarFunction};
 use datafusion_expr::{col, expr, lit, ScalarUDF};
 use datafusion_functions::core::get_field;
 use sail_common::spec;
@@ -24,6 +24,32 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         if is_metadata_column {
             return Err(PlanError::todo("resolve metadata column"));
+        }
+        // Lambda parameters shadow columns inside a lambda function body. SQL lambda
+        // bodies reference parameters as plain attributes, so the lambda scope stack
+        // is consulted first. A `plan_id` indicates an explicit DataFrame column
+        // reference, which never refers to a lambda parameter.
+        if plan_id.is_none() {
+            if let [first, rest @ ..] = name.parts() {
+                if let Some((declared, field)) = state
+                    .resolve_lambda_parameter(first.as_ref())
+                    .map(|(param, field)| (param.to_string(), field.cloned()))
+                {
+                    let display = rest
+                        .last()
+                        .map(|x| x.as_ref())
+                        .unwrap_or(declared.as_str())
+                        .to_string();
+                    let mut expr = expr::Expr::LambdaVariable(LambdaVariable::new(declared, field));
+                    for part in rest {
+                        expr = expr::Expr::ScalarFunction(ScalarFunction::new_udf(
+                            get_field(),
+                            vec![expr, lit(part.as_ref().to_string())],
+                        ));
+                    }
+                    return Ok(NamedExpr::new(vec![display], expr));
+                }
+            }
         }
         if let Some((name, expr)) =
             self.resolve_aggregate_field(&name, state.get_grouping_for_having())?

@@ -309,7 +309,6 @@ Feature: Delta Lake Merge
         AS src(id, value, flag)
         """
 
-    @sail-only
     Scenario: EXPLAIN for insert-only MERGE on a DV table does not request row indices
       When query
         """
@@ -323,7 +322,6 @@ Feature: Delta Lake Merge
         """
       Then query plan matches snapshot
 
-    @sail-only
     Scenario: EXPLAIN for MERGE delete on a DV table uses sorted partitioned DV rows
       When query
         """
@@ -339,7 +337,6 @@ Feature: Delta Lake Merge
         """
       Then query plan matches snapshot
 
-    @sail-only
     Scenario: Matched deletes use deletion vectors while unmatched rows are inserted
       Given statement
         """
@@ -377,7 +374,6 @@ Feature: Delta Lake Merge
         | 3  | stay     | target |
         | 4  | inserted | insert |
 
-    @sail-only
     Scenario: Matched updates are rejected for Merge-on-Read MERGE
       When query
         """

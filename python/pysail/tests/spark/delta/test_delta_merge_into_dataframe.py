@@ -4,11 +4,7 @@ from pandas.testing import assert_frame_equal
 from pyspark.sql import functions as F  # noqa: N812
 from pyspark.sql.dataframe import DataFrame as SparkDataFrame
 
-from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
-
-if is_jvm_spark():
-    pytest.skip("mergeInto integration test targets Spark Connect", allow_module_level=True)
 
 if not hasattr(SparkDataFrame, "mergeInto"):
     pytest.skip("DataFrame.mergeInto requires Spark 4.0+ (missing in this PySpark)", allow_module_level=True)

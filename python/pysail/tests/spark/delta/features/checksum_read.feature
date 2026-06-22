@@ -1,6 +1,5 @@
 Feature: Delta Lake checksum read path
 
-  @sail-only
   Rule: Metadata-as-data reads can use the latest checksum directly
 
     Background:
@@ -53,7 +52,6 @@ Feature: Delta Lake checksum read path
         📄 00000000000000000002.json
         """
 
-  @sail-only
   Rule: Metadata-as-data reads can use an older checksum as a hint
 
     Background:
@@ -106,7 +104,6 @@ Feature: Delta Lake checksum read path
         📄 00000000000000000002.json
         """
 
-  @sail-only
   Rule: Metadata-as-data reads recover from malformed latest checksum files
 
     Background:
@@ -163,7 +160,6 @@ Feature: Delta Lake checksum read path
         📄 00000000000000000002.json
         """
 
-  @sail-only
   Rule: Metadata-as-data reads fall back to full replay when checksum files are absent
 
     Background:

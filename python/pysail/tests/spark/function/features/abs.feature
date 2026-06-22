@@ -1,4 +1,3 @@
-@abs
 Feature: abs comprehensive tests
 
   Rule: Argument count validation

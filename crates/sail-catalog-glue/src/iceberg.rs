@@ -235,6 +235,7 @@ fn should_fallback_to_table_input(has_custom_endpoint: bool, error: &str) -> boo
         || error.contains("unknown parameter")
         || error.contains("not implemented")
         || error.contains("not yet implemented")
+        || error.contains("unhandled error")
 }
 
 /// Validates CreateTableOptions for Iceberg tables.
@@ -430,6 +431,7 @@ mod tests {
             true,
             "unknown parameter: open_table_format_input"
         ));
+        assert!(should_fallback_to_table_input(true, "unhandled error"));
     }
 
     #[test]

@@ -7931,6 +7931,7 @@ dependencies = [
  "datafusion",
  "datafusion-physical-expr",
  "log",
+ "sail-function",
  "sail-physical-plan",
 ]
 

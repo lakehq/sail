@@ -1114,7 +1114,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             mode,
             properties,
             is_external: _,
-            is_write_precondition: _,
+            is_write_precondition,
         } = options;
 
         if !format.eq_ignore_ascii_case("iceberg") {
@@ -1203,12 +1203,14 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .await
             .map_err(|e| CatalogError::External(format!("Failed to create table: {e}")))?;
 
-        self.validate_create_table_access_session_requirements(
-            database,
-            table,
-            catalog_config,
-            &result,
-        )?;
+        if is_write_precondition {
+            self.validate_create_table_access_session_requirements(
+                database,
+                table,
+                catalog_config,
+                &result,
+            )?;
+        }
         self.load_table_result_to_status(table, database, result)
     }
 
@@ -2064,6 +2066,45 @@ mod tests {
             is_external: false,
             is_write_precondition: true,
         }
+    }
+
+    fn create_table_response_with_access_session_requirements() -> serde_json::Value {
+        serde_json::json!({
+            "metadata-location": "s3://bucket/table/metadata/v1.metadata.json",
+            "metadata": {
+                "format-version": 2,
+                "table-uuid": "12345678-1234-1234-1234-123456789012",
+                "location": "s3://bucket/table",
+                "current-schema-id": 0,
+                "schemas": [
+                    {
+                        "type": "struct",
+                        "schema-id": 0,
+                        "fields": [
+                            {
+                                "id": 1,
+                                "name": "id",
+                                "required": true,
+                                "type": "long"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "config": {
+                "scan-planning-mode": "server",
+                "s3.remote-signing-enabled": "true"
+            },
+            "storage-credentials": [
+                {
+                    "prefix": "s3://bucket/table",
+                    "config": {
+                        "s3.access-key-id": "AKIA-SECRET",
+                        "s3.secret-access-key": "storage-secret"
+                    }
+                }
+            ]
+        })
     }
 
     async fn load_merged_test_config(
@@ -2952,42 +2993,7 @@ mod tests {
 
         ctx.mock_post_json(
             &ctx.path("/namespaces/db1/tables"),
-            serde_json::json!({
-                "metadata-location": "s3://bucket/table/metadata/v1.metadata.json",
-                "metadata": {
-                    "format-version": 2,
-                    "table-uuid": "12345678-1234-1234-1234-123456789012",
-                    "location": "s3://bucket/table",
-                    "current-schema-id": 0,
-                    "schemas": [
-                        {
-                            "type": "struct",
-                            "schema-id": 0,
-                            "fields": [
-                                {
-                                    "id": 1,
-                                    "name": "id",
-                                    "required": true,
-                                    "type": "long"
-                                }
-                            ]
-                        }
-                    ]
-                },
-                "config": {
-                    "scan-planning-mode": "server",
-                    "s3.remote-signing-enabled": "true"
-                },
-                "storage-credentials": [
-                    {
-                        "prefix": "s3://bucket/table",
-                        "config": {
-                            "s3.access-key-id": "AKIA-SECRET",
-                            "s3.secret-access-key": "storage-secret"
-                        }
-                    }
-                ]
-            }),
+            create_table_response_with_access_session_requirements(),
         )
         .await;
 
@@ -2999,6 +3005,28 @@ mod tests {
 
         assert!(matches!(err, CatalogError::UnsupportedCapability(_)));
         assert!(err.to_string().contains("Iceberg REST access session"));
+    }
+
+    #[tokio::test]
+    async fn metadata_only_create_table_allows_rest_access_session_requirements() {
+        let ctx = TestContext::new(Some("test")).await;
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+
+        ctx.mock_post_json(
+            &ctx.path("/namespaces/db1/tables"),
+            create_table_response_with_access_session_requirements(),
+        )
+        .await;
+
+        let mut options = simple_create_table_options();
+        options.is_write_precondition = false;
+        let status = ctx
+            .catalog
+            .create_table(&namespace, "table1", options)
+            .await
+            .unwrap();
+
+        assert_eq!(status.name, "table1");
     }
 
     #[tokio::test]

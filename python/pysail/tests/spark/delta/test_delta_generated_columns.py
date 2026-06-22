@@ -5,10 +5,6 @@ from pathlib import Path
 
 import pytest
 
-from pysail.testing.spark.utils.common import is_jvm_spark
-
-pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail only - Delta generated-column path writes")
-
 
 def _create_empty_generated_column_table(table_path: Path) -> None:
     now_ms = int(time.time() * 1000)
