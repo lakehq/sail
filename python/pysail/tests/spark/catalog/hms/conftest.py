@@ -19,33 +19,17 @@ from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
 from testcontainers.core.waiting_utils import wait_for_logs
 
+from pysail.testing.spark.session import spark_connect_server, spark_session_factory
+
 if TYPE_CHECKING:
     from collections.abc import Generator
-
-# We skip the tests for now since it may cause issues
-# when running the tests in installed packages.
-pytest.skip("not working", allow_module_level=True)
-
-
-# ---------------------------------------------------------------------------
-# Override the parent's autouse spark_doctest fixture so it does not
-# start a default in-memory-catalog Sail server.
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="module", autouse=True)
-def spark_doctest(
-    request: pytest.FixtureRequest,
-    doctest_namespace: dict[str, object],
-) -> None:
-    doctest_namespace["spark"] = request.getfixturevalue("hms_s3_spark")
 
 
 # ---------------------------------------------------------------------------
 # HMS container
 # ---------------------------------------------------------------------------
 #
-_HMS_IMAGE = "apache/hive:3.1.3"
+_HMS_IMAGE = "apache/hive:4.0.0"
 _HMS_METASTORE_PORT = 9083
 _HMS_STARTUP_TIMEOUT = 180  # seconds
 # Use 127.0.0.1 explicitly instead of 'localhost' to avoid IPv6 resolution
@@ -159,74 +143,28 @@ def _wait_for_port(host: str, port: int, timeout: float) -> None:
     raise TimeoutError(msg)
 
 
-def _wait_for_hms_catalog(remote_url: str, timeout: float) -> None:
+def _wait_for_hms_catalog_with_timeout(remote: str, timeout: float) -> None:
     """Block until Sail can successfully list HMS databases.
 
     We intentionally probe with ``SHOW DATABASES`` instead of an HMS-only
     ping. This verifies the full harness path (Sail Spark Connect server,
     catalog wiring, and HMS) rather than just metastore socket readiness.
     """
-    from pysail.tests.spark.conftest import (
-        configure_spark_session,
-        patch_spark_connect_session,
-    )
-
     deadline = time.monotonic() + timeout
     last_error = None
     while time.monotonic() < deadline:
-        spark = None
-        try:
-            spark = SparkSession.builder.remote(remote_url).appName("hms_smoke_readiness").create()
-            configure_spark_session(spark)
-            patch_spark_connect_session(spark)
-            spark.sql("SHOW DATABASES").collect()
-            return
-        except AnalysisException as exc:
-            last_error = exc
-            time.sleep(1)
-        except Exception as exc:  # noqa: BLE001
-            last_error = exc
-            time.sleep(1)
-        finally:
-            if spark is not None:
-                spark.stop()
+        with spark_session_factory(remote) as sessions:
+            spark = sessions.create()
+            try:
+                spark.sql("SHOW DATABASES").collect()
+                return
+            except AnalysisException as exc:
+                last_error = exc
+            except Exception as exc:  # noqa: BLE001
+                last_error = exc
+        time.sleep(1)
 
     raise TimeoutError(f"Sail HMS catalog did not become queryable within {timeout}s; last error: {last_error}")
-
-
-def _run_sail_hms_server(
-    hms_endpoint: str,
-    extra_env: dict[str, str] | None = None,
-) -> Generator[str, None, None]:
-    # Defer imports that pull in pysail._native until fixture execution time,
-    # after the root conftest's pytest_configure has set up the environment.
-    from pysail.spark import SparkConnectServer
-
-    catalogs_config = f'[{{name="sail", type="hms", uris=["{hms_endpoint}"]}}]'
-    env = {
-        "SAIL_CATALOG__LIST": catalogs_config,
-        **(extra_env or {}),
-    }
-    old_env = {key: os.environ.get(key) for key in env}
-    os.environ.update(env)
-
-    server: SparkConnectServer | None = None
-    try:
-        server = SparkConnectServer("127.0.0.1", 0)
-        server.start(background=True)
-        _, port = server.listening_address
-        remote_url = f"sc://localhost:{port}"
-        _wait_for_hms_catalog(remote_url, 60)
-        yield remote_url
-    finally:
-        if server is not None:
-            with contextlib.suppress(Exception):
-                server.stop()
-        for key, old_value in old_env.items():
-            if old_value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = old_value
 
 
 @pytest.fixture(scope="session")
@@ -354,8 +292,8 @@ def hms_s3_container(
     """Start a Hive Metastore container with S3A wiring for s3:// locations."""
     s3a_classpath = ":".join(
         [
-            "/opt/hadoop/share/hadoop/tools/lib/hadoop-aws-3.1.0.jar",
-            "/opt/hadoop/share/hadoop/tools/lib/aws-java-sdk-bundle-1.11.271.jar",
+            "/opt/hadoop/share/hadoop/tools/lib/hadoop-aws-3.3.6.jar",
+            "/opt/hadoop/share/hadoop/tools/lib/aws-java-sdk-bundle-1.12.367.jar",
         ]
     )
     container = DockerContainer(_HMS_IMAGE)
@@ -399,27 +337,24 @@ def hms_s3_metastore_endpoint(hms_s3_container: DockerContainer) -> str:
 
 
 @pytest.fixture(scope="module")
-def hms_s3_remote(
+def remote(
     hms_s3_metastore_endpoint: str,
     hms_s3_env: dict[str, str],
 ) -> Generator[str, None, None]:
     """Start a separate Sail server configured for HMS plus MinIO-backed S3."""
-    yield from _run_sail_hms_server(hms_s3_metastore_endpoint, hms_s3_env)
+    catalogs_config = f'[{{name="sail", type="hms", uris=["{hms_s3_metastore_endpoint}"]}}]'
+    with spark_connect_server(
+        envs={
+            "SAIL_CATALOG__LIST": catalogs_config,
+            **hms_s3_env,
+        },
+    ) as server:
+        yield server.remote
 
 
-@pytest.fixture(scope="module")
-def hms_s3_spark(hms_s3_remote: str) -> Generator[SparkSession, None, None]:
-    """Create a Spark Connect session connected to Sail's S3 HMS lane."""
-    from pysail.tests.spark.conftest import (
-        configure_spark_session,
-        patch_spark_connect_session,
-    )
-
-    spark = SparkSession.builder.remote(hms_s3_remote).appName("hms_s3_interop_test").create()
-    configure_spark_session(spark)
-    patch_spark_connect_session(spark)
-    yield spark
-    spark.stop()
+@pytest.fixture(scope="module", autouse=True)
+def _wait_for_hms_catalog(remote: str) -> None:
+    _wait_for_hms_catalog_with_timeout(remote, 60)
 
 
 # ---------------------------------------------------------------------------
@@ -428,20 +363,20 @@ def hms_s3_spark(hms_s3_remote: str) -> Generator[SparkSession, None, None]:
 
 
 @pytest.fixture(scope="module")
-def reference_spark_s3(
-    hms_s3_spark: SparkSession,
+def jvm_spark(
+    spark: SparkSession,
     hms_s3_metastore_endpoint: str,
     hms_warehouse_dir: Path,
     hms_s3_endpoint: str,
 ) -> Generator[SparkSession, None, None]:
     """Start classic reference Spark with Hive support and MinIO S3A wiring."""
-    del hms_s3_spark
+    del spark
     warehouse_uri = hms_warehouse_dir.as_uri()
 
     with _classic_spark_mode():
         builder = (
             SparkSession.builder.master("local[1]")
-            .appName("hms_reference_spark_s3")
+            .appName("hms-jvm-s3")
             .config("spark.sql.catalogImplementation", "hive")
             .config(
                 "spark.hadoop.hive.metastore.uris",
@@ -466,22 +401,22 @@ def reference_spark_s3(
 @pytest.fixture
 def hms_s3_database(
     request: pytest.FixtureRequest,
-    reference_spark_s3: SparkSession,
-    hms_s3_spark: SparkSession,
+    jvm_spark: SparkSession,
+    spark: SparkSession,
 ) -> Generator[str, None, None]:
     """Create a unique HMS database whose managed table root is on S3."""
     database = _hms_test_database_name(request, prefix="hms_s3_", max_name_len=100)
     location = f"s3://{_HMS_S3_BUCKET}/{database}"
 
-    reference_spark_s3.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
-    reference_spark_s3.sql(f"CREATE DATABASE {database} LOCATION '{location}'")
+    jvm_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+    jvm_spark.sql(f"CREATE DATABASE {database} LOCATION '{location}'")
 
     yield database
 
     try:
-        reference_spark_s3.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+        jvm_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
     except Exception:  # noqa: BLE001
-        hms_s3_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+        spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
 
 
 # ---------------------------------------------------------------------------

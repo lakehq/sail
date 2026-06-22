@@ -37,17 +37,17 @@ def _struct_field_type_json_by_name(unity_rest_url: str, table_name: str) -> dic
 
 
 def test_dataframe_append_and_merge_schema_are_unity_managed(
-    unity_spark: SparkSession,
+    spark: SparkSession,
     unity_rest_url: str,
 ) -> None:
     database = "unity_dataframe_test"
     table = "managed_delta_df_t"
     table_fqn = f"{database}.{table}"
 
-    unity_spark.sql(f"CREATE SCHEMA IF NOT EXISTS {database}")
+    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {database}")
     try:
-        unity_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-        unity_spark.sql(
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(
             f"""
             CREATE TABLE {table_fqn} (
               id INT,
@@ -58,7 +58,7 @@ def test_dataframe_append_and_merge_schema_are_unity_managed(
         )
 
         (
-            unity_spark.createDataFrame([(1, "one")], schema="id INT, name STRING")
+            spark.createDataFrame([(1, "one")], schema="id INT, name STRING")
             .write.format("delta")
             .mode("append")
             .saveAsTable(table_fqn)
@@ -67,13 +67,13 @@ def test_dataframe_append_and_merge_schema_are_unity_managed(
         first_commit = _unity_delta_commit_info(unity_rest_url, table_fqn, 1)
         assert first_commit
 
-        evolved = unity_spark.createDataFrame([(2, "two", 20)], schema="id INT, name STRING, age INT")
+        evolved = spark.createDataFrame([(2, "two", 20)], schema="id INT, name STRING, age INT")
         (evolved.write.format("delta").mode("append").option("mergeSchema", "true").saveAsTable(table_fqn))
 
         second_commit = _unity_delta_commit_info(unity_rest_url, table_fqn, 2)
         assert second_commit
 
-        rows = unity_spark.sql(f"SELECT id, name, age FROM {table_fqn} ORDER BY id").collect()
+        rows = spark.sql(f"SELECT id, name, age FROM {table_fqn} ORDER BY id").collect()
         assert [(row.id, row.name, row.age) for row in rows] == [(1, "one", None), (2, "two", 20)]
 
         table_info = _unity_table_info(unity_rest_url, table_fqn)
@@ -84,22 +84,22 @@ def test_dataframe_append_and_merge_schema_are_unity_managed(
             ("age", "INT"),
         ]
     finally:
-        unity_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-        unity_spark.sql(f"DROP SCHEMA IF EXISTS {database} CASCADE")
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(f"DROP SCHEMA IF EXISTS {database} CASCADE")
 
 
 def test_managed_delta_create_and_schema_merge_write_spark_struct_field_type_json(
-    unity_spark: SparkSession,
+    spark: SparkSession,
     unity_rest_url: str,
 ) -> None:
     database = "unity_dataframe_type_json_test"
     table = "managed_delta_type_json_t"
     table_fqn = f"{database}.{table}"
 
-    unity_spark.sql(f"CREATE SCHEMA IF NOT EXISTS {database}")
+    spark.sql(f"CREATE SCHEMA IF NOT EXISTS {database}")
     try:
-        unity_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-        unity_spark.sql(
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(
             f"""
             CREATE TABLE {table_fqn} (
               id INT,
@@ -114,7 +114,7 @@ def test_managed_delta_create_and_schema_merge_write_spark_struct_field_type_jso
             "name": _expected_struct_field("name", "string"),
         }
 
-        evolved = unity_spark.createDataFrame([(1, "one", "new")], schema="id INT, name STRING, extra STRING")
+        evolved = spark.createDataFrame([(1, "one", "new")], schema="id INT, name STRING, extra STRING")
         (evolved.write.format("delta").mode("append").option("mergeSchema", "true").saveAsTable(table_fqn))
 
         assert _struct_field_type_json_by_name(unity_rest_url, table_fqn) == {
@@ -123,5 +123,5 @@ def test_managed_delta_create_and_schema_merge_write_spark_struct_field_type_jso
             "extra": _expected_struct_field("extra", "string"),
         }
     finally:
-        unity_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-        unity_spark.sql(f"DROP SCHEMA IF EXISTS {database} CASCADE")
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(f"DROP SCHEMA IF EXISTS {database} CASCADE")

@@ -164,21 +164,11 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             if like.is_some() {
                 return Err(SqlError::todo("LIKE in CREATE TABLE"));
             }
-            if or_replace.is_some() && if_not_exists.is_some() {
-                return Err(SqlError::invalid(
-                    "CREATE OR REPLACE TABLE cannot be used with IF NOT EXISTS",
-                ));
-            }
-            let mode = if or_replace.is_some() {
-                spec::CreateTableMode::CreateOrReplace
-            } else if if_not_exists.is_some() {
-                spec::CreateTableMode::CreateIfNotExists
-            } else {
-                spec::CreateTableMode::Create
-            };
             let definition = TableDefinition {
                 external: external.is_some(),
-                mode,
+                replace: false,
+                or_replace: or_replace.is_some(),
+                if_not_exists: if_not_exists.is_some(),
                 using: using.map(|(_, x)| x),
                 columns,
                 clauses: clauses.try_into()?,
@@ -209,7 +199,9 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
         } => {
             let definition = TableDefinition {
                 external: external.is_some(),
-                mode: spec::CreateTableMode::Replace,
+                replace: true,
+                or_replace: false,
+                if_not_exists: false,
                 using: using.map(|(_, x)| x),
                 columns,
                 clauses: clauses.try_into()?,
@@ -1225,7 +1217,9 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
 
 struct TableDefinition {
     external: bool,
-    mode: spec::CreateTableMode,
+    replace: bool,
+    or_replace: bool,
+    if_not_exists: bool,
     using: Option<Ident>,
     columns: Option<ColumnDefinitionList>,
     clauses: CreateTableClauses,
@@ -1237,7 +1231,9 @@ fn from_ast_table_definition(
 ) -> SqlResult<(spec::TableDefinition, Option<Box<QueryPlan>>)> {
     let TableDefinition {
         external,
-        mode,
+        replace,
+        or_replace,
+        if_not_exists,
         using,
         columns,
         clauses:
@@ -1254,6 +1250,19 @@ fn from_ast_table_definition(
             },
         query,
     } = definition;
+    let mode = if replace {
+        spec::CreateTableMode::Replace
+    } else if or_replace && if_not_exists {
+        return Err(SqlError::invalid(
+            "CREATE OR REPLACE TABLE cannot be used with IF NOT EXISTS",
+        ));
+    } else if or_replace {
+        spec::CreateTableMode::CreateOrReplace
+    } else if if_not_exists {
+        spec::CreateTableMode::CreateIfNotExists
+    } else {
+        spec::CreateTableMode::Create
+    };
     let row_format = row_format.map(from_ast_row_format).transpose()?;
     let file_format = match (using, stored_as) {
         (Some(using), None) => Some(spec::TableFileFormat::General {
