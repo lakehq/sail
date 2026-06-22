@@ -3,14 +3,18 @@ use std::collections::HashMap;
 use dashmap::{DashMap, Entry};
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
-    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions,
+    plain_lakehouse_create_table_metadata_requirement, AlterTableOptions, CatalogProvider,
+    CreateDatabaseOptions, CreateTableColumnOptions, CreateTableMetadataRequirement,
     CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
     DropTableOptions, DropViewOptions, Namespace,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
-    alter_column_type, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
+    alter_column_default, alter_column_type, CatalogPartitionField, DatabaseStatus,
+    TableColumnStatus, TableKind, TableStatus,
 };
+
+use crate::managed_table;
 
 struct MemoryDatabase {
     status: DatabaseStatus,
@@ -47,6 +51,19 @@ impl MemoryCatalogProvider {
         );
         Self { name, databases }
     }
+}
+
+fn validate_create_table_options(
+    format: &str,
+    partition_by: &[CatalogPartitionField],
+) -> CatalogResult<()> {
+    if !format.eq_ignore_ascii_case("iceberg") && partition_by.iter().any(|f| f.transform.is_some())
+    {
+        return Err(CatalogError::NotSupported(
+            "partition transforms are not supported by memory catalog".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 #[async_trait::async_trait]
@@ -167,14 +184,10 @@ impl CatalogProvider for MemoryCatalogProvider {
             if_not_exists,
             replace,
             properties,
+            is_external,
+            is_write_precondition: _,
         } = options;
-        if !format.eq_ignore_ascii_case("iceberg")
-            && partition_by.iter().any(|f| f.transform.is_some())
-        {
-            return Err(CatalogError::NotSupported(
-                "partition transforms are not supported by memory catalog".to_string(),
-            ));
-        }
+        validate_create_table_options(&format, &partition_by)?;
         let mut db = self.databases.get_mut(database).ok_or_else(|| {
             CatalogError::NotFound(CatalogObject::Database, quote_namespace_if_needed(database))
         })?;
@@ -200,6 +213,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                     comment,
                     default,
                     generated_always_as,
+                    identity,
                 } = x;
                 let is_partition = partition_by
                     .iter()
@@ -214,6 +228,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                     comment,
                     default,
                     generated_always_as,
+                    identity,
                     is_partition,
                     is_bucket,
                     is_cluster: false,
@@ -234,10 +249,19 @@ impl CatalogProvider for MemoryCatalogProvider {
                 sort_by,
                 bucket_by,
                 properties,
+                is_external,
             },
         };
         db.tables.insert(table.to_string(), status.clone());
         Ok(status)
+    }
+
+    fn create_table_metadata_requirement(
+        &self,
+        options: &CreateTableOptions,
+    ) -> CatalogResult<CreateTableMetadataRequirement> {
+        validate_create_table_options(&options.format, &options.partition_by)?;
+        Ok(plain_lakehouse_create_table_metadata_requirement(options))
     }
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
@@ -317,6 +341,9 @@ impl CatalogProvider for MemoryCatalogProvider {
                 AlterTableOptions::SetTableProperties {
                     properties: new_props,
                 } => {
+                    managed_table::validate_metadata_location_precondition(
+                        table, properties, &new_props,
+                    )?;
                     for (key, value) in new_props {
                         if let Some(existing) = properties.iter_mut().find(|(k, _)| k == &key) {
                             existing.1 = value;
@@ -347,6 +374,17 @@ impl CatalogProvider for MemoryCatalogProvider {
                         ))
                     })
                 }
+                AlterTableOptions::AlterColumnDefault { name, default } => {
+                    alter_column_default(columns, &name, default).map_err(|e| {
+                        CatalogError::InvalidArgument(format!(
+                            "failed to alter column default for '{}': {e}",
+                            name.join(".")
+                        ))
+                    })
+                }
+                AlterTableOptions::AddCheckConstraint { .. } => Err(CatalogError::NotSupported(
+                    "CHECK constraints are handled by lakehouse table formats".to_string(),
+                )),
             },
             _ => Err(CatalogError::NotSupported(
                 "ALTER TABLE is not supported for views".to_string(),
@@ -399,6 +437,7 @@ impl CatalogProvider for MemoryCatalogProvider {
                     comment,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                     is_partition: false,
                     is_bucket: false,
                     is_cluster: false,

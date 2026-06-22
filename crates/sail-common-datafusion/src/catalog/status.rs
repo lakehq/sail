@@ -3,6 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
 use datafusion_common::{plan_err, Result};
 use datafusion_expr::LogicalPlan;
+use serde::{Deserialize, Serialize};
 
 use crate::catalog::{
     CatalogPartitionField, CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
@@ -45,6 +46,15 @@ pub enum TableKind {
         sort_by: Vec<CatalogTableSort>,
         bucket_by: Option<CatalogTableBucketBy>,
         properties: Vec<(String, String)>,
+        /// Whether the table is external. When `false` the table is managed.
+        ///
+        /// This flag is purely informational at present: Sail always creates
+        /// tables as external (`EXTERNAL=TRUE`, `table_type = EXTERNAL_TABLE`)
+        /// and does not differentiate managed vs external behavior for
+        /// operations like `DROP TABLE` (metadata-only; data is preserved). The flag
+        /// exists so that `type_name()` correctly reports the table type that
+        /// was recorded in the HMS metastore by other engines (e.g. Spark).
+        is_external: bool,
     },
     View {
         definition: String,
@@ -57,13 +67,30 @@ pub enum TableKind {
         columns: Vec<TableColumnStatus>,
         comment: Option<String>,
         properties: Vec<(String, String)>,
+        /// The data source backing the view, if it was created with `USING`.
+        source: Option<TemporaryViewSource>,
     },
     GlobalTemporaryView {
         plan: Arc<LogicalPlan>,
         columns: Vec<TableColumnStatus>,
         comment: Option<String>,
         properties: Vec<(String, String)>,
+        /// The data source backing the view, if it was created with `USING`.
+        source: Option<TemporaryViewSource>,
     },
+}
+
+/// The data source backing a temporary view created with
+/// `CREATE TEMPORARY VIEW ... USING <format> OPTIONS (...)`.
+///
+/// This is the write target for `INSERT INTO`/`INSERT OVERWRITE` against the view:
+///   - The rows are written to the view's backing data source location, matching Spark behavior.
+///   - It is `None` for temporary views defined by an `AS` query, which are not insertable.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct TemporaryViewSource {
+    pub format: String,
+    /// The data source options, including the `path` entry.
+    pub options: Vec<(String, String)>,
 }
 
 impl TableKind {
@@ -87,7 +114,12 @@ impl TableKind {
 
     pub fn type_name(&self) -> &str {
         match self {
-            TableKind::Table { .. } => "MANAGED",
+            TableKind::Table {
+                is_external: true, ..
+            } => "EXTERNAL",
+            TableKind::Table {
+                is_external: false, ..
+            } => "MANAGED",
             TableKind::View { .. } => "VIEW",
             TableKind::TemporaryView { .. } => "TEMPORARY",
             TableKind::GlobalTemporaryView { .. } => "TEMPORARY",
@@ -216,6 +248,7 @@ pub struct TableColumnStatus {
     pub comment: Option<String>,
     pub default: Option<String>,
     pub generated_always_as: Option<String>,
+    pub identity: Option<super::CatalogTableColumnIdentity>,
     pub is_partition: bool,
     pub is_bucket: bool,
     pub is_cluster: bool,
@@ -226,6 +259,14 @@ impl TableColumnStatus {
         let mut metadata = std::collections::HashMap::new();
         if let Some(expr) = &self.generated_always_as {
             let builder = ColumnFeaturesBuilder::new().with_generation_expression(expr.clone());
+            metadata.extend(builder.build());
+        }
+        if let Some(expr) = &self.default {
+            let builder = ColumnFeaturesBuilder::new().with_current_default(expr.clone());
+            metadata.extend(builder.build());
+        }
+        if let Some(identity) = &self.identity {
+            let builder = ColumnFeaturesBuilder::new().with_identity(identity);
             metadata.extend(builder.build());
         }
         if let Some(comment) = &self.comment {
@@ -256,6 +297,21 @@ pub fn alter_column_type(
     } else {
         column.data_type = alter_nested_data_type(&column.data_type, nested_path, data_type)?;
     }
+    Ok(())
+}
+
+pub fn alter_column_default(
+    columns: &mut [TableColumnStatus],
+    path: &[String],
+    default: Option<String>,
+) -> Result<()> {
+    let [name] = path else {
+        return plan_err!("ALTER COLUMN DEFAULT only supports top-level columns");
+    };
+    let Some(column) = columns.iter_mut().find(|column| column.name == *name) else {
+        return plan_err!("column '{}' does not exist", path.join("."));
+    };
+    column.default = default;
     Ok(())
 }
 

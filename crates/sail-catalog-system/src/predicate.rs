@@ -82,7 +82,7 @@ pub fn is_column_physical_predicate(expr: &Arc<dyn PhysicalExpr>, column: &str) 
 
     let mut valid = true;
     expr.apply(|e| {
-        if let Some(col) = e.as_any().downcast_ref::<Column>() {
+        if let Some(col) = e.downcast_ref::<Column>() {
             if col.name() != column {
                 valid = false;
                 return Ok(TreeNodeRecursion::Stop);
@@ -118,7 +118,7 @@ impl<T: PredicateInput> ArrowPredicateEvaluator<T> {
         // predicate evaluation.
         let predicate = predicate
             .transform(|e| {
-                if e.as_any().is::<Column>() {
+                if e.is::<Column>() {
                     Ok(Transformed::yes(Arc::new(Column::new(Self::FIELD_NAME, 0))))
                 } else {
                     Ok(Transformed::no(e))

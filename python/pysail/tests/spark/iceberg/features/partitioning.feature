@@ -44,6 +44,7 @@ Feature: Iceberg Partitioning
             📄 *.parquet
         📂 metadata
           📄 *.metadata.json
+          📄 *.metadata.json
           📄 snap-*.avro
         """
 
@@ -95,6 +96,7 @@ Feature: Iceberg Partitioning
             📂 category=2
               📄 *.parquet
         📂 metadata
+          📄 *.metadata.json
           📄 *.metadata.json
           📄 snap-*.avro
         """

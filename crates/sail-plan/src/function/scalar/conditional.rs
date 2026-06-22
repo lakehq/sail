@@ -1,8 +1,11 @@
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, lit, ExprSchemable};
+use datafusion_expr::{cast, expr, lit, ExprSchemable, ScalarUDF};
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::datetime::spark_date::SparkDate;
+use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
+use sail_function::scalar::spark_to_string::SparkToUtf8;
 
 use crate::error::PlanResult;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -36,11 +39,109 @@ fn if_expr(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }))
 }
 
+fn coalesce(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let data_types = arguments
+        .iter()
+        .map(|arg| arg.get_type(function_context.schema))
+        .collect::<Result<Vec<_>, _>>()?;
+    let has_string = data_types.iter().any(is_string_type);
+    let temporal_type = common_temporal_type(&data_types);
+    let arguments = if has_string {
+        if let Some(temporal_type) = temporal_type {
+            if function_context.plan_config.ansi_mode {
+                arguments
+                    .into_iter()
+                    .zip(data_types.iter())
+                    .map(|(arg, data_type)| coerce_to_temporal(arg, data_type, &temporal_type))
+                    .collect::<PlanResult<Vec<_>>>()?
+            } else {
+                arguments
+                    .into_iter()
+                    .zip(data_types)
+                    .map(|(arg, data_type)| {
+                        if is_temporal_type(&data_type) {
+                            ScalarUDF::from(SparkToUtf8::new()).call(vec![arg])
+                        } else {
+                            arg
+                        }
+                    })
+                    .collect()
+            }
+        } else {
+            arguments
+        }
+    } else {
+        arguments
+    };
+    Ok(expr_fn::coalesce(arguments))
+}
+
+fn coerce_to_temporal(
+    arg: expr::Expr,
+    data_type: &DataType,
+    target_type: &DataType,
+) -> PlanResult<expr::Expr> {
+    if data_type == target_type {
+        return Ok(arg);
+    }
+    if is_string_type(data_type) {
+        match target_type {
+            DataType::Date32 => Ok(ScalarUDF::from(SparkDate::new(false)).call(vec![arg])),
+            DataType::Timestamp(_, timezone) => Ok(ScalarUDF::from(SparkTimestamp::try_new(
+                timezone.clone(),
+                false,
+            )?)
+            .call(vec![arg])),
+            _ => Ok(cast(arg, target_type.clone())),
+        }
+    } else if is_temporal_type(data_type) {
+        Ok(cast(arg, target_type.clone()))
+    } else {
+        Ok(arg)
+    }
+}
+
+fn common_temporal_type(data_types: &[DataType]) -> Option<DataType> {
+    data_types
+        .iter()
+        .find_map(|data_type| match data_type {
+            DataType::Timestamp(_, timezone) => {
+                Some(DataType::Timestamp(TimeUnit::Microsecond, timezone.clone()))
+            }
+            _ => None,
+        })
+        .or_else(|| {
+            data_types
+                .iter()
+                .any(is_date_type)
+                .then_some(DataType::Date32)
+        })
+}
+
+fn is_string_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    )
+}
+
+fn is_temporal_type(data_type: &DataType) -> bool {
+    is_date_type(data_type) || matches!(data_type, DataType::Timestamp(_, _))
+}
+
+fn is_date_type(data_type: &DataType) -> bool {
+    matches!(data_type, DataType::Date32 | DataType::Date64)
+}
+
 pub(super) fn list_built_in_conditional_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
-        ("coalesce", F::var_arg(expr_fn::coalesce)),
+        ("coalesce", F::custom(coalesce)),
         ("if", F::custom(if_expr)),
         ("ifnull", F::binary(expr_fn::nvl)),
         ("nanvl", F::binary(expr_fn::nanvl)),

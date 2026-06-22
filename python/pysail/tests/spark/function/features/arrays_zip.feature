@@ -1,4 +1,3 @@
-@arrays_zip
 Feature: arrays_zip comprehensive tests
 
   Rule: Basic usage

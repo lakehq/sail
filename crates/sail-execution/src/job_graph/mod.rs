@@ -4,8 +4,9 @@ use std::fmt;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
+use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
-use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, PhysicalExpr};
+use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
 /// A job graph represents a distributed execution plan for a job.
 /// A job consists of multiple *stages*, where each stage has one or more
@@ -41,7 +42,7 @@ impl JobGraph {
                     .iter()
                     .filter(|input| input.stage == stage)
                     .map(|input| match input.mode {
-                        InputMode::Forward | InputMode::Shuffle => 1,
+                        InputMode::Forward | InputMode::Shuffle | InputMode::Rescale => 1,
                         InputMode::Merge | InputMode::Broadcast => {
                             x.plan.output_partitioning().partition_count()
                         }
@@ -143,6 +144,10 @@ pub enum InputMode {
     /// For each partition in the current stage, execute a single partition to fetch the input
     /// which reads all channels from all partitions in the input stage.
     Broadcast,
+    /// For each partition in the current stage, execute a contiguous subset of input partitions
+    /// (determined by evenly dividing input partitions among output partitions) and read all
+    /// channels from each.
+    Rescale,
 }
 
 impl fmt::Display for InputMode {
@@ -152,6 +157,7 @@ impl fmt::Display for InputMode {
             InputMode::Merge => write!(f, "Merge"),
             InputMode::Shuffle => write!(f, "Shuffle"),
             InputMode::Broadcast => write!(f, "Broadcast"),
+            InputMode::Rescale => write!(f, "Rescale"),
         }
     }
 }
@@ -181,6 +187,12 @@ pub enum OutputDistribution {
     RoundRobin {
         channels: usize,
     },
+    /// Row-level round-robin distribution for explicit user repartition calls.
+    /// Unlike `RoundRobin` (batch-based), this distributes individual rows across
+    /// output partitions to ensure even data distribution.
+    RoundRobinRow {
+        channels: usize,
+    },
 }
 
 impl OutputDistribution {
@@ -188,6 +200,7 @@ impl OutputDistribution {
         match self {
             OutputDistribution::Hash { channels, .. } => *channels,
             OutputDistribution::RoundRobin { channels } => *channels,
+            OutputDistribution::RoundRobinRow { channels } => *channels,
         }
     }
 }
@@ -201,6 +214,9 @@ impl fmt::Display for OutputDistribution {
             }
             OutputDistribution::RoundRobin { channels } => {
                 write!(f, "RoundRobin(channels={})", channels)
+            }
+            OutputDistribution::RoundRobinRow { channels } => {
+                write!(f, "RoundRobinRow(channels={})", channels)
             }
         }
     }

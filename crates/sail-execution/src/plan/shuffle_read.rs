@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
@@ -51,10 +50,6 @@ impl DisplayAs for ShuffleReadExec {
 impl ExecutionPlan for ShuffleReadExec {
     fn name(&self) -> &str {
         "ShuffleReadExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

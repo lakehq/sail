@@ -4,7 +4,8 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion_expr::LogicalPlan;
 pub use sail_common_datafusion::catalog::{CatalogPartitionField, PartitionTransform};
 use sail_common_datafusion::catalog::{
-    CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
+    CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableConstraint, CatalogTableSort,
+    TemporaryViewSource,
 };
 use serde::{Deserialize, Serialize};
 
@@ -36,6 +37,38 @@ pub struct CreateTableOptions {
     pub if_not_exists: bool,
     pub replace: bool,
     pub properties: Vec<(String, String)>,
+    pub is_external: bool,
+    #[serde(default)]
+    pub is_write_precondition: bool,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub enum CreateTableMetadataRequirement {
+    None,
+    TableFormat { mode: TableFormatCreateMetadataMode },
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub enum TableFormatCreateMetadataMode {
+    PathManaged,
+    CatalogCoordinated,
+}
+
+pub fn plain_lakehouse_create_table_metadata_requirement(
+    options: &CreateTableOptions,
+) -> CreateTableMetadataRequirement {
+    if options.is_write_precondition {
+        return CreateTableMetadataRequirement::None;
+    }
+    if options.format.eq_ignore_ascii_case("delta")
+        || options.format.eq_ignore_ascii_case("iceberg")
+    {
+        CreateTableMetadataRequirement::TableFormat {
+            mode: TableFormatCreateMetadataMode::PathManaged,
+        }
+    } else {
+        CreateTableMetadataRequirement::None
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
@@ -46,6 +79,7 @@ pub struct CreateTableColumnOptions {
     pub comment: Option<String>,
     pub default: Option<String>,
     pub generated_always_as: Option<String>,
+    pub identity: Option<CatalogTableColumnIdentity>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
@@ -80,6 +114,8 @@ pub struct CreateTemporaryViewOptions<I = Arc<LogicalPlan>> {
     pub replace: bool,
     pub comment: Option<String>,
     pub properties: Vec<(String, String)>,
+    /// The data source backing the view, if it was created with `USING`.
+    pub source: Option<TemporaryViewSource>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
@@ -110,5 +146,13 @@ pub enum AlterTableOptions {
     AlterColumnType {
         name: Vec<String>,
         data_type: DataType,
+    },
+    AlterColumnDefault {
+        name: Vec<String>,
+        default: Option<String>,
+    },
+    AddCheckConstraint {
+        name: String,
+        expression: String,
     },
 }

@@ -13,5 +13,5 @@ pub mod spark_regexp_extract_all;
 pub mod spark_sentences;
 pub mod spark_split;
 pub mod spark_to_binary;
+pub mod spark_to_char;
 pub mod spark_to_number;
-pub mod spark_try_to_number;

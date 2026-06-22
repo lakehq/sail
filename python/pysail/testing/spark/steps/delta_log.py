@@ -11,8 +11,6 @@ from typing import TYPE_CHECKING
 import pytest
 from pytest_bdd import given, parsers, then
 
-from pysail.testing.spark.utils.common import is_jvm_spark
-
 if TYPE_CHECKING:
     from syrupy.assertion import SnapshotAssertion
 
@@ -352,9 +350,6 @@ def delta_log_assert(
     datatable=None,
 ):
     """Delta log assertions: snapshot whole/subset, or assert specific paths."""
-    if is_jvm_spark():
-        pytest.skip("Delta log assertions are Sail-only")
-
     obj = _delta_log_compute(which, variables, delta_log_cache)
 
     if mode == "contains":
@@ -389,9 +384,6 @@ def delta_log_json_file_matches_snapshot(
     variables: dict,
     snapshot: SnapshotAssertion,
 ) -> None:
-    if is_jvm_spark():
-        pytest.skip("Delta log assertions are Sail-only")
-
     location = variables.get(location_var)
     assert location is not None, f"Variable {location_var!r} not found"
 
@@ -413,9 +405,6 @@ def delta_log_json_file_contains(
     ``path`` is a JSONPath expression (without leading ``$``).
     ``value`` is a JSON-encoded expected value.
     """
-    if is_jvm_spark():
-        pytest.skip("Delta log assertions are Sail-only")
-
     location = variables.get(location_var)
     assert location is not None, f"Variable {location_var!r} not found"
 
@@ -594,9 +583,6 @@ def delta_log_add_partition_values_uses_physical_name(
     variables: dict,
 ) -> None:
     """Assert column-mapped add.partitionValues keys use physical names."""
-    if is_jvm_spark():
-        pytest.skip("Delta log assertions are Sail-only")
-
     location = variables.get(location_var)
     assert location is not None, f"Variable {location_var!r} not found"
     location_path = Path(location.path)
@@ -629,9 +615,6 @@ def checkpoint_parquet_contains_add_fields(
     datatable,
 ) -> None:
     """Assert fields inside the checkpoint ``add`` struct match expected values."""
-    if is_jvm_spark():
-        pytest.skip("Delta log assertions are Sail-only")
-
     location = variables.get(location_var)
     assert location is not None, f"Variable {location_var!r} not found"
 
@@ -675,9 +658,6 @@ def checkpoint_parquet_contains_physical_partition_value(
     variables: dict,
 ) -> None:
     """Assert partitionValues_parsed uses a column mapping physical field name."""
-    if is_jvm_spark():
-        pytest.skip("Delta log assertions are Sail-only")
-
     location = variables.get(location_var)
     assert location is not None, f"Variable {location_var!r} not found"
     location_path = Path(location.path)
@@ -721,9 +701,6 @@ def checkpoint_parquet_contains_physical_stats_value(
     variables: dict,
 ) -> None:
     """Assert stats_parsed uses a column mapping physical field name."""
-    if is_jvm_spark():
-        pytest.skip("Delta log assertions are Sail-only")
-
     assert stats_kind in {"minValues", "maxValues", "nullCount"}
     location = variables.get(location_var)
     assert location is not None, f"Variable {location_var!r} not found"
@@ -761,9 +738,6 @@ def checkpoint_parquet_add_missing_field(
     variables: dict,
 ) -> None:
     """Assert the checkpoint ``add`` struct does not have a direct sub-field."""
-    if is_jvm_spark():
-        pytest.skip("Delta log assertions are Sail-only")
-
     location = variables.get(location_var)
     assert location is not None, f"Variable {location_var!r} not found"
 

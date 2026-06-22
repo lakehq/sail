@@ -1,12 +1,11 @@
-use std::sync::Arc;
-
-use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{cast, lit, Expr, ExprSchemable, ScalarUDF};
+use datafusion_expr::{lit, Expr, ScalarUDF};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
+use sail_function::scalar::variant::spark_variant_explode::SparkVariantExplodeUdf;
 
 use crate::error::PlanError;
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
@@ -15,7 +14,7 @@ use crate::PlanResult;
 fn stack(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ScalarFunctionInput {
         arguments,
-        function_context,
+        function_context: _,
     } = input;
 
     let (n_expr, mut args) = arguments.at_least_one()?;
@@ -46,44 +45,23 @@ fn stack(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let num_cols = args.len().div_ceil(n);
     args.resize(num_cols * n, lit(ScalarValue::Null));
 
+    let field_names = (0..num_cols).map(|i| format!("col{i}")).collect::<Vec<_>>();
+
     let arrays = (0..num_cols)
         .map(|i| args.iter().skip(i).step_by(num_cols).cloned().collect())
         .map(|col| ScalarUDF::from(SparkArray::new()).call(col))
         .collect::<Vec<_>>();
 
-    let zipped = ScalarUDF::from(ArraysZip::new(vec![])).call(arrays);
+    let zipped = ScalarUDF::from(ArraysZip::new(field_names)).call(arrays);
 
-    let err_struct = || {
-        Err(PlanError::internal(
-            "stack: arrays_zip call should return array<struct>",
-        ))
-    };
+    Ok(ScalarUDF::from(Explode::new(ExplodeKind::Inline)).call(vec![zipped]))
+}
 
-    let DataType::List(field) = zipped.get_type(function_context.schema)? else {
-        return err_struct();
-    };
-
-    let DataType::Struct(fields) = field.data_type() else {
-        return err_struct();
-    };
-
-    let res_type = DataType::List(Arc::new(Field::new(
-        field.name(),
-        DataType::Struct(
-            fields
-                .iter()
-                .map(|field| {
-                    field
-                        .as_ref()
-                        .clone()
-                        .with_name(format!("col{}", field.name()))
-                })
-                .collect(),
-        ),
-        field.is_nullable(),
-    )));
-
-    Ok(ScalarUDF::from(Explode::new(ExplodeKind::Inline)).call(vec![cast(zipped, res_type)]))
+fn variant_explode(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
+    let arg = arguments.one()?;
+    let explode_arr = ScalarUDF::from(SparkVariantExplodeUdf::new()).call(vec![arg]);
+    Ok(ScalarUDF::from(Explode::new(ExplodeKind::Inline)).call(vec![explode_arr]))
 }
 
 pub(super) fn list_built_in_generator_functions() -> Vec<(&'static str, ScalarFunction)> {
@@ -106,6 +84,8 @@ pub(super) fn list_built_in_generator_functions() -> Vec<(&'static str, ScalarFu
             F::udf(Explode::new(ExplodeKind::PosExplodeOuter)),
         ),
         ("stack", F::custom(stack)),
+        ("variant_explode", F::custom(variant_explode)),
+        ("variant_explode_outer", F::custom(variant_explode)),
     ]
 }
 
@@ -114,6 +94,7 @@ pub fn get_outer_built_in_generator_functions(name: &str) -> &str {
         "explode" => "explode_outer",
         "inline" => "inline_outer",
         "posexplode" => "posexplode_outer",
+        "variant_explode" => "variant_explode_outer",
         _ => name,
     }
 }

@@ -6,6 +6,7 @@ use datafusion::physical_optimizer::enforce_distribution::EnforceDistribution;
 use datafusion::physical_optimizer::enforce_sorting::EnforceSorting;
 use datafusion::physical_optimizer::ensure_coop::EnsureCooperative;
 use datafusion::physical_optimizer::filter_pushdown::FilterPushdown;
+use datafusion::physical_optimizer::hash_join_buffering::HashJoinBuffering;
 use datafusion::physical_optimizer::join_selection::JoinSelection;
 use datafusion::physical_optimizer::limit_pushdown::LimitPushdown;
 use datafusion::physical_optimizer::limit_pushdown_past_window::LimitPushPastWindows;
@@ -15,22 +16,28 @@ use datafusion::physical_optimizer::projection_pushdown::ProjectionPushdown;
 use datafusion::physical_optimizer::pushdown_sort::PushdownSort;
 use datafusion::physical_optimizer::sanity_checker::SanityCheckPlan;
 use datafusion::physical_optimizer::topk_aggregation::TopKAggregation;
+use datafusion::physical_optimizer::topk_repartition::TopKRepartition;
 use datafusion::physical_optimizer::update_aggr_exprs::OptimizeAggregateOrder;
+use datafusion::physical_optimizer::window_topn::WindowTopN;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
 
 use crate::barrier::EnforceBarrierPartitioning;
 use crate::collect_left::RewriteCollectLeftHashJoin;
 use crate::explicit_repartition::RewriteExplicitRepartition;
 use crate::join_reorder::JoinReorder;
+pub use crate::join_reorder::JoinReorderOptions;
+use crate::wrap_higher_order::WrapHigherOrderFunctions;
 
 mod barrier;
 mod collect_left;
 mod explicit_repartition;
 mod join_reorder;
+mod wrap_higher_order;
 
 #[derive(Debug, Clone, Default)]
 pub struct PhysicalOptimizerOptions {
     pub enable_join_reorder: bool,
+    pub join_reorder: JoinReorderOptions,
 }
 
 pub fn get_physical_optimizers(
@@ -41,7 +48,7 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(OutputRequirements::new_add_mode()));
     rules.push(Arc::new(AggregateStatistics::new()));
     if options.enable_join_reorder {
-        rules.push(Arc::new(JoinReorder::new()));
+        rules.push(Arc::new(JoinReorder::new(options.join_reorder)));
     }
     rules.push(Arc::new(JoinSelection::new()));
     rules.push(Arc::new(LimitedDistinctAggregation::new()));
@@ -50,11 +57,14 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(CombinePartialFinalAggregate::new()));
     rules.push(Arc::new(EnforceSorting::new()));
     rules.push(Arc::new(OptimizeAggregateOrder::new()));
+    rules.push(Arc::new(WindowTopN::new()));
     rules.push(Arc::new(ProjectionPushdown::new()));
     rules.push(Arc::new(OutputRequirements::new_remove_mode()));
     rules.push(Arc::new(TopKAggregation::new()));
     rules.push(Arc::new(LimitPushPastWindows::new()));
+    rules.push(Arc::new(HashJoinBuffering::new()));
     rules.push(Arc::new(LimitPushdown::new()));
+    rules.push(Arc::new(TopKRepartition::new()));
     rules.push(Arc::new(ProjectionPushdown::new()));
     rules.push(Arc::new(PushdownSort::new()));
     rules.push(Arc::new(EnsureCooperative::new()));
@@ -62,6 +72,10 @@ pub fn get_physical_optimizers(
     rules.push(Arc::new(RewriteExplicitRepartition::new()));
     rules.push(Arc::new(RewriteCollectLeftHashJoin::new()));
     rules.push(Arc::new(EnforceBarrierPartitioning::new()));
+    // Wrap higher-order function expressions so they can be serialized for
+    // distributed execution. Runs after SanityCheckPlan-relevant rewrites but
+    // before the final sanity check validates the wrapped plan.
+    rules.push(Arc::new(WrapHigherOrderFunctions::new()));
     rules.push(Arc::new(SanityCheckPlan::new()));
 
     rules

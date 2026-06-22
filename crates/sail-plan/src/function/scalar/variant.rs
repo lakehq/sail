@@ -1,5 +1,5 @@
 use sail_function::scalar::variant::spark_is_variant_null::SparkIsVariantNullUdf;
-use sail_function::scalar::variant::spark_json_to_variant::SparkJsonToVariantUdf;
+use sail_function::scalar::variant::spark_parse_json::SparkParseJson;
 use sail_function::scalar::variant::spark_schema_of_variant::SparkSchemaOfVariantUdf;
 use sail_function::scalar::variant::spark_to_variant_object::SparkToVariantObjectUdf;
 use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
@@ -12,14 +12,12 @@ pub(super) fn list_built_in_variant_functions() -> Vec<(&'static str, ScalarFunc
 
     vec![
         ("is_variant_null", F::udf(SparkIsVariantNullUdf::new())),
-        ("parse_json", F::udf(SparkJsonToVariantUdf::new())),
+        ("parse_json", F::udf(SparkParseJson::new(false))),
         ("schema_of_variant", F::udf(SparkSchemaOfVariantUdf::new())),
         // schema_of_variant_agg is registered as an aggregate function
         ("to_variant_object", F::udf(SparkToVariantObjectUdf::new())),
-        ("try_parse_json", F::unknown("try_parse_json")),
+        ("try_parse_json", F::udf(SparkParseJson::new(true))),
         ("try_variant_get", F::udf(SparkVariantGet::new(true))),
-        ("variant_explode", F::unknown("variant_explode")),
-        ("variant_explode_outer", F::unknown("variant_explode_outer")),
         ("variant_get", F::udf(SparkVariantGet::new(false))),
         ("variant_to_json", F::udf(SparkVariantToJsonUdf::new())),
     ]
