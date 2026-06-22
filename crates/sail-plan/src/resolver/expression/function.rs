@@ -1,12 +1,14 @@
+use datafusion::arrow::datatypes::DataType;
 use datafusion_common::DFSchemaRef;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::utils::{expand_qualified_wildcard, expand_wildcard};
-use datafusion_expr::{expr, EmptyRelation, Expr, LogicalPlan};
+use datafusion_expr::{expr, EmptyRelation, Expr, ExprSchemable, LogicalPlan};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::explode::{Explode, ExplodeKind};
 use sail_function::scalar::multi_expr::MultiExpr;
 use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
@@ -269,10 +271,17 @@ impl PlanResolver<'_> {
             vec![]
         };
 
+        // Spark generator functions (explode/posexplode/inline/...) have special output column
+        // names (e.g., `col`, `pos`, `key`, `value`, or struct field names). Our normal
+        // expression formatter would otherwise name the output column(s) after the function call,
+        // which diverges from Spark behavior when the generator expands to a single column.
+        let display_names =
+            derive_generator_output_names(&func, schema).unwrap_or_else(|| vec![name.clone()]);
+
         if !metadata.is_empty() {
-            Ok(NamedExpr::new(vec![name], func).with_metadata(metadata))
+            Ok(NamedExpr::new(display_names, func).with_metadata(metadata))
         } else {
-            Ok(NamedExpr::new(vec![name], func))
+            Ok(NamedExpr::new(display_names, func))
         }
     }
 
@@ -448,6 +457,64 @@ impl PlanResolver<'_> {
             }
         }
         arguments
+    }
+}
+
+fn derive_generator_output_names(func: &expr::Expr, schema: &DFSchemaRef) -> Option<Vec<String>> {
+    let expr::Expr::ScalarFunction(ScalarFunction {
+        func: udf, args, ..
+    }) = func
+    else {
+        return None;
+    };
+    let explode = udf.inner().as_any().downcast_ref::<Explode>()?;
+    let arg = args.first()?;
+    let arg_type = arg.get_type(schema).ok()?;
+
+    let is_map = matches!(arg_type, DataType::Map(_, _));
+    let is_list = matches!(
+        arg_type,
+        DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _)
+    );
+
+    match (explode.kind(), is_map, is_list) {
+        (ExplodeKind::Explode | ExplodeKind::ExplodeOuter, false, true) => {
+            Some(vec!["col".to_string()])
+        }
+        (ExplodeKind::PosExplode | ExplodeKind::PosExplodeOuter, false, true) => {
+            Some(vec!["pos".to_string(), "col".to_string()])
+        }
+        (ExplodeKind::Inline | ExplodeKind::InlineOuter, false, true) => match arg_type {
+            DataType::List(f) | DataType::LargeList(f) | DataType::FixedSizeList(f, _) => {
+                let DataType::Struct(fields) = f.data_type() else {
+                    return None;
+                };
+                Some(
+                    fields
+                        .iter()
+                        .enumerate()
+                        .map(|(i, field)| {
+                            let name = field.name();
+                            if name.is_empty() {
+                                format!("col{}", i + 1)
+                            } else {
+                                name.to_string()
+                            }
+                        })
+                        .collect(),
+                )
+            }
+            _ => None,
+        },
+        (ExplodeKind::Explode | ExplodeKind::ExplodeOuter, true, false) => {
+            Some(vec!["key".to_string(), "value".to_string()])
+        }
+        (ExplodeKind::PosExplode | ExplodeKind::PosExplodeOuter, true, false) => Some(vec![
+            "pos".to_string(),
+            "key".to_string(),
+            "value".to_string(),
+        ]),
+        _ => None,
     }
 }
 
