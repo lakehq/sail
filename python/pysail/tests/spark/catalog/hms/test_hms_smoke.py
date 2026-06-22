@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 
-def test_hms_list_default_database(hms_s3_spark):
+def test_hms_list_default_database(spark):
     """Sail connected to HMS should see at least the ``default`` database.
 
     This is the smallest meaningful smoke assertion: verify that the Sail
@@ -12,5 +12,5 @@ def test_hms_list_default_database(hms_s3_spark):
     returns the built-in ``default`` database that every Hive Metastore
     creates on first startup.
     """
-    databases = [row.name for row in hms_s3_spark.sql("SHOW DATABASES").collect()]
+    databases = [row.name for row in spark.sql("SHOW DATABASES").collect()]
     assert "default" in databases, f"HMS 'default' database not found; got: {databases}"

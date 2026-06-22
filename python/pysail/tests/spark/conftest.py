@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 from _pytest.doctest import DoctestItem
-from pyspark.sql import SparkSession
 
+from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
 # This doctest option flag is used to annotate tests involving
@@ -45,109 +45,30 @@ def pytest_configure(config):
 
 
 if TYPE_CHECKING:
-    import pyspark.sql.connect.session
     from _pytest.mark import MarkDecorator
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="package")
 def remote():
     """Creates a Spark Connect server if there is not one already running
     whose address is set in the `SPARK_REMOTE` environment variable.
 
     :yields: The remote address of the Spark Connect server to connect to.
     """
-    if r := os.environ.get("SPARK_REMOTE"):
-        yield r
-    else:
-        from pysail.spark import SparkConnectServer
-
-        server = SparkConnectServer("127.0.0.1", 0)
-        server.start(background=True)
-        _, port = server.listening_address
-        yield f"sc://localhost:{port}"
-        server.stop()
+    with spark_connect_server() as server:
+        yield server.remote
 
 
 @pytest.fixture(scope="module")
-def default_spark(remote):
+def spark(remote):
     """Create and configure a Spark Session to be used in the tests.
     After the tests are finished, the Spark Session is stopped.
 
     :param remote: The remote address of the Spark Connect server to connect to.
     :yields: A Spark Session configured for the tests.
     """
-    spark = SparkSession.builder.remote(remote).getOrCreate()
-    configure_spark_session(spark)
-    patch_spark_connect_session(spark)
-    yield spark
-    spark.stop()
-
-
-@pytest.fixture(scope="module")
-def spark(default_spark):
-    return default_spark
-
-
-@pytest.fixture
-def spark_session_factory(remote):
-    """Factory for creating independent SparkSessions.
-
-    Each call to the factory creates a new SparkSession with a unique session ID,
-    allowing tests to verify session isolation behavior.
-
-    :param remote: The remote address of the Spark Connect server.
-    :yields: A factory function that creates new SparkSessions.
-    """
-    import contextlib
-    import uuid
-
-    sessions = []
-
-    def create_session():
-        # Use a unique app name to ensure we get a fresh session
-        # The session ID is generated internally by Spark Connect
-        unique_app = f"test_session_{uuid.uuid4().hex[:8]}"
-        session = (
-            SparkSession.builder.appName(unique_app).remote(remote).create()
-        )  # Use create() instead of getOrCreate() to force new session
-        configure_spark_session(session)
-        patch_spark_connect_session(session)
-        sessions.append(session)
-        return session
-
-    yield create_session
-
-    # Cleanup all created sessions
-    for session in sessions:
-        # Best-effort cleanup: ignore errors while stopping Spark sessions during test teardown.
-        with contextlib.suppress(Exception):
-            session.stop()
-
-
-def configure_spark_session(session):
-    # Set the Spark session time zone to UTC by default.
-    # Some test data (e.g. TPC-DS data) may generate timestamps that is invalid
-    # in some local time zones. This would result in `pytz.exceptions.NonExistentTimeError`
-    # when converting such timestamps from the local time zone to UTC.
-    session.conf.set("spark.sql.session.timeZone", "UTC")
-    # Pin ANSI mode so plan snapshots are stable across PySpark 3.x and 4.x test environments.
-    session.conf.set("spark.sql.ansi.enabled", "true")
-    # Enable Arrow to avoid data type errors when creating Spark DataFrame from Pandas.
-    session.conf.set("spark.sql.execution.arrow.pyspark.enabled", "true")
-
-
-def patch_spark_connect_session(session: pyspark.sql.connect.session.SparkSession):
-    """
-    Patch the Spark Connect session to avoid deadlock when closing the session.
-    """
-    f = session._client.close  # noqa: SLF001
-
-    def close():
-        if session._client._closed:  # noqa: SLF001
-            return
-        return f()
-
-    session._client.close = close  # noqa: SLF001
+    with spark_session_factory(remote) as sessions:
+        yield sessions.create()
 
 
 @pytest.fixture(scope="module", autouse=True)

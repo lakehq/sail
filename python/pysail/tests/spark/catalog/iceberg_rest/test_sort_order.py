@@ -17,10 +17,10 @@ NAMESPACE = "iceberg_sort_order_test"
 
 
 @pytest.fixture(scope="module", autouse=True)
-def namespace(iceberg_spark: SparkSession) -> Generator[None, None, None]:
-    iceberg_spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
+def namespace(spark: SparkSession) -> Generator[None, None, None]:
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {NAMESPACE}")
     yield
-    iceberg_spark.sql(f"DROP DATABASE IF EXISTS {NAMESPACE} CASCADE")
+    spark.sql(f"DROP DATABASE IF EXISTS {NAMESPACE} CASCADE")
 
 
 def _load_table_metadata(iceberg_rest_endpoint: str, table_name: str) -> dict:
@@ -105,13 +105,13 @@ def _create_sorted_table(spark: SparkSession, table_name: str, sort_clause: str)
     ],
 )
 def test_create_table_sort_order_transforms(
-    iceberg_spark: SparkSession,
+    spark: SparkSession,
     iceberg_rest_endpoint: str,
     table_name: str,
     sort_clause: str,
     expected: list[tuple[str, str, str]],
 ) -> None:
-    _create_sorted_table(iceberg_spark, table_name, sort_clause)
+    _create_sorted_table(spark, table_name, sort_clause)
 
     metadata = _load_table_metadata(iceberg_rest_endpoint, table_name)
     field_ids = _current_schema_fields(metadata)
@@ -137,10 +137,10 @@ def test_create_table_sort_order_transforms(
     ],
 )
 def test_create_table_sort_order_transform_errors(
-    iceberg_spark: SparkSession,
+    spark: SparkSession,
     table_name: str,
     sort_clause: str,
     error: str,
 ) -> None:
     with pytest.raises(Exception, match=error):
-        _create_sorted_table(iceberg_spark, table_name, sort_clause)
+        _create_sorted_table(spark, table_name, sort_clause)
