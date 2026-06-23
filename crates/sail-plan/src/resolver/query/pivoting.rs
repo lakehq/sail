@@ -85,7 +85,10 @@ impl PlanResolver<'_> {
                         "pivot value must have a literal".to_string(),
                     ));
                 };
-                resolved.push((self.resolve_literal(literal, state)?, alias.map(String::from)));
+                resolved.push((
+                    self.resolve_literal(literal, state)?,
+                    alias.map(String::from),
+                ));
             }
             resolved
         };
@@ -137,12 +140,7 @@ impl PlanResolver<'_> {
         let plan = LogicalPlanBuilder::from(input.clone())
             .aggregate(vec![pivot_column.clone()], Vec::<expr::Expr>::new())?
             .build()?;
-        let batches = self
-            .ctx
-            .execute_logical_plan(plan)
-            .await?
-            .collect()
-            .await?;
+        let batches = self.ctx.execute_logical_plan(plan).await?.collect().await?;
         let mut values = Vec::new();
         for batch in &batches {
             let column = batch.column(0);
