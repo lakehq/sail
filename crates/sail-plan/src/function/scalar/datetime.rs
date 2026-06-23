@@ -481,6 +481,10 @@ fn from_unixtime(input: ScalarFunctionInput) -> PlanResult<Expr> {
     }?;
 
     let timezone = input.function_context.plan_config.session_timezone.clone();
+    let expr = cast(
+        expr,
+        DataType::Timestamp(TimeUnit::Second, Some(timezone.clone())),
+    );
     Ok(date_format(expr, format, timezone.to_string()))
 }
 
