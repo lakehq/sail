@@ -405,8 +405,10 @@ async fn explain_from_collected(
 
     let logical_simple =
         collected.logical_string(&collected.initial_logical, PlanType::InitialLogicalPlan);
-    let logical_analyzed_schema =
-        collected.logical_string_with_schema(&collected.analyzed_logical, PlanType::FinalAnalyzedLogicalPlan);
+    let logical_analyzed_schema = collected.logical_string_with_schema(
+        &collected.analyzed_logical,
+        PlanType::FinalAnalyzedLogicalPlan,
+    );
     let logical_optimized =
         collected.logical_string(&collected.optimized_logical, PlanType::FinalLogicalPlan);
 
