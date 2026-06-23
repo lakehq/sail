@@ -351,11 +351,7 @@ fn unix_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
 }
 
 fn to_unix_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    if input.arguments.is_empty() {
-        Err(PlanError::invalid(
-            "to_unix_timestamp requires 1 or 2 arguments",
-        ))
-    } else if input.arguments.len() > 2 {
+    if !(1..=2).contains(&input.arguments.len()) {
         Err(PlanError::invalid(
             "to_unix_timestamp requires 1 or 2 arguments",
         ))
