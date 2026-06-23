@@ -283,8 +283,8 @@ use crate::proto::decode::{
     try_decode_schema,
 };
 use crate::proto::encode::{
-    try_encode_field_ref, try_encode_message, try_encode_physical_expr, try_encode_physical_plan,
-    try_encode_schema,
+    physical_expr_to_proto, try_encode_field_ref, try_encode_message, try_encode_physical_expr,
+    try_encode_physical_plan, try_encode_schema,
 };
 
 pub struct RemoteExecutionCodec;
@@ -413,7 +413,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let schema = try_decode_schema(&schema)?;
                 Ok(Arc::new(MapPartitionsExec::new(
                     try_decode_physical_plan(ctx, self, &input)?,
-                    self.try_decode_stream_udf(udf)?,
+                    self.try_decode_stream_udf(&udf)?,
                     Arc::new(schema),
                 )))
             }
@@ -645,15 +645,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Some(mode) => mode,
                     None => return plan_err!("Missing sink_mode"),
                 };
-                let sink_mode =
-                    self.try_decode_physical_sink_mode(sink_mode, &input.schema(), ctx)?;
+                let sink_mode = self.try_decode_physical_sink_mode(&sink_mode)?;
 
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
                 let options =
                     serde_json::from_str(&options).map_err(|e| plan_datafusion_err!("{e}"))?;
                 let write_context = match write_context {
-                    Some(write_context) => self.try_decode_delta_write_context(write_context)?,
+                    Some(write_context) => self.try_decode_delta_write_context(&write_context)?,
                     None => return plan_err!("Missing write_context for DeltaWriterExec"),
                 };
                 let lakehouse_table = self.try_decode_lakehouse_table(&lakehouse_table_json)?;
@@ -688,12 +687,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
 
                 let sink_mode = if let Some(sink_mode) = sink_mode {
-                    self.try_decode_physical_sink_mode(sink_mode, &sink_schema, ctx)?
+                    self.try_decode_physical_sink_mode(&sink_mode)?
                 } else {
                     return plan_err!("Missing sink_mode for DeltaCommitExec");
                 };
                 let commit_context = match commit_context {
-                    Some(commit_context) => self.try_decode_delta_commit_context(commit_context)?,
+                    Some(commit_context) => {
+                        self.try_decode_delta_commit_context(&commit_context)?
+                    }
                     None => return plan_err!("Missing commit_context for DeltaCommitExec"),
                 };
 
@@ -1155,13 +1156,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     Some(mode) => mode,
                     None => return plan_err!("Missing sink_mode for IcebergWriterExec"),
                 };
-                let sink_mode =
-                    self.try_decode_physical_sink_mode(sink_mode, &input.schema(), ctx)?;
+                let sink_mode = self.try_decode_physical_sink_mode(&sink_mode)?;
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
                 let partition_columns = partition_columns
                     .into_iter()
-                    .map(|field| self.try_decode_catalog_partition_field(field))
+                    .map(|field| self.try_decode_catalog_partition_field(&field))
                     .collect::<Result<Vec<_>>>()?;
                 let mut options = if options.is_empty() {
                     IcebergWriterExecOptions::default()
@@ -1395,10 +1395,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let filters = system_table
                 .filters()
                 .iter()
-                .map(|expr| {
-                    let expr = try_encode_physical_expr(self, expr)?;
-                    try_encode_message(expr)
-                })
+                .map(|expr| try_encode_physical_expr(self, expr))
                 .collect::<Result<_>>()?;
             let fetch = system_table.fetch().map(|f| f as u64);
             NodeKind::SystemTable(gen::SystemTableExecNode {
@@ -1446,8 +1443,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 .on()
                 .iter()
                 .map(|(left, right)| {
-                    let left = try_encode_message(try_encode_physical_expr(self, left)?)?;
-                    let right = try_encode_message(try_encode_physical_expr(self, right)?)?;
+                    let left = try_encode_physical_expr(self, left)?;
+                    let right = try_encode_physical_expr(self, right)?;
                     Ok(gen::JoinOn { left, right })
                 })
                 .collect::<Result<_>>()?;
@@ -1455,10 +1452,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 .filter()
                 .as_ref()
                 .map(|join_filter| {
-                    let expression = try_encode_message(try_encode_physical_expr(
-                        self,
-                        join_filter.expression(),
-                    )?)?;
+                    let expression = try_encode_physical_expr(self, join_filter.expression())?;
                     let column_indices = join_filter
                         .column_indices()
                         .iter()
@@ -1653,8 +1647,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 .transpose()
                 .map_err(|_| plan_datafusion_err!("invalid limit for DeltaScanByAddsExec"))?;
             let pushdown_filter = if let Some(pred) = delta_scan_by_adds_exec.pushdown_filter() {
-                let predicate_node = try_encode_physical_expr(self, pred)?;
-                Some(try_encode_message(predicate_node)?)
+                Some(try_encode_physical_expr(self, pred)?)
             } else {
                 None
             };
@@ -1680,8 +1673,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 delta_discovery_exec.input(),
             )?);
             let predicate = if let Some(pred) = delta_discovery_exec.predicate() {
-                let predicate_node = try_encode_physical_expr(self, &pred.clone())?;
-                Some(try_encode_message(predicate_node)?)
+                Some(try_encode_physical_expr(self, &pred.clone())?)
             } else {
                 None
             };
@@ -1788,7 +1780,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         .map(|requirement| {
                             let expr: PhysicalSortExpr = requirement.to_owned().into();
                             let sort_expr = PhysicalSortExprNode {
-                                expr: Some(Box::new(try_encode_physical_expr(self, &expr.expr)?)),
+                                expr: Some(Box::new(physical_expr_to_proto(self, &expr.expr)?)),
                                 asc: !expr.options.descending,
                                 nulls_first: expr.options.nulls_first,
                             };
@@ -1852,8 +1844,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::StreamLimit(gen::StreamLimitExecNode { input, skip, fetch })
         } else if let Some(stream_filter) = node.downcast_ref::<StreamFilterExec>() {
             let input = try_encode_physical_plan(self, stream_filter.input().clone())?;
-            let predicate =
-                try_encode_message(try_encode_physical_expr(self, stream_filter.predicate())?)?;
+            let predicate = try_encode_physical_expr(self, stream_filter.predicate())?;
             NodeKind::StreamFilter(gen::StreamFilterExecNode { input, predicate })
         } else if let Some(stream_source_adapter) = node.downcast_ref::<StreamSourceAdapterExec>() {
             let input = try_encode_physical_plan(self, stream_source_adapter.input().clone())?;
@@ -1895,8 +1886,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::RelaxedTzCast(gen::RelaxedTzCastExecNode { input, schema })
         } else if let Some(dv_writer_exec) = node.downcast_ref::<DeletionVectorWriterExec>() {
             let input = try_encode_physical_plan(self, dv_writer_exec.input().clone())?;
-            let condition_node = try_encode_physical_expr(self, dv_writer_exec.condition())?;
-            let condition = try_encode_message(condition_node)?;
+            let condition = try_encode_physical_expr(self, dv_writer_exec.condition())?;
             let table_schema = try_encode_schema(dv_writer_exec.table_schema())?;
             let operation_json = if let Some(op) = dv_writer_exec.operation() {
                 Some(serde_json::to_string(op).map_err(|e| plan_datafusion_err!("{e}"))?)
@@ -1957,7 +1947,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 partition_columns: iceberg_writer_exec
                     .partition_columns()
                     .iter()
-                    .map(Self::try_encode_catalog_partition_field)
+                    .map(|field| self.try_encode_catalog_partition_field(field))
                     .collect::<Result<Vec<_>>>()?,
                 sink_mode: Some(sink_mode),
                 table_exists: iceberg_writer_exec.table_exists(),
@@ -2126,7 +2116,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .collect::<Result<Vec<_>>>()?;
                 let output_type = self.try_decode_data_type(&output_type)?;
                 let config = match config {
-                    Some(config) => self.try_decode_pyspark_udf_config(config)?,
+                    Some(config) => self.try_decode_pyspark_udf_config(&config)?,
                     None => return plan_err!("missing config for PySparkUDF"),
                 };
                 let udf = PySparkUDF::new(
@@ -2162,7 +2152,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .collect::<Result<Vec<_>>>()?;
                 let output_type = self.try_decode_data_type(&output_type)?;
                 let config = match config {
-                    Some(config) => self.try_decode_pyspark_udf_config(config)?,
+                    Some(config) => self.try_decode_pyspark_udf_config(&config)?,
                     None => return plan_err!("missing config for PySparkCoGroupMapUDF"),
                 };
                 let udf = PySparkCoGroupMapUDF::try_new(
@@ -2849,7 +2839,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .collect::<Result<Vec<_>>>()?;
                 let output_type = self.try_decode_data_type(&output_type)?;
                 let config = match config {
-                    Some(config) => self.try_decode_pyspark_udf_config(config)?,
+                    Some(config) => self.try_decode_pyspark_udf_config(&config)?,
                     None => return plan_err!("missing config for PySparkGroupAggUDF"),
                 };
                 let kind = self.try_decode_pyspark_group_agg_kind(kind)?;
@@ -2886,7 +2876,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .collect::<Result<Vec<_>>>()?;
                 let output_type = self.try_decode_data_type(&output_type)?;
                 let config = match config {
-                    Some(config) => self.try_decode_pyspark_udf_config(config)?,
+                    Some(config) => self.try_decode_pyspark_udf_config(&config)?,
                     None => return plan_err!("missing config for PySparkGroupMapUDF"),
                 };
                 let udaf = PySparkGroupMapUDF::new(
@@ -3039,7 +3029,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         match expr_kind {
             ExprKind::SchemaEvolutionCast(node) => {
                 let (input, input_field, target_field) = self.try_decode_cast_column_expr(
-                    node,
+                    &node,
                     inputs,
                     "SchemaEvolutionCastColumnExpr",
                 )?;
@@ -3108,7 +3098,7 @@ impl RemoteExecutionCodec {
     #[expect(clippy::type_complexity)]
     fn try_decode_cast_column_expr(
         &self,
-        node: CastColumnExprNode,
+        node: &CastColumnExprNode,
         inputs: &[Arc<dyn PhysicalExpr>],
         expr_name: &str,
     ) -> Result<(Arc<dyn PhysicalExpr>, Arc<Field>, Arc<Field>)> {
@@ -3123,8 +3113,8 @@ impl RemoteExecutionCodec {
             );
         }
 
-        let input_schema = try_decode_schema(&input_schema)?;
-        let target_schema = try_decode_schema(&target_schema)?;
+        let input_schema = try_decode_schema(input_schema)?;
+        let target_schema = try_decode_schema(target_schema)?;
 
         let input_field = input_schema
             .fields()
@@ -3163,9 +3153,7 @@ impl RemoteExecutionCodec {
 
     fn try_decode_physical_sink_mode(
         &self,
-        proto_mode: gen::PhysicalSinkMode,
-        _schema: &Schema,
-        _ctx: &TaskContext,
+        proto_mode: &gen::PhysicalSinkMode,
     ) -> Result<PhysicalSinkMode> {
         let gen::PhysicalSinkMode { mode } = proto_mode;
         match mode {
@@ -3178,7 +3166,7 @@ impl RemoteExecutionCodec {
             Some(gen::physical_sink_mode::Mode::OverwriteIf(gen::OverwriteIfMode { source })) => {
                 Ok(PhysicalSinkMode::OverwriteIf {
                     condition: None,
-                    source,
+                    source: source.clone(),
                 })
             }
             Some(gen::physical_sink_mode::Mode::ErrorIfExists(gen::ErrorIfExistsMode {})) => {
@@ -3223,7 +3211,7 @@ impl RemoteExecutionCodec {
 
     fn try_decode_delta_snapshot_context(
         &self,
-        context: gen::DeltaSnapshotContext,
+        context: &gen::DeltaSnapshotContext,
     ) -> Result<DeltaSnapshotContext> {
         Ok(DeltaSnapshotContext {
             version: context.version,
@@ -3255,10 +3243,11 @@ impl RemoteExecutionCodec {
 
     fn try_decode_delta_commit_context(
         &self,
-        context: gen::DeltaCommitContext,
+        context: &gen::DeltaCommitContext,
     ) -> Result<DeltaCommitContext> {
         let base_snapshot = context
             .base_snapshot
+            .as_ref()
             .map(|context| self.try_decode_delta_snapshot_context(context))
             .transpose()?;
         Ok(DeltaCommitContext { base_snapshot })
@@ -3278,10 +3267,10 @@ impl RemoteExecutionCodec {
 
     fn try_decode_delta_write_context(
         &self,
-        context: gen::DeltaWriteContext,
+        context: &gen::DeltaWriteContext,
     ) -> Result<DeltaWriteContext> {
         let commit_context = match context.commit_context {
-            Some(context) => self.try_decode_delta_commit_context(context)?,
+            Some(ref context) => self.try_decode_delta_commit_context(context)?,
             None => return plan_err!("Missing commit_context for DeltaWriteContext"),
         };
         let initial_actions = context
@@ -3314,7 +3303,7 @@ impl RemoteExecutionCodec {
             schema_actions,
             operation,
             logical_kernel_for_mapping,
-            physical_partition_columns: context.physical_partition_columns,
+            physical_partition_columns: context.physical_partition_columns.clone(),
         })
     }
 
@@ -3348,7 +3337,7 @@ impl RemoteExecutionCodec {
             final_schema_json: self.try_encode_json(&context.final_schema, "Delta final schema")?,
             effective_column_mapping_mode: Self::try_encode_delta_column_mapping_mode(
                 context.effective_column_mapping_mode,
-            ),
+            )?,
             initial_actions_json,
             schema_actions_json,
             operation_json,
@@ -3367,12 +3356,12 @@ impl RemoteExecutionCodec {
         }
     }
 
-    fn try_encode_delta_column_mapping_mode(mode: ColumnMappingMode) -> i32 {
-        (match mode {
+    fn try_encode_delta_column_mapping_mode(mode: ColumnMappingMode) -> Result<i32> {
+        Ok((match mode {
             ColumnMappingMode::None => gen::DeltaColumnMappingMode::None,
             ColumnMappingMode::Name => gen::DeltaColumnMappingMode::Name,
             ColumnMappingMode::Id => gen::DeltaColumnMappingMode::Id,
-        }) as i32
+        }) as i32)
     }
 
     fn try_decode_json<T: DeserializeOwned>(&self, value: &str, description: &str) -> Result<T> {
@@ -3405,7 +3394,7 @@ impl RemoteExecutionCodec {
 
     fn try_decode_catalog_partition_field(
         &self,
-        field: gen::CatalogPartitionFieldNode,
+        field: &gen::CatalogPartitionFieldNode,
     ) -> Result<CatalogPartitionField> {
         let transform_kind = gen::PartitionTransformKind::try_from(field.transform_kind)
             .map_err(|_| plan_datafusion_err!("invalid partition transform kind"))?;
@@ -3425,12 +3414,13 @@ impl RemoteExecutionCodec {
             }
         };
         Ok(CatalogPartitionField {
-            column: field.column,
+            column: field.column.clone(),
             transform,
         })
     }
 
     fn try_encode_catalog_partition_field(
+        &self,
         field: &CatalogPartitionField,
     ) -> Result<gen::CatalogPartitionFieldNode> {
         let (transform_kind, transform_value) = match field.transform {
@@ -3452,7 +3442,7 @@ impl RemoteExecutionCodec {
         })
     }
 
-    fn try_decode_stream_udf(&self, udf: ExtendedStreamUdf) -> Result<Arc<dyn StreamUDF>> {
+    fn try_decode_stream_udf(&self, udf: &ExtendedStreamUdf) -> Result<Arc<dyn StreamUDF>> {
         let ExtendedStreamUdf { stream_udf_kind } = udf;
         let stream_udf_kind = match stream_udf_kind {
             Some(x) => x,
@@ -3467,17 +3457,17 @@ impl RemoteExecutionCodec {
                 output_schema,
                 config,
             }) => {
-                let kind = self.try_decode_pyspark_map_iter_kind(kind)?;
-                let output_schema = try_decode_schema(&output_schema)?;
+                let kind = self.try_decode_pyspark_map_iter_kind(*kind)?;
+                let output_schema = try_decode_schema(output_schema)?;
                 let config = match config {
                     Some(config) => self.try_decode_pyspark_udf_config(config)?,
                     None => return plan_err!("missing config for PySparkMapIterUDF"),
                 };
                 Arc::new(PySparkMapIterUDF::new(
                     kind,
-                    name,
-                    payload,
-                    input_names,
+                    name.clone(),
+                    payload.clone(),
+                    input_names.clone(),
                     Arc::new(output_schema),
                     Arc::new(config),
                 ))
@@ -3494,16 +3484,16 @@ impl RemoteExecutionCodec {
                 deterministic,
                 config,
             }) => {
-                let kind = self.try_decode_pyspark_udtf_kind(kind)?;
+                let kind = self.try_decode_pyspark_udtf_kind(*kind)?;
                 let input_types = input_types
                     .iter()
                     .map(|x| self.try_decode_data_type(x))
                     .collect::<Result<Vec<_>>>()?;
-                let function_return_type = self.try_decode_data_type(&function_return_type)?;
+                let function_return_type = self.try_decode_data_type(function_return_type)?;
                 let function_output_names = if function_output_names.is_empty() {
                     None
                 } else {
-                    Some(function_output_names)
+                    Some(function_output_names.clone())
                 };
                 let config = match config {
                     Some(config) => self.try_decode_pyspark_udf_config(config)?,
@@ -3511,14 +3501,14 @@ impl RemoteExecutionCodec {
                 };
                 Arc::new(PySparkUDTF::try_new(
                     kind,
-                    name,
-                    payload,
-                    input_names,
+                    name.clone(),
+                    payload.clone(),
+                    input_names.clone(),
                     input_types,
-                    passthrough_columns as usize,
+                    *passthrough_columns as usize,
                     function_return_type,
                     function_output_names,
-                    deterministic,
+                    *deterministic,
                     Arc::new(config),
                 )?)
             }
@@ -3695,7 +3685,7 @@ impl RemoteExecutionCodec {
 
     fn try_decode_equivalence_class(
         &self,
-        class: gen::EquivalenceClass,
+        class: &gen::EquivalenceClass,
         schema: &Schema,
         ctx: &TaskContext,
     ) -> Result<EquivalenceClass> {
@@ -3714,10 +3704,7 @@ impl RemoteExecutionCodec {
     ) -> Result<gen::EquivalenceClass> {
         let exprs = class
             .iter()
-            .map(|expr| {
-                let expr = try_encode_physical_expr(self, expr)?;
-                try_encode_message(expr)
-            })
+            .map(|expr| try_encode_physical_expr(self, expr))
             .collect::<Result<Vec<_>>>()?;
         Ok(gen::EquivalenceClass { exprs })
     }
@@ -3742,7 +3729,6 @@ impl RemoteExecutionCodec {
 
     fn try_encode_constant_expression(&self, const_expr: &ConstExpr) -> Result<gen::ConstantExpr> {
         let expr = try_encode_physical_expr(self, &const_expr.expr)?;
-        let expr = try_encode_message(expr)?;
         let across_partitions =
             self.try_encode_constant_across_partitions(&const_expr.across_partitions)?;
         Ok(gen::ConstantExpr {
@@ -3800,7 +3786,7 @@ impl RemoteExecutionCodec {
         let gen::EquivalenceGroup { classes } = eq_group;
         let classes = classes
             .iter()
-            .map(|class| self.try_decode_equivalence_class(class.clone(), schema, ctx))
+            .map(|class| self.try_decode_equivalence_class(class, schema, ctx))
             .collect::<Result<Vec<_>>>()?;
         Ok(EquivalenceGroup::new(classes))
     }
@@ -3980,11 +3966,11 @@ impl RemoteExecutionCodec {
 
     fn try_decode_pyspark_udf_config(
         &self,
-        config: gen::PySparkUdfConfig,
+        config: &gen::PySparkUdfConfig,
     ) -> Result<PySparkUdfConfig> {
         let config = PySparkUdfConfig {
-            session_timezone: config.session_timezone,
-            pandas_window_bound_types: config.pandas_window_bound_types,
+            session_timezone: config.session_timezone.clone(),
+            pandas_window_bound_types: config.pandas_window_bound_types.clone(),
             pandas_grouped_map_assign_columns_by_name: config
                 .pandas_grouped_map_assign_columns_by_name,
             pandas_convert_to_arrow_array_safely: config.pandas_convert_to_arrow_array_safely,
@@ -4110,7 +4096,6 @@ mod tests {
     use datafusion::arrow::datatypes::{Schema, SchemaRef};
     use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
     use datafusion::physical_expr::HigherOrderFunctionExpr;
-    use prost::Message;
 
     use super::*;
 
@@ -4140,7 +4125,7 @@ mod tests {
         schema: &Schema,
     ) -> Result<Arc<dyn PhysicalExpr>> {
         let codec = RemoteExecutionCodec;
-        let bytes = try_encode_physical_expr(&codec, expr)?.encode_to_vec();
+        let bytes = try_encode_physical_expr(&codec, expr)?;
         let ctx = TaskContext::default();
         try_decode_physical_expr(&ctx, &codec, &bytes, schema)
     }
@@ -4279,7 +4264,7 @@ mod tests {
 
         let (physical, schema_ref, list) = build_filter()?;
         let codec = RemoteExecutionCodec;
-        let key = try_encode_physical_expr(&codec, &physical)?.encode_to_vec();
+        let key = try_encode_physical_expr(&codec, &physical)?;
         let output = TaskOutput {
             distribution: TaskOutputDistribution::Hash {
                 keys: vec![Arc::from(key)],
