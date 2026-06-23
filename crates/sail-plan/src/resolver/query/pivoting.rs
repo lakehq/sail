@@ -2,7 +2,11 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
-use datafusion_expr::{col, expr, lit, ExprSchemable, LogicalPlan, Projection, ScalarUDF};
+use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{Column, DFSchemaRef, ScalarValue};
+use datafusion_expr::{
+    col, expr, lit, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection, ScalarUDF,
+};
 use datafusion_functions_nested::expr_fn as nested_fn;
 use sail_common::spec;
 use sail_function::scalar::explode;
@@ -19,10 +23,178 @@ use crate::resolver::PlanResolver;
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_pivot(
         &self,
-        _pivot: spec::Pivot,
-        _state: &mut PlanResolverState,
+        pivot: spec::Pivot,
+        state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        Err(PlanError::todo("pivot"))
+        let spec::Pivot {
+            input,
+            grouping,
+            aggregate,
+            columns,
+            values,
+        } = pivot;
+
+        let input = self.resolve_query_plan(*input, state).await?;
+        let schema = input.schema().clone();
+
+        // Only a single pivot column is supported.
+        let mut pivot_columns = self.resolve_expressions(columns, &schema, state).await?;
+        if pivot_columns.len() != 1 {
+            return Err(PlanError::todo("pivot with multiple pivot columns"));
+        }
+        let pivot_column = pivot_columns.swap_remove(0);
+
+        let aggregates = self
+            .resolve_named_expressions(aggregate, &schema, state)
+            .await?;
+
+        // For SQL pivots the grouping list is empty; the implicit grouping columns are
+        // all input columns not referenced by the pivot column or the aggregates.
+        let grouping = self
+            .resolve_named_expressions(grouping, &schema, state)
+            .await?;
+        let grouping = if grouping.is_empty() {
+            Self::implicit_pivot_grouping(&schema, &pivot_column, &aggregates, state)?
+        } else {
+            grouping
+        };
+
+        // Each pivot value becomes one output column per aggregate. Values may be
+        // given explicitly (`... IN (v1, v2)`); otherwise infer the distinct values
+        // from the data (matching Spark's `pivot(column)`).
+        let pivot_values: Vec<(ScalarValue, Option<String>)> = if values.is_empty() {
+            self.infer_pivot_values(&input, &pivot_column)
+                .await?
+                .into_iter()
+                .map(|scalar| (scalar, None))
+                .collect()
+        } else {
+            let mut resolved = Vec::with_capacity(values.len());
+            for value in values {
+                let spec::PivotValue {
+                    values: literals,
+                    alias,
+                } = value;
+                if literals.len() != 1 {
+                    return Err(PlanError::todo(
+                        "pivot value with multiple literals (struct pivot)",
+                    ));
+                }
+                let Some(literal) = literals.into_iter().next() else {
+                    return Err(PlanError::AnalysisError(
+                        "pivot value must have a literal".to_string(),
+                    ));
+                };
+                resolved.push((self.resolve_literal(literal, state)?, alias.map(String::from)));
+            }
+            resolved
+        };
+
+        let single_aggregate = aggregates.len() == 1;
+        let mut projections = grouping.clone();
+        for (scalar, alias) in pivot_values {
+            // A NULL pivot value forms its own group in Spark: match rows where the
+            // pivot column IS NULL (equality with NULL never holds) and name the
+            // output column `null`.
+            let is_null = scalar.is_null();
+            let value_name = match alias {
+                Some(alias) => alias,
+                None if is_null => "null".to_string(),
+                None => scalar.to_string(),
+            };
+            let predicate = if is_null {
+                pivot_column.clone().is_null()
+            } else {
+                pivot_column.clone().eq(lit(scalar))
+            };
+            for agg in &aggregates {
+                let expr = inject_pivot_filter(agg.expr.clone(), &predicate)?;
+                let name = if single_aggregate {
+                    value_name.clone()
+                } else {
+                    format!("{value_name}_{}", agg.name.join("_"))
+                };
+                projections.push(NamedExpr {
+                    name: vec![name],
+                    expr,
+                    metadata: vec![],
+                });
+            }
+        }
+
+        self.rewrite_aggregate(input, projections, grouping, None, false, state)
+    }
+
+    /// Infer pivot values by collecting the distinct values of the pivot column
+    /// from the input, sorted ascending (matching Spark's `pivot(column)`).
+    async fn infer_pivot_values(
+        &self,
+        input: &LogicalPlan,
+        pivot_column: &expr::Expr,
+    ) -> PlanResult<Vec<ScalarValue>> {
+        // `GROUP BY pivot_column` with no aggregates is equivalent to
+        // `SELECT DISTINCT pivot_column`.
+        let plan = LogicalPlanBuilder::from(input.clone())
+            .aggregate(vec![pivot_column.clone()], Vec::<expr::Expr>::new())?
+            .build()?;
+        let batches = self
+            .ctx
+            .execute_logical_plan(plan)
+            .await?
+            .collect()
+            .await?;
+        let mut values = Vec::new();
+        for batch in &batches {
+            let column = batch.column(0);
+            for row in 0..batch.num_rows() {
+                values.push(ScalarValue::try_from_array(column, row)?);
+            }
+        }
+        // Spark rejects pivots whose distinct-value count exceeds the configured
+        // maximum (`spark.sql.pivotMaxValues`, default 10000).
+        const MAX_PIVOT_VALUES: usize = 10000;
+        if values.len() > MAX_PIVOT_VALUES {
+            return Err(PlanError::AnalysisError(format!(
+                "Too many distinct pivot values ({}); maximum is {MAX_PIVOT_VALUES}",
+                values.len()
+            )));
+        }
+        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        Ok(values)
+    }
+
+    /// Compute the implicit grouping columns for a SQL `PIVOT` with no explicit
+    /// grouping: every input column that is not referenced by the pivot column or
+    /// any of the aggregate expressions.
+    fn implicit_pivot_grouping(
+        schema: &DFSchemaRef,
+        pivot_column: &expr::Expr,
+        aggregates: &[NamedExpr],
+        state: &PlanResolverState,
+    ) -> PlanResult<Vec<NamedExpr>> {
+        let mut referenced: HashSet<Column> = HashSet::new();
+        for column in pivot_column.column_refs() {
+            referenced.insert(column.clone());
+        }
+        for agg in aggregates {
+            for column in agg.expr.column_refs() {
+                referenced.insert(column.clone());
+            }
+        }
+        // The schema field names are internal ids (e.g. `#6`); map each to its
+        // user-facing name so the grouping columns keep their original names.
+        let names = Self::get_field_names(schema, state)?;
+        Ok(schema
+            .columns()
+            .into_iter()
+            .zip(names)
+            .filter(|(column, _)| !referenced.contains(column))
+            .map(|(column, name)| NamedExpr {
+                name: vec![name],
+                expr: expr::Expr::Column(column),
+                metadata: vec![],
+            })
+            .collect())
     }
 
     pub(super) async fn resolve_query_unpivot(
@@ -180,6 +352,25 @@ impl PlanResolver<'_> {
             Arc::new(input),
         )?))
     }
+}
+
+/// Add `predicate` as a FILTER to every aggregate function inside `expr`,
+/// AND-combining with any existing filter. Implements Spark's pivot semantics:
+/// each aggregate is computed only over rows matching the pivot value.
+fn inject_pivot_filter(expr: expr::Expr, predicate: &expr::Expr) -> PlanResult<expr::Expr> {
+    Ok(expr
+        .transform(|e| match e {
+            expr::Expr::AggregateFunction(mut func) => {
+                let filter = match func.params.filter.take() {
+                    Some(existing) => (*existing).and(predicate.clone()),
+                    None => predicate.clone(),
+                };
+                func.params.filter = Some(Box::new(filter));
+                Ok(Transformed::yes(expr::Expr::AggregateFunction(func)))
+            }
+            other => Ok(Transformed::no(other)),
+        })?
+        .data)
 }
 
 fn types_are_coercible(data_types: &[DataType]) -> bool {
