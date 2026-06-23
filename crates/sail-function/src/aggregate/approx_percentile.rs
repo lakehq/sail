@@ -19,7 +19,9 @@ use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatil
 use datafusion::physical_expr::PhysicalExpr;
 
 use crate::aggregate::percentile::{extract_literal, extract_percentiles_array};
-use crate::aggregate::utils::{calculate_percentile_disc, cast_to_type};
+use crate::aggregate::utils::{
+    calculate_percentile_disc, calculate_percentiles_disc, cast_to_type,
+};
 use crate::error::invalid_arg_count_exec_err;
 
 macro_rules! dispatch_numeric_type {
@@ -285,14 +287,13 @@ impl<T: ArrowNumericType> Accumulator for ApproxPercentileAccumulator<T> {
                 self.data_type.clone(),
                 false,
             )));
-            let mut natives: Vec<T::Native> = Vec::with_capacity(self.percentiles.len());
-            for percentile in &self.percentiles {
-                match calculate_percentile_disc::<T>(values.clone(), *percentile) {
-                    Some(value) => natives.push(value),
-                    // No (non-null) input rows: Spark returns NULL for the whole array.
-                    None => return ScalarValue::try_from(&element_type),
-                }
-            }
+            // Sort the values once and index per percentile, rather than cloning
+            // the whole vector and re-selecting for each one.
+            let natives = match calculate_percentiles_disc::<T>(values, &self.percentiles) {
+                Some(natives) => natives,
+                // No (non-null) input rows: Spark returns NULL for the whole array.
+                None => return ScalarValue::try_from(&element_type),
+            };
             let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, natives.len() as i32]));
             let values_array = PrimitiveArray::<T>::new(ScalarBuffer::from(natives), None)
                 .with_data_type(self.data_type.clone());

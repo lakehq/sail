@@ -531,8 +531,10 @@ fn median(input: AggFunctionInput) -> PlanResult<expr::Expr> {
 /// Builds the Spark `approx_percentile` / `percentile_approx` aggregate.
 ///
 /// Unlike DataFusion's `approx_percentile_cont`, the Spark variant accepts an
-/// array of percentiles (returning `array<double>`) as well as an optional
-/// integer accuracy argument.
+/// array of percentiles (returning an array of the input type, e.g.
+/// `array<int>` / `array<decimal(10,2)>`) as well as an optional integer
+/// accuracy argument, and preserves the input type rather than always
+/// returning `double`.
 fn approx_percentile_agg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: Arc::new(AggregateUDF::from(SparkApproxPercentile::new())),
