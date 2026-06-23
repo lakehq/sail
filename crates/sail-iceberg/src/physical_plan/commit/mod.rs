@@ -12,6 +12,7 @@
 
 pub mod commit_exec;
 
+use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use serde::{Deserialize, Serialize};
 
 use crate::spec::{DataFile, Operation, PartitionSpec, Schema, TableRequirement, TableUpdate};
@@ -25,6 +26,8 @@ pub struct IcebergCommitInfo {
     pub manifest_list_path: String,
     pub updates: Vec<TableUpdate>,
     pub requirements: Vec<TableRequirement>,
+    pub table_properties: Vec<(String, String)>,
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
     pub operation: Operation,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schema: Option<Schema>,

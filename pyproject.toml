@@ -1,6 +1,6 @@
 [project]
 name = "pysail"
-version = "0.6.1"
+version = "0.6.4"
 description = "Sail Python library"
 authors = [
     { name = "LakeSail", email = "hello@lakesail.com" },
@@ -32,17 +32,15 @@ classifiers = [
 [project.optional-dependencies]
 test = [
     # The dependencies for testing the installed package.
-    # PySpark 4.1.0 does not work on Windows.
-    #   https://issues.apache.org/jira/browse/SPARK-54745
-    "pyspark-client>=4.0,<4.2,!=4.1.0",
+    "pyspark-client==4.1.1",
     "pandas<3",
     "duckdb>=1.0,<2",
-    "pytest>=8.4,<9",
+    "pytest>=9.1,<10",
     "pytest-bdd>=8.1,<9",
     "syrupy>=5.0,<6",
     "jinja2>=3.1,<4",
     "pillow>=10.3.0,<11",
-    "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
+    "pyiceberg[sql-sqlite,pyiceberg-core]==0.11.1",
     "pydantic>=2.11,<2.12",
     "jedi>=0.19.2,<0.20",
     "jsonpath-ng>=1.6,<2",
@@ -51,7 +49,7 @@ test = [
     "testcontainers>=4,<5",
     "connectorx>=0.3,<1",
     "vortex-data>=0.64,<1; platform_system != 'Windows'",
-    "pyarrow>=19.0,<20",
+    "pyarrow>=24.0,<25",
     "adbc-driver-flightsql>=1.0,<2",
     "adbc-driver-manager>=1.0,<2",
 ]
@@ -59,12 +57,12 @@ mcp = [
     "mcp>=1.0.0,<2",
 ]
 jdbc = [
-    "connectorx>=0.3,<1",
-    "pyarrow>=10.0,<20",
+    "connectorx>=0.3",
+    "pyarrow>=10.0",
 ]
 vortex = [
-    "vortex-data>=0.64,<1; platform_system != 'Windows'",
-    "pyarrow>=10.0,<20",
+    "vortex-data>=0.64; platform_system != 'Windows'",
+    "pyarrow>=10.0",
 ]
 
 [project.urls]
@@ -98,7 +96,7 @@ dependencies = [
     "pyspark[connect]==4.1.1",
     "ibis-framework>=12,<13",
     "pandas<3",
-    "pytest>=8.4,<9",
+    "pytest>=9.1,<10",
     "pytest-bdd>=8.1,<9",
     "syrupy>=5.0,<6",
     "jinja2>=3.1,<4",
@@ -106,12 +104,12 @@ dependencies = [
     "mcp>=1.0,<2",
     "boto3>=1.38,<2",
     "pillow>=10.3.0,<11",
-    "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
+    "pyiceberg[sql-sqlite,pyiceberg-core]==0.11.1",
     "pydantic>=2.11,<2.12",
     "jedi>=0.19.2,<0.20",
     "jsonpath-ng>=1.6,<2",
     "PyYAML>=6.0,<7",
-    "pyarrow>=19.0,<20",
+    "pyarrow>=24.0,<25",
     "adbc-driver-flightsql>=1.0,<2",
     "adbc-driver-manager>=1.0,<2",
     "moto[glue]>=5,<6",
@@ -154,18 +152,18 @@ installer = "pip"
 skip-install = true
 dependencies = [
     "pandas<3",
-    "pytest>=8.4,<9",
+    "pytest>=9.1,<10",
     "pytest-bdd>=8.1,<9",
     "syrupy>=5.0,<6",
     "jinja2>=3.1,<4",
     "duckdb>=1.1,<2",
     "pillow>=10.3.0,<11",
-    "pyiceberg[sql-sqlite,pyiceberg-core]==0.10.0",
+    "pyiceberg[sql-sqlite,pyiceberg-core]==0.11.1",
     "pydantic>=2.11,<2.12",
     "jedi>=0.19.2,<0.20",
     "jsonpath-ng>=1.6,<2",
     "PyYAML>=6.0,<7",
-    "pyarrow>=19.0,<20",
+    "pyarrow>=24.0,<25",
     "adbc-driver-flightsql>=1.0,<2",
     "adbc-driver-manager>=1.0,<2",
     "moto[glue]>=5,<6",

@@ -5,11 +5,12 @@ use arrow::datatypes::DataType;
 use datafusion::optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue};
 use datafusion_expr::expr::WindowFunctionParams;
-use datafusion_expr::simplify::SimplifyContext;
+use datafusion_expr::simplify::SimplifyContextBuilder;
 use datafusion_expr::{
     expr, AggregateUDF, ExprSchemable, WindowFrame, WindowFrameBound, WindowFrameUnits,
 };
-use sail_common::spec;
+use sail_catalog::manager::CatalogManager;
+use sail_common::spec::{self};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::session::plan::PlanService;
@@ -17,6 +18,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_python_udf::cereal::pyspark_udf::PySparkUdfPayload;
 use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_udaf::{PySparkGroupAggKind, PySparkGroupAggregateUDF};
+use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{get_null_treatment, FunctionContextInput, WinFunctionInput};
@@ -33,6 +35,14 @@ impl PlanResolver<'_> {
         schema: &DFSchemaRef,
         state: &mut PlanResolverState,
     ) -> PlanResult<NamedExpr> {
+        let window = match window {
+            spec::Window::Named(name) => state
+                .get_window(name.as_ref())
+                .ok_or_else(|| PlanError::analysis(format!("undefined window: {}", name.as_ref())))?
+                .clone(),
+            w => w,
+        };
+
         let spec::Window::Unnamed {
             cluster_by,
             partition_by,
@@ -40,7 +50,7 @@ impl PlanResolver<'_> {
             frame,
         } = window
         else {
-            return Err(PlanError::todo("named window"));
+            return Err(PlanError::analysis("named windows in window expressions"));
         };
         if !cluster_by.is_empty() {
             return Err(PlanError::unsupported(
@@ -86,30 +96,77 @@ impl PlanResolver<'_> {
                     return Err(PlanError::todo("named window function arguments"));
                 }
                 let canonical_function_name = function_name.to_ascii_lowercase();
-                let (argument_display_names, arguments) = self
-                    .resolve_expressions_and_names(arguments, schema, state)
-                    .await?;
-                let function = get_built_in_window_function(&canonical_function_name)?;
-                let input = WinFunctionInput {
-                    arguments,
-                    partition_by,
-                    order_by: sorts,
-                    window_frame,
-                    ignore_nulls,
-                    distinct: is_distinct,
-                    function_context: FunctionContextInput {
-                        argument_display_names: &argument_display_names,
-                        plan_config: &self.config,
-                        session_context: self.ctx,
-                        schema,
-                    },
-                };
-                (
-                    function(input)?,
-                    function_name,
-                    argument_display_names,
-                    is_distinct,
-                )
+                // `is_user_defined_function` is always false on the wire, so a registered
+                // Python UDAF arrives here as `UnresolvedFunction`. Look it up in the
+                // catalog before falling back to the built-in window function registry.
+                let catalog_function = self
+                    .ctx
+                    .extension::<CatalogManager>()?
+                    .get_function(&canonical_function_name)?;
+                let registered_udaf = catalog_function.as_ref().and_then(|udf| {
+                    udf.inner()
+                        .downcast_ref::<PySparkUnresolvedUDF>()
+                        .filter(|f| {
+                            matches!(
+                                f.eval_type(),
+                                spec::PySparkUdfType::GroupedAggPandas
+                                    | spec::PySparkUdfType::GroupedAggPandasIter
+                                    | spec::PySparkUdfType::GroupedAggArrow
+                                    | spec::PySparkUdfType::GroupedAggArrowIter
+                                    | spec::PySparkUdfType::WindowAggPandas
+                                    | spec::PySparkUdfType::WindowAggArrow
+                            )
+                        })
+                });
+                if let Some(udaf) = registered_udaf {
+                    let (udaf, arguments, argument_display_names) = self
+                        .resolve_registered_pyspark_udaf(
+                            udaf,
+                            &function_name,
+                            arguments,
+                            schema,
+                            state,
+                        )
+                        .await?;
+                    let window = expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
+                        fun: expr::WindowFunctionDefinition::AggregateUDF(udaf),
+                        params: WindowFunctionParams {
+                            args: arguments,
+                            partition_by,
+                            order_by: sorts,
+                            window_frame,
+                            filter: None,
+                            null_treatment: get_null_treatment(None),
+                            distinct: is_distinct,
+                        },
+                    }));
+                    (window, function_name, argument_display_names, is_distinct)
+                } else {
+                    let (argument_display_names, arguments) = self
+                        .resolve_expressions_and_names(arguments, schema, state)
+                        .await?;
+                    let function = get_built_in_window_function(&canonical_function_name)?;
+                    let input = WinFunctionInput {
+                        arguments,
+                        partition_by,
+                        order_by: sorts,
+                        window_frame,
+                        ignore_nulls,
+                        distinct: is_distinct,
+                        function_context: FunctionContextInput {
+                            argument_display_names: &argument_display_names,
+                            plan_config: &self.config,
+                            session_context: self.ctx,
+                            schema,
+                        },
+                    };
+                    (
+                        function(input)?,
+                        function_name,
+                        argument_display_names,
+                        is_distinct,
+                    )
+                }
             }
             spec::Expr::CommonInlineUserDefinedFunction(function) => {
                 let mut scope = state.enter_config_scope();
@@ -218,6 +275,68 @@ impl PlanResolver<'_> {
         Ok(NamedExpr::new(vec![name], window))
     }
 
+    async fn resolve_registered_pyspark_udaf(
+        &self,
+        udaf: &PySparkUnresolvedUDF,
+        function_name: &str,
+        arguments: Vec<spec::Expr>,
+        schema: &DFSchemaRef,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<(Arc<AggregateUDF>, Vec<expr::Expr>, Vec<String>)> {
+        let mut scope = state.enter_config_scope();
+        let state = scope.state();
+        state.config_mut().arrow_allow_large_var_types = true;
+        let (argument_display_names, arguments) = self
+            .resolve_expressions_and_names(arguments, schema, state)
+            .await?;
+        let input_types: Vec<DataType> = arguments
+            .iter()
+            .map(|arg| arg.get_type(schema))
+            .collect::<Result<Vec<DataType>, DataFusionError>>()?;
+        let output_type = udaf.output_type().cloned().ok_or_else(|| {
+            PlanError::internal(format!(
+                "unresolved UDAF {function_name} has no return type"
+            ))
+        })?;
+        let payload = PySparkUdfPayload::build(
+            udaf.python_version(),
+            udaf.command(),
+            udaf.eval_type(),
+            &((0..arguments.len()).collect::<Vec<_>>()),
+            &input_types,
+            &[],
+            &self.config.pyspark_udf_config,
+        )?;
+        let kind = match udaf.eval_type() {
+            spec::PySparkUdfType::GroupedAggArrow
+            | spec::PySparkUdfType::GroupedAggArrowIter
+            | spec::PySparkUdfType::WindowAggArrow => PySparkGroupAggKind::Arrow,
+            _ => PySparkGroupAggKind::Pandas,
+        };
+        let actual_arg_count = arguments.len();
+        let (arguments, input_types) = if arguments.is_empty() {
+            (vec![datafusion_expr::lit(0i64)], vec![DataType::Int64])
+        } else {
+            (arguments, input_types)
+        };
+        let new_udaf = PySparkGroupAggregateUDF::new(
+            kind,
+            get_udf_name(function_name, &payload),
+            payload,
+            udaf.deterministic(),
+            argument_display_names.clone(),
+            input_types,
+            output_type,
+            self.config.pyspark_udf_config.clone(),
+            actual_arg_count,
+        );
+        Ok((
+            Arc::new(AggregateUDF::from(new_udaf)),
+            arguments,
+            argument_display_names,
+        ))
+    }
+
     async fn resolve_window_frame(
         &self,
         frame: spec::WindowFrame,
@@ -269,7 +388,9 @@ impl PlanResolver<'_> {
         }
         // Apply type coercion so that expressions like `CAST(0 AS INTERVAL SECOND)`
         // have compatible types before physical evaluation.
-        let context = SimplifyContext::default().with_schema(schema.clone());
+        let context = SimplifyContextBuilder::default()
+            .with_schema(schema.clone())
+            .build();
         let simplifier = ExprSimplifier::new(context);
         let coerced = simplifier.coerce(resolved, schema).map_err(|e| {
             PlanError::invalid(format!(

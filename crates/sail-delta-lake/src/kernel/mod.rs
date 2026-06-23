@@ -14,10 +14,12 @@ pub mod log_segment;
 pub mod snapshot;
 pub mod transaction;
 
+pub(crate) mod checkpoint_augment;
 pub(crate) mod checkpoints;
 mod config;
 
-pub use config::DeltaSnapshotConfig;
+pub(crate) use config::{catalog_managed_commit_file_name, catalog_managed_commit_path};
+pub use config::{CatalogManagedCommitFile, CatalogManagedCommitSet, DeltaSnapshotConfig};
 
 pub use crate::spec::operation::{DeltaOperation, MergePredicate, SaveMode};
 pub use crate::spec::SchemaRef;

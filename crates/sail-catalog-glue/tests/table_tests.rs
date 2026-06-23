@@ -21,8 +21,8 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Fields, TimeUnit};
 use sail_catalog::provider::{
-    CatalogPartitionField, CatalogProvider, CreateTableColumnOptions, CreateTableOptions,
-    DropTableOptions, PartitionTransform,
+    CatalogPartitionField, CatalogProvider, CreateTableColumnOptions, CreateTableMode,
+    CreateTableOptions, DropTableOptions, PartitionTransform,
 };
 use table_view_common::{col, setup_with_database, simple_table_options};
 
@@ -68,9 +68,10 @@ async fn test_create_table() {
                 }],
                 sort_by: vec![],
                 bucket_by: None,
-                if_not_exists: false,
-                replace: false,
+                mode: CreateTableMode::Create,
                 properties: vec![("owner".to_string(), "test_user".to_string())],
+                is_external: true,
+                is_write_precondition: false,
             },
         )
         .await
@@ -129,7 +130,7 @@ async fn test_create_table() {
             CreateTableOptions {
                 columns: vec![col("different", DataType::Int32)],
                 comment: Some("Different comment".to_string()),
-                if_not_exists: true,
+                mode: CreateTableMode::CreateIfNotExists,
                 ..simple_table_options(vec![])
             },
         )
@@ -188,9 +189,10 @@ async fn test_get_table() {
                 partition_by: vec![],
                 sort_by: vec![],
                 bucket_by: None,
-                if_not_exists: false,
-                replace: false,
+                mode: CreateTableMode::Create,
                 properties: vec![("key1".to_string(), "value1".to_string())],
+                is_external: true,
+                is_write_precondition: false,
             },
         )
         .await
@@ -416,9 +418,10 @@ async fn test_storage_formats() {
                     partition_by: vec![],
                     sort_by: vec![],
                     bucket_by: None,
-                    if_not_exists: false,
-                    replace: false,
+                    mode: CreateTableMode::Create,
                     properties: vec![],
+                    is_external: true,
+                    is_write_precondition: false,
                 },
             )
             .await
@@ -593,9 +596,10 @@ async fn test_partition_transforms() {
                 ],
                 sort_by: vec![],
                 bucket_by: None,
-                if_not_exists: false,
-                replace: false,
+                mode: CreateTableMode::Create,
                 properties: vec![],
+                is_external: true,
+                is_write_precondition: false,
             },
         )
         .await
@@ -655,9 +659,10 @@ async fn test_hive_rejects_transforms() {
                 }],
                 sort_by: vec![],
                 bucket_by: None,
-                if_not_exists: false,
-                replace: false,
+                mode: CreateTableMode::Create,
                 properties: vec![],
+                is_external: true,
+                is_write_precondition: false,
             },
         )
         .await;
@@ -698,9 +703,10 @@ async fn test_iceberg_requires_location() {
                 partition_by: vec![],
                 sort_by: vec![],
                 bucket_by: None,
-                if_not_exists: false,
-                replace: false,
+                mode: CreateTableMode::Create,
                 properties: vec![],
+                is_external: true,
+                is_write_precondition: false,
             },
         )
         .await;

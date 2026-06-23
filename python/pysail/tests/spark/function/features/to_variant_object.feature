@@ -1,4 +1,4 @@
-@to_variant_object @spark-4
+@spark-4
 Feature: to_variant_object
 
   Rule: Struct input

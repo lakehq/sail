@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use aws_sdk_glue::types::{SerDeInfo, StorageDescriptor, TableInput};
 use aws_sdk_glue::Client;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
-use sail_catalog::hive_format::HiveStorageFormat;
+use sail_catalog::hive_format::{HiveCatalogFormat, HiveStorageFormat};
 use sail_catalog::provider::{
     CatalogProvider, CreateTableColumnOptions, CreateTableOptions, Namespace, PartitionTransform,
 };
@@ -12,6 +12,8 @@ use sail_common_datafusion::catalog::TableStatus;
 
 use crate::data_type::arrow_to_glue_type;
 use crate::GlueCatalogProvider;
+
+pub(crate) const SPARK_DATASOURCE_PROVIDER_KEY: &str = "spark.sql.sources.provider";
 
 /// Validated options for Hive table creation.
 pub(crate) struct ValidatedHiveOptions {
@@ -44,12 +46,15 @@ pub(crate) async fn create_hive_table(
         properties,
     } = validate_hive_options(options)?;
 
-    let format_info = HiveStorageFormat::from_format(&format)?;
+    let format_info = HiveCatalogFormat::from_format(&format)?;
 
     let (regular_columns, partition_columns) = build_glue_columns(columns, &partition_by)?;
 
-    let storage_descriptor =
-        build_storage_descriptor(regular_columns, &format_info, location.as_deref());
+    let storage_descriptor = build_storage_descriptor(
+        regular_columns,
+        &format_info.storage_format,
+        location.as_deref(),
+    );
 
     let table_input = build_table_input(
         table,
@@ -57,6 +62,7 @@ pub(crate) async fn create_hive_table(
         partition_columns,
         comment.as_deref(),
         properties,
+        format_info.logical_format,
     )?;
 
     let result = client
@@ -89,44 +95,32 @@ pub(crate) async fn create_hive_table(
 }
 
 /// Validates CreateTableOptions for Hive-style tables.
-fn validate_hive_options(options: CreateTableOptions) -> CatalogResult<ValidatedHiveOptions> {
-    let CreateTableOptions {
-        columns,
-        comment,
-        constraints,
-        location,
-        format,
-        partition_by,
-        sort_by,
-        bucket_by,
-        if_not_exists,
-        replace,
-        properties,
-    } = options;
-
-    if replace {
+pub(crate) fn validate_hive_create_table_options(
+    options: &CreateTableOptions,
+) -> CatalogResult<()> {
+    if options.mode.is_replace() {
         return Err(CatalogError::NotSupported(
             "AWS Glue catalog does not support REPLACE".to_string(),
         ));
     }
-    if !constraints.is_empty() {
+    if !options.constraints.is_empty() {
         return Err(CatalogError::NotSupported(
             "AWS Glue catalog does not support CONSTRAINT".to_string(),
         ));
     }
-    if !sort_by.is_empty() {
+    if !options.sort_by.is_empty() {
         return Err(CatalogError::NotSupported(
             "AWS Glue catalog does not support SORT BY".to_string(),
         ));
     }
-    if bucket_by.is_some() {
+    if options.bucket_by.is_some() {
         return Err(CatalogError::NotSupported(
             "AWS Glue catalog does not support BUCKET BY".to_string(),
         ));
     }
 
-    // Hive-style tables only support identity partitions
-    if partition_by
+    if options
+        .partition_by
         .iter()
         .any(|f| f.transform.is_some() && f.transform != Some(PartitionTransform::Identity))
     {
@@ -135,6 +129,26 @@ fn validate_hive_options(options: CreateTableOptions) -> CatalogResult<Validated
                 .to_string(),
         ));
     }
+
+    Ok(())
+}
+
+fn validate_hive_options(options: CreateTableOptions) -> CatalogResult<ValidatedHiveOptions> {
+    validate_hive_create_table_options(&options)?;
+    let CreateTableOptions {
+        columns,
+        comment,
+        constraints: _,
+        location,
+        format,
+        partition_by,
+        sort_by: _,
+        bucket_by: _,
+        mode,
+        properties,
+        is_external: _,
+        is_write_precondition: _,
+    } = options;
 
     // Extract just the column names for partitioning
     let partition_columns: Vec<String> = partition_by.iter().map(|f| f.column.clone()).collect();
@@ -145,7 +159,7 @@ fn validate_hive_options(options: CreateTableOptions) -> CatalogResult<Validated
         location,
         format,
         partition_by: partition_columns,
-        if_not_exists,
+        if_not_exists: mode.ignore_if_exists(),
         properties,
     })
 }
@@ -212,12 +226,15 @@ fn build_table_input(
     partition_columns: Vec<aws_sdk_glue::types::Column>,
     comment: Option<&str>,
     properties: Vec<(String, String)>,
+    logical_format: &str,
 ) -> CatalogResult<TableInput> {
-    let parameters: Option<HashMap<String, String>> = if properties.is_empty() {
-        None
-    } else {
-        Some(properties.into_iter().collect())
-    };
+    let mut parameters: HashMap<String, String> = properties.into_iter().collect();
+    if logical_format.eq_ignore_ascii_case("delta") {
+        parameters.insert(
+            SPARK_DATASOURCE_PROVIDER_KEY.to_string(),
+            "delta".to_string(),
+        );
+    }
 
     let mut builder = TableInput::builder()
         .name(table_name)
@@ -231,8 +248,8 @@ fn build_table_input(
         builder = builder.set_partition_keys(Some(partition_columns));
     }
 
-    if let Some(params) = parameters {
-        builder = builder.set_parameters(Some(params));
+    if !parameters.is_empty() {
+        builder = builder.set_parameters(Some(parameters));
     }
 
     builder

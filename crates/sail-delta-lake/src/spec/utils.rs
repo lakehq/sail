@@ -18,7 +18,10 @@
 
 use std::str::Utf8Error;
 
+use arrow_schema::extension::ExtensionType;
+use parquet_variant_compute::VariantType;
 use percent_encoding::{percent_decode_str, percent_encode, AsciiSet, CONTROLS};
+use sail_common_datafusion::variant::is_marked_variant_storage_type;
 
 use super::schema::{DataType, StructField};
 
@@ -110,4 +113,53 @@ pub(crate) fn contains_timestampntz_arrow(schema: &datafusion::arrow::datatypes:
         .fields()
         .iter()
         .any(|f| has_timestamp_ntz(f.data_type()))
+}
+
+/// Checks if any field (including nested) in the provided iterator is a `variant`.
+pub(crate) fn contains_variant<'a>(mut fields: impl Iterator<Item = &'a StructField>) -> bool {
+    fn has_variant(dtype: &DataType) -> bool {
+        match dtype {
+            DataType::Variant(_) => true,
+            DataType::Array(inner) => has_variant(inner.element_type()),
+            DataType::Struct(struct_type) => {
+                struct_type.fields().any(|f| has_variant(f.data_type()))
+            }
+            DataType::Map(map_type) => {
+                has_variant(map_type.key_type()) || has_variant(map_type.value_type())
+            }
+            _ => false,
+        }
+    }
+
+    fields.any(|field| has_variant(field.data_type()))
+}
+
+/// Checks if any field (including nested) in an Arrow schema contains a Variant extension field.
+pub(crate) fn contains_variant_arrow(schema: &datafusion::arrow::datatypes::Schema) -> bool {
+    fn is_variant_field(field: &datafusion::arrow::datatypes::Field) -> bool {
+        field.extension_type_name() == Some(VariantType::NAME)
+            || is_marked_variant_storage_type(field.data_type())
+    }
+
+    fn has_variant(field: &datafusion::arrow::datatypes::Field) -> bool {
+        if is_variant_field(field) {
+            return true;
+        }
+        use datafusion::arrow::datatypes::DataType as ArrowDataType;
+        match field.data_type() {
+            ArrowDataType::Struct(fields) => fields.iter().any(|f| has_variant(f.as_ref())),
+            ArrowDataType::List(elem)
+            | ArrowDataType::ListView(elem)
+            | ArrowDataType::LargeList(elem)
+            | ArrowDataType::LargeListView(elem)
+            | ArrowDataType::FixedSizeList(elem, _) => has_variant(elem.as_ref()),
+            ArrowDataType::Map(entries, _) => has_variant(entries.as_ref()),
+            _ => false,
+        }
+    }
+
+    schema
+        .fields()
+        .iter()
+        .any(|field| has_variant(field.as_ref()))
 }

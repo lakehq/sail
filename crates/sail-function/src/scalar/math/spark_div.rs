@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array};
@@ -44,10 +43,6 @@ impl SparkIntervalDiv {
 }
 
 impl ScalarUDFImpl for SparkIntervalDiv {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_interval_div"
     }
@@ -116,10 +111,6 @@ impl SparkIntegerDiv {
 }
 
 impl ScalarUDFImpl for SparkIntegerDiv {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_integer_div"
     }
@@ -383,6 +374,82 @@ mod tests {
             return Err(generic_exec_err("test", "Expected Int64Array"));
         };
         assert!(int_array.is_null(0));
+        Ok(())
+    }
+
+    #[test]
+    fn test_integer_div_basic() -> Result<()> {
+        // 7 div 2 = 3
+        let dividend = Arc::new(Int64Array::from(vec![7])) as ArrayRef;
+        let divisor = Arc::new(Int64Array::from(vec![2])) as ArrayRef;
+        let result = integer_div_inner(&[dividend, divisor], false)?;
+        let Some(arr) = result.as_any().downcast_ref::<Int64Array>() else {
+            return Err(generic_exec_err("test", "Expected Int64Array"));
+        };
+        assert_eq!(arr.value(0), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn test_integer_div_long_min_overflow_ansi_errors() -> Result<()> {
+        // ANSI=true: LONG_MIN div -1 overflows and must error.
+        let dividend = Arc::new(Int64Array::from(vec![i64::MIN])) as ArrayRef;
+        let divisor = Arc::new(Int64Array::from(vec![-1])) as ArrayRef;
+        match integer_div_inner(&[dividend, divisor], true) {
+            Ok(_) => Err(generic_exec_err(
+                "test",
+                "expected ARITHMETIC_OVERFLOW under ANSI",
+            )),
+            Err(e) => {
+                assert!(e.to_string().contains("ARITHMETIC_OVERFLOW"));
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn test_integer_div_long_min_overflow_non_ansi_wraps() -> Result<()> {
+        // ANSI=false: LONG_MIN div -1 wraps to LONG_MIN.
+        let dividend = Arc::new(Int64Array::from(vec![i64::MIN])) as ArrayRef;
+        let divisor = Arc::new(Int64Array::from(vec![-1])) as ArrayRef;
+        let result = integer_div_inner(&[dividend, divisor], false)?;
+        let Some(arr) = result.as_any().downcast_ref::<Int64Array>() else {
+            return Err(generic_exec_err("test", "Expected Int64Array"));
+        };
+        assert_eq!(arr.value(0), i64::MIN);
+        Ok(())
+    }
+
+    #[test]
+    fn test_integer_div_zero_divisor_guard_no_panic() -> Result<()> {
+        // Zero divisors are masked to NULL upstream; the inner `y == 0` guard
+        // must not panic in either mode (it yields 0 at the masked slot).
+        let dividend = Arc::new(Int64Array::from(vec![10])) as ArrayRef;
+        let divisor = Arc::new(Int64Array::from(vec![0])) as ArrayRef;
+        let result = integer_div_inner(&[Arc::clone(&dividend), Arc::clone(&divisor)], false)?;
+        let Some(arr) = result.as_any().downcast_ref::<Int64Array>() else {
+            return Err(generic_exec_err("test", "Expected Int64Array"));
+        };
+        assert_eq!(arr.value(0), 0);
+        let result = integer_div_inner(&[dividend, divisor], true)?;
+        let Some(arr) = result.as_any().downcast_ref::<Int64Array>() else {
+            return Err(generic_exec_err("test", "Expected Int64Array"));
+        };
+        assert_eq!(arr.value(0), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_integer_div_propagates_nulls() -> Result<()> {
+        // NULL positions stay NULL (binary copies the validity mask).
+        let dividend = Arc::new(Int64Array::from(vec![Some(10), None])) as ArrayRef;
+        let divisor = Arc::new(Int64Array::from(vec![Some(3), Some(2)])) as ArrayRef;
+        let result = integer_div_inner(&[dividend, divisor], false)?;
+        let Some(arr) = result.as_any().downcast_ref::<Int64Array>() else {
+            return Err(generic_exec_err("test", "Expected Int64Array"));
+        };
+        assert_eq!(arr.value(0), 3);
+        assert!(arr.is_null(1));
         Ok(())
     }
 }

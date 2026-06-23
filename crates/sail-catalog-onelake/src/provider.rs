@@ -251,6 +251,7 @@ impl OneLakeCatalogProvider {
                     comment: col.comment,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                     is_partition: false,
                     is_bucket: false,
                     is_cluster: false,
@@ -272,6 +273,7 @@ impl OneLakeCatalogProvider {
                 sort_by: vec![],
                 bucket_by: None,
                 properties: vec![],
+                is_external: true,
             },
         })
     }

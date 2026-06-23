@@ -18,16 +18,23 @@
 // limitations under the License.
 
 use std::collections::HashMap;
+use std::io::Cursor;
+use std::sync::Arc;
 
+use datafusion::arrow::array::{Array, NullBufferBuilder, StringArray, StructArray};
+use datafusion::arrow::datatypes::SchemaRef as ArrowSchemaRef;
+use datafusion::arrow::json::ReaderBuilder as JsonReaderBuilder;
+use datafusion::arrow::record_batch::RecordBatch;
 use serde::{Deserialize, Serialize};
 
+use crate::spec::error::DeltaError as DeltaTableError;
 use crate::spec::fields::{
     STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES, STATS_FIELD_NULL_COUNT,
     STATS_FIELD_NUM_RECORDS, STATS_FIELD_TIGHT_BOUNDS,
 };
 use crate::spec::{
-    ColumnName, DataSkippingNumIndexedCols, DataType, PrimitiveType, Schema, StructField,
-    StructType, TableProperties,
+    ColumnName, DataSkippingNumIndexedCols, DataType, DeltaResult, PrimitiveType, Schema,
+    StructField, StructType, TableProperties,
 };
 
 /// Column statistics stored in `Stats`.
@@ -528,11 +535,69 @@ fn is_skipping_eligible_datatype(data_type: &PrimitiveType) -> bool {
     )
 }
 
+/// Parse a column of `stats` JSON strings into a typed [`StructArray`] that mirrors
+/// `target_schema`.
+///
+/// Empty strings and nulls produce a null struct row, preserving the distinction between
+/// missing stats and stats with fields set to null.
+pub(crate) fn parse_stats_json_array(
+    json: &StringArray,
+    target_schema: &ArrowSchemaRef,
+) -> DeltaResult<StructArray> {
+    let num_rows = json.len();
+    let estimated = json
+        .iter()
+        .map(|value| value.map_or(2, str::len) + 1)
+        .sum::<usize>()
+        .max(num_rows + 1);
+    let mut json_lines = String::with_capacity(estimated);
+    let mut validity = NullBufferBuilder::new(num_rows);
+    for value in json.iter() {
+        match value {
+            Some(value) if !value.is_empty() => {
+                json_lines.push_str(value);
+                validity.append_non_null();
+            }
+            _ => {
+                json_lines.push_str("{}");
+                validity.append_null();
+            }
+        }
+        json_lines.push('\n');
+    }
+
+    let mut reader = JsonReaderBuilder::new(Arc::clone(target_schema))
+        .with_batch_size(num_rows.max(1))
+        .build(Cursor::new(json_lines))
+        .map_err(DeltaTableError::generic_err)?;
+    let parsed = match reader.next() {
+        Some(batch) => batch.map_err(DeltaTableError::generic_err)?,
+        None => RecordBatch::new_empty(Arc::clone(target_schema)),
+    };
+    let parsed: StructArray = parsed.into();
+    Ok(StructArray::try_new(
+        parsed.fields().clone(),
+        parsed.columns().to_vec(),
+        validity.finish(),
+    )?)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::sync::Arc;
 
-    use super::{lookup_value_stat, ColumnCountStat, ColumnValueStat, StatValue, Stats};
+    use datafusion::arrow::array::{Array, Int32Array, Int64Array, StringArray, StructArray};
+    use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
+
+    use super::{
+        lookup_value_stat, parse_stats_json_array, ColumnCountStat, ColumnValueStat, StatValue,
+        Stats,
+    };
+    use crate::spec::fields::{
+        STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES, STATS_FIELD_NULL_COUNT,
+        STATS_FIELD_NUM_RECORDS,
+    };
 
     #[test]
     fn test_lookup_value_stat_supports_top_level_keys_containing_dots() {
@@ -576,5 +641,111 @@ mod tests {
             ..zero_nulls
         };
         assert_eq!(all_nulls.null_count_value("value"), Some(10));
+    }
+
+    fn target_schema() -> Arc<ArrowSchema> {
+        let min_max_fields = vec![
+            Arc::new(Field::new("id", ArrowDataType::Int32, true)),
+            Arc::new(Field::new("name", ArrowDataType::Utf8, true)),
+        ];
+        let nested_fields = vec![Arc::new(Field::new("code", ArrowDataType::Int32, true))];
+        let min_max_struct = ArrowDataType::Struct(
+            [
+                min_max_fields.clone(),
+                vec![Arc::new(Field::new(
+                    "nested",
+                    ArrowDataType::Struct(nested_fields.clone().into()),
+                    true,
+                ))],
+            ]
+            .concat()
+            .into(),
+        );
+        let null_count_struct = ArrowDataType::Struct(
+            vec![
+                Arc::new(Field::new("id", ArrowDataType::Int64, true)),
+                Arc::new(Field::new("name", ArrowDataType::Int64, true)),
+                Arc::new(Field::new(
+                    "nested",
+                    ArrowDataType::Struct(
+                        vec![Arc::new(Field::new("code", ArrowDataType::Int64, true))].into(),
+                    ),
+                    true,
+                )),
+            ]
+            .into(),
+        );
+        Arc::new(ArrowSchema::new(vec![
+            Field::new(STATS_FIELD_NUM_RECORDS, ArrowDataType::Int64, true),
+            Field::new(STATS_FIELD_MIN_VALUES, min_max_struct.clone(), true),
+            Field::new(STATS_FIELD_MAX_VALUES, min_max_struct, true),
+            Field::new(STATS_FIELD_NULL_COUNT, null_count_struct, true),
+        ]))
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn parse_stats_json_array_handles_typed_numeric_string_nested_and_nulls() {
+        let schema = target_schema();
+        let json = StringArray::from(vec![
+            Some(
+                r#"{"numRecords":3,"minValues":{"id":1,"name":"alice","nested":{"code":10}},"maxValues":{"id":9,"name":"zoe","nested":{"code":99}},"nullCount":{"id":0,"name":0,"nested":{"code":0}}}"#,
+            ),
+            Some(r#"{"numRecords":0}"#),
+            None,
+            Some(""),
+        ]);
+        let parsed = parse_stats_json_array(&json, &schema).unwrap();
+
+        assert_eq!(parsed.len(), 4);
+        let num_records = parsed
+            .column_by_name(STATS_FIELD_NUM_RECORDS)
+            .and_then(|col| col.as_any().downcast_ref::<Int64Array>())
+            .unwrap();
+        assert_eq!(num_records.value(0), 3);
+        assert_eq!(num_records.value(1), 0);
+        assert!(parsed.is_null(2));
+        assert!(parsed.is_null(3));
+        assert!(num_records.is_null(2));
+        assert!(num_records.is_null(3));
+
+        let min_values = parsed
+            .column_by_name(STATS_FIELD_MIN_VALUES)
+            .and_then(|col| col.as_any().downcast_ref::<StructArray>())
+            .unwrap();
+        let id = min_values
+            .column_by_name("id")
+            .and_then(|col| col.as_any().downcast_ref::<Int32Array>())
+            .unwrap();
+        assert_eq!(id.value(0), 1);
+        assert!(id.is_null(1));
+        assert!(id.is_null(2));
+
+        let name = min_values
+            .column_by_name("name")
+            .and_then(|col| col.as_any().downcast_ref::<StringArray>())
+            .unwrap();
+        assert_eq!(name.value(0), "alice");
+        assert!(name.is_null(1));
+
+        let nested = min_values
+            .column_by_name("nested")
+            .and_then(|col| col.as_any().downcast_ref::<StructArray>())
+            .unwrap();
+        let code = nested
+            .column_by_name("code")
+            .and_then(|col| col.as_any().downcast_ref::<Int32Array>())
+            .unwrap();
+        assert_eq!(code.value(0), 10);
+        assert!(code.is_null(1));
+    }
+
+    #[test]
+    #[expect(clippy::unwrap_used)]
+    fn parse_stats_json_array_empty_input_returns_empty_struct() {
+        let schema = target_schema();
+        let json = StringArray::from(Vec::<Option<&str>>::new());
+        let parsed = parse_stats_json_array(&json, &schema).unwrap();
+        assert_eq!(parsed.len(), 0);
     }
 }

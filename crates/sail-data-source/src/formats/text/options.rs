@@ -1,3 +1,4 @@
+use datafusion::catalog::Session;
 use datafusion_common::parsers::CompressionTypeVariant;
 use sail_common_datafusion::datasource::OptionLayer;
 
@@ -6,7 +7,7 @@ use crate::formats::text::TableTextOptions;
 use crate::options::gen::{
     TextReadOptions, TextReadPartialOptions, TextWriteOptions, TextWritePartialOptions,
 };
-use crate::options::{BuildPartialOptions, PartialOptions};
+use crate::options::{BuildPartialOptions, PartialOptions, ResolveOptions};
 use crate::utils::char_to_u8;
 
 impl TextReadOptions {
@@ -62,33 +63,41 @@ impl TextWriteOptions {
     }
 }
 
-pub fn resolve_text_read_options(options: Vec<OptionLayer>) -> DataSourceResult<TextReadOptions> {
-    let mut partial = TextReadPartialOptions::initialize();
-    for layer in options {
-        partial.merge(layer.build_partial_options()?);
+impl ResolveOptions for TextReadOptions {
+    fn resolve(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
+        let mut partial = TextReadPartialOptions::initialize();
+        for layer in options {
+            partial.merge(layer.build_partial_options()?);
+        }
+        partial.finalize()
     }
-    partial.finalize()
 }
 
-pub fn resolve_text_write_options(options: Vec<OptionLayer>) -> DataSourceResult<TextWriteOptions> {
-    let mut partial = TextWritePartialOptions::initialize();
-    for layer in options {
-        partial.merge(layer.build_partial_options()?);
+impl ResolveOptions for TextWriteOptions {
+    fn resolve(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
+        let mut partial = TextWritePartialOptions::initialize();
+        for layer in options {
+            partial.merge(layer.build_partial_options()?);
+        }
+        partial.finalize()
     }
-    partial.finalize()
 }
 
 #[cfg(test)]
 mod tests {
+    use datafusion::prelude::SessionContext;
     use datafusion_common::parsers::CompressionTypeVariant;
 
-    use crate::formats::text::options::{resolve_text_read_options, resolve_text_write_options};
-    use crate::options::option_list;
+    use crate::options::gen::{TextReadOptions, TextWriteOptions};
+    use crate::options::{option_list, ResolveOptions};
 
     #[test]
     fn test_resolve_text_read_options() -> datafusion_common::Result<()> {
+        let ctx = SessionContext::default();
+        let state = ctx.state();
+
         let kv = option_list(&[]);
-        let options = resolve_text_read_options(vec![kv])
+        let options = TextReadOptions::resolve(&state, vec![kv])
             .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert!(!options.whole_text);
@@ -96,7 +105,7 @@ mod tests {
         assert_eq!(options.compression, CompressionTypeVariant::UNCOMPRESSED);
 
         let kv = option_list(&[("whole_text", "true"), ("line_sep", "\r")]);
-        let options = resolve_text_read_options(vec![kv])
+        let options = TextReadOptions::resolve(&state, vec![kv])
             .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert!(options.whole_text);
@@ -107,15 +116,18 @@ mod tests {
 
     #[test]
     fn test_resolve_text_write_options() -> datafusion_common::Result<()> {
+        let ctx = SessionContext::default();
+        let state = ctx.state();
+
         let kv = option_list(&[]);
-        let options = resolve_text_write_options(vec![kv])
+        let options = TextWriteOptions::resolve(&state, vec![kv])
             .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.line_sep, Some('\n'));
         assert_eq!(options.compression, CompressionTypeVariant::UNCOMPRESSED);
 
         let kv = option_list(&[("line_sep", "\r"), ("compression", "bzip2")]);
-        let options = resolve_text_write_options(vec![kv])
+        let options = TextWriteOptions::resolve(&state, vec![kv])
             .and_then(|o| o.into_table_options())
             .map_err(datafusion_common::DataFusionError::from)?;
         assert_eq!(options.line_sep, Some('\r'));

@@ -256,15 +256,37 @@ impl DriverActor {
             .get_task_state(&key)
             .is_some_and(|x| matches!(x, TaskState::Created))
         {
-            let message = "task scheduling timeout".to_string();
-            let cause = CommonErrorCause::Execution(message.clone());
-            ctx.send(DriverEvent::UpdateTask {
-                key,
-                status: TaskStatus::Failed,
-                message: Some(message),
-                cause: Some(cause),
-                sequence: None,
-            })
+            // The task has not been assigned to a worker within the launch
+            // timeout. If workers are still launching, the task can be assigned
+            // once one registers (`handle_register_worker` runs pending tasks),
+            // so reschedule the probe instead of failing. This keeps long,
+            // many-stage jobs alive while the worker pool scales between stages.
+            // It cannot loop forever: a pending worker that never registers is
+            // failed at `worker_launch_timeout`, after which there are no pending
+            // workers and the task fails below.
+            //
+            // Re-probe at `worker_launch_timeout` (capped by `task_launch_timeout`)
+            // rather than a full `task_launch_timeout`: that is the window a
+            // pending worker takes to register or be failed, so once the last
+            // pending worker resolves the task fails promptly instead of waiting
+            // another full launch window.
+            if self.worker_pool.has_pending_workers() {
+                let delay = self
+                    .options
+                    .worker_launch_timeout
+                    .min(self.options.task_launch_timeout);
+                ctx.send_with_delay(DriverEvent::ProbePendingTask { key }, delay);
+            } else {
+                let message = "task scheduling timeout".to_string();
+                let cause = CommonErrorCause::Execution(message.clone());
+                ctx.send(DriverEvent::UpdateTask {
+                    key,
+                    status: TaskStatus::Failed,
+                    message: Some(message),
+                    cause: Some(cause),
+                    sequence: None,
+                })
+            }
         }
         ActorAction::Continue
     }

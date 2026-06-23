@@ -16,6 +16,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Schema as ArrowSchema};
 use datafusion_common::{DataFusionError, Result};
+use sail_common_datafusion::variant::variant_storage_types_equivalent;
 
 use crate::spec::schema::{Schema as IcebergSchema, SchemaBuilder};
 use crate::spec::types::{ListType, MapType, NestedField, PrimitiveType, StructType, Type};
@@ -120,13 +121,17 @@ impl SchemaEvolver {
     }
 
     fn field_types_compatible(table_field: &Field, input_field: &Field) -> bool {
-        Self::field_types_equivalent(table_field.data_type(), input_field.data_type())
+        variant_storage_types_equivalent(table_field.data_type(), input_field.data_type())
+            || Self::field_types_equivalent(table_field.data_type(), input_field.data_type())
             || Self::is_allowed_type_promotion(table_field.data_type(), input_field.data_type())
             || Self::is_safe_write_cast(table_field.data_type(), input_field.data_type())
     }
 
     fn field_types_equivalent(table_type: &DataType, input_type: &DataType) -> bool {
         if table_type == input_type {
+            return true;
+        }
+        if variant_storage_types_equivalent(table_type, input_type) {
             return true;
         }
 
@@ -524,7 +529,13 @@ impl SchemaEvolver {
     }
 
     pub fn assign_schema_field_ids(schema: &IcebergSchema) -> Result<IcebergSchema> {
-        let mut next_field_id = 1;
+        Self::assign_schema_field_ids_starting_at(schema, 1)
+    }
+
+    pub fn assign_schema_field_ids_starting_at(
+        schema: &IcebergSchema,
+        mut next_field_id: i32,
+    ) -> Result<IcebergSchema> {
         let mut new_fields = Vec::with_capacity(schema.fields().len());
         for field in schema.fields() {
             let mut cloned = field.as_ref().clone();
@@ -1156,6 +1167,8 @@ mod tests {
             last_partition_id,
             properties: HashMap::new(),
             current_snapshot_id: None,
+            next_row_id: None,
+            encryption_keys: vec![],
             snapshots: vec![],
             snapshot_log: vec![],
             metadata_log: vec![],

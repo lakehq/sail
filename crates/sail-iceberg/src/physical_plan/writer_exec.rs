@@ -10,11 +10,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::any::Any;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::compute::concat_batches;
+use datafusion::arrow::datatypes::{Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::{Distribution, EquivalenceProperties};
@@ -27,9 +27,8 @@ use datafusion::physical_plan::{
 use datafusion_common::{internal_err, DataFusionError, Result};
 use futures::stream::once;
 use futures::StreamExt;
-use object_store::ObjectStoreExt;
 use parquet::file::properties::WriterProperties;
-use sail_common_datafusion::catalog::CatalogPartitionField;
+use sail_common_datafusion::catalog::{CatalogPartitionField, LakehouseExecutionContext};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
@@ -46,6 +45,10 @@ use crate::spec::partition::{
 };
 use crate::spec::schema::Schema as IcebergSchema;
 use crate::spec::{TableMetadata, TableRequirement};
+use crate::table::metadata_loader::metadata_location_to_object_path_string;
+use crate::table_format::{
+    catalog_managed_iceberg_from_properties, metadata_location_from_properties,
+};
 use crate::utils::get_object_store_from_context;
 use crate::utils::partition_transform::{
     catalog_partition_field_from_iceberg, format_partition_expr,
@@ -60,6 +63,7 @@ pub struct IcebergWriterExec {
     sink_mode: PhysicalSinkMode,
     table_exists: bool,
     options: IcebergWriterExecOptions,
+    logical_input_schema: Option<SchemaRef>,
     cache: Arc<PlanProperties>,
 }
 
@@ -95,6 +99,7 @@ impl IcebergWriterExec {
         sink_mode: PhysicalSinkMode,
         table_exists: bool,
         options: IcebergWriterExecOptions,
+        logical_input_schema: Option<SchemaRef>,
     ) -> Self {
         let schema = match iceberg_action_schema() {
             Ok(s) => s,
@@ -111,6 +116,7 @@ impl IcebergWriterExec {
             sink_mode,
             table_exists,
             options,
+            logical_input_schema,
             cache,
         }
     }
@@ -144,8 +150,46 @@ impl IcebergWriterExec {
         &self.options
     }
 
+    pub fn lakehouse_table(&self) -> Option<&LakehouseExecutionContext> {
+        self.options.lakehouse_table.as_ref()
+    }
+
     pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
         &self.input
+    }
+
+    pub fn logical_input_schema(&self) -> Option<&SchemaRef> {
+        self.logical_input_schema.as_ref()
+    }
+
+    fn input_schema_with_logical_metadata(&self) -> SchemaRef {
+        let physical_schema = self.input.schema();
+        let Some(logical_schema) = self.logical_input_schema.as_ref() else {
+            return physical_schema;
+        };
+
+        let fields = physical_schema
+            .fields()
+            .iter()
+            .map(|physical_field| {
+                let Ok(logical_field) = logical_schema.field_with_name(physical_field.name())
+                else {
+                    return Arc::clone(physical_field);
+                };
+                if logical_field.metadata().is_empty() {
+                    return Arc::clone(physical_field);
+                }
+
+                let mut metadata = physical_field.metadata().clone();
+                metadata.extend(logical_field.metadata().clone());
+                Arc::new(physical_field.as_ref().clone().with_metadata(metadata))
+            })
+            .collect::<Vec<_>>();
+
+        Arc::new(Schema::new_with_metadata(
+            fields,
+            physical_schema.metadata().clone(),
+        ))
     }
 
     fn get_schema_mode(
@@ -173,56 +217,73 @@ impl IcebergWriterExec {
     }
 
     fn resolve_data_dir(table_meta: &TableMetadata, table_url: &Url) -> String {
-        let data_dir = "data".to_string();
+        Self::resolve_data_dir_from_properties(&table_meta.properties, table_url)
+    }
+
+    fn resolve_data_dir_from_property_value(
+        value: Option<&str>,
+        table_url: &Url,
+    ) -> Option<String> {
+        let raw = value?.trim();
+        if raw.is_empty() {
+            return None;
+        }
+
         let base_path = crate::utils::url_to_object_path(table_url).ok();
-        if let Some(val) = table_meta
-            .properties
-            .get("write.data.path")
-            .or_else(|| table_meta.properties.get("write.folder-storage.path"))
-        {
-            let raw = val.trim();
-            if !raw.is_empty() {
-                if let Ok(prop_url) = Url::parse(raw) {
-                    if prop_url.scheme() == table_url.scheme()
-                        && prop_url.host_str() == table_url.host_str()
-                    {
-                        if let (Ok(prop_path), Some(base_path)) = (
-                            crate::utils::url_to_object_path(&prop_url),
-                            base_path.as_ref(),
-                        ) {
-                            let prop_str = prop_path.as_ref();
-                            let base_str = base_path.as_ref();
-                            if let Some(stripped) = prop_str.strip_prefix(base_str) {
-                                let rel = stripped.trim_start_matches('/').trim_matches('/');
-                                if !rel.is_empty() {
-                                    return rel.to_string();
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    let prop_path = raw.replace('\\', "/");
-                    if prop_path.starts_with('/') {
-                        if let Some(base_path) = base_path.as_ref() {
-                            let base_str = base_path.as_ref();
-                            let prop_no_leading = prop_path.trim_start_matches('/');
-                            if let Some(stripped) = prop_no_leading.strip_prefix(base_str) {
-                                let rel = stripped.trim_start_matches('/').trim_matches('/');
-                                if !rel.is_empty() {
-                                    return rel.to_string();
-                                }
-                            }
-                        }
-                    } else {
-                        let rel = prop_path.trim_matches('/');
+        if let Ok(prop_url) = Url::parse(raw) {
+            if prop_url.scheme() == table_url.scheme()
+                && prop_url.host_str() == table_url.host_str()
+            {
+                if let (Ok(prop_path), Some(base_path)) = (
+                    crate::utils::url_to_object_path(&prop_url),
+                    base_path.as_ref(),
+                ) {
+                    let prop_str = prop_path.as_ref();
+                    let base_str = base_path.as_ref();
+                    if let Some(stripped) = prop_str.strip_prefix(base_str) {
+                        let rel = stripped.trim_start_matches('/').trim_matches('/');
                         if !rel.is_empty() {
-                            return rel.to_string();
+                            return Some(rel.to_string());
                         }
                     }
                 }
             }
+        } else {
+            let prop_path = raw.replace('\\', "/");
+            if prop_path.starts_with('/') {
+                if let Some(base_path) = base_path.as_ref() {
+                    let base_str = base_path.as_ref();
+                    let prop_no_leading = prop_path.trim_start_matches('/');
+                    if let Some(stripped) = prop_no_leading.strip_prefix(base_str) {
+                        let rel = stripped.trim_start_matches('/').trim_matches('/');
+                        if !rel.is_empty() {
+                            return Some(rel.to_string());
+                        }
+                    }
+                }
+            } else {
+                let rel = prop_path.trim_matches('/');
+                if !rel.is_empty() {
+                    return Some(rel.to_string());
+                }
+            }
         }
-        data_dir
+
+        None
+    }
+
+    fn resolve_data_dir_from_properties(
+        properties: &std::collections::HashMap<String, String>,
+        table_url: &Url,
+    ) -> String {
+        Self::resolve_data_dir_from_property_value(
+            properties
+                .get("write.data.path")
+                .or_else(|| properties.get("write.folder-storage.path"))
+                .map(String::as_str),
+            table_url,
+        )
+        .unwrap_or_else(|| "data".to_string())
     }
 }
 
@@ -230,10 +291,6 @@ impl IcebergWriterExec {
 impl ExecutionPlan for IcebergWriterExec {
     fn name(&self) -> &'static str {
         "IcebergWriterExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -262,6 +319,7 @@ impl ExecutionPlan for IcebergWriterExec {
             self.sink_mode.clone(),
             self.table_exists,
             self.options.clone(),
+            self.logical_input_schema.clone(),
         )))
     }
 
@@ -287,8 +345,9 @@ impl ExecutionPlan for IcebergWriterExec {
         let partition_columns = self.partition_columns.clone();
         let sink_mode = self.sink_mode.clone();
         let table_exists = self.table_exists;
-        let input_schema = self.input.schema();
-        let schema_mode = Self::get_schema_mode(&self.options, &sink_mode)?;
+        let input_schema = self.input_schema_with_logical_metadata();
+        let options = self.options.clone();
+        let schema_mode = Self::get_schema_mode(&options, &sink_mode)?;
 
         let schema = self.schema();
         let future = async move {
@@ -326,20 +385,29 @@ impl ExecutionPlan for IcebergWriterExec {
                 spec_id_val,
                 commit_schema,
                 commit_requirements,
+                variant_shredding,
             ) = if table_exists {
                 let latest_meta =
-                    crate::table::find_latest_metadata_file(&object_store, &table_url).await?;
-                let meta_path = object_store::path::Path::from(latest_meta.as_str());
-                let bytes = object_store
-                    .get(&meta_path)
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?
-                    .bytes()
-                    .await
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    if catalog_managed_iceberg_from_properties(&options.table_properties) {
+                        match metadata_location_from_properties(&options.table_properties) {
+                            Some(location) => metadata_location_to_object_path_string(&location)?,
+                            None => {
+                                crate::table::find_latest_metadata_file(&object_store, &table_url)
+                                    .await?
+                            }
+                        }
+                    } else {
+                        crate::table::find_latest_metadata_file(&object_store, &table_url).await?
+                    };
+                let bytes = crate::table::metadata_loader::load_metadata_file_bytes(
+                    &object_store,
+                    &latest_meta,
+                )
+                .await?;
                 let table_meta = TableMetadata::from_json(&bytes)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
                 let data_dir = Self::resolve_data_dir(&table_meta, &table_url);
+                let variant_shredding = options.variant_shredding_config(&table_meta.properties)?;
                 // FIXME: Concurrency Issue with Schema Evolution.
                 // This requires a mechanism to reserve Field IDs or restart the Writer task upon conflict.
                 let schema_outcome =
@@ -412,8 +480,14 @@ impl ExecutionPlan for IcebergWriterExec {
                     spec_id_val,
                     commit_schema,
                     requirements,
+                    variant_shredding,
                 )
             } else {
+                let (_, metadata_properties) =
+                    crate::properties::metadata_properties_from_table_properties(
+                        &options.table_properties,
+                    )?;
+                let variant_shredding = options.variant_shredding_config(&metadata_properties)?;
                 let input_arrow_schema = input_schema.as_ref().clone();
                 let mut iceberg_schema = arrow_schema_to_iceberg(&input_arrow_schema)?;
                 iceberg_schema = SchemaEvolver::assign_schema_field_ids(&iceberg_schema)?;
@@ -446,10 +520,20 @@ impl ExecutionPlan for IcebergWriterExec {
                     iceberg_schema.clone(),
                     Arc::new(iceberg_schema_to_arrow(&iceberg_schema)?),
                     Some(spec),
-                    "data".to_string(),
+                    Self::resolve_data_dir_from_property_value(
+                        options
+                            .write_data_path
+                            .as_deref()
+                            .or(options.write_folder_storage_path.as_deref()),
+                        &table_url,
+                    )
+                    .unwrap_or_else(|| {
+                        Self::resolve_data_dir_from_properties(&metadata_properties, &table_url)
+                    }),
                     sid,
                     Some(iceberg_schema),
                     Vec::new(),
+                    variant_shredding,
                 )
             };
 
@@ -479,6 +563,7 @@ impl ExecutionPlan for IcebergWriterExec {
                 stats_columns: None,
                 iceberg_schema: Arc::new(iceberg_schema.clone()),
                 partition_spec: unbound_spec,
+                variant_shredding,
             };
 
             let writer_root = crate::utils::url_to_object_path(&table_url)
@@ -517,6 +602,8 @@ impl ExecutionPlan for IcebergWriterExec {
                     crate::spec::Operation::Append
                 },
                 requirements: commit_requirements,
+                table_properties: options.table_properties,
+                lakehouse_table: options.lakehouse_table,
                 schema: commit_schema.clone(),
                 partition_spec: if !table_exists
                     || matches!(schema_mode, Some(SchemaMode::Overwrite))

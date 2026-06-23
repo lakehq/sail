@@ -10,7 +10,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::any::Any;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -34,17 +33,20 @@ use datafusion::logical_expr::{
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
+use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use object_store::ObjectMeta;
+use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 use url::Url;
 
-use crate::datasource::expr_adapter::IcebergPhysicalExprAdapterFactory;
 use crate::datasource::expressions::simplify_expr;
-use crate::datasource::pruning::{prune_files, prune_manifests_by_partition_summaries};
+use crate::datasource::pruning::{
+    prune_data_files_by_partition_values, prune_files, prune_manifests_by_partition_summaries,
+};
 use crate::datasource::type_converter::iceberg_schema_to_arrow;
 use crate::io::{
     load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list, StoreContext,
@@ -69,7 +71,7 @@ pub struct IcebergTableProvider {
     /// The current schema of the table
     schema: Schema,
     /// The current snapshot of the table
-    snapshot: Snapshot,
+    snapshot: Option<Snapshot>,
     /// All partition specs referenced by the table
     partition_specs: Vec<PartitionSpec>,
     /// Default partition spec id (for schema ordering / partition metadata)
@@ -112,7 +114,40 @@ impl IcebergTableProvider {
         Ok(Self {
             table_uri: table_uri_str,
             schema,
-            snapshot,
+            snapshot: Some(snapshot),
+            partition_specs,
+            default_spec_id,
+            arrow_schema,
+            metadata_as_data_read: false,
+        })
+    }
+
+    /// Create a provider for an Iceberg table that has metadata but no current
+    /// snapshot yet, such as a table created by plain `CREATE TABLE`.
+    pub fn new_empty(
+        table_uri: impl ToString,
+        schema: Schema,
+        partition_specs: Vec<PartitionSpec>,
+        default_spec_id: i32,
+    ) -> Result<Self> {
+        let table_uri_str = table_uri.to_string();
+        log::trace!("Creating empty table provider for: {}", table_uri_str);
+
+        let arrow_schema = iceberg_schema_to_arrow(&schema).map_err(|e| {
+            log::trace!("Failed to convert schema to Arrow: {:?}", e);
+            e
+        })?;
+        let arrow_schema = Arc::new(Self::reorder_arrow_schema_for_identity_partitions(
+            &schema,
+            &partition_specs,
+            default_spec_id,
+            &arrow_schema,
+        ));
+
+        Ok(Self {
+            table_uri: table_uri_str,
+            schema,
+            snapshot: None,
             partition_specs,
             default_spec_id,
             arrow_schema,
@@ -192,13 +227,31 @@ impl IcebergTableProvider {
     }
 
     /// Get the current snapshot
-    pub fn current_snapshot(&self) -> &Snapshot {
-        &self.snapshot
+    pub fn current_snapshot(&self) -> Option<&Snapshot> {
+        self.snapshot.as_ref()
+    }
+
+    fn projected_arrow_schema(&self, projection: Option<&Vec<usize>>) -> Result<Arc<ArrowSchema>> {
+        match projection {
+            Some(projection) => {
+                let fields = projection
+                    .iter()
+                    .map(|idx| self.arrow_schema.field(*idx).clone())
+                    .collect::<Vec<_>>();
+                Ok(Arc::new(ArrowSchema::new(fields)))
+            }
+            None => Ok(self.arrow_schema.clone()),
+        }
     }
 
     /// Load manifest list from snapshot
     async fn load_manifest_list(&self, store_ctx: &StoreContext) -> Result<ManifestList> {
-        let manifest_list_str = self.snapshot.manifest_list();
+        let snapshot = self.snapshot.as_ref().ok_or_else(|| {
+            datafusion::common::DataFusionError::Plan(
+                "Iceberg table has no current snapshot".to_string(),
+            )
+        })?;
+        let manifest_list_str = snapshot.manifest_list();
         log::trace!("Manifest list path: {}", manifest_list_str);
         let ml = io_load_manifest_list(store_ctx, manifest_list_str).await?;
         Ok(ml)
@@ -232,6 +285,7 @@ impl IcebergTableProvider {
 
             let partition_spec_id = manifest_file.partition_spec_id;
             let parent_seq = manifest_file.sequence_number;
+            let mut inherited_next_row_id = manifest_file.first_row_id;
 
             // Collect (DataFile, seq) pairs preserving inheritance.
             let mut manifest_pairs: Vec<(DataFile, i64)> = Vec::new();
@@ -245,6 +299,12 @@ impl IcebergTableProvider {
                 }
                 let mut df = entry.data_file.clone();
                 df.partition_spec_id = partition_spec_id;
+                if df.first_row_id.is_none() {
+                    df.first_row_id = inherited_next_row_id;
+                }
+                if let Some(next_row_id) = &mut inherited_next_row_id {
+                    *next_row_id += df.record_count as i64;
+                }
                 let seq = entry.sequence_number.unwrap_or(parent_seq);
                 manifest_pairs.push((df, seq));
             }
@@ -252,13 +312,21 @@ impl IcebergTableProvider {
             // Early prune at manifest entry level using DataFusion predicate over metrics.
             if !filters.is_empty() && !manifest_pairs.is_empty() {
                 // Preserve pairing by keying on file_path before/after prune.
-                let (files_only, seq_only): (Vec<DataFile>, Vec<i64>) =
+                let (mut files_only, seq_only): (Vec<DataFile>, Vec<i64>) =
                     manifest_pairs.iter().cloned().unzip();
                 let seq_by_path: HashMap<String, i64> = files_only
                     .iter()
                     .map(|f| f.file_path.clone())
                     .zip(seq_only)
                     .collect();
+                if let Some(spec) = spec_map.get(&partition_spec_id) {
+                    files_only = prune_data_files_by_partition_values(
+                        files_only,
+                        &self.schema,
+                        spec,
+                        filters,
+                    );
+                }
                 let (kept, _mask) = crate::datasource::pruning::prune_files(
                     session,
                     filters,
@@ -323,8 +391,8 @@ impl IcebergTableProvider {
                     partition_spec_id,
                     is_unpartitioned_spec: is_unpartitioned,
                 };
-                // Guard: reject v3 deletion vectors explicitly. Silently skipping would
-                // corrupt read results.
+                // TODO(V3): Implement Puffin metadata parsing and RoaringBitmap delete application.
+                // Guard: reject v3 deletion vectors explicitly. Silently skipping would corrupt read results.
                 if file_ref.is_deletion_vector() {
                     return plan_err!(
                         "Iceberg v3 deletion vectors are not yet supported \
@@ -387,8 +455,9 @@ impl IcebergTableProvider {
                 range: None,
                 statistics: Some(Arc::new(self.create_file_statistics(&data_file))),
                 ordering: None,
-                extensions: None,
+                extensions: Default::default(),
                 metadata_size_hint: None,
+                table_reference: None,
             };
 
             partitioned_files.push(partitioned_file);
@@ -612,10 +681,6 @@ impl IcebergTableProvider {
 
 #[async_trait]
 impl TableProvider for IcebergTableProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> Arc<ArrowSchema> {
         self.arrow_schema.clone()
     }
@@ -641,6 +706,12 @@ impl TableProvider for IcebergTableProvider {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         log::trace!("Starting scan for table: {}", self.table_uri);
 
+        let Some(snapshot) = self.snapshot.as_ref() else {
+            return Ok(Arc::new(EmptyExec::new(
+                self.projected_arrow_schema(projection)?,
+            )));
+        };
+
         if self.metadata_as_data_read {
             return self
                 .scan_metadata_as_data(session, projection, filters, limit)
@@ -653,10 +724,7 @@ impl TableProvider for IcebergTableProvider {
         let store_ctx = StoreContext::new(base_store.clone(), &table_url)?;
         log::trace!("Got object store");
 
-        log::trace!(
-            "Loading manifest list from: {}",
-            self.snapshot.manifest_list()
-        );
+        log::trace!("Loading manifest list from: {}", snapshot.manifest_list());
         let manifest_list = self.load_manifest_list(&store_ctx).await?;
         log::trace!("Loaded {} manifest files", manifest_list.entries().len());
 
@@ -758,7 +826,7 @@ impl TableProvider for IcebergTableProvider {
                 .with_statistics(table_stats)
                 .with_projection_indices(expanded_projection)?
                 .with_limit(limit)
-                .with_expr_adapter(Some(Arc::new(IcebergPhysicalExprAdapterFactory {})
+                .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})
                     as Arc<dyn PhysicalExprAdapterFactory>))
                 .build();
             return Ok(DataSourceExec::from_data_source(file_scan_config));
@@ -787,7 +855,7 @@ impl TableProvider for IcebergTableProvider {
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(file_groups)
-                    .with_expr_adapter(Some(Arc::new(IcebergPhysicalExprAdapterFactory {})
+                    .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})
                         as Arc<dyn PhysicalExprAdapterFactory>))
                     .build();
             branches.push(DataSourceExec::from_data_source(file_scan_config));
@@ -801,7 +869,7 @@ impl TableProvider for IcebergTableProvider {
             let file_scan_config =
                 FileScanConfigBuilder::new(object_store_url.clone(), parquet_source)
                     .with_file_groups(vec![FileGroup::from(partitioned)])
-                    .with_expr_adapter(Some(Arc::new(IcebergPhysicalExprAdapterFactory {})
+                    .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})
                         as Arc<dyn PhysicalExprAdapterFactory>))
                     .build();
             let data_scan: Arc<dyn ExecutionPlan> =
@@ -889,7 +957,9 @@ impl TableProvider for IcebergTableProvider {
 impl IcebergTableProvider {
     fn classify_pushdown_for_expr(&self, expr: &Expr) -> TableProviderFilterPushDown {
         use TableProviderFilterPushDown as FP;
-        // Identity partition columns get Exact (Eq/IN) or Inexact (ranges)
+        // Identity partition columns can satisfy Eq/IN at partition level. Transformed
+        // partition source columns are useful for pruning but remain inexact because the
+        // original row predicate must still be evaluated.
         match expr {
             Expr::BinaryExpr(BinaryExpr { left, op, right }) => {
                 let (l, r) = (Self::strip_expr(left), Self::strip_expr(right));
@@ -898,22 +968,27 @@ impl IcebergTableProvider {
                         if let (Some(col), true) =
                             (self.expr_as_column_name(l), self.expr_is_literal(r))
                         {
-                            if self.is_identity_partition_col(&col) {
-                                return FP::Exact;
+                            if let Some(pushdown) = self.eq_in_pushdown_for_partition_col(&col) {
+                                return pushdown;
                             }
                         }
                         if let (Some(col), true) =
                             (self.expr_as_column_name(r), self.expr_is_literal(l))
                         {
-                            if self.is_identity_partition_col(&col) {
-                                return FP::Exact;
+                            if let Some(pushdown) = self.eq_in_pushdown_for_partition_col(&col) {
+                                return pushdown;
                             }
                         }
                         FP::Unsupported
                     }
                     Operator::Gt | Operator::GtEq | Operator::Lt | Operator::LtEq => {
                         if let Some(col) = self.expr_as_column_name(l) {
-                            if self.expr_is_literal(r) && self.is_identity_partition_col(&col) {
+                            if self.expr_is_literal(r) && self.is_partition_source_col(&col) {
+                                return FP::Inexact;
+                            }
+                        }
+                        if let Some(col) = self.expr_as_column_name(r) {
+                            if self.expr_is_literal(l) && self.is_partition_source_col(&col) {
                                 return FP::Inexact;
                             }
                         }
@@ -926,8 +1001,9 @@ impl IcebergTableProvider {
                 let e = Self::strip_expr(&in_list.expr);
                 if let Some(col) = self.expr_as_column_name(e) {
                     let all_literals = in_list.list.iter().all(|it| self.expr_is_literal(it));
-                    if all_literals && self.is_identity_partition_col(&col) {
-                        TableProviderFilterPushDown::Exact
+                    if all_literals {
+                        self.eq_in_pushdown_for_partition_col(&col)
+                            .unwrap_or(TableProviderFilterPushDown::Unsupported)
                     } else {
                         TableProviderFilterPushDown::Unsupported
                     }
@@ -945,20 +1021,29 @@ impl IcebergTableProvider {
         for f in filters.iter() {
             match self.classify_pushdown_for_expr(f) {
                 TableProviderFilterPushDown::Exact => {
-                    pruning_filters.push(f.clone());
+                    Self::push_filter_once(&mut pruning_filters, f);
                     // Even if partition pruning is "exact", we still must apply the filter at scan
                     // time. Pruning is an optimization and can be conservative when stats are
                     // missing; correctness requires retaining the predicate.
-                    parquet_pushdown_filters.push(f.clone());
+                    Self::push_filter_once(&mut parquet_pushdown_filters, f);
                 }
                 TableProviderFilterPushDown::Inexact => {
-                    pruning_filters.push(f.clone());
-                    parquet_pushdown_filters.push(f.clone());
+                    Self::push_filter_once(&mut pruning_filters, f);
                 }
                 TableProviderFilterPushDown::Unsupported => {}
             }
         }
         (pruning_filters, parquet_pushdown_filters)
+    }
+
+    fn push_filter_once(filters: &mut Vec<Expr>, filter: &Expr) {
+        let filter_key = filter.to_string();
+        if !filters
+            .iter()
+            .any(|existing| existing.to_string() == filter_key)
+        {
+            filters.push(filter.clone());
+        }
     }
 
     fn strip_expr(expr: &Expr) -> &Expr {
@@ -980,19 +1065,40 @@ impl IcebergTableProvider {
         matches!(expr, Expr::Literal(_, _))
     }
 
-    fn is_identity_partition_col(&self, col_name: &str) -> bool {
-        // Map identity partition source_id to schema field names
-        let mut names = std::collections::HashSet::new();
+    fn eq_in_pushdown_for_partition_col(
+        &self,
+        col_name: &str,
+    ) -> Option<TableProviderFilterPushDown> {
+        let only_identity = self.partition_source_col_only_uses_identity(col_name)?;
+        if only_identity {
+            Some(TableProviderFilterPushDown::Exact)
+        } else {
+            Some(TableProviderFilterPushDown::Inexact)
+        }
+    }
+
+    fn is_partition_source_col(&self, col_name: &str) -> bool {
+        self.partition_source_col_only_uses_identity(col_name)
+            .is_some()
+    }
+
+    fn partition_source_col_only_uses_identity(&self, col_name: &str) -> Option<bool> {
+        let mut found = false;
+        let mut only_identity = true;
         for spec in &self.partition_specs {
             for pf in spec.fields().iter() {
-                if matches!(pf.transform, crate::spec::transform::Transform::Identity) {
-                    if let Some(field) = self.schema.field_by_id(pf.source_id) {
-                        names.insert(field.name.clone());
+                if matches!(pf.transform, Transform::Void | Transform::Unknown) {
+                    continue;
+                }
+                if let Some(field) = self.schema.field_by_id(pf.source_id) {
+                    if field.name == col_name {
+                        found = true;
+                        only_identity &= matches!(pf.transform, Transform::Identity);
                     }
                 }
             }
         }
-        names.contains(col_name)
+        found.then_some(only_identity)
     }
 
     fn rebuild_logical_schema_for_filters(
@@ -1079,15 +1185,21 @@ impl IcebergTableProvider {
             );
         }
 
+        // TODO: Apply transform-aware partition pruning here
+        let snapshot = self.snapshot.as_ref().ok_or_else(|| {
+            datafusion::common::DataFusionError::Plan(
+                "Iceberg table has no current snapshot".to_string(),
+            )
+        })?;
         let manifest_scan: Arc<dyn ExecutionPlan> = Arc::new(IcebergManifestScanExec::new(
             self.table_uri.clone(),
-            self.snapshot.clone(),
+            snapshot.clone(),
         ));
 
         let discovery: Arc<dyn ExecutionPlan> = Arc::new(IcebergDiscoveryExec::new(
             manifest_scan,
             self.table_uri.clone(),
-            self.snapshot.snapshot_id(),
+            snapshot.snapshot_id(),
             false, // full data file scan, not partition-only
         )?);
 

@@ -18,12 +18,7 @@ use crate::resolver::PlanResolver;
 /// contain a UDF in a sub-expression.
 fn expr_is_python_udf(expr: &Expr) -> bool {
     match expr {
-        Expr::ScalarFunction(sf) => sf
-            .func
-            .inner()
-            .as_any()
-            .downcast_ref::<PySparkUDF>()
-            .is_some(),
+        Expr::ScalarFunction(sf) => sf.func.inner().is::<PySparkUDF>(),
         _ => false,
     }
 }

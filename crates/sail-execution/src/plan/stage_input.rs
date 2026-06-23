@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt;
 use std::fmt::Formatter;
 use std::sync::Arc;
@@ -44,10 +43,6 @@ where
 {
     fn name(&self) -> &str {
         "StageInputExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, StructArray};
@@ -67,10 +66,6 @@ impl StructFunction {
 }
 
 impl ScalarUDFImpl for StructFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "struct"
     }

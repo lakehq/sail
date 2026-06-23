@@ -3,13 +3,11 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::Schema;
 use datafusion::execution::TaskContext;
 use datafusion::physical_expr::Partitioning;
-use datafusion_proto::physical_plan::from_proto::parse_physical_expr;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
-use datafusion_proto::protobuf::PhysicalExprNode;
-use prost::Message;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
+use crate::proto::decode::try_decode_physical_expr;
 use crate::stream::reader::TaskReadLocation;
 use crate::stream::writer::{LocalStreamStorage, TaskWriteLocation};
 use crate::task::gen;
@@ -63,6 +61,9 @@ pub enum TaskOutputDistribution {
         channels: usize,
     },
     RoundRobin {
+        channels: usize,
+    },
+    RoundRobinRow {
         channels: usize,
     },
 }
@@ -422,6 +423,13 @@ impl From<TaskOutputDistribution> for gen::TaskOutputDistribution {
                     },
                 )
             }
+            TaskOutputDistribution::RoundRobinRow { channels } => {
+                gen::task_output_distribution::Kind::RoundRobinRow(
+                    gen::TaskOutputRoundRobinRowDistribution {
+                        channels: channels as u64,
+                    },
+                )
+            }
         };
         gen::TaskOutputDistribution { kind: Some(kind) }
     }
@@ -442,6 +450,11 @@ impl TryFrom<gen::TaskOutputDistribution> for TaskOutputDistribution {
             Some(gen::task_output_distribution::Kind::RoundRobin(
                 gen::TaskOutputRoundRobinDistribution { channels },
             )) => Ok(TaskOutputDistribution::RoundRobin {
+                channels: channels as usize,
+            }),
+            Some(gen::task_output_distribution::Kind::RoundRobinRow(
+                gen::TaskOutputRoundRobinRowDistribution { channels },
+            )) => Ok(TaskOutputDistribution::RoundRobinRow {
                 channels: channels as usize,
             }),
             None => Err(ExecutionError::InvalidArgument(
@@ -549,6 +562,7 @@ impl TaskOutput {
         match self.distribution {
             TaskOutputDistribution::Hash { channels, .. } => channels,
             TaskOutputDistribution::RoundRobin { channels, .. } => channels,
+            TaskOutputDistribution::RoundRobinRow { channels, .. } => channels,
         }
     }
 
@@ -595,20 +609,23 @@ impl TaskOutput {
                 let keys = keys
                     .iter()
                     .map(|k| {
-                        parse_physical_expr(
-                            &PhysicalExprNode::decode(k.as_ref())?,
-                            ctx,
-                            schema,
-                            codec,
-                        )
-                        .map_err(|e| e.into())
+                        try_decode_physical_expr(ctx, codec, k.as_ref(), schema)
+                            .map_err(|e| e.into())
                     })
                     .collect::<ExecutionResult<Vec<_>>>()?;
                 Ok(Partitioning::Hash(keys, *channels))
             }
-            TaskOutputDistribution::RoundRobin { channels } => {
+            TaskOutputDistribution::RoundRobin { channels }
+            | TaskOutputDistribution::RoundRobinRow { channels } => {
                 Ok(Partitioning::RoundRobinBatch(*channels))
             }
         }
+    }
+
+    pub fn row_based(&self) -> bool {
+        matches!(
+            &self.distribution,
+            TaskOutputDistribution::RoundRobinRow { .. }
+        )
     }
 }

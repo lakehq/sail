@@ -1,5 +1,7 @@
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
 
 use datafusion::common::tree_node::{Transformed, TreeNode};
 use datafusion::config::ConfigOptions;
@@ -10,7 +12,9 @@ use datafusion::physical_plan::{displayable, ExecutionPlan};
 use log::{trace, warn};
 
 use crate::join_reorder::builder::{ColumnMap, ColumnMapEntry, GraphBuilder};
-use crate::join_reorder::enumerator::PlanEnumerator;
+use crate::join_reorder::enumerator::{
+    JoinReorderFallbackReason, JoinReorderStatus, PlanEnumerator,
+};
 use crate::join_reorder::graph::StableColumn;
 use crate::join_reorder::reconstructor::PlanReconstructor;
 use crate::PhysicalOptimizerRule;
@@ -24,12 +28,104 @@ mod graph;
 mod join_set;
 mod reconstructor;
 
-#[derive(Default)]
-pub struct JoinReorder {}
+#[derive(Debug, Clone)]
+pub struct JoinReorderOptions {
+    pub max_relations: usize,
+    pub emit_threshold: usize,
+    pub enable_fact_anchor_heuristic: bool,
+    pub fact_anchor_min_relations: usize,
+    pub fact_anchor_relative_threshold: f64,
+    pub fact_anchor_min_share: f64,
+    pub fact_anchor_penalty_multiplier: f64,
+    pub build_side_weight: f64,
+    pub probe_side_weight: f64,
+    pub output_weight: f64,
+}
+
+impl Default for JoinReorderOptions {
+    fn default() -> Self {
+        Self {
+            max_relations: 12,
+            emit_threshold: 10_000,
+            enable_fact_anchor_heuristic: true,
+            fact_anchor_min_relations: 5,
+            fact_anchor_relative_threshold: 0.25,
+            fact_anchor_min_share: 0.55,
+            fact_anchor_penalty_multiplier: 8.0,
+            build_side_weight: 1.0,
+            probe_side_weight: 0.1,
+            output_weight: 1.0,
+        }
+    }
+}
+
+pub struct JoinReorder {
+    options: JoinReorderOptions,
+    /// Per-region outcome trace recorded by `try_optimize_region` for tests.
+    #[cfg(test)]
+    recorded_outcomes: Mutex<Vec<RegionOutcome>>,
+}
+
+/// Outcome of running the enumerator on a single reorderable region.
+///
+/// `path` records which terminal branch the rule took, exposed primarily for tests that need
+/// to verify the DP/greedy fallback dispatcher is wired correctly without relying on log
+/// inspection or end-to-end performance measurements.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegionOutcome {
+    pub relation_count: usize,
+    pub emit_count: usize,
+    pub path: RegionOutcomePath,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RegionOutcomePath {
+    /// DP enumeration completed and produced a full plan.
+    DpCompleted,
+    /// DP gave up because the emit budget was exhausted; greedy left-deep was used instead.
+    GreedyFallbackEmitThreshold,
+    /// DP completed without producing a full plan (e.g. disconnected graph); greedy fallback.
+    GreedyFallbackFullPlanMissing,
+}
 
 impl JoinReorder {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(options: JoinReorderOptions) -> Self {
+        Self {
+            options,
+            #[cfg(test)]
+            recorded_outcomes: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Drain and return the per-region outcomes recorded since the last call. Intended for
+    /// tests; production code should not depend on this trace.
+    #[cfg(test)]
+    pub fn take_recorded_outcomes(&self) -> Vec<RegionOutcome> {
+        match self.recorded_outcomes.lock() {
+            Ok(mut guard) => std::mem::take(&mut *guard),
+            // A poisoned mutex means a previous test panicked while holding the lock; recover
+            // by dropping whatever partial data was there.
+            Err(poisoned) => {
+                let mut guard = poisoned.into_inner();
+                std::mem::take(&mut *guard)
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn record_outcome(&self, outcome: RegionOutcome) {
+        if let Ok(mut guard) = self.recorded_outcomes.lock() {
+            guard.push(outcome);
+        }
+    }
+
+    #[cfg(not(test))]
+    fn record_outcome(&self, _outcome: RegionOutcome) {}
+}
+
+impl Default for JoinReorder {
+    fn default() -> Self {
+        Self::new(JoinReorderOptions::default())
     }
 }
 
@@ -107,7 +203,7 @@ impl JoinReorder {
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
         // Attempt to build a query graph starting from the current node.
         // The GraphBuilder will traverse downwards to find a complete reorderable region.
-        let mut graph_builder = GraphBuilder::new();
+        let mut graph_builder = GraphBuilder::new(self.options.clone());
         let Some((query_graph, target_column_map)) = graph_builder.build(plan.clone())? else {
             return Ok(None);
         };
@@ -123,14 +219,47 @@ impl JoinReorder {
             query_graph.edges.len()
         );
 
-        let mut enumerator = PlanEnumerator::new(query_graph);
-        let best_plan = match enumerator.solve()? {
+        let mut enumerator = PlanEnumerator::new(query_graph, self.options.clone());
+        let solve_result = enumerator.solve_with_status()?;
+        let relation_count = enumerator.query_graph.relation_count();
+        let emit_count = solve_result.emit_count;
+        let best_plan = match solve_result.plan {
             Some(plan) => {
-                trace!("JoinReorder: DP optimization completed successfully");
+                trace!(
+                    "JoinReorder: DP optimization completed successfully (status={:?}, emits={})",
+                    solve_result.status,
+                    emit_count
+                );
+                self.record_outcome(RegionOutcome {
+                    relation_count,
+                    emit_count,
+                    path: RegionOutcomePath::DpCompleted,
+                });
                 plan
             }
             None => {
-                trace!("JoinReorder: DP optimization exceeded threshold, falling back to greedy algorithm");
+                warn!(
+                    "JoinReorder: DP optimization requires fallback (status={:?}, emits={}); using greedy algorithm",
+                    solve_result.status, emit_count
+                );
+                let path = match solve_result.status {
+                    JoinReorderStatus::FallbackRequired(
+                        JoinReorderFallbackReason::EmitThresholdExceeded,
+                    ) => RegionOutcomePath::GreedyFallbackEmitThreshold,
+                    JoinReorderStatus::FallbackRequired(
+                        JoinReorderFallbackReason::FullPlanMissing,
+                    ) => RegionOutcomePath::GreedyFallbackFullPlanMissing,
+                    JoinReorderStatus::DpCompleted => {
+                        // Defensive: DpCompleted with no plan should not happen, but if it does
+                        // we still record a meaningful path label.
+                        RegionOutcomePath::GreedyFallbackFullPlanMissing
+                    }
+                };
+                self.record_outcome(RegionOutcome {
+                    relation_count,
+                    emit_count,
+                    path,
+                });
                 enumerator.solve_greedy()?
             }
         };
@@ -143,6 +272,7 @@ impl JoinReorder {
 
         let mut reconstructor =
             PlanReconstructor::new(&enumerator.dp_table, &enumerator.query_graph);
+        reconstructor.validate_reconstruction_plan(&best_plan)?;
         // Pre-compute required output columns for each join subtree based on the original
         // region-root output columns. This keeps intermediate join outputs narrow before
         // `JoinSelection` runs, helping avoid plan-shape regressions when we see through
@@ -244,7 +374,7 @@ impl JoinReorder {
                     ));
                 }
                 ColumnMapEntry::Expression { expr, input_map } => {
-                    let rewritten_expr = self.rewrite_expr_to_final_map(
+                    let rewritten_expr = Self::rewrite_expr_to_final_map(
                         Arc::clone(expr),
                         input_map,
                         final_map,
@@ -267,7 +397,6 @@ impl JoinReorder {
     }
 
     fn rewrite_expr_to_final_map(
-        &self,
         expr: Arc<dyn datafusion::physical_expr::PhysicalExpr>,
         input_map: &ColumnMap,
         final_map: &ColumnMap,
@@ -279,7 +408,7 @@ impl JoinReorder {
             HashMap::new();
 
         let transformed = expr.transform(|node| {
-            if let Some(col) = node.as_any().downcast_ref::<Column>() {
+            if let Some(col) = node.downcast_ref::<Column>() {
                 let original_entry = input_map.get(col.index()).ok_or_else(|| {
                     DataFusionError::Internal(format!(
                         "Expression column index {} out of bounds for its input_map (len {})",
@@ -324,7 +453,7 @@ impl JoinReorder {
                         }
 
                         // Inline nested derived expression by rewriting it against the final join schema.
-                        let rewritten_nested = self.rewrite_expr_to_final_map(
+                        let rewritten_nested = Self::rewrite_expr_to_final_map(
                             Arc::clone(nested_expr),
                             nested_input_map,
                             final_map,
@@ -420,7 +549,7 @@ mod tests {
         )?);
 
         // Test our recursive optimizer
-        let join_reorder = JoinReorder::new();
+        let join_reorder = JoinReorder::default();
         let optimized_plan = join_reorder.find_and_optimize_regions(aggregate.clone())?;
 
         // Should complete without errors and preserve the structure
@@ -517,7 +646,7 @@ mod tests {
         let root_plan = Arc::new(ProjectionExec::try_new(projection_exprs, aggregate)?);
 
         // Now test our recursive optimizer
-        let join_reorder = JoinReorder::new();
+        let join_reorder = JoinReorder::default();
         let optimized_plan = join_reorder.find_and_optimize_regions(root_plan.clone())?;
 
         // The optimized plan should have the same structure at the top level
@@ -623,7 +752,7 @@ mod tests {
         )?);
 
         // Test optimization
-        let join_reorder = JoinReorder::new();
+        let join_reorder = JoinReorder::default();
         let optimized_plan = join_reorder.find_and_optimize_regions(upper_aggregate.clone())?;
 
         // Should complete without errors and preserve the aggregate boundaries
@@ -708,7 +837,7 @@ mod tests {
             false, // null_aware
         )?);
 
-        let join_reorder = JoinReorder::new();
+        let join_reorder = JoinReorder::default();
         let optimized_plan = join_reorder.find_and_optimize_regions(root)?;
 
         // Root region should be optimized (>= 3 relations), producing a ProjectionExec.
@@ -802,7 +931,7 @@ mod tests {
         let original_plan = Arc::new(ProjectionExec::try_new(proj_exprs, join_abc)?);
 
         // 4. Run the optimizer
-        let optimizer = JoinReorder::new();
+        let optimizer = JoinReorder::default();
         let optimized_plan = optimizer.find_and_optimize_regions(original_plan.clone())?;
 
         // 5. Assertions
@@ -896,7 +1025,7 @@ mod tests {
             input_map: outer_input_map,
         }];
 
-        let join_reorder = JoinReorder::new();
+        let join_reorder = JoinReorder::default();
         let plan = join_reorder.build_final_projection(
             Arc::clone(&input_plan),
             &final_map,
@@ -905,7 +1034,6 @@ mod tests {
         )?;
         #[expect(clippy::expect_used)]
         let proj = plan
-            .as_any()
             .downcast_ref::<ProjectionExec>()
             .expect("expected ProjectionExec");
         assert_eq!(proj.schema().fields().len(), 1);
@@ -917,6 +1045,295 @@ mod tests {
         indices.dedup();
         assert_eq!(indices, vec![0, 1, 2]);
 
+        Ok(())
+    }
+
+    // The tests below intentionally use `datafusion::physical_plan::test::exec::StatisticsExec`
+    // as leaves so the cardinality estimator sees realistic row counts. The reorderer is then
+    // exercised end-to-end and the resulting plan tree is collapsed into a compact "shape
+    // string" (e.g. `HJ(HJ(R0,R1),R2)`). The shape string is much more stable across
+    // DataFusion version bumps than the full `displayable().indent()` output because it omits
+    // partition modes, projection details, and on-clause printing — yet still pins the
+    // build/probe topology and which relation ends up at which position.
+    //
+    // Each test additionally inspects the per-region outcome trace recorded by
+    // `JoinReorder::take_recorded_outcomes()` so that we catch silent regressions where the
+    // rule shape is unchanged but the optimizer fell back to greedy (or vice versa).
+
+    use datafusion::common::stats::Precision;
+    use datafusion::common::Statistics;
+    use datafusion::physical_plan::test::exec::StatisticsExec;
+
+    /// Build a `StatisticsExec` leaf with a fixed (id, val) schema, a known total row count,
+    /// and a known distinct count on the join key. Column names are suffixed with `tag` so
+    /// every relation has unique column names, mirroring how SQL views show up in practice.
+    fn stats_leaf(tag: &str, rows: usize, distinct: usize) -> Arc<dyn ExecutionPlan> {
+        let id = format!("{tag}_id");
+        let val = format!("{tag}_val");
+        let schema = Schema::new(vec![
+            Field::new(&id, DataType::Int32, false),
+            Field::new(&val, DataType::Int32, false),
+        ]);
+        let mut stats = Statistics::new_unknown(&schema);
+        stats.num_rows = Precision::Exact(rows);
+        stats.column_statistics[0].distinct_count = Precision::Exact(distinct);
+        stats.column_statistics[1].distinct_count = Precision::Exact(distinct);
+        Arc::new(StatisticsExec::new(stats, schema))
+    }
+
+    fn hash_inner_join(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        left_key: &str,
+        right_key: &str,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let left_idx = left
+            .schema()
+            .index_of(left_key)
+            .map_err(|e| DataFusionError::Internal(e.to_string()))?;
+        let right_idx = right
+            .schema()
+            .index_of(right_key)
+            .map_err(|e| DataFusionError::Internal(e.to_string()))?;
+        let on: Vec<(Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>)> = vec![(
+            Arc::new(Column::new(left_key, left_idx)),
+            Arc::new(Column::new(right_key, right_idx)),
+        )];
+        Ok(Arc::new(HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::Inner,
+            None,
+            PartitionMode::Auto,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?))
+    }
+
+    /// Collapse a plan tree into a compact shape string. Inner HashJoinExec becomes `HJ(L,R)`
+    /// where L and R are recursively rendered. Any other node that has children is rendered
+    /// as `<Name>(child0,child1,...)`. Leaves are rendered by their declared op name (e.g.
+    /// `StatisticsExec`) tagged with a stable identifier derived from the FIRST column name
+    /// in their output schema, so the renaming convention from `stats_leaf` (e.g. `a_id` ->
+    /// `R[a]`) makes the position of each input relation in the final tree directly readable.
+    fn shape(plan: &Arc<dyn ExecutionPlan>) -> String {
+        let children = plan.children();
+        if children.is_empty() {
+            let first = plan
+                .schema()
+                .field(0)
+                .name()
+                .split('_')
+                .next()
+                .unwrap_or("?")
+                .to_string();
+            return format!("R[{first}]");
+        }
+        let kind = match plan.name() {
+            "HashJoinExec" => "HJ".to_string(),
+            other => other.to_string(),
+        };
+        let rendered: Vec<String> = children.iter().map(|c| shape(c)).collect();
+        format!("{kind}({})", rendered.join(","))
+    }
+
+    /// Star schema: one big fact joined to three small dimensions on the fact's id column.
+    /// The cost model must pick a shape that minimises intermediate cardinality. With these
+    /// stats we lock the *invariants* of the final plan rather than a single concrete shape:
+    /// (1) the rule completes without fallback, (2) all four relations are present, (3) the
+    /// tree contains exactly three HashJoinExec nodes, and (4) DP was the terminal path.
+    #[test]
+    fn test_plan_shape_star_schema_dp_completes_and_is_locked() -> Result<()> {
+        // fact: 1_000_000 rows on f_id (distinct 1_000_000)
+        // dim_s: 10 rows; dim_m: 100 rows; dim_l: 10_000 rows.
+        let fact = stats_leaf("f", 1_000_000, 1_000_000);
+        let dim_s = stats_leaf("s", 10, 10);
+        let dim_m = stats_leaf("m", 100, 100);
+        let dim_l = stats_leaf("l", 10_000, 10_000);
+
+        // Initial left-deep shape: ((fact ⋈ dim_s) ⋈ dim_m) ⋈ dim_l, all on *_id == f_id.
+        let j1 = hash_inner_join(fact, dim_s, "f_id", "s_id")?;
+        let j2 = hash_inner_join(j1, dim_m, "f_id", "m_id")?;
+        let root = hash_inner_join(j2, dim_l, "f_id", "l_id")?;
+
+        let reorder = JoinReorder::default();
+        let optimized = reorder.find_and_optimize_regions(root)?;
+
+        // The optimizer must wrap the reordered join tree in a ProjectionExec that pins the
+        // original output column order. This is itself an invariant we want locked.
+        assert_eq!(optimized.name(), "ProjectionExec");
+        assert_eq!(optimized.children().len(), 1);
+
+        let join_tree = Arc::clone(optimized.children()[0]);
+        let shape_str = shape(&join_tree);
+
+        // Three inner HashJoinExec nodes => 4 leaves total.
+        let hj_count = shape_str.matches("HJ(").count();
+        assert_eq!(
+            hj_count, 3,
+            "expected 3 HashJoinExec nodes, got shape {shape_str}"
+        );
+
+        // All four input relations must appear exactly once.
+        for tag in ["f", "s", "m", "l"] {
+            let needle = format!("R[{tag}]");
+            assert_eq!(
+                shape_str.matches(&needle).count(),
+                1,
+                "relation {tag} must appear exactly once in {shape_str}"
+            );
+        }
+
+        // The outcome trace must contain at least one DP-completion covering all 4 relations.
+        // Bottom-up recursion may legitimately enumerate the same join region more than once
+        // (an inner sub-region first, then the outer level after the inner is rebuilt), so we
+        // do not pin the exact number of outcomes — only that the largest-relation enumeration
+        // succeeded via DP, never via a greedy fallback.
+        let outcomes = reorder.take_recorded_outcomes();
+        assert!(
+            !outcomes.is_empty(),
+            "expected at least one recorded region"
+        );
+        let max_outcome = outcomes
+            .iter()
+            .max_by_key(|o| o.relation_count)
+            .ok_or_else(|| DataFusionError::Internal("no outcomes recorded".into()))?;
+        assert_eq!(max_outcome.relation_count, 4);
+        assert_eq!(max_outcome.path, RegionOutcomePath::DpCompleted);
+        assert!(
+            max_outcome.emit_count > 0,
+            "DP path must emit at least one CSG-CMP pair"
+        );
+        assert!(
+            outcomes
+                .iter()
+                .all(|o| !matches!(o.path, RegionOutcomePath::GreedyFallbackEmitThreshold)),
+            "no region should have triggered greedy fallback under default budget, got {outcomes:?}"
+        );
+
+        Ok(())
+    }
+
+    /// Same 4-way star, but with the emit budget squeezed to 1 so DP cannot complete. The
+    /// rule must transparently fall back to greedy and still produce a valid 4-relation
+    /// tree (one ProjectionExec + three HashJoinExec). The recorded outcome trace must
+    /// contain at least one greedy-fallback path.
+    #[test]
+    fn test_plan_shape_greedy_fallback_when_emit_threshold_exceeded() -> Result<()> {
+        let fact = stats_leaf("f", 1_000_000, 1_000_000);
+        let dim_s = stats_leaf("s", 10, 10);
+        let dim_m = stats_leaf("m", 100, 100);
+        let dim_l = stats_leaf("l", 10_000, 10_000);
+        let j1 = hash_inner_join(fact, dim_s, "f_id", "s_id")?;
+        let j2 = hash_inner_join(j1, dim_m, "f_id", "m_id")?;
+        let root = hash_inner_join(j2, dim_l, "f_id", "l_id")?;
+
+        let opts = JoinReorderOptions {
+            emit_threshold: 1,
+            ..JoinReorderOptions::default()
+        };
+        let reorder = JoinReorder::new(opts);
+        let optimized = reorder.find_and_optimize_regions(root)?;
+
+        assert_eq!(optimized.name(), "ProjectionExec");
+        let join_tree = Arc::clone(optimized.children()[0]);
+        let shape_str = shape(&join_tree);
+        assert_eq!(
+            shape_str.matches("HJ(").count(),
+            3,
+            "greedy fallback must still produce a 3-join tree, got {shape_str}"
+        );
+        for tag in ["f", "s", "m", "l"] {
+            let needle = format!("R[{tag}]");
+            assert_eq!(
+                shape_str.matches(&needle).count(),
+                1,
+                "relation {tag} must appear exactly once in {shape_str}"
+            );
+        }
+
+        // At least one of the recorded outcomes must indicate the emit-threshold fallback.
+        let outcomes = reorder.take_recorded_outcomes();
+        assert!(
+            !outcomes.is_empty(),
+            "expected at least one recorded region"
+        );
+        assert!(
+            outcomes
+                .iter()
+                .any(|o| o.path == RegionOutcomePath::GreedyFallbackEmitThreshold),
+            "expected at least one greedy-fallback outcome, got {outcomes:?}"
+        );
+
+        Ok(())
+    }
+
+    /// Snowflake-ish 5-way chain. We lock that DP completes and that all five inputs land in
+    /// the final tree with the right number of joins.
+    #[test]
+    fn test_plan_shape_snowflake_chain_dp_completes() -> Result<()> {
+        let fact = stats_leaf("f", 1_000_000, 1_000_000);
+        let d1 = stats_leaf("a", 100, 100);
+        let d2 = stats_leaf("b", 500, 500);
+        let d3 = stats_leaf("c", 2_000, 2_000);
+        let d4 = stats_leaf("d", 50, 50);
+
+        let j1 = hash_inner_join(fact, d1, "f_id", "a_id")?;
+        let j2 = hash_inner_join(j1, d2, "f_id", "b_id")?;
+        let j3 = hash_inner_join(j2, d3, "f_id", "c_id")?;
+        let root = hash_inner_join(j3, d4, "f_id", "d_id")?;
+
+        let reorder = JoinReorder::default();
+        let optimized = reorder.find_and_optimize_regions(root)?;
+        assert_eq!(optimized.name(), "ProjectionExec");
+        let join_tree = Arc::clone(optimized.children()[0]);
+        let shape_str = shape(&join_tree);
+
+        assert_eq!(
+            shape_str.matches("HJ(").count(),
+            4,
+            "expected 4 HashJoinExec nodes in 5-way join, got {shape_str}"
+        );
+        for tag in ["f", "a", "b", "c", "d"] {
+            let needle = format!("R[{tag}]");
+            assert_eq!(
+                shape_str.matches(&needle).count(),
+                1,
+                "relation {tag} must appear exactly once in {shape_str}"
+            );
+        }
+
+        let outcomes = reorder.take_recorded_outcomes();
+        assert!(!outcomes.is_empty());
+        let max_outcome = outcomes
+            .iter()
+            .max_by_key(|o| o.relation_count)
+            .ok_or_else(|| DataFusionError::Internal("no outcomes recorded".into()))?;
+        assert_eq!(max_outcome.relation_count, 5);
+        assert_eq!(max_outcome.path, RegionOutcomePath::DpCompleted);
+
+        Ok(())
+    }
+
+    /// Sanity check on the shape helper: two relations joined directly do *not* enter the
+    /// reorderable region (< 3 relations), so no outcome is recorded and the plan tree shape
+    /// is preserved verbatim.
+    #[test]
+    fn test_plan_shape_two_relation_join_is_not_reordered() -> Result<()> {
+        let a = stats_leaf("a", 100, 100);
+        let b = stats_leaf("b", 200, 200);
+        let root = hash_inner_join(a, b, "a_id", "b_id")?;
+
+        let reorder = JoinReorder::default();
+        let optimized = reorder.find_and_optimize_regions(root.clone())?;
+
+        assert_eq!(shape(&optimized), shape(&(root as Arc<dyn ExecutionPlan>)));
+        assert!(
+            reorder.take_recorded_outcomes().is_empty(),
+            "two-relation joins must not be enumerated"
+        );
         Ok(())
     }
 }

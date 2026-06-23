@@ -11,6 +11,7 @@ use glob::Pattern;
 use log::debug;
 use object_store::ObjectStoreExt;
 use percent_encoding::percent_decode;
+use sail_common_datafusion::utils::items::ItemTaker;
 use url::Url;
 
 /// A parsed pattern segment in a glob pattern.
@@ -497,10 +498,41 @@ pub async fn resolve_listing_urls(
     for path in paths {
         for url in GlobUrl::parse(&path)? {
             let url = rewrite_directory_url(url, ctx).await?;
+            let url = attach_default_glob(url)?;
             urls.push(url.try_into()?);
         }
     }
     Ok(urls)
+}
+
+pub fn resolve_listing_writer_url(path: String) -> Result<Url> {
+    // Listing writes always target a directory of output files.
+    let path = if path.ends_with(object_store::path::DELIMITER) {
+        path
+    } else {
+        format!("{path}{}", object_store::path::DELIMITER)
+    };
+    let Ok(GlobUrl { base, glob }) = GlobUrl::parse(&path)?.one() else {
+        return plan_err!("exactly one URL should be provided for writing: {path}");
+    };
+    if glob.is_some() {
+        return plan_err!("glob pattern is not allowed in the output URL: {path}");
+    }
+    Ok(base)
+}
+
+/// If `url` points to a directory and the user did not supply an explicit
+/// glob, attach a default pattern that excludes file names starting with
+/// `.` or `_` (commit/_SUCCESS markers, `.crc` checksum files, etc.).
+/// Matches Spark's `HiddenFileFilter` semantics so users migrating from
+/// Spark see the same set of files included in directory reads.
+fn attach_default_glob(mut url: GlobUrl) -> Result<GlobUrl> {
+    if url.glob.is_none() && url.base.path().ends_with(object_store::path::DELIMITER) {
+        let pattern = Pattern::new("[!._]*")
+            .map_err(|e| plan_datafusion_err!("default hidden-file glob: {e}"))?;
+        url.glob = Some(pattern);
+    }
+    Ok(url)
 }
 
 pub async fn rewrite_directory_url(url: GlobUrl, session: &dyn Session) -> Result<GlobUrl> {

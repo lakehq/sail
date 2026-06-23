@@ -17,18 +17,19 @@
 // limitations under the License.
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/execution.rs>
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
 
 use async_trait::async_trait;
-use chrono::Utc;
-use datafusion::arrow::array::{ArrayRef, PrimitiveArray};
-use datafusion::arrow::compute::SortOptions;
+use datafusion::arrow::array::{
+    Array, ArrayRef, BooleanArray, BooleanBuilder, Int32Array, Int64Array, PrimitiveArray,
+    UInt64Array,
+};
+use datafusion::arrow::compute::{filter_record_batch, SortOptions};
 use datafusion::arrow::datatypes::{
-    ArrowTimestampType, DataType, Field, Schema, SchemaRef, TimeUnit, TimestampMicrosecondType,
+    ArrowTimestampType, DataType, Schema, SchemaRef, TimeUnit, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
 };
 use datafusion::arrow::record_batch::RecordBatch;
@@ -45,34 +46,237 @@ use datafusion::physical_plan::{
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::stream::{once, StreamExt};
-use sail_common_datafusion::datasource::PhysicalSinkMode;
+use sail_common_datafusion::catalog::LakehouseExecutionContext;
+use sail_common_datafusion::datasource::{
+    PhysicalSinkMode, RowLevelOperationType, MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN,
+};
 use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
 use crate::kernel::transaction::OperationMetrics;
-use crate::kernel::{DeltaOperation, SaveMode};
+use crate::kernel::DeltaOperation;
+use crate::operations::write::variant_shredding::{
+    variant_top_level_columns, VariantShreddingConfig,
+};
 use crate::operations::write::writer::{DeltaWriter, WriterConfig};
+use crate::physical_plan::catalog_location::resolve_catalog_table_url;
 use crate::physical_plan::writer_options::DeltaWriterExecOptions;
-use crate::physical_plan::{delta_action_schema, encode_actions, ExecCommitMeta};
-use crate::schema::{
-    annotate_for_column_mapping, compute_max_column_id, evolve_schema, get_physical_schema,
-    metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
-    schema_has_generated_columns,
+use crate::physical_plan::{
+    delta_action_schema, encode_actions, DeltaWriteContext, ExecCommitMeta,
 };
 use crate::spec::{
-    contains_timestampntz_arrow, Action, ColumnMappingMode, ColumnMetadataKey, MetadataValue,
-    StructField, StructType, TableProperties,
+    Action, ColumnMappingMode, Metadata, Protocol, StructType, TableFeature, TableProperties,
 };
-use crate::storage::{get_object_store_from_context, StorageConfig};
-use crate::table::open_table_with_object_store;
+use crate::storage::get_object_store_from_context;
 
-/// Schema handling mode for Delta Lake writes
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum SchemaMode {
-    /// Merge new schema with existing schema
-    Merge,
-    /// Overwrite existing schema with new schema
-    Overwrite,
+/// Counts internal row intent tags before they are stripped from writer input.
+///
+/// These counters are derived from Sail metadata columns only. The metadata is
+/// removed before data batches are validated against the persisted table schema.
+#[derive(Debug, Default, Clone, Copy)]
+struct MergeRowMetrics {
+    copied: u64,
+    inserted: u64,
+    updated: u64,
+    deleted: u64,
+    noop: u64,
+    source_metric: u64,
+    matched_updated: u64,
+    not_matched_by_source_updated: u64,
+    matched_deleted: u64,
+    not_matched_by_source_deleted: u64,
+    saw_detailed_merge_op: bool,
+    uses_source_metric: bool,
+}
+
+enum SourceMetricColumn<'a> {
+    UInt64(&'a UInt64Array),
+    Int64(&'a Int64Array),
+    None,
+}
+
+impl<'a> SourceMetricColumn<'a> {
+    fn try_from_batch(batch: &'a RecordBatch) -> Result<Self> {
+        let Some((index, _)) = batch.schema().column_with_name(MERGE_SOURCE_METRIC_COLUMN) else {
+            return Ok(Self::None);
+        };
+        let column = batch.column(index);
+        match column.data_type() {
+            DataType::UInt64 => {
+                let values = column
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "failed to downcast {MERGE_SOURCE_METRIC_COLUMN} as UInt64"
+                        ))
+                    })?;
+                Ok(Self::UInt64(values))
+            }
+            DataType::Int64 => {
+                let values = column
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "failed to downcast {MERGE_SOURCE_METRIC_COLUMN} as Int64"
+                        ))
+                    })?;
+                Ok(Self::Int64(values))
+            }
+            other => Err(DataFusionError::Plan(format!(
+                "MERGE source metric column {MERGE_SOURCE_METRIC_COLUMN} must be UInt64 or Int64, got {other:?}"
+            ))),
+        }
+    }
+
+    fn value(&self, row: usize) -> Result<Option<u64>> {
+        match self {
+            Self::UInt64(values) => Ok(values.is_valid(row).then(|| values.value(row))),
+            Self::Int64(values) => {
+                if !values.is_valid(row) {
+                    return Ok(None);
+                }
+                let value = values.value(row);
+                let value = u64::try_from(value).map_err(|_| {
+                    DataFusionError::Plan(format!(
+                        "MERGE source metric column {MERGE_SOURCE_METRIC_COLUMN} must be non-negative, got {value}"
+                    ))
+                })?;
+                Ok(Some(value))
+            }
+            Self::None => Ok(None),
+        }
+    }
+}
+
+impl MergeRowMetrics {
+    fn add_operation_value(&mut self, value: i64, source_metric_count: Option<u64>) {
+        match value {
+            v if v == i64::from(RowLevelOperationType::Copy.as_i32()) => {
+                self.copied = self.copied.saturating_add(1)
+            }
+            v if v == i64::from(RowLevelOperationType::Insert.as_i32()) => {
+                self.inserted = self.inserted.saturating_add(1)
+            }
+            v if v == i64::from(RowLevelOperationType::Update.as_i32()) => {
+                self.updated = self.updated.saturating_add(1)
+            }
+            v if v == i64::from(RowLevelOperationType::Delete.as_i32()) => {
+                self.deleted = self.deleted.saturating_add(1)
+            }
+            v if v == i64::from(RowLevelOperationType::Noop.as_i32()) => {
+                self.saw_detailed_merge_op = true;
+                self.noop = self.noop.saturating_add(1)
+            }
+            v if v == i64::from(RowLevelOperationType::MatchedUpdate.as_i32()) => {
+                self.saw_detailed_merge_op = true;
+                self.updated = self.updated.saturating_add(1);
+                self.matched_updated = self.matched_updated.saturating_add(1);
+            }
+            v if v == i64::from(RowLevelOperationType::NotMatchedBySourceUpdate.as_i32()) => {
+                self.saw_detailed_merge_op = true;
+                self.updated = self.updated.saturating_add(1);
+                self.not_matched_by_source_updated =
+                    self.not_matched_by_source_updated.saturating_add(1);
+            }
+            v if v == i64::from(RowLevelOperationType::MatchedDelete.as_i32()) => {
+                self.saw_detailed_merge_op = true;
+                self.deleted = self.deleted.saturating_add(1);
+                self.matched_deleted = self.matched_deleted.saturating_add(1);
+            }
+            v if v == i64::from(RowLevelOperationType::NotMatchedBySourceDelete.as_i32()) => {
+                self.saw_detailed_merge_op = true;
+                self.deleted = self.deleted.saturating_add(1);
+                self.not_matched_by_source_deleted =
+                    self.not_matched_by_source_deleted.saturating_add(1);
+            }
+            v if v == i64::from(RowLevelOperationType::SourceMetric.as_i32()) => {
+                self.source_metric = self
+                    .source_metric
+                    .saturating_add(source_metric_count.unwrap_or(1));
+            }
+            _ => {}
+        }
+    }
+
+    fn source_rows(self) -> u64 {
+        if self.uses_source_metric {
+            return self.source_metric;
+        }
+        if self.source_metric > 0 {
+            return self.source_metric;
+        }
+        let detailed_source_rows = self
+            .inserted
+            .saturating_add(self.matched_updated)
+            .saturating_add(self.matched_deleted)
+            .saturating_add(self.noop);
+        if self.saw_detailed_merge_op {
+            detailed_source_rows
+        } else {
+            self.inserted
+                .saturating_add(self.updated)
+                .saturating_add(self.deleted)
+                .saturating_add(self.noop)
+        }
+    }
+
+    fn accumulate_batch(&mut self, batch: &RecordBatch) -> Result<()> {
+        self.uses_source_metric |= batch
+            .schema()
+            .column_with_name(MERGE_SOURCE_METRIC_COLUMN)
+            .is_some();
+        let source_metric_column = SourceMetricColumn::try_from_batch(batch)?;
+        let Some((index, _)) = batch.schema().column_with_name(OPERATION_COLUMN) else {
+            return Ok(());
+        };
+        let column = batch.column(index);
+        match column.data_type() {
+            DataType::Int32 => {
+                let values = column
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "failed to downcast {OPERATION_COLUMN} as Int32"
+                        ))
+                    })?;
+                for row in 0..values.len() {
+                    if values.is_valid(row) {
+                        self.add_operation_value(
+                            i64::from(values.value(row)),
+                            source_metric_column.value(row)?,
+                        );
+                    }
+                }
+            }
+            DataType::Int64 => {
+                let values = column
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "failed to downcast {OPERATION_COLUMN} as Int64"
+                        ))
+                    })?;
+                for row in 0..values.len() {
+                    if values.is_valid(row) {
+                        self.add_operation_value(
+                            values.value(row),
+                            source_metric_column.value(row)?,
+                        );
+                    }
+                }
+            }
+            other => {
+                return Err(DataFusionError::Plan(format!(
+                    "row-level operation column {OPERATION_COLUMN} must be Int32 or Int64, got {other:?}"
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Physical execution node for Delta Lake writing operations
@@ -86,8 +290,8 @@ pub struct DeltaWriterExec {
     sink_mode: PhysicalSinkMode,
     table_exists: bool,
     sink_schema: SchemaRef,
-    /// Optional override for commit operation metadata.
-    operation_override: Option<DeltaOperation>,
+    write_context: DeltaWriteContext,
+    lakehouse_table: Option<LakehouseExecutionContext>,
     metrics: ExecutionPlanMetricsSet,
     cache: Arc<PlanProperties>,
 }
@@ -117,7 +321,8 @@ impl DeltaWriterExec {
         sink_mode: PhysicalSinkMode,
         table_exists: bool,
         sink_schema: SchemaRef,
-        operation_override: Option<DeltaOperation>,
+        write_context: DeltaWriteContext,
+        lakehouse_table: Option<LakehouseExecutionContext>,
     ) -> Result<Self> {
         let schema = delta_action_schema()?;
         let output_partitions = input.output_partitioning().partition_count().max(1);
@@ -131,7 +336,8 @@ impl DeltaWriterExec {
             sink_mode,
             table_exists,
             sink_schema,
-            operation_override,
+            write_context,
+            lakehouse_table,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
         })
@@ -178,8 +384,107 @@ impl DeltaWriterExec {
         self.table_exists
     }
 
-    pub fn operation_override(&self) -> Option<&DeltaOperation> {
-        self.operation_override.as_ref()
+    pub fn write_context(&self) -> &DeltaWriteContext {
+        &self.write_context
+    }
+
+    pub fn catalog_table(&self) -> Option<&[String]> {
+        self.lakehouse_table
+            .as_ref()
+            .map(LakehouseExecutionContext::catalog_table)
+    }
+
+    pub fn lakehouse_table(&self) -> Option<&LakehouseExecutionContext> {
+        self.lakehouse_table.as_ref()
+    }
+
+    fn effective_protocol_and_metadata(
+        write_context: &DeltaWriteContext,
+    ) -> (Option<&Protocol>, Option<&Metadata>) {
+        let protocol = write_context
+            .schema_actions
+            .iter()
+            .rev()
+            .chain(write_context.initial_actions.iter().rev())
+            .find_map(|action| match action {
+                Action::Protocol(protocol) => Some(protocol),
+                _ => None,
+            })
+            .or_else(|| {
+                write_context
+                    .commit_context
+                    .base_snapshot
+                    .as_ref()
+                    .map(|snapshot| &snapshot.protocol)
+            });
+
+        let metadata = write_context
+            .schema_actions
+            .iter()
+            .rev()
+            .chain(write_context.initial_actions.iter().rev())
+            .find_map(|action| match action {
+                Action::Metadata(metadata) => Some(metadata),
+                _ => None,
+            })
+            .or_else(|| {
+                write_context
+                    .commit_context
+                    .base_snapshot
+                    .as_ref()
+                    .map(|snapshot| &snapshot.metadata)
+            });
+
+        (protocol, metadata)
+    }
+
+    fn protocol_supports_variant_shredding(protocol: &Protocol) -> bool {
+        protocol.min_reader_version() >= 3
+            && protocol.min_writer_version() >= 7
+            && protocol
+                .reader_features()
+                .unwrap_or(&[])
+                .iter()
+                .any(TableFeature::is_variant_shredding_feature)
+            && protocol
+                .writer_features()
+                .unwrap_or(&[])
+                .iter()
+                .any(TableFeature::is_variant_shredding_feature)
+    }
+
+    fn variant_shredding_config(
+        write_context: &DeltaWriteContext,
+        has_top_level_variant_columns: bool,
+    ) -> Result<VariantShreddingConfig> {
+        if !has_top_level_variant_columns {
+            return Ok(VariantShreddingConfig::default());
+        }
+
+        let (protocol, metadata) = Self::effective_protocol_and_metadata(write_context);
+        let Some(metadata) = metadata else {
+            return Ok(VariantShreddingConfig::default());
+        };
+        let table_properties = TableProperties::from(metadata.configuration().iter());
+        if !table_properties.enable_variant_shredding() {
+            return Ok(VariantShreddingConfig::default());
+        }
+
+        let Some(protocol) = protocol else {
+            return Err(DataFusionError::Plan(
+                "Delta variant shredding write requires table protocol".to_string(),
+            ));
+        };
+        if !Self::protocol_supports_variant_shredding(protocol) {
+            return Err(DataFusionError::Plan(
+                "Delta variant shredding write requires the variantShredding reader and writer table features".to_string(),
+            ));
+        }
+
+        Ok(VariantShreddingConfig {
+            enabled: true,
+            ..Default::default()
+        })
     }
 }
 
@@ -187,10 +492,6 @@ impl DeltaWriterExec {
 impl ExecutionPlan for DeltaWriterExec {
     fn name(&self) -> &'static str {
         "DeltaWriterExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -277,7 +578,8 @@ impl ExecutionPlan for DeltaWriterExec {
             self.sink_mode.clone(),
             self.table_exists,
             self.sink_schema.clone(),
-            self.operation_override.clone(),
+            self.write_context.clone(),
+            self.lakehouse_table.clone(),
         )?))
     }
 
@@ -313,14 +615,12 @@ impl DeltaWriterExec {
         let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(partition);
 
         let table_url = self.table_url.clone();
+        let catalog_table = self.catalog_table().map(<[String]>::to_vec);
         let options = self.options.clone();
-        let metadata_configuration = self.metadata_configuration.clone();
         let partition_columns = self.partition_columns.clone();
         let sink_mode = self.sink_mode.clone();
         let table_exists = self.table_exists;
-        let input_schema = normalize_delta_schema(&self.input.schema());
-        let operation_override = self.operation_override.clone();
-        // let sink_schema = self.sink_schema.clone();
+        let write_context = self.write_context.clone();
         let session_timezone = context
             .session_config()
             .options()
@@ -338,64 +638,14 @@ impl DeltaWriterExec {
             } = &options;
             let timezone = session_timezone;
 
-            let storage_config = StorageConfig;
+            let table_url =
+                resolve_catalog_table_url(&context, catalog_table.as_deref(), &table_url).await?;
             let object_store = get_object_store_from_context(&context, &table_url)?;
 
-            // Calculate initial_actions and operation based on sink_mode.
-            //
-            // NOTE: The Delta log requires certain actions (Protocol/Metadata/schema evolution)
-            // to appear at most once in a commit. We compute them in every partition for
-            // consistency, but only emit them from partition 0 in the final action stream.
-            let mut initial_actions: Vec<Action> = Vec::new();
-            let mut operation: Option<DeltaOperation> = None;
-
-            let table_result = open_table_with_object_store(
-                table_url.clone(),
-                object_store.clone(),
-                storage_config.clone(),
-            )
-            .await;
-
-            let table = if table_exists {
-                Some(table_result?)
-            } else {
-                None
-            };
-
             match &sink_mode {
-                PhysicalSinkMode::Append => {
-                    operation = Some(DeltaOperation::Write {
-                        mode: SaveMode::Append,
-                        partition_by: if partition_columns.is_empty() {
-                            None
-                        } else {
-                            Some(partition_columns.clone())
-                        },
-                        predicate: None,
-                    });
-                }
-                PhysicalSinkMode::Overwrite => {
-                    operation = Some(DeltaOperation::Write {
-                        mode: SaveMode::Overwrite,
-                        partition_by: if partition_columns.is_empty() {
-                            None
-                        } else {
-                            Some(partition_columns.clone())
-                        },
-                        predicate: None,
-                    });
-                }
-                PhysicalSinkMode::OverwriteIf { source, .. } => {
-                    operation = Some(DeltaOperation::Write {
-                        mode: SaveMode::Overwrite,
-                        partition_by: if partition_columns.is_empty() {
-                            None
-                        } else {
-                            Some(partition_columns.clone())
-                        },
-                        predicate: source.clone(),
-                    });
-                }
+                PhysicalSinkMode::Append
+                | PhysicalSinkMode::Overwrite
+                | PhysicalSinkMode::OverwriteIf { .. } => {}
                 PhysicalSinkMode::ErrorIfExists => {
                     if table_exists {
                         return Err(DataFusionError::Plan(format!(
@@ -419,186 +669,16 @@ impl DeltaWriterExec {
                 }
             }
 
-            // Handle schema evolution if table exists
-            let (final_schema, schema_actions) = if let Some(table) = &table {
-                // Determine save mode from operation
-                let save_mode = match &operation {
-                    Some(DeltaOperation::Write { mode, .. }) => *mode,
-                    Some(DeltaOperation::Create { mode, .. }) => *mode,
-                    _ => SaveMode::Append,
-                };
-
-                // Get schema mode based on options
-                let schema_mode = Self::get_schema_mode(&options, save_mode)?;
-
-                Self::handle_schema_evolution(table, &input_schema, schema_mode).await?
-            } else {
-                (input_schema.clone(), Vec::new())
-            };
-            let final_schema = normalize_delta_schema(&final_schema);
-
-            // Determine effective column mapping mode
-            let effective_mode = if let Some(table) = &table {
-                table
-                    .snapshot()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?
-                    .effective_column_mapping_mode()
-            } else {
-                // For new tables, column mapping only comes from the metadata configuration
-                // that will be written into the initial Metadata action.
-                metadata_configuration
-                    .get("delta.columnMapping.mode")
-                    .and_then(|v| ColumnMappingMode::try_from(v.as_str()).ok())
-                    .unwrap_or_default()
-            };
-
-            // Determine the kernel column mapping mode once for downstream conversions
-            let kernel_mode = effective_mode;
-
-            // If creating a new table, always materialize protocol+metadata so explicit
-            // table properties are persisted in the first Delta log commit.
-            let mut annotated_schema_opt: Option<StructType> = None;
-            if !table_exists {
-                // Column-level metadata is carried on the arrow schema (propagated
-                // end-to-end via Alias field metadata) and preserved by `StructType::try_from`
-                // for sources that keep arrow `Field::metadata`. However, DataFusion's
-                // physical planner strips Alias metadata when lowering to arrow, so we also
-                // fall back to `options.generation_expressions`, which the planner resolves
-                // from the write input's logical schema at plan-build time.
-                let has_timestamp_ntz = contains_timestampntz_arrow(final_schema.as_ref());
-                let mut kernel_schema = StructType::try_from(final_schema.as_ref())
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                if !options.generation_expressions.is_empty() {
-                    kernel_schema = inject_generation_expressions(
-                        kernel_schema,
-                        &options.generation_expressions,
-                    );
-                }
-
-                let mut configuration = metadata_configuration.clone();
-                let metadata_schema = if !matches!(effective_mode, ColumnMappingMode::None) {
-                    let annotated_schema = annotate_for_column_mapping(&kernel_schema);
-                    configuration.insert(
-                        "delta.columnMapping.mode".to_string(),
-                        effective_mode.as_ref().to_string(),
-                    );
-                    configuration.insert(
-                        "delta.columnMapping.maxColumnId".to_string(),
-                        compute_max_column_id(&annotated_schema).to_string(),
-                    );
-                    annotated_schema_opt = Some(annotated_schema.clone());
-                    annotated_schema
-                } else {
-                    kernel_schema
-                };
-
-                let protocol = protocol_for_create(
-                    !matches!(effective_mode, ColumnMappingMode::None),
-                    has_timestamp_ntz,
-                    TableProperties::from(configuration.iter()).enable_in_commit_timestamps(),
-                    schema_has_generated_columns(&metadata_schema),
-                    &configuration,
-                )
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let metadata = metadata_for_create_with_struct_type(
-                    metadata_schema,
-                    partition_columns.clone(),
-                    Utc::now().timestamp_millis(),
-                    configuration,
-                )
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                initial_actions.push(Action::Protocol(protocol.clone()));
-                initial_actions.push(Action::Metadata(metadata.clone()));
-
-                log::trace!(
-                    "init_protocol: {:?}, init_metadata_has_mode: {:?}",
-                    &protocol,
-                    metadata.configuration().get("delta.columnMapping.mode")
-                );
-
-                operation = Some(DeltaOperation::Create {
-                    mode: SaveMode::ErrorIfExists,
-                    location: table_url.to_string(),
-                    protocol: Box::new(protocol.clone()),
-                    metadata: Box::new(metadata.clone()),
-                });
-            }
-
-            // Build physical writer schema (use physical names and set parquet field ids)
-            // Prefer schema from pending Metadata action (schema evolution) if present
-            let (writer_schema, physical_partition_columns, logical_kernel_for_mapping) =
-                if !matches!(effective_mode, ColumnMappingMode::None) {
-                    // Determine logical kernel schema (annotated for new tables; from snapshot for existing tables)
-                    let logical_kernel: StructType = if let Some(meta_action_schema) =
-                        schema_actions
-                            .iter()
-                            .find_map(|a| match a {
-                                Action::Metadata(m) => Some(
-                                    m.parse_schema()
-                                        .map_err(|e| DataFusionError::External(Box::new(e))),
-                                ),
-                                _ => None,
-                            })
-                            .transpose()?
-                    {
-                        meta_action_schema
-                    } else if table_exists {
-                        let table = table.as_ref().ok_or_else(|| {
-                            DataFusionError::Internal(
-                                "table exists but was not loaded for column-mapped write planning"
-                                    .to_string(),
-                            )
-                        })?;
-                        StructType::try_from(
-                            table
-                                .snapshot()
-                                .map_err(|e| DataFusionError::External(Box::new(e)))?
-                                .schema(),
-                        )
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?
-                    } else {
-                        annotated_schema_opt.clone().ok_or_else(|| {
-                            DataFusionError::Plan(
-                            "Annotated schema should be present for new table with column mapping"
-                                .to_string(),
-                        )
-                        })?
-                    };
-
-                    // Build physical Arrow schema enriched with PARQUET:field_id
-                    let enriched_arrow = get_physical_schema(&logical_kernel, kernel_mode);
-                    let arc_schema = Arc::new(enriched_arrow);
-                    let writer_field_names: Vec<String> = arc_schema
-                        .fields()
-                        .iter()
-                        .map(|f| f.name().clone())
-                        .collect();
-                    log::trace!(
-                        "effective_mode: {:?}, writer_schema_fields: {:?}",
-                        effective_mode,
-                        &writer_field_names
-                    );
-
-                    // Resolve logical partition columns to their physical names so that the
-                    // writer can locate them in the batch when column mapping is enabled.
-                    let resolved_partitions = partition_columns
-                        .iter()
-                        .map(|logical_name| {
-                            let field = logical_kernel.field(logical_name).ok_or_else(|| {
-                                DataFusionError::Plan(format!(
-                                    "Partition column '{}' not found in logical schema",
-                                    logical_name
-                                ))
-                            })?;
-                            Ok(field.physical_name(kernel_mode).to_string())
-                        })
-                        .collect::<Result<Vec<_>>>()?;
-
-                    (arc_schema, resolved_partitions, Some(logical_kernel))
-                } else {
-                    (final_schema.clone(), partition_columns.clone(), None)
-                };
+            let schema_actions = write_context.schema_actions.clone();
+            let initial_actions = write_context.initial_actions.clone();
+            let operation = write_context.operation.clone();
+            let kernel_mode = write_context.effective_column_mapping_mode;
+            let writer_schema = write_context.writer_schema()?;
+            let stats_excluded_columns = variant_top_level_columns(&writer_schema);
+            let variant_shredding =
+                Self::variant_shredding_config(&write_context, !stats_excluded_columns.is_empty())?;
+            let physical_partition_columns = write_context.physical_partition_columns.clone();
+            let logical_kernel_for_mapping = write_context.logical_kernel_for_mapping.clone();
 
             let writer_config = WriterConfig::new(
                 writer_schema.clone(),
@@ -609,6 +689,8 @@ impl DeltaWriterExec {
                 write_batch_size.get(),
                 32,
                 None,
+                stats_excluded_columns,
+                variant_shredding,
             );
 
             let writer_path = object_store::path::Path::from(table_url.path());
@@ -624,11 +706,18 @@ impl DeltaWriterExec {
             let mut total_rows = 0u64;
             let mut data = stream;
             let mut write_time_ms: u64 = 0;
+            let mut merge_row_metrics = MergeRowMetrics::default();
 
             while let Some(batch_result) = data.next().await {
                 let batch_start = Instant::now();
                 let batch = batch_result?;
+                merge_row_metrics.accumulate_batch(&batch)?;
+                let batch = Self::filter_metric_only_operation_rows(batch)?;
+                let batch = Self::strip_metric_columns(batch)?;
                 let rows: u64 = u64::try_from(batch.num_rows()).unwrap_or_default();
+                if rows == 0 {
+                    continue;
+                }
                 total_rows += rows;
 
                 // Debug: input vs target schema field names for each batch
@@ -682,9 +771,7 @@ impl DeltaWriterExec {
             let mut actions: Vec<Action> = schema_actions;
             actions.extend(add_actions.into_iter().map(Action::Add));
 
-            let operation = operation_override.or(operation);
-
-            let operation_metrics = OperationMetrics {
+            let mut operation_metrics = OperationMetrics {
                 num_files: Some(num_added_files),
                 num_output_rows: Some(total_rows),
                 num_output_bytes: Some(num_added_bytes),
@@ -695,6 +782,29 @@ impl DeltaWriterExec {
                 write_time_ms: Some(write_time_ms.saturating_add(close_time_ms)),
                 ..Default::default()
             };
+            if matches!(operation.as_ref(), Some(DeltaOperation::Merge { .. })) {
+                operation_metrics.num_target_rows_inserted = Some(merge_row_metrics.inserted);
+                operation_metrics.num_target_rows_updated = Some(merge_row_metrics.updated);
+                if merge_row_metrics.deleted > 0 {
+                    operation_metrics.num_target_rows_deleted = Some(merge_row_metrics.deleted);
+                }
+                operation_metrics.num_target_rows_copied = Some(merge_row_metrics.copied);
+                operation_metrics.num_target_rows_matched_updated =
+                    Some(merge_row_metrics.matched_updated);
+                operation_metrics.num_target_rows_not_matched_by_source_updated =
+                    Some(merge_row_metrics.not_matched_by_source_updated);
+                operation_metrics.num_target_rows_matched_deleted =
+                    Some(merge_row_metrics.matched_deleted);
+                operation_metrics.num_target_rows_not_matched_by_source_deleted =
+                    Some(merge_row_metrics.not_matched_by_source_deleted);
+                let source_rows = merge_row_metrics.source_rows();
+                if source_rows > 0
+                    || merge_row_metrics.saw_detailed_merge_op
+                    || merge_row_metrics.uses_source_metric
+                {
+                    operation_metrics.num_source_rows = Some(source_rows);
+                }
+            }
 
             output_rows.add(usize::try_from(total_rows).unwrap_or(usize::MAX));
             output_bytes.add(usize::try_from(num_added_bytes).unwrap_or(usize::MAX));
@@ -751,172 +861,108 @@ impl DeltaWriterExec {
 }
 
 impl DeltaWriterExec {
-    /// Determine the schema mode based on options and save mode
-    fn get_schema_mode(
-        options: &DeltaWriterExecOptions,
-        save_mode: SaveMode,
-    ) -> Result<Option<SchemaMode>> {
-        match (options.merge_schema, options.overwrite_schema) {
-            (true, true) => Err(DataFusionError::Plan(
-                "Cannot specify both mergeSchema and overwriteSchema options".to_string(),
-            )),
-            (false, true) => {
-                if save_mode != SaveMode::Overwrite {
-                    Err(DataFusionError::Plan(
-                        "overwriteSchema option can only be used with overwrite save mode"
-                            .to_string(),
-                    ))
-                } else {
-                    Ok(Some(SchemaMode::Overwrite))
-                }
-            }
-            (true, false) => Ok(Some(SchemaMode::Merge)),
-            (false, false) => Ok(None), // Default, should check
-        }
+    fn is_writer_metric_column(name: &str) -> bool {
+        name == OPERATION_COLUMN || name == MERGE_SOURCE_METRIC_COLUMN
     }
 
-    /// Handle schema evolution based on the schema mode
-    async fn handle_schema_evolution(
-        table: &crate::table::DeltaTable,
-        input_schema: &SchemaRef,
-        schema_mode: Option<SchemaMode>,
-    ) -> Result<(SchemaRef, Vec<Action>)> {
-        let table_metadata = table.snapshot()?.metadata();
-        let table_arrow_schema = Arc::new(
-            table_metadata
-                .parse_schema_arrow()
-                .map_err(|e| DataFusionError::External(Box::new(e)))?,
-        );
-
-        match schema_mode {
-            Some(SchemaMode::Merge) => {
-                // Merge schemas
-                let merged_schema = Self::merge_schemas(&table_arrow_schema, input_schema)?;
-                if merged_schema.fields() != table_arrow_schema.fields() {
-                    // Schema has changed, create metadata action
-                    let candidate_kernel = StructType::try_from(merged_schema.as_ref())
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                    let snapshot = table.snapshot()?;
-                    let current_metadata = snapshot.metadata();
-                    let current_kernel = StructType::try_from(snapshot.schema())
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                    let kmode = snapshot.effective_column_mapping_mode();
-
-                    // Delegate schema evolution to SchemaManager
-                    let (_final_kernel, updated_metadata) =
-                        evolve_schema(&current_kernel, &candidate_kernel, current_metadata, kmode)
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                    // Use merged_schema (Arrow) for downstream planning; metadata carries final kernel schema
-                    Ok((merged_schema, vec![Action::Metadata(updated_metadata)]))
-                } else {
-                    Ok((table_arrow_schema, Vec::new()))
-                }
-            }
-            Some(SchemaMode::Overwrite) => {
-                // Use input schema as-is
-                let candidate_kernel = StructType::try_from(input_schema.as_ref())
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                let snapshot = table.snapshot()?;
-                let current_metadata = snapshot.metadata();
-                let current_kernel = StructType::try_from(snapshot.schema())
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let kmode = snapshot.effective_column_mapping_mode();
-
-                // Delegate schema overwrite to SchemaManager
-                let (_final_kernel, updated_metadata) =
-                    evolve_schema(&current_kernel, &candidate_kernel, current_metadata, kmode)
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-                Ok((
-                    input_schema.clone(),
-                    vec![Action::Metadata(updated_metadata)],
-                ))
-            }
-            None => {
-                // Validate schema compatibility
-                Self::validate_schema_compatibility(&table_arrow_schema, input_schema)?;
-                Ok((table_arrow_schema, Vec::new()))
-            }
+    fn strip_metric_columns(batch: RecordBatch) -> Result<RecordBatch> {
+        if !batch
+            .schema()
+            .fields()
+            .iter()
+            .any(|field| Self::is_writer_metric_column(field.name()))
+        {
+            return Ok(batch);
         }
-    }
-
-    /// Merge two Arrow schemas
-    fn merge_schemas(table_schema: &Schema, input_schema: &Schema) -> Result<SchemaRef> {
-        let mut field_map: HashMap<String, Field> = HashMap::new();
-        let mut field_order: Vec<String> = Vec::new();
-
-        // Add all fields from table schema first (preserve order)
-        for field in table_schema.fields() {
-            let field_name = field.name().clone();
-            field_map.insert(field_name.clone(), field.as_ref().clone());
-            field_order.push(field_name);
-        }
-
-        // Process fields from input schema
-        for input_field in input_schema.fields() {
-            let field_name = input_field.name().clone();
-
-            if let Some(existing_field) = field_map.get(&field_name) {
-                // Field exists in both schemas - check for type compatibility and promotion
-                let promoted_field =
-                    DeltaTypeConverter::promote_field_types(existing_field, input_field)?;
-                field_map.insert(field_name, promoted_field);
-            } else {
-                // New field from input schema
-                field_map.insert(field_name.clone(), input_field.as_ref().clone());
-                field_order.push(field_name);
-            }
-        }
-
-        // Build merged fields in the correct order
-        let merged_fields: Vec<Field> = field_order
-            .into_iter()
-            .map(|name| {
-                field_map.remove(&name).ok_or_else(|| {
-                    DataFusionError::Internal(format!(
-                        "Field '{name}' missing during schema merge construction",
-                    ))
-                })
+        let fields = batch
+            .schema()
+            .fields()
+            .iter()
+            .enumerate()
+            .filter(|(_, field)| !Self::is_writer_metric_column(field.name()))
+            .map(|(_, field)| field.as_ref().clone())
+            .collect::<Vec<_>>();
+        let columns = batch
+            .columns()
+            .iter()
+            .enumerate()
+            .filter(|(column_index, _)| {
+                !Self::is_writer_metric_column(batch.schema().field(*column_index).name())
             })
-            .collect::<Result<Vec<Field>>>()?;
-
-        Ok(Arc::new(Schema::new(merged_fields)))
+            .map(|(_, column)| Arc::clone(column))
+            .collect::<Vec<_>>();
+        RecordBatch::try_new(Arc::new(Schema::new(fields)), columns)
+            .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
     }
 
-    /// Validate schema compatibility
-    fn validate_schema_compatibility(table_schema: &Schema, input_schema: &Schema) -> Result<()> {
-        // Simple validation: check if all input fields exist in table schema with compatible types
-        for input_field in input_schema.fields() {
-            match table_schema.field_with_name(input_field.name()) {
-                Ok(table_field) => {
-                    if table_field.data_type() != input_field.data_type()
-                        && DeltaTypeConverter::validate_cast_safety(
-                            input_field.data_type(),
-                            table_field.data_type(),
-                            input_field.name(),
-                        )
-                        .is_err()
-                    {
-                        return Err(DataFusionError::Plan(format!(
-                            "Schema mismatch for field '{}': table has type {:?}, input has type {:?}. Use mergeSchema=true to allow schema evolution.",
-                            input_field.name(),
-                            table_field.data_type(),
-                            input_field.data_type()
-                        )));
-                    }
-                }
-                Err(_) => {
-                    return Err(DataFusionError::Plan(format!(
-                        "Field '{}' not found in table schema. Use mergeSchema=true to allow schema evolution.",
-                        input_field.name()
-                    )));
+    fn filter_metric_only_operation_rows(batch: RecordBatch) -> Result<RecordBatch> {
+        let Some(mask) = Self::metric_only_filter_mask(&batch)? else {
+            return Ok(batch);
+        };
+        filter_record_batch(&batch, &mask)
+            .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
+    }
+
+    // TODO: Move row-intent filtering/counting into a shared helper once another
+    // row-level writer consumes `OPERATION_COLUMN`.
+    fn metric_only_filter_mask(batch: &RecordBatch) -> Result<Option<BooleanArray>> {
+        let Some((index, _)) = batch.schema().column_with_name(OPERATION_COLUMN) else {
+            return Ok(None);
+        };
+        let column = batch.column(index);
+        let mut has_metric_only_row = false;
+        let mut builder = BooleanBuilder::with_capacity(column.len());
+
+        let is_metric_only = |value| {
+            matches!(
+                value,
+                v if v == i64::from(RowLevelOperationType::Noop.as_i32())
+                    || v == i64::from(RowLevelOperationType::Delete.as_i32())
+                    || v == i64::from(RowLevelOperationType::MatchedDelete.as_i32())
+                    || v == i64::from(RowLevelOperationType::NotMatchedBySourceDelete.as_i32())
+                    || v == i64::from(RowLevelOperationType::SourceMetric.as_i32())
+            )
+        };
+
+        match column.data_type() {
+            DataType::Int32 => {
+                let values = column
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "failed to downcast {OPERATION_COLUMN} as Int32"
+                        ))
+                    })?;
+                for row in 0..values.len() {
+                    let keep = values.is_null(row) || !is_metric_only(i64::from(values.value(row)));
+                    has_metric_only_row |= !keep;
+                    builder.append_value(keep);
                 }
             }
+            DataType::Int64 => {
+                let values = column
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .ok_or_else(|| {
+                        DataFusionError::Internal(format!(
+                            "failed to downcast {OPERATION_COLUMN} as Int64"
+                        ))
+                    })?;
+                for row in 0..values.len() {
+                    let keep = values.is_null(row) || !is_metric_only(values.value(row));
+                    has_metric_only_row |= !keep;
+                    builder.append_value(keep);
+                }
+            }
+            other => {
+                return Err(DataFusionError::Plan(format!(
+                    "row-level operation column {OPERATION_COLUMN} must be Int32 or Int64, got {other:?}"
+                )));
+            }
         }
-        Ok(())
+
+        Ok(has_metric_only_row.then(|| builder.finish()))
     }
 
     /// Validate and adapt a batch to match the final schema
@@ -1044,53 +1090,6 @@ impl DeltaWriterExec {
         RecordBatch::try_new(final_schema.clone(), adapted_columns)
             .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
     }
-}
-
-/// Attach `delta.generationExpression` metadata to top-level fields based on a column-name keyed map.
-///
-/// DataFusion's physical planner may strip `Field::metadata` set via
-/// `Expr::Alias::with_metadata` when lowering logical expressions to arrow, which
-/// means a downstream `StructType::try_from(arrow_schema)` loses per-field
-/// generation expressions. This helper re-attaches them from a map resolved at
-/// plan-build time from the logical schema.
-fn inject_generation_expressions(
-    schema: StructType,
-    generation_expressions: &HashMap<String, String>,
-) -> StructType {
-    let fields = schema.into_fields().map(|field| {
-        if let Some(expr) = generation_expressions.get(&field.name) {
-            let existing_expr = field
-                .metadata
-                .get(ColumnMetadataKey::GenerationExpression.as_ref())
-                .and_then(|v| match v {
-                    MetadataValue::String(s) => Some(s.clone()),
-                    _ => None,
-                });
-            if existing_expr.as_deref() == Some(expr.as_str()) {
-                field
-            } else {
-                let StructField {
-                    name,
-                    data_type,
-                    nullable,
-                    mut metadata,
-                } = field;
-                metadata.insert(
-                    ColumnMetadataKey::GenerationExpression.as_ref().to_string(),
-                    MetadataValue::String(expr.clone()),
-                );
-                StructField {
-                    name,
-                    data_type,
-                    nullable,
-                    metadata,
-                }
-            }
-        } else {
-            field
-        }
-    });
-    StructType::new_unchecked(fields)
 }
 
 fn reinterpret_timestamp_timezone(

@@ -3,27 +3,32 @@ use sail_common::spec;
 use sail_common::spec::QueryPlan;
 use sail_sql_parser::ast::expression::{BooleanLiteral, Expr, OrderDirection};
 use sail_sql_parser::ast::identifier::{Ident, ObjectName};
-use sail_sql_parser::ast::keywords::{Cascade, Global, Overwrite, Restrict, Temp, Temporary};
+use sail_sql_parser::ast::keywords::{Cascade, Overwrite, Restrict};
 use sail_sql_parser::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use sail_sql_parser::ast::operator::{Minus, Plus};
 use sail_sql_parser::ast::query::{IdentList, WhereClause};
 use sail_sql_parser::ast::statement::{
-    AlterTableOperation, AlterViewOperation, AnalyzeTableModifier, AsQueryClause, Assignment,
-    AssignmentList, ColumnAlteration, ColumnAlterationList, ColumnAlterationOption,
-    ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption, ColumnPosition,
-    ColumnTypeDefinition, CommentValue, CreateDatabaseClause, CreateTableClause, CreateViewClause,
-    DeleteTableAlias, DescribeItem, ExplainFormat, FileFormat, InsertDirectoryDestination,
-    MergeMatchClause, MergeMatchedAction, MergeNotMatchedBySourceAction,
-    MergeNotMatchedByTargetAction, MergeSource, PartitionByItem, PartitionByList, PartitionClause,
-    PartitionValue, PartitionValueList, PropertyKey, PropertyKeyList, PropertyKeyValue,
-    PropertyList, PropertyValue, RowFormat, RowFormatDelimitedClause, SetClause, SortColumn,
-    SortColumnList, Statement, UpdateTableAlias, ViewColumn,
+    AlterColumnOperation, AlterTableOperation, AlterViewOperation, AnalyzeTableModifier,
+    AsQueryClause, Assignment, AssignmentList, ColumnAlteration, ColumnAlterationList,
+    ColumnAlterationOption, ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption,
+    ColumnPosition, ColumnTypeDefinition, CommentValue, CreateDatabaseClause, CreateTableClause,
+    CreateViewClause, CreateViewDefinition, DeleteTableAlias, DescribeItem, ExplainFormat,
+    FileFormat, InsertDirectoryDestination, MergeMatchClause, MergeMatchedAction,
+    MergeNotMatchedBySourceAction, MergeNotMatchedByTargetAction, MergeSource, PartitionByItem,
+    PartitionByList, PartitionClause, PartitionValue, PartitionValueList, PropertyKey,
+    PropertyKeyList, PropertyKeyValue, PropertyList, PropertyValue, RowFormat,
+    RowFormatDelimitedClause, SetClause, SortColumn, SortColumnClause, SortColumnList, Statement,
+    TableColumnIdentityOption, TableColumnIdentityOptions, UpdateTableAlias, ViewColumn,
+    ViewColumnList, ViewUsingClause,
 };
 use sail_sql_parser::tree::TreeText;
 
 use crate::data_type::from_ast_data_type;
 use crate::error::{SqlError, SqlResult};
-use crate::expression::{from_ast_expression, from_ast_identifier_list, from_ast_object_name};
+use crate::expression::{
+    expr_with_default_column_values, from_ast_expression, from_ast_identifier_list,
+    from_ast_object_name,
+};
 use crate::query::from_ast_query;
 use crate::value::from_ast_string;
 
@@ -146,7 +151,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             create: _,
             or_replace,
             temporary: _, // TODO: handle temporary tables
-            external: _,  // TODO: handle external tables
+            external,
             table: _,
             if_not_exists,
             name,
@@ -160,6 +165,8 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                 return Err(SqlError::todo("LIKE in CREATE TABLE"));
             }
             let definition = TableDefinition {
+                external: external.is_some(),
+                replace: false,
                 or_replace: or_replace.is_some(),
                 if_not_exists: if_not_exists.is_some(),
                 using: using.map(|(_, x)| x),
@@ -182,6 +189,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
         }
         Statement::ReplaceTable {
             replace: _,
+            external,
             table: _,
             name,
             columns,
@@ -190,7 +198,9 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             r#as,
         } => {
             let definition = TableDefinition {
-                or_replace: true,
+                external: external.is_some(),
+                replace: true,
+                or_replace: false,
                 if_not_exists: false,
                 using: using.map(|(_, x)| x),
                 columns,
@@ -309,43 +319,17 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
         Statement::CreateView {
             create: _,
             or_replace,
-            global_temporary,
-            view: _,
-            if_not_exists,
-            name,
-            columns,
-            clauses,
-            r#as: _,
-            query,
+            definition,
         } => {
-            let columns = if let Some((_, columns, _)) = columns {
-                Some(
-                    columns
-                        .into_items()
-                        .map(|ViewColumn { name, comment }| {
-                            let comment = comment.map(|(_, s)| from_ast_string(s)).transpose()?;
-                            Ok(spec::ViewColumnDefinition {
-                                name: name.value,
-                                comment,
-                            })
-                        })
-                        .collect::<SqlResult<Vec<_>>>()?,
+            let view_columns = |columns: Option<ViewColumnList>| {
+                columns.map(
+                    |ViewColumnList {
+                         left: _,
+                         columns,
+                         right: _,
+                     }| columns.into_items().collect::<Vec<_>>(),
                 )
-            } else {
-                None
             };
-            let query_text = query.text();
-            let query = from_ast_query(query)?;
-            let name = from_ast_object_name(name)?;
-            let CreateViewClauses {
-                comment,
-                properties,
-            } = clauses.try_into()?;
-            let comment = comment.map(from_ast_string).transpose()?;
-            let properties = properties
-                .map(from_ast_property_list)
-                .transpose()?
-                .unwrap_or_default();
             let temporary_view_name = |name: spec::ObjectName| {
                 let mut name: Vec<String> = name.into();
                 match (name.pop(), name.is_empty()) {
@@ -355,48 +339,133 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     )),
                 }
             };
-            let node = match global_temporary {
-                Some((
-                    Some(Global { .. }),
-                    Either::Left(Temp { .. }) | Either::Right(Temporary { .. }),
-                )) => spec::CommandNode::CreateTemporaryView {
-                    view: temporary_view_name(name)?,
-                    is_global: true,
-                    definition: spec::TemporaryViewDefinition {
-                        input: Box::new(query),
-                        columns,
-                        if_not_exists: if_not_exists.is_some(),
-                        replace: or_replace.is_some(),
+            let node = match definition {
+                CreateViewDefinition::Query {
+                    temporary,
+                    view: _,
+                    if_not_exists,
+                    name,
+                    columns,
+                    clauses,
+                    r#as: _,
+                    query,
+                } => {
+                    let name = from_ast_object_name(name)?;
+                    let CreateViewClauses {
                         comment,
                         properties,
-                    },
-                },
-                Some((None, Either::Left(Temp { .. }) | Either::Right(Temporary { .. }))) => {
+                    } = clauses.try_into()?;
+                    let comment = comment.map(from_ast_string).transpose()?;
+                    let properties = properties
+                        .map(from_ast_property_list)
+                        .transpose()?
+                        .unwrap_or_default();
+                    if if_not_exists.is_some() && or_replace.is_some() {
+                        return Err(SqlError::invalid(
+                            "CREATE VIEW with both IF NOT EXISTS and REPLACE is not allowed",
+                        ));
+                    }
+                    if temporary.is_some() && !properties.is_empty() {
+                        return Err(SqlError::invalid(
+                            "TBLPROPERTIES can't coexist with CREATE TEMPORARY VIEW",
+                        ));
+                    }
+                    if temporary.is_some() && if_not_exists.is_some() {
+                        return Err(SqlError::invalid(
+                            "It is not allowed to define a TEMPORARY view with IF NOT EXISTS",
+                        ));
+                    }
+                    let columns = view_columns(columns)
+                        .map(from_ast_view_columns)
+                        .transpose()?;
+                    let query_text = query.text();
+                    let query = from_ast_query(query)?;
+                    if let Some(temporary) = temporary {
+                        spec::CommandNode::CreateTemporaryView {
+                            view: temporary_view_name(name)?,
+                            is_global: temporary.global.is_some(),
+                            definition: spec::TemporaryViewDefinition {
+                                input: Box::new(query),
+                                columns,
+                                if_not_exists: if_not_exists.is_some(),
+                                replace: or_replace.is_some(),
+                                comment,
+                                properties,
+                            },
+                        }
+                    } else {
+                        spec::CommandNode::CreateView {
+                            view: name,
+                            definition: spec::ViewDefinition {
+                                definition: query_text,
+                                input: Box::new(query),
+                                columns,
+                                if_not_exists: if_not_exists.is_some(),
+                                replace: or_replace.is_some(),
+                                comment,
+                                properties,
+                            },
+                        }
+                    }
+                }
+                CreateViewDefinition::Using {
+                    temporary,
+                    view: _,
+                    name,
+                    columns,
+                    using:
+                        ViewUsingClause {
+                            using: _,
+                            format,
+                            options,
+                        },
+                } => {
+                    let name = from_ast_object_name(name)?;
+                    let (schema, columns) = view_columns(columns)
+                        .map(from_ast_view_using_columns)
+                        .transpose()?
+                        .map(|(schema, columns)| (Some(schema), Some(columns)))
+                        .unwrap_or((None, None));
+                    let options = options
+                        .map(|(_, x)| from_ast_property_list(x))
+                        .transpose()?
+                        .unwrap_or_default();
+                    // The path is also kept in the options, since data sources such as
+                    // Python data sources read the path from the options.
+                    // Only the `path` option is a path source; `location` is forwarded
+                    // as an ordinary option and never used as the path in Spark.
+                    let paths = options
+                        .iter()
+                        .rfind(|(key, _)| key.eq_ignore_ascii_case("path"))
+                        .map(|(_, value)| vec![value.clone()])
+                        .ok_or_else(|| {
+                            SqlError::invalid(
+                                "the data source path must be specified for CREATE TEMPORARY VIEW ... USING",
+                            )
+                        })?;
+                    let input = spec::QueryPlan::new(spec::QueryNode::Read {
+                        read_type: spec::ReadType::DataSource(Box::new(spec::ReadDataSource {
+                            format: Some(format.value),
+                            schema,
+                            options,
+                            paths,
+                            predicates: vec![],
+                        })),
+                        is_streaming: false,
+                    });
                     spec::CommandNode::CreateTemporaryView {
                         view: temporary_view_name(name)?,
-                        is_global: false,
+                        is_global: temporary.global.is_some(),
                         definition: spec::TemporaryViewDefinition {
-                            input: Box::new(query),
+                            input: Box::new(input),
                             columns,
-                            if_not_exists: if_not_exists.is_some(),
+                            if_not_exists: false,
                             replace: or_replace.is_some(),
-                            comment,
-                            properties,
+                            comment: None,
+                            properties: vec![],
                         },
                     }
                 }
-                None => spec::CommandNode::CreateView {
-                    view: name,
-                    definition: spec::ViewDefinition {
-                        definition: query_text,
-                        input: Box::new(query),
-                        columns,
-                        if_not_exists: if_not_exists.is_some(),
-                        replace: or_replace.is_some(),
-                        comment,
-                        properties,
-                    },
-                },
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
@@ -743,6 +812,10 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                                         values.len()
                                     )));
                                 }
+                                let values = values
+                                    .into_iter()
+                                    .map(expr_with_default_column_values)
+                                    .collect();
                                 spec::MergeNotMatchedByTargetAction::InsertColumns {
                                     columns,
                                     values,
@@ -1143,6 +1216,8 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
 }
 
 struct TableDefinition {
+    external: bool,
+    replace: bool,
     or_replace: bool,
     if_not_exists: bool,
     using: Option<Ident>,
@@ -1155,6 +1230,8 @@ fn from_ast_table_definition(
     definition: TableDefinition,
 ) -> SqlResult<(spec::TableDefinition, Option<Box<QueryPlan>>)> {
     let TableDefinition {
+        external,
+        replace,
         or_replace,
         if_not_exists,
         using,
@@ -1173,6 +1250,19 @@ fn from_ast_table_definition(
             },
         query,
     } = definition;
+    let mode = if replace {
+        spec::CreateTableMode::Replace
+    } else if or_replace && if_not_exists {
+        return Err(SqlError::invalid(
+            "CREATE OR REPLACE TABLE cannot be used with IF NOT EXISTS",
+        ));
+    } else if or_replace {
+        spec::CreateTableMode::CreateOrReplace
+    } else if if_not_exists {
+        spec::CreateTableMode::CreateIfNotExists
+    } else {
+        spec::CreateTableMode::Create
+    };
     let row_format = row_format.map(from_ast_row_format).transpose()?;
     let file_format = match (using, stored_as) {
         (Some(using), None) => Some(spec::TableFileFormat::General {
@@ -1206,6 +1296,7 @@ fn from_ast_table_definition(
                         default: None,
                         comment,
                         generated_always_as: None,
+                        identity: None,
                     },
                 ))
             }
@@ -1248,20 +1339,22 @@ fn from_ast_table_definition(
     let options = options.map(from_ast_property_list).transpose()?;
     let properties = properties.map(from_ast_property_list).transpose()?;
     let columns = from_ast_table_columns(columns)?;
+    let location = location.map(from_ast_string).transpose()?;
+    let options = options.into_iter().flatten().collect();
     let definition = spec::TableDefinition {
+        external,
         columns,
         comment: comment.map(from_ast_string).transpose()?,
         constraints: vec![],
-        location: location.map(from_ast_string).transpose()?,
+        location,
         file_format,
         row_format,
         partition_by,
         sort_by,
         bucket_by,
         cluster_by,
-        if_not_exists,
-        replace: or_replace,
-        options: options.into_iter().flatten().collect(),
+        mode,
+        options,
         properties: properties.into_iter().flatten().collect(),
     };
     let query = query
@@ -1292,26 +1385,102 @@ fn from_ast_table_columns(
             data_type,
             options,
         } = column;
-        // TODO: support `default` SQL expression strings
         let ColumnDefinitionOptions {
             not_null,
-            default: _,
+            default,
             generated_always_as,
+            identity,
             comment,
         } = options.try_into()?;
         let comment = comment.map(from_ast_string).transpose()?;
+        let default = default.map(|expr| expr.text().trim().to_string());
         let generated_always_as = generated_always_as.map(|expr| expr.text().trim().to_string());
+        let identity = identity
+            .map(|(options, allow_explicit_insert)| {
+                from_ast_identity_column(options, allow_explicit_insert)
+            })
+            .transpose()?;
         let column = spec::TableColumnDefinition {
             name: name.value,
             data_type: from_ast_data_type(data_type)?,
             nullable: !not_null,
-            default: None,
+            default,
             generated_always_as,
+            identity,
             comment,
         };
         output.push(column);
     }
     Ok(output)
+}
+
+fn from_ast_view_columns(columns: Vec<ViewColumn>) -> SqlResult<Vec<spec::ViewColumnDefinition>> {
+    columns
+        .into_iter()
+        .map(|column| {
+            let ViewColumn {
+                name,
+                data_type,
+                not_null,
+                comment,
+            } = column;
+            if data_type.is_some() || not_null.is_some() {
+                return Err(SqlError::invalid(
+                    "a typed column list can only be used in CREATE TEMPORARY VIEW ... USING",
+                ));
+            }
+            let comment = comment.map(|(_, s)| from_ast_string(s)).transpose()?;
+            Ok(spec::ViewColumnDefinition {
+                name: name.value,
+                comment,
+            })
+        })
+        .collect::<SqlResult<Vec<_>>>()
+}
+
+fn from_ast_view_using_columns(
+    columns: Vec<ViewColumn>,
+) -> SqlResult<(spec::Schema, Vec<spec::ViewColumnDefinition>)> {
+    let columns = columns
+        .into_iter()
+        .map(|column| {
+            let ViewColumn {
+                name,
+                data_type,
+                not_null,
+                comment,
+            } = column;
+            let Some(data_type) = data_type else {
+                return Err(SqlError::invalid(
+                    "expected a data type for each column in CREATE TEMPORARY VIEW ... USING",
+                ));
+            };
+            let comment = comment
+                .map(|(_, comment)| from_ast_string(comment))
+                .transpose()?;
+            let mut metadata = vec![];
+            if let Some(comment) = comment.clone() {
+                metadata.push(("comment".to_string(), comment));
+            }
+            let name = name.value;
+            Ok((
+                spec::Field {
+                    name: name.clone(),
+                    data_type: from_ast_data_type(data_type)?,
+                    nullable: not_null.is_none(),
+                    metadata,
+                },
+                spec::ViewColumnDefinition { name, comment },
+            ))
+        })
+        .collect::<SqlResult<Vec<_>>>()?;
+    let (fields, columns): (Vec<_>, Vec<_>) = columns.into_iter().unzip();
+    Ok((
+        spec::Schema {
+            fields: fields.into(),
+        },
+        columns,
+    ))
 }
 
 fn from_ast_row_format(format: RowFormat) -> SqlResult<spec::TableRowFormat> {
@@ -1437,6 +1606,7 @@ struct ColumnDefinitionOptions {
     not_null: bool,
     default: Option<Expr>,
     generated_always_as: Option<Expr>,
+    identity: Option<(Option<TableColumnIdentityOptions>, bool)>,
     comment: Option<StringLiteral>,
 }
 
@@ -1463,6 +1633,16 @@ impl TryFrom<Vec<ColumnDefinitionOption>> for ColumnDefinitionOptions {
                         return Err(SqlError::invalid("duplicate GENERATED clause"));
                     }
                 }
+                ColumnDefinitionOption::GeneratedAlwaysIdentity(_, _, _, _, options) => {
+                    if output.identity.replace((options, false)).is_some() {
+                        return Err(SqlError::invalid("duplicate GENERATED clause"));
+                    }
+                }
+                ColumnDefinitionOption::GeneratedByDefaultIdentity(_, _, _, _, _, options) => {
+                    if output.identity.replace((options, true)).is_some() {
+                        return Err(SqlError::invalid("duplicate GENERATED clause"));
+                    }
+                }
                 ColumnDefinitionOption::Comment(_, x) => {
                     if output.comment.replace(x).is_some() {
                         return Err(SqlError::invalid("duplicate COMMENT clause"));
@@ -1470,8 +1650,79 @@ impl TryFrom<Vec<ColumnDefinitionOption>> for ColumnDefinitionOptions {
                 }
             }
         }
+        if output.generated_always_as.is_some() && output.identity.is_some() {
+            return Err(SqlError::invalid(
+                "a column cannot have both a generation expression and identity",
+            ));
+        }
         Ok(output)
     }
+}
+
+fn from_ast_identity_column(
+    options: Option<TableColumnIdentityOptions>,
+    allow_explicit_insert: bool,
+) -> SqlResult<spec::TableColumnIdentity> {
+    let mut start = None;
+    let mut step = None;
+    if let Some(TableColumnIdentityOptions {
+        left: _,
+        options,
+        right: _,
+    }) = options
+    {
+        for option in options {
+            match option {
+                TableColumnIdentityOption::StartWith(_, _, sign, value) => {
+                    if start
+                        .replace(from_ast_identity_i64(sign, value, "START WITH")?)
+                        .is_some()
+                    {
+                        return Err(SqlError::invalid(
+                            "duplicate START WITH clause for identity column",
+                        ));
+                    }
+                }
+                TableColumnIdentityOption::IncrementBy(_, _, sign, value) => {
+                    if step
+                        .replace(from_ast_identity_i64(sign, value, "INCREMENT BY")?)
+                        .is_some()
+                    {
+                        return Err(SqlError::invalid(
+                            "duplicate INCREMENT BY clause for identity column",
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    Ok(spec::TableColumnIdentity {
+        start,
+        step,
+        allow_explicit_insert,
+    })
+}
+
+fn from_ast_identity_i64(
+    sign: Option<Either<Plus, Minus>>,
+    value: NumberLiteral,
+    clause: &str,
+) -> SqlResult<i64> {
+    let raw = value.value.as_str();
+    let unsigned = raw.parse::<i128>().map_err(|_| {
+        SqlError::invalid(format!(
+            "{clause} value for identity column must be an integer literal"
+        ))
+    })?;
+    let signed = match sign {
+        Some(Either::Right(_)) => -unsigned,
+        _ => unsigned,
+    };
+    i64::try_from(signed).map_err(|_| {
+        SqlError::invalid(format!(
+            "{clause} value for identity column is outside the BIGINT range"
+        ))
+    })
 }
 
 #[derive(Default)]
@@ -1570,15 +1821,16 @@ impl TryFrom<Vec<CreateTableClause>> for CreateTableClauses {
                     let bucket_by = CreateTableBucketBy {
                         columns: names.into_items().collect(),
                         sort_columns: sort.map(
-                            |(
-                                _,
-                                _,
-                                SortColumnList {
-                                    left: _,
-                                    columns,
-                                    right: _,
-                                },
-                            )| columns.into_items().collect(),
+                            |SortColumnClause {
+                                 sorted: _,
+                                 by: _,
+                                 columns:
+                                     SortColumnList {
+                                         left: _,
+                                         columns,
+                                         right: _,
+                                     },
+                             }| columns.into_items().collect(),
                         ),
                         buckets: n,
                     };
@@ -1766,11 +2018,7 @@ fn from_ast_sort_column(sort: SortColumn) -> SqlResult<spec::SortOrder> {
         None => spec::SortDirection::Unspecified,
     };
     Ok(spec::SortOrder {
-        child: Box::new(spec::Expr::UnresolvedAttribute {
-            name: spec::ObjectName::bare(column.value),
-            plan_id: None,
-            is_metadata_column: false,
-        }),
+        child: Box::new(from_ast_expression(column)?),
         direction,
         null_ordering: spec::NullOrdering::Unspecified,
     })
@@ -1896,7 +2144,10 @@ fn from_ast_merge_assignment_list(
         .into_items()
         .map(|assignment| {
             let Assignment { target, value, .. } = assignment;
-            Ok((from_ast_object_name(target)?, from_ast_expression(value)?))
+            Ok((
+                from_ast_object_name(target)?,
+                expr_with_default_column_values(from_ast_expression(value)?),
+            ))
         })
         .collect()
 }
@@ -1920,16 +2171,52 @@ fn from_ast_alter_table_operation(
                 if_exists: if_exists.is_some(),
             })
         }
+        AlterTableOperation::AlterColumn {
+            name,
+            operation: AlterColumnOperation::Type(_, data_type),
+            ..
+        } => Ok(spec::AlterTableOperation::AlterColumnType {
+            name: from_ast_object_name(name)?,
+            data_type: from_ast_data_type(data_type)?,
+        }),
+        AlterTableOperation::AlterColumn {
+            name,
+            operation: AlterColumnOperation::SetDefault(_, _, expr),
+            ..
+        } => Ok(spec::AlterTableOperation::AlterColumnDefault {
+            name: from_ast_object_name(name)?,
+            default: Some(expr.text().trim().to_string()),
+        }),
+        AlterTableOperation::AlterColumn {
+            name,
+            operation: AlterColumnOperation::DropDefault(_, _),
+            ..
+        } => Ok(spec::AlterTableOperation::AlterColumnDefault {
+            name: from_ast_object_name(name)?,
+            default: None,
+        }),
+        AlterTableOperation::AddConstraint {
+            name, expression, ..
+        } => {
+            let source = expression.text().trim().to_string();
+            Ok(spec::AlterTableOperation::AddCheckConstraint {
+                name: name.value.into(),
+                expression: spec::ExprWithSource {
+                    expr: from_ast_expression(expression)?,
+                    source: Some(source),
+                },
+            })
+        }
         AlterTableOperation::RenameTable { .. }
         | AlterTableOperation::RenamePartition { .. }
         | AlterTableOperation::DropColumns { .. }
         | AlterTableOperation::RenameColumn { .. }
-        | AlterTableOperation::AlterColumn { .. }
         | AlterTableOperation::AddPartitions { .. }
         | AlterTableOperation::DropPartition { .. }
         | AlterTableOperation::SetFileFormat { .. }
         | AlterTableOperation::SetLocation { .. }
         | AlterTableOperation::RecoverPartitions { .. } => Ok(spec::AlterTableOperation::Unknown),
+        AlterTableOperation::AlterColumn { .. } => Ok(spec::AlterTableOperation::Unknown),
         AlterTableOperation::AddColumns { items, .. }
         | AlterTableOperation::ReplaceColumns { items, .. } => {
             // Validate column descriptors (e.g. detect duplicate COMMENT/DEFAULT/NOT NULL/POSITION
@@ -1945,7 +2232,3 @@ fn from_ast_alter_view_operation(
 ) -> SqlResult<spec::AlterViewOperation> {
     Ok(spec::AlterViewOperation::Unknown)
 }
-
-// TODO: add the following test cases as gold tests:
-//   `CREATE TABLE foo.1m(a INT)`
-//   `CREATE TABLE foo.1m(a INT) USING parquet`

@@ -505,7 +505,16 @@
                 "t1"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumnDefault": {
+                  "name": [
+                    "a",
+                    "b",
+                    "c"
+                  ],
+                  "default": null
+                }
+              }
             },
             "planId": null
           }
@@ -536,7 +545,16 @@
                 "t1"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumnDefault": {
+                  "name": [
+                    "a",
+                    "b",
+                    "c"
+                  ],
+                  "default": "''"
+                }
+              }
             },
             "planId": null
           }
@@ -553,7 +571,16 @@
                 "t1"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumnDefault": {
+                  "name": [
+                    "a",
+                    "b",
+                    "c"
+                  ],
+                  "default": "42"
+                }
+              }
             },
             "planId": null
           }
@@ -804,7 +831,16 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumnType": {
+                  "name": [
+                    "a",
+                    "b",
+                    "c"
+                  ],
+                  "data_type": "int64"
+                }
+              }
             },
             "planId": null
           }
@@ -876,7 +912,16 @@
                 "table_name"
               ],
               "ifExists": false,
-              "operation": "unknown"
+              "operation": {
+                "alterColumnType": {
+                  "name": [
+                    "a",
+                    "b",
+                    "c"
+                  ],
+                  "data_type": "int64"
+                }
+              }
             },
             "planId": null
           }

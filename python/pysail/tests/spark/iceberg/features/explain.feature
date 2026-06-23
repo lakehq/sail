@@ -29,6 +29,32 @@ Feature: Iceberg Query Optimization
         """
       Then query plan matches snapshot
 
+    Scenario: EXPLAIN shows partition pruning for day transform on timestamp
+      Given statement template
+        """
+        CREATE TABLE prune_table (id INT, payload_timestamp TIMESTAMP, payload STRING)
+        USING iceberg
+        PARTITIONED BY (days(payload_timestamp))
+        LOCATION {{ location.uri }}
+        """
+      Given statement
+        """
+        INSERT INTO prune_table VALUES
+          (1, TIMESTAMP '2024-01-01 10:00:00', 'day1-a'),
+          (2, TIMESTAMP '2024-01-01 11:00:00', 'day1-b'),
+          (3, TIMESTAMP '2024-01-02 10:00:00', 'day2-a'),
+          (4, TIMESTAMP '2024-01-02 11:00:00', 'day2-b'),
+          (5, TIMESTAMP '2024-01-03 10:00:00', 'day3-a'),
+          (6, TIMESTAMP '2024-01-03 11:00:00', 'day3-b')
+        """
+      When query
+        """
+        EXPLAIN SELECT * FROM prune_table
+        WHERE payload_timestamp >= TIMESTAMP '2024-01-02 00:00:00'
+          AND payload_timestamp < TIMESTAMP '2024-01-03 00:00:00'
+        """
+      Then query plan matches snapshot
+
     Scenario: EXPLAIN for unpartitioned table scan
       Given statement template
         """
