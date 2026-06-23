@@ -12,27 +12,31 @@
 
 mod catalog;
 mod catalog_managed;
+mod checkpoint;
 pub mod conversion;
 pub mod datasource;
 pub mod deletion_vector;
 mod delta_log;
 pub mod error;
-mod kernel;
 pub mod logical;
-pub mod operations;
 pub mod options;
 pub mod physical;
 pub mod physical_plan;
 pub mod schema;
 pub mod session_extension;
+mod snapshot;
 pub mod spec;
-pub mod storage;
 pub mod table;
 pub mod table_format;
+mod transaction;
+mod writer;
 
 pub use logical::DeltaTableSource;
 pub use table::create_delta_source;
 pub use table_format::DeltaTableFormat;
 
-pub use crate::kernel::DeltaSnapshotConfig;
+pub use crate::delta_log::{
+    CommitOrBytes, LogStore, LogStoreConfig, LogStoreRef, ObjectStoreRef, StorageConfig,
+};
+pub use crate::snapshot::DeltaSnapshotConfig;
 pub use crate::spec::{DeltaError, DeltaError as DeltaTableError, DeltaResult};

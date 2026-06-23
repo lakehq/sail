@@ -33,25 +33,26 @@ use parquet::arrow::async_writer::ParquetObjectWriter;
 use parquet::arrow::AsyncArrowWriter;
 use uuid::Uuid;
 
+use crate::checkpoint::action_fields::{
+    normalize_checkpoint_batch_for_decode, AddAugmentationConfig,
+};
+use crate::delta_log::segment_files::ReplayedTableHeader;
+use crate::delta_log::{
+    get_actions, list_delta_log_entries_from, parse_checkpoint_version_from_location,
+    parse_commit_version_from_location, read_last_checkpoint_version_from_store,
+    resolve_commit_timestamp_from_actions, LogStore,
+};
 pub(crate) use crate::delta_log::{
     latest_replayable_version, load_replayed_table_header, load_replayed_table_state,
 };
-use crate::delta_log::{
-    list_delta_log_entries_from, parse_checkpoint_version_from_location,
-    parse_commit_version_from_location, read_last_checkpoint_version_from_store,
-    resolve_commit_timestamp_from_actions,
-};
-use crate::kernel::checkpoint_augment::{
-    normalize_checkpoint_batch_for_decode, AddAugmentationConfig,
-};
-use crate::kernel::log_segment::ReplayedTableHeader;
 use crate::spec::{
-    checkpoint_path, is_json_checkpoint_filename, last_checkpoint_path, sidecar_file_path,
-    uuid_checkpoint_path, Action, Add, CheckpointActionRow, CheckpointMetadata,
-    DeltaError as DeltaTableError, DeltaResult, DomainMetadata, LastCheckpointHint, Metadata,
-    Protocol, Remove, Sidecar, TableFeature, TableProperties, Transaction,
+    checkpoint_path, is_json_checkpoint_filename, last_checkpoint_path, logical_file_key,
+    sidecar_file_path, uuid_checkpoint_path, Action, Add, CheckpointActionRow, CheckpointMetadata,
+    DeltaError as DeltaTableError, DeltaResult, DomainMetadata, LastCheckpointHint, LogicalFileKey,
+    Metadata, Protocol, Remove, Sidecar, TableFeature, TableProperties, Transaction,
 };
-use crate::storage::{get_actions, LogStore};
+
+mod action_fields;
 
 #[derive(Debug, Clone, Copy)]
 struct CheckpointRetentionTimestamps {
@@ -94,23 +95,6 @@ fn retention_cutoff_timestamp(
                 "Failed to compute retention cutoff for {property_name}"
             ))
         })
-}
-
-/// Primary key for a logical file in the Delta log: `(path, uniqueId)`.
-///
-/// Per the Delta protocol, a logical file is identified by its data-file path
-/// combined with the `uniqueId` of its Deletion Vector (or `None` if no DV is
-/// present). This composite key correctly handles tables where the same physical
-/// path appears with different Deletion Vectors across successive commits.
-type LogicalFileKey = (String, Option<String>);
-
-/// Compute the logical file key for an `Add` or `Remove` action.
-#[inline]
-fn logical_file_key(
-    path: &str,
-    dv: Option<&crate::spec::DeletionVectorDescriptor>,
-) -> LogicalFileKey {
-    (path.to_string(), dv.map(|d| d.unique_id()))
 }
 
 #[derive(Debug, Default)]
@@ -1394,7 +1378,7 @@ mod tests {
         read_checkpoint_rows_from_checkpoint_file, replay_commit_header_actions,
         ReconciledCheckpointState, ReconciledHeaderState,
     };
-    use crate::kernel::checkpoint_augment::{
+    use crate::checkpoint::action_fields::{
         normalize_checkpoint_batch_for_decode, AddAugmentationConfig,
     };
     use crate::spec::{

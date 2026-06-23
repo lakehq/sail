@@ -40,8 +40,7 @@ use url::Url;
 
 use crate::catalog_managed::{metadata_with_catalog_managed, protocol_with_catalog_managed};
 use crate::datasource::actions::adds_to_remove_actions;
-use crate::kernel::transaction::CommitBuilder;
-use crate::kernel::{DeltaSnapshotConfig, SaveMode};
+use crate::delta_log::StorageConfig;
 use crate::options::gen::{DeltaReadOptions, DeltaWriteOptions};
 use crate::physical_plan::planner::{DeltaPhysicalPlanner, DeltaPlannerConfig, PlannerContext};
 use crate::schema::type_widening::alter_column_type as alter_delta_column_type;
@@ -52,19 +51,20 @@ use crate::schema::{
     normalize_delta_schema, protocol_can_write_type_widening, protocol_for_create,
     schema_has_column_defaults, schema_has_generated_columns, schema_has_identity_columns,
 };
+use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
     canonicalize_and_validate_table_properties, contains_timestampntz_arrow,
     contains_variant_arrow, route_table_property_key, ColumnMappingMode, ColumnMetadataKey,
-    CommitAction, DataType as DeltaDataType, DeltaOperation, MetadataValue, Protocol, StructField,
-    StructType, TableFeature, TableProperties,
+    CommitAction, DataType as DeltaDataType, DeltaOperation, MetadataValue, Protocol, SaveMode,
+    StructField, StructType, TableFeature, TableProperties,
 };
-use crate::storage::StorageConfig;
 use crate::table::{
     create_delta_table_with_object_store, create_logstore_with_object_store,
     infer_delta_logical_metadata, infer_delta_logical_schema,
     load_catalog_managed_commits_for_snapshot, open_table_with_object_store_and_table_config,
     DeltaTable,
 };
+use crate::transaction::CommitBuilder;
 use crate::{create_delta_source, DeltaTableError};
 
 /// Delta Lake implementation of [`TableFormat`].
@@ -818,8 +818,8 @@ impl DeltaTableFormat {
         changes: Vec<(String, Option<String>)>,
         if_exists: bool,
     ) -> Result<()> {
-        use crate::kernel::transaction::CommitBuilder;
         use crate::schema::protocol_for_metadata;
+        use crate::transaction::CommitBuilder;
 
         if let Some((key, _)) = changes
             .iter()
@@ -960,8 +960,8 @@ impl DeltaTableFormat {
         name: &str,
         expression: &str,
     ) -> Result<()> {
-        use crate::kernel::transaction::CommitBuilder;
         use crate::schema::protocol_for_metadata;
+        use crate::transaction::CommitBuilder;
 
         let url = parse_location_to_url(path)?;
         let object_store = runtime_env
@@ -1037,7 +1037,7 @@ impl DeltaTableFormat {
         column_path: Vec<String>,
         data_type: ArrowDataType,
     ) -> Result<()> {
-        use crate::kernel::transaction::CommitBuilder;
+        use crate::transaction::CommitBuilder;
 
         let url = parse_location_to_url(path)?;
         let object_store = runtime_env
@@ -1142,8 +1142,8 @@ impl DeltaTableFormat {
         column_path: Vec<String>,
         default: Option<String>,
     ) -> Result<()> {
-        use crate::kernel::transaction::CommitBuilder;
         use crate::schema::protocol_for_metadata;
+        use crate::transaction::CommitBuilder;
 
         let url = parse_location_to_url(path)?;
         let object_store = runtime_env

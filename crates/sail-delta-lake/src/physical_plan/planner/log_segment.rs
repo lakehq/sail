@@ -3,11 +3,11 @@ use std::collections::BTreeMap;
 use datafusion::common::Result;
 
 use super::context::PlannerContext;
-pub use crate::kernel::log_segment::{
+pub use crate::delta_log::segment_files::{
     list_log_segment_files as kernel_list_log_segment_files, LogSegmentFiles,
     LogSegmentResolveOptions,
 };
-use crate::kernel::{catalog_managed_commit_file_name, CatalogManagedCommitSet};
+use crate::snapshot::{catalog_managed_commit_file_name, CatalogManagedCommitSet};
 use crate::spec::{parse_commit_version, parse_compacted_json_versions, parse_version_prefix};
 
 /// List Delta log files up to `max_version`, using the planner-local cache when available.

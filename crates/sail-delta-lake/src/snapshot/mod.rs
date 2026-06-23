@@ -32,17 +32,17 @@ use once_cell::sync::OnceCell;
 use serde_json::Value;
 use url::Url;
 
-use crate::kernel::checkpoints::{
+use crate::checkpoint::{
     latest_replayable_version, load_replayed_table_header, load_replayed_table_state,
     ReplayedTableState,
 };
-use crate::kernel::log_segment::ReplayedTableHeader;
-pub use crate::kernel::snapshot::stats::SnapshotPruningStats;
-use crate::kernel::{DeltaSnapshotConfig, SchemaRef};
+use crate::delta_log::segment_files::ReplayedTableHeader;
+use crate::delta_log::LogStore;
 use crate::schema::{
     arrow_field_physical_name, arrow_schema_reorder_partitions, protocol_supports_type_widening,
     schema_contains_type_widening_metadata, validate_type_widening_metadata,
 };
+pub use crate::snapshot::stats::SnapshotPruningStats;
 use crate::spec::fields::{
     FIELD_NAME_MODIFICATION_TIME, FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_PATH,
     FIELD_NAME_SIZE, FIELD_NAME_STATS_PARSED, STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES,
@@ -50,17 +50,23 @@ use crate::spec::fields::{
 };
 use crate::spec::{
     Add, ColumnMappingMode, ColumnMetadataKey, CommitConflictError, DeltaError as DeltaTableError,
-    DeltaResult, DomainMetadata, Metadata, Protocol, Remove, StructType, TableFeature,
+    DeltaResult, DomainMetadata, Metadata, Protocol, Remove, SchemaRef, StructType, TableFeature,
     TableProperties, Transaction, TransactionError, VersionChecksum,
 };
-use crate::storage::LogStore;
 use crate::table::{
     ChangeDataFeedSupport, ChangeDataFeedToken, ColumnMappingToken, DeletionVectorToken,
     EnabledRowTrackingToken, RowTrackingToken, SupportedRowTrackingToken,
 };
 
+mod config;
 pub(crate) mod materialize;
 mod stats;
+
+pub use config::DeltaSnapshotConfig;
+pub(crate) use config::{
+    catalog_managed_commit_file_name, catalog_managed_commit_path, CatalogManagedCommitFile,
+    CatalogManagedCommitSet,
+};
 
 pub struct DeltaSnapshot {
     version: i64,
@@ -456,7 +462,7 @@ impl DeltaSnapshot {
             ));
         }
 
-        crate::kernel::transaction::PROTOCOL
+        crate::transaction::PROTOCOL
             .can_read_from_protocol(self.protocol())
             .map_err(map_read_protocol_error)?;
 
@@ -485,11 +491,11 @@ impl DeltaSnapshot {
             return true;
         }
 
-        let reader_unsupported = crate::kernel::transaction::PROTOCOL
+        let reader_unsupported = crate::transaction::PROTOCOL
             .unsupported_reader_features(self.protocol())
             .map(|features| !features.is_empty())
             .unwrap_or(true);
-        let writer_unsupported = crate::kernel::transaction::PROTOCOL
+        let writer_unsupported = crate::transaction::PROTOCOL
             .unsupported_writer_features(self.protocol())
             .map(|features| !features.is_empty())
             .unwrap_or(true);
@@ -1002,13 +1008,13 @@ mod tests {
 
     use super::DeltaSnapshot;
     use crate::datasource::DeltaScanConfig;
-    use crate::kernel::{CatalogManagedCommitSet, DeltaSnapshotConfig};
+    use crate::delta_log::{default_logstore, LogStoreRef, StorageConfig};
     use crate::logical::table_source::DeltaTableSource;
+    use crate::snapshot::{CatalogManagedCommitSet, DeltaSnapshotConfig};
     use crate::spec::{
         Add, ColumnMappingMode, ColumnMetadataKey, DataType, DomainMetadata, Metadata,
         MetadataValue, Protocol, StructField, StructType, TableFeature, TableProperties,
     };
-    use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
     use crate::table::{ChangeDataFeedSupport, RowTrackingToken};
 
     #[expect(clippy::unwrap_used)]

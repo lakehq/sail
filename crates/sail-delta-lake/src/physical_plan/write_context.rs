@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
-use crate::kernel::{DeltaOperation, DeltaSnapshotConfig, SaveMode};
+use crate::delta_log::LogStore;
 use crate::physical_plan::writer_options::DeltaWriterExecOptions;
 use crate::schema::{
     add_type_widening_metadata, annotate_for_column_mapping, collect_type_changes,
@@ -22,12 +22,12 @@ use crate::schema::{
     schema_contains_type_widening_metadata, schema_has_column_defaults,
     schema_has_generated_columns, schema_has_identity_columns,
 };
+use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
     contains_timestampntz_arrow, contains_variant_arrow, Action, ColumnMappingMode,
-    ColumnMetadataKey, DomainMetadata, Metadata, MetadataValue, Protocol, StructField, StructType,
-    TableProperties, Transaction,
+    ColumnMetadataKey, DeltaOperation, DomainMetadata, Metadata, MetadataValue, Protocol, SaveMode,
+    StructField, StructType, TableProperties, Transaction,
 };
-use crate::storage::LogStore;
 use crate::table::DeltaSnapshot;
 
 /// Metadata-only table state pinned during coordinator-side write planning.
