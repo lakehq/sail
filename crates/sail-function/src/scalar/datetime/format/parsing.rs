@@ -387,7 +387,9 @@ fn parse_localized_offset(value: &str, position: usize) -> Result<(usize, FixedO
     }
     let next = position + 3;
     if next == value.len() || !matches!(value.as_bytes().get(next), Some(b'+') | Some(b'-')) {
-        return Ok((next, FixedOffset::east_opt(0).unwrap()));
+        let offset = FixedOffset::east_opt(0)
+            .ok_or_else(|| exec_datafusion_err!("invalid UTC offset seconds: 0"))?;
+        return Ok((next, offset));
     }
     parse_numeric_offset(value, next, value[next..].contains(':'), false, true)
 }
@@ -774,10 +776,10 @@ fn parse_field_spec(
     match spec.kind {
         DateTimeField::Era => parse_era(value, position, locale, state),
         DateTimeField::YearOfEra => {
-            parse_signed_number(value, position, number_bounds(spec.width, 10)).and_then(
+            parse_signed_number(value, position, number_bounds(spec.width, 10)).map(
                 |(next, year)| {
                     state.year_of_era = Some(expand_year(year, spec.width));
-                    Ok(next)
+                    next
                 },
             )
         }

@@ -10,28 +10,18 @@ pub struct DateTimeFormat {
     pub(crate) resolver_style: ResolverStyle,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub enum LocaleSpec {
+    #[default]
     Default,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum ResolverStyle {
     Strict,
+    #[default]
     Smart,
     Lenient,
-}
-
-impl Default for LocaleSpec {
-    fn default() -> Self {
-        Self::Default
-    }
-}
-
-impl Default for ResolverStyle {
-    fn default() -> Self {
-        Self::Smart
-    }
 }
 
 impl DateTimeFormat {

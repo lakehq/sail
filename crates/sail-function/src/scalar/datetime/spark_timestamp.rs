@@ -1,3 +1,4 @@
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -413,10 +414,8 @@ fn get_or_parse_format<'a>(
     cache: &'a mut HashMap<String, DateTimeFormat>,
     pattern: &str,
 ) -> Result<&'a DateTimeFormat> {
-    let cache_key = pattern.to_string();
-    if !cache.contains_key(&cache_key) {
-        let format = DateTimeFormat::parse(pattern)?;
-        cache.insert(cache_key.clone(), format);
+    match cache.entry(pattern.to_string()) {
+        Entry::Occupied(entry) => Ok(entry.into_mut()),
+        Entry::Vacant(entry) => Ok(entry.insert(DateTimeFormat::parse(pattern)?)),
     }
-    Ok(cache.get(&cache_key).expect("datetime format was inserted"))
 }
