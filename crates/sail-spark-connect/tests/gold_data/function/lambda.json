@@ -546,7 +546,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: transform"
+        "success": "ok"
       }
     },
     {
@@ -572,7 +572,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: transform"
+        "success": "ok"
       }
     },
     {

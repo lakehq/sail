@@ -19,6 +19,7 @@ use arrow::datatypes::{
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_common::spec::{
     SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
+    SAIL_SPARK_UDT_METADATA_KEY, SPARK_METADATA_JSON_KEY,
 };
 
 use crate::unity::types;
@@ -31,6 +32,167 @@ pub(crate) struct UnityColumnType {
     pub type_text: String,
     pub type_json: serde_json::Value,
     pub type_name: types::ColumnTypeName,
+}
+
+pub(crate) fn unity_struct_field_type_json(
+    name: &str,
+    data_type: &DataType,
+    nullable: bool,
+    metadata: &HashMap<String, String>,
+) -> CatalogResult<serde_json::Value> {
+    let data_type_json = spark_data_type_json(data_type)?;
+    Ok(serde_json::json!({
+        "name": name,
+        "type": data_type_json,
+        "nullable": nullable,
+        "metadata": spark_field_metadata_json(metadata)?,
+    }))
+}
+
+fn spark_struct_field_json(field: &Field) -> CatalogResult<serde_json::Value> {
+    unity_struct_field_type_json(
+        field.name(),
+        field.data_type(),
+        field.is_nullable(),
+        field.metadata(),
+    )
+}
+
+fn spark_field_metadata_json(
+    metadata: &HashMap<String, String>,
+) -> CatalogResult<serde_json::Value> {
+    let mut out = if let Some(raw) = metadata.get(SPARK_METADATA_JSON_KEY) {
+        match serde_json::from_str::<serde_json::Value>(raw) {
+            Ok(serde_json::Value::Object(object)) => object,
+            Ok(other) => {
+                return Err(CatalogError::InvalidArgument(format!(
+                    "{SPARK_METADATA_JSON_KEY} must contain a JSON object, got {other:?}",
+                )));
+            }
+            Err(e) => {
+                return Err(CatalogError::InvalidArgument(format!(
+                    "{SPARK_METADATA_JSON_KEY} contains invalid JSON: {e}",
+                )));
+            }
+        }
+    } else {
+        serde_json::Map::new()
+    };
+
+    for (key, value) in metadata {
+        if key == SPARK_METADATA_JSON_KEY || key == SAIL_SPARK_UDT_METADATA_KEY {
+            continue;
+        }
+        out.entry(key.clone())
+            .or_insert_with(|| serde_json::Value::String(value.clone()));
+    }
+
+    Ok(serde_json::Value::Object(out))
+}
+
+fn spark_data_type_json(data_type: &DataType) -> CatalogResult<serde_json::Value> {
+    match data_type {
+        DataType::Null => Ok(serde_json::Value::String("void".to_string())),
+        DataType::Boolean => Ok(serde_json::Value::String("boolean".to_string())),
+        DataType::Int8 => Ok(serde_json::Value::String("byte".to_string())),
+        DataType::Int16 | DataType::UInt8 => Ok(serde_json::Value::String("short".to_string())),
+        DataType::Int32 | DataType::UInt16 => Ok(serde_json::Value::String("integer".to_string())),
+        DataType::Int64 | DataType::UInt32 => Ok(serde_json::Value::String("long".to_string())),
+        DataType::Float32 => Ok(serde_json::Value::String("float".to_string())),
+        DataType::Float64 => Ok(serde_json::Value::String("double".to_string())),
+        DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => {
+            Ok(serde_json::Value::String("timestamp".to_string()))
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, None) => {
+            Ok(serde_json::Value::String("timestamp_ntz".to_string()))
+        }
+        DataType::Date32 => Ok(serde_json::Value::String("date".to_string())),
+        DataType::Binary
+        | DataType::FixedSizeBinary(_)
+        | DataType::LargeBinary
+        | DataType::BinaryView => Ok(serde_json::Value::String("binary".to_string())),
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+            Ok(serde_json::Value::String("string".to_string()))
+        }
+        DataType::Duration(TimeUnit::Microsecond) | DataType::Interval(IntervalUnit::DayTime) => {
+            Ok(serde_json::Value::String(
+                "interval day to second".to_string(),
+            ))
+        }
+        DataType::Interval(IntervalUnit::YearMonth) => Ok(serde_json::Value::String(
+            "interval year to month".to_string(),
+        )),
+        DataType::Interval(IntervalUnit::MonthDayNano) => Err(CatalogError::InvalidArgument(
+            "MonthDayNano interval is not supported in Unity Catalog".to_string(),
+        )),
+        DataType::Decimal32(precision, scale)
+        | DataType::Decimal64(precision, scale)
+        | DataType::Decimal128(precision, scale) => Ok(serde_json::Value::String(format!(
+            "decimal({precision},{scale})"
+        ))),
+        DataType::Decimal256(precision, scale) => {
+            if *precision <= DECIMAL128_MAX_PRECISION && *scale <= DECIMAL128_MAX_SCALE {
+                Ok(serde_json::Value::String(format!(
+                    "decimal({precision},{scale})"
+                )))
+            } else {
+                Err(CatalogError::InvalidArgument(format!(
+                    "Decimal with precision > {DECIMAL128_MAX_PRECISION} and scale > {DECIMAL128_MAX_SCALE} is not supported in Unity Catalog"
+                )))
+            }
+        }
+        DataType::List(field)
+        | DataType::ListView(field)
+        | DataType::LargeList(field)
+        | DataType::LargeListView(field) => Ok(serde_json::json!({
+            "type": "array",
+            "elementType": spark_data_type_json(field.data_type())?,
+            "containsNull": field.is_nullable(),
+        })),
+        DataType::Map(field, _) => {
+            let DataType::Struct(fields) = field.data_type() else {
+                return Err(CatalogError::InvalidArgument(format!(
+                    "Map type must be a struct with key and value fields, found {field:?}"
+                )));
+            };
+            if fields.len() != 2 {
+                return Err(CatalogError::InvalidArgument(format!(
+                    "Map type struct must have exactly two fields, found {fields:?}"
+                )));
+            }
+            Ok(serde_json::json!({
+                "type": "map",
+                "keyType": spark_data_type_json(fields[0].data_type())?,
+                "valueType": spark_data_type_json(fields[1].data_type())?,
+                "valueContainsNull": fields[1].is_nullable(),
+            }))
+        }
+        DataType::Struct(fields) => {
+            let fields = fields
+                .iter()
+                .map(|field| spark_struct_field_json(field.as_ref()))
+                .collect::<CatalogResult<Vec<_>>>()?;
+            Ok(serde_json::json!({
+                "type": "struct",
+                "fields": fields,
+            }))
+        }
+        DataType::UInt64
+        | DataType::Float16
+        | DataType::Timestamp(TimeUnit::Second, _)
+        | DataType::Timestamp(TimeUnit::Millisecond, _)
+        | DataType::Timestamp(TimeUnit::Nanosecond, _)
+        | DataType::Date64
+        | DataType::Time32(_)
+        | DataType::Time64(_)
+        | DataType::Duration(TimeUnit::Second | TimeUnit::Millisecond | TimeUnit::Nanosecond)
+        | DataType::FixedSizeList(_, _)
+        | DataType::Union(_, _)
+        | DataType::Dictionary(_, _)
+        | DataType::RunEndEncoded(_, _) => Err(CatalogError::NotSupported(format!(
+            "{data_type:?} type is not supported in Unity Catalog",
+        ))),
+    }
 }
 
 pub(crate) fn data_type_to_unity_type(data_type: &DataType) -> CatalogResult<UnityColumnType> {

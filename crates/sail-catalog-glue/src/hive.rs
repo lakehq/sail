@@ -98,7 +98,7 @@ pub(crate) async fn create_hive_table(
 pub(crate) fn validate_hive_create_table_options(
     options: &CreateTableOptions,
 ) -> CatalogResult<()> {
-    if options.replace {
+    if options.mode.is_replace() {
         return Err(CatalogError::NotSupported(
             "AWS Glue catalog does not support REPLACE".to_string(),
         ));
@@ -144,8 +144,7 @@ fn validate_hive_options(options: CreateTableOptions) -> CatalogResult<Validated
         partition_by,
         sort_by: _,
         bucket_by: _,
-        if_not_exists,
-        replace: _,
+        mode,
         properties,
         is_external: _,
         is_write_precondition: _,
@@ -160,7 +159,7 @@ fn validate_hive_options(options: CreateTableOptions) -> CatalogResult<Validated
         location,
         format,
         partition_by: partition_columns,
-        if_not_exists,
+        if_not_exists: mode.ignore_if_exists(),
         properties,
     })
 }

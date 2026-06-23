@@ -19,7 +19,6 @@ use chrono::Utc;
 use datafusion::arrow::array::UInt64Array;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::runtime::SpawnedTask;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet};
@@ -61,8 +60,6 @@ use crate::spec::{
 use crate::storage::{get_object_store_from_context, LogStoreRef, StorageConfig};
 use crate::table::{
     create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot,
-    open_table_with_object_store_and_table_config,
-    open_table_with_object_store_and_table_config_at_version,
 };
 
 const METRIC_NUM_COMMIT_RETRIES: &str = "num_commit_retries";
@@ -254,6 +251,47 @@ impl DeltaCommitExec {
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
         Ok(Some(Arc::new(snapshot)))
+    }
+
+    async fn load_reference_snapshot(
+        context: &Arc<TaskContext>,
+        lakehouse_table: Option<&LakehouseExecutionContext>,
+        table_url: &Url,
+        log_store: &LogStoreRef,
+        version: Option<i64>,
+        require_files: bool,
+        use_catalog_managed_replay: bool,
+    ) -> Result<Arc<crate::table::DeltaSnapshot>> {
+        let catalog_managed_commits = if use_catalog_managed_replay {
+            let lakehouse_table = lakehouse_table.ok_or_else(|| {
+                DataFusionError::Internal(
+                    "catalog-managed Delta snapshot replay missing lakehouse context".to_string(),
+                )
+            })?;
+            load_catalog_managed_commits_for_snapshot(
+                context.as_ref(),
+                lakehouse_table,
+                table_url,
+                log_store.clone(),
+                version,
+            )
+            .await?
+        } else {
+            None
+        };
+        let snapshot = crate::table::DeltaSnapshot::try_new(
+            log_store.as_ref(),
+            DeltaSnapshotConfig {
+                require_files,
+                catalog_managed_commits,
+                ..Default::default()
+            },
+            version,
+            None,
+        )
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        Ok(Arc::new(snapshot))
     }
 
     fn is_catalog_managed_commit(
@@ -538,38 +576,6 @@ impl ExecutionPlan for DeltaCommitExec {
                 resolve_catalog_table_url(&context, catalog_table.as_deref(), &table_url).await?;
             let object_store = get_object_store_from_context(&context, &table_url)?;
 
-            let full_snapshot_task = if table_exists {
-                let open_url = table_url.clone();
-                let open_store = Arc::clone(&object_store);
-                let open_storage = storage_config.clone();
-                let base_version = commit_context.base_version();
-                Some(SpawnedTask::spawn(async move {
-                    match base_version {
-                        Some(version) => {
-                            open_table_with_object_store_and_table_config_at_version(
-                                open_url,
-                                open_store,
-                                open_storage,
-                                DeltaSnapshotConfig::default(),
-                                version,
-                            )
-                            .await
-                        }
-                        None => {
-                            open_table_with_object_store_and_table_config(
-                                open_url,
-                                open_store,
-                                open_storage,
-                                DeltaSnapshotConfig::default(),
-                            )
-                            .await
-                        }
-                    }
-                }))
-            } else {
-                None
-            };
-
             let mut total_rows = 0u64;
             let mut has_data = false;
             // "data" actions (Add/Remove/other) and "initial" actions (Protocol/Metadata)
@@ -781,23 +787,19 @@ impl ExecutionPlan for DeltaCommitExec {
 
             let reference = if table_exists {
                 if needs_full_snapshot {
-                    let table = full_snapshot_task
-                        .ok_or_else(|| {
-                            DataFusionError::Internal(
-                                "Delta full snapshot task missing for existing table".to_string(),
-                            )
-                        })?
-                        .await
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
                     Some(
-                        table
-                            .snapshot()
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?
-                            .clone(),
+                        Self::load_reference_snapshot(
+                            &context,
+                            lakehouse_table.as_ref(),
+                            &table_url,
+                            &log_store,
+                            commit_context.base_version(),
+                            true,
+                            catalog_managed_table.is_some(),
+                        )
+                        .await?,
                     )
                 } else {
-                    drop(full_snapshot_task);
                     if let Some(snapshot_context) = commit_context.base_snapshot.as_ref() {
                         Some(Arc::new(
                             snapshot_context
@@ -811,39 +813,17 @@ impl ExecutionPlan for DeltaCommitExec {
                                 .map_err(|e| DataFusionError::External(Box::new(e)))?,
                         ))
                     } else {
-                        let table = match commit_context.base_version() {
-                            Some(version) => {
-                                open_table_with_object_store_and_table_config_at_version(
-                                    table_url.clone(),
-                                    object_store.clone(),
-                                    storage_config.clone(),
-                                    DeltaSnapshotConfig {
-                                        require_files: false,
-                                        ..Default::default()
-                                    },
-                                    version,
-                                )
-                                .await
-                            }
-                            None => {
-                                open_table_with_object_store_and_table_config(
-                                    table_url.clone(),
-                                    object_store.clone(),
-                                    storage_config.clone(),
-                                    DeltaSnapshotConfig {
-                                        require_files: false,
-                                        ..Default::default()
-                                    },
-                                )
-                                .await
-                            }
-                        }
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
                         Some(
-                            table
-                                .snapshot()
-                                .map_err(|e| DataFusionError::External(Box::new(e)))?
-                                .clone(),
+                            Self::load_reference_snapshot(
+                                &context,
+                                lakehouse_table.as_ref(),
+                                &table_url,
+                                &log_store,
+                                commit_context.base_version(),
+                                false,
+                                catalog_managed_table.is_some(),
+                            )
+                            .await?,
                         )
                     }
                 }
