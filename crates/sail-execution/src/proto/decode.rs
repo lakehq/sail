@@ -13,6 +13,7 @@ use datafusion_proto::physical_plan::{
 use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
 use prost::Message;
 use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
+use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 
 use crate::plan::gen;
 use crate::plan::gen::higher_order_udf::HigherOrderUdfKind;
@@ -89,6 +90,15 @@ pub fn try_decode_higher_order_udf(udf: &gen::HigherOrderUdf) -> Result<Arc<High
                 ))
             } else {
                 Arc::new(HigherOrderUDF::new_from_impl(SparkArrayFilter::new()))
+            }
+        }
+        HigherOrderUdfKind::Transform(gen::SparkArrayTransformUdf { index_first }) => {
+            if index_first {
+                Arc::new(HigherOrderUDF::new_from_impl(
+                    SparkArrayTransform::new_index_first(),
+                ))
+            } else {
+                Arc::new(HigherOrderUDF::new_from_impl(SparkArrayTransform::new()))
             }
         }
     })

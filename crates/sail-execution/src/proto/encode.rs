@@ -9,6 +9,7 @@ use datafusion_proto::physical_plan::{PhysicalExtensionCodec, PhysicalProtoConve
 use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
 use prost::Message;
 use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
+use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 
 use crate::plan::gen;
 use crate::plan::gen::higher_order_udf::HigherOrderUdfKind;
@@ -67,6 +68,10 @@ pub fn try_encode_higher_order_udf(hof: &HigherOrderFunctionExpr) -> Result<gen:
     let udf_kind = if let Some(filter) = udf_inner.downcast_ref::<SparkArrayFilter>() {
         HigherOrderUdfKind::Filter(gen::SparkArrayFilterUdf {
             index_first: filter.is_index_first(),
+        })
+    } else if let Some(transform) = udf_inner.downcast_ref::<SparkArrayTransform>() {
+        HigherOrderUdfKind::Transform(gen::SparkArrayTransformUdf {
+            index_first: transform.is_index_first(),
         })
     } else {
         return plan_err!("unsupported higher-order function: {}", hof.name());
