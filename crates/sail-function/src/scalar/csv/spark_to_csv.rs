@@ -317,13 +317,8 @@ fn spark_to_csv_inner(args: &[ArrayRef], timezone: &str) -> Result<ArrayRef> {
             if col.is_null(row_idx) {
                 parts.push(write_csv_null_field(&options));
             } else {
-                let value_str = format_field_to_csv(
-                    col,
-                    row_idx,
-                    field.data_type(),
-                    &options,
-                    timezone,
-                )?;
+                let value_str =
+                    format_field_to_csv(col, row_idx, field.data_type(), &options, timezone)?;
                 parts.push(write_csv_field(&value_str, &options));
             }
         }
@@ -394,9 +389,7 @@ fn format_timestamp_field(
     if tz_opt.is_some() {
         // TIMESTAMP LTZ — localize to session timezone and emit offset
         let tz: Tz = timezone.parse().map_err(|e| {
-            DataFusionError::Execution(format!(
-                "Invalid session timezone '{timezone}': {e}"
-            ))
+            DataFusionError::Execution(format!("Invalid session timezone '{timezone}': {e}"))
         })?;
         let utc_dt = DateTime::<Utc>::from_timestamp(secs, nanos).ok_or_else(|| {
             DataFusionError::Execution(format!("Timestamp out of range: {micros}"))
@@ -505,12 +498,7 @@ fn format_field_to_csv(
                 .as_any()
                 .downcast_ref::<ListArray>()
                 .ok_or_else(|| DataFusionError::Execution("Expected ListArray".to_string()))?;
-            format_list_to_csv(
-                &arr.value(row_idx),
-                field.data_type(),
-                options,
-                timezone,
-            )
+            format_list_to_csv(&arr.value(row_idx), field.data_type(), options, timezone)
         }
 
         DataType::LargeList(field) => {
@@ -518,12 +506,7 @@ fn format_field_to_csv(
                 .as_any()
                 .downcast_ref::<LargeListArray>()
                 .ok_or_else(|| DataFusionError::Execution("Expected LargeListArray".to_string()))?;
-            format_list_to_csv(
-                &arr.value(row_idx),
-                field.data_type(),
-                options,
-                timezone,
-            )
+            format_list_to_csv(&arr.value(row_idx), field.data_type(), options, timezone)
         }
 
         DataType::FixedSizeList(field, _) => {
@@ -533,12 +516,7 @@ fn format_field_to_csv(
                 .ok_or_else(|| {
                     DataFusionError::Execution("Expected FixedSizeListArray".to_string())
                 })?;
-            format_list_to_csv(
-                &arr.value(row_idx),
-                field.data_type(),
-                options,
-                timezone,
-            )
+            format_list_to_csv(&arr.value(row_idx), field.data_type(), options, timezone)
         }
 
         DataType::Map(_, _) => {
@@ -621,24 +599,14 @@ fn format_map_to_csv(
         if i > 0 {
             output.push_str(", ");
         }
-        output.push_str(&format_field_to_csv(
-            keys,
-            i,
-            key_type,
-            options,
-            timezone,
-        )?);
+        output.push_str(&format_field_to_csv(keys, i, key_type, options, timezone)?);
         output.push_str(" ->");
         if values.is_null(i) {
             append_nested_null(&mut output, options);
         } else {
             output.push(' ');
             output.push_str(&format_field_to_csv(
-                values,
-                i,
-                value_type,
-                options,
-                timezone,
+                values, i, value_type, options, timezone,
             )?);
         }
     }

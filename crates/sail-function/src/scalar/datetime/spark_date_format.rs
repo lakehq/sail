@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{Offset, TimeZone};
+use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::{
     Array, Date32Array, Date64Array, StringArray, TimestampMicrosecondArray,
     TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
@@ -10,7 +11,6 @@ use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion::arrow::temporal_conversions::{
     as_datetime, date32_to_datetime, date64_to_datetime,
 };
-use datafusion::arrow::array::timezone::Tz;
 use datafusion_common::cast::{as_large_string_array, as_string_array, as_string_view_array};
 use datafusion_common::{exec_datafusion_err, exec_err, Result, ScalarValue};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
@@ -100,12 +100,14 @@ impl ScalarUDFImpl for SparkDateFormat {
             }
             (ColumnarValue::Array(timestamp_array), ColumnarValue::Array(format_array)) => {
                 // Convert string arrays to timestamp arrays if needed
-                let (timestamp_array, tz): (Arc<dyn datafusion::arrow::array::Array>, Option<Arc<str>>) = match timestamp_array.clone().data_type() {
+                let (timestamp_array, tz): (
+                    Arc<dyn datafusion::arrow::array::Array>,
+                    Option<Arc<str>>,
+                ) = match timestamp_array.clone().data_type() {
                     DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
-                        let ts_array: Arc<dyn datafusion::arrow::array::Array> = Arc::new(parse_string_array_to_timestamp(
-                            &timestamp_array,
-                            &self.timezone,
-                        )?);
+                        let ts_array: Arc<dyn datafusion::arrow::array::Array> = Arc::new(
+                            parse_string_array_to_timestamp(&timestamp_array, &self.timezone)?,
+                        );
                         (ts_array, Some(self.timezone.clone()))
                     }
                     DataType::Timestamp(_, tz) => (timestamp_array, tz.clone()),
@@ -321,30 +323,15 @@ fn format_timestamp_array_dynamic(
     let result = match format_array.data_type() {
         DataType::Utf8 => {
             let formats = as_string_array(format_array)?;
-            format_timestamp_array_with_formats(
-                timestamp_array,
-                formats.iter(),
-                tz,
-                &mut cache,
-            )?
+            format_timestamp_array_with_formats(timestamp_array, formats.iter(), tz, &mut cache)?
         }
         DataType::LargeUtf8 => {
             let formats = as_large_string_array(format_array)?;
-            format_timestamp_array_with_formats(
-                timestamp_array,
-                formats.iter(),
-                tz,
-                &mut cache,
-            )?
+            format_timestamp_array_with_formats(timestamp_array, formats.iter(), tz, &mut cache)?
         }
         DataType::Utf8View => {
             let formats = as_string_view_array(format_array)?;
-            format_timestamp_array_with_formats(
-                timestamp_array,
-                formats.iter(),
-                tz,
-                &mut cache,
-            )?
+            format_timestamp_array_with_formats(timestamp_array, formats.iter(), tz, &mut cache)?
         }
         _ => return exec_err!("spark_date_format: expected string array for format argument"),
     };

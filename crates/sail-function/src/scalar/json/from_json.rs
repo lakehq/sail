@@ -351,11 +351,7 @@ enum FieldBuilder {
     },
 }
 
-fn create_builder(
-    data_type: &DataType,
-    capacity: usize,
-    timezone: &str,
-) -> Result<FieldBuilder> {
+fn create_builder(data_type: &DataType, capacity: usize, timezone: &str) -> Result<FieldBuilder> {
     match data_type {
         DataType::Boolean => Ok(FieldBuilder::Boolean(BooleanBuilder::with_capacity(
             capacity,
@@ -406,8 +402,7 @@ fn create_builder(
                 )
             }?;
             let keys_builder = create_builder(keys_field.data_type(), capacity, timezone)?;
-            let values_builder =
-                create_builder(values_field.data_type(), capacity, timezone)?;
+            let values_builder = create_builder(values_field.data_type(), capacity, timezone)?;
             let mut offsets = Vec::with_capacity(capacity + 1);
             offsets.push(0);
             Ok(FieldBuilder::Map {
@@ -1319,9 +1314,7 @@ fn spec_to_arrow_data_type(dt: &spec::DataType, timezone: &str) -> Result<DataTy
             Arc::new(Field::new("metadata", DataType::Binary, false)),
             Arc::new(Field::new("value", DataType::Binary, false)),
         ]))),
-        SDT::UserDefined { sql_type, .. } => {
-            spec_to_arrow_data_type(sql_type.as_ref(), timezone)
-        }
+        SDT::UserDefined { sql_type, .. } => spec_to_arrow_data_type(sql_type.as_ref(), timezone),
         other => Err(DataFusionError::Plan(format!(
             "Unsupported data type in from_json schema: {other:?}"
         ))),
