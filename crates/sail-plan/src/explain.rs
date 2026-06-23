@@ -467,8 +467,7 @@ async fn explain_from_collected(
         ]
         .join("\n\n"),
         ExplainKind::Cost => [
-            render_section("Parsed Logical Plan", &logical_simple),
-            render_section("Analyzed Logical Plan", &logical_optimized),
+            render_section("Optimized Logical Plan", &logical_optimized),
             // TODO: Spark COST mode shows logical plan + stats; we currently return physical +
             // stats
             render_section(
