@@ -434,6 +434,7 @@ async fn explain_from_collected(
         }
         ExplainKind::Extended => [
             render_section("Parsed Logical Plan", &logical_simple),
+            // prepend schema to make analyzed plan distinct from optimized plan
             render_section("Analyzed Logical Plan", &logical_analyzed_schema),
             render_section("Optimized Logical Plan", &logical_optimized),
             render_section(
