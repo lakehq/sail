@@ -38,7 +38,9 @@ use tokio::sync::OnceCell;
 
 use crate::config::UnityCatalogConfig;
 use crate::credential::CredentialProvider;
-use crate::data_type::{data_type_to_unity_type, unity_type_to_data_type};
+use crate::data_type::{
+    data_type_to_unity_type, unity_struct_field_type_json, unity_type_to_data_type,
+};
 use crate::unity::{types, Client};
 
 pub(crate) const DEFAULT_URI: &str = "http://localhost:8080/api/2.1/unity-catalog";
@@ -532,14 +534,13 @@ impl CatalogProvider for UnityCatalogProvider {
             partition_by,
             sort_by,
             bucket_by,
-            if_not_exists,
-            replace,
+            mode,
             properties,
             is_external,
             is_write_precondition: _,
         } = options;
 
-        if replace {
+        if mode.is_replace() {
             return Err(CatalogError::NotSupported(
                 "Open source Unity Catalog does not support REPLACE option".to_string(),
             ));
@@ -575,7 +576,7 @@ impl CatalogProvider for UnityCatalogProvider {
             .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
 
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
-        if !is_external && if_not_exists {
+        if !is_external && mode.ignore_if_exists() {
             match self.get_table(database, table).await {
                 Ok(status) => return Ok(status),
                 Err(CatalogError::NotFound(_, _)) => {}
@@ -627,7 +628,15 @@ impl CatalogProvider for UnityCatalogProvider {
                     partition_index,
                     position: Some(idx as i32),
                     type_interval_type,
-                    type_json: Some(unity_type.type_json.to_string()),
+                    type_json: Some(
+                        unity_struct_field_type_json(
+                            &col.name,
+                            &col.data_type,
+                            col.nullable,
+                            &HashMap::new(),
+                        )?
+                        .to_string(),
+                    ),
                     type_name: Some(unity_type.type_name),
                     type_precision,
                     type_scale,
@@ -701,7 +710,7 @@ impl CatalogProvider for UnityCatalogProvider {
                 self.table_info_to_table_status(table_info, &catalog_name, &schema_name)
             }
             Err(progenitor_client::Error::UnexpectedResponse(response))
-                if response.status().as_u16() == 409 && if_not_exists =>
+                if response.status().as_u16() == 409 && mode.ignore_if_exists() =>
             {
                 self.get_table(database, table).await
             }

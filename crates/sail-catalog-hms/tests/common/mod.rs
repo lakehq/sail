@@ -9,7 +9,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use arrow::datatypes::DataType;
 use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableOptions, Namespace,
+    CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions, CreateTableMode,
+    CreateTableOptions, Namespace,
 };
 use sail_catalog_hms::{HmsCatalogConfig, HmsCatalogProvider};
 use sail_common::runtime::RuntimeHandle;
@@ -121,8 +122,7 @@ pub fn simple_table_options_with_format(
         partition_by: vec![],
         sort_by: vec![],
         bucket_by: None,
-        if_not_exists: false,
-        replace: false,
+        mode: CreateTableMode::Create,
         properties: vec![],
         is_external: true,
         is_write_precondition: false,

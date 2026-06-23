@@ -384,6 +384,113 @@ pub async fn bootstrap_empty_table_metadata(
     })
 }
 
+pub async fn replace_empty_table_metadata(
+    table_url: &Url,
+    store_ctx: &StoreContext,
+    iceberg_schema: IcebergSchema,
+    partition_spec: PartitionSpec,
+    table_properties: &[(String, String)],
+    previous_metadata: &TableMetadata,
+    latest_meta_path: &str,
+    metadata_style: NewTableMetadataStyle,
+) -> Result<BootstrapResult> {
+    let (requested_format_version, table_properties) =
+        crate::properties::metadata_properties_from_table_properties(table_properties)?;
+    let format_version = previous_metadata
+        .format_version
+        .max(requested_format_version)
+        .max(format_version_for_schema(&iceberg_schema));
+    let commit_timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
+
+    let mut metadata_log = previous_metadata.metadata_log.clone();
+    metadata_log.push(crate::spec::metadata::table_metadata::MetadataLog {
+        timestamp_ms: commit_timestamp_ms,
+        metadata_file: latest_meta_path.to_string(),
+    });
+
+    let last_column_id = previous_metadata
+        .last_column_id
+        .max(iceberg_schema.highest_field_id());
+    let last_partition_id = previous_metadata
+        .last_partition_id
+        .max(partition_spec.highest_field_id().unwrap_or(0));
+    let mut schemas = previous_metadata.schemas.clone();
+    schemas.push(iceberg_schema.clone());
+    let mut partition_specs = previous_metadata.partition_specs.clone();
+    partition_specs.push(partition_spec.clone());
+
+    let mut table_meta = TableMetadata {
+        format_version,
+        table_uuid: previous_metadata.table_uuid,
+        location: table_url.to_string(),
+        last_sequence_number: previous_metadata.last_sequence_number,
+        last_updated_ms: commit_timestamp_ms,
+        last_column_id,
+        schemas,
+        current_schema_id: iceberg_schema.schema_id(),
+        partition_specs,
+        default_spec_id: partition_spec.spec_id(),
+        last_partition_id,
+        properties: table_properties,
+        current_snapshot_id: Some(-1),
+        next_row_id: (format_version >= FormatVersion::V3).then_some(0),
+        encryption_keys: previous_metadata.encryption_keys.clone(),
+        snapshots: vec![],
+        snapshot_log: vec![],
+        metadata_log,
+        sort_orders: vec![],
+        default_sort_order_id: None,
+        refs: HashMap::new(),
+        statistics: vec![],
+        partition_statistics: vec![],
+    };
+    table_meta.ensure_required_format_fields();
+
+    let new_meta_json = table_meta
+        .to_json()
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let version = metadata_file_version_from_path(latest_meta_path)
+        .map(|version| version + 1)
+        .unwrap_or_else(|| table_meta.metadata_log.len() as i32 + 1);
+    let file_extension = metadata_file_extension_from_properties(&table_meta.properties)?;
+    let (new_meta_rel, hint) = match metadata_style {
+        NewTableMetadataStyle::Hadoop => (
+            format!("metadata/v{version}{file_extension}"),
+            version.to_string(),
+        ),
+        NewTableMetadataStyle::Uuid => {
+            let file = format!("{version:05}-{}{}", uuid::Uuid::new_v4(), file_extension);
+            (format!("metadata/{file}"), file)
+        }
+    };
+    let new_meta_bytes = encode_metadata_file(&new_meta_rel, &new_meta_json)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let meta_path = object_store::path::Path::from(new_meta_rel.as_str());
+    store_ctx
+        .prefixed
+        .put(
+            &meta_path,
+            object_store::PutPayload::from(Bytes::from(new_meta_bytes)),
+        )
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    let hint_path = object_store::path::Path::from("metadata/version-hint.text");
+    store_ctx
+        .prefixed
+        .put(
+            &hint_path,
+            object_store::PutPayload::from(Bytes::from(hint.into_bytes())),
+        )
+        .await
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+    Ok(BootstrapResult {
+        table_metadata: table_meta,
+        metadata_file: new_meta_rel,
+    })
+}
+
 /// Bootstrap the first snapshot for an existing table that has no current snapshot
 ///
 /// This is used when a table was created via CREATE TABLE but has no data yet.

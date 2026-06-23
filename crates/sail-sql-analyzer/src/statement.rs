@@ -166,6 +166,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             }
             let definition = TableDefinition {
                 external: external.is_some(),
+                replace: false,
                 or_replace: or_replace.is_some(),
                 if_not_exists: if_not_exists.is_some(),
                 using: using.map(|(_, x)| x),
@@ -198,7 +199,8 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
         } => {
             let definition = TableDefinition {
                 external: external.is_some(),
-                or_replace: true,
+                replace: true,
+                or_replace: false,
                 if_not_exists: false,
                 using: using.map(|(_, x)| x),
                 columns,
@@ -1215,6 +1217,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
 
 struct TableDefinition {
     external: bool,
+    replace: bool,
     or_replace: bool,
     if_not_exists: bool,
     using: Option<Ident>,
@@ -1228,6 +1231,7 @@ fn from_ast_table_definition(
 ) -> SqlResult<(spec::TableDefinition, Option<Box<QueryPlan>>)> {
     let TableDefinition {
         external,
+        replace,
         or_replace,
         if_not_exists,
         using,
@@ -1246,6 +1250,19 @@ fn from_ast_table_definition(
             },
         query,
     } = definition;
+    let mode = if replace {
+        spec::CreateTableMode::Replace
+    } else if or_replace && if_not_exists {
+        return Err(SqlError::invalid(
+            "CREATE OR REPLACE TABLE cannot be used with IF NOT EXISTS",
+        ));
+    } else if or_replace {
+        spec::CreateTableMode::CreateOrReplace
+    } else if if_not_exists {
+        spec::CreateTableMode::CreateIfNotExists
+    } else {
+        spec::CreateTableMode::Create
+    };
     let row_format = row_format.map(from_ast_row_format).transpose()?;
     let file_format = match (using, stored_as) {
         (Some(using), None) => Some(spec::TableFileFormat::General {
@@ -1336,8 +1353,7 @@ fn from_ast_table_definition(
         sort_by,
         bucket_by,
         cluster_by,
-        if_not_exists,
-        replace: or_replace,
+        mode,
         options,
         properties: properties.into_iter().flatten().collect(),
     };

@@ -22,8 +22,9 @@ use sail_catalog::lakehouse::{
 };
 use sail_catalog::provider::{
     AlterTableOptions, CatalogPartitionField, CatalogProvider, CreateDatabaseOptions,
-    CreateTableColumnOptions, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
-    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
+    CreateTableColumnOptions, CreateTableMode, CreateTableOptions, CreateViewColumnOptions,
+    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    PartitionTransform,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
 use sail_common_datafusion::catalog::managed::METADATA_LOCATION_KEY;
@@ -504,6 +505,35 @@ impl IcebergRestCatalogProvider {
                 .unwrap_or(0),
             remote_signing_enabled,
         })
+    }
+
+    fn validate_create_table_access_session_requirements(
+        &self,
+        database: &Namespace,
+        table: &str,
+        catalog_config: &RestCatalogConfig,
+        result: &crate::models::LoadTableResult,
+    ) -> CatalogResult<()> {
+        let rest_session = self.rest_table_session_ref(database, table, catalog_config, result)?;
+        let mut requirements = Vec::new();
+        if rest_session.scan_planning_mode.as_deref() == Some("server") {
+            requirements.push("server-side scan planning");
+        }
+        if rest_session.remote_signing_enabled {
+            requirements.push("remote signing");
+        }
+        if rest_session.storage_credential_count > 0 {
+            requirements.push("vended credentials");
+        }
+
+        if requirements.is_empty() {
+            Ok(())
+        } else {
+            Err(CatalogError::UnsupportedCapability(format!(
+                "Iceberg REST access session requirements returned by create_table are not supported for create+write yet: {}",
+                requirements.join(", ")
+            )))
+        }
     }
 
     /// Converts an Iceberg REST API table load result into a catalog `TableStatus`.
@@ -1081,11 +1111,10 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             partition_by,
             sort_by,
             bucket_by,
-            if_not_exists,
-            replace,
+            mode,
             properties,
             is_external: _,
-            is_write_precondition: _,
+            is_write_precondition,
         } = options;
 
         if !format.eq_ignore_ascii_case("iceberg") {
@@ -1096,13 +1125,13 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 
         let (client, catalog_config) = self.load_client_and_merged_config().await?;
 
-        if if_not_exists {
+        if mode.ignore_if_exists() {
             if let Ok(existing) = self.get_table(database, table).await {
                 return Ok(existing);
             }
         }
 
-        if replace {
+        if mode.is_replace() {
             return Err(CatalogError::NotSupported(
                 "Replace table is not supported yet".to_string(),
             ));
@@ -1174,6 +1203,14 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .await
             .map_err(|e| CatalogError::External(format!("Failed to create table: {e}")))?;
 
+        if is_write_precondition {
+            self.validate_create_table_access_session_requirements(
+                database,
+                table,
+                catalog_config,
+                &result,
+            )?;
+        }
         self.load_table_result_to_status(table, database, result)
     }
 
@@ -1919,6 +1956,7 @@ fn parse_unary_sort_transform(
 #[expect(clippy::unwrap_used, clippy::panic)]
 #[cfg(test)]
 mod tests {
+    use arrow::datatypes::DataType;
     use sail_catalog::lakehouse::TableAccessPurpose;
     use sail_common_datafusion::catalog::{
         CatalogProviderId, CatalogTableIdentity, CommitAuthority, LakehouseAuthority,
@@ -2003,6 +2041,70 @@ mod tests {
                 .mount(&self.server)
                 .await;
         }
+    }
+
+    fn simple_create_table_options() -> CreateTableOptions {
+        CreateTableOptions {
+            columns: vec![CreateTableColumnOptions {
+                name: "id".to_string(),
+                data_type: DataType::Int64,
+                nullable: false,
+                comment: None,
+                default: None,
+                generated_always_as: None,
+                identity: None,
+            }],
+            comment: None,
+            constraints: vec![],
+            location: None,
+            format: "iceberg".to_string(),
+            partition_by: vec![],
+            sort_by: vec![],
+            bucket_by: None,
+            mode: CreateTableMode::Create,
+            properties: vec![],
+            is_external: false,
+            is_write_precondition: true,
+        }
+    }
+
+    fn create_table_response_with_access_session_requirements() -> serde_json::Value {
+        serde_json::json!({
+            "metadata-location": "s3://bucket/table/metadata/v1.metadata.json",
+            "metadata": {
+                "format-version": 2,
+                "table-uuid": "12345678-1234-1234-1234-123456789012",
+                "location": "s3://bucket/table",
+                "current-schema-id": 0,
+                "schemas": [
+                    {
+                        "type": "struct",
+                        "schema-id": 0,
+                        "fields": [
+                            {
+                                "id": 1,
+                                "name": "id",
+                                "required": true,
+                                "type": "long"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "config": {
+                "scan-planning-mode": "server",
+                "s3.remote-signing-enabled": "true"
+            },
+            "storage-credentials": [
+                {
+                    "prefix": "s3://bucket/table",
+                    "config": {
+                        "s3.access-key-id": "AKIA-SECRET",
+                        "s3.secret-access-key": "storage-secret"
+                    }
+                }
+            ]
+        })
     }
 
     async fn load_merged_test_config(
@@ -2882,6 +2984,49 @@ mod tests {
     async fn test_get_table() {
         test_get_table_impl(None).await;
         test_get_table_impl(Some("test")).await;
+    }
+
+    #[tokio::test]
+    async fn create_table_rejects_rest_access_session_requirements() {
+        let ctx = TestContext::new(Some("test")).await;
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+
+        ctx.mock_post_json(
+            &ctx.path("/namespaces/db1/tables"),
+            create_table_response_with_access_session_requirements(),
+        )
+        .await;
+
+        let err = ctx
+            .catalog
+            .create_table(&namespace, "table1", simple_create_table_options())
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, CatalogError::UnsupportedCapability(_)));
+        assert!(err.to_string().contains("Iceberg REST access session"));
+    }
+
+    #[tokio::test]
+    async fn metadata_only_create_table_allows_rest_access_session_requirements() {
+        let ctx = TestContext::new(Some("test")).await;
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+
+        ctx.mock_post_json(
+            &ctx.path("/namespaces/db1/tables"),
+            create_table_response_with_access_session_requirements(),
+        )
+        .await;
+
+        let mut options = simple_create_table_options();
+        options.is_write_precondition = false;
+        let status = ctx
+            .catalog
+            .create_table(&namespace, "table1", options)
+            .await
+            .unwrap();
+
+        assert_eq!(status.name, "table1");
     }
 
     #[tokio::test]
