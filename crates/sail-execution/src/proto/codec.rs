@@ -4125,6 +4125,12 @@ mod tests {
         codec.try_decode_udf(&name, &buf)
     }
 
+    fn downcast_udf<'a, T: ScalarUDFImpl>(udf: &'a ScalarUDF, name: &str) -> Result<&'a T> {
+        udf.inner()
+            .downcast_ref::<T>()
+            .ok_or_else(|| plan_datafusion_err!("decoded UDF should be {name}"))
+    }
+
     #[test]
     fn test_round_trip_spark_variant_explode_helper_udf() -> Result<()> {
         let decoded = round_trip_udf(ScalarUDF::from(SparkVariantExplodeUdf::new()))?;
@@ -4624,10 +4630,7 @@ mod tests {
         let udf = SparkTimestamp::try_new(Some(Arc::from("America/Los_Angeles")), true)?;
         let decoded = round_trip_udf(ScalarUDF::from(udf))?;
 
-        let decoded = decoded
-            .inner()
-            .downcast_ref::<SparkTimestamp>()
-            .expect("decoded UDF should be SparkTimestamp");
+        let decoded = downcast_udf::<SparkTimestamp>(&decoded, "SparkTimestamp")?;
         assert_eq!(decoded.timezone(), Some("America/Los_Angeles"));
         assert!(decoded.is_try());
 
@@ -4638,10 +4641,7 @@ mod tests {
     fn test_round_trip_spark_date_preserves_options() -> Result<()> {
         let decoded = round_trip_udf(ScalarUDF::from(SparkDate::new(true)))?;
 
-        let decoded = decoded
-            .inner()
-            .downcast_ref::<SparkDate>()
-            .expect("decoded UDF should be SparkDate");
+        let decoded = downcast_udf::<SparkDate>(&decoded, "SparkDate")?;
         assert!(decoded.is_try());
 
         Ok(())
@@ -4653,10 +4653,7 @@ mod tests {
             Arc::from("America/Los_Angeles"),
         ))))?;
 
-        let decoded = decoded
-            .inner()
-            .downcast_ref::<SparkTryToTimestamp>()
-            .expect("decoded UDF should be SparkTryToTimestamp");
+        let decoded = downcast_udf::<SparkTryToTimestamp>(&decoded, "SparkTryToTimestamp")?;
         assert_eq!(decoded.timezone(), Some("America/Los_Angeles"));
 
         Ok(())
@@ -4668,10 +4665,7 @@ mod tests {
             "America/Los_Angeles",
         ))))?;
 
-        let decoded = decoded
-            .inner()
-            .downcast_ref::<SparkUnixTimestamp>()
-            .expect("decoded UDF should be SparkUnixTimestamp");
+        let decoded = downcast_udf::<SparkUnixTimestamp>(&decoded, "SparkUnixTimestamp")?;
         assert_eq!(decoded.session_timezone(), "America/Los_Angeles");
 
         Ok(())
