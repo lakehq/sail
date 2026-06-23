@@ -1455,7 +1455,7 @@ fn build_merge_projection(
     path_column: &str,
     row_index_column: Option<&str>,
 ) -> Result<Vec<Expr>> {
-    let mut cases: Vec<(String, Vec<(Expr, Expr)>)> = target_schema
+    let mut cases: HashMap<String, Vec<(Expr, Expr)>> = target_schema
         .fields()
         .iter()
         .filter(|f| {
@@ -1466,10 +1466,11 @@ fn build_merge_projection(
         .map(|f| (f.name().clone(), Vec::new()))
         .collect();
 
-    let mut target_exprs = Vec::new();
-    for field in target_schema.fields() {
-        target_exprs.push(Expr::Column(Column::from_name(field.name().clone())));
-    }
+    let target_exprs_by_name: HashMap<String, Expr> = target_schema
+        .fields()
+        .iter()
+        .map(|f| (f.name().clone(), Expr::Column(Column::from_name(f.name()))))
+        .collect();
 
     let source_exprs_by_name: HashMap<String, Expr> = source_schema
         .fields()
@@ -1506,8 +1507,8 @@ fn build_merge_projection(
             MergeMatchedAction::UpdateAll => {
                 for field in target_schema.fields().iter() {
                     let value = source_expr_for_target(field.name());
-                    if let Some(entry) = cases.iter_mut().find(|(name, _)| name == field.name()) {
-                        entry.1.push((pred.clone(), value));
+                    if let Some(v) = cases.get_mut(field.name()) {
+                        v.push((pred.clone(), value));
                     }
                 }
             }
@@ -1515,8 +1516,8 @@ fn build_merge_projection(
                 for assignment in assignments {
                     let resolved =
                         resolve_target_column(assignment.column.as_str(), target_schema)?;
-                    if let Some(entry) = cases.iter_mut().find(|(name, _)| name == &resolved) {
-                        entry.1.push((pred.clone(), assignment.value.clone()));
+                    if let Some(v) = cases.get_mut(&resolved) {
+                        v.push((pred.clone(), assignment.value.clone()));
                     }
                 }
             }
@@ -1536,8 +1537,8 @@ fn build_merge_projection(
                 for assignment in assignments {
                     let resolved =
                         resolve_target_column(assignment.column.as_str(), target_schema)?;
-                    if let Some(entry) = cases.iter_mut().find(|(name, _)| name == &resolved) {
-                        entry.1.push((pred.clone(), assignment.value.clone()));
+                    if let Some(v) = cases.get_mut(&resolved) {
+                        v.push((pred.clone(), assignment.value.clone()));
                     }
                 }
             }
@@ -1556,16 +1557,16 @@ fn build_merge_projection(
             MergeNotMatchedByTargetAction::InsertAll => {
                 for field in target_schema.fields().iter() {
                     let value = source_expr_for_target(field.name());
-                    if let Some(entry) = cases.iter_mut().find(|(name, _)| name == field.name()) {
-                        entry.1.push((pred.clone(), value));
+                    if let Some(v) = cases.get_mut(field.name()) {
+                        v.push((pred.clone(), value));
                     }
                 }
             }
             MergeNotMatchedByTargetAction::InsertColumns { columns, values } => {
                 for (col_name, value) in columns.iter().zip(values.iter()) {
                     let resolved = resolve_target_column(col_name, target_schema)?;
-                    if let Some(entry) = cases.iter_mut().find(|(name, _)| name == &resolved) {
-                        entry.1.push((pred.clone(), value.clone()));
+                    if let Some(v) = cases.get_mut(&resolved) {
+                        v.push((pred.clone(), value.clone()));
                     }
                 }
             }
@@ -1581,17 +1582,11 @@ fn build_merge_projection(
             continue;
         }
         let name = field.name();
-        let default_expr = target_exprs
-            .iter()
-            .find(|expr| matches!(expr, Expr::Column(col) if col.name == *name))
+        let default_expr = target_exprs_by_name
+            .get(name)
             .cloned()
             .unwrap_or_else(|| lit(ScalarValue::Null));
-
-        let case_branches = cases
-            .iter_mut()
-            .find(|(col, _)| col == name)
-            .map(|(_, branches)| branches.split_off(0))
-            .unwrap_or_default();
+        let case_branches = cases.remove(name).unwrap_or_default();
 
         let expr = if case_branches.is_empty() {
             default_expr

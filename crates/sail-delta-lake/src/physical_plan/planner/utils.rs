@@ -242,6 +242,7 @@ pub async fn build_log_replay_pipeline_with_options(
         LogSegmentResolveOptions {
             commit_version_range: options.commit_version_range,
         },
+        snapshot.load_config().catalog_managed_commits.as_ref(),
     )
     .await?;
     build_log_replay_pipeline_with_files(

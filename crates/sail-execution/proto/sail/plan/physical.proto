@@ -97,8 +97,9 @@ message HigherOrderUdfExprNode {
 message HigherOrderUdf {
   oneof HigherOrderUdfKind {
     SparkArrayFilterUdf filter = 1;
-    SparkArrayExistsUdf exists = 2;
-    SparkArrayForallUdf forall = 3;
+    SparkArrayTransformUdf transform = 2;
+    SparkArrayExistsUdf exists = 3;
+    SparkArrayForallUdf forall = 4;
   }
 }
 
@@ -123,6 +124,13 @@ message SparkArrayFilterUdf {
   // "Field of physical LambdaVariable ... doesn't match batch field". No
   // dedicated upstream issue exists yet (worth filing). Once fixed upstream, the
   // `index_first` rewrite and this field can be removed.
+  bool index_first = 1;
+}
+
+message SparkArrayTransformUdf {
+  // True when the lambda parameters are `[index, element]` (an index-only
+  // lambda rewritten by the planner) instead of `[element, index]`. See the
+  // identical workaround documented on `SparkArrayFilterUdf.index_first`.
   bool index_first = 1;
 }
 

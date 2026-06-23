@@ -189,7 +189,7 @@ def test_delta_io_create_table_rejects_mismatched_existing_log_nullability(spark
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
 
-def test_delta_io_create_or_replace_existing_table_reaches_catalog_provider(spark, tmp_path):
+def test_delta_io_create_or_replace_existing_table_with_same_schema_clears_rows(spark, tmp_path):
     delta_path = tmp_path / "delta_replace_existing"
     table_name = "delta_create_or_replace_existing_test"
 
@@ -219,7 +219,120 @@ def test_delta_io_create_or_replace_existing_table_reaches_catalog_provider(spar
         )
 
         rows = spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect()  # noqa: S608
-        assert rows == [Row(id=1, name="one")]
+        assert rows == []
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def test_delta_io_create_or_replace_existing_table_replaces_metadata_and_clears_rows(spark, tmp_path):
+    delta_path = tmp_path / "delta_replace_existing_clears_rows"
+    table_name = "delta_create_or_replace_existing_clear_test"
+
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (
+              id BIGINT,
+              name STRING
+            )
+            USING DELTA
+            LOCATION '{escape_sql_string_literal(str(delta_path))}'
+            """
+        )
+        spark.sql(f"INSERT INTO {table_name} VALUES (1, 'one')")  # noqa: S608
+
+        spark.sql(
+            f"""
+            CREATE OR REPLACE TABLE {table_name} (
+              replacement STRING
+            )
+            USING DELTA
+            LOCATION '{escape_sql_string_literal(str(delta_path))}'
+            """
+        )
+
+        rows = spark.sql(f"SELECT replacement FROM {table_name}").collect()  # noqa: S608
+        assert rows == []
+
+        latest_log = sorted((delta_path / "_delta_log").glob("*.json"))[-1]
+        latest_actions = [json.loads(line) for line in latest_log.read_text(encoding="utf-8").splitlines()]
+        metadata_actions = [action["metaData"] for action in latest_actions if "metaData" in action]
+        remove_actions = [action["remove"] for action in latest_actions if "remove" in action]
+        assert len(metadata_actions) == 1
+        assert json.loads(metadata_actions[0]["schemaString"])["fields"][0]["name"] == "replacement"
+        assert [action["path"] for action in remove_actions]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def test_delta_io_create_or_replace_existing_table_requires_schema(spark, tmp_path):
+    delta_path = tmp_path / "delta_replace_existing_no_schema"
+    table_name = "delta_create_or_replace_no_schema_test"
+
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (
+              id BIGINT
+            )
+            USING DELTA
+            LOCATION '{escape_sql_string_literal(str(delta_path))}'
+            """
+        )
+
+        with pytest.raises(Exception, match="schema is not provided"):
+            spark.sql(
+                f"""
+                CREATE OR REPLACE TABLE {table_name}
+                USING DELTA
+                LOCATION '{escape_sql_string_literal(str(delta_path))}'
+                """
+            )
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def test_delta_io_replace_table_missing_errors_without_materializing_log(spark, tmp_path):
+    delta_path = tmp_path / "delta_replace_missing"
+    table_name = "delta_replace_missing_test"
+
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+    try:
+        with pytest.raises(Exception, match=r"(?i)(not found|does not exist|table_or_view_not_found)"):
+            spark.sql(
+                f"""
+                REPLACE TABLE {table_name} (
+                  id BIGINT
+                )
+                USING DELTA
+                LOCATION '{escape_sql_string_literal(str(delta_path))}'
+                """
+            )
+
+        assert not (delta_path / "_delta_log").exists()
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def test_delta_io_replace_table_as_select_missing_errors_without_materializing_log(spark, tmp_path):
+    delta_path = tmp_path / "delta_replace_as_select_missing"
+    table_name = "delta_replace_as_select_missing_test"
+
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+    try:
+        with pytest.raises(Exception, match=r"(?i)(not found|does not exist|table_or_view_not_found)"):
+            spark.sql(
+                f"""
+                REPLACE TABLE {table_name}
+                USING DELTA
+                LOCATION '{escape_sql_string_literal(str(delta_path))}'
+                AS SELECT 1 AS id
+                """
+            )
+
+        assert not (delta_path / "_delta_log").exists()
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
@@ -341,7 +454,7 @@ def test_delta_io_overwrite_partitions_with_v2_api(spark, tmp_path):
     df.write.format("delta").mode("overwrite").save(str(delta_path))
 
     spark.sql(
-        f"CREATE OR REPLACE TABLE {table_name} {table_columns} USING DELTA LOCATION '{escape_sql_string_literal(delta_table_path)}'"
+        f"CREATE TABLE {table_name} {table_columns} USING DELTA LOCATION '{escape_sql_string_literal(delta_table_path)}'"
     )
 
     try:
@@ -384,7 +497,7 @@ def test_delta_io_overwrite_partitions_with_sql_condition(spark, tmp_path):
     df.write.format("delta").mode("overwrite").save(str(delta_path))
 
     spark.sql(
-        f"CREATE OR REPLACE TABLE {table_name} {table_columns} USING DELTA LOCATION '{escape_sql_string_literal(delta_table_path)}'"
+        f"CREATE TABLE {table_name} {table_columns} USING DELTA LOCATION '{escape_sql_string_literal(delta_table_path)}'"
     )
 
     try:

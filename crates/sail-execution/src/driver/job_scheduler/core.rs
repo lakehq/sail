@@ -7,7 +7,6 @@ use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use indexmap::{IndexMap, IndexSet};
 use log::{debug, warn};
-use prost::Message;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::ActorContext;
@@ -678,8 +677,7 @@ impl JobScheduler {
                 let keys = keys
                     .iter()
                     .map(|expr| {
-                        let expr =
-                            try_encode_physical_expr(self.codec.as_ref(), expr)?.encode_to_vec();
+                        let expr = try_encode_physical_expr(self.codec.as_ref(), expr)?;
                         Ok(Arc::from(expr))
                     })
                     .collect::<ExecutionResult<Vec<Arc<[u8]>>>>()?;

@@ -11,6 +11,7 @@ use prost::Message;
 use sail_function::scalar::array::spark_array_exists::SparkArrayExists;
 use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
+use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 
 use crate::plan::gen;
 use crate::plan::gen::higher_order_udf::HigherOrderUdfKind;
@@ -35,15 +36,28 @@ pub fn try_encode_physical_plan(
     codec: &dyn PhysicalExtensionCodec,
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Vec<u8>> {
-    Ok(PhysicalPlanNode::try_from_physical_plan_with_converter(
+    try_encode_message(physical_plan_to_proto(codec, plan)?)
+}
+
+pub fn physical_plan_to_proto(
+    codec: &dyn PhysicalExtensionCodec,
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<PhysicalPlanNode> {
+    PhysicalPlanNode::try_from_physical_plan_with_converter(
         plan,
         codec,
         &RemotePhysicalProtoConverter {},
-    )?
-    .encode_to_vec())
+    )
 }
 
 pub fn try_encode_physical_expr(
+    codec: &dyn PhysicalExtensionCodec,
+    expr: &Arc<dyn PhysicalExpr>,
+) -> Result<Vec<u8>> {
+    try_encode_message(physical_expr_to_proto(codec, expr)?)
+}
+
+pub fn physical_expr_to_proto(
     codec: &dyn PhysicalExtensionCodec,
     expr: &Arc<dyn PhysicalExpr>,
 ) -> Result<PhysicalExprNode> {
@@ -56,6 +70,10 @@ pub fn try_encode_higher_order_udf(hof: &HigherOrderFunctionExpr) -> Result<gen:
     let udf_kind = if let Some(filter) = udf_inner.downcast_ref::<SparkArrayFilter>() {
         HigherOrderUdfKind::Filter(gen::SparkArrayFilterUdf {
             index_first: filter.is_index_first(),
+        })
+    } else if let Some(transform) = udf_inner.downcast_ref::<SparkArrayTransform>() {
+        HigherOrderUdfKind::Transform(gen::SparkArrayTransformUdf {
+            index_first: transform.is_index_first(),
         })
     } else if udf_inner.is::<SparkArrayExists>() {
         HigherOrderUdfKind::Exists(gen::SparkArrayExistsUdf {})

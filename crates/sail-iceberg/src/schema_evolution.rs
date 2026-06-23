@@ -529,7 +529,13 @@ impl SchemaEvolver {
     }
 
     pub fn assign_schema_field_ids(schema: &IcebergSchema) -> Result<IcebergSchema> {
-        let mut next_field_id = 1;
+        Self::assign_schema_field_ids_starting_at(schema, 1)
+    }
+
+    pub fn assign_schema_field_ids_starting_at(
+        schema: &IcebergSchema,
+        mut next_field_id: i32,
+    ) -> Result<IcebergSchema> {
         let mut new_fields = Vec::with_capacity(schema.fields().len());
         for field in schema.fields() {
             let mut cloned = field.as_ref().clone();

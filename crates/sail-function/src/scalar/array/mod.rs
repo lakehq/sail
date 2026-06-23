@@ -9,4 +9,5 @@ pub mod spark_array_filter;
 pub mod spark_array_forall;
 pub mod spark_array_item_with_position;
 pub mod spark_array_min_max;
+pub mod spark_array_transform;
 pub mod spark_sequence;

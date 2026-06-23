@@ -15,6 +15,7 @@ use prost::Message;
 use sail_function::scalar::array::spark_array_exists::SparkArrayExists;
 use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
+use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 
 use crate::plan::gen;
 use crate::plan::gen::higher_order_udf::HigherOrderUdfKind;
@@ -45,8 +46,15 @@ pub fn try_decode_physical_plan(
     codec: &dyn PhysicalExtensionCodec,
     buf: &[u8],
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    let plan = PhysicalPlanNode::decode(buf)
-        .map_err(|e| plan_datafusion_err!("failed to decode plan: {e}"))?;
+    let plan = try_decode_message::<PhysicalPlanNode>(buf)?;
+    proto_to_physical_plan(ctx, codec, &plan)
+}
+
+pub fn proto_to_physical_plan(
+    ctx: &TaskContext,
+    codec: &dyn PhysicalExtensionCodec,
+    plan: &PhysicalPlanNode,
+) -> Result<Arc<dyn ExecutionPlan>> {
     plan.try_into_physical_plan_with_converter(ctx, codec, &RemotePhysicalProtoConverter {})
 }
 
@@ -56,20 +64,25 @@ pub fn try_decode_physical_expr(
     buf: &[u8],
     schema: &Schema,
 ) -> Result<Arc<dyn PhysicalExpr>> {
-    let converter = RemotePhysicalProtoConverter;
-    converter.proto_to_physical_expr(
-        &PhysicalExprNode::decode(buf)
-            .map_err(|e| plan_datafusion_err!("failed to decode expr: {e}"))?,
-        schema,
-        &PhysicalPlanDecodeContext::new(ctx, codec),
-    )
+    let expr = try_decode_message::<PhysicalExprNode>(buf)?;
+    proto_to_physical_expr(ctx, codec, &expr, schema)
 }
 
-pub fn try_decode_higher_order_udf(
-    udf: Option<gen::HigherOrderUdf>,
-) -> Result<Arc<HigherOrderUDF>> {
+pub fn proto_to_physical_expr(
+    ctx: &TaskContext,
+    codec: &dyn PhysicalExtensionCodec,
+    expr: &PhysicalExprNode,
+    schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let converter = RemotePhysicalProtoConverter;
+    converter.proto_to_physical_expr(expr, schema, &PhysicalPlanDecodeContext::new(ctx, codec))
+}
+
+pub fn try_decode_higher_order_udf(udf: &gen::HigherOrderUdf) -> Result<Arc<HigherOrderUDF>> {
     let udf_kind = udf
-        .and_then(|udf| udf.higher_order_udf_kind)
+        .higher_order_udf_kind
+        .as_ref()
+        .cloned()
         .ok_or_else(|| plan_datafusion_err!("missing higher-order function UDF"))?;
     Ok(match udf_kind {
         HigherOrderUdfKind::Filter(gen::SparkArrayFilterUdf { index_first }) => {
@@ -79,6 +92,15 @@ pub fn try_decode_higher_order_udf(
                 ))
             } else {
                 Arc::new(HigherOrderUDF::new_from_impl(SparkArrayFilter::new()))
+            }
+        }
+        HigherOrderUdfKind::Transform(gen::SparkArrayTransformUdf { index_first }) => {
+            if index_first {
+                Arc::new(HigherOrderUDF::new_from_impl(
+                    SparkArrayTransform::new_index_first(),
+                ))
+            } else {
+                Arc::new(HigherOrderUDF::new_from_impl(SparkArrayTransform::new()))
             }
         }
         HigherOrderUdfKind::Exists(gen::SparkArrayExistsUdf {}) => {
