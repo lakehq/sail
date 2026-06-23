@@ -15,7 +15,7 @@ use crate::scalar::datetime::format::DateTimeFormat;
 /// Spark-compatible `to_xml` UDF. Serializes a StructArray into XML strings.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkToXml {
-    timezone: Arc<str>,
+    session_timezone: Arc<str>,
     signature: Signature,
 }
 
@@ -31,7 +31,7 @@ struct SparkToXmlOptions {
     timestamp_ltz_format: Option<DateTimeFormat>,
     timestamp_ntz_format: DateTimeFormat,
     date_format: DateTimeFormat,
-    timezone: String,
+    session_timezone: String,
 }
 
 impl SparkToXmlOptions {
@@ -56,7 +56,7 @@ impl SparkToXmlOptions {
     pub const TIMESTAMP_NTZ_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd'T'HH:mm:ss.SSS";
     pub const DATE_FORMAT_DEFAULT: &'static str = "yyyy-MM-dd";
 
-    fn from_map(map: &MapArray, timezone: &str) -> Result<Self> {
+    fn from_map(map: &MapArray, session_timezone: &str) -> Result<Self> {
         let row_tag = find_key_value(map, Self::ROW_TAG_OPTION)
             .unwrap_or_else(|| Self::ROW_TAG_DEFAULT.to_string());
         if row_tag.is_empty() {
@@ -125,7 +125,7 @@ impl SparkToXmlOptions {
             timestamp_ltz_format,
             timestamp_ntz_format,
             date_format,
-            timezone: timezone.to_string(),
+            session_timezone: session_timezone.to_string(),
         })
     }
 
@@ -156,7 +156,7 @@ impl Default for SparkToXmlOptions {
                 .expect("default timestamp NTZ format should be valid"),
             date_format: DateTimeFormat::parse(Self::DATE_FORMAT_DEFAULT)
                 .expect("default date format should be valid"),
-            timezone: "UTC".to_string(),
+            session_timezone: "UTC".to_string(),
         }
     }
 }
@@ -164,15 +164,15 @@ impl Default for SparkToXmlOptions {
 impl SparkToXml {
     pub const TO_XML_NAME: &'static str = "to_xml";
 
-    pub fn new(timezone: Arc<str>) -> Self {
+    pub fn new(session_timezone: Arc<str>) -> Self {
         Self {
-            timezone,
+            session_timezone,
             signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 
-    pub fn timezone(&self) -> &str {
-        &self.timezone
+    pub fn session_timezone(&self) -> &str {
+        &self.session_timezone
     }
 
     fn column_name(args: &[datafusion_expr::Expr]) -> String {
@@ -235,28 +235,28 @@ impl ScalarUDFImpl for SparkToXml {
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
-        let timezone = self.timezone.as_ref();
+        let session_timezone = self.session_timezone.as_ref();
 
         let options = if args.len() == 2 {
             match &args[1] {
                 ColumnarValue::Scalar(s) if s.is_null() => SparkToXmlOptions {
-                    timezone: timezone.to_string(),
+                    session_timezone: session_timezone.to_string(),
                     ..SparkToXmlOptions::default()
                 },
                 ColumnarValue::Array(arr) if matches!(arr.data_type(), DataType::Null) => {
                     SparkToXmlOptions {
-                        timezone: timezone.to_string(),
+                        session_timezone: session_timezone.to_string(),
                         ..SparkToXmlOptions::default()
                     }
                 }
                 _ => {
                     let map_array = to_map_array(&args[1])?;
-                    SparkToXmlOptions::from_map(&map_array, timezone)?
+                    SparkToXmlOptions::from_map(&map_array, session_timezone)?
                 }
             }
         } else {
             SparkToXmlOptions {
-                timezone: timezone.to_string(),
+                session_timezone: session_timezone.to_string(),
                 ..SparkToXmlOptions::default()
             }
         };
@@ -834,10 +834,10 @@ fn format_timestamp_field(
     let _is_default_format = options.timestamp_ltz_format.is_none();
 
     if tz_opt.is_some() {
-        let tz: Tz = options.timezone.parse().map_err(|e| {
+        let tz: Tz = options.session_timezone.parse().map_err(|e| {
             DataFusionError::Execution(format!(
                 "Invalid session timezone '{}': {e}",
-                options.timezone
+                options.session_timezone
             ))
         })?;
         let utc_dt = DateTime::<Utc>::from_timestamp(secs, nanos).ok_or_else(|| {
@@ -856,9 +856,9 @@ fn format_timestamp_field(
             datetime: local_dt.naive_local(),
             timezone: Some(TimeZoneDisplay {
                 offset,
-                name: Some(&options.timezone),
+                name: Some(&options.session_timezone),
             }),
-            zone_id: Some(&options.timezone),
+            zone_id: Some(&options.session_timezone),
             timestamp_kind: TimestampKind::Normal,
             precision: TimePrecision::Microsecond,
         };

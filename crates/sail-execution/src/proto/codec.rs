@@ -2183,16 +2183,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = XpathTyped::new(kind);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkToXml(gen::SparkToXmlUdf { timezone }) => {
-                let udf = SparkToXml::new(Arc::from(timezone));
+            UdfKind::SparkToXml(gen::SparkToXmlUdf { session_timezone }) => {
+                let udf = SparkToXml::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkUnixTimestamp(gen::SparkUnixTimestampUdf { timezone }) => {
-                let udf = SparkUnixTimestamp::new(Arc::from(timezone));
+            UdfKind::SparkUnixTimestamp(gen::SparkUnixTimestampUdf { session_timezone }) => {
+                let udf = SparkUnixTimestamp::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkDateFormat(gen::SparkDateFormatUdf { timezone }) => {
-                let udf = SparkDateFormat::new(Arc::from(timezone));
+            UdfKind::SparkDateFormat(gen::SparkDateFormatUdf { session_timezone }) => {
+                let udf = SparkDateFormat::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::StructFunction(gen::StructFunctionUdf { field_names }) => {
@@ -2208,13 +2208,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::TimestampNow(gen::TimestampNowUdf {
-                timezone,
+                session_timezone,
                 time_unit,
             }) => {
                 let time_unit = gen_datafusion_common::TimeUnit::from_str_name(time_unit.as_str())
                     .ok_or_else(|| plan_datafusion_err!("invalid time unit: {time_unit}"))?;
                 let time_unit: TimeUnit = time_unit.into();
-                let udf = TimestampNow::new(Arc::from(timezone), time_unit);
+                let udf = TimestampNow::new(Arc::from(session_timezone), time_unit);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone, is_try }) => {
@@ -2232,16 +2232,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkTime(gen::SparkTimeUdf { is_try }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkTime::new(is_try))));
             }
-            UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { timezone }) => {
-                let udf = SparkFromCSV::new(Arc::from(timezone));
+            UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone }) => {
+                let udf = SparkFromCSV::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkToCsv(gen::SparkToCsvUdf { timezone }) => {
-                let udf = SparkToCsv::new(Arc::from(timezone));
+            UdfKind::SparkToCsv(gen::SparkToCsvUdf { session_timezone }) => {
+                let udf = SparkToCsv::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkFromJson(gen::SparkFromJsonUdf { timezone }) => {
-                let udf = SparkFromJson::new(Arc::from(timezone));
+            UdfKind::SparkFromJson(gen::SparkFromJsonUdf { session_timezone }) => {
+                let udf = SparkFromJson::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::SparkVariantGet(gen::SparkVariantGetUdf { safe }) => {
@@ -2664,18 +2664,18 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let name = node.name().to_string();
             UdfKind::XpathTyped(gen::XpathTypedUdf { name })
         } else if let Some(func) = node.inner().downcast_ref::<SparkToXml>() {
-            let timezone = func.timezone().to_string();
-            UdfKind::SparkToXml(gen::SparkToXmlUdf { timezone })
+            let session_timezone = func.session_timezone().to_string();
+            UdfKind::SparkToXml(gen::SparkToXmlUdf { session_timezone })
         } else if let Some(func) = node.inner().downcast_ref::<SparkTimestamp>() {
             let timezone = func.timezone().map(|x| x.to_string());
             let is_try = func.is_try();
             UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone, is_try })
         } else if let Some(func) = node.inner().downcast_ref::<SparkUnixTimestamp>() {
-            let timezone = func.timezone().to_string();
-            UdfKind::SparkUnixTimestamp(gen::SparkUnixTimestampUdf { timezone })
+            let session_timezone = func.session_timezone().to_string();
+            UdfKind::SparkUnixTimestamp(gen::SparkUnixTimestampUdf { session_timezone })
         } else if let Some(func) = node.inner().downcast_ref::<SparkDateFormat>() {
-            let timezone = func.timezone().to_string();
-            UdfKind::SparkDateFormat(gen::SparkDateFormatUdf { timezone })
+            let session_timezone = func.session_timezone().to_string();
+            UdfKind::SparkDateFormat(gen::SparkDateFormatUdf { session_timezone })
         } else if let Some(func) = node.inner().downcast_ref::<StructFunction>() {
             let field_names = func.field_names().to_vec();
             UdfKind::StructFunction(gen::StructFunctionUdf { field_names })
@@ -2686,11 +2686,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let field_names = func.field_names().to_vec();
             UdfKind::UpdateStructField(gen::UpdateStructFieldUdf { field_names })
         } else if let Some(func) = node.inner().downcast_ref::<TimestampNow>() {
-            let timezone = func.timezone().to_string();
+            let session_timezone = func.session_timezone().to_string();
             let time_unit: gen_datafusion_common::TimeUnit = func.time_unit().into();
             let time_unit = time_unit.as_str_name().to_string();
             UdfKind::TimestampNow(gen::TimestampNowUdf {
-                timezone,
+                session_timezone,
                 time_unit,
             })
         } else if let Some(func) = node.inner().downcast_ref::<SparkDate>() {
@@ -2709,14 +2709,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let safe = func.safe();
             UdfKind::SparkParseJson(gen::SparkParseJsonUdf { safe })
         } else if let Some(func) = node.inner().downcast_ref::<SparkFromCSV>() {
-            let timezone = func.timezone().to_string();
-            UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { timezone })
+            let session_timezone = func.session_timezone().to_string();
+            UdfKind::SparkFromCsv(gen::SparkFromCsvUdf { session_timezone })
         } else if let Some(func) = node.inner().downcast_ref::<SparkToCsv>() {
-            let timezone = func.timezone().to_string();
-            UdfKind::SparkToCsv(gen::SparkToCsvUdf { timezone })
+            let session_timezone = func.session_timezone().to_string();
+            UdfKind::SparkToCsv(gen::SparkToCsvUdf { session_timezone })
         } else if let Some(func) = node.inner().downcast_ref::<SparkFromJson>() {
-            let timezone = func.timezone().to_string();
-            UdfKind::SparkFromJson(gen::SparkFromJsonUdf { timezone })
+            let session_timezone = func.session_timezone().to_string();
+            UdfKind::SparkFromJson(gen::SparkFromJsonUdf { session_timezone })
         } else if let Some(func) = node.inner().downcast_ref::<SparkNextDay>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkNextDay(gen::SparkNextDayUdf { ansi_mode })
@@ -3987,7 +3987,7 @@ impl RemoteExecutionCodec {
         config: &gen::PySparkUdfConfig,
     ) -> Result<PySparkUdfConfig> {
         let config = PySparkUdfConfig {
-            timezone: config.timezone.clone(),
+            session_timezone: config.session_timezone.clone(),
             pandas_window_bound_types: config.pandas_window_bound_types.clone(),
             pandas_grouped_map_assign_columns_by_name: config
                 .pandas_grouped_map_assign_columns_by_name,
@@ -4007,7 +4007,7 @@ impl RemoteExecutionCodec {
         config: &PySparkUdfConfig,
     ) -> Result<gen::PySparkUdfConfig> {
         let config = gen::PySparkUdfConfig {
-            timezone: config.timezone.clone(),
+            session_timezone: config.session_timezone.clone(),
             pandas_window_bound_types: config.pandas_window_bound_types.clone(),
             pandas_grouped_map_assign_columns_by_name: config
                 .pandas_grouped_map_assign_columns_by_name,
@@ -4672,7 +4672,7 @@ mod tests {
             .inner()
             .downcast_ref::<SparkUnixTimestamp>()
             .expect("decoded UDF should be SparkUnixTimestamp");
-        assert_eq!(decoded.timezone(), "America/Los_Angeles");
+        assert_eq!(decoded.session_timezone(), "America/Los_Angeles");
 
         Ok(())
     }

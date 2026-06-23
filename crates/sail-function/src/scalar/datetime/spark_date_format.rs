@@ -25,20 +25,20 @@ use crate::scalar::datetime::format::{
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkDateFormat {
-    timezone: Arc<str>,
+    session_timezone: Arc<str>,
     signature: Signature,
 }
 
 impl SparkDateFormat {
-    pub fn new(timezone: Arc<str>) -> Self {
+    pub fn new(session_timezone: Arc<str>) -> Self {
         Self {
-            timezone,
+            session_timezone,
             signature: Signature::variadic_any(Volatility::Immutable),
         }
     }
 
-    pub fn timezone(&self) -> &str {
-        &self.timezone
+    pub fn session_timezone(&self) -> &str {
+        &self.session_timezone
     }
 }
 
@@ -73,7 +73,7 @@ impl ScalarUDFImpl for SparkDateFormat {
 
                 let result: StringArray = match array.data_type() {
                     DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
-                        format_string_array_as_timestamp(&array, &self.timezone, &format)?
+                        format_string_array_as_timestamp(&array, &self.session_timezone, &format)?
                     }
                     DataType::Date32 => format_date32_array(&array, &format)?,
                     DataType::Date64 => format_date64_array(&array, &format)?,
@@ -106,10 +106,12 @@ impl ScalarUDFImpl for SparkDateFormat {
                     Option<Arc<str>>,
                 ) = match timestamp_array.clone().data_type() {
                     DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
-                        let ts_array: Arc<dyn datafusion::arrow::array::Array> = Arc::new(
-                            parse_string_array_to_timestamp(&timestamp_array, &self.timezone)?,
-                        );
-                        (ts_array, Some(self.timezone.clone()))
+                        let ts_array: Arc<dyn datafusion::arrow::array::Array> =
+                            Arc::new(parse_string_array_to_timestamp(
+                                &timestamp_array,
+                                &self.session_timezone,
+                            )?);
+                        (ts_array, Some(self.session_timezone.clone()))
                     }
                     DataType::Timestamp(_, tz) => (timestamp_array, tz.clone()),
                     _ => (timestamp_array, None),
@@ -128,12 +130,12 @@ impl ScalarUDFImpl for SparkDateFormat {
                     ScalarValue::Utf8(Some(value))
                     | ScalarValue::LargeUtf8(Some(value))
                     | ScalarValue::Utf8View(Some(value)) => {
-                        let micros = parse_timestamp_string(&value, &self.timezone)?;
+                        let micros = parse_timestamp_string(&value, &self.session_timezone)?;
                         match micros {
                             Some(micros) => format_timestamp_value(
                                 micros,
                                 &TimeUnit::Microsecond,
-                                Some(&self.timezone),
+                                Some(&self.session_timezone),
                                 &format,
                             )?,
                             None => return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
@@ -180,11 +182,11 @@ impl ScalarUDFImpl for SparkDateFormat {
                     ScalarValue::Utf8(Some(value))
                     | ScalarValue::LargeUtf8(Some(value))
                     | ScalarValue::Utf8View(Some(value)) => {
-                        let micros = parse_timestamp_string(&value, &self.timezone)?;
+                        let micros = parse_timestamp_string(&value, &self.session_timezone)?;
                         match micros {
                             Some(micros) => ScalarValue::TimestampMicrosecond(
                                 Some(micros),
-                                Some(self.timezone.clone()),
+                                Some(self.session_timezone.clone()),
                             ),
                             None => return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(None))),
                         }
@@ -203,7 +205,7 @@ impl ScalarUDFImpl for SparkDateFormat {
                     | ScalarValue::TimestampMillisecond(_, tz)
                     | ScalarValue::TimestampSecond(_, tz)
                     | ScalarValue::TimestampNanosecond(_, tz) => tz.clone(),
-                    _ => Some(self.timezone.clone()),
+                    _ => Some(self.session_timezone.clone()),
                 };
                 format_timestamp_array_dynamic(&timestamp_array, &format_array, tz.as_ref())
             }

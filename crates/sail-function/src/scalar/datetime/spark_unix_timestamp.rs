@@ -17,19 +17,19 @@ use crate::scalar::datetime::utils::validate_data_types;
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkUnixTimestamp {
     signature: Signature,
-    timezone: Arc<str>,
+    session_timezone: Arc<str>,
 }
 
 impl SparkUnixTimestamp {
-    pub fn new(timezone: Arc<str>) -> Self {
+    pub fn new(session_timezone: Arc<str>) -> Self {
         Self {
             signature: Signature::variadic_any(Volatility::Immutable),
-            timezone,
+            session_timezone,
         }
     }
 
-    pub fn timezone(&self) -> &str {
-        &self.timezone
+    pub fn session_timezone(&self) -> &str {
+        &self.session_timezone
     }
 }
 
@@ -66,13 +66,13 @@ impl ScalarUDFImpl for SparkUnixTimestamp {
         match first.data_type() {
             DataType::Int32 | DataType::Int64 => args.args[0]
                 .cast_to(
-                    &DataType::Timestamp(TimeUnit::Second, Some(self.timezone.clone())),
+                    &DataType::Timestamp(TimeUnit::Second, Some(self.session_timezone.clone())),
                     None,
                 )?
                 .cast_to(&DataType::Int64, None),
             DataType::Date64 | DataType::Date32 | DataType::Timestamp(_, _) => args.args[0]
                 .cast_to(
-                    &DataType::Timestamp(TimeUnit::Second, Some(self.timezone.clone())),
+                    &DataType::Timestamp(TimeUnit::Second, Some(self.session_timezone.clone())),
                     None,
                 )?
                 .cast_to(&DataType::Int64, None),
@@ -80,7 +80,7 @@ impl ScalarUDFImpl for SparkUnixTimestamp {
                 ToTimestampSecondsFunc::new_with_config(args.config_options.as_ref())
                     .invoke_with_args(args)?
                     .cast_to(
-                        &DataType::Timestamp(TimeUnit::Second, Some(self.timezone.clone())),
+                        &DataType::Timestamp(TimeUnit::Second, Some(self.session_timezone.clone())),
                         None,
                     )?
                     .cast_to(&DataType::Int64, None)
@@ -251,7 +251,7 @@ impl SparkUnixTimestamp {
             let timezone: Tz = parsed
                 .timezone
                 .as_deref()
-                .unwrap_or(&self.timezone)
+                .unwrap_or(&self.session_timezone)
                 .parse()?;
             localize_with_fallback(&timezone, &parsed.datetime)?.timestamp()
         };

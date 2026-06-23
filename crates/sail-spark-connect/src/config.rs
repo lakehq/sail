@@ -304,7 +304,7 @@ impl TryFrom<&SparkRuntimeConfig> for PySparkUdfConfig {
             .get(SPARK_SQL_SESSION_TIME_ZONE)?
             .map(|x| x.to_string())
         {
-            output.timezone = value;
+            output.session_timezone = value;
         }
 
         if let Some(value) = config

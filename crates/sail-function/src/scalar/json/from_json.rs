@@ -40,7 +40,7 @@ use crate::scalar::datetime::format::DateTimeFormat;
 /// licensed under the Apache License, Version 2.0.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkFromJson {
-    timezone: Arc<str>,
+    session_timezone: Arc<str>,
     signature: Signature,
 }
 
@@ -101,15 +101,15 @@ impl Default for SparkFromJsonOptions {
 impl SparkFromJson {
     pub const FROM_JSON_NAME: &'static str = "from_json";
 
-    pub fn new(timezone: Arc<str>) -> Self {
+    pub fn new(session_timezone: Arc<str>) -> Self {
         Self {
-            timezone,
+            session_timezone,
             signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 
-    pub fn timezone(&self) -> &str {
-        &self.timezone
+    pub fn session_timezone(&self) -> &str {
+        &self.session_timezone
     }
 }
 
@@ -150,15 +150,15 @@ impl ScalarUDFImpl for SparkFromJson {
             );
         };
 
-        let dt = parse_schema_to_data_type(schema_str, &self.timezone)?;
+        let dt = parse_schema_to_data_type(schema_str, &self.session_timezone)?;
         Ok(Arc::new(Field::new(self.name(), dt, true)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let timezone = self.timezone.to_string();
+        let session_timezone = self.session_timezone.to_string();
         let ScalarFunctionArgs { args, .. } = args;
         make_scalar_function(
-            move |inner_args| from_json_inner(inner_args, timezone.as_str()),
+            move |inner_args| from_json_inner(inner_args, session_timezone.as_str()),
             vec![],
         )(&args)
     }
@@ -185,7 +185,7 @@ impl ScalarUDFImpl for SparkFromJson {
 }
 
 /// Core implementation of the `from_json` function logic.
-fn from_json_inner(args: &[ArrayRef], timezone: &str) -> Result<ArrayRef> {
+fn from_json_inner(args: &[ArrayRef], session_timezone: &str) -> Result<ArrayRef> {
     if args.len() < 2 || args.len() > 3 {
         return exec_err!(
             "`{}` function requires 2 or 3 arguments, got {}",
@@ -218,7 +218,7 @@ fn from_json_inner(args: &[ArrayRef], timezone: &str) -> Result<ArrayRef> {
         SparkFromJsonOptions::default()
     };
 
-    let schema_data_type = parse_schema_to_data_type(schema_str, timezone)?;
+    let schema_data_type = parse_schema_to_data_type(schema_str, session_timezone)?;
 
     match &schema_data_type {
         DataType::Struct(_) | DataType::Map(_, _) | DataType::List(_) => {}
@@ -231,16 +231,16 @@ fn from_json_inner(args: &[ArrayRef], timezone: &str) -> Result<ArrayRef> {
         }
     }
 
-    parse_rows(rows, &schema_data_type, &options, timezone)
+    parse_rows(rows, &schema_data_type, &options, session_timezone)
 }
 
 fn parse_rows(
     rows: &StringArray,
     schema: &DataType,
     options: &SparkFromJsonOptions,
-    timezone: &str,
+    session_timezone: &str,
 ) -> Result<ArrayRef> {
-    let mut builder = create_builder(schema, rows.len(), timezone)?;
+    let mut builder = create_builder(schema, rows.len(), session_timezone)?;
     for i in 0..rows.len() {
         if rows.is_null(i) {
             append_to_builder(&mut builder, &Value::Null, options)?;
@@ -351,7 +351,11 @@ enum FieldBuilder {
     },
 }
 
-fn create_builder(data_type: &DataType, capacity: usize, timezone: &str) -> Result<FieldBuilder> {
+fn create_builder(
+    data_type: &DataType,
+    capacity: usize,
+    session_timezone: &str,
+) -> Result<FieldBuilder> {
     match data_type {
         DataType::Boolean => Ok(FieldBuilder::Boolean(BooleanBuilder::with_capacity(
             capacity,
@@ -377,7 +381,7 @@ fn create_builder(data_type: &DataType, capacity: usize, timezone: &str) -> Resu
         DataType::Int32 => Ok(FieldBuilder::Int32(Int32Builder::with_capacity(capacity))),
         DataType::Int64 => Ok(FieldBuilder::Int64(Int64Builder::with_capacity(capacity))),
         DataType::List(field) => {
-            let values = create_builder(field.data_type(), capacity, timezone)?;
+            let values = create_builder(field.data_type(), capacity, session_timezone)?;
             let mut offsets = Vec::with_capacity(capacity + 1);
             offsets.push(0);
             Ok(FieldBuilder::List {
@@ -401,8 +405,9 @@ fn create_builder(data_type: &DataType, capacity: usize, timezone: &str) -> Resu
                     other
                 )
             }?;
-            let keys_builder = create_builder(keys_field.data_type(), capacity, timezone)?;
-            let values_builder = create_builder(values_field.data_type(), capacity, timezone)?;
+            let keys_builder = create_builder(keys_field.data_type(), capacity, session_timezone)?;
+            let values_builder =
+                create_builder(values_field.data_type(), capacity, session_timezone)?;
             let mut offsets = Vec::with_capacity(capacity + 1);
             offsets.push(0);
             Ok(FieldBuilder::Map {
@@ -417,7 +422,7 @@ fn create_builder(data_type: &DataType, capacity: usize, timezone: &str) -> Resu
         DataType::Struct(fields) => {
             let nested_builders = fields
                 .iter()
-                .map(|f| create_builder(f.data_type(), capacity, timezone))
+                .map(|f| create_builder(f.data_type(), capacity, session_timezone))
                 .collect::<Result<Vec<_>>>()?;
             Ok(FieldBuilder::Struct {
                 fields: fields.clone(),
@@ -430,7 +435,7 @@ fn create_builder(data_type: &DataType, capacity: usize, timezone: &str) -> Resu
             capacity * 16,
         ))),
         DataType::Timestamp(time_unit, tz) => {
-            let resolved_tz = tz.clone().unwrap_or(Arc::from(timezone));
+            let resolved_tz = tz.clone().unwrap_or(Arc::from(session_timezone));
             match time_unit {
                 TimeUnit::Microsecond => Ok(FieldBuilder::TimestampMicrosecond {
                     builder: TimestampMicrosecondBuilder::with_capacity(capacity)
@@ -966,7 +971,7 @@ fn parse_timestamp(
 /// Parses a schema string into an Arrow DataType. The schema may be a bare field list
 /// like "a INT, b DOUBLE" (interpreted as a STRUCT), or a full type string like
 /// "ARRAY<INT>" or "MAP<STRING, INT>".
-fn parse_schema_to_data_type(schema: &str, timezone: &str) -> Result<DataType> {
+fn parse_schema_to_data_type(schema: &str, session_timezone: &str) -> Result<DataType> {
     let schema = schema.trim();
 
     // Try parsing as Spark JSON schema format (e.g., {"type":"struct","fields":[...]}).
@@ -974,7 +979,7 @@ fn parse_schema_to_data_type(schema: &str, timezone: &str) -> Result<DataType> {
     // For inputs that clearly look like JSON, return the JSON parsing result directly
     // so callers see the real error instead of a later DDL parsing failure.
     if schema.starts_with('{') || schema.starts_with('"') {
-        return parse_spark_json_schema(schema, timezone);
+        return parse_spark_json_schema(schema, session_timezone);
     }
 
     // Try parsing as a full type first (STRUCT<...>, ARRAY<...>, MAP<...>).
@@ -987,7 +992,7 @@ fn parse_schema_to_data_type(schema: &str, timezone: &str) -> Result<DataType> {
         ast.map_err(|e| DataFusionError::Plan(format!("Failed to parse schema '{schema}': {e}")))?;
     let spec_dt = from_ast_data_type(ast)
         .map_err(|e| DataFusionError::Plan(format!("Failed to analyze schema '{schema}': {e}")))?;
-    spec_to_arrow_data_type(&spec_dt, timezone)
+    spec_to_arrow_data_type(&spec_dt, session_timezone)
 }
 
 /// Parses a Spark JSON schema string into an Arrow DataType.
@@ -996,15 +1001,15 @@ fn parse_schema_to_data_type(schema: &str, timezone: &str) -> Result<DataType> {
 /// - Struct: `{"type":"struct","fields":[{"name":"a","type":"integer","nullable":true,"metadata":{}}]}`
 /// - Array: `{"type":"array","elementType":"integer","containsNull":true}`
 /// - Map: `{"type":"map","keyType":"string","valueType":"integer","valueContainsNull":true}`
-fn parse_spark_json_schema(schema: &str, timezone: &str) -> Result<DataType> {
+fn parse_spark_json_schema(schema: &str, session_timezone: &str) -> Result<DataType> {
     let json: Value = serde_json::from_str(schema)
         .map_err(|e| DataFusionError::Plan(format!("Failed to parse JSON schema: {e}")))?;
-    json_value_to_data_type(&json, timezone)
+    json_value_to_data_type(&json, session_timezone)
 }
 
-fn json_value_to_data_type(value: &Value, timezone: &str) -> Result<DataType> {
+fn json_value_to_data_type(value: &Value, session_timezone: &str) -> Result<DataType> {
     match value {
-        Value::String(s) => json_type_name_to_data_type(s, timezone),
+        Value::String(s) => json_type_name_to_data_type(s, session_timezone),
         Value::Object(map) => {
             let type_str = map.get("type").and_then(|v| v.as_str()).ok_or_else(|| {
                 DataFusionError::Plan("JSON schema object missing 'type' field".to_string())
@@ -1029,7 +1034,7 @@ fn json_value_to_data_type(value: &Value, timezone: &str) -> Result<DataType> {
                         let field_type = field.get("type").ok_or_else(|| {
                             DataFusionError::Plan("Struct field missing 'type'".to_string())
                         })?;
-                        let dt = json_value_to_data_type(field_type, timezone)?;
+                        let dt = json_value_to_data_type(field_type, session_timezone)?;
                         arrow_fields.push(Arc::new(Field::new(name, dt, nullable)));
                     }
                     Ok(DataType::Struct(Fields::from(arrow_fields)))
@@ -1042,7 +1047,7 @@ fn json_value_to_data_type(value: &Value, timezone: &str) -> Result<DataType> {
                         .get("containsNull")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(true);
-                    let dt = json_value_to_data_type(element_type, timezone)?;
+                    let dt = json_value_to_data_type(element_type, session_timezone)?;
                     Ok(DataType::List(Arc::new(Field::new(
                         SAIL_LIST_FIELD_NAME,
                         dt,
@@ -1060,8 +1065,8 @@ fn json_value_to_data_type(value: &Value, timezone: &str) -> Result<DataType> {
                         .get("valueContainsNull")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(true);
-                    let key_dt = json_value_to_data_type(key_type, timezone)?;
-                    let value_dt = json_value_to_data_type(value_type, timezone)?;
+                    let key_dt = json_value_to_data_type(key_type, session_timezone)?;
+                    let value_dt = json_value_to_data_type(value_type, session_timezone)?;
                     let fields = Fields::from(vec![
                         Arc::new(Field::new(SAIL_MAP_KEY_FIELD_NAME, key_dt, false)),
                         Arc::new(Field::new(
@@ -1086,11 +1091,11 @@ fn json_value_to_data_type(value: &Value, timezone: &str) -> Result<DataType> {
                         .ok_or_else(|| {
                             DataFusionError::Plan("UDT type missing 'sqlType' field".to_string())
                         })?;
-                    json_value_to_data_type(sql_type, timezone)
+                    json_value_to_data_type(sql_type, session_timezone)
                 }
                 other => {
                     // Some types might be expressed as {"type": "simple_name"}
-                    json_type_name_to_data_type(other, timezone)
+                    json_type_name_to_data_type(other, session_timezone)
                 }
             }
         }
@@ -1100,7 +1105,7 @@ fn json_value_to_data_type(value: &Value, timezone: &str) -> Result<DataType> {
     }
 }
 
-fn json_type_name_to_data_type(type_name: &str, timezone: &str) -> Result<DataType> {
+fn json_type_name_to_data_type(type_name: &str, session_timezone: &str) -> Result<DataType> {
     match type_name {
         "null" | "void" => Ok(DataType::Null),
         "boolean" => Ok(DataType::Boolean),
@@ -1116,7 +1121,7 @@ fn json_type_name_to_data_type(type_name: &str, timezone: &str) -> Result<DataTy
         "date" => Ok(DataType::Date32),
         "timestamp" | "timestamp_ltz" => Ok(DataType::Timestamp(
             TimeUnit::Microsecond,
-            Some(Arc::from(timezone)),
+            Some(Arc::from(session_timezone)),
         )),
         "timestamp_ntz" => Ok(DataType::Timestamp(TimeUnit::Microsecond, None)),
         "interval" => Ok(DataType::Interval(IntervalUnit::MonthDayNano)),
@@ -1181,12 +1186,12 @@ fn json_type_name_to_data_type(type_name: &str, timezone: &str) -> Result<DataTy
             let spec_dt = from_ast_data_type(ast).map_err(|e| {
                 DataFusionError::Plan(format!("Failed to analyze JSON schema type '{other}': {e}"))
             })?;
-            spec_to_arrow_data_type(&spec_dt, timezone)
+            spec_to_arrow_data_type(&spec_dt, session_timezone)
         }
     }
 }
 
-fn spec_to_arrow_data_type(dt: &spec::DataType, timezone: &str) -> Result<DataType> {
+fn spec_to_arrow_data_type(dt: &spec::DataType, session_timezone: &str) -> Result<DataType> {
     use spec::DataType as SDT;
 
     fn to_time_unit(unit: &spec::TimeUnit) -> TimeUnit {
@@ -1228,7 +1233,7 @@ fn spec_to_arrow_data_type(dt: &spec::DataType, timezone: &str) -> Result<DataTy
             to_time_unit(time_unit),
             match timestamp_type {
                 spec::TimestampType::Configured | spec::TimestampType::WithLocalTimeZone => {
-                    Some(Arc::from(timezone))
+                    Some(Arc::from(session_timezone))
                 }
                 spec::TimestampType::WithoutTimeZone => None,
             },
@@ -1248,7 +1253,7 @@ fn spec_to_arrow_data_type(dt: &spec::DataType, timezone: &str) -> Result<DataTy
             nullable,
         } => Ok(DataType::List(Arc::new(Field::new(
             SAIL_LIST_FIELD_NAME,
-            spec_to_arrow_data_type(data_type.as_ref(), timezone)?,
+            spec_to_arrow_data_type(data_type.as_ref(), session_timezone)?,
             *nullable,
         )))),
         SDT::FixedSizeList {
@@ -1258,7 +1263,7 @@ fn spec_to_arrow_data_type(dt: &spec::DataType, timezone: &str) -> Result<DataTy
         } => Ok(DataType::FixedSizeList(
             Arc::new(Field::new(
                 SAIL_LIST_FIELD_NAME,
-                spec_to_arrow_data_type(data_type.as_ref(), timezone)?,
+                spec_to_arrow_data_type(data_type.as_ref(), session_timezone)?,
                 *nullable,
             )),
             *length,
@@ -1268,7 +1273,7 @@ fn spec_to_arrow_data_type(dt: &spec::DataType, timezone: &str) -> Result<DataTy
             nullable,
         } => Ok(DataType::LargeList(Arc::new(Field::new(
             SAIL_LIST_FIELD_NAME,
-            spec_to_arrow_data_type(data_type.as_ref(), timezone)?,
+            spec_to_arrow_data_type(data_type.as_ref(), session_timezone)?,
             *nullable,
         )))),
         SDT::Struct { fields } => {
@@ -1276,7 +1281,7 @@ fn spec_to_arrow_data_type(dt: &spec::DataType, timezone: &str) -> Result<DataTy
             for f in fields.iter() {
                 out.push(Arc::new(Field::new(
                     f.name.clone(),
-                    spec_to_arrow_data_type(&f.data_type, timezone)?,
+                    spec_to_arrow_data_type(&f.data_type, session_timezone)?,
                     f.nullable,
                 )));
             }
@@ -1291,12 +1296,12 @@ fn spec_to_arrow_data_type(dt: &spec::DataType, timezone: &str) -> Result<DataTy
             let fields = Fields::from(vec![
                 Arc::new(Field::new(
                     SAIL_MAP_KEY_FIELD_NAME,
-                    spec_to_arrow_data_type(key_type.as_ref(), timezone)?,
+                    spec_to_arrow_data_type(key_type.as_ref(), session_timezone)?,
                     false,
                 )),
                 Arc::new(Field::new(
                     SAIL_MAP_VALUE_FIELD_NAME,
-                    spec_to_arrow_data_type(value_type.as_ref(), timezone)?,
+                    spec_to_arrow_data_type(value_type.as_ref(), session_timezone)?,
                     *value_type_nullable,
                 )),
             ]);
@@ -1314,7 +1319,9 @@ fn spec_to_arrow_data_type(dt: &spec::DataType, timezone: &str) -> Result<DataTy
             Arc::new(Field::new("metadata", DataType::Binary, false)),
             Arc::new(Field::new("value", DataType::Binary, false)),
         ]))),
-        SDT::UserDefined { sql_type, .. } => spec_to_arrow_data_type(sql_type.as_ref(), timezone),
+        SDT::UserDefined { sql_type, .. } => {
+            spec_to_arrow_data_type(sql_type.as_ref(), session_timezone)
+        }
         other => Err(DataFusionError::Plan(format!(
             "Unsupported data type in from_json schema: {other:?}"
         ))),

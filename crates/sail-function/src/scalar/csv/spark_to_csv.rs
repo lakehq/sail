@@ -51,7 +51,7 @@ const DEFAULT_SESSION_TIMEZONE: &str = "UTC";
 /// - `args[1]` (optional): a `MapArray` of CSV options (e.g. `sep`, `timestampFormat`, `dateFormat`).
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkToCsv {
-    timezone: Arc<str>,
+    session_timezone: Arc<str>,
     signature: Signature,
 }
 
@@ -189,18 +189,18 @@ impl SparkToCsv {
 
     /// Constructor for the UDF.
     ///
-    /// `timezone` is the Spark session timezone (e.g. `"UTC"`, `"Asia/Shanghai"`).
+    /// `session_timezone` is the Spark session timezone (e.g. `"UTC"`, `"Asia/Shanghai"`).
     /// It is used to localize `TIMESTAMP` (LTZ) values when formatting to CSV,
     /// and for codec serialization in distributed mode.
-    pub fn new(timezone: Arc<str>) -> Self {
+    pub fn new(session_timezone: Arc<str>) -> Self {
         Self {
-            timezone,
+            session_timezone,
             signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 
-    pub fn timezone(&self) -> &str {
-        &self.timezone
+    pub fn session_timezone(&self) -> &str {
+        &self.session_timezone
     }
 
     fn column_name(args: &[Expr]) -> String {
@@ -229,10 +229,10 @@ impl ScalarUDFImpl for SparkToCsv {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let timezone = self.timezone.to_string();
+        let session_timezone = self.session_timezone.to_string();
         let ScalarFunctionArgs { args, .. } = args;
         make_scalar_function(
-            move |inner_args| spark_to_csv_inner(inner_args, timezone.as_str()),
+            move |inner_args| spark_to_csv_inner(inner_args, session_timezone.as_str()),
             vec![],
         )(&args)
     }
@@ -261,13 +261,13 @@ impl ScalarUDFImpl for SparkToCsv {
 /// # Parameters
 /// - `args[0]`: `StructArray` — rows to serialize.
 /// - `args[1]` (optional): `MapArray` — CSV options (sep, timestampFormat, dateFormat).
-/// - `timezone`: the Spark session timezone, used to localize
+/// - `session_timezone`: the Spark session timezone, used to localize
 ///   `TIMESTAMP` (LTZ) values when formatting to CSV.
 ///
 /// # Returns
 /// A `StringArray` where each entry is the CSV representation of the struct row,
 /// or `null` if the input row was null.
-fn spark_to_csv_inner(args: &[ArrayRef], timezone: &str) -> Result<ArrayRef> {
+fn spark_to_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<ArrayRef> {
     if args.is_empty() || args.len() > 2 {
         return exec_err!(
             "`{}` function requires 1 or 2 arguments, got {}",
@@ -317,8 +317,13 @@ fn spark_to_csv_inner(args: &[ArrayRef], timezone: &str) -> Result<ArrayRef> {
             if col.is_null(row_idx) {
                 parts.push(write_csv_null_field(&options));
             } else {
-                let value_str =
-                    format_field_to_csv(col, row_idx, field.data_type(), &options, timezone)?;
+                let value_str = format_field_to_csv(
+                    col,
+                    row_idx,
+                    field.data_type(),
+                    &options,
+                    session_timezone,
+                )?;
                 parts.push(write_csv_field(&value_str, &options));
             }
         }
@@ -341,7 +346,7 @@ fn format_timestamp_field(
     time_unit: &TimeUnit,
     tz_opt: &Option<Arc<str>>,
     options: &SparkToCsvOptions,
-    timezone: &str,
+    session_timezone: &str,
 ) -> Result<String> {
     // Normalise every variant to microseconds for uniform handling.
     let micros = match time_unit {
@@ -388,8 +393,10 @@ fn format_timestamp_field(
 
     if tz_opt.is_some() {
         // TIMESTAMP LTZ — localize to session timezone and emit offset
-        let tz: Tz = timezone.parse().map_err(|e| {
-            DataFusionError::Execution(format!("Invalid session timezone '{timezone}': {e}"))
+        let tz: Tz = session_timezone.parse().map_err(|e| {
+            DataFusionError::Execution(format!(
+                "Invalid session timezone '{session_timezone}': {e}"
+            ))
         })?;
         let utc_dt = DateTime::<Utc>::from_timestamp(secs, nanos).ok_or_else(|| {
             DataFusionError::Execution(format!("Timestamp out of range: {micros}"))
@@ -399,9 +406,9 @@ fn format_timestamp_field(
             datetime: local_dt.naive_local(),
             timezone: Some(TimeZoneDisplay {
                 offset: local_dt.offset().fix(),
-                name: Some(timezone),
+                name: Some(session_timezone),
             }),
-            zone_id: Some(timezone),
+            zone_id: Some(session_timezone),
             timestamp_kind: TimestampKind::Normal,
             precision: TimePrecision::Microsecond,
         };
@@ -438,11 +445,11 @@ fn format_field_to_csv(
     row_idx: usize,
     data_type: &DataType,
     options: &SparkToCsvOptions,
-    timezone: &str,
+    session_timezone: &str,
 ) -> Result<String> {
     match data_type {
         DataType::Timestamp(time_unit, tz_opt) => {
-            format_timestamp_field(array, row_idx, time_unit, tz_opt, options, timezone)
+            format_timestamp_field(array, row_idx, time_unit, tz_opt, options, session_timezone)
         }
 
         // --- Dates: format with user-specified or default dateFormat ---
@@ -498,7 +505,12 @@ fn format_field_to_csv(
                 .as_any()
                 .downcast_ref::<ListArray>()
                 .ok_or_else(|| DataFusionError::Execution("Expected ListArray".to_string()))?;
-            format_list_to_csv(&arr.value(row_idx), field.data_type(), options, timezone)
+            format_list_to_csv(
+                &arr.value(row_idx),
+                field.data_type(),
+                options,
+                session_timezone,
+            )
         }
 
         DataType::LargeList(field) => {
@@ -506,7 +518,12 @@ fn format_field_to_csv(
                 .as_any()
                 .downcast_ref::<LargeListArray>()
                 .ok_or_else(|| DataFusionError::Execution("Expected LargeListArray".to_string()))?;
-            format_list_to_csv(&arr.value(row_idx), field.data_type(), options, timezone)
+            format_list_to_csv(
+                &arr.value(row_idx),
+                field.data_type(),
+                options,
+                session_timezone,
+            )
         }
 
         DataType::FixedSizeList(field, _) => {
@@ -516,7 +533,12 @@ fn format_field_to_csv(
                 .ok_or_else(|| {
                     DataFusionError::Execution("Expected FixedSizeListArray".to_string())
                 })?;
-            format_list_to_csv(&arr.value(row_idx), field.data_type(), options, timezone)
+            format_list_to_csv(
+                &arr.value(row_idx),
+                field.data_type(),
+                options,
+                session_timezone,
+            )
         }
 
         DataType::Map(_, _) => {
@@ -524,7 +546,7 @@ fn format_field_to_csv(
                 .as_any()
                 .downcast_ref::<MapArray>()
                 .ok_or_else(|| DataFusionError::Execution("Expected MapArray".to_string()))?;
-            format_map_to_csv(arr, row_idx, options, timezone)
+            format_map_to_csv(arr, row_idx, options, session_timezone)
         }
 
         DataType::Struct(_) => {
@@ -532,7 +554,7 @@ fn format_field_to_csv(
                 .as_any()
                 .downcast_ref::<StructArray>()
                 .ok_or_else(|| DataFusionError::Execution("Expected StructArray".to_string()))?;
-            format_struct_to_csv(arr, row_idx, options, timezone)
+            format_struct_to_csv(arr, row_idx, options, session_timezone)
         }
 
         // --- All other types: use ScalarValue display ---
@@ -549,7 +571,7 @@ fn format_list_to_csv(
     values: &ArrayRef,
     element_type: &DataType,
     options: &SparkToCsvOptions,
-    timezone: &str,
+    session_timezone: &str,
 ) -> Result<String> {
     let mut output = String::from("[");
     for i in 0..values.len() {
@@ -567,7 +589,7 @@ fn format_list_to_csv(
                 i,
                 element_type,
                 options,
-                timezone,
+                session_timezone,
             )?);
         }
     }
@@ -579,7 +601,7 @@ fn format_map_to_csv(
     map_array: &MapArray,
     index: usize,
     options: &SparkToCsvOptions,
-    timezone: &str,
+    session_timezone: &str,
 ) -> Result<String> {
     let entries = map_array.value(index);
     let struct_array = entries
@@ -599,14 +621,24 @@ fn format_map_to_csv(
         if i > 0 {
             output.push_str(", ");
         }
-        output.push_str(&format_field_to_csv(keys, i, key_type, options, timezone)?);
+        output.push_str(&format_field_to_csv(
+            keys,
+            i,
+            key_type,
+            options,
+            session_timezone,
+        )?);
         output.push_str(" ->");
         if values.is_null(i) {
             append_nested_null(&mut output, options);
         } else {
             output.push(' ');
             output.push_str(&format_field_to_csv(
-                values, i, value_type, options, timezone,
+                values,
+                i,
+                value_type,
+                options,
+                session_timezone,
             )?);
         }
     }
@@ -618,7 +650,7 @@ fn format_struct_to_csv(
     struct_array: &StructArray,
     index: usize,
     options: &SparkToCsvOptions,
-    timezone: &str,
+    session_timezone: &str,
 ) -> Result<String> {
     let fields = struct_array.fields();
     let columns = struct_array.columns();
@@ -639,7 +671,7 @@ fn format_struct_to_csv(
                 index,
                 field.data_type(),
                 options,
-                timezone,
+                session_timezone,
             )?);
         }
     }
@@ -1107,11 +1139,11 @@ mod tests {
     }
 
     /// Session timezone shifts the formatted timestamp — mirrors
-    /// test_from_csv_timestamp_uses_timezone.
+    /// test_from_csv_timestamp_uses_session_timezone.
     ///
     /// 1970-01-01 00:00:00 UTC = 1970-01-01 08:00:00 Asia/Shanghai (UTC+8).
     #[test]
-    fn test_to_csv_timestamp_uses_timezone() -> Result<()> {
+    fn test_to_csv_timestamp_uses_session_timezone() -> Result<()> {
         let micros: i64 = 0; // Unix epoch in microseconds
         let fields = Fields::from(vec![Arc::new(Field::new(
             "created",
