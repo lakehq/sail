@@ -100,6 +100,7 @@ message HigherOrderUdf {
     SparkArrayTransformUdf transform = 2;
     SparkArrayExistsUdf exists = 3;
     SparkArrayForallUdf forall = 4;
+    SparkArraySortUdf sort = 5;
   }
 }
 
@@ -129,6 +130,14 @@ message SparkArrayTransformUdf {
   // lambda rewritten by the planner) instead of `[element, index]`. See the
   // identical workaround documented on `SparkArrayFilterUdf.index_first`.
   bool index_first = 1;
+}
+
+message SparkArraySortUdf {
+  // True when the comparator columns are fed in `[right, left]` order (a
+  // right-only comparator `(l, r) -> f(r)` rewritten by the planner to a
+  // single-parameter lambda). See the identical workaround documented on
+  // `SparkArrayFilterUdf.index_first`.
+  bool swapped = 1;
 }
 
 message ExtendedScalarUdf {

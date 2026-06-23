@@ -11,6 +11,7 @@ use prost::Message;
 use sail_function::scalar::array::spark_array_exists::SparkArrayExists;
 use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
+use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 
 use crate::plan::gen;
@@ -79,6 +80,10 @@ pub fn try_encode_higher_order_udf(hof: &HigherOrderFunctionExpr) -> Result<gen:
         HigherOrderUdfKind::Exists(gen::SparkArrayExistsUdf {})
     } else if udf_inner.is::<SparkArrayForall>() {
         HigherOrderUdfKind::Forall(gen::SparkArrayForallUdf {})
+    } else if let Some(sort) = udf_inner.downcast_ref::<SparkArraySort>() {
+        HigherOrderUdfKind::Sort(gen::SparkArraySortUdf {
+            swapped: sort.is_swapped(),
+        })
     } else {
         return plan_err!("unsupported higher-order function: {}", hof.name());
     };

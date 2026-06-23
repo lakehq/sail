@@ -15,6 +15,7 @@ use prost::Message;
 use sail_function::scalar::array::spark_array_exists::SparkArrayExists;
 use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
+use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 
 use crate::plan::gen;
@@ -108,6 +109,13 @@ pub fn try_decode_higher_order_udf(udf: &gen::HigherOrderUdf) -> Result<Arc<High
         }
         HigherOrderUdfKind::Forall(gen::SparkArrayForallUdf {}) => {
             Arc::new(HigherOrderUDF::new_from_impl(SparkArrayForall::new()))
+        }
+        HigherOrderUdfKind::Sort(gen::SparkArraySortUdf { swapped }) => {
+            if swapped {
+                Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new_swapped()))
+            } else {
+                Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new()))
+            }
         }
     })
 }
