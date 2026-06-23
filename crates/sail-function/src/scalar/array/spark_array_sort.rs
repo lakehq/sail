@@ -15,15 +15,16 @@
 ///
 /// The one-argument form `array_sort(array)` is handled by the planner via
 /// DataFusion's built-in `array_sort`; only the comparator form reaches this UDF.
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, LargeListArray, ListArray, PrimitiveArray, UInt32Array,
+    Array, ArrayRef, AsArray, Int32Array, LargeListArray, ListArray, UInt32Array,
 };
-use datafusion::arrow::compute::{cast, take, take_arrays};
-use datafusion::arrow::datatypes::{ArrowNativeType, DataType, Field, FieldRef, Int32Type};
+use datafusion::arrow::compute::{take, take_arrays};
+use datafusion::arrow::datatypes::{ArrowNativeType, DataType, Field, FieldRef};
 use datafusion_common::utils::adjust_offsets_for_slice;
-use datafusion_common::{exec_err, plan_err, Result};
+use datafusion_common::{exec_datafusion_err, exec_err, plan_err, DataFusionError, Result};
 use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
     HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda, Volatility,
@@ -170,84 +171,80 @@ impl HigherOrderUDFImpl for SparkArraySort {
             other => return exec_err!("{} expected list, got {other}", self.name()),
         };
 
-        // Enumerate ordered pairs `(i, j)`, `i != j`, within each sublist. Using
-        // ordered pairs (rather than the upper triangle) avoids assuming the
-        // user comparator is antisymmetric and mirrors the actual comparator
-        // calls a comparison sort would make.
-        let mut left_idx: Vec<u32> = Vec::new();
-        let mut right_idx: Vec<u32> = Vec::new();
-        let mut pair_row: Vec<u32> = Vec::new();
-        for (row, w) in offsets.windows(2).enumerate() {
-            let (start, end) = (w[0], w[1]);
-            let n = end - start;
-            for i in 0..n {
-                for j in 0..n {
-                    if i == j {
-                        continue;
-                    }
-                    left_idx.push((start + i) as u32);
-                    right_idx.push((start + j) as u32);
-                    pair_row.push(row as u32);
-                }
+        // Sort each sublist independently with a stable comparison sort,
+        // evaluating the comparator lambda once per comparison — the same model
+        // as Spark's `java.util.Arrays.sort` + per-pair `f.eval`. This keeps the
+        // extra memory O(1) and the comparisons O(n log n) per sublist.
+        //
+        // TODO(perf): each comparison builds a one-row `RecordBatch` and walks
+        // the lambda's physical expression tree, so the per-comparison constant
+        // is high (heavier than Spark's codegen). It never materialises the
+        // O(n^2) pair matrix (the previous approach, which could OOM), but for
+        // very large arrays the per-call overhead dominates. If this becomes a
+        // hot path, batch the comparisons across rows with an oblivious sorting
+        // network (Batcher odd-even) or a synchronised merge sort: O(log^2 n)
+        // (resp. O(n)) lambda evaluations over wide batches instead of one per
+        // comparison. Revisit the complexity here before optimising elsewhere.
+        let compare = |row: usize, pa: usize, pb: usize| -> Result<Ordering> {
+            let left = list_values.slice(pa, 1);
+            let right = list_values.slice(pb, 1);
+            let left_param = || Ok(Arc::clone(&left));
+            let right_param = || Ok(Arc::clone(&right));
+            let params: [&dyn Fn() -> Result<ArrayRef>; 2] = if self.swapped {
+                [&right_param, &left_param]
+            } else {
+                [&left_param, &right_param]
+            };
+            let result = lambda
+                .evaluate(&params, |captures| {
+                    // The eval batch is this comparison's single outer row, so
+                    // captured columns collapse to that row's value.
+                    let index = UInt32Array::from(vec![row as u32]);
+                    Ok(take_arrays(captures, &index, None)?)
+                })?
+                .into_array(1)?;
+            // `return_field_from_args` already rejected non-`Int32` comparators.
+            let result = result
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .ok_or_else(|| {
+                    exec_datafusion_err!("{} comparator must return INT", self.name())
+                })?;
+            if result.is_null(0) {
+                return exec_err!(
+                    "{} comparator returned NULL; the comparator must return a non-null integer",
+                    self.name()
+                );
             }
-        }
-
-        // Every sublist has at most one element: already sorted, nothing to do.
-        if left_idx.is_empty() {
-            return Ok(ColumnarValue::Array(list_array));
-        }
-
-        let left_indices = UInt32Array::from(left_idx);
-        let right_indices = UInt32Array::from(right_idx);
-        let left_col = take(list_values.as_ref(), &left_indices, None)?;
-        let right_col = take(list_values.as_ref(), &right_indices, None)?;
-        let pair_row_numbers = UInt32Array::from(pair_row);
-
-        let left_param = || Ok(Arc::clone(&left_col));
-        let right_param = || Ok(Arc::clone(&right_col));
-        let params: [&dyn Fn() -> Result<ArrayRef>; 2] = if self.swapped {
-            [&right_param, &left_param]
-        } else {
-            [&left_param, &right_param]
+            Ok(result.value(0).cmp(&0))
         };
-        let cmp_result = lambda
-            .evaluate(&params, |arrays| {
-                // Spread captured columns from per-row to per-pair.
-                Ok(take_arrays(arrays, &pair_row_numbers, None)?)
-            })?
-            .into_array(left_indices.len())?;
 
-        // Spark requires the comparator to return `IntegerType`; normalise the
-        // result to `Int32`.
-        let cmp_result = cast(cmp_result.as_ref(), &DataType::Int32)?;
-        let cmp: &PrimitiveArray<Int32Type> = cmp_result.as_primitive::<Int32Type>();
-        if cmp.null_count() > 0 {
-            return exec_err!(
-                "{} comparator returned NULL; the comparator must return a non-null integer",
-                self.name()
-            );
-        }
-
-        // Sort each sublist's local indices using the precomputed comparisons.
         let mut perm: Vec<u32> = Vec::with_capacity(list_values.len());
-        let mut base = 0usize;
-        for w in offsets.windows(2) {
+        for (row, w) in offsets.windows(2).enumerate() {
             let (start, end) = (w[0], w[1]);
             let n = end - start;
             if n == 0 {
                 continue;
             }
-            let mut local: Vec<usize> = (0..n).collect();
             // Stable sort to mirror Spark's `java.util.Arrays.sort` (TimSort).
+            let mut local: Vec<usize> = (0..n).collect();
+            let mut error: Option<DataFusionError> = None;
             local.sort_by(|&a, &b| {
-                // Position of pair `(a, b)`, `a != b`, in this sublist's block.
-                let pos = a * (n - 1) + if b < a { b } else { b - 1 };
-                cmp.value(base + pos).cmp(&0)
+                if error.is_some() {
+                    return Ordering::Equal;
+                }
+                match compare(row, start + a, start + b) {
+                    Ok(ordering) => ordering,
+                    Err(e) => {
+                        error = Some(e);
+                        Ordering::Equal
+                    }
+                }
             });
-            for l in local {
-                perm.push((start + l) as u32);
+            if let Some(e) = error {
+                return Err(e);
             }
-            base += n * (n - 1);
+            perm.extend(local.into_iter().map(|l| (start + l) as u32));
         }
 
         let perm_array = UInt32Array::from(perm);
