@@ -34,15 +34,28 @@ pub fn try_encode_physical_plan(
     codec: &dyn PhysicalExtensionCodec,
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Vec<u8>> {
-    Ok(PhysicalPlanNode::try_from_physical_plan_with_converter(
+    try_encode_message(physical_plan_to_proto(codec, plan)?)
+}
+
+pub fn physical_plan_to_proto(
+    codec: &dyn PhysicalExtensionCodec,
+    plan: Arc<dyn ExecutionPlan>,
+) -> Result<PhysicalPlanNode> {
+    PhysicalPlanNode::try_from_physical_plan_with_converter(
         plan,
         codec,
         &RemotePhysicalProtoConverter {},
-    )?
-    .encode_to_vec())
+    )
 }
 
 pub fn try_encode_physical_expr(
+    codec: &dyn PhysicalExtensionCodec,
+    expr: &Arc<dyn PhysicalExpr>,
+) -> Result<Vec<u8>> {
+    try_encode_message(physical_expr_to_proto(codec, expr)?)
+}
+
+pub fn physical_expr_to_proto(
     codec: &dyn PhysicalExtensionCodec,
     expr: &Arc<dyn PhysicalExpr>,
 ) -> Result<PhysicalExprNode> {
