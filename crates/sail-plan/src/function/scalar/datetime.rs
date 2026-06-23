@@ -375,12 +375,12 @@ fn next_day(input: ScalarFunctionInput) -> PlanResult<Expr> {
     Ok(udf.call(input.arguments))
 }
 
-pub(super) fn date_format(expr: Expr, format: Expr) -> Expr {
-    date_format_with_args(vec![expr, format])
+pub(super) fn date_format(expr: Expr, format: Expr, timezone: String) -> Expr {
+    date_format_with_args(vec![expr, format], timezone)
 }
 
-fn date_format_with_args(arguments: Vec<Expr>) -> Expr {
-    ScalarUDF::from(SparkDateFormat::new()).call(arguments)
+fn date_format_with_args(arguments: Vec<Expr>, timezone: String) -> Expr {
+    ScalarUDF::from(SparkDateFormat::new(timezone.into())).call(arguments)
 }
 
 fn timestamp_data_type(input: &ScalarFunctionInput, timestamp_ntz: bool) -> DataType {
@@ -481,8 +481,7 @@ fn from_unixtime(input: ScalarFunctionInput) -> PlanResult<Expr> {
     }?;
 
     let timezone = input.function_context.plan_config.session_timezone.clone();
-    let expr = cast(expr, DataType::Timestamp(TimeUnit::Second, Some(timezone)));
-    Ok(date_format(expr, format))
+    Ok(date_format(expr, format, timezone.to_string()))
 }
 
 fn unix_time_unit(input: ScalarFunctionInput, time_unit: TimeUnit) -> PlanResult<Expr> {
@@ -976,7 +975,10 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         (
             "date_format",
             F::custom(|input| match input.arguments.len() {
-                2 => Ok(date_format_with_args(input.arguments)),
+                2 => {
+                    let timezone = input.function_context.plan_config.session_timezone.clone();
+                    Ok(date_format_with_args(input.arguments, timezone.to_string()))
+                }
                 _ => Err(PlanError::invalid("date_format requires 2 arguments")),
             }),
         ),
