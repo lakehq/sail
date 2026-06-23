@@ -1,4 +1,3 @@
-@substring
 Feature: substring() and substr() extract substrings
 
   Rule: Basic usage with positive positions (1-based)

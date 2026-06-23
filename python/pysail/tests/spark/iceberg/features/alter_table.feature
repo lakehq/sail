@@ -1,6 +1,5 @@
 Feature: Iceberg ALTER TABLE SET/UNSET TBLPROPERTIES
 
-  @sail-only
   Rule: CREATE TABLE TBLPROPERTIES are materialized into Iceberg metadata
 
     Scenario: CREATE TABLE TBLPROPERTIES writes metadata properties on first commit
@@ -61,7 +60,6 @@ Feature: Iceberg ALTER TABLE SET/UNSET TBLPROPERTIES
         | $['format-version'] | 1                        |
         | properties         | {"custom.created":"yes"} |
 
-  @sail-only
   Rule: ALTER TABLE SET TBLPROPERTIES persists properties to Iceberg metadata
 
     Scenario: ALTER TABLE SET TBLPROPERTIES writes a new metadata file
@@ -122,7 +120,6 @@ Feature: Iceberg ALTER TABLE SET/UNSET TBLPROPERTIES
         | $['format-version'] | 2                                            |
         | properties         | {"custom.created":"yes","custom.key":"hello"} |
 
-  @sail-only
   Rule: ALTER TABLE UNSET TBLPROPERTIES persists removals to Iceberg metadata
 
     Scenario: ALTER TABLE UNSET TBLPROPERTIES removes a property

@@ -39,3 +39,60 @@
 +------+------+
 |https |string|
 +------+------+
+
+>>> spark.sql("select parse_url('http://userinfo@spark.apache.org/path?query=1#Ref', 'HOST')").show(truncate=False)
++------------------------------------------------------------------+
+|parse_url(http://userinfo@spark.apache.org/path?query=1#Ref, HOST)|
++------------------------------------------------------------------+
+|spark.apache.org                                                  |
++------------------------------------------------------------------+
+
+>>> spark.sql("select parse_url('http://userinfo@spark.apache.org/path?query=1#Ref', 'PATH')").show(truncate=False)
++------------------------------------------------------------------+
+|parse_url(http://userinfo@spark.apache.org/path?query=1#Ref, PATH)|
++------------------------------------------------------------------+
+|/path                                                             |
++------------------------------------------------------------------+
+
+>>> spark.sql("select parse_url('http://userinfo@spark.apache.org/path?query=1#Ref', 'QUERY')").show(truncate=False)
++-------------------------------------------------------------------+
+|parse_url(http://userinfo@spark.apache.org/path?query=1#Ref, QUERY)|
++-------------------------------------------------------------------+
+|query=1                                                            |
++-------------------------------------------------------------------+
+
+>>> spark.sql("select parse_url('http://userinfo@spark.apache.org/path?query=1#Ref', 'REF')").show(truncate=False)
++-----------------------------------------------------------------+
+|parse_url(http://userinfo@spark.apache.org/path?query=1#Ref, REF)|
++-----------------------------------------------------------------+
+|Ref                                                              |
++-----------------------------------------------------------------+
+
+>>> spark.sql("select parse_url('http://userinfo@spark.apache.org/path?query=1#Ref', 'PROTOCOL')").show(truncate=False)
++----------------------------------------------------------------------+
+|parse_url(http://userinfo@spark.apache.org/path?query=1#Ref, PROTOCOL)|
++----------------------------------------------------------------------+
+|http                                                                  |
++----------------------------------------------------------------------+
+
+>>> spark.sql("select parse_url('http://userinfo@spark.apache.org/path?query=1#Ref', 'FILE')").show(truncate=False)
++------------------------------------------------------------------+
+|parse_url(http://userinfo@spark.apache.org/path?query=1#Ref, FILE)|
++------------------------------------------------------------------+
+|/path?query=1                                                     |
++------------------------------------------------------------------+
+
+>>> spark.sql("select parse_url('http://userinfo@spark.apache.org/path?query=1#Ref', 'AUTHORITY')").show(truncate=False)
++-----------------------------------------------------------------------+
+|parse_url(http://userinfo@spark.apache.org/path?query=1#Ref, AUTHORITY)|
++-----------------------------------------------------------------------+
+|userinfo@spark.apache.org                                              |
++-----------------------------------------------------------------------+
+
+>>> spark.sql("select parse_url('http://userinfo@spark.apache.org/path?query=1#Ref', 'USERINFO')").show(truncate=False)
++----------------------------------------------------------------------+
+|parse_url(http://userinfo@spark.apache.org/path?query=1#Ref, USERINFO)|
++----------------------------------------------------------------------+
+|userinfo                                                              |
++----------------------------------------------------------------------+
+

@@ -1,4 +1,4 @@
-@sail-only @variant @spark-4
+@spark-4
 Feature: Iceberg Variant support
 
   Scenario: Write and read a Variant column

@@ -1,4 +1,3 @@
-@concat
 Feature: concat function
 
   Rule: Basic concatenation

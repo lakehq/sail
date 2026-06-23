@@ -1,6 +1,5 @@
 Feature: Delta Lake Checkpoint
 
-  @sail-only
   Rule: Checkpoint parquet and _last_checkpoint files are created at the configured interval
 
     Background:
@@ -52,7 +51,6 @@ Feature: Delta Lake Checkpoint
         📄 _last_checkpoint
         """
 
-  @sail-only
   Rule: Multiple checkpoints are created after repeated writes with interval three
 
     Background:
@@ -138,7 +136,6 @@ Feature: Delta Lake Checkpoint
         📄 _last_checkpoint
         """
 
-  @sail-only
   Rule: Table remains readable from checkpoint when a JSON commit log is deleted
 
     Background:
@@ -176,7 +173,6 @@ Feature: Delta Lake Checkpoint
         | 2  |
         | 3  |
 
-  @sail-only
   Rule: Expired remove actions are pruned from checkpoint parquet based on table properties
 
     Background:
@@ -235,7 +231,6 @@ Feature: Delta Lake Checkpoint
         📄 _last_checkpoint
         """
 
-  @sail-only
   Rule: Expired Delta log files are cleaned up after checkpoint creation when enabled by table properties
 
     Background:
@@ -311,7 +306,6 @@ Feature: Delta Lake Checkpoint
         📄 _last_checkpoint
         """
 
-  @sail-only
   Rule: Expired Delta log cleanup honors in-commit timestamps
 
     Background:
@@ -384,7 +378,6 @@ Feature: Delta Lake Checkpoint
         📄 _last_checkpoint
         """
 
-  @sail-only
   Rule: EXPLAIN shows checkpoint parquet in metadata-as-data log replay
 
     Background:
@@ -418,7 +411,6 @@ Feature: Delta Lake Checkpoint
         """
       Then query plan matches snapshot
 
-  @sail-only
   Rule: EXPLAIN shows checkpoint parquet together with later JSON log commits
 
     Background:

@@ -70,12 +70,51 @@ message ExtendedPhysicalPlanNode {
 message ExtendedPhysicalExprNode {
   oneof ExprKind {
     CastColumnExprNode schema_evolution_cast = 1;
+    HigherOrderUdfExprNode higher_order_udf = 2;
+    LambdaExprNode lambda = 3;
+    LambdaVariableExprNode lambda_variable = 4;
   }
 }
 
 message CastColumnExprNode {
   bytes input_schema = 1;
   bytes target_schema = 2;
+}
+
+message LambdaExprNode {
+  repeated string params = 1;
+}
+
+message LambdaVariableExprNode {
+  uint32 index = 1;
+  bytes field = 2;
+}
+
+message HigherOrderUdfExprNode {
+  HigherOrderUdf udf = 1;
+}
+
+message HigherOrderUdf {
+  oneof HigherOrderUdfKind {
+    SparkArrayFilterUdf filter = 1;
+  }
+}
+
+message SparkArrayFilterUdf {
+  // True when the lambda parameters are `[index, element]` (an index-only
+  // lambda rewritten by the planner) instead of `[element, index]`.
+  //
+  // TODO: this flag exists only to work around a DataFusion 54 physical lambda
+  // alignment bug. `LambdaExpr::new` (datafusion-physical-expr 54,
+  // src/expressions/lambda.rs) collects the body's used column/variable indices,
+  // sorts them, and remaps the body to compact positions; the eval batch is
+  // built as `[captures..., all declared params]` and projected to those used
+  // indices. When an earlier declared param is unused and a later one is used
+  // (e.g. `(x, i) -> i % 2 = 0`), the remap misaligns and evaluation fails with
+  // "Field of physical LambdaVariable ... doesn't match batch field". No
+  // dedicated upstream issue exists yet (worth filing). Once fixed upstream, the
+  // `index_first` rewrite and this field can be removed.
+  bool index_first = 1;
 }
 
 message ExtendedScalarUdf {
