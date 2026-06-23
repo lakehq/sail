@@ -2026,7 +2026,6 @@ fn from_ast_sort_column(sort: SortColumn) -> SqlResult<spec::SortOrder> {
 
 fn from_ast_explain_format(format: Option<ExplainFormat>) -> SqlResult<spec::ExplainMode> {
     // TODO(spark-compat):
-    //   - EXTENDED: emit Parsed/Analyzed/Optimized Logical Plan sections distinctly.
     //   - COST: match Spark (logical + stats, not physical-with-stats).
     //   - FORMATTED: add outline + node-details sections to mirror Spark.
     //   - CODEGEN: keep "unsupported" notice until DataFusion adds support.
