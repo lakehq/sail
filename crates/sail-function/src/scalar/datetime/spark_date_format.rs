@@ -220,17 +220,18 @@ fn null_string_array(len: usize) -> ColumnarValue {
 /// Parse a timestamp string to microseconds since epoch.
 fn parse_timestamp_string(value: &str, timezone: &str) -> Result<Option<i64>> {
     let parsed = parse_timestamp(value).and_then(|x| x.into_naive());
-    let (datetime, timezone) = match parsed {
+    let (datetime, parsed_timezone) = match parsed {
         Ok(v) => v,
         Err(_e) => return Ok(None),
     };
-    let timezone: Tz = if timezone.is_empty() {
+    // Use the timezone from the parsed string if present, otherwise use the provided timezone
+    let timezone: Tz = if parsed_timezone.is_empty() {
         match timezone.parse() {
             Ok(v) => v,
             Err(_e) => return Ok(None),
         }
     } else {
-        match timezone.parse() {
+        match parsed_timezone.parse() {
             Ok(v) => v,
             Err(_e) => return Ok(None),
         }
