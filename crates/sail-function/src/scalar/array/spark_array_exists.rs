@@ -1,18 +1,14 @@
-//! Spark-compatible `exists(array, predicate)` higher-order function.
-//!
-//! Spark semantics (`ArrayExists`, three-valued logic — the modern default):
-//! - array `NULL` → `NULL`
-//! - some element makes the predicate `true` → `true` (short-circuit)
-//! - else if some element makes the predicate `NULL` → `NULL`
-//! - else (including the empty array) → `false`
-//!
-//! The predicate must return `BooleanType`. Unlike `filter`/`transform`, the
-//! lambda takes exactly **one** parameter (the element); there is no index
-//! parameter, so no `index_first` rewrite is needed.
-//!
-//! See `ArrayExists` in
-//! `sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/higherOrderFunctions.scala`.
-
+/// Spark-compatible `exists(array, predicate)` higher-order function.
+///
+/// Spark semantics (`ArrayExists`, three-valued logic — the modern default):
+/// - array `NULL` → `NULL`
+/// - some element makes the predicate `true` → `true` (short-circuit)
+/// - else if some element makes the predicate `NULL` → `NULL`
+/// - else (including the empty array) → `false`
+///
+/// The predicate must return `BooleanType`. Unlike `filter`/`transform`, the
+/// lambda takes exactly **one** parameter (the element); there is no index
+/// parameter, so no `index_first` rewrite is needed.
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -71,7 +67,6 @@ impl HigherOrderUDFImpl for SparkArrayExists {
             DataType::List(field) | DataType::LargeList(field) => Arc::clone(field),
             other => return plan_err!("{} expected a list, got {other}", self.name()),
         };
-        // Spark `exists` lambdas take exactly one parameter (the element).
         Ok(LambdaParametersProgress::Complete(vec![vec![element]]))
     }
 

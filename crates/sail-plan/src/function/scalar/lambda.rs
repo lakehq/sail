@@ -162,8 +162,6 @@ fn exists(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             "`exists` expects a lambda function as its second argument".to_string(),
         ));
     };
-    // Spark's `exists` lambda takes exactly one parameter (the element); there is
-    // no index variant, so no index-first rewrite is needed.
     if lambda.params.len() != 1 {
         return Err(PlanError::AnalysisError(format!(
             "`exists` expects a lambda function with 1 parameter, got {}",
@@ -183,8 +181,6 @@ fn forall(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             "`forall` expects a lambda function as its second argument".to_string(),
         ));
     };
-    // Spark's `forall` lambda takes exactly one parameter (the element); there is
-    // no index variant, so no index-first rewrite is needed.
     if lambda.params.len() != 1 {
         return Err(PlanError::AnalysisError(format!(
             "`forall` expects a lambda function with 1 parameter, got {}",

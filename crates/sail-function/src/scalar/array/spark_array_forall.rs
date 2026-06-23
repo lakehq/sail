@@ -1,17 +1,13 @@
-//! Spark-compatible `forall(array, predicate)` higher-order function.
-//!
-//! Spark semantics (`ArrayForAll`, three-valued logic):
-//! - array `NULL` → `NULL`
-//! - some element makes the predicate `false` → `false` (short-circuit)
-//! - else if some element makes the predicate `NULL` → `NULL`
-//! - else (all `true`, **including the empty array**) → `true`
-//!
-//! The predicate must return `BooleanType`. Like `exists`, the lambda takes
-//! exactly **one** parameter (the element); no index parameter.
-//!
-//! See `ArrayForAll` in
-//! `sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/higherOrderFunctions.scala`.
-
+/// Spark-compatible `forall(array, predicate)` higher-order function.
+///
+/// Spark semantics (`ArrayForAll`, three-valued logic):
+/// - array `NULL` → `NULL`
+/// - some element makes the predicate `false` → `false` (short-circuit)
+/// - else if some element makes the predicate `NULL` → `NULL`
+/// - else (all `true`, **including the empty array**) → `true`
+///
+/// The predicate must return `BooleanType`. Like `exists`, the lambda takes
+/// exactly **one** parameter (the element); no index parameter.
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -70,7 +66,6 @@ impl HigherOrderUDFImpl for SparkArrayForall {
             DataType::List(field) | DataType::LargeList(field) => Arc::clone(field),
             other => return plan_err!("{} expected a list, got {other}", self.name()),
         };
-        // Spark `forall` lambdas take exactly one parameter (the element).
         Ok(LambdaParametersProgress::Complete(vec![vec![element]]))
     }
 
@@ -147,7 +142,6 @@ fn forall_reduce<O: OffsetSizeTrait>(
             if is_row_null(nulls, row) {
                 builder.append_null();
             } else if offsets[row + 1].as_usize() - offsets[row].as_usize() == 0 {
-                // Empty array: forall is vacuously true.
                 builder.append_value(true);
             } else {
                 match b {
