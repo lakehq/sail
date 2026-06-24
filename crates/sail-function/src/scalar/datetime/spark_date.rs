@@ -52,6 +52,7 @@ impl SparkDate {
         }
     }
 
+    /// Parses the value column using the format argument, returning NULL per row on failure.
     fn date_formatted(
         &self,
         args: &[ColumnarValue],
@@ -163,6 +164,7 @@ impl ScalarUDFImpl for SparkDate {
     }
 }
 
+/// Returns the string value at `row`, or `None` when the entry is NULL.
 fn string_value_at(arg: &ColumnarValue, row: usize) -> Result<Option<&str>> {
     match arg {
         ColumnarValue::Array(array) => match array.data_type() {
@@ -187,6 +189,7 @@ fn string_value_at(arg: &ColumnarValue, row: usize) -> Result<Option<&str>> {
     }
 }
 
+/// Parses a single value against the format argument at `row`, returning the Date32 days.
 fn date_formatted_row(
     value: &str,
     row: usize,
@@ -197,6 +200,7 @@ fn date_formatted_row(
     date_with_to_date_func(value, format, invoke_args)
 }
 
+/// Parses one value/format pair via DataFusion's `to_date`, returning `None` on failure.
 fn date_with_to_date_func(
     value: &str,
     format: &str,
