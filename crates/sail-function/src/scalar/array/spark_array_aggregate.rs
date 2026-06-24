@@ -323,7 +323,7 @@ fn aggregate_offsets<O: OffsetSizeTrait>(
         return evaluate_finish(finish, acc, number_rows, |arrays| Ok(arrays.to_vec()));
     }
 
-    let row_indices = UInt64Array::from(non_null_rows.clone());
+    let row_indices = UInt64Array::from_iter_values(non_null_rows.iter().copied());
     let acc_param = take_one(&acc, &row_indices)?;
     let finished = evaluate_finish(finish, acc_param, non_null_rows.len(), |arrays| {
         Ok(take_arrays(arrays, &row_indices, None)?)
