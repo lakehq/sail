@@ -15,6 +15,7 @@ use crate::function::common::{AggFunctionInput, FunctionContextInput, ScalarFunc
 use crate::function::{
     get_built_in_aggregate_function, get_built_in_function, is_higher_order_function,
 };
+use crate::resolver::expression::lambda::is_spec_lambda_argument;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::function::PythonUdf;
 use crate::resolver::state::PlanResolverState;
@@ -90,9 +91,7 @@ impl PlanResolver<'_> {
         let (arguments, order_by) =
             Self::convert_mode_within_group(&canonical_function_name, arguments, order_by)?;
 
-        let has_spec_lambda_argument = arguments
-            .iter()
-            .any(|x| matches!(x, spec::Expr::LambdaFunction { .. }));
+        let has_spec_lambda_argument = arguments.iter().any(is_spec_lambda_argument);
 
         let (argument_display_names, arguments) = if canonical_function_name == "struct" {
             self.resolve_struct_expressions_and_names(arguments, schema, state)
