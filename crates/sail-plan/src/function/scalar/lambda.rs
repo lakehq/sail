@@ -112,6 +112,7 @@ fn array_lambda_with_index(
     udf_index_first: &LazyLock<Arc<HigherOrderUDF>>,
 ) -> PlanResult<expr::Expr> {
     let (array, lambda) = input.arguments.two()?;
+    // FIXME: This should be handled in the UDF itself, checking for expr type here is unreliable.
     let expr::Expr::Lambda(lambda) = lambda else {
         return Err(PlanError::AnalysisError(format!(
             "`{name}` expects a lambda function as its second argument"
@@ -165,39 +166,17 @@ fn transform(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 
 fn exists(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let (array, lambda) = input.arguments.two()?;
-    let expr::Expr::Lambda(lambda) = lambda else {
-        return Err(PlanError::AnalysisError(
-            "`exists` expects a lambda function as its second argument".to_string(),
-        ));
-    };
-    if lambda.params.len() != 1 {
-        return Err(PlanError::AnalysisError(format!(
-            "`exists` expects a lambda function with 1 parameter, got {}",
-            lambda.params.len()
-        )));
-    }
     Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
         Arc::clone(&SPARK_ARRAY_EXISTS_UDF),
-        vec![array, expr::Expr::Lambda(lambda)],
+        vec![array, lambda],
     )))
 }
 
 fn forall(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let (array, lambda) = input.arguments.two()?;
-    let expr::Expr::Lambda(lambda) = lambda else {
-        return Err(PlanError::AnalysisError(
-            "`forall` expects a lambda function as its second argument".to_string(),
-        ));
-    };
-    if lambda.params.len() != 1 {
-        return Err(PlanError::AnalysisError(format!(
-            "`forall` expects a lambda function with 1 parameter, got {}",
-            lambda.params.len()
-        )));
-    }
     Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
         Arc::clone(&SPARK_ARRAY_FORALL_UDF),
-        vec![array, expr::Expr::Lambda(lambda)],
+        vec![array, lambda],
     )))
 }
 
@@ -227,39 +206,9 @@ fn aggregate(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             )));
         }
     };
-
-    let expr::Expr::Lambda(merge) = merge else {
-        return Err(PlanError::AnalysisError(
-            "`aggregate` expects a merge lambda as its third argument".to_string(),
-        ));
-    };
-    if merge.params.len() != 2 {
-        return Err(PlanError::AnalysisError(format!(
-            "`aggregate` expects a merge lambda with 2 parameters, got {}",
-            merge.params.len()
-        )));
-    }
-
-    let expr::Expr::Lambda(finish) = finish else {
-        return Err(PlanError::AnalysisError(
-            "`aggregate` expects a finish lambda as its fourth argument".to_string(),
-        ));
-    };
-    if finish.params.len() != 1 {
-        return Err(PlanError::AnalysisError(format!(
-            "`aggregate` expects a finish lambda with 1 parameter, got {}",
-            finish.params.len()
-        )));
-    }
-
     Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
         Arc::clone(&SPARK_ARRAY_AGGREGATE_UDF),
-        vec![
-            array,
-            zero,
-            expr::Expr::Lambda(merge),
-            expr::Expr::Lambda(finish),
-        ],
+        vec![array, zero, merge, finish],
     )))
 }
 
