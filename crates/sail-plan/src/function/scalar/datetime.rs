@@ -278,13 +278,16 @@ fn to_date(input: ScalarFunctionInput, is_try: bool) -> PlanResult<Expr> {
         }
         let expr = match expr_type {
             Ok(DataType::Dictionary(_, value_type))
-                if is_try
-                    && matches!(
-                        value_type.as_ref(),
-                        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
-                    ) =>
+                if matches!(
+                    value_type.as_ref(),
+                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+                ) =>
             {
-                cast(expr, value_type.as_ref().clone())
+                if is_try {
+                    try_cast(expr, value_type.as_ref().clone())
+                } else {
+                    cast(expr, value_type.as_ref().clone())
+                }
             }
             Ok(_other) => expr,
             Err(_) => cast(expr, DataType::Utf8), // In case of error, cast to string
