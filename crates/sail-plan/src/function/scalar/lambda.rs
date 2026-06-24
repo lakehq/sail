@@ -191,13 +191,14 @@ fn forall(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
 fn expect_lambda_arity(role: &str, expr: &expr::Expr, arity: usize) -> PlanResult<()> {
     let expr::Expr::Lambda(lambda) = expr else {
         return Err(PlanError::AnalysisError(format!(
-            "`aggregate` expects a lambda function as the {role} argument"
+            "expects a lambda function as the {role} argument"
         )));
     };
     if lambda.params.len() != arity {
         // Mirrors Spark's `INVALID_LAMBDA_FUNCTION_CALL.NUM_ARGS_MISMATCH` wording.
+        // No function name: `aggregate` and `reduce` share this builder.
         return Err(PlanError::AnalysisError(format!(
-            "Invalid lambda function call. The `aggregate` {role} lambda function expects {arity} arguments, but got {}",
+            "Invalid lambda function call. The {role} lambda function expects {arity} arguments, but got {}",
             lambda.params.len()
         )));
     }
