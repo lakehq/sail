@@ -8,14 +8,14 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, MutableArrayData, OffsetSizeTrait, UInt64Array, make_array,
-    new_empty_array, new_null_array,
+    make_array, new_empty_array, new_null_array, Array, ArrayRef, AsArray, MutableArrayData,
+    OffsetSizeTrait, UInt64Array,
 };
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::take_arrays;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::{adjust_offsets_for_slice, list_values, take_function_args};
-use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
+use datafusion_common::{exec_err, plan_err, Result};
 use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
     HigherOrderUDFImpl, LambdaArgument, LambdaParametersProgress, ValueOrLambda, Volatility,
@@ -63,17 +63,12 @@ impl HigherOrderUDFImpl for SparkArrayAggregate {
         fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
     ) -> Result<LambdaParametersProgress> {
         let (list, zero, has_finish) = match fields {
-            [
-                ValueOrLambda::Value(list),
-                ValueOrLambda::Value(zero),
-                ValueOrLambda::Lambda(_merge),
-            ] => (list, zero, false),
-            [
-                ValueOrLambda::Value(list),
-                ValueOrLambda::Value(zero),
-                ValueOrLambda::Lambda(_merge),
-                ValueOrLambda::Lambda(_finish),
-            ] => (list, zero, true),
+            [ValueOrLambda::Value(list), ValueOrLambda::Value(zero), ValueOrLambda::Lambda(_merge)] => {
+                (list, zero, false)
+            }
+            [ValueOrLambda::Value(list), ValueOrLambda::Value(zero), ValueOrLambda::Lambda(_merge), ValueOrLambda::Lambda(_finish)] => {
+                (list, zero, true)
+            }
             _ => {
                 return plan_err!(
                     "{} expects value, value, lambda[, lambda] arguments",
@@ -215,15 +210,9 @@ fn equals_structurally_ignore_nullability(left: &DataType, right: &DataType) -> 
         }
         (DataType::Struct(left), DataType::Struct(right)) => {
             left.len() == right.len()
-                && left
-                    .iter()
-                    .zip(right)
-                    .all(|(left, right)| {
-                        equals_structurally_ignore_nullability(
-                            left.data_type(),
-                            right.data_type(),
-                        )
-                    })
+                && left.iter().zip(right).all(|(left, right)| {
+                    equals_structurally_ignore_nullability(left.data_type(), right.data_type())
+                })
         }
         (DataType::Map(left, _), DataType::Map(right, _)) => {
             equals_structurally_ignore_nullability(left.data_type(), right.data_type())
@@ -232,7 +221,7 @@ fn equals_structurally_ignore_nullability(left: &DataType, right: &DataType) -> 
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments)]
 fn aggregate_offsets<O: OffsetSizeTrait>(
     name: &str,
     number_rows: usize,
@@ -276,7 +265,9 @@ fn aggregate_offsets<O: OffsetSizeTrait>(
         let value_arg = || Ok(Arc::clone(&value_param));
         let params: [&dyn Fn() -> Result<ArrayRef>; 2] = [&acc_arg, &value_arg];
         let next_acc = merge
-            .evaluate(&params, |arrays| Ok(take_arrays(arrays, &row_indices, None)?))?
+            .evaluate(&params, |arrays| {
+                Ok(take_arrays(arrays, &row_indices, None)?)
+            })?
             .into_array(rows.len())?;
 
         acc = scatter_updates(name, &acc, &next_acc, &rows)?;
