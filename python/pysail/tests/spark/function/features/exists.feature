@@ -1,3 +1,4 @@
+@lambda_hof
 @exists
 Feature: exists higher-order function
 
@@ -339,5 +340,14 @@ Feature: exists higher-order function
       When query
         """
         SELECT exists(array(1, 2, 3), x -> x + 1) AS result
+        """
+      Then query error .*
+
+  Rule: Lambda only accepts one parameter
+
+    Scenario: two-parameter lambda is rejected as type error
+      When query
+        """
+        SELECT exists(array(1, 2, 3), (x, i) -> x > i) AS result
         """
       Then query error .*
