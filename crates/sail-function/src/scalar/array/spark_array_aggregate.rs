@@ -268,9 +268,14 @@ fn aggregate_offsets<O: OffsetSizeTrait>(
         .max()
         .unwrap_or(0);
 
+    // Reused across depth iterations: `number_rows` is the tight upper bound on the
+    // per-depth row count (reached at depth 0), so one allocation up front and a
+    // `clear()` per depth avoids a fresh allocation and growth reallocs per depth.
+    let mut rows = Vec::with_capacity(number_rows);
+    let mut value_indices = Vec::with_capacity(number_rows);
     for depth in 0..max_len {
-        let mut rows = Vec::new();
-        let mut value_indices = Vec::new();
+        rows.clear();
+        value_indices.clear();
         for row in 0..number_rows {
             if is_row_null(nulls, row) {
                 continue;
@@ -286,10 +291,10 @@ fn aggregate_offsets<O: OffsetSizeTrait>(
             continue;
         }
 
-        let row_indices = UInt64Array::from(rows.clone());
-        let value_indices = UInt64Array::from(value_indices);
+        let row_indices = UInt64Array::from_iter_values(rows.iter().copied());
+        let value_index_array = UInt64Array::from_iter_values(value_indices.iter().copied());
         let acc_param = take_one(&acc, &row_indices)?;
-        let value_param = take_one(&values, &value_indices)?;
+        let value_param = take_one(&values, &value_index_array)?;
         let acc_arg = || Ok(Arc::clone(&acc_param));
         let value_arg = || Ok(Arc::clone(&value_param));
         let params: [&dyn Fn() -> Result<ArrayRef>; 2] = if element_first {
@@ -318,7 +323,7 @@ fn aggregate_offsets<O: OffsetSizeTrait>(
         return evaluate_finish(finish, acc, number_rows, |arrays| Ok(arrays.to_vec()));
     }
 
-    let row_indices = UInt64Array::from(non_null_rows.clone());
+    let row_indices = UInt64Array::from_iter_values(non_null_rows.iter().copied());
     let acc_param = take_one(&acc, &row_indices)?;
     let finished = evaluate_finish(finish, acc_param, non_null_rows.len(), |arrays| {
         Ok(take_arrays(arrays, &row_indices, None)?)

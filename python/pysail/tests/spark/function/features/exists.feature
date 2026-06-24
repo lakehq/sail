@@ -1,3 +1,4 @@
+@lambda_hof
 @exists
 Feature: exists higher-order function
 

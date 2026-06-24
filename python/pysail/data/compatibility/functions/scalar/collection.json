@@ -27,20 +27,17 @@
   {
     "module": "pyspark.sql.functions",
     "function": "exists",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/229"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "filter",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/229"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "forall",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/229"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
@@ -72,8 +69,7 @@
   {
     "module": "pyspark.sql.functions",
     "function": "transform",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/229"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",

@@ -1,3 +1,4 @@
+@lambda_hof
 @transform
 Feature: transform higher-order function
 

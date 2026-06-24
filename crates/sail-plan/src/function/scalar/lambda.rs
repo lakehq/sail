@@ -191,6 +191,31 @@ fn forall(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     )))
 }
 
+/// Enforces the exact lambda arity Spark requires for a higher-order
+/// `aggregate`/`reduce` argument, but only on a direct `Expr::Lambda` match.
+///
+/// The UDF binding only rejects lambdas with too many parameters, so a `merge`
+/// lambda with fewer than 2 parameters would otherwise bind silently to a prefix
+/// and return a wrong result instead of erroring like Spark
+/// (`INVALID_LAMBDA_FUNCTION_CALL.NUM_ARGS_MISMATCH`).
+///
+/// Direct expr matching is unreliable for aliased or otherwise-wrapped lambdas,
+/// so anything that is not a bare `Expr::Lambda` falls back to the lenient path
+/// (no arity check here) until expr matching is improved more broadly.
+fn expect_lambda_arity(role: &str, expr: &expr::Expr, arity: usize) -> PlanResult<()> {
+    if let expr::Expr::Lambda(lambda) = expr {
+        if lambda.params.len() != arity {
+            // Mirrors Spark's `INVALID_LAMBDA_FUNCTION_CALL.NUM_ARGS_MISMATCH`
+            // wording, naming no function (`aggregate`/`reduce` share this builder).
+            return Err(PlanError::AnalysisError(format!(
+                "Invalid lambda function call. The {role} lambda function expects {arity} arguments, but got {}",
+                lambda.params.len()
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn aggregate(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let args = input.arguments;
     let (array, zero, merge, finish) = match args.len() {
@@ -217,6 +242,8 @@ fn aggregate(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             )));
         }
     };
+    expect_lambda_arity("merge", &merge, 2)?;
+    expect_lambda_arity("finish", &finish, 1)?;
     let (func, merge) = match merge {
         expr::Expr::Lambda(lambda)
             if lambda.params.len() == 2
