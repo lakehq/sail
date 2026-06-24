@@ -262,7 +262,13 @@ fn array_sort_spark(array: expr::Expr, asc: expr::Expr) -> PlanResult<expr::Expr
     Ok(expr_fn::array_sort(array, sort, nulls))
 }
 
-/// Builds the comparator form `array_sort(array, (left, right) -> int)`.
+/// Builds `array_sort(array)` (no comparator) and the comparator form
+/// `array_sort(array, (left, right) -> int)`.
+///
+/// Expectations (a 2-parameter comparator, plus the swapped rewrite below) are
+/// only enforced on a direct `Expr::Lambda` match; any other shape (e.g. an
+/// aliased or otherwise wrapped expression) is passed through to the UDF
+/// unchanged rather than rejected, mirroring `aggregate`/`array_lambda_with_index`.
 ///
 /// The physical lambda evaluation batch contains all declared parameters while
 /// the body is projected to the columns it actually uses; the two only line up
@@ -271,35 +277,7 @@ fn array_sort_spark(array: expr::Expr, asc: expr::Expr) -> PlanResult<expr::Expr
 /// rewritten to `r -> f(r)` over the `SPARK_ARRAY_SORT_SWAPPED_UDF` instance,
 /// which feeds the lambda the columns in `[right, left]` order. This mirrors the
 /// index-first rewrite in [`array_lambda_with_index`].
-fn array_sort_with_comparator(array: expr::Expr, lambda: Lambda) -> PlanResult<expr::Expr> {
-    if lambda.params.len() != 2 {
-        return Err(PlanError::AnalysisError(format!(
-            "`array_sort` expects a comparator lambda with 2 parameters, got {}",
-            lambda.params.len()
-        )));
-    }
-    let (func, lambda) = if !lambda_body_uses_param(&lambda.body, &lambda.params[0])?
-        && lambda_body_uses_param(&lambda.body, &lambda.params[1])?
-    {
-        let Lambda { params, body } = lambda;
-        let (_left, right) = params.two()?;
-        (
-            Arc::clone(&SPARK_ARRAY_SORT_SWAPPED_UDF),
-            Lambda {
-                params: vec![right],
-                body,
-            },
-        )
-    } else {
-        (Arc::clone(&SPARK_ARRAY_SORT_UDF), lambda)
-    };
-    Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
-        func,
-        vec![array, expr::Expr::Lambda(lambda)],
-    )))
-}
-
-fn array_sort(input: ScalarFunctionInput) -> PlanResult<datafusion_expr::Expr> {
+fn array_sort(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let (array, rest) = input.arguments.at_least_one()?;
 
     if rest.is_empty() {
@@ -307,13 +285,34 @@ fn array_sort(input: ScalarFunctionInput) -> PlanResult<datafusion_expr::Expr> {
         return array_sort_spark(array, lit(true));
     }
 
-    let lambda = rest.one()?;
-    let expr::Expr::Lambda(lambda) = lambda else {
-        return Err(PlanError::AnalysisError(
-            "`array_sort` expects a lambda function as its second argument".to_string(),
-        ));
+    let comparator = rest.one()?;
+    let (func, comparator) = match comparator {
+        expr::Expr::Lambda(lambda) if lambda.params.len() != 2 => {
+            return Err(PlanError::AnalysisError(format!(
+                "`array_sort` expects a comparator lambda with 2 parameters, got {}",
+                lambda.params.len()
+            )));
+        }
+        expr::Expr::Lambda(lambda)
+            if !lambda_body_uses_param(&lambda.body, &lambda.params[0])?
+                && lambda_body_uses_param(&lambda.body, &lambda.params[1])? =>
+        {
+            let Lambda { params, body } = lambda;
+            let (_left, right) = params.two()?;
+            (
+                Arc::clone(&SPARK_ARRAY_SORT_SWAPPED_UDF),
+                expr::Expr::Lambda(Lambda {
+                    params: vec![right],
+                    body,
+                }),
+            )
+        }
+        comparator => (Arc::clone(&SPARK_ARRAY_SORT_UDF), comparator),
     };
-    array_sort_with_comparator(array, lambda)
+    Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
+        func,
+        vec![array, comparator],
+    )))
 }
 
 pub(super) fn list_built_in_lambda_functions() -> Vec<(&'static str, ScalarFunction)> {
