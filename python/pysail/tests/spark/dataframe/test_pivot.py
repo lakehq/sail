@@ -122,7 +122,7 @@ def test_pivot_value_colliding_with_grouping_column(spark):
 @pytest.mark.xfail(
     strict=False,
     reason="Known flaky bug: with duplicate output column names, the Arrow/toPandas path "
-    "intermittently fails with an internal field-id error (No field named s.\"#0\") while "
+    'intermittently fails with an internal field-id error (No field named s."#0") while '
     "collect() always succeeds. Paired with the collect test above to isolate the failure "
     "to toPandas. Separate core field-id resolution bug, not specific to pivot.",
 )
