@@ -14,6 +14,7 @@ use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use sail_common::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
+use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
@@ -25,7 +26,6 @@ use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
-use sail_function::scalar::datetime::spark_try_to_date::SparkTryToDate;
 use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
@@ -294,7 +294,7 @@ fn to_date(input: ScalarFunctionInput, is_try: bool) -> PlanResult<Expr> {
         };
         let format = to_chrono_fmt(format);
         if is_try {
-            Ok(ScalarUDF::from(SparkTryToDate::new()).call(vec![expr, format]))
+            Ok(ScalarUDF::from(SparkDate::new(true)).call(vec![expr, format]))
         } else {
             Ok(expr_fn::to_date(vec![expr, format]))
         }

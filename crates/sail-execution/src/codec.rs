@@ -151,7 +151,6 @@ use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
-use sail_function::scalar::datetime::spark_try_to_date::SparkTryToDate;
 use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
@@ -2418,9 +2417,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_try_to_timestamp" | "try_to_timestamp" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToTimestamp::new())))
             }
-            "spark_try_to_date" | "try_to_date" => {
-                Ok(Arc::new(ScalarUDF::from(SparkTryToDate::new())))
-            }
             "spark_expm1" | "expm1" => Ok(Arc::new(ScalarUDF::from(SparkExpm1::new()))),
             "spark_ceil" | "ceil" => Ok(Arc::new(ScalarUDF::from(SparkCeil::new()))),
             "spark_floor" | "floor" => Ok(Arc::new(ScalarUDF::from(SparkFloor::new()))),
@@ -2551,7 +2547,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkTryParseUrl>()
             || node_inner.is::<SparkTrySubtract>()
             || node_inner.is::<SparkTryToBinary>()
-            || node_inner.is::<SparkTryToDate>()
             || node_inner.is::<SparkTryToTimestamp>()
             || node_inner.is::<HllSketchEstimateFunction>()
             || node_inner.is::<HllUnionFunction>()
