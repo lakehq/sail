@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
-use datafusion_expr::{expr, try_cast, ExprSchemable, ScalarUDF};
+use datafusion_expr::{cast, expr, try_cast, ExprSchemable, ScalarUDF};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_time::SparkTime;
@@ -17,6 +17,24 @@ pub(crate) fn cast_to_date(input: ScalarFunctionInput, is_try: bool) -> PlanResu
         .1
         .data_type()
         .clone();
+    // Unwrap dictionary-encoded strings so they parse through `SparkDate` like plain strings.
+    let (arg, data_type) = match data_type {
+        DataType::Dictionary(_, value_type)
+            if matches!(
+                value_type.as_ref(),
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+            ) =>
+        {
+            let value_type = value_type.as_ref().clone();
+            let arg = if is_try {
+                try_cast(arg, value_type.clone())
+            } else {
+                cast(arg, value_type.clone())
+            };
+            (arg, value_type)
+        }
+        _ => (arg, data_type),
+    };
     if matches!(
         data_type,
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
