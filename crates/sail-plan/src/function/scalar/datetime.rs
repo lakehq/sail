@@ -164,7 +164,8 @@ fn timestampadd_interval(unit: &str, quantity: Expr) -> PlanResult<Expr> {
     let make_interval = |args: Vec<Expr>| ScalarUDF::from(SparkMakeInterval::new()).call(args);
     let make_dt_interval = |args: Vec<Expr>| ScalarUDF::from(SparkMakeDtInterval::new()).call(args);
 
-    match unit {
+    let normalized = unit.trim().to_uppercase();
+    match normalized.as_str() {
         "YEAR" => Ok(make_interval(vec![quantity_i32()])),
         "QUARTER" => Ok(make_interval(vec![
             zero_i32(),
@@ -223,8 +224,8 @@ fn timestampadd(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let (unit, quantity, timestamp) = input.arguments.three()?;
     let unit = match &unit {
         Expr::Literal(ScalarValue::Utf8(Some(s)), _)
-        | Expr::Literal(ScalarValue::LargeUtf8(Some(s)), _) => s.to_uppercase(),
-        Expr::Column(col) => col.name().to_uppercase(),
+        | Expr::Literal(ScalarValue::LargeUtf8(Some(s)), _) => s.clone(),
+        Expr::Column(col) => col.name().to_string(),
         _ => {
             return Err(PlanError::invalid(
                 "timestampadd unit must be a string literal or keyword",
