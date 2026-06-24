@@ -56,7 +56,12 @@ impl PlanResolver<'_> {
 
         let mut slots: Vec<Slot> = Vec::with_capacity(arguments.len());
         for argument in arguments {
-            if let Some((function, arguments)) = take_spec_lambda_argument(argument.clone()) {
+            if is_spec_lambda_argument(&argument) {
+                let Some((function, arguments)) = take_spec_lambda_argument(argument) else {
+                    return Err(PlanError::internal(
+                        "lambda argument predicate and extraction disagreed",
+                    ));
+                };
                 slots.push(Slot::Lambda(function, arguments));
             } else {
                 slots.push(Slot::Resolved(
