@@ -57,7 +57,7 @@ impl SparkDate {
         args: &[ColumnarValue],
         invoke_args: &ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
-        let format_args = &args[1..];
+        let format_arg = &args[1];
         match &args[0] {
             ColumnarValue::Array(array) => {
                 let len = array.len();
@@ -65,7 +65,7 @@ impl SparkDate {
                 for row in 0..len {
                     let value = string_value_at(&args[0], row)?;
                     let date =
-                        value.and_then(|s| date_formatted_row(s, row, format_args, invoke_args));
+                        value.and_then(|s| date_formatted_row(s, row, format_arg, invoke_args));
                     match date {
                         Some(days) => builder.append_value(days),
                         None => builder.append_null(),
@@ -76,7 +76,7 @@ impl SparkDate {
             ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
                 Some(value) => {
                     let date =
-                        value.and_then(|s| date_formatted_scalar(s, format_args, invoke_args));
+                        value.and_then(|s| date_formatted_row(s, 0, format_arg, invoke_args));
                     Ok(ColumnarValue::Scalar(ScalarValue::Date32(date)))
                 }
                 _ => exec_err!("Unsupported data type {scalar:?} for function spark_date"),
@@ -156,27 +156,11 @@ impl ScalarUDFImpl for SparkDate {
                 if !self.is_try {
                     return exec_err!("`spark_date` with a format argument requires try mode");
                 }
-                validate_format_args(&args.args, "spark_date")?;
                 self.date_formatted(&args.args, &args)
             }
             n => exec_err!("`spark_date` expects 1 or 2 arguments, got {n}"),
         }
     }
-}
-
-fn validate_format_args(args: &[ColumnarValue], name: &str) -> Result<()> {
-    for (idx, arg) in args.iter().skip(1).enumerate() {
-        match arg.data_type() {
-            DataType::Utf8View | DataType::LargeUtf8 | DataType::Utf8 => {}
-            other => {
-                return exec_err!(
-                    "{name} function unsupported data type at index {}: {other}",
-                    idx + 1
-                );
-            }
-        }
-    }
-    Ok(())
 }
 
 fn string_value_at(arg: &ColumnarValue, row: usize) -> Result<Option<&str>> {
@@ -203,33 +187,14 @@ fn string_value_at(arg: &ColumnarValue, row: usize) -> Result<Option<&str>> {
     }
 }
 
-fn format_value_at(arg: &ColumnarValue, row: usize) -> Result<Option<&str>> {
-    string_value_at(arg, row)
-}
-
-fn date_formatted_scalar(
-    value: &str,
-    format_args: &[ColumnarValue],
-    invoke_args: &ScalarFunctionArgs,
-) -> Option<i32> {
-    date_formatted_row(value, 0, format_args, invoke_args)
-}
-
 fn date_formatted_row(
     value: &str,
     row: usize,
-    format_args: &[ColumnarValue],
+    format_arg: &ColumnarValue,
     invoke_args: &ScalarFunctionArgs,
 ) -> Option<i32> {
-    for format_arg in format_args {
-        let Some(format) = format_value_at(format_arg, row).ok().flatten() else {
-            continue;
-        };
-        if let Some(days) = date_with_to_date_func(value, format, invoke_args) {
-            return Some(days);
-        }
-    }
-    None
+    let format = string_value_at(format_arg, row).ok().flatten()?;
+    date_with_to_date_func(value, format, invoke_args)
 }
 
 fn date_with_to_date_func(
