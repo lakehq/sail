@@ -183,24 +183,27 @@ fn forall(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     )))
 }
 
-/// Validates that a higher-order `aggregate`/`reduce` lambda argument is a lambda
-/// with the exact arity Spark requires. The UDF binding only rejects lambdas with
-/// too many parameters, so a `merge` lambda with fewer than 2 parameters would
-/// otherwise bind silently to a prefix and return a wrong result instead of
-/// erroring like Spark (`INVALID_LAMBDA_FUNCTION_CALL.NUM_ARGS_MISMATCH`).
+/// Enforces the exact lambda arity Spark requires for a higher-order
+/// `aggregate`/`reduce` argument, but only on a direct `Expr::Lambda` match.
+///
+/// The UDF binding only rejects lambdas with too many parameters, so a `merge`
+/// lambda with fewer than 2 parameters would otherwise bind silently to a prefix
+/// and return a wrong result instead of erroring like Spark
+/// (`INVALID_LAMBDA_FUNCTION_CALL.NUM_ARGS_MISMATCH`).
+///
+/// Direct expr matching is unreliable for aliased or otherwise-wrapped lambdas,
+/// so anything that is not a bare `Expr::Lambda` falls back to the lenient path
+/// (no arity check here) until expr matching is improved more broadly.
 fn expect_lambda_arity(role: &str, expr: &expr::Expr, arity: usize) -> PlanResult<()> {
-    let expr::Expr::Lambda(lambda) = expr else {
-        return Err(PlanError::AnalysisError(format!(
-            "expects a lambda function as the {role} argument"
-        )));
-    };
-    if lambda.params.len() != arity {
-        // Mirrors Spark's `INVALID_LAMBDA_FUNCTION_CALL.NUM_ARGS_MISMATCH` wording.
-        // No function name: `aggregate` and `reduce` share this builder.
-        return Err(PlanError::AnalysisError(format!(
-            "Invalid lambda function call. The {role} lambda function expects {arity} arguments, but got {}",
-            lambda.params.len()
-        )));
+    if let expr::Expr::Lambda(lambda) = expr {
+        if lambda.params.len() != arity {
+            // Mirrors Spark's `INVALID_LAMBDA_FUNCTION_CALL.NUM_ARGS_MISMATCH`
+            // wording, naming no function (`aggregate`/`reduce` share this builder).
+            return Err(PlanError::AnalysisError(format!(
+                "Invalid lambda function call. The {role} lambda function expects {arity} arguments, but got {}",
+                lambda.params.len()
+            )));
+        }
     }
     Ok(())
 }
