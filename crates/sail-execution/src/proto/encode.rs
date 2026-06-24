@@ -8,6 +8,7 @@ use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
 use datafusion_proto::physical_plan::{PhysicalExtensionCodec, PhysicalProtoConverterExtension};
 use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
 use prost::Message;
+use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
 use sail_function::scalar::array::spark_array_exists::SparkArrayExists;
 use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
@@ -75,6 +76,10 @@ pub fn try_encode_higher_order_udf(hof: &HigherOrderFunctionExpr) -> Result<gen:
     } else if let Some(transform) = udf_inner.downcast_ref::<SparkArrayTransform>() {
         HigherOrderUdfKind::Transform(gen::SparkArrayTransformUdf {
             index_first: transform.is_index_first(),
+        })
+    } else if let Some(aggregate) = udf_inner.downcast_ref::<SparkArrayAggregate>() {
+        HigherOrderUdfKind::Aggregate(gen::SparkArrayAggregateUdf {
+            element_first: aggregate.is_element_first(),
         })
     } else if udf_inner.is::<SparkArrayExists>() {
         HigherOrderUdfKind::Exists(gen::SparkArrayExistsUdf {})

@@ -156,6 +156,92 @@ fn format_interval(interval: Expr, unit: &str) -> Expr {
     })
 }
 
+fn timestampadd_interval(unit: &str, quantity: Expr) -> PlanResult<Expr> {
+    let zero_i32 = || lit(0_i32);
+    let zero_f64 = || lit(0_f64);
+    let quantity_i32 = || cast(quantity.clone(), DataType::Int32);
+    let quantity_f64 = || cast(quantity.clone(), DataType::Float64);
+    let make_interval = |args: Vec<Expr>| ScalarUDF::from(SparkMakeInterval::new()).call(args);
+    let make_dt_interval = |args: Vec<Expr>| ScalarUDF::from(SparkMakeDtInterval::new()).call(args);
+
+    let normalized = unit.trim().to_uppercase();
+    match normalized.as_str() {
+        "YEAR" => Ok(make_interval(vec![quantity_i32()])),
+        "QUARTER" => Ok(make_interval(vec![
+            zero_i32(),
+            cast(quantity.clone() * lit(3_i32), DataType::Int32),
+        ])),
+        "MONTH" => Ok(make_interval(vec![zero_i32(), quantity_i32()])),
+        "WEEK" => Ok(make_dt_interval(vec![
+            cast(quantity.clone() * lit(7_i32), DataType::Int32),
+            zero_i32(),
+            zero_i32(),
+            zero_f64(),
+        ])),
+        "DAY" | "DAYOFYEAR" => Ok(make_dt_interval(vec![
+            quantity_i32(),
+            zero_i32(),
+            zero_i32(),
+            zero_f64(),
+        ])),
+        "HOUR" => Ok(make_dt_interval(vec![
+            zero_i32(),
+            quantity_i32(),
+            zero_i32(),
+            zero_f64(),
+        ])),
+        "MINUTE" => Ok(make_dt_interval(vec![
+            zero_i32(),
+            zero_i32(),
+            quantity_i32(),
+            zero_f64(),
+        ])),
+        "SECOND" => Ok(make_dt_interval(vec![
+            zero_i32(),
+            zero_i32(),
+            zero_i32(),
+            quantity_f64(),
+        ])),
+        "MILLISECOND" => Ok(make_dt_interval(vec![
+            zero_i32(),
+            zero_i32(),
+            zero_i32(),
+            quantity_f64() / lit(1_000_f64),
+        ])),
+        "MICROSECOND" => Ok(make_dt_interval(vec![
+            zero_i32(),
+            zero_i32(),
+            zero_i32(),
+            quantity_f64() / lit(1_000_000_f64),
+        ])),
+        _ => Err(PlanError::invalid(format!(
+            "timestampadd does not support interval unit type '{unit}'"
+        ))),
+    }
+}
+
+fn timestampadd(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let (unit, quantity, timestamp) = input.arguments.three()?;
+    let unit = match &unit {
+        Expr::Literal(ScalarValue::Utf8(Some(s)), _)
+        | Expr::Literal(ScalarValue::LargeUtf8(Some(s)), _) => s.clone(),
+        Expr::Column(col) => col.name().to_string(),
+        _ => {
+            return Err(PlanError::invalid(
+                "timestampadd unit must be a string literal or keyword",
+            ))
+        }
+    };
+    let interval = timestampadd_interval(&unit, quantity)?;
+    Ok(cast(
+        timestamp,
+        DataType::Timestamp(
+            TimeUnit::Microsecond,
+            Some(input.function_context.plan_config.session_timezone.clone()),
+        ),
+    ) + interval)
+}
+
 fn make_date(year: Expr, month: Expr, day: Expr) -> Expr {
     match (&year, &month, &day) {
         (Expr::Literal(ScalarValue::Null, metadata), _, _)
@@ -1011,6 +1097,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
                 )
             }),
         ),
+        ("timestampadd", F::custom(timestampadd)),
         ("timestampdiff", F::custom(datediff)),
         ("to_date", F::custom(to_date)),
         ("to_time", F::var_arg(to_time)),
