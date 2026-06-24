@@ -59,7 +59,7 @@ static SPARK_ARRAY_SORT_SWAPPED_UDF: LazyLock<Arc<HigherOrderUDF>> =
 
 pub(crate) fn is_higher_order_function(name: &str) -> bool {
     matches!(
-        name,
+        name.trim().to_lowercase().as_str(),
         "aggregate" | "reduce" | "filter" | "transform" | "exists" | "forall" | "array_sort"
     )
 }
@@ -72,7 +72,7 @@ pub(crate) fn get_lambda_parameters(
     function_name: &str,
     fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
 ) -> PlanResult<Vec<Vec<FieldRef>>> {
-    let udf = match function_name {
+    let udf = match function_name.trim().to_lowercase().as_str() {
         "aggregate" | "reduce" => &SPARK_ARRAY_AGGREGATE_UDF,
         "filter" => &SPARK_ARRAY_FILTER_UDF,
         "transform" => &SPARK_ARRAY_TRANSFORM_UDF,
