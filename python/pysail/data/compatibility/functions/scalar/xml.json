@@ -14,7 +14,7 @@
   {
     "module": "pyspark.sql.functions",
     "function": "to_xml",
-    "status": "supported",
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
