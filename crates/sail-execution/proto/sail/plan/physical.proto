@@ -98,8 +98,14 @@ message HigherOrderUdf {
   oneof HigherOrderUdfKind {
     SparkArrayFilterUdf filter = 1;
     SparkArrayTransformUdf transform = 2;
+    SparkArrayExistsUdf exists = 3;
+    SparkArrayForallUdf forall = 4;
   }
 }
+
+message SparkArrayExistsUdf {}
+
+message SparkArrayForallUdf {}
 
 message SparkArrayFilterUdf {
   // True when the lambda parameters are `[index, element]` (an index-only

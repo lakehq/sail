@@ -141,7 +141,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: exists"
+        "success": "ok"
       }
     },
     {
@@ -163,7 +163,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: exists"
+        "success": "ok"
       }
     },
     {
@@ -185,7 +185,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: exists"
+        "success": "ok"
       }
     },
     {
@@ -207,7 +207,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: exists"
+        "success": "ok"
       }
     },
     {
@@ -229,7 +229,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: exists"
+        "success": "ok"
       }
     },
     {
@@ -329,7 +329,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: forall"
+        "success": "ok"
       }
     },
     {
@@ -351,7 +351,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: forall"
+        "success": "ok"
       }
     },
     {
@@ -373,7 +373,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: forall"
+        "success": "ok"
       }
     },
     {
@@ -395,7 +395,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: forall"
+        "success": "ok"
       }
     },
     {

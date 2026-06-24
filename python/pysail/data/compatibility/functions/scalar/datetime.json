@@ -363,14 +363,12 @@
   {
     "module": "pyspark.sql.functions",
     "function": "window",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/505"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "window_time",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/505"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
