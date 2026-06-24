@@ -436,7 +436,8 @@ impl PlanResolver<'_> {
         function_name: &str,
         mut arguments: Vec<spec::Expr>,
     ) -> Vec<spec::Expr> {
-        const DATE_PART_FUNCTIONS: &[&str] = &["datediff", "date_diff", "timestampdiff"];
+        const DATE_PART_FUNCTIONS: &[&str] =
+            &["datediff", "date_diff", "timestampadd", "timestampdiff"];
         if arguments.len() >= 3 && DATE_PART_FUNCTIONS.contains(&function_name) {
             if let spec::Expr::UnresolvedAttribute { ref name, .. } = arguments[0] {
                 let parts: Vec<String> = name.clone().into();
