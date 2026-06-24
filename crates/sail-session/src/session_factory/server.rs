@@ -265,5 +265,13 @@ impl ServerSessionFactory {
             .config
             .parquet
             .maximum_buffered_record_batches_per_stream;
+        parquet.content_defined_chunking.enabled =
+            self.config.parquet.content_defined_chunking.enabled;
+        parquet.content_defined_chunking.min_chunk_size =
+            self.config.parquet.content_defined_chunking.min_chunk_size;
+        parquet.content_defined_chunking.max_chunk_size =
+            self.config.parquet.content_defined_chunking.max_chunk_size;
+        parquet.content_defined_chunking.norm_level =
+            self.config.parquet.content_defined_chunking.norm_level;
     }
 }
