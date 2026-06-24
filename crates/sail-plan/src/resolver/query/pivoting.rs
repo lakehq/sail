@@ -3,12 +3,15 @@ use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{Column, DFSchemaRef, ScalarValue};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, ScalarValue};
+use datafusion_expr::utils::find_aggregate_exprs;
 use datafusion_expr::{
     col, expr, lit, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection, ScalarUDF,
 };
 use datafusion_functions_nested::expr_fn as nested_fn;
 use sail_common::spec;
+use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
+use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_function::scalar::explode;
 use sail_function::scalar::struct_function::StructFunction;
 
@@ -48,6 +51,19 @@ impl PlanResolver<'_> {
             .resolve_named_expressions(aggregate, &schema, state)
             .await?;
 
+        // Spark requires every pivot expression to contain an aggregate function. Reject a bare
+        // non-aggregate expression up front with a clear error instead of letting it fail
+        // cryptically (or pass through unfiltered) during the aggregate rewrite.
+        for agg in &aggregates {
+            if find_aggregate_exprs(std::slice::from_ref(&agg.expr)).is_empty() {
+                return Err(PlanError::AnalysisError(format!(
+                    "Aggregate expression required for pivot, but '{}' did not appear in any \
+                     aggregate function.",
+                    agg.name.join(".")
+                )));
+            }
+        }
+
         // For SQL pivots the grouping list is empty; the implicit grouping columns are
         // all input columns not referenced by the pivot column or the aggregates.
         let grouping = self
@@ -69,26 +85,32 @@ impl PlanResolver<'_> {
                 .map(|scalar| (scalar, None))
                 .collect()
         } else {
+            // Each pivot value is a foldable expression (literal, typed literal such as
+            // `DATE'...'`, or cast). Resolve it against an empty schema and fold it to a scalar
+            // with `LiteralEvaluator`, mirroring how SHOW PARTITIONS resolves partition values.
+            let empty_schema = Arc::new(DFSchema::empty());
+            let evaluator = LiteralEvaluator::new();
             let mut resolved = Vec::with_capacity(values.len());
             for value in values {
                 let spec::PivotValue {
-                    values: literals,
+                    values: exprs,
                     alias,
                 } = value;
-                if literals.len() != 1 {
+                if exprs.len() != 1 {
                     return Err(PlanError::todo(
-                        "pivot value with multiple literals (struct pivot)",
+                        "pivot value with multiple expressions (struct pivot)",
                     ));
                 }
-                let Some(literal) = literals.into_iter().next() else {
+                let Some(expr) = exprs.into_iter().next() else {
                     return Err(PlanError::AnalysisError(
-                        "pivot value must have a literal".to_string(),
+                        "pivot value must have a value".to_string(),
                     ));
                 };
-                resolved.push((
-                    self.resolve_literal(literal, state)?,
-                    alias.map(String::from),
-                ));
+                let expr = self.resolve_expression(expr, &empty_schema, state).await?;
+                let scalar = evaluator
+                    .evaluate(&expr)
+                    .map_err(|e| PlanError::invalid(e.to_string()))?;
+                resolved.push((scalar, alias.map(String::from)));
             }
             resolved
         };
@@ -103,7 +125,7 @@ impl PlanResolver<'_> {
             let value_name = match alias {
                 Some(alias) => alias,
                 None if is_null => "null".to_string(),
-                None => scalar.to_string(),
+                None => pivot_value_name(&scalar)?,
             };
             let predicate = if is_null {
                 pivot_column.clone().is_null()
@@ -135,10 +157,20 @@ impl PlanResolver<'_> {
         input: &LogicalPlan,
         pivot_column: &expr::Expr,
     ) -> PlanResult<Vec<ScalarValue>> {
+        // Spark rejects pivots whose distinct-value count exceeds the configured maximum
+        // (`spark.sql.pivotMaxValues`, default 10000), defined as `DATAFRAME_PIVOT_MAX_VALUES`
+        // in `SQLConf`. Its `collectPivotValues` bounds the distinct-value scan with
+        // `.limit(maxValues + 1)` before collecting, which is what the LIMIT below mirrors:
+        //   https://github.com/apache/spark/blob/v4.0.0/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L1951
+        //   https://github.com/apache/spark/blob/v4.0.0/sql/core/src/main/scala/org/apache/spark/sql/classic/RelationalGroupedDataset.scala#L637-L655
+        const MAX_PIVOT_VALUES: usize = 10000;
         // `GROUP BY pivot_column` with no aggregates is equivalent to
-        // `SELECT DISTINCT pivot_column`.
+        // `SELECT DISTINCT pivot_column`. Apply a LIMIT of one past the cap so a
+        // high-cardinality pivot column never pulls an unbounded number of distinct
+        // values into the planner process; the extra row still lets us detect overflow.
         let plan = LogicalPlanBuilder::from(input.clone())
             .aggregate(vec![pivot_column.clone()], Vec::<expr::Expr>::new())?
+            .limit(0, Some(MAX_PIVOT_VALUES + 1))?
             .build()?;
         let batches = self.ctx.execute_logical_plan(plan).await?.collect().await?;
         let mut values = Vec::new();
@@ -148,16 +180,22 @@ impl PlanResolver<'_> {
                 values.push(ScalarValue::try_from_array(column, row)?);
             }
         }
-        // Spark rejects pivots whose distinct-value count exceeds the configured
-        // maximum (`spark.sql.pivotMaxValues`, default 10000).
-        const MAX_PIVOT_VALUES: usize = 10000;
+        // The plan is limited to `MAX_PIVOT_VALUES + 1` rows, so report "more than" rather than
+        // an exact count (which would be capped and misleading) — mirroring Spark's message.
         if values.len() > MAX_PIVOT_VALUES {
             return Err(PlanError::AnalysisError(format!(
-                "Too many distinct pivot values ({}); maximum is {MAX_PIVOT_VALUES}",
-                values.len()
+                "The pivot column has more than {MAX_PIVOT_VALUES} distinct values; this could \
+                 indicate an error. Specify the pivot values explicitly if this was intended."
             )));
         }
-        values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        // `partial_cmp` returns `None` only for incomparable values such as float `NaN`.
+        // Fall back to a deterministic tiebreaker so the inferred pivot column order is stable
+        // across runs (the distinct values arrive in non-deterministic aggregate order). The
+        // string form also places `NaN` last, matching Spark's "NaN is greatest" ordering.
+        values.sort_by(|a, b| {
+            a.partial_cmp(b)
+                .unwrap_or_else(|| a.to_string().cmp(&b.to_string()))
+        });
         Ok(values)
     }
 
@@ -350,6 +388,20 @@ impl PlanResolver<'_> {
             Arc::new(input),
         )?))
     }
+}
+
+/// Formats a pivot value into its output column name via Sail's `CAST(... AS STRING)` arrow
+/// formatter (keeps `.0` on whole doubles, formats decimals) rather than `ScalarValue::Display`.
+fn pivot_value_name(scalar: &ScalarValue) -> PlanResult<String> {
+    let array = scalar
+        .to_array()
+        .map_err(|e| PlanError::invalid(e.to_string()))?;
+    let formatter = ArrayFormatter::try_new(array.as_ref(), &FormatOptions::default())
+        .map_err(|e| PlanError::invalid(e.to_string()))?;
+    formatter
+        .value(0)
+        .try_to_string()
+        .map_err(|e| PlanError::invalid(e.to_string()))
 }
 
 /// Add `predicate` as a FILTER to every aggregate function inside `expr`,

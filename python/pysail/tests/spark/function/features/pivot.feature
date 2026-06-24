@@ -102,6 +102,21 @@ Feature: PIVOT rotates rows into columns
         | Alice | 10000 | 20000 |
         | Bob   | 30000 | NULL  |
 
+  Rule: A non-aggregate pivot expression is rejected
+
+    Scenario: pivot expression without an aggregate function raises AnalysisException
+      When query
+        """
+        SELECT * FROM (
+          SELECT year, course, earnings FROM VALUES
+            (2012, 'Java', 20000)
+          AS courseSales(year, course, earnings)
+        ) PIVOT (
+          earnings FOR (course) IN ('Java')
+        )
+        """
+      Then query error Aggregate expression required for pivot
+
   Rule: Multiple grouping columns
 
     Scenario: pivot keeps all non-pivot, non-aggregate columns as grouping
@@ -121,6 +136,26 @@ Feature: PIVOT rotates rows into columns
         | region | year | dotNET | Java  |
         | EU     | 2012 | 5000   | NULL  |
         | US     | 2012 | 10000  | 20000 |
+
+  Rule: Explicit NULL pivot value
+
+    Scenario: pivot on an explicit NULL value names the column null and matches NULL rows
+      When query
+        """
+        SELECT * FROM (
+          SELECT year, course, earnings FROM VALUES
+            (2012, 'Java', 20000),
+            (2012, CAST(NULL AS STRING), 5000),
+            (2013, 'Java', 30000)
+          AS courseSales(year, course, earnings)
+        ) PIVOT (
+          sum(earnings) FOR (course) IN (NULL, 'Java')
+        )
+        """
+      Then query result
+        | year | null | Java  |
+        | 2012 | 5000 | 20000 |
+        | 2013 | NULL | 30000 |
 
   Rule: Count aggregate
 
