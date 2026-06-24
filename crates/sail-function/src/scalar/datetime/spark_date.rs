@@ -23,8 +23,10 @@ impl SparkDate {
     /// When `is_try` is true, returns NULL on invalid input (for try_cast).
     /// When `is_try` is false, throws an error on invalid input (for cast).
     pub fn new(is_try: bool) -> Self {
-        Self {
-            signature: Signature::one_of(
+        // Only try mode accepts the 2-argument formatted form; the non-try form is a
+        // synonym for `cast(expr AS DATE)` and accepts a single argument.
+        let signature = if is_try {
+            Signature::one_of(
                 vec![
                     TypeSignature::Coercible(vec![Coercion::new_exact(
                         TypeSignatureClass::Native(logical_string()),
@@ -35,9 +37,16 @@ impl SparkDate {
                     ]),
                 ],
                 Volatility::Immutable,
-            ),
-            is_try,
-        }
+            )
+        } else {
+            Signature::coercible(
+                vec![Coercion::new_exact(TypeSignatureClass::Native(
+                    logical_string(),
+                ))],
+                Volatility::Immutable,
+            )
+        };
+        Self { signature, is_try }
     }
 
     pub fn is_try(&self) -> bool {
