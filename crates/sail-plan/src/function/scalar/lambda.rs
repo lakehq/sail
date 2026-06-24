@@ -11,6 +11,7 @@ use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
 use sail_function::scalar::array::spark_array_exists::SparkArrayExists;
 use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
+use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 
 use crate::error::{PlanError, PlanResult};
@@ -50,10 +51,16 @@ static SPARK_ARRAY_TRANSFORM_INDEX_FIRST_UDF: LazyLock<Arc<HigherOrderUDF>> = La
     ))
 });
 
+static SPARK_ARRAY_SORT_UDF: LazyLock<Arc<HigherOrderUDF>> =
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new())));
+
+static SPARK_ARRAY_SORT_SWAPPED_UDF: LazyLock<Arc<HigherOrderUDF>> =
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new_swapped())));
+
 pub(crate) fn is_higher_order_function(name: &str) -> bool {
     matches!(
         name,
-        "aggregate" | "reduce" | "filter" | "transform" | "exists" | "forall"
+        "aggregate" | "reduce" | "filter" | "transform" | "exists" | "forall" | "array_sort"
     )
 }
 
@@ -71,6 +78,7 @@ pub(crate) fn get_lambda_parameters(
         "transform" => &SPARK_ARRAY_TRANSFORM_UDF,
         "exists" => &SPARK_ARRAY_EXISTS_UDF,
         "forall" => &SPARK_ARRAY_FORALL_UDF,
+        "array_sort" => &SPARK_ARRAY_SORT_UDF,
         other => {
             return Err(PlanError::internal(format!(
                 "not a higher-order function: {other}"
@@ -254,19 +262,57 @@ fn array_sort_spark(array: expr::Expr, asc: expr::Expr) -> PlanResult<expr::Expr
     Ok(expr_fn::array_sort(array, sort, nulls))
 }
 
-fn array_sort(input: ScalarFunctionInput) -> PlanResult<datafusion_expr::Expr> {
+/// Builds `array_sort(array)` (no comparator) and the comparator form
+/// `array_sort(array, (left, right) -> int)`.
+///
+/// Expectations (a 2-parameter comparator, plus the swapped rewrite below) are
+/// only enforced on a direct `Expr::Lambda` match; any other shape (e.g. an
+/// aliased or otherwise wrapped expression) is passed through to the UDF
+/// unchanged rather than rejected, mirroring `aggregate`/`array_lambda_with_index`.
+///
+/// The physical lambda evaluation batch contains all declared parameters while
+/// the body is projected to the columns it actually uses; the two only line up
+/// when the used parameters form a prefix of the declared ones. A comparator that
+/// uses only its second parameter (`(l, r) -> f(r)`, `l` unused) is therefore
+/// rewritten to `r -> f(r)` over the `SPARK_ARRAY_SORT_SWAPPED_UDF` instance,
+/// which feeds the lambda the columns in `[right, left]` order. This mirrors the
+/// index-first rewrite in [`array_lambda_with_index`].
+fn array_sort(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let (array, rest) = input.arguments.at_least_one()?;
 
-    // Check if there's a second argument (lambda comparator)
-    if !rest.is_empty() {
-        // array_sort with lambda comparator is not yet implemented
-        return Err(crate::error::PlanError::todo(
-            "array_sort with lambda comparator is not yet implemented",
-        ));
+    if rest.is_empty() {
+        // array_sort(array) without lambda - ascending order, NULLs last (Spark behavior).
+        return array_sort_spark(array, lit(true));
     }
 
-    // array_sort(array) without lambda - sorts in ascending order with NULLs last (Spark behavior)
-    array_sort_spark(array, lit(true))
+    let comparator = rest.one()?;
+    let (func, comparator) = match comparator {
+        expr::Expr::Lambda(lambda) if lambda.params.len() != 2 => {
+            return Err(PlanError::AnalysisError(format!(
+                "`array_sort` expects a comparator lambda with 2 parameters, got {}",
+                lambda.params.len()
+            )));
+        }
+        expr::Expr::Lambda(lambda)
+            if !lambda_body_uses_param(&lambda.body, &lambda.params[0])?
+                && lambda_body_uses_param(&lambda.body, &lambda.params[1])? =>
+        {
+            let Lambda { params, body } = lambda;
+            let (_left, right) = params.two()?;
+            (
+                Arc::clone(&SPARK_ARRAY_SORT_SWAPPED_UDF),
+                expr::Expr::Lambda(Lambda {
+                    params: vec![right],
+                    body,
+                }),
+            )
+        }
+        comparator => (Arc::clone(&SPARK_ARRAY_SORT_UDF), comparator),
+    };
+    Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
+        func,
+        vec![array, comparator],
+    )))
 }
 
 pub(super) fn list_built_in_lambda_functions() -> Vec<(&'static str, ScalarFunction)> {
