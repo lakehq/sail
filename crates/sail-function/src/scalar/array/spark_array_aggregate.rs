@@ -24,6 +24,7 @@ use datafusion_expr::{
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkArrayAggregate {
     signature: HigherOrderSignature,
+    element_first: bool,
 }
 
 impl Default for SparkArrayAggregate {
@@ -44,7 +45,27 @@ impl SparkArrayAggregate {
                 ],
                 Volatility::Immutable,
             ),
+            element_first: false,
         }
+    }
+
+    pub fn new_element_first() -> Self {
+        Self {
+            signature: HigherOrderSignature::exact(
+                vec![
+                    ValueOrLambda::Value(()),
+                    ValueOrLambda::Value(()),
+                    ValueOrLambda::Lambda(()),
+                    ValueOrLambda::Lambda(()),
+                ],
+                Volatility::Immutable,
+            ),
+            element_first: true,
+        }
+    }
+
+    pub fn is_element_first(&self) -> bool {
+        self.element_first
     }
 }
 
@@ -79,7 +100,12 @@ impl HigherOrderUDFImpl for SparkArrayAggregate {
 
         let element = list_element_field(self.name(), list.data_type())?;
         let acc = Arc::new(Field::new("", zero.data_type().clone(), true));
-        let mut params = vec![vec![Arc::clone(&acc), element]];
+        let merge_params = if self.element_first {
+            vec![element, Arc::clone(&acc)]
+        } else {
+            vec![Arc::clone(&acc), element]
+        };
+        let mut params = vec![merge_params];
         if has_finish {
             params.push(vec![acc]);
         }
@@ -128,6 +154,7 @@ impl HigherOrderUDFImpl for SparkArrayAggregate {
                     zero_array,
                     merge,
                     finish,
+                    self.element_first,
                     args.return_type(),
                 )?
             }
@@ -142,6 +169,7 @@ impl HigherOrderUDFImpl for SparkArrayAggregate {
                     zero_array,
                     merge,
                     finish,
+                    self.element_first,
                     args.return_type(),
                 )?
             }
@@ -231,6 +259,7 @@ fn aggregate_offsets<O: OffsetSizeTrait>(
     mut acc: ArrayRef,
     merge: &LambdaArgument,
     finish: &LambdaArgument,
+    element_first: bool,
     return_type: &DataType,
 ) -> Result<ArrayRef> {
     let max_len = (0..number_rows)
@@ -263,7 +292,11 @@ fn aggregate_offsets<O: OffsetSizeTrait>(
         let value_param = take_one(&values, &value_indices)?;
         let acc_arg = || Ok(Arc::clone(&acc_param));
         let value_arg = || Ok(Arc::clone(&value_param));
-        let params: [&dyn Fn() -> Result<ArrayRef>; 2] = [&acc_arg, &value_arg];
+        let params: [&dyn Fn() -> Result<ArrayRef>; 2] = if element_first {
+            [&value_arg, &acc_arg]
+        } else {
+            [&acc_arg, &value_arg]
+        };
         let next_acc = merge
             .evaluate(&params, |arrays| {
                 Ok(take_arrays(arrays, &row_indices, None)?)

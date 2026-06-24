@@ -104,7 +104,9 @@ message HigherOrderUdf {
   }
 }
 
-message SparkArrayAggregateUdf {}
+message SparkArrayAggregateUdf {
+  bool element_first = 1;
+}
 
 message SparkArrayExistsUdf {}
 

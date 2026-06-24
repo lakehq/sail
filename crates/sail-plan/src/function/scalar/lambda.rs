@@ -22,6 +22,12 @@ static SPARK_ARRAY_FILTER_UDF: LazyLock<Arc<HigherOrderUDF>> =
 static SPARK_ARRAY_AGGREGATE_UDF: LazyLock<Arc<HigherOrderUDF>> =
     LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayAggregate::new())));
 
+static SPARK_ARRAY_AGGREGATE_ELEMENT_FIRST_UDF: LazyLock<Arc<HigherOrderUDF>> = LazyLock::new(|| {
+    Arc::new(HigherOrderUDF::new_from_impl(
+        SparkArrayAggregate::new_element_first(),
+    ))
+});
+
 static SPARK_ARRAY_FILTER_INDEX_FIRST_UDF: LazyLock<Arc<HigherOrderUDF>> = LazyLock::new(|| {
     Arc::new(HigherOrderUDF::new_from_impl(
         SparkArrayFilter::new_index_first(),
@@ -206,8 +212,26 @@ fn aggregate(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
             )));
         }
     };
+    let (func, merge) = match merge {
+        expr::Expr::Lambda(lambda)
+            if lambda.params.len() == 2
+                && !lambda_body_uses_param(&lambda.body, &lambda.params[0])?
+                && lambda_body_uses_param(&lambda.body, &lambda.params[1])? =>
+        {
+            let Lambda { params, body } = lambda;
+            let (_acc, element) = params.two()?;
+            (
+                Arc::clone(&SPARK_ARRAY_AGGREGATE_ELEMENT_FIRST_UDF),
+                expr::Expr::Lambda(Lambda {
+                    params: vec![element],
+                    body,
+                }),
+            )
+        }
+        merge => (Arc::clone(&SPARK_ARRAY_AGGREGATE_UDF), merge),
+    };
     Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
-        Arc::clone(&SPARK_ARRAY_AGGREGATE_UDF),
+        func,
         vec![array, zero, merge, finish],
     )))
 }

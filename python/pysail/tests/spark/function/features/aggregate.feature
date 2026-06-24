@@ -96,6 +96,29 @@ Feature: aggregate higher-order function
         | result |
         | 8.4    |
 
+    Scenario: aggregate merge can reference the element without the accumulator
+      When query
+        """
+        SELECT aggregate(array(1, 2, 3), 0, (acc, x) -> x) AS result
+        """
+      Then query result
+        | result |
+        | 3      |
+
+    Scenario: aggregate merge references the element and a captured column
+      When query
+        """
+        SELECT aggregate(arr, 0, (acc, x) -> x + base) AS result
+        FROM VALUES
+          (array(1, 2), 10),
+          (array(3), 20)
+        AS t(arr, base)
+        """
+      Then query result
+        | result |
+        | 12     |
+        | 23     |
+
     Scenario: reduce is an alias for aggregate
       When query
         """

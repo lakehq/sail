@@ -76,8 +76,10 @@ pub fn try_encode_higher_order_udf(hof: &HigherOrderFunctionExpr) -> Result<gen:
         HigherOrderUdfKind::Transform(gen::SparkArrayTransformUdf {
             index_first: transform.is_index_first(),
         })
-    } else if udf_inner.is::<SparkArrayAggregate>() {
-        HigherOrderUdfKind::Aggregate(gen::SparkArrayAggregateUdf {})
+    } else if let Some(aggregate) = udf_inner.downcast_ref::<SparkArrayAggregate>() {
+        HigherOrderUdfKind::Aggregate(gen::SparkArrayAggregateUdf {
+            element_first: aggregate.is_element_first(),
+        })
     } else if udf_inner.is::<SparkArrayExists>() {
         HigherOrderUdfKind::Exists(gen::SparkArrayExistsUdf {})
     } else if udf_inner.is::<SparkArrayForall>() {

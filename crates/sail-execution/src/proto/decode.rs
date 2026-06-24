@@ -104,8 +104,14 @@ pub fn try_decode_higher_order_udf(udf: &gen::HigherOrderUdf) -> Result<Arc<High
                 Arc::new(HigherOrderUDF::new_from_impl(SparkArrayTransform::new()))
             }
         }
-        HigherOrderUdfKind::Aggregate(gen::SparkArrayAggregateUdf {}) => {
-            Arc::new(HigherOrderUDF::new_from_impl(SparkArrayAggregate::new()))
+        HigherOrderUdfKind::Aggregate(gen::SparkArrayAggregateUdf { element_first }) => {
+            if element_first {
+                Arc::new(HigherOrderUDF::new_from_impl(
+                    SparkArrayAggregate::new_element_first(),
+                ))
+            } else {
+                Arc::new(HigherOrderUDF::new_from_impl(SparkArrayAggregate::new()))
+            }
         }
         HigherOrderUdfKind::Exists(gen::SparkArrayExistsUdf {}) => {
             Arc::new(HigherOrderUDF::new_from_impl(SparkArrayExists::new()))
