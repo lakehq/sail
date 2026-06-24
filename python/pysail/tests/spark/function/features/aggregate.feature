@@ -21,6 +21,20 @@ Feature: aggregate higher-order function
         | result |
         | 60     |
 
+    Scenario: aggregate computes average with struct accumulator
+      When query
+        """
+        SELECT aggregate(
+          array(1, 2, 3, 4),
+          named_struct('sum', 0, 'cnt', 0),
+          (acc, x) -> named_struct('sum', acc.sum + x, 'cnt', acc.cnt + 1),
+          acc -> acc.sum / acc.cnt
+        ) AS avg
+        """
+      Then query result
+        | avg |
+        | 2.5 |
+
     Scenario: aggregate applies finish to initial value for empty array
       When query
         """

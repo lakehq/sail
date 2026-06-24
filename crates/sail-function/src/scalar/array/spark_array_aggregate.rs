@@ -329,7 +329,21 @@ fn scatter_updates(
     }
 
     let base_data = base.to_data();
-    let update_data = updates.to_data();
+    let update_data = if base.data_type() == updates.data_type() {
+        updates.to_data()
+    } else if equals_structurally_ignore_nullability(base.data_type(), updates.data_type()) {
+        updates
+            .to_data()
+            .into_builder()
+            .data_type(base.data_type().clone())
+            .build()?
+    } else {
+        return exec_err!(
+            "{name} internal error: cannot scatter updates of type {} into accumulator type {}",
+            updates.data_type(),
+            base.data_type()
+        );
+    };
     let mut mutable = MutableArrayData::new(vec![&base_data, &update_data], true, base.len());
     let mut base_start = 0usize;
     for (update_index, row) in rows.iter().enumerate() {
