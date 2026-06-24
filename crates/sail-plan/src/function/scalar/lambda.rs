@@ -3,10 +3,11 @@ use std::sync::{Arc, LazyLock};
 use datafusion_common::arrow::datatypes::FieldRef;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::ScalarValue;
-use datafusion_expr::expr::{HigherOrderFunction, Lambda};
+use datafusion_expr::expr::{HigherOrderFunction, Lambda, LambdaVariable};
 use datafusion_expr::{expr, lit, HigherOrderUDF, LambdaParametersProgress, ValueOrLambda};
 use datafusion_functions_nested::expr_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
 use sail_function::scalar::array::spark_array_exists::SparkArrayExists;
 use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
@@ -17,6 +18,9 @@ use crate::function::common::{ScalarFunction, ScalarFunctionInput};
 
 static SPARK_ARRAY_FILTER_UDF: LazyLock<Arc<HigherOrderUDF>> =
     LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayFilter::new())));
+
+static SPARK_ARRAY_AGGREGATE_UDF: LazyLock<Arc<HigherOrderUDF>> =
+    LazyLock::new(|| Arc::new(HigherOrderUDF::new_from_impl(SparkArrayAggregate::new())));
 
 static SPARK_ARRAY_FILTER_INDEX_FIRST_UDF: LazyLock<Arc<HigherOrderUDF>> = LazyLock::new(|| {
     Arc::new(HigherOrderUDF::new_from_impl(
@@ -40,7 +44,10 @@ static SPARK_ARRAY_TRANSFORM_INDEX_FIRST_UDF: LazyLock<Arc<HigherOrderUDF>> = La
 });
 
 pub(crate) fn is_higher_order_function(name: &str) -> bool {
-    matches!(name, "filter" | "transform" | "exists" | "forall")
+    matches!(
+        name,
+        "aggregate" | "reduce" | "filter" | "transform" | "exists" | "forall"
+    )
 }
 
 /// Returns the lambda parameter fields of a built-in higher-order function, one
@@ -52,6 +59,7 @@ pub(crate) fn get_lambda_parameters(
     fields: &[ValueOrLambda<FieldRef, Option<FieldRef>>],
 ) -> PlanResult<Vec<Vec<FieldRef>>> {
     let udf = match function_name {
+        "aggregate" | "reduce" => &SPARK_ARRAY_AGGREGATE_UDF,
         "filter" => &SPARK_ARRAY_FILTER_UDF,
         "transform" => &SPARK_ARRAY_TRANSFORM_UDF,
         "exists" => &SPARK_ARRAY_EXISTS_UDF,
@@ -193,6 +201,68 @@ fn forall(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     )))
 }
 
+fn aggregate(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let args = input.arguments;
+    let (array, zero, merge, finish) = match args.len() {
+        3 => {
+            let (array, zero, merge) = args.three()?;
+            let acc = match &merge {
+                expr::Expr::Lambda(lambda) => lambda
+                    .params
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "acc".to_string()),
+                _ => "acc".to_string(),
+            };
+            let finish = expr::Expr::Lambda(Lambda::new(
+                vec![acc.clone()],
+                expr::Expr::LambdaVariable(LambdaVariable::new(acc, None)),
+            ));
+            (array, zero, merge, finish)
+        }
+        4 => args.four()?,
+        n => {
+            return Err(PlanError::AnalysisError(format!(
+                "`aggregate` expects 3 or 4 arguments, got {n}"
+            )));
+        }
+    };
+
+    let expr::Expr::Lambda(merge) = merge else {
+        return Err(PlanError::AnalysisError(
+            "`aggregate` expects a merge lambda as its third argument".to_string(),
+        ));
+    };
+    if merge.params.len() != 2 {
+        return Err(PlanError::AnalysisError(format!(
+            "`aggregate` expects a merge lambda with 2 parameters, got {}",
+            merge.params.len()
+        )));
+    }
+
+    let expr::Expr::Lambda(finish) = finish else {
+        return Err(PlanError::AnalysisError(
+            "`aggregate` expects a finish lambda as its fourth argument".to_string(),
+        ));
+    };
+    if finish.params.len() != 1 {
+        return Err(PlanError::AnalysisError(format!(
+            "`aggregate` expects a finish lambda with 1 parameter, got {}",
+            finish.params.len()
+        )));
+    }
+
+    Ok(expr::Expr::HigherOrderFunction(HigherOrderFunction::new(
+        Arc::clone(&SPARK_ARRAY_AGGREGATE_UDF),
+        vec![
+            array,
+            zero,
+            expr::Expr::Lambda(merge),
+            expr::Expr::Lambda(finish),
+        ],
+    )))
+}
+
 /// Spark's array_sort always puts NULLs last, regardless of sort direction
 /// https://spark.apache.org/docs/latest/api/sql/index.html#array_sort
 fn array_sort_spark(array: expr::Expr, asc: expr::Expr) -> PlanResult<expr::Expr> {
@@ -233,14 +303,14 @@ pub(super) fn list_built_in_lambda_functions() -> Vec<(&'static str, ScalarFunct
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
-        ("aggregate", F::unknown("aggregate")),
+        ("aggregate", F::custom(aggregate)),
         ("array_sort", F::custom(array_sort)),
         ("exists", F::custom(exists)),
         ("filter", F::custom(filter)),
         ("forall", F::custom(forall)),
         ("map_filter", F::unknown("map_filter")),
         ("map_zip_with", F::unknown("map_zip_with")),
-        ("reduce", F::unknown("reduce")),
+        ("reduce", F::custom(aggregate)),
         ("transform", F::custom(transform)),
         ("transform_keys", F::unknown("transform_keys")),
         ("transform_values", F::unknown("transform_values")),

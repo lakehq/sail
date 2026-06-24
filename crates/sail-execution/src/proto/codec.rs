@@ -4312,6 +4312,64 @@ mod tests {
     }
 
     #[test]
+    fn test_round_trip_distributed_aggregate_higher_order_expr() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Array, Int32Array, ListArray};
+        use datafusion::arrow::buffer::OffsetBuffer;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{col, lambda, lit, Expr, HigherOrderUDF};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
+
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let list = ListArray::new(
+            list_field,
+            OffsetBuffer::<i32>::from_lengths(vec![3, 1]),
+            Arc::new(Int32Array::from(vec![1, 2, 3, 10])),
+            None,
+        );
+
+        let fields = vec![Field::new("arr", list.data_type().clone(), true)];
+        let schema = Schema::new(fields.clone());
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+
+        let acc = Expr::LambdaVariable(LambdaVariable::new(
+            "acc".to_string(),
+            Some(Arc::new(Field::new("acc", DataType::Int32, true))),
+        ));
+        let value = Expr::LambdaVariable(LambdaVariable::new(
+            "v".to_string(),
+            Some(Arc::new(Field::new("v", DataType::Int32, true))),
+        ));
+        let finish_acc = Expr::LambdaVariable(LambdaVariable::new(
+            "acc".to_string(),
+            Some(Arc::new(Field::new("acc", DataType::Int32, true))),
+        ));
+
+        let func = Arc::new(HigherOrderUDF::new_from_impl(SparkArrayAggregate::new()));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            func,
+            vec![
+                col("arr"),
+                lit(0i32),
+                lambda(["acc", "v"], acc + value),
+                lambda(["acc"], finish_acc),
+            ],
+        ));
+        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+
+        let schema_ref: SchemaRef = Arc::new(schema);
+        as_hof(&physical)?;
+        let decoded = round_trip_expr(&physical, &schema_ref)?;
+        as_hof(&decoded)?;
+        assert_same_result(&physical, &decoded, schema_ref, vec![Arc::new(list)])
+    }
+
+    #[test]
     fn test_round_trip_distributed_filter_in_projection_plan() -> Result<()> {
         use datafusion::physical_expr::projection::ProjectionExpr;
         use datafusion::physical_plan::empty::EmptyExec;

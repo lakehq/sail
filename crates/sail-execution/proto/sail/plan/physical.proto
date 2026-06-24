@@ -100,8 +100,11 @@ message HigherOrderUdf {
     SparkArrayTransformUdf transform = 2;
     SparkArrayExistsUdf exists = 3;
     SparkArrayForallUdf forall = 4;
+    SparkArrayAggregateUdf aggregate = 5;
   }
 }
+
+message SparkArrayAggregateUdf {}
 
 message SparkArrayExistsUdf {}
 

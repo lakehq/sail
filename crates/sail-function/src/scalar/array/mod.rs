@@ -3,6 +3,7 @@ pub mod array_position;
 pub mod arrays_zip;
 pub mod lambda_utils;
 pub mod spark_array;
+pub mod spark_array_aggregate;
 pub mod spark_array_compact;
 pub mod spark_array_exists;
 pub mod spark_array_filter;
