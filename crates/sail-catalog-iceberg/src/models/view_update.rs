@@ -24,55 +24,29 @@ use serde::{Deserialize, Serialize};
 
 use crate::models;
 
-#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ViewUpdate {
-    #[serde(rename = "action")]
-    pub action: String,
-    #[serde(rename = "uuid")]
-    pub uuid: String,
-    #[serde(rename = "format-version")]
-    pub format_version: i32,
-    #[serde(rename = "schema")]
-    pub schema: Box<models::Schema>,
-    /// This optional field is **DEPRECATED for REMOVAL** since it more safe to handle this internally, and shouldn't be exposed to the clients. The highest assigned column ID for the table. This is used to ensure columns are always assigned an unused ID when evolving schemas. When omitted, it will be computed on the server side.
-    #[serde(rename = "last-column-id", skip_serializing_if = "Option::is_none")]
-    pub last_column_id: Option<i32>,
-    #[serde(rename = "location")]
-    pub location: String,
-    #[serde(rename = "updates")]
-    pub updates: std::collections::HashMap<String, String>,
-    #[serde(rename = "removals")]
-    pub removals: Vec<String>,
-    #[serde(rename = "view-version")]
-    pub view_version: Box<models::ViewVersion>,
-    /// The view version id to set as current, or -1 to set last added view version id
-    #[serde(rename = "view-version-id")]
-    pub view_version_id: i32,
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "action")]
+pub enum ViewUpdate {
+    #[serde(rename = "add-schema")]
+    AddSchemaUpdate {},
+    #[serde(rename = "add-view-version")]
+    AddViewVersionUpdate {},
+    #[serde(rename = "assign-uuid")]
+    AssignUuidUpdate {},
+    #[serde(rename = "remove-properties")]
+    RemovePropertiesUpdate {},
+    #[serde(rename = "set-current-view-version")]
+    SetCurrentViewVersionUpdate {},
+    #[serde(rename = "set-location")]
+    SetLocationUpdate {},
+    #[serde(rename = "set-properties")]
+    SetPropertiesUpdate {},
+    #[serde(rename = "upgrade-format-version")]
+    UpgradeFormatVersionUpdate {},
 }
 
-impl ViewUpdate {
-    pub fn new(
-        action: String,
-        uuid: String,
-        format_version: i32,
-        schema: models::Schema,
-        location: String,
-        updates: std::collections::HashMap<String, String>,
-        removals: Vec<String>,
-        view_version: models::ViewVersion,
-        view_version_id: i32,
-    ) -> ViewUpdate {
-        ViewUpdate {
-            action,
-            uuid,
-            format_version,
-            schema: Box::new(schema),
-            last_column_id: None,
-            location,
-            updates,
-            removals,
-            view_version: Box::new(view_version),
-            view_version_id,
-        }
+impl Default for ViewUpdate {
+    fn default() -> Self {
+        Self::AddSchemaUpdate {}
     }
 }
