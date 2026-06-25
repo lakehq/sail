@@ -32,9 +32,29 @@ jobs:
     runs-on: ubuntu-slim
     outputs:
       platforms: ${{ steps.define-platforms.outputs.result }}
+      package_version: ${{ steps.version.outputs.package_version }}
     steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install Hatch
+        uses: pypa/hatch@install
+
+      # We add the `+local` suffix in the package version
+      # to distinguish the built package from the released version on PyPI.
+      # This ensures that pip can install the package from a local directory
+      # while the dependencies are fetched from PyPI.
+      - name: Get patched package version
+        id: version
+        shell: bash
+        run: |
+          echo "package_version=$(hatch version)+local" >> "$GITHUB_OUTPUT"
+
       - id: define-platforms
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const platforms = [];
@@ -65,9 +85,9 @@ jobs:
     needs:
       - setup
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -80,6 +100,15 @@ jobs:
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Patch package version
+        shell: bash
+        run: |
+          python -c 'import re, pathlib; p = pathlib.Path("pyproject.toml"); p.write_text(re.sub(r"""(?m)^version\s*=\s*"([^"]+)""", r"""version = "\1+local""", p.read_text()))'
+          if [[ "$(hatch version)" != *"+local" ]]; then
+            echo "Error: failed to patch package version"
+            exit 1
+          fi
+
       - name: Build Wheels
         uses: PyO3/maturin-action@v1
         env:
@@ -90,14 +119,41 @@ jobs:
           RUSTFLAGS: ${{ matrix.platform.os == 'windows' && '-C linker=rust-lld.exe' || '' }}
 
       - name: Upload Wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: python-package-${{ matrix.platform.os }}-${{ matrix.platform.target }}
           path: target/wheels
-          retention-days: 1
+          retention-days: 3
 
-      - name: Set Up Hatch Environment
-        run: hatch run install-pysail
+  test:
+    name: Test
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(needs.setup.outputs.platforms) }}
+    needs:
+      - setup
+      - build
+    steps:
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
 
+      - uses: actions/download-artifact@v7
+        with:
+          name: python-package-${{ matrix.platform.os }}-${{ matrix.platform.target }}
+          path: target/wheels
+
+      - name: Install Package
+        shell: bash
+        env:
+          PACKAGE_VERSION: ${{ needs.setup.outputs.package_version }}
+        run: |
+          pip install 'pysail[test]=='"${PACKAGE_VERSION}" -v -f target/wheels --only-binary pysail
+
+      # We run the tests in the installed package without using Hatch and
+      # without the source code being present in the current working directory.
+      # This is a closer setup to how users will run the tests.
       - name: Run Tests
-        run: hatch run pytest --pyargs pysail
+        run: pytest --pyargs pysail

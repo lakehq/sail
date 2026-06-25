@@ -1,10 +1,10 @@
 use object_store::{ObjectMeta, ObjectStoreExt};
 
+use crate::delta_log::{get_actions, LogStore};
 use crate::spec::{
     checksum_path, commit_path, Action, DeltaError, DeltaResult, Metadata, Protocol,
     TableProperties, VersionChecksum,
 };
-use crate::storage::{get_actions, LogStore};
 
 pub(crate) fn in_commit_timestamp_from_actions(actions: &[Action]) -> Option<i64> {
     actions.iter().find_map(|action| match action {
@@ -146,8 +146,8 @@ mod tests {
     use url::Url;
 
     use super::*;
+    use crate::delta_log::{default_logstore, LogStoreRef, StorageConfig};
     use crate::spec::{CommitInfo, DataType, Metadata, StructField, StructType, TableFeature};
-    use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
 
     fn test_log_store(store: Arc<dyn ObjectStore>) -> LogStoreRef {
         default_logstore(

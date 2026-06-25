@@ -29,8 +29,7 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "coalesce",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/477"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.DataFrame",
@@ -60,8 +59,7 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "cov",
-    "status": "supported",
-    "issue": ""
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.DataFrame",

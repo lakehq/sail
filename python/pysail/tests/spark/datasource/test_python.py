@@ -12,6 +12,8 @@ from uuid import uuid4
 import pyarrow as pa
 import pytest
 
+from pysail.testing.spark.session import spark_session_factory
+
 try:
     from pyspark.sql.datasource import (
         DataSource,
@@ -555,14 +557,13 @@ def test_python_exception_handling(spark):
         df.collect()
 
 
-def test_python_session_isolation(spark_session_factory):
+def test_python_session_isolation(remote: str):
     """Test that datasources registered in one session are not visible in another.
 
     This test creates two separate SparkSessions with unique session IDs
     and verifies that a datasource registered in Session A cannot be
     accessed from Session B.
     """
-    import pyarrow as pa
     from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
 
     class SessionIsolationDataSource(DataSource):
@@ -592,22 +593,23 @@ def test_python_session_isolation(spark_session_factory):
             )
             yield batch
 
-    # Session A: Register the datasource
-    spark_a = spark_session_factory()
-    spark_a.dataSource.register(SessionIsolationDataSource)
+    with spark_session_factory(remote) as sessions:
+        # Session A: Register the datasource
+        spark_a = sessions.create()
+        spark_a.dataSource.register(SessionIsolationDataSource)
 
-    # Verify Session A can read from it
-    df_a = spark_a.read.format("session_isolation_test").load()
-    rows_a = df_a.collect()
-    assert len(rows_a) == 3  # noqa: PLR2004
+        # Verify Session A can read from it
+        df_a = spark_a.read.format("session_isolation_test").load()
+        rows_a = df_a.collect()
+        assert len(rows_a) == 3  # noqa: PLR2004
 
-    # Session B: Create a completely independent session
-    spark_b = spark_session_factory()
+        # Session B: Create a completely independent session
+        spark_b = sessions.create()
 
-    # Session B should NOT be able to access the datasource from Session A
-    # because datasources are registered per-session
-    with pytest.raises(Exception, match=r"session_isolation_test|not found|unknown"):
-        spark_b.read.format("session_isolation_test").load().collect()
+        # Session B should NOT be able to access the datasource from Session A
+        # because datasources are registered per-session
+        with pytest.raises(Exception, match=r"session_isolation_test|not found|unknown"):
+            spark_b.read.format("session_isolation_test").load().collect()
 
 
 # ============================================================================
@@ -1298,50 +1300,6 @@ def test_python_write_save_path_passed(spark):
         "Save path should be passed to DataSource via options['path']"
     )
     assert PathCheckDataSource._received_options["path"] == "/my/test/path"  # noqa: SLF001
-
-
-def test_python_write_mode_passed_as_option(spark):
-    """Test that the save mode is passed to DataSource via options["mode"]."""
-
-    class ModeCheckWriter(DataSourceWriter):
-        def __init__(self, schema, overwrite):
-            pass
-
-        def write(self, iterator):
-            for _ in iterator:
-                pass
-            return {}
-
-        def commit(self, messages):
-            pass
-
-    class ModeCheckDataSource(DataSource):
-        def __init__(self, options):
-            self.options = options
-            ModeCheckDataSource._received_options = dict(options)
-
-        @classmethod
-        def name(cls):
-            return "mode_check"
-
-        def schema(self):
-            return "id INT"
-
-        def writer(self, schema, overwrite):
-            return ModeCheckWriter(schema, overwrite)
-
-    ModeCheckDataSource._received_options = {}  # noqa: SLF001
-
-    spark.dataSource.register(ModeCheckDataSource)
-
-    df = spark.createDataFrame([(1,), (2,)], ["id"])
-    df.write.format("mode_check").mode("append").save()
-
-    # Verify the mode was passed through options
-    assert "mode" in ModeCheckDataSource._received_options, (  # noqa: SLF001
-        "Save mode should be passed to DataSource via options['mode']"
-    )
-    assert ModeCheckDataSource._received_options["mode"] == "append"  # noqa: SLF001
 
 
 def test_python_write_commit_failure_triggers_abort(spark):

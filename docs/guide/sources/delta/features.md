@@ -78,7 +78,7 @@ The "merge-on-read" mode refers to updating the table with deletion vectors. Thi
 | Variant Data Type              | :white_check_mark: |
 | Type Widening                  | :white_check_mark: |
 | Column Invariants              | :construction:     |
-| `CHECK` Constraints            | :construction:     |
+| `CHECK` Constraints            | :white_check_mark: |
 | Default Columns                | :construction:     |
 | Identity Columns               | :construction:     |
 | Change Data Feed               | :construction:     |

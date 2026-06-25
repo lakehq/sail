@@ -10,7 +10,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 use std::time::Instant;
@@ -28,12 +27,12 @@ use datafusion_common::{internal_err, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::stream::{self, StreamExt};
 
-use crate::kernel::transaction::OperationMetrics;
 use crate::physical_plan::{
     current_timestamp_millis, decode_adds_from_batch, delta_action_schema, encode_actions,
     meta_adds, ExecCommitMeta, COL_ACTION,
 };
 use crate::spec::{Action, Add, Remove, RemoveOptions, Stats};
+use crate::transaction::OperationMetrics;
 
 /// Physical execution node to convert Add actions (from FindFiles) into Remove actions
 #[derive(Debug)]
@@ -108,10 +107,6 @@ impl DisplayAs for DeltaRemoveActionsExec {
 impl ExecutionPlan for DeltaRemoveActionsExec {
     fn name(&self) -> &'static str {
         "DeltaRemoveActionsExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

@@ -13,18 +13,31 @@ use super::{
     read_last_checkpoint_version_from_store, LogSegmentResolver, ReplayedTableHeader,
     ResolvedLogSegment,
 };
-use crate::kernel::checkpoints::{
-    decode_checkpoint_rows, read_checkpoint_rows_from_parquet,
-    replay_commit_actions_with_compactions, replay_commit_header_actions_with_compactions,
-    ReconciledCheckpointState, ReconciledHeaderState, ReplayedTableState,
+use crate::checkpoint::{
+    decode_checkpoint_rows, read_checkpoint_main_rows_from_checkpoint_file,
+    read_checkpoint_rows_from_checkpoint_file, replay_commit_actions_with_compactions,
+    replay_commit_header_actions_with_compactions, ReconciledCheckpointState,
+    ReconciledHeaderState, ReplayedTableState,
 };
-use crate::spec::{CheckpointActionRow, DeltaError as DeltaTableError, DeltaResult};
-use crate::storage::LogStore;
+use crate::delta_log::LogStore;
+use crate::snapshot::CatalogManagedCommitSet;
+use crate::spec::{
+    is_json_checkpoint_filename, CheckpointActionRow, DeltaError as DeltaTableError, DeltaResult,
+};
 
-async fn read_checkpoint_header_from_parquet(
+async fn read_checkpoint_header_from_checkpoint_file(
     root_store: Arc<dyn ObjectStore>,
     meta: ObjectMeta,
 ) -> DeltaResult<ReconciledHeaderState> {
+    if is_json_checkpoint_location(&meta) {
+        let rows = read_checkpoint_main_rows_from_checkpoint_file(root_store, meta).await?;
+        let mut state = ReconciledHeaderState::default();
+        for row in rows {
+            state.apply_checkpoint_row(row)?;
+        }
+        return Ok(state);
+    }
+
     let bytes = root_store.get(&meta.location).await?.bytes().await?;
     SpawnedTask::spawn_blocking(move || {
         let builder = ParquetRecordBatchReaderBuilder::try_new(bytes)
@@ -55,9 +68,18 @@ async fn read_checkpoint_header_from_parquet(
     .map_err(DeltaTableError::generic_err)?
 }
 
+fn is_json_checkpoint_location(meta: &ObjectMeta) -> bool {
+    meta.location
+        .as_ref()
+        .rsplit('/')
+        .next()
+        .is_some_and(is_json_checkpoint_filename)
+}
+
 pub(crate) async fn load_replayed_table_state(
     version: i64,
     log_store: &dyn LogStore,
+    catalog_managed_commits: Option<&CatalogManagedCommitSet>,
 ) -> DeltaResult<ReplayedTableState> {
     if version < 0 {
         return Err(DeltaTableError::generic(format!(
@@ -65,7 +87,7 @@ pub(crate) async fn load_replayed_table_state(
         )));
     }
 
-    let segment = LogSegmentResolver::new(log_store, version, None)
+    let segment = LogSegmentResolver::new(log_store, version, None, catalog_managed_commits)
         .resolve_for_full_state()
         .await?;
 
@@ -84,7 +106,7 @@ pub(crate) async fn load_replayed_table_state(
     let store = log_store.object_store(None);
     let mut state = ReconciledCheckpointState::default();
     let start_commit_version = if let Some(cp_meta) = checkpoint {
-        let rows = read_checkpoint_rows_from_parquet(store.clone(), cp_meta).await?;
+        let rows = read_checkpoint_rows_from_checkpoint_file(store.clone(), cp_meta).await?;
         for row in rows {
             state.apply_checkpoint_row(row)?;
         }
@@ -148,6 +170,7 @@ pub(crate) async fn load_replayed_table_header(
     version: i64,
     log_store: &dyn LogStore,
     replay_hint: Option<&ReplayedTableHeader>,
+    catalog_managed_commits: Option<&CatalogManagedCommitSet>,
 ) -> DeltaResult<Option<ReplayedTableHeader>> {
     if version < 0 {
         return Err(DeltaTableError::generic(format!(
@@ -155,7 +178,7 @@ pub(crate) async fn load_replayed_table_header(
         )));
     }
 
-    let segment = LogSegmentResolver::new(log_store, version, replay_hint)
+    let segment = LogSegmentResolver::new(log_store, version, replay_hint, catalog_managed_commits)
         .resolve_for_header()
         .await?;
 
@@ -173,7 +196,7 @@ pub(crate) async fn load_replayed_table_header(
             let (mut state, start_commit_version, mut commit_timestamps) = match checkpoint {
                 Some(cp_meta) => {
                     let cp_state =
-                        read_checkpoint_header_from_parquet(store.clone(), cp_meta).await?;
+                        read_checkpoint_header_from_checkpoint_file(store.clone(), cp_meta).await?;
                     let next_v = commit_files
                         .first()
                         .map(|(v, _)| *v)

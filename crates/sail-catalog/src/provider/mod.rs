@@ -9,7 +9,14 @@ pub use options::*;
 pub use runtime::*;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 
-use crate::error::CatalogResult;
+use crate::error::{CatalogError, CatalogResult};
+use crate::lakehouse::{
+    plan_lakehouse_create_from_requirement, resolve_lakehouse_table_status,
+    BeginTableAccessRequest, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
+    LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest, LakehouseCreatePlan,
+    LakehouseCreateRequest, LakehouseResolvedTable, LakehouseScanPlanningRequest,
+    LakehouseScanPlanningResponse, ResolveLakehouseTableRequest, TableAccessSession,
+};
 
 /// A trait that defines the interface for a catalog.
 /// A catalog contains *databases*, where each database has a multi-level name
@@ -54,6 +61,104 @@ pub trait CatalogProvider: Send + Sync {
         table: &str,
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus>;
+
+    /// Whether catalog `CREATE TABLE` needs the table format to create storage metadata before
+    /// registering the catalog object. Providers that can reject create options should do so here
+    /// before storage metadata is materialized.
+    // TODO: Remove this compatibility hook after LakehouseCreatePlan owns all
+    // create/register paths.
+    fn create_table_metadata_requirement(
+        &self,
+        options: &CreateTableOptions,
+    ) -> CatalogResult<CreateTableMetadataRequirement> {
+        let _ = options;
+        Ok(CreateTableMetadataRequirement::None)
+    }
+
+    fn lakehouse_capabilities(&self) -> Vec<LakehouseCapability> {
+        Vec::new()
+    }
+
+    async fn resolve_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: ResolveLakehouseTableRequest,
+    ) -> CatalogResult<LakehouseResolvedTable> {
+        let status = self.get_table(database, table).await?;
+        Ok(resolve_lakehouse_table_status(
+            self.get_name(),
+            request.catalog_table,
+            &status,
+            request.operation,
+            &self.lakehouse_capabilities(),
+        ))
+    }
+
+    async fn plan_lakehouse_create(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseCreateRequest,
+    ) -> CatalogResult<LakehouseCreatePlan> {
+        let _ = (database, table);
+        let requirement = self.create_table_metadata_requirement(&request.options)?;
+        Ok(plan_lakehouse_create_from_requirement(
+            self.get_name(),
+            request.catalog_table,
+            &request.options,
+            requirement,
+            &self.lakehouse_capabilities(),
+        ))
+    }
+
+    async fn begin_table_access(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: BeginTableAccessRequest,
+    ) -> CatalogResult<TableAccessSession> {
+        let _ = (database, table, request);
+        Err(CatalogError::UnsupportedCapability(
+            "table access sessions".to_string(),
+        ))
+    }
+
+    async fn plan_lakehouse_scan(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseScanPlanningRequest,
+    ) -> CatalogResult<LakehouseScanPlanningResponse> {
+        let _ = (database, table, request);
+        Err(CatalogError::UnsupportedCapability(
+            "lakehouse scan planning".to_string(),
+        ))
+    }
+
+    async fn commit_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseCommitRequest,
+    ) -> CatalogResult<LakehouseCommitOutcome> {
+        let _ = (database, table, request);
+        Err(CatalogError::UnsupportedCapability(
+            "lakehouse table commits".to_string(),
+        ))
+    }
+
+    async fn get_delta_ratified_commits(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: DeltaRatifiedCommitRequest,
+    ) -> CatalogResult<DeltaRatifiedCommitResponse> {
+        let _ = (database, table, request);
+        Err(CatalogError::UnsupportedCapability(
+            "Delta ratified commits".to_string(),
+        ))
+    }
 
     /// Gets the status of a table in the catalog.
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus>;

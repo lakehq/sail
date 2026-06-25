@@ -12,7 +12,10 @@ use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{AggFunctionInput, FunctionContextInput, ScalarFunctionInput};
-use crate::function::{get_built_in_aggregate_function, get_built_in_function};
+use crate::function::{
+    get_built_in_aggregate_function, get_built_in_function, is_higher_order_function,
+};
+use crate::resolver::expression::lambda::is_spec_lambda_argument;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::function::PythonUdf;
 use crate::resolver::state::PlanResolverState;
@@ -71,7 +74,7 @@ impl PlanResolver<'_> {
         let canonical_function_name = function_name.to_ascii_lowercase();
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
         if let Some(udf) = catalog_manager.get_function(&canonical_function_name)? {
-            if udf.inner().as_any().is::<PySparkUnresolvedUDF>() {
+            if udf.inner().is::<PySparkUnresolvedUDF>() {
                 state.config_mut().arrow_allow_large_var_types = true;
             }
         }
@@ -81,13 +84,32 @@ impl PlanResolver<'_> {
         // to a string literal before resolution.
         let arguments = Self::convert_date_part_argument(&canonical_function_name, arguments);
 
+        // For `mode() WITHIN GROUP (ORDER BY col)`, move the sort expression and a
+        // tie-break sentinel into the argument list before resolution, so that the
+        // aggregate function receives the column and the output column name can be
+        // derived from the argument display names.
+        let (arguments, order_by) =
+            Self::convert_mode_within_group(&canonical_function_name, arguments, order_by)?;
+
+        let has_spec_lambda_argument = arguments.iter().any(is_spec_lambda_argument);
+
         let (argument_display_names, arguments) = if canonical_function_name == "struct" {
             self.resolve_struct_expressions_and_names(arguments, schema, state)
                 .await?
+        } else if has_spec_lambda_argument && is_higher_order_function(&canonical_function_name) {
+            self.resolve_higher_order_function_arguments(
+                &canonical_function_name,
+                arguments,
+                schema,
+                state,
+            )
+            .await?
         } else {
             self.resolve_expressions_and_names(arguments, schema, state)
                 .await?
         };
+
+        let has_lambda_argument = arguments.iter().any(|x| matches!(x, expr::Expr::Lambda(_)));
 
         // FIXME: `is_user_defined_function` is always false,
         //   so we need to check UDFs before built-in functions.
@@ -95,7 +117,7 @@ impl PlanResolver<'_> {
             if ignore_nulls.is_some() || filter.is_some() || order_by.is_some() {
                 return Err(PlanError::invalid("invalid scalar function clause"));
             }
-            if let Some(f) = udf.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>() {
+            if let Some(f) = udf.inner().downcast_ref::<PySparkUnresolvedUDF>() {
                 if f.eval_type().is_table_function() {
                     return Err(PlanError::AnalysisError(format!(
                         "user-defined table function cannot be used as a scalar function: {function_name}"
@@ -196,6 +218,17 @@ impl PlanResolver<'_> {
             return Err(PlanError::unsupported(format!(
                 "unknown function: {function_name}",
             )));
+        };
+
+        // DataFusion lambda variables carry no type until resolved against the schema.
+        // Sail bypasses the DataFusion SQL planner, so resolution happens here — but
+        // only when not inside an enclosing lambda scope: a higher-order function
+        // nested in another lambda body has free variables that only the outermost
+        // resolution, which sees the whole expression tree, can bind.
+        let func = if has_lambda_argument && !state.in_lambda_scope() {
+            func.resolve_lambda_variables(schema)?.data
+        } else {
+            func
         };
 
         // When `COUNT(DISTINCT *)` is used, expand the wildcard display names
@@ -321,7 +354,7 @@ impl PlanResolver<'_> {
                 // Nested-field wildcard expansion can produce a MultiExpr.
                 // Flatten it so `struct(a.*)` can become `struct(a.x, a.y, ...)`.
                 Expr::ScalarFunction(ScalarFunction { func, args })
-                    if func.inner().as_any().is::<MultiExpr>() =>
+                    if func.inner().is::<MultiExpr>() =>
                 {
                     if name.len() == args.len() {
                         for (n, arg) in name.into_iter().zip(args) {
@@ -352,6 +385,49 @@ impl PlanResolver<'_> {
         Ok((names, exprs))
     }
 
+    /// For `mode() WITHIN GROUP (ORDER BY col)`, move the sort expression into the
+    /// argument list along with a tie-break sentinel literal derived from the sort
+    /// direction. Spark returns the lowest value among equally frequent values for
+    /// ascending order and the highest for descending order, so this canonicalizes
+    /// the WITHIN GROUP syntax to the same argument form as `mode(col, deterministic)`
+    /// for both the aggregate function and the output column name formatter.
+    fn convert_mode_within_group(
+        function_name: &str,
+        arguments: Vec<spec::Expr>,
+        order_by: Option<Vec<spec::SortOrder>>,
+    ) -> PlanResult<(Vec<spec::Expr>, Option<Vec<spec::SortOrder>>)> {
+        if function_name.trim().to_lowercase() != "mode" {
+            return Ok((arguments, order_by));
+        }
+        let Some(sorts) = order_by else {
+            // order_by on UnresolvedFunction is populated exclusively from the within_group clause.
+            return Ok((arguments, None));
+        };
+        if !arguments.is_empty() {
+            return Err(PlanError::invalid(
+                "mode() with WITHIN GROUP does not take arguments",
+            ));
+        }
+        let spec::SortOrder {
+            child,
+            direction,
+            null_ordering: _,
+        } = sorts.one()?;
+        let tie_break = match direction {
+            spec::SortDirection::Descending => "highest",
+            spec::SortDirection::Ascending | spec::SortDirection::Unspecified => "lowest",
+        };
+        Ok((
+            vec![
+                *child,
+                spec::Expr::Literal(spec::Literal::Utf8 {
+                    value: Some(tie_break.to_string()),
+                }),
+            ],
+            None,
+        ))
+    }
+
     /// For functions that accept a date-part keyword as their first argument
     /// (e.g., `DATEDIFF(DAY, start, end)`, `TIMESTAMPDIFF(HOUR, start, end)`),
     /// convert the first argument from an unresolved attribute to a string literal.
@@ -359,8 +435,17 @@ impl PlanResolver<'_> {
         function_name: &str,
         mut arguments: Vec<spec::Expr>,
     ) -> Vec<spec::Expr> {
-        const DATE_PART_FUNCTIONS: &[&str] = &["datediff", "date_diff", "timestampdiff"];
-        if arguments.len() >= 3 && DATE_PART_FUNCTIONS.contains(&function_name) {
+        const DATE_PART_FUNCTIONS: &[&str] = &[
+            "datediff",
+            "date_diff",
+            "timestampadd",
+            "timestamp_add",
+            "timestampdiff",
+            "timestamp_diff",
+        ];
+        if arguments.len() >= 3
+            && DATE_PART_FUNCTIONS.contains(&function_name.trim().to_lowercase().as_str())
+        {
             if let spec::Expr::UnresolvedAttribute { ref name, .. } = arguments[0] {
                 let parts: Vec<String> = name.clone().into();
                 if parts.len() == 1 {

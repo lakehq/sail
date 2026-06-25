@@ -1,0 +1,86 @@
+use std::fmt::Formatter;
+use std::sync::Arc;
+
+use datafusion_common::{DFSchema, DFSchemaRef};
+use datafusion_expr::expr::Sort;
+use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
+use educe::Educe;
+use sail_common_datafusion::catalog::CatalogPartitionField;
+use sail_common_datafusion::utils::items::ItemTaker;
+use url::Url;
+
+use crate::listing::source::WriteFormat;
+
+#[derive(Clone, Debug, Educe)]
+#[educe(PartialEq, Eq, Hash, PartialOrd)]
+pub struct FileWriteOptions {
+    #[educe(PartialEq(ignore), Hash(ignore), PartialOrd(ignore))]
+    pub format: Arc<dyn WriteFormat>,
+    pub url: Url,
+    pub overwrite: bool,
+    pub partition_by: Vec<CatalogPartitionField>,
+    pub sort_by: Vec<Sort>,
+}
+
+#[derive(Clone, Debug, Educe)]
+#[educe(PartialEq, Eq, Hash, PartialOrd)]
+pub struct FileWriteNode {
+    input: Arc<LogicalPlan>,
+    options: FileWriteOptions,
+    #[educe(PartialOrd(ignore))]
+    schema: DFSchemaRef,
+}
+
+impl FileWriteNode {
+    pub fn new(input: Arc<LogicalPlan>, options: FileWriteOptions) -> Self {
+        Self {
+            input,
+            options,
+            schema: Arc::new(DFSchema::empty()),
+        }
+    }
+
+    pub fn options(&self) -> &FileWriteOptions {
+        &self.options
+    }
+}
+
+impl UserDefinedLogicalNodeCore for FileWriteNode {
+    fn name(&self) -> &str {
+        "FileWrite"
+    }
+
+    fn inputs(&self) -> Vec<&LogicalPlan> {
+        vec![self.input.as_ref()]
+    }
+
+    fn schema(&self) -> &DFSchemaRef {
+        &self.schema
+    }
+
+    fn expressions(&self) -> Vec<Expr> {
+        vec![]
+    }
+
+    fn fmt_for_explain(&self, f: &mut Formatter) -> std::fmt::Result {
+        write!(f, "FileWrite: options={:?}", self.options)?;
+        Ok(())
+    }
+
+    fn with_exprs_and_inputs(
+        &self,
+        exprs: Vec<Expr>,
+        inputs: Vec<LogicalPlan>,
+    ) -> datafusion_common::Result<Self> {
+        exprs.zero()?;
+        Ok(Self {
+            input: Arc::new(inputs.one()?),
+            options: self.options.clone(),
+            schema: self.schema.clone(),
+        })
+    }
+
+    fn necessary_children_exprs(&self, _output_columns: &[usize]) -> Option<Vec<Vec<usize>>> {
+        Some(vec![(0..self.input.schema().fields().len()).collect()])
+    }
+}

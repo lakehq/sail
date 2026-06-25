@@ -15,6 +15,7 @@ use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::{JobRunner, JobService};
+use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
 use sail_delta_lake::session_extension::DeltaTableCache;
 use sail_execution::driver::DriverOptions;
 use sail_execution::job_runner::{ClusterJobRunner, LocalJobRunner};
@@ -121,6 +122,9 @@ impl ServerSessionFactory {
             )?))
             .with_extension(Arc::new(ActivityTracker::new()))
             .with_extension(Arc::new(JobService::new(job_runner)))
+            .with_extension(Arc::new(RepartitionBufferConfig::new(
+                self.config.cluster.task_stream_buffer,
+            )))
             .with_extension(Arc::new(self.create_system_table_service(info)?))
             .with_extension(Arc::new(DeltaTableCache::default()));
         self.apply_execution_config(&mut config);
@@ -144,6 +148,7 @@ impl ServerSessionFactory {
             .with_optimizer_rules(default_optimizer_rules())
             .with_physical_optimizer_rules(get_physical_optimizers(PhysicalOptimizerOptions {
                 enable_join_reorder: self.config.optimizer.enable_join_reorder,
+                ..Default::default()
             }))
             .with_query_planner(new_query_planner());
         let builder = self.mutator.mutate_state(builder, info)?;
@@ -260,5 +265,13 @@ impl ServerSessionFactory {
             .config
             .parquet
             .maximum_buffered_record_batches_per_stream;
+        parquet.content_defined_chunking.enabled =
+            self.config.parquet.content_defined_chunking.enabled;
+        parquet.content_defined_chunking.min_chunk_size =
+            self.config.parquet.content_defined_chunking.min_chunk_size;
+        parquet.content_defined_chunking.max_chunk_size =
+            self.config.parquet.content_defined_chunking.max_chunk_size;
+        parquet.content_defined_chunking.norm_level =
+            self.config.parquet.content_defined_chunking.norm_level;
     }
 }

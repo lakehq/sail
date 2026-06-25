@@ -86,6 +86,18 @@ pub(crate) fn metadata_file_version_from_path(path: &str) -> Option<i32> {
         .map(|file| file.version)
 }
 
+pub(crate) fn metadata_location_to_object_path(metadata_location: &str) -> Result<ObjectPath> {
+    match crate::utils::parse_absolute_url(metadata_location) {
+        Some(url) => crate::utils::url_to_object_path(&url),
+        None => ObjectPath::parse(metadata_location.trim_start_matches('/'))
+            .map_err(|e| DataFusionError::External(Box::new(e))),
+    }
+}
+
+pub(crate) fn metadata_location_to_object_path_string(metadata_location: &str) -> Result<String> {
+    Ok(metadata_location_to_object_path(metadata_location)?.to_string())
+}
+
 fn metadata_file_codec_from_path(path: &str) -> Option<MetadataFileCodec> {
     path.rsplit('/')
         .next()
@@ -130,7 +142,7 @@ pub(crate) async fn load_metadata_file_bytes(
     object_store: &Arc<dyn object_store::ObjectStore>,
     metadata_location: &str,
 ) -> Result<Vec<u8>> {
-    let metadata_path = ObjectPath::from(metadata_location);
+    let metadata_path = metadata_location_to_object_path(metadata_location)?;
     let metadata_data = object_store
         .get(&metadata_path)
         .await
@@ -245,12 +257,14 @@ mod tests {
     use std::collections::HashMap;
     use std::io::{self, Write};
 
+    use datafusion::common::Result;
     use flate2::write::GzEncoder;
     use flate2::Compression;
 
     use super::{
         decode_metadata_file, encode_metadata_file, metadata_file_extension_from_properties,
-        parse_metadata_file_name, MetadataFileCodec, MetadataFileName,
+        metadata_location_to_object_path, parse_metadata_file_name, MetadataFileCodec,
+        MetadataFileName,
     };
 
     #[test]
@@ -298,6 +312,25 @@ mod tests {
             })
         );
         assert_eq!(parse_metadata_file_name("1.metadata.json"), None);
+    }
+
+    #[test]
+    fn parses_windows_drive_metadata_locations_as_object_paths() -> Result<()> {
+        assert_eq!(
+            metadata_location_to_object_path(
+                "C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json",
+            )?
+            .as_ref(),
+            "C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json"
+        );
+        assert_eq!(
+            metadata_location_to_object_path(
+                "file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json",
+            )?
+            .as_ref(),
+            "C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json"
+        );
+        Ok(())
     }
 
     #[test]

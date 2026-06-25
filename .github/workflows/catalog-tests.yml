@@ -16,9 +16,9 @@ jobs:
       RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
       LLVM_PROFILE_FILE: ${{ github.workspace }}/target/sail-catalog-it-%p-%m.profraw
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -36,7 +36,7 @@ jobs:
         uses: taiki-e/install-action@grcov
 
       - name: Download Python Package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: python-package
           path: target/wheels
@@ -52,7 +52,7 @@ jobs:
 
       - name: Run Catalog Integration Tests
         run: |
-          hatch run pytest -m catalog_integration --pyargs pysail.tests.spark -v
+          hatch run pytest -m integration --pyargs pysail.tests.spark -v
 
       # Generate coverage report after catalog IT tests
       - name: Generate coverage report
@@ -69,7 +69,7 @@ jobs:
 
       - name: Upload Catalog IT coverage to Codecov
         if: ${{ github.actor != 'dependabot[bot]' }}
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage-catalog-it.info

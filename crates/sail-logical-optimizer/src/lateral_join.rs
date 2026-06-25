@@ -5,7 +5,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Result;
 use datafusion_expr::{Expr, JoinType, LogicalPlan, LogicalPlanBuilder};
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct DecorrelateLateralProjection;
 
 impl DecorrelateLateralProjection {

@@ -31,11 +31,11 @@ use super::utils::{
     align_schemas_for_union, build_log_replay_pipeline_with_options, build_standard_write_layers,
     LogReplayOptions,
 };
-use crate::kernel::{DeltaOperation, SaveMode};
 use crate::physical_plan::{
     create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaDiscoveryExec,
     DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec, DeltaWriterExecOptions,
 };
+use crate::spec::{DeltaOperation, SaveMode};
 use crate::table::DeltaSnapshot;
 
 pub async fn build_write_plan(
@@ -91,13 +91,15 @@ async fn build_full_overwrite_plan(
         plan,
         ctx.table_url().clone(),
         DeltaWriterExecOptions::from(ctx.options().clone())
-            .with_generation_expressions(ctx.generation_expressions().clone()),
+            .with_generation_expressions(ctx.generation_expressions().clone())
+            .with_identity_columns(ctx.identity_columns().clone()),
         ctx.metadata_configuration().clone(),
         ctx.partition_columns().to_vec(),
         PhysicalSinkMode::Overwrite,
         ctx.table_exists(),
         writer_schema,
         write_context.clone(),
+        ctx.lakehouse_table().cloned(),
     )?);
 
     // For existing tables, build a remove plan from the active file set and union it with the
@@ -144,6 +146,7 @@ async fn build_full_overwrite_plan(
         PhysicalSinkMode::Overwrite,
         ctx.options().user_metadata.clone(),
         write_context.commit_context.clone(),
+        ctx.lakehouse_table().cloned(),
     )))
 }
 
@@ -204,7 +207,8 @@ async fn build_overwrite_if_plan(
         predicate: predicate_source.clone(),
     });
     let writer_options = DeltaWriterExecOptions::from(ctx.options().clone())
-        .with_generation_expressions(ctx.generation_expressions().clone());
+        .with_generation_expressions(ctx.generation_expressions().clone())
+        .with_identity_columns(ctx.identity_columns().clone());
     let write_context = crate::physical_plan::prepare_delta_write_context(
         ctx.table_url(),
         Some(snapshot_state.as_ref()),
@@ -232,6 +236,7 @@ async fn build_overwrite_if_plan(
         ctx.table_exists(),
         union_plan.schema(),
         write_context.clone(),
+        ctx.lakehouse_table().cloned(),
     )?);
 
     let partition_only = !predicate_requires_stats(&condition_expr, &partition_columns);
@@ -278,6 +283,7 @@ async fn build_overwrite_if_plan(
         },
         ctx.options().user_metadata.clone(),
         write_context.commit_context.clone(),
+        ctx.lakehouse_table().cloned(),
     )))
 }
 
@@ -333,6 +339,7 @@ async fn build_old_data_plan(
         None,
         None,
         None,
+        ctx.lakehouse_table().cloned(),
     ));
 
     let negated_condition = Arc::new(NotExpr::new(condition));

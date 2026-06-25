@@ -6,7 +6,7 @@ use sail_catalog::provider::{
 };
 use sail_common::spec;
 use sail_common_datafusion::catalog::{
-    CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
+    CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableConstraint, CatalogTableSort,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
@@ -24,6 +24,7 @@ impl PlanResolver<'_> {
         state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
         let spec::TableDefinition {
+            external,
             columns,
             comment,
             constraints,
@@ -34,12 +35,12 @@ impl PlanResolver<'_> {
             sort_by,
             bucket_by,
             cluster_by,
-            if_not_exists,
-            replace,
+            mode,
             options,
             properties,
         } = definition;
 
+        let is_external = external || spec::has_path_or_location(location.as_deref(), &options);
         if row_format.is_some() {
             return Err(PlanError::todo("ROW FORMAT in CREATE TABLE statement"));
         }
@@ -56,6 +57,16 @@ impl PlanResolver<'_> {
         let format = self.resolve_catalog_table_format(file_format)?;
         let partition_by =
             self.resolve_catalog_table_partition_by(partition_by, &mut columns, state)?;
+        for partition in &partition_by {
+            if columns.iter().any(|column| {
+                column.identity.is_some() && column.name.eq_ignore_ascii_case(&partition.column)
+            }) {
+                return Err(PlanError::invalid(format!(
+                    "PARTITIONED BY IDENTITY column `{}` is not supported",
+                    partition.column
+                )));
+            }
+        }
         let sort_by = self.resolve_catalog_table_sort(sort_by)?;
         let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
         let properties = properties
@@ -74,9 +85,10 @@ impl PlanResolver<'_> {
                 partition_by,
                 sort_by,
                 bucket_by,
-                if_not_exists,
-                replace,
+                mode,
                 properties,
+                is_external,
+                is_write_precondition: false,
             },
         };
         self.resolve_catalog_command(command)
@@ -91,6 +103,7 @@ impl PlanResolver<'_> {
     ) -> PlanResult<LogicalPlan> {
         use super::super::write::{WriteColumnMatch, WriteMode, WritePlanBuilder, WriteTarget};
         let spec::TableDefinition {
+            external,
             columns,
             comment,
             constraints,
@@ -101,11 +114,12 @@ impl PlanResolver<'_> {
             sort_by,
             bucket_by,
             cluster_by,
-            if_not_exists,
-            replace,
+            mode,
             options,
             properties,
         } = definition;
+
+        let is_external = external || spec::has_path_or_location(location.as_deref(), &options);
         if row_format.is_some() {
             return Err(PlanError::todo(
                 "ROW FORMAT in CREATE TABLE AS SELECT statement",
@@ -168,14 +182,15 @@ impl PlanResolver<'_> {
         }
 
         // Set write mode based on create-or-replace / if-not-exists semantics.
-        let write_mode = if replace {
-            WriteMode::Replace {
+        let write_mode = match mode {
+            spec::CreateTableMode::Create => WriteMode::ErrorIfExists,
+            spec::CreateTableMode::CreateIfNotExists => WriteMode::IgnoreIfExists,
+            spec::CreateTableMode::CreateOrReplace => WriteMode::Replace {
                 error_if_absent: false,
-            }
-        } else if if_not_exists {
-            WriteMode::IgnoreIfExists
-        } else {
-            WriteMode::ErrorIfExists
+            },
+            spec::CreateTableMode::Replace => WriteMode::Replace {
+                error_if_absent: true,
+            },
         };
         let partition_by = self.resolve_write_partition_by_expressions(partition_by_exprs)?;
         let builder = WritePlanBuilder::new()
@@ -187,6 +202,7 @@ impl PlanResolver<'_> {
             .with_format(format)
             .with_partition_by(partition_by)
             .with_table_properties(properties)
+            .with_table_is_external(is_external)
             .with_options(write_options);
 
         self.resolve_write_with_builder(input, builder, state).await
@@ -320,17 +336,49 @@ impl PlanResolver<'_> {
                     default,
                     comment,
                     generated_always_as,
+                    identity,
                 } = x;
+                let data_type = self.resolve_data_type(&data_type, state)?;
+                let identity = Self::resolve_table_column_identity(&name, identity)?;
+                if identity.is_some() && data_type != datafusion::arrow::datatypes::DataType::Int64
+                {
+                    return Err(PlanError::invalid(format!(
+                        "identity column `{name}` must be BIGINT"
+                    )));
+                }
                 Ok(CreateTableColumnOptions {
                     name,
-                    data_type: self.resolve_data_type(&data_type, state)?,
+                    data_type,
                     nullable,
                     comment,
                     default,
                     generated_always_as,
+                    identity,
                 })
             })
             .collect()
+    }
+
+    fn resolve_table_column_identity(
+        _name: &str,
+        identity: Option<spec::TableColumnIdentity>,
+    ) -> PlanResult<Option<CatalogTableColumnIdentity>> {
+        identity
+            .map(|identity| {
+                let step = identity.step.unwrap_or(1);
+                if step == 0 {
+                    return Err(PlanError::invalid(
+                        "INCREMENT BY value for identity column cannot be 0",
+                    ));
+                }
+                Ok(CatalogTableColumnIdentity {
+                    start: identity.start.unwrap_or(1),
+                    step,
+                    allow_explicit_insert: identity.allow_explicit_insert,
+                    high_water_mark: None,
+                })
+            })
+            .transpose()
     }
 
     fn resolve_table_constraints(
@@ -432,6 +480,17 @@ impl PlanResolver<'_> {
                     name: name.into(),
                     data_type: self.resolve_data_type(&data_type, state)?,
                 }
+            }
+            spec::AlterTableOperation::AlterColumnDefault { name, default } => {
+                AlterTableOptions::AlterColumnDefault {
+                    name: name.into(),
+                    default,
+                }
+            }
+            spec::AlterTableOperation::AddCheckConstraint { .. } => {
+                return Err(PlanError::unsupported(
+                    "ALTER TABLE ADD CONSTRAINT is only supported for Delta Lake tables",
+                ));
             }
             spec::AlterTableOperation::Unknown => {
                 return Err(PlanError::todo("unsupported ALTER TABLE operation"));

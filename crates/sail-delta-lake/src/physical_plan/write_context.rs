@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion_common::{DataFusionError, Result};
+use sail_common_datafusion::column_features::SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY;
 use sail_common_datafusion::datasource::{
     PhysicalSinkMode, MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN,
 };
@@ -10,21 +11,22 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
-use crate::kernel::{DeltaOperation, DeltaSnapshotConfig, SaveMode};
+use crate::delta_log::LogStore;
 use crate::physical_plan::writer_options::DeltaWriterExecOptions;
 use crate::schema::{
     add_type_widening_metadata, annotate_for_column_mapping, collect_type_changes,
     compute_max_column_id, evolve_schema, format_type_change_path, get_physical_schema,
+    inject_default_expressions, inject_generation_expressions, inject_identity_columns,
     is_supported_type_change_for_schema_evolution, metadata_for_create_with_struct_type,
     normalize_delta_schema, protocol_can_write_type_widening, protocol_for_create,
-    schema_contains_type_widening_metadata, schema_has_generated_columns,
+    schema_contains_type_widening_metadata, schema_has_column_defaults,
+    schema_has_generated_columns, schema_has_identity_columns,
 };
+use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
-    contains_timestampntz_arrow, contains_variant_arrow, Action, ColumnMappingMode,
-    ColumnMetadataKey, DomainMetadata, Metadata, MetadataValue, Protocol, StructField, StructType,
-    TableProperties, Transaction,
+    contains_timestampntz_arrow, contains_variant_arrow, Action, ColumnMappingMode, DeltaOperation,
+    DomainMetadata, Metadata, Protocol, SaveMode, StructType, TableProperties, Transaction,
 };
-use crate::storage::LogStore;
 use crate::table::DeltaSnapshot;
 
 /// Metadata-only table state pinned during coordinator-side write planning.
@@ -143,7 +145,10 @@ pub fn prepare_delta_write_context(
     input_schema: &SchemaRef,
     operation_override: Option<DeltaOperation>,
 ) -> Result<DeltaWriteContext> {
-    let input_schema = normalize_delta_schema(&schema_without_writer_metric_columns(input_schema));
+    let input_schema = normalize_delta_schema(&apply_target_nullability(
+        &schema_without_writer_metric_columns(input_schema),
+        &options.target_nullability,
+    ));
     let mut initial_actions: Vec<Action> = Vec::new();
     let planned_operation = operation_for_sink_mode(table_url, partition_columns, sink_mode);
 
@@ -186,6 +191,12 @@ pub fn prepare_delta_write_context(
             kernel_schema =
                 inject_generation_expressions(kernel_schema, &options.generation_expressions);
         }
+        if !options.default_expressions.is_empty() {
+            kernel_schema = inject_default_expressions(kernel_schema, &options.default_expressions);
+        }
+        if !options.identity_columns.is_empty() {
+            kernel_schema = inject_identity_columns(kernel_schema, &options.identity_columns);
+        }
 
         let mut configuration = metadata_configuration.clone();
         let metadata_schema = if !matches!(effective_mode, ColumnMappingMode::None) {
@@ -209,6 +220,8 @@ pub fn prepare_delta_write_context(
             has_timestamp_ntz,
             TableProperties::from(configuration.iter()).enable_in_commit_timestamps(),
             schema_has_generated_columns(&metadata_schema),
+            schema_has_column_defaults(&metadata_schema),
+            schema_has_identity_columns(&metadata_schema),
             has_variant,
             &configuration,
         )
@@ -306,6 +319,7 @@ fn schema_without_writer_metric_columns(schema: &SchemaRef) -> SchemaRef {
     {
         return Arc::clone(schema);
     }
+
     Arc::new(Schema::new(
         schema
             .fields()
@@ -313,6 +327,39 @@ fn schema_without_writer_metric_columns(schema: &SchemaRef) -> SchemaRef {
             .filter(|field| !is_writer_metric_column(field.name()))
             .map(|field| field.as_ref().clone())
             .collect::<Vec<_>>(),
+    ))
+}
+
+fn apply_target_nullability(
+    schema: &SchemaRef,
+    target_nullability: &HashMap<String, bool>,
+) -> SchemaRef {
+    if target_nullability.is_empty()
+        && !schema.fields().iter().any(|field| {
+            field
+                .metadata()
+                .contains_key(SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY)
+        })
+    {
+        return Arc::clone(schema);
+    }
+
+    Arc::new(Schema::new_with_metadata(
+        schema
+            .fields()
+            .iter()
+            .map(|field| {
+                let nullable = target_nullability
+                    .get(field.name())
+                    .copied()
+                    .unwrap_or_else(|| field.is_nullable());
+                let mut metadata = field.metadata().clone();
+                metadata.remove(SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY);
+                Field::new(field.name().clone(), field.data_type().clone(), nullable)
+                    .with_metadata(metadata)
+            })
+            .collect::<Vec<_>>(),
+        schema.metadata().clone(),
     ))
 }
 
@@ -529,44 +576,4 @@ fn validate_schema_compatibility(table_schema: &Schema, input_schema: &Schema) -
         }
     }
     Ok(())
-}
-
-fn inject_generation_expressions(
-    schema: StructType,
-    generation_expressions: &HashMap<String, String>,
-) -> StructType {
-    let fields = schema.into_fields().map(|field| {
-        if let Some(expr) = generation_expressions.get(&field.name) {
-            let existing_expr = field
-                .metadata
-                .get(ColumnMetadataKey::GenerationExpression.as_ref())
-                .and_then(|v| match v {
-                    MetadataValue::String(s) => Some(s.clone()),
-                    _ => None,
-                });
-            if existing_expr.as_deref() == Some(expr.as_str()) {
-                field
-            } else {
-                let StructField {
-                    name,
-                    data_type,
-                    nullable,
-                    mut metadata,
-                } = field;
-                metadata.insert(
-                    ColumnMetadataKey::GenerationExpression.as_ref().to_string(),
-                    MetadataValue::String(expr.clone()),
-                );
-                StructField {
-                    name,
-                    data_type,
-                    nullable,
-                    metadata,
-                }
-            }
-        } else {
-            field
-        }
-    });
-    StructType::new_unchecked(fields)
 }

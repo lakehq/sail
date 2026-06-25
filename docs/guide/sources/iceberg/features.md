@@ -7,7 +7,7 @@ rank: 2
 
 ## Overview
 
-Here is a high-level overview of the features supported by Sail for Iceberg tables.
+The following table lists the features supported by Sail for Iceberg tables.
 
 | Feature                              | Supported          |
 | ------------------------------------ | ------------------ |

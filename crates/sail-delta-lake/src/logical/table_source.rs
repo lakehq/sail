@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
@@ -7,7 +6,7 @@ use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableSource};
 use sail_common_datafusion::datasource::MergeCapableSource;
 
 use crate::datasource::{df_logical_schema, get_pushdown_filters, DeltaScanConfig};
-use crate::storage::LogStoreRef;
+use crate::delta_log::LogStoreRef;
 use crate::table::DeltaSnapshot;
 use crate::DeltaResult;
 
@@ -78,10 +77,6 @@ impl DeltaTableSource {
 }
 
 impl TableSource for DeltaTableSource {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> SchemaRef {
         self.schema.clone()
     }

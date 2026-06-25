@@ -76,6 +76,7 @@ message TaskOutputDistribution {
   oneof Kind {
     TaskOutputHashDistribution hash = 1;
     TaskOutputRoundRobinDistribution round_robin = 2;
+    TaskOutputRoundRobinRowDistribution round_robin_row = 3;
   }
 }
 
@@ -85,6 +86,10 @@ message TaskOutputHashDistribution {
 }
 
 message TaskOutputRoundRobinDistribution {
+  uint64 channels = 1;
+}
+
+message TaskOutputRoundRobinRowDistribution {
   uint64 channels = 1;
 }
 

@@ -42,6 +42,18 @@ fn table_column_definition_from_field(field: &Arc<spec::Field>) -> spec::TableCo
             _ => {}
         }
     }
+    let metadata = field
+        .metadata
+        .iter()
+        .cloned()
+        .collect::<std::collections::HashMap<_, _>>();
+    let identity = sail_common_datafusion::column_features::ColumnFeatures::from_map(&metadata)
+        .identity()
+        .map(|identity| spec::TableColumnIdentity {
+            start: Some(identity.start),
+            step: Some(identity.step),
+            allow_explicit_insert: identity.allow_explicit_insert,
+        });
     spec::TableColumnDefinition {
         name: field.name.clone(),
         data_type: field.data_type.clone(),
@@ -49,6 +61,7 @@ fn table_column_definition_from_field(field: &Arc<spec::Field>) -> spec::TableCo
         default: None,
         comment,
         generated_always_as,
+        identity,
     }
 }
 
@@ -1435,6 +1448,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 Ok(spec::CommandNode::CreateTable {
                     table: from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                     definition: spec::TableDefinition {
+                        external: true,
                         columns,
                         comment: None,
                         constraints: vec![],
@@ -1445,8 +1459,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         sort_by: vec![],
                         bucket_by: None,
                         cluster_by: vec![],
-                        if_not_exists: false,
-                        replace: false,
+                        mode: spec::CreateTableMode::Create,
                         options: options.into_iter().collect(),
                         properties: vec![],
                     },
@@ -1461,6 +1474,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                     schema,
                     options,
                 } = x;
+                let options: Vec<(String, String)> = options.into_iter().collect();
                 let schema = schema.required("create external table schema")?;
                 let schema: spec::DataType = schema.try_into()?;
                 let schema = schema.into_schema(DEFAULT_FIELD_NAME, true);
@@ -1472,6 +1486,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                 Ok(spec::CommandNode::CreateTable {
                     table: from_ast_object_name(parse_object_name(table_name.as_str())?)?,
                     definition: spec::TableDefinition {
+                        external: false,
                         columns,
                         comment: description,
                         constraints: vec![],
@@ -1482,9 +1497,8 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         sort_by: vec![],
                         bucket_by: None,
                         cluster_by: vec![],
-                        if_not_exists: false,
-                        replace: false,
-                        options: options.into_iter().collect(),
+                        mode: spec::CreateTableMode::Create,
+                        options,
                         properties: vec![],
                     },
                 })

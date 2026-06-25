@@ -377,6 +377,7 @@ fn is_streaming_query_node(node: &spec::QueryNode) -> bool {
         spec::QueryNode::Parse(p) => is_streaming_query_plan(&p.input),
         spec::QueryNode::WithWatermark(w) => is_streaming_query_plan(&w.input),
         spec::QueryNode::ApplyInPandasWithState(a) => is_streaming_query_plan(&a.input),
+        spec::QueryNode::NamedWindows { input, windows: _ } => is_streaming_query_plan(input),
         // multiple inputs
         spec::QueryNode::Join(j) => {
             is_streaming_query_plan(&j.left) || is_streaming_query_plan(&j.right)

@@ -1,4 +1,3 @@
-@last_day
 Feature: last_day comprehensive tests
 
   Rule: Argument count validation

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use datafusion::catalog::Session;
-use datafusion::common::{DataFusionError, Result, ToDFSchema};
+use datafusion::common::{Result, ToDFSchema};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::Expr;
@@ -12,12 +12,15 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
-use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
-use sail_data_source::options::gen::DeltaWritePartialOptions;
-use sail_data_source::options::PartialOptions;
+use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
+use sail_data_source::options::ResolveOptions;
 
-use crate::datasource::scan::{build_file_scan_config, FileScanParams, TableStatsMode};
+use crate::datasource::scan::{
+    build_file_scan_config, file_scan_projection_for_schema, FileScanParams, TableStatsMode,
+};
 use crate::datasource::{df_logical_schema, simplify_expr, DeltaScanConfig};
+use crate::delta_log::LogStoreRef;
+use crate::options::gen::DeltaWriteOptions;
 use crate::physical_plan::planner::metadata_predicate::{
     build_metadata_filter, predicate_requires_stats,
 };
@@ -26,7 +29,6 @@ use crate::physical_plan::planner::{DeltaPlannerConfig, PlannerContext};
 use crate::physical_plan::{DeltaDiscoveryExec, DeltaScanByAddsExec, RelaxedTzCastExec};
 use crate::schema::get_physical_schema;
 use crate::spec::{Add, ColumnMappingMode, StructType};
-use crate::storage::LogStoreRef;
 use crate::table::DeltaSnapshot;
 
 pub(crate) async fn plan_delta_scan(
@@ -44,11 +46,10 @@ pub(crate) async fn plan_delta_scan(
         .ensure_data_read_supported()
         .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
 
-    let schema = match config.schema.clone() {
-        Some(value) => Ok(value),
-        // Change from `arrow_schema` to input_schema for Spark compatibility
-        None => snapshot.input_schema(),
-    }?;
+    let schema = config
+        .schema
+        .clone()
+        .unwrap_or_else(|| Arc::new(snapshot.schema().clone()));
 
     let full_logical_schema = df_logical_schema(
         snapshot,
@@ -135,9 +136,7 @@ pub(crate) async fn plan_delta_scan(
         }
     }
 
-    let table_schema = snapshot
-        .input_schema()
-        .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?;
+    let stats_source_schema = Arc::clone(&full_logical_schema);
 
     let pruning_expr = conjunction(pruning_filters);
     let pruning_predicate = if let Some(expr) = pruning_expr.as_ref() {
@@ -159,7 +158,7 @@ pub(crate) async fn plan_delta_scan(
                 let source_files = files.as_ref().clone();
                 let pruning_mask = crate::datasource::pruning::prune_adds_by_physical_predicate(
                     source_files.clone(),
-                    table_schema.clone(),
+                    Arc::clone(&logical_schema),
                     Arc::clone(predicate),
                 )?;
                 let pruned_files = source_files
@@ -229,6 +228,18 @@ pub(crate) async fn plan_delta_scan(
     };
 
     if let Some(files) = files {
+        let output_schema = if let Some(used_columns) = projection {
+            let fields = used_columns
+                .iter()
+                .map(|idx| full_logical_schema.field(*idx).to_owned())
+                .collect::<Vec<_>>();
+            Arc::new(ArrowSchema::new(fields))
+        } else {
+            Arc::clone(&full_logical_schema)
+        };
+        let file_scan_projection =
+            file_scan_projection_for_schema(snapshot, &config, &file_schema, &output_schema)?;
+
         let file_scan_config = build_file_scan_config(
             snapshot,
             log_store,
@@ -236,7 +247,7 @@ pub(crate) async fn plan_delta_scan(
             &config,
             FileScanParams {
                 pruning_mask: pruning_mask.as_deref(),
-                projection,
+                projection: Some(&file_scan_projection),
                 limit,
                 pushdown_filter,
                 sort_order: None,
@@ -248,22 +259,13 @@ pub(crate) async fn plan_delta_scan(
 
         let scan_exec = DataSourceExec::from_data_source(file_scan_config);
 
-        // Rename columns from physical back to logical names expected by `schema`
-        let logical_names = full_logical_schema
+        // Rename columns from physical back to logical names expected by the Spark-facing schema.
+        let logical_names = output_schema
             .fields()
             .iter()
             .map(|f| f.name().clone())
             .collect::<Vec<_>>();
-        let renamed = rename_projected_physical_plan(scan_exec, &logical_names, projection)?;
-        let output_schema = if let Some(used_columns) = projection {
-            let fields = used_columns
-                .iter()
-                .map(|idx| full_logical_schema.field(*idx).to_owned())
-                .collect::<Vec<_>>();
-            Arc::new(ArrowSchema::new(fields))
-        } else {
-            Arc::clone(&full_logical_schema)
-        };
+        let renamed = rename_physical_plan(scan_exec, &logical_names)?;
 
         let renamed_schema = renamed.schema();
 
@@ -288,16 +290,11 @@ pub(crate) async fn plan_delta_scan(
     // construction of write options (DeltaWritePartialOptions) just to drive the
     // log-replay strategy for a read scan. The replay strategy and hash threshold
     // should ideally come from read options or a dedicated configuration.
-    let mut partial = DeltaWritePartialOptions::initialize();
-    partial.delta_log_replay_strategy = Some(config.delta_log_replay_strategy);
-    // NonZeroUsize::new returns None for zero, causing finalize() to use the YAML default (100).
-    // A zero threshold is invalid and should not occur in practice since the option is now
-    // parsed with parse_non_zero_usize; falling back to the default is safe behavior.
-    partial.delta_log_replay_hash_threshold =
-        std::num::NonZeroUsize::new(config.delta_log_replay_hash_threshold);
-    let planner_options = partial
-        .finalize()
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+    let mut planner_options = DeltaWriteOptions::resolve(session, Vec::new())?;
+    planner_options.delta_log_replay_strategy = config.delta_log_replay_strategy;
+    if let Some(threshold) = std::num::NonZeroUsize::new(config.delta_log_replay_hash_threshold) {
+        planner_options.delta_log_replay_hash_threshold = threshold;
+    }
 
     let planner_ctx = PlannerContext::new(
         session,
@@ -363,12 +360,13 @@ pub(crate) async fn plan_delta_scan(
             find_files,
             table_url,
             snapshot.version(),
-            table_schema,
+            stats_source_schema,
             logical_schema.clone(),
             config.clone(),
             scan_projection.clone(),
             limit,
             pushdown_filter,
+            None,
         )
         .with_table_statistics(snapshot.datafusion_table_statistics(None)),
     );

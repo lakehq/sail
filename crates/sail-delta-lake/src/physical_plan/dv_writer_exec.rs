@@ -1,6 +1,5 @@
 //! Physical execution node for Merge-on-Read deletion vector writing.
 
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -23,15 +22,16 @@ use datafusion_physical_expr::expressions::Column;
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{self, StreamExt};
 use object_store::ObjectStore;
+use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 use url::Url;
 
 use crate::deletion_vector::{DeletionVectorBitmap, DeletionVectorWriter};
-use crate::kernel::transaction::OperationMetrics;
 use crate::physical_plan::{
     current_timestamp_millis, decode_adds_from_batch, delta_action_schema, encode_actions,
     meta_adds, ExecCommitMeta, COL_ACTION,
 };
 use crate::spec::{Action, Add, RemoveOptions};
+use crate::transaction::OperationMetrics;
 
 /// Update an Add action's stats to reflect that the bounds are now wide (non-tight)
 /// because a Deletion Vector has been added or updated.
@@ -79,7 +79,7 @@ pub struct DeletionVectorWriterExec {
     /// Mapping from replay output partition column names to Delta log partition value keys.
     partition_value_columns: Option<Vec<(String, String)>>,
     /// The delta operation to record in the commit log.
-    operation: Option<crate::kernel::DeltaOperation>,
+    operation: Option<crate::spec::DeltaOperation>,
     /// Metrics set.
     metrics: ExecutionPlanMetricsSet,
     /// Cached plan properties.
@@ -94,7 +94,7 @@ impl DeletionVectorWriterExec {
         table_schema: datafusion::arrow::datatypes::SchemaRef,
         version: i64,
         partition_value_columns: Option<Vec<(String, String)>>,
-        operation: Option<crate::kernel::DeltaOperation>,
+        operation: Option<crate::spec::DeltaOperation>,
     ) -> Result<Self> {
         let schema = delta_action_schema()?;
         let partition_count = input.output_partitioning().partition_count().max(1);
@@ -141,7 +141,7 @@ impl DeletionVectorWriterExec {
         self.partition_value_columns.as_deref()
     }
 
-    pub fn operation(&self) -> Option<&crate::kernel::DeltaOperation> {
+    pub fn operation(&self) -> Option<&crate::spec::DeltaOperation> {
         self.operation.as_ref()
     }
 }
@@ -159,7 +159,7 @@ pub struct DeletionVectorRowsWriterExec {
     row_index_column: String,
     version: i64,
     partition_value_columns: Option<Vec<(String, String)>>,
-    operation: Option<crate::kernel::DeltaOperation>,
+    operation: Option<crate::spec::DeltaOperation>,
     metrics: ExecutionPlanMetricsSet,
     cache: Arc<PlanProperties>,
 }
@@ -173,7 +173,7 @@ impl DeletionVectorRowsWriterExec {
         row_index_column: impl Into<String>,
         version: i64,
         partition_value_columns: Option<Vec<(String, String)>>,
-        operation: Option<crate::kernel::DeltaOperation>,
+        operation: Option<crate::spec::DeltaOperation>,
     ) -> Result<Self> {
         let path_column = path_column.into();
         let row_index_column = row_index_column.into();
@@ -240,7 +240,7 @@ impl DeletionVectorRowsWriterExec {
         self.partition_value_columns.as_deref()
     }
 
-    pub fn operation(&self) -> Option<&crate::kernel::DeltaOperation> {
+    pub fn operation(&self) -> Option<&crate::spec::DeltaOperation> {
         self.operation.as_ref()
     }
 }
@@ -362,10 +362,6 @@ async fn write_merge_dv_actions_for_path(
 impl ExecutionPlan for DeletionVectorRowsWriterExec {
     fn name(&self) -> &'static str {
         "DeletionVectorRowsWriterExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -642,10 +638,6 @@ impl ExecutionPlan for DeletionVectorWriterExec {
         "DeletionVectorWriterExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -917,6 +909,7 @@ async fn scan_file_for_matching_rows(
     let file_group = FileGroup::from(vec![partitioned_file]);
     let file_scan_config = FileScanConfigBuilder::new(object_store_url, file_source)
         .with_file_groups(vec![file_group])
+        .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})))
         .build();
 
     let parquet_exec: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(file_scan_config);

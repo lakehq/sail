@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "success": "ok"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "success": "ok"
       }
     },
     {
@@ -93,7 +93,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "success": "ok"
       }
     },
     {
@@ -119,7 +119,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "success": "ok"
       }
     },
     {
@@ -141,7 +141,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "success": "ok"
       }
     },
     {
@@ -163,7 +163,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "success": "ok"
       }
     },
     {
@@ -185,7 +185,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "success": "ok"
       }
     },
     {
@@ -207,7 +207,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "success": "ok"
       }
     },
     {
@@ -229,7 +229,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "success": "ok"
       }
     },
     {
@@ -255,7 +255,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "success": "ok"
       }
     },
     {
@@ -281,7 +281,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "success": "ok"
       }
     },
     {
@@ -307,7 +307,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "success": "ok"
       }
     },
     {
@@ -329,7 +329,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "success": "ok"
       }
     },
     {
@@ -351,7 +351,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "success": "ok"
       }
     },
     {
@@ -373,7 +373,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "success": "ok"
       }
     },
     {
@@ -395,7 +395,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "success": "ok"
       }
     },
     {
@@ -422,7 +422,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: function: map_filter"
       }
     },
     {
@@ -449,7 +449,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: function: map_zip_with"
       }
     },
     {
@@ -476,7 +476,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: function: map_zip_with"
       }
     },
     {
@@ -498,7 +498,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "success": "ok"
       }
     },
     {
@@ -520,7 +520,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "success": "ok"
       }
     },
     {
@@ -546,7 +546,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "success": "ok"
       }
     },
     {
@@ -572,7 +572,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "success": "ok"
       }
     },
     {
@@ -599,7 +599,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: function: transform_keys"
       }
     },
     {
@@ -626,7 +626,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: function: transform_keys"
       }
     },
     {
@@ -653,7 +653,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: function: transform_values"
       }
     },
     {
@@ -680,7 +680,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: function: transform_values"
       }
     },
     {
@@ -706,7 +706,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: function: zip_with"
       }
     },
     {
@@ -732,7 +732,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: function: zip_with"
       }
     },
     {
@@ -774,7 +774,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: lambda function"
+        "failure": "not implemented: function: zip_with"
       }
     }
   ]
