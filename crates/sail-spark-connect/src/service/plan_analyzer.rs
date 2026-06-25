@@ -148,12 +148,8 @@ pub(crate) async fn handle_analyze_input_files(
 }
 
 fn collect_input_files(plan: &dyn ExecutionPlan, files: &mut BTreeSet<String>) {
-    if let Some(ds_exec) = plan.as_any().downcast_ref::<DataSourceExec>() {
-        if let Some(file_scan_config) = ds_exec
-            .data_source()
-            .as_any()
-            .downcast_ref::<FileScanConfig>()
-        {
+    if let Some(ds_exec) = plan.downcast_ref::<DataSourceExec>() {
+        if let Some(file_scan_config) = ds_exec.data_source().downcast_ref::<FileScanConfig>() {
             let base_url = file_scan_config.object_store_url.as_str();
             for file_group in &file_scan_config.file_groups {
                 for file in file_group.iter() {
