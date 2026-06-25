@@ -10,11 +10,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod apply;
 pub mod format;
 pub mod statistic_file;
 pub mod table_metadata;
 pub mod table_metadata_builder;
 
+pub use apply::apply_table_updates;
 pub use format::*;
 pub use statistic_file::*;
 pub use table_metadata::*;
