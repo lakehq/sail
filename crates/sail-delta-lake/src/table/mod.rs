@@ -50,24 +50,24 @@ pub use features::{
     EnabledRowTrackingToken, RowTrackingToken, SupportedRowTrackingToken,
 };
 
-use crate::delta_log::resolve_version_timestamp;
-pub use crate::kernel::snapshot::DeltaSnapshot;
-use crate::kernel::transaction::CommitBuilder;
-use crate::kernel::{
-    catalog_managed_commit_file_name, CatalogManagedCommitFile, CatalogManagedCommitSet,
-    DeltaOperation, DeltaSnapshotConfig, SaveMode,
-};
+use crate::delta_log::{default_logstore, resolve_version_timestamp, LogStoreRef, StorageConfig};
 use crate::logical::table_source::DeltaTableSource;
 use crate::options::gen::DeltaReadOptions;
 use crate::schema::{
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
     schema_has_column_defaults, schema_has_generated_columns, schema_has_identity_columns,
 };
+pub use crate::snapshot::DeltaSnapshot;
+use crate::snapshot::{
+    catalog_managed_commit_file_name, CatalogManagedCommitFile, CatalogManagedCommitSet,
+    DeltaSnapshotConfig,
+};
 use crate::spec::{
     contains_timestampntz_arrow, contains_variant_arrow, CommitAction, DeltaError,
-    DeltaError as DeltaTableError, DeltaResult, Protocol, StructType, TableFeature,
+    DeltaError as DeltaTableError, DeltaOperation, DeltaResult, Protocol, SaveMode, StructType,
+    TableFeature,
 };
-use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
+use crate::transaction::CommitBuilder;
 
 /// In memory representation of a Delta Table
 ///

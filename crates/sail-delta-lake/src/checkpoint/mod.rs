@@ -33,25 +33,26 @@ use parquet::arrow::async_writer::ParquetObjectWriter;
 use parquet::arrow::AsyncArrowWriter;
 use uuid::Uuid;
 
+use crate::checkpoint::action_fields::{
+    normalize_checkpoint_batch_for_decode, AddAugmentationConfig,
+};
+use crate::delta_log::segment_files::ReplayedTableHeader;
+use crate::delta_log::{
+    get_actions, list_delta_log_entries_from, parse_checkpoint_version_from_location,
+    parse_commit_version_from_location, read_last_checkpoint_version_from_store,
+    resolve_commit_timestamp_from_actions, LogStore,
+};
 pub(crate) use crate::delta_log::{
     latest_replayable_version, load_replayed_table_header, load_replayed_table_state,
 };
-use crate::delta_log::{
-    list_delta_log_entries_from, parse_checkpoint_version_from_location,
-    parse_commit_version_from_location, read_last_checkpoint_version_from_store,
-    resolve_commit_timestamp_from_actions,
-};
-use crate::kernel::checkpoint_augment::{
-    normalize_checkpoint_batch_for_decode, AddAugmentationConfig,
-};
-use crate::kernel::log_segment::ReplayedTableHeader;
 use crate::spec::{
-    checkpoint_path, is_json_checkpoint_filename, last_checkpoint_path, sidecar_file_path,
-    uuid_checkpoint_path, Action, Add, CheckpointActionRow, CheckpointMetadata,
-    DeltaError as DeltaTableError, DeltaResult, DomainMetadata, LastCheckpointHint, Metadata,
-    Protocol, Remove, Sidecar, TableFeature, TableProperties, Transaction,
+    checkpoint_path, is_json_checkpoint_filename, last_checkpoint_path, logical_file_key,
+    sidecar_file_path, uuid_checkpoint_path, Action, Add, CheckpointActionRow, CheckpointMetadata,
+    DeltaError as DeltaTableError, DeltaResult, DomainMetadata, LastCheckpointHint, LogicalFileKey,
+    Metadata, Protocol, Remove, Sidecar, TableFeature, TableProperties, Transaction,
 };
-use crate::storage::{get_actions, LogStore};
+
+mod action_fields;
 
 #[derive(Debug, Clone, Copy)]
 struct CheckpointRetentionTimestamps {
@@ -94,23 +95,6 @@ fn retention_cutoff_timestamp(
                 "Failed to compute retention cutoff for {property_name}"
             ))
         })
-}
-
-/// Primary key for a logical file in the Delta log: `(path, uniqueId)`.
-///
-/// Per the Delta protocol, a logical file is identified by its data-file path
-/// combined with the `uniqueId` of its Deletion Vector (or `None` if no DV is
-/// present). This composite key correctly handles tables where the same physical
-/// path appears with different Deletion Vectors across successive commits.
-type LogicalFileKey = (String, Option<String>);
-
-/// Compute the logical file key for an `Add` or `Remove` action.
-#[inline]
-fn logical_file_key(
-    path: &str,
-    dv: Option<&crate::spec::DeletionVectorDescriptor>,
-) -> LogicalFileKey {
-    (path.to_string(), dv.map(|d| d.unique_id()))
 }
 
 #[derive(Debug, Default)]
@@ -360,6 +344,40 @@ impl ReconciledHeaderState {
             txns: header.txns.as_ref().clone(),
             domain_metadata: header.domain_metadata.as_ref().clone(),
         }
+    }
+}
+
+trait ReplayActionState {
+    fn protocol(&self) -> Option<&Protocol>;
+    fn metadata(&self) -> Option<&Metadata>;
+    fn apply_replay_action(&mut self, action: Action);
+}
+
+impl ReplayActionState for ReconciledCheckpointState {
+    fn protocol(&self) -> Option<&Protocol> {
+        self.protocol.as_ref()
+    }
+
+    fn metadata(&self) -> Option<&Metadata> {
+        self.metadata.as_ref()
+    }
+
+    fn apply_replay_action(&mut self, action: Action) {
+        ReconciledCheckpointState::apply_action(self, action);
+    }
+}
+
+impl ReplayActionState for ReconciledHeaderState {
+    fn protocol(&self) -> Option<&Protocol> {
+        self.protocol.as_ref()
+    }
+
+    fn metadata(&self) -> Option<&Metadata> {
+        self.metadata.as_ref()
+    }
+
+    fn apply_replay_action(&mut self, action: Action) {
+        ReconciledHeaderState::apply_action(self, action);
     }
 }
 
@@ -813,6 +831,25 @@ pub(crate) async fn replay_commit_actions(
     start_version: i64,
     end_version: i64,
 ) -> DeltaResult<BTreeMap<i64, i64>> {
+    replay_commit_actions_for_state(
+        state,
+        root_store,
+        commit_entries,
+        start_version,
+        end_version,
+        "building checkpoint",
+    )
+    .await
+}
+
+async fn replay_commit_actions_for_state<S: ReplayActionState>(
+    state: &mut S,
+    root_store: Arc<dyn ObjectStore>,
+    commit_entries: &[(i64, ObjectMeta)],
+    start_version: i64,
+    end_version: i64,
+    context: &str,
+) -> DeltaResult<BTreeMap<i64, i64>> {
     if start_version > end_version {
         return Ok(BTreeMap::new());
     }
@@ -825,7 +862,7 @@ pub(crate) async fn replay_commit_actions(
         }
         if *version != expected_version {
             return Err(DeltaTableError::generic(format!(
-                "Missing commit file while building checkpoint: expected version {expected_version}, found {version}"
+                "Missing commit file while {context}: expected version {expected_version}, found {version}"
             )));
         }
         let bytes = root_store.get(&meta.location).await?.bytes().await?;
@@ -833,12 +870,12 @@ pub(crate) async fn replay_commit_actions(
         let commit_timestamp = resolve_commit_timestamp_from_actions(
             *version,
             meta,
-            state.protocol.as_ref(),
-            state.metadata.as_ref(),
+            state.protocol(),
+            state.metadata(),
             &actions,
         )?;
         for action in actions {
-            state.apply_action(action);
+            state.apply_replay_action(action);
         }
         commit_timestamps.insert(*version, commit_timestamp);
         expected_version = expected_version.saturating_add(1);
@@ -846,7 +883,7 @@ pub(crate) async fn replay_commit_actions(
 
     if expected_version.saturating_sub(1) != end_version {
         return Err(DeltaTableError::generic(format!(
-            "Missing commit file while building checkpoint: expected final version {end_version}, replay reached {}",
+            "Missing commit file while {context}: expected final version {end_version}, replay reached {}",
             expected_version.saturating_sub(1)
         )));
     }
@@ -993,44 +1030,15 @@ pub(crate) async fn replay_commit_header_actions(
     start_version: i64,
     end_version: i64,
 ) -> DeltaResult<BTreeMap<i64, i64>> {
-    if start_version > end_version {
-        return Ok(BTreeMap::new());
-    }
-
-    let mut expected_version = start_version;
-    let mut commit_timestamps = BTreeMap::new();
-    for (version, meta) in commit_entries {
-        if *version < start_version || *version > end_version {
-            continue;
-        }
-        if *version != expected_version {
-            return Err(DeltaTableError::generic(format!(
-                "Missing commit file while replaying table header: expected version {expected_version}, found {version}"
-            )));
-        }
-        let bytes = root_store.get(&meta.location).await?.bytes().await?;
-        let actions = get_actions(*version, &bytes)?;
-        let commit_timestamp = resolve_commit_timestamp_from_actions(
-            *version,
-            meta,
-            state.protocol.as_ref(),
-            state.metadata.as_ref(),
-            &actions,
-        )?;
-        for action in actions {
-            state.apply_action(action);
-        }
-        commit_timestamps.insert(*version, commit_timestamp);
-        expected_version = expected_version.saturating_add(1);
-    }
-
-    if expected_version.saturating_sub(1) != end_version {
-        return Err(DeltaTableError::generic(format!(
-            "Missing commit file while replaying table header: expected final version {end_version}, replay reached {}",
-            expected_version.saturating_sub(1)
-        )));
-    }
-    Ok(commit_timestamps)
+    replay_commit_actions_for_state(
+        state,
+        root_store,
+        commit_entries,
+        start_version,
+        end_version,
+        "replaying table header",
+    )
+    .await
 }
 
 /// Replay commit actions with compacted JSON files.
@@ -1057,6 +1065,25 @@ pub(crate) async fn replay_commit_actions_with_compactions(
         .await;
     }
 
+    replay_commit_actions_with_compactions_for_state(
+        state,
+        root_store,
+        commit_entries,
+        compaction_entries,
+        start_version,
+        end_version,
+    )
+    .await
+}
+
+async fn replay_commit_actions_with_compactions_for_state<S: ReplayActionState>(
+    state: &mut S,
+    root_store: Arc<dyn ObjectStore>,
+    commit_entries: &[(i64, ObjectMeta)],
+    compaction_entries: &[((i64, i64), ObjectMeta)],
+    start_version: i64,
+    end_version: i64,
+) -> DeltaResult<BTreeMap<i64, i64>> {
     let replay_sequence = build_replay_sequence(
         commit_entries,
         compaction_entries,
@@ -1073,12 +1100,12 @@ pub(crate) async fn replay_commit_actions_with_compactions(
                 let commit_timestamp = resolve_commit_timestamp_from_actions(
                     *version,
                     meta,
-                    state.protocol.as_ref(),
-                    state.metadata.as_ref(),
+                    state.protocol(),
+                    state.metadata(),
                     &actions,
                 )?;
                 for action in actions {
-                    state.apply_action(action);
+                    state.apply_replay_action(action);
                 }
                 commit_timestamps.insert(*version, commit_timestamp);
             }
@@ -1088,7 +1115,7 @@ pub(crate) async fn replay_commit_actions_with_compactions(
                 // Use end_version for the "version" parameter in error messages.
                 let actions = get_actions(*end, &bytes)?;
                 for action in actions {
-                    state.apply_action(action);
+                    state.apply_replay_action(action);
                 }
                 // Use the compaction file's modification time as timestamp for the end version.
                 let timestamp = meta.last_modified.timestamp_millis();
@@ -1121,45 +1148,15 @@ pub(crate) async fn replay_commit_header_actions_with_compactions(
         .await;
     }
 
-    let replay_sequence = build_replay_sequence(
+    replay_commit_actions_with_compactions_for_state(
+        state,
+        root_store,
         commit_entries,
         compaction_entries,
         start_version,
         end_version,
-    );
-
-    let mut commit_timestamps = BTreeMap::new();
-    for entry in &replay_sequence {
-        match entry {
-            ReplayEntry::Commit(version, meta) => {
-                let bytes = root_store.get(&meta.location).await?.bytes().await?;
-                let actions = get_actions(*version, &bytes)?;
-                let commit_timestamp = resolve_commit_timestamp_from_actions(
-                    *version,
-                    meta,
-                    state.protocol.as_ref(),
-                    state.metadata.as_ref(),
-                    &actions,
-                )?;
-                for action in actions {
-                    state.apply_action(action);
-                }
-                commit_timestamps.insert(*version, commit_timestamp);
-            }
-            ReplayEntry::Compaction(start, end, meta) => {
-                let bytes = root_store.get(&meta.location).await?.bytes().await?;
-                let actions = get_actions(*end, &bytes)?;
-                for action in actions {
-                    state.apply_action(action);
-                }
-                let timestamp = meta.last_modified.timestamp_millis();
-                for v in *start..=*end {
-                    commit_timestamps.insert(v, timestamp);
-                }
-            }
-        }
-    }
-    Ok(commit_timestamps)
+    )
+    .await
 }
 
 /// An entry in the ordered replay sequence.
@@ -1394,7 +1391,7 @@ mod tests {
         read_checkpoint_rows_from_checkpoint_file, replay_commit_header_actions,
         ReconciledCheckpointState, ReconciledHeaderState,
     };
-    use crate::kernel::checkpoint_augment::{
+    use crate::checkpoint::action_fields::{
         normalize_checkpoint_batch_for_decode, AddAugmentationConfig,
     };
     use crate::spec::{

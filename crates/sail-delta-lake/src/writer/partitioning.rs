@@ -135,3 +135,51 @@ fn push_partition_range(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::array::{Int32Array, StringArray};
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+
+    use super::*;
+    use crate::spec::DeltaResult;
+
+    #[test]
+    fn partition_ranges_extract_and_emit_physical_partition_keys() -> DeltaResult<()> {
+        let batch = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Int32, false),
+                Field::new("col-physical", DataType::Utf8, true),
+            ])),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef,
+                Arc::new(StringArray::from(vec![Some("us"), Some("us")])) as ArrayRef,
+            ],
+        )
+        .map_err(DeltaTableError::generic_err)?;
+
+        let ranges = partition_ranges(
+            &["region".to_string()],
+            &["col-physical".to_string()],
+            &batch,
+        )?;
+
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(
+            ranges[0]
+                .partition_values
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec!["col-physical".to_string()]
+        );
+        assert_eq!(
+            ranges[0].partition_values.get("col-physical"),
+            Some(&ScalarValue::Utf8(Some("us".to_string())))
+        );
+        assert_eq!(ranges[0].partition_values.get("region"), None);
+        Ok(())
+    }
+}

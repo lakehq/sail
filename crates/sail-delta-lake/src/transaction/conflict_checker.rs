@@ -22,12 +22,12 @@
 
 use std::collections::HashSet;
 
-use crate::kernel::DeltaOperation;
+use crate::delta_log::{get_actions, LogStore};
 use crate::spec::{
-    Action, Add, CommitAction, CommitConflictError, CommitInfo, DeltaError, DeltaResult,
-    IsolationLevel, Metadata, Protocol, Remove, Transaction,
+    logical_file_key, Action, Add, CommitAction, CommitConflictError, CommitInfo, DeltaError,
+    DeltaOperation, DeltaResult, IsolationLevel, LogicalFileKey, Metadata, Protocol, Remove,
+    Transaction,
 };
-use crate::storage::{get_actions, LogStore};
 use crate::table::DeltaSnapshot;
 
 /// A struct representing different attributes of current transaction needed for conflict detection.
@@ -463,16 +463,18 @@ impl<'a> ConflictChecker<'a> {
         &self,
     ) -> Result<(), CommitConflictError> {
         // Fail if files have been deleted that the txn read.
-        let read_file_path: HashSet<String> = self
+        let read_file_keys: HashSet<LogicalFileKey> = self
             .txn_info
             .read_files()?
-            .map(|f| f.path.clone())
+            .map(|f| logical_file_key(&f.path, f.deletion_vector.as_ref()))
             .collect();
         let deleted_read_overlap = self
             .winning_commit_summary
             .removed_files()
             .iter()
-            .find(|&f| read_file_path.contains(&f.path))
+            .find(|&f| {
+                read_file_keys.contains(&logical_file_key(&f.path, f.deletion_vector.as_ref()))
+            })
             .cloned();
         if deleted_read_overlap.is_some()
             || (!self.winning_commit_summary.removed_files().is_empty()
@@ -490,24 +492,26 @@ impl<'a> ConflictChecker<'a> {
         &self,
     ) -> Result<(), CommitConflictError> {
         // Fail if a file is deleted twice.
-        let txn_deleted_files: HashSet<String> = self
+        let txn_deleted_files: HashSet<LogicalFileKey> = self
             .txn_info
             .actions
             .iter()
             .cloned()
             .filter_map(|action| match action {
-                CommitAction::Remove(remove) => Some(remove.path),
+                CommitAction::Remove(remove) => Some(logical_file_key(
+                    &remove.path,
+                    remove.deletion_vector.as_ref(),
+                )),
                 _ => None,
             })
             .collect();
-        let winning_deleted_files: HashSet<String> = self
+        let winning_deleted_files: HashSet<LogicalFileKey> = self
             .winning_commit_summary
             .removed_files()
             .iter()
-            .cloned()
-            .map(|r| r.path)
+            .map(|r| logical_file_key(&r.path, r.deletion_vector.as_ref()))
             .collect();
-        let intersection: HashSet<&String> = txn_deleted_files
+        let intersection: HashSet<&LogicalFileKey> = txn_deleted_files
             .intersection(&winning_deleted_files)
             .collect();
 

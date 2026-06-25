@@ -19,9 +19,15 @@
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/operations/write/writer.rs>
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/writer/record_batch.rs>
 
+mod async_buffer;
+mod partitioning;
+mod stats;
+pub(crate) mod variant_shredding;
+
 use std::collections::HashSet;
 use std::sync::Arc;
 
+use async_buffer::AsyncShareableBuffer;
 use bytes::Bytes;
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
@@ -34,15 +40,14 @@ use parquet::basic::Compression;
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
 use parquet::schema::types::ColumnPath;
+use partitioning::partition_ranges;
+use stats::create_add;
 use uuid::Uuid;
-
-use super::async_utils::AsyncShareableBuffer;
-use super::partitioning::partition_ranges;
-use super::stats::create_add;
-use super::variant_shredding::{
+use variant_shredding::{
     apply_variant_shredding_plan, build_variant_shredding_plan, VariantShreddingConfig,
     VariantShreddingPlan,
 };
+
 use crate::conversion::ScalarExt;
 use crate::spec::{Add, DeltaError as DeltaTableError};
 
@@ -715,7 +720,7 @@ mod tests {
     use parquet_variant_compute::json_to_variant;
     use parquet_variant_json::VariantToJson;
 
-    use super::super::variant_shredding::VariantShreddingConfig;
+    use super::variant_shredding::VariantShreddingConfig;
     use super::{DeltaWriter, WriterConfig};
     use crate::deletion_vector::z85::z85_decode;
     use crate::spec::DeltaError as DeltaTableError;

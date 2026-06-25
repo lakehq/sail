@@ -10,8 +10,8 @@ use datafusion::arrow::datatypes::{
 use datafusion::arrow::json::LineDelimitedWriter;
 use datafusion::arrow::record_batch::RecordBatch;
 
-use crate::kernel::snapshot::materialize::parse_partition_values_array;
 use crate::schema::make_physical_arrow_schema;
+use crate::snapshot::materialize::parse_partition_values_array;
 use crate::spec::fields::{FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_STATS_PARSED};
 use crate::spec::{
     add_struct_type, parse_stats_json_array, remove_struct_type, stats_schema, ColumnMappingMode,

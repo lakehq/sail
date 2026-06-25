@@ -37,8 +37,8 @@ use super::commit::{
 use super::context::PlannerContext;
 use super::utils::LogReplayOptions;
 use crate::datasource::PATH_COLUMN;
-use crate::kernel::{DeltaOperation, MergePredicate};
 use crate::physical_plan::{prepare_delta_write_context, DeltaCommitExec, DeltaWriterExec};
+use crate::spec::{DeltaOperation, MergePredicate};
 
 /// Target table information shared by Delta row-level operations.
 #[derive(Debug, Clone)]

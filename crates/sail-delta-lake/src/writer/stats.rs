@@ -98,29 +98,6 @@ pub fn create_add(
         commit_timestamp: None,
     })
 }
-/// Creates stats from parquet metadata already in memory
-pub fn stats_from_parquet_metadata(
-    partition_values: &IndexMap<String, ScalarValue>,
-    parquet_metadata: &ParquetMetaData,
-    num_indexed_cols: i32,
-    stats_columns: &Option<Vec<String>>,
-    stats_excluded_columns: &HashSet<String>,
-) -> Result<Stats, DeltaTableError> {
-    let num_rows = parquet_metadata.file_metadata().num_rows();
-    let schema_descriptor = parquet_metadata.file_metadata().schema_descr_ptr();
-    let row_group_metadata = parquet_metadata.row_groups().to_vec();
-
-    stats_from_metadata(
-        partition_values,
-        schema_descriptor,
-        row_group_metadata,
-        num_rows,
-        num_indexed_cols,
-        stats_columns,
-        stats_excluded_columns,
-    )
-}
-
 fn stats_from_file_metadata(
     partition_values: &IndexMap<String, ScalarValue>,
     file_metadata: &ParquetMetaData,

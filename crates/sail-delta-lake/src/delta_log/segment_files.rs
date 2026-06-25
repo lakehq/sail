@@ -10,10 +10,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::checkpoint::read_checkpoint_main_rows_from_checkpoint_file;
 pub(crate) use crate::delta_log::ReplayedTableHeader;
 use crate::delta_log::{list_log_files, read_last_checkpoint_version_from_store};
-use crate::kernel::checkpoints::read_checkpoint_main_rows_from_checkpoint_file;
-use crate::spec::{is_uuid_checkpoint_filename, DeltaResult};
+use crate::spec::{is_uuid_checkpoint_filename, sidecar_log_path, DeltaResult};
 
 /// The minimal set of Delta log files needed to reconstruct table state up to a given version.
 #[derive(Debug, Clone, Default)]
@@ -45,7 +45,7 @@ pub struct LogSegmentResolveOptions {
 ///
 /// Commit files are **not** filtered against the checkpoint here.
 pub async fn list_log_segment_files(
-    log_store: &crate::storage::LogStoreRef,
+    log_store: &crate::delta_log::LogStoreRef,
     max_version: i64,
 ) -> DeltaResult<LogSegmentFiles> {
     let store = log_store.object_store(None);
@@ -75,7 +75,7 @@ pub async fn list_log_segment_files(
             let rows = read_checkpoint_main_rows_from_checkpoint_file(store, meta).await?;
             for row in &rows {
                 if let Some(ref sidecar) = row.sidecar {
-                    sidecar_files.push(format!("_sidecars/{}", sidecar.path));
+                    sidecar_files.push(sidecar_log_path(&sidecar.path));
                 }
             }
         }
