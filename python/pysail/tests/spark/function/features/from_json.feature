@@ -1368,3 +1368,59 @@ Rule: Valid but non-matching JSON value at top level (PERMISSIVE)
       Then query result
         | result |
         | NULL   |
+
+  Rule: Field access on parsed struct preserves the parent's null
+
+    Scenario: Field of a NULL parsed struct is NULL
+      When query
+        """
+        SELECT from_json(CAST(NULL AS STRING), 'a INT, b STRING').a AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: Field with a null value in a parsed struct is NULL
+      When query
+        """
+        SELECT from_json('{"a": null, "b": "x"}', 'a INT, b STRING').a AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: Non-null field is preserved when a sibling field is null
+      When query
+        """
+        SELECT from_json('{"a": null, "b": "x"}', 'a INT, b STRING').b AS result
+        """
+      Then query result
+        | result |
+        | x      |
+
+    Scenario: Nested field access on a parsed struct
+      When query
+        """
+        SELECT from_json('{"a": {"b": 1}}', 'a STRUCT<b: INT>').a.b AS result
+        """
+      Then query result
+        | result |
+        | 1      |
+
+    Scenario: Nested field of a null inner struct is NULL
+      When query
+        """
+        SELECT from_json('{"a": null}', 'a STRUCT<b: INT>').a.b AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: Nested field of a fully NULL parsed struct is NULL
+      When query
+        """
+        SELECT from_json(CAST(NULL AS STRING), 'a STRUCT<b: INT>').a.b AS result
+        """
+      Then query result
+        | result |
+        | NULL   |

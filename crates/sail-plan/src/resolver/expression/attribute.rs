@@ -7,6 +7,7 @@ use datafusion_expr::{col, expr, lit, ScalarUDF};
 use datafusion_functions::core::get_field;
 use sail_common::spec;
 use sail_function::scalar::array_struct_field::ArrayStructField;
+use sail_function::scalar::struct_field::struct_field_udf;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
@@ -259,8 +260,10 @@ impl PlanResolver<'_> {
                     .find(|x| x.name().eq_ignore_ascii_case(name.as_ref()))
                     .and_then(|field| {
                         let args = vec![expr, lit(field.name().to_string())];
-                        let expr =
-                            expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args));
+                        let expr = expr::Expr::ScalarFunction(ScalarFunction::new_udf(
+                            struct_field_udf(),
+                            args,
+                        ));
                         Self::resolve_potentially_nested_field(expr, field.data_type(), remaining)
                     }),
                 DataType::List(field)

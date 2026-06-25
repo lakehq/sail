@@ -976,3 +976,32 @@ Feature: Variant type functions (parse_json, is_variant_null, variant_get)
       Then query result
         | result |
         | 42     |
+
+  Rule: variant_get on a NULL variant preserves null
+
+    Scenario: Field path on a NULL variant is NULL
+      When query
+        """
+        SELECT variant_get(CAST(NULL AS VARIANT), '$.a', 'int') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: Field path on parse_json of NULL is NULL
+      When query
+        """
+        SELECT variant_get(parse_json(CAST(NULL AS STRING)), '$.a', 'int') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+    Scenario: try_variant_get field path on a NULL variant is NULL
+      When query
+        """
+        SELECT try_variant_get(CAST(NULL AS VARIANT), '$.a', 'int') AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
