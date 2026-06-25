@@ -144,6 +144,22 @@ def test_pivot_inference_rejects_too_many_distinct_values(spark):
         df.groupBy("g").pivot("k").sum("v").collect()
 
 
+def test_pivot_max_values_config_is_honored(spark):
+    # `spark.sql.pivotMaxValues` is configurable: lowering it makes inference reject a column
+    # with more distinct values than the cap, and the message reflects the configured limit.
+    original = spark.conf.get("spark.sql.pivotMaxValues")
+    spark.conf.set("spark.sql.pivotMaxValues", "2")
+    try:
+        df = spark.createDataFrame(
+            [("a", 1, 10), ("a", 2, 20), ("a", 3, 30)],
+            schema="g STRING, k INT, v INT",
+        )
+        with pytest.raises(Exception, match="more than 2 distinct values"):
+            df.groupBy("g").pivot("k").sum("v").collect()
+    finally:
+        spark.conf.set("spark.sql.pivotMaxValues", original)
+
+
 def test_pivot_float_column_naming_matches_spark(spark):
     # Whole-number double pivot values keep their trailing `.0` in the column name (Spark
     # formats the value with its CAST-to-string; Sail mirrors this with the arrow formatter).

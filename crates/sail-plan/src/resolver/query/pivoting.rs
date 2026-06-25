@@ -163,14 +163,14 @@ impl PlanResolver<'_> {
         // `.limit(maxValues + 1)` before collecting, which is what the LIMIT below mirrors:
         //   https://github.com/apache/spark/blob/v4.0.0/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L1951
         //   https://github.com/apache/spark/blob/v4.0.0/sql/core/src/main/scala/org/apache/spark/sql/classic/RelationalGroupedDataset.scala#L637-L655
-        const MAX_PIVOT_VALUES: usize = 10000;
+        let max_pivot_values = self.config.pivot_max_values;
         // `GROUP BY pivot_column` with no aggregates is equivalent to
         // `SELECT DISTINCT pivot_column`. Apply a LIMIT of one past the cap so a
         // high-cardinality pivot column never pulls an unbounded number of distinct
         // values into the planner process; the extra row still lets us detect overflow.
         let plan = LogicalPlanBuilder::from(input.clone())
             .aggregate(vec![pivot_column.clone()], Vec::<expr::Expr>::new())?
-            .limit(0, Some(MAX_PIVOT_VALUES + 1))?
+            .limit(0, Some(max_pivot_values + 1))?
             .build()?;
         let batches = self.ctx.execute_logical_plan(plan).await?.collect().await?;
         let mut values = Vec::new();
@@ -180,11 +180,11 @@ impl PlanResolver<'_> {
                 values.push(ScalarValue::try_from_array(column, row)?);
             }
         }
-        // The plan is limited to `MAX_PIVOT_VALUES + 1` rows, so report "more than" rather than
+        // The plan is limited to `max_pivot_values + 1` rows, so report "more than" rather than
         // an exact count (which would be capped and misleading) — mirroring Spark's message.
-        if values.len() > MAX_PIVOT_VALUES {
+        if values.len() > max_pivot_values {
             return Err(PlanError::AnalysisError(format!(
-                "The pivot column has more than {MAX_PIVOT_VALUES} distinct values; this could \
+                "The pivot column has more than {max_pivot_values} distinct values; this could \
                  indicate an error. Specify the pivot values explicitly if this was intended."
             )));
         }
