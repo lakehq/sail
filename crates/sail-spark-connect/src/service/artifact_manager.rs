@@ -293,8 +293,10 @@ fn add_artifact_summary(
     summaries: &mut Vec<ArtifactSummary>,
 ) -> SparkResult<()> {
     if is_crc_successful {
-        let python_path = store_artifact(&name, data, artifact_dir)?;
-        spark.add_artifact(name.clone(), python_path)?;
+        let normalized_name = normalize_artifact_name(&name)?;
+        let python_path = store_artifact(&normalized_name, data, artifact_dir)?;
+        let artifact_data = python_path.as_ref().map(|_| data.to_vec());
+        spark.add_artifact(normalized_name, python_path, artifact_data)?;
     }
     summaries.push(ArtifactSummary {
         name,

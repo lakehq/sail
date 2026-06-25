@@ -1,5 +1,6 @@
 """Artifact handling tests for Sail local-cluster execution."""
 
+import os
 import shutil
 import tempfile
 import zipfile
@@ -15,19 +16,29 @@ pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode 
 
 
 @pytest.fixture(scope="module")
-def remote():
-    """Override the global remote fixture to use local-cluster mode for this module."""
+def artifact_root():
     artifact_root = tempfile.mkdtemp(prefix="sail-artifact-root-")
     try:
-        with spark_connect_server(
-            envs={
-                "SAIL_MODE": "local-cluster",
-                "SAIL_SPARK__ARTIFACT_ROOT": artifact_root,
-            }
-        ) as server:
-            yield server.remote
+        yield artifact_root
     finally:
         shutil.rmtree(artifact_root, ignore_errors=True)
+
+
+@pytest.fixture(scope="module")
+def remote(artifact_root):
+    """Override the global remote fixture to use local-cluster mode for this module."""
+    if os.environ.get("SPARK_REMOTE"):
+        with spark_connect_server() as server:
+            yield server.remote
+        return
+
+    with spark_connect_server(
+        envs={
+            "SAIL_MODE": "local-cluster",
+            "SAIL_SPARK__ARTIFACT_ROOT": artifact_root,
+        }
+    ) as server:
+        yield server.remote
 
 
 def _make_zip(path, module_name, code):
@@ -35,11 +46,12 @@ def _make_zip(path, module_name, code):
         zf.writestr(module_name, code)
 
 
-def test_add_artifact_zip_as_pyfile_on_worker(spark, tmp_path):
+def test_add_artifact_zip_materializes_when_shared_path_is_missing(spark, artifact_root, tmp_path):
     zip_path = tmp_path / "sail_cluster_artifact.zip"
     _make_zip(zip_path, "sail_cluster_artifact.py", "VALUE = 123\n")
 
     spark.addArtifact(str(zip_path), pyfile=True)
+    shutil.rmtree(artifact_root, ignore_errors=True)
 
     @udf(IntegerType())
     def read_artifact_value(_):

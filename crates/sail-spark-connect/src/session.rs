@@ -9,6 +9,7 @@ use datafusion::logical_expr::StringifiedPlan;
 use sail_common::datetime::get_system_timezone;
 use sail_common_datafusion::extension::SessionExtension;
 use sail_plan::config::PlanConfig;
+use sail_python_udf::config::PySparkPythonArtifact;
 
 use crate::config::{ConfigKeyValue, SparkRuntimeConfig};
 use crate::error::{SparkError, SparkResult, SparkThrowable};
@@ -108,6 +109,19 @@ impl SparkSession {
             .artifacts
             .iter()
             .filter_map(|artifact| artifact.python_path.clone())
+            .collect();
+        pyspark_udf_config.python_artifacts = state
+            .artifacts
+            .iter()
+            .filter_map(|artifact| {
+                let python_path = artifact.python_path.clone()?;
+                let data = artifact.data.clone()?;
+                Some(PySparkPythonArtifact {
+                    name: artifact.name.clone(),
+                    python_path,
+                    data,
+                })
+            })
             .collect();
         config.pyspark_udf_config = Arc::new(pyspark_udf_config);
         Ok(Arc::new(config))
@@ -340,6 +354,7 @@ impl SparkSession {
         &self,
         name: String,
         python_path: Option<String>,
+        data: Option<Vec<u8>>,
     ) -> SparkResult<()> {
         let mut state = self.state.lock()?;
         if let Some(artifact) = state
@@ -348,10 +363,13 @@ impl SparkSession {
             .find(|artifact| artifact.name == name)
         {
             artifact.python_path = python_path;
+            artifact.data = data;
         } else {
-            state
-                .artifacts
-                .push(SparkSessionArtifact { name, python_path });
+            state.artifacts.push(SparkSessionArtifact {
+                name,
+                python_path,
+                data,
+            });
         }
         Ok(())
     }
@@ -367,6 +385,7 @@ impl SparkSession {
 struct SparkSessionArtifact {
     name: String,
     python_path: Option<String>,
+    data: Option<Vec<u8>>,
 }
 
 struct SparkSessionState {

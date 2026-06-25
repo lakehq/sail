@@ -252,7 +252,7 @@ use sail_physical_plan::streaming::collector::StreamCollectorExec;
 use sail_physical_plan::streaming::filter::StreamFilterExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
-use sail_python_udf::config::PySparkUdfConfig;
+use sail_python_udf::config::{PySparkPythonArtifact, PySparkUdfConfig};
 use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
 use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
 use sail_python_udf::udf::pyspark_group_map_udf::{PySparkGroupMapMode, PySparkGroupMapUDF};
@@ -3976,6 +3976,15 @@ impl RemoteExecutionCodec {
                 .python_udf_pandas_int_to_decimal_coercion_enabled,
             binary_as_bytes: config.binary_as_bytes,
             python_artifact_paths: config.python_artifact_paths.clone(),
+            python_artifacts: config
+                .python_artifacts
+                .iter()
+                .map(|artifact| PySparkPythonArtifact {
+                    name: artifact.name.clone(),
+                    python_path: artifact.python_path.clone(),
+                    data: artifact.data.clone(),
+                })
+                .collect(),
         };
         Ok(config)
     }
@@ -3997,6 +4006,15 @@ impl RemoteExecutionCodec {
                 .python_udf_pandas_int_to_decimal_coercion_enabled,
             binary_as_bytes: config.binary_as_bytes,
             python_artifact_paths: config.python_artifact_paths.clone(),
+            python_artifacts: config
+                .python_artifacts
+                .iter()
+                .map(|artifact| gen::PySparkPythonArtifact {
+                    name: artifact.name.clone(),
+                    python_path: artifact.python_path.clone(),
+                    data: artifact.data.clone(),
+                })
+                .collect(),
         };
         Ok(config)
     }
