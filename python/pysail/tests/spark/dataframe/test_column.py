@@ -232,3 +232,26 @@ def test_struct_field_null_parent_complex_child(spark):
         Row(id="0", arr=[1, 2], m={"k": 1}, sub=Row(x=9)),
         Row(id="1", arr=None, m=None, sub=None),
     ]
+
+
+def test_struct_field_case_insensitive_null_parent(spark):
+    # Struct field access is case-insensitive in Spark (`s.NAME` resolves field `name`),
+    # for dot, bracket, and getField, including nested access. The resolver matches the
+    # field case-insensitively and feeds the canonical schema name to the StructField UDF
+    # (which looks up by exact match), so a case mismatch must NOT fail with "missing field"
+    # and NULL must still propagate from a NULL parent. Regression test for that path.
+    df = spark.createDataFrame(
+        data=[("0", {"name": "alice", "inner": {"val": 10}}), ("1", None)],
+        schema="id: string, s: struct<name: string, inner: struct<val: int>>",
+    )
+    actual = df.select(
+        "id",
+        F.col("s.NAME").alias("dot"),
+        F.col("s")["NAME"].alias("subscript"),
+        F.col("s").getField("Name").alias("get_field"),
+        F.col("s.INNER.VAL").alias("nested"),
+    ).collect()
+    assert sorted(actual, key=lambda row: row.id) == [
+        Row(id="0", dot="alice", subscript="alice", get_field="alice", nested=10),
+        Row(id="1", dot=None, subscript=None, get_field=None, nested=None),
+    ]

@@ -80,35 +80,6 @@ impl ScalarUDFImpl for StructField {
         &self.signature
     }
 
-    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
-        if arg_types.len() != 2 {
-            return Err(invalid_arg_count_exec_err(
-                self.name(),
-                (2, 2),
-                arg_types.len(),
-            ));
-        }
-        if !matches!(arg_types[0], DataType::Struct(_)) {
-            return plan_err!(
-                "The first argument of the `{}` function must be a struct, but got {}",
-                self.name(),
-                arg_types[0]
-            );
-        }
-        let name_type = match arg_types[1] {
-            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => arg_types[1].clone(),
-            DataType::Null => DataType::Utf8,
-            _ => {
-                return plan_err!(
-                    "The second argument of the `{}` function must be a string, but got {}",
-                    self.name(),
-                    arg_types[1]
-                )
-            }
-        };
-        Ok(vec![arg_types[0].clone(), name_type])
-    }
-
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         internal_err!("return_field_from_args should be called instead")
     }
@@ -147,21 +118,44 @@ impl ScalarUDFImpl for StructField {
         if args.len() != 2 {
             return Err(invalid_arg_count_exec_err(self.name(), (2, 2), args.len()));
         }
-        let field_name = args
-            .get(1)
-            .and_then(|arg| match arg {
-                ColumnarValue::Scalar(value) => value.try_as_str().flatten(),
-                ColumnarValue::Array(_) => None,
-            })
-            .filter(|x| !x.is_empty())
-            .ok_or_else(|| {
-                plan_datafusion_err!("{} requires a non-empty literal field name", self.name())
-            })?;
+        let field_name = self.field_name(match args.get(1) {
+            Some(ColumnarValue::Scalar(value)) => Some(value),
+            _ => None,
+        })?;
         let arrays = ColumnarValue::values_to_arrays(&args[..1])?;
         let [array] = arrays.as_slice() else {
             return exec_err!("{} requires a struct argument", self.name());
         };
         let out = Self::project(array, field_name)?;
         Ok(ColumnarValue::Array(out))
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        if arg_types.len() != 2 {
+            return Err(invalid_arg_count_exec_err(
+                self.name(),
+                (2, 2),
+                arg_types.len(),
+            ));
+        }
+        if !matches!(arg_types[0], DataType::Struct(_)) {
+            return plan_err!(
+                "The first argument of the `{}` function must be a struct, but got {}",
+                self.name(),
+                arg_types[0]
+            );
+        }
+        let name_type = match arg_types[1] {
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => arg_types[1].clone(),
+            DataType::Null => DataType::Utf8,
+            _ => {
+                return plan_err!(
+                    "The second argument of the `{}` function must be a string, but got {}",
+                    self.name(),
+                    arg_types[1]
+                )
+            }
+        };
+        Ok(vec![arg_types[0].clone(), name_type])
     }
 }
