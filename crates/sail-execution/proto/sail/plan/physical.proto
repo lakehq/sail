@@ -70,7 +70,7 @@ message ExtendedPhysicalPlanNode {
 message ExtendedPhysicalExprNode {
   oneof ExprKind {
     CastColumnExprNode schema_evolution_cast = 1;
-    HigherOrderFunctionExprNode higher_order_function = 2;
+    HigherOrderUdfExprNode higher_order_udf = 2;
     LambdaExprNode lambda = 3;
     LambdaVariableExprNode lambda_variable = 4;
   }
@@ -81,21 +81,37 @@ message CastColumnExprNode {
   bytes target_schema = 2;
 }
 
-// A Spark higher-order function (e.g. `filter`). The argument expressions
-// (including the lambda) are carried as the extension node's `inputs`.
-// `input_schema` is the schema the inner expression was planned against,
-// needed to rebuild it. `udf` identifies the concrete higher-order function,
-// following the same one-variant-per-function pattern as `ExtendedScalarUdf`.
-message HigherOrderFunctionExprNode {
-  bytes input_schema = 1;
-  HigherOrderUdf udf = 2;
+message LambdaExprNode {
+  repeated string params = 1;
+}
+
+message LambdaVariableExprNode {
+  uint32 index = 1;
+  bytes field = 2;
+}
+
+message HigherOrderUdfExprNode {
+  HigherOrderUdf udf = 1;
 }
 
 message HigherOrderUdf {
-  oneof UdfKind {
+  oneof HigherOrderUdfKind {
     SparkArrayFilterUdf filter = 1;
+    SparkArrayTransformUdf transform = 2;
+    SparkArrayExistsUdf exists = 3;
+    SparkArrayForallUdf forall = 4;
+    SparkArrayAggregateUdf aggregate = 5;
+    SparkArraySortUdf sort = 6;
   }
 }
+
+message SparkArrayAggregateUdf {
+  bool element_first = 1;
+}
+
+message SparkArrayExistsUdf {}
+
+message SparkArrayForallUdf {}
 
 message SparkArrayFilterUdf {
   // True when the lambda parameters are `[index, element]` (an index-only
@@ -114,16 +130,19 @@ message SparkArrayFilterUdf {
   bool index_first = 1;
 }
 
-// A lambda function. Its body is carried as the extension node's single input.
-message LambdaExprNode {
-  repeated string params = 1;
+message SparkArrayTransformUdf {
+  // True when the lambda parameters are `[index, element]` (an index-only
+  // lambda rewritten by the planner) instead of `[element, index]`. See the
+  // identical workaround documented on `SparkArrayFilterUdf.index_first`.
+  bool index_first = 1;
 }
 
-// A reference to a lambda parameter, resolved to a position in the (extended)
-// schema with its field type.
-message LambdaVariableExprNode {
-  uint64 index = 1;
-  bytes field = 2;
+message SparkArraySortUdf {
+  // True when the comparator columns are fed in `[right, left]` order (a
+  // right-only comparator `(l, r) -> f(r)` rewritten by the planner to a
+  // single-parameter lambda). See the identical workaround documented on
+  // `SparkArrayFilterUdf.index_first`.
+  bool swapped = 1;
 }
 
 message ExtendedScalarUdf {

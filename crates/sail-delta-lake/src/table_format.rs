@@ -39,6 +39,7 @@ use sail_logical_plan::merge::RowLevelWriteNode;
 use url::Url;
 
 use crate::catalog_managed::{metadata_with_catalog_managed, protocol_with_catalog_managed};
+use crate::datasource::actions::adds_to_remove_actions;
 use crate::kernel::transaction::CommitBuilder;
 use crate::kernel::{DeltaSnapshotConfig, SaveMode};
 use crate::options::gen::{DeltaReadOptions, DeltaWriteOptions};
@@ -155,7 +156,7 @@ impl TableFormat for DeltaTableFormat {
             comment,
             partition_by,
             properties,
-            replace: _,
+            replace,
             lakehouse_table,
         } = info;
         let catalog_table = lakehouse_table
@@ -195,7 +196,7 @@ impl TableFormat for DeltaTableFormat {
             object_store.clone(),
             Default::default(),
             DeltaSnapshotConfig {
-                require_files: false,
+                require_files: replace,
                 ..Default::default()
             },
         )
@@ -208,39 +209,60 @@ impl TableFormat for DeltaTableFormat {
         };
 
         let declared_schema = delta_create_table_arrow_schema(&columns)?;
-        if let Some(table) = existing_table {
-            if !declared_schema.fields().is_empty() {
-                let snapshot = table
-                    .snapshot()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let existing_schema = snapshot
-                    .arrow_schema()
-                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                validate_existing_delta_create_table_schema(
-                    existing_schema.as_ref(),
-                    declared_schema.as_ref(),
-                    &path,
-                )?;
-                let declared_partitions = partition_by
-                    .iter()
-                    .map(|field| field.column.clone())
-                    .collect::<Vec<_>>();
-                let existing_partitions = snapshot.metadata().partition_columns();
-                if existing_partitions.as_slice() != declared_partitions.as_slice() {
-                    return plan_err!(
-                        "Delta table already exists at {path} with different partition columns: \
-                         existing {existing_partitions:?}, declared {declared_partitions:?}"
-                    );
+        if let Some(table) = existing_table.as_ref() {
+            if replace {
+                if declared_schema.fields().is_empty() {
+                    return plan_err!("schema is not provided");
                 }
+            } else {
+                if !declared_schema.fields().is_empty() {
+                    let snapshot = table
+                        .snapshot()
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    let existing_schema = snapshot
+                        .arrow_schema()
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    validate_existing_delta_create_table_schema(
+                        existing_schema.as_ref(),
+                        declared_schema.as_ref(),
+                        &path,
+                    )?;
+                    let declared_partitions = partition_by
+                        .iter()
+                        .map(|field| field.column.clone())
+                        .collect::<Vec<_>>();
+                    let existing_partitions = snapshot.metadata().partition_columns();
+                    if existing_partitions.as_slice() != declared_partitions.as_slice() {
+                        return plan_err!(
+                            "Delta table already exists at {path} with different partition columns: \
+                             existing {existing_partitions:?}, declared {declared_partitions:?}"
+                        );
+                    }
+                }
+                return Ok(TableFormatCreateTableResult::default());
             }
-            return Ok(TableFormatCreateTableResult::default());
         }
 
         if declared_schema.fields().is_empty() {
-            return plan_err!(
-                "Delta CREATE TABLE requires at least one column when no existing Delta metadata is present"
-            );
+            if replace {
+                return plan_err!("schema is not provided");
+            } else {
+                return plan_err!(
+                    "Delta CREATE TABLE requires at least one column when no existing Delta metadata is present"
+                );
+            }
         }
+
+        let replace_snapshot = if let Some(table) = existing_table.as_ref() {
+            Some(
+                table
+                    .snapshot()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .clone(),
+            )
+        } else {
+            None
+        };
 
         let properties = if catalog_managed_table_id.is_some() {
             delta_catalog_managed_create_table_properties(properties)
@@ -319,26 +341,56 @@ impl TableFormat for DeltaTableFormat {
             metadata = metadata_with_catalog_managed(metadata, table_id);
         }
 
-        let table = create_delta_table_with_object_store(
-            table_url.clone(),
-            object_store,
-            Default::default(),
-        )
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let log_store = if let Some(table) = existing_table.as_ref() {
+            table.log_store()
+        } else {
+            create_delta_table_with_object_store(
+                table_url.clone(),
+                object_store,
+                Default::default(),
+            )
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .log_store()
+        };
         let operation = DeltaOperation::Create {
-            mode: SaveMode::ErrorIfExists,
+            mode: if replace {
+                SaveMode::Overwrite
+            } else {
+                SaveMode::ErrorIfExists
+            },
             location: table_url.to_string(),
             protocol: Box::new(protocol.clone()),
             metadata: Box::new(metadata.clone()),
         };
 
+        let mut actions = Vec::new();
+        if let Some(snapshot) = replace_snapshot.as_ref() {
+            let desired_protocol = avoid_stable_type_widening_auto_upgrade_for_preview_tables(
+                snapshot.protocol(),
+                &protocol,
+                metadata.configuration(),
+            );
+            let (merged_protocol, protocol_upgraded) =
+                merge_protocol_for_upgrade(snapshot.protocol(), &desired_protocol);
+            if protocol_upgraded {
+                actions.push(CommitAction::Protocol(merged_protocol));
+            }
+        } else {
+            actions.push(CommitAction::Protocol(protocol));
+        }
+        actions.push(CommitAction::Metadata(metadata));
+        if let Some(snapshot) = replace_snapshot.as_ref() {
+            actions.extend(
+                adds_to_remove_actions(snapshot.adds().to_vec())
+                    .into_iter()
+                    .map(CommitAction::Remove),
+            );
+        }
+
         CommitBuilder::default()
-            .with_actions(vec![
-                CommitAction::Protocol(protocol),
-                CommitAction::Metadata(metadata),
-            ])
-            .build(None, table.log_store(), operation)
+            .with_actions(actions)
+            .build(replace_snapshot, log_store, operation)
             .await
             .map(|_| TableFormatCreateTableResult::default())
             .map_err(|e| DataFusionError::External(Box::new(e)))

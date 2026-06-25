@@ -46,7 +46,7 @@ impl StoreContext {
         &'a self,
         raw: &str,
     ) -> Result<(&'a Arc<dyn object_store::ObjectStore>, ObjectPath), DataFusionError> {
-        if let Ok(url) = Url::parse(raw) {
+        if let Some(url) = crate::utils::parse_absolute_url(raw) {
             return Ok((&self.base, crate::utils::url_to_object_path(&url)?));
         }
         if raw.starts_with(object_store::path::DELIMITER) {
@@ -60,7 +60,7 @@ impl StoreContext {
     }
 
     pub fn resolve_to_absolute_path(&self, raw_path: &str) -> Result<ObjectPath, DataFusionError> {
-        if let Ok(url) = Url::parse(raw_path) {
+        if let Some(url) = crate::utils::parse_absolute_url(raw_path) {
             return crate::utils::url_to_object_path(&url);
         }
 

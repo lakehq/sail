@@ -60,8 +60,7 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "cov",
-    "status": "supported",
-    "issue": ""
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.DataFrame",

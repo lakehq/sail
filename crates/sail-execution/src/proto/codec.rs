@@ -10,7 +10,6 @@ use datafusion::common::{
     plan_datafusion_err, plan_err, Constraint, Constraints, JoinSide, Result, ScalarValue,
     Statistics,
 };
-use datafusion::config::ConfigOptions;
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::{
@@ -24,13 +23,13 @@ use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
 use datafusion::logical_expr::{
-    AggregateUDF, AggregateUDFImpl, HigherOrderUDF, ScalarUDF, ScalarUDFImpl, WindowUDF,
+    AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF,
 };
 use datafusion::physical_expr::equivalence::{EquivalenceClass, EquivalenceGroup};
 use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable};
 use datafusion::physical_expr::{
-    AcrossPartitions, ConstExpr, EquivalenceProperties, HigherOrderFunctionExpr, LexOrdering,
-    LexRequirement, Partitioning, PhysicalExpr, PhysicalSortExpr,
+    AcrossPartitions, ConstExpr, EquivalenceProperties, LexOrdering, LexRequirement, Partitioning,
+    PhysicalExpr, PhysicalSortExpr,
 };
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::joins::utils::{ColumnIndex, JoinFilter};
@@ -41,20 +40,14 @@ use datafusion::physical_plan::work_table::WorkTableExec;
 use datafusion::physical_plan::{ExecutionPlan, PlanProperties};
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
 use datafusion_proto::physical_plan::from_proto::{
-    parse_physical_expr, parse_physical_sort_exprs, parse_protobuf_file_scan_config,
-    parse_protobuf_file_scan_schema, parse_protobuf_partitioning,
+    parse_physical_sort_exprs, parse_protobuf_file_scan_config, parse_protobuf_file_scan_schema,
+    parse_protobuf_partitioning,
 };
 use datafusion_proto::physical_plan::to_proto::{
-    serialize_file_scan_config, serialize_partitioning, serialize_physical_expr,
-    serialize_physical_sort_exprs,
+    serialize_file_scan_config, serialize_partitioning, serialize_physical_sort_exprs,
 };
-use datafusion_proto::physical_plan::{
-    AsExecutionPlan, DefaultPhysicalProtoConverter, PhysicalExtensionCodec,
-    PhysicalPlanDecodeContext,
-};
-use datafusion_proto::protobuf::{
-    JoinType as ProtoJoinType, PhysicalPlanNode, PhysicalSortExprNode,
-};
+use datafusion_proto::physical_plan::{PhysicalExtensionCodec, PhysicalPlanDecodeContext};
+use datafusion_proto::protobuf::{JoinType as ProtoJoinType, PhysicalSortExprNode};
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use datafusion_spark::function::array::shuffle::SparkShuffle;
 use datafusion_spark::function::bitmap::bitmap_count::BitmapCount;
@@ -65,6 +58,7 @@ use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use datafusion_spark::function::hash::crc32::SparkCrc32;
 use datafusion_spark::function::hash::sha1::SparkSha1;
+use datafusion_spark::function::hash::xxhash64::SparkXxhash64;
 use datafusion_spark::function::map::map_from_arrays::MapFromArrays;
 use datafusion_spark::function::map::map_from_entries::MapFromEntries;
 use datafusion_spark::function::math::expm1::SparkExpm1;
@@ -130,7 +124,6 @@ use sail_function::scalar::array::array_position::SparkArrayPosition;
 use sail_function::scalar::array::arrays_zip::ArraysZip;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::array::spark_array_compact::SparkArrayCompact;
-use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
 use sail_function::scalar::array::spark_array_item_with_position::ArrayItemWithPosition;
 use sail_function::scalar::array::spark_array_min_max::{ArrayMax, ArrayMin};
 use sail_function::scalar::array::spark_sequence::SparkSequence;
@@ -168,7 +161,6 @@ use sail_function::scalar::geo::st_asbinary::StAsBinary;
 use sail_function::scalar::geo::st_geogfromwkb::StGeogFromWKB;
 use sail_function::scalar::geo::st_geomfromwkb::StGeomFromWKB;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
-use sail_function::scalar::hash::spark_xxhash64::SparkXxhash64;
 use sail_function::scalar::json::{SparkFromJson, SparkSchemaOfJson, SparkToJson};
 use sail_function::scalar::map::map_entries::SparkMapEntries;
 use sail_function::scalar::map::str_to_map::StrToMap;
@@ -249,7 +241,6 @@ use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
-use sail_physical_plan::higher_order::DistributedHigherOrderExpr;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
@@ -279,13 +270,21 @@ use crate::plan::gen::extended_physical_plan_node::NodeKind;
 use crate::plan::gen::extended_scalar_udf::UdfKind;
 use crate::plan::gen::extended_stream_udf::StreamUdfKind;
 use crate::plan::gen::extended_window_udf::UdwfKind;
-use crate::plan::gen::higher_order_udf::UdfKind as HigherOrderUdfKind;
 use crate::plan::gen::{
     CastColumnExprNode, ExtendedAggregateUdf, ExtendedPhysicalExprNode, ExtendedPhysicalPlanNode,
-    ExtendedScalarUdf, ExtendedStreamUdf, ExtendedWindowUdf, HigherOrderFunctionExprNode,
-    LambdaExprNode, LambdaVariableExprNode,
+    ExtendedScalarUdf, ExtendedStreamUdf, ExtendedWindowUdf, LambdaExprNode,
+    LambdaVariableExprNode,
 };
 use crate::plan::{gen, StageInputExec};
+use crate::proto::converter::RemotePhysicalProtoConverter;
+use crate::proto::decode::{
+    try_decode_field_ref, try_decode_message, try_decode_physical_expr, try_decode_physical_plan,
+    try_decode_schema,
+};
+use crate::proto::encode::{
+    physical_expr_to_proto, try_encode_field_ref, try_encode_message, try_encode_physical_expr,
+    try_encode_physical_plan, try_encode_schema,
+};
 
 pub struct RemoteExecutionCodec;
 
@@ -318,7 +317,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 schema,
                 projection,
             }) => {
-                let schema = self.try_decode_schema(&schema)?;
+                let schema = try_decode_schema(&schema)?;
                 let projection = self.try_decode_projection(&projection)?;
                 Ok(Arc::new(RangeExec::try_new(
                     Range { start, end, step },
@@ -335,9 +334,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 truncate,
                 schema,
             }) => {
-                let schema = self.try_decode_schema(&schema)?;
+                let schema = try_decode_schema(&schema)?;
                 Ok(Arc::new(ShowStringExec::new(
-                    self.try_decode_plan(&input, ctx)?,
+                    try_decode_physical_plan(ctx, self, &input)?,
                     names,
                     limit as usize,
                     ShowStringFormat::new(
@@ -388,9 +387,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     projection.map(|x| x.columns.into_iter().map(|c| c as usize).collect());
                 let filters = filters
                     .iter()
-                    .map(|expr| {
-                        parse_physical_expr(&self.try_decode_message(expr)?, ctx, &schema, self)
-                    })
+                    .map(|expr| try_decode_physical_expr(ctx, self, expr, &schema))
                     .collect::<Result<Vec<_>>>()?;
                 let fetch = fetch.map(|x| x as usize);
                 let node = SystemTableExec::try_new(table, projection, filters, fetch)?;
@@ -401,9 +398,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 names,
                 schema,
             }) => {
-                let schema = self.try_decode_schema(&schema)?;
+                let schema = try_decode_schema(&schema)?;
                 Ok(Arc::new(SchemaPivotExec::new(
-                    self.try_decode_plan(&input, ctx)?,
+                    try_decode_physical_plan(ctx, self, &input)?,
                     names,
                     Arc::new(schema),
                 )))
@@ -412,10 +409,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let Some(udf) = udf else {
                     return plan_err!("no UDF found for MapPartitionsExec");
                 };
-                let schema = self.try_decode_schema(&schema)?;
+                let schema = try_decode_schema(&schema)?;
                 Ok(Arc::new(MapPartitionsExec::new(
-                    self.try_decode_plan(&input, ctx)?,
-                    self.try_decode_stream_udf(udf)?,
+                    try_decode_physical_plan(ctx, self, &input)?,
+                    self.try_decode_stream_udf(&udf)?,
                     Arc::new(schema),
                 )))
             }
@@ -427,7 +424,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sort_information,
                 limit,
             }) => {
-                let schema = self.try_decode_schema(&schema)?;
+                let schema = try_decode_schema(&schema)?;
                 let partitions = partitions
                     .into_iter()
                     .map(|x| read_record_batches(&x))
@@ -444,7 +441,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
             NodeKind::Values(gen::ValuesExecNode { data, schema }) => {
-                let schema = self.try_decode_schema(&schema)?;
+                let schema = try_decode_schema(&schema)?;
                 let data = read_record_batches(&data)?;
                 let source = MemorySourceConfig::try_new_from_batches(Arc::new(schema), data)?;
                 Ok(source)
@@ -455,12 +452,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }) => {
                 let file_compression_type: FileCompressionType =
                     self.try_decode_file_compression_type(file_compression_type)?;
-                let proto = self.try_decode_message(&base_config)?;
+                let proto = try_decode_message(&base_config)?;
                 let table_schema = parse_protobuf_file_scan_schema(&proto)?;
                 let source = parse_protobuf_file_scan_config(
                     &proto,
                     &PhysicalPlanDecodeContext::new(ctx, self),
-                    &DefaultPhysicalProtoConverter {},
+                    &RemotePhysicalProtoConverter {},
                     Arc::new(JsonSource::new(table_schema)),
                 )?;
                 let source = FileScanConfigBuilder::from(source)
@@ -469,12 +466,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
             NodeKind::Arrow(gen::ArrowExecNode { base_config }) => {
-                let proto = self.try_decode_message(&base_config)?;
+                let proto = try_decode_message(&base_config)?;
                 let table_schema = parse_protobuf_file_scan_schema(&proto)?;
                 let source = parse_protobuf_file_scan_config(
                     &proto,
                     &PhysicalPlanDecodeContext::new(ctx, self),
-                    &DefaultPhysicalProtoConverter {},
+                    &RemotePhysicalProtoConverter {},
                     Arc::new(ArrowSource::new_file_source(table_schema)),
                 )?;
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
@@ -497,12 +494,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         );
                     }
                 };
-                let proto = self.try_decode_message(&base_config)?;
+                let proto = try_decode_message(&base_config)?;
                 let table_schema = parse_protobuf_file_scan_schema(&proto)?;
                 let source = parse_protobuf_file_scan_config(
                     &proto,
                     &PhysicalPlanDecodeContext::new(ctx, self),
-                    &DefaultPhysicalProtoConverter {},
+                    &RemotePhysicalProtoConverter {},
                     Arc::new(TextSource::new(table_schema, whole_text, line_sep)),
                 )?;
                 let source = FileScanConfigBuilder::from(source)
@@ -514,30 +511,30 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 base_config,
                 path_glob_filter,
             }) => {
-                let proto = self.try_decode_message(&base_config)?;
+                let proto = try_decode_message(&base_config)?;
                 let table_schema = parse_protobuf_file_scan_schema(&proto)?;
                 let source = parse_protobuf_file_scan_config(
                     &proto,
                     &PhysicalPlanDecodeContext::new(ctx, self),
-                    &DefaultPhysicalProtoConverter {},
+                    &RemotePhysicalProtoConverter {},
                     Arc::new(BinarySource::new(table_schema, path_glob_filter)),
                 )?;
                 let source = FileScanConfigBuilder::from(source).build();
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
             NodeKind::Avro(gen::AvroExecNode { base_config }) => {
-                let proto = self.try_decode_message(&base_config)?;
+                let proto = try_decode_message(&base_config)?;
                 let table_schema = parse_protobuf_file_scan_schema(&proto)?;
                 let source = parse_protobuf_file_scan_config(
                     &proto,
                     &PhysicalPlanDecodeContext::new(ctx, self),
-                    &DefaultPhysicalProtoConverter {},
+                    &RemotePhysicalProtoConverter {},
                     Arc::new(AvroSource::new(table_schema)),
                 )?;
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
             NodeKind::WorkTable(gen::WorkTableExecNode { name, schema }) => {
-                let schema = self.try_decode_schema(&schema)?;
+                let schema = try_decode_schema(&schema)?;
                 Ok(Arc::new(WorkTableExec::new(name, Arc::new(schema), None)?))
             }
             NodeKind::RecursiveQuery(gen::RecursiveQueryExecNode {
@@ -546,8 +543,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 recursive_term,
                 is_distinct,
             }) => {
-                let static_term = self.try_decode_plan(&static_term, ctx)?;
-                let recursive_term = self.try_decode_plan(&recursive_term, ctx)?;
+                let static_term = try_decode_physical_plan(ctx, self, &static_term)?;
+                let recursive_term = try_decode_physical_plan(ctx, self, &recursive_term)?;
                 Ok(Arc::new(RecursiveQueryExec::try_new(
                     name,
                     static_term,
@@ -564,34 +561,22 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 sort_options,
                 null_equals_null,
             }) => {
-                let left = self.try_decode_plan(&left, ctx)?;
-                let right = self.try_decode_plan(&right, ctx)?;
+                let left = try_decode_physical_plan(ctx, self, &left)?;
+                let right = try_decode_physical_plan(ctx, self, &right)?;
                 let on = on
                     .into_iter()
                     .map(|join_on| {
-                        let left = parse_physical_expr(
-                            &self.try_decode_message(&join_on.left)?,
-                            ctx,
-                            &left.schema(),
-                            self,
-                        )?;
-                        let right = parse_physical_expr(
-                            &self.try_decode_message(&join_on.right)?,
-                            ctx,
-                            &right.schema(),
-                            self,
-                        )?;
+                        let left =
+                            try_decode_physical_expr(ctx, self, &join_on.left, &left.schema())?;
+                        let right =
+                            try_decode_physical_expr(ctx, self, &join_on.right, &right.schema())?;
                         Ok((left, right))
                     })
                     .collect::<Result<_>>()?;
                 let filter = if let Some(join_filter) = filter {
-                    let schema = self.try_decode_schema(&join_filter.schema)?;
-                    let expression = parse_physical_expr(
-                        &self.try_decode_message(&join_filter.expression)?,
-                        ctx,
-                        &schema,
-                        self,
-                    )?;
+                    let schema = try_decode_schema(&join_filter.schema)?;
+                    let expression =
+                        try_decode_physical_expr(ctx, self, &join_filter.expression, &schema)?;
                     let column_indices = join_filter
                         .column_indices
                         .into_iter()
@@ -653,21 +638,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     write_context,
                     lakehouse_table_json,
                 } = *delta_writer;
-                let input = self.try_decode_plan(&input, ctx)?;
-                let sink_schema = self.try_decode_schema(&sink_schema)?;
+                let input = try_decode_physical_plan(ctx, self, &input)?;
+                let sink_schema = try_decode_schema(&sink_schema)?;
                 let sink_mode = match sink_mode {
                     Some(mode) => mode,
                     None => return plan_err!("Missing sink_mode"),
                 };
-                let sink_mode =
-                    self.try_decode_physical_sink_mode(sink_mode, &input.schema(), ctx)?;
+                let sink_mode = self.try_decode_physical_sink_mode(&sink_mode)?;
 
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
                 let options =
                     serde_json::from_str(&options).map_err(|e| plan_datafusion_err!("{e}"))?;
                 let write_context = match write_context {
-                    Some(write_context) => self.try_decode_delta_write_context(write_context)?,
+                    Some(write_context) => self.try_decode_delta_write_context(&write_context)?,
                     None => return plan_err!("Missing write_context for DeltaWriterExec"),
                 };
                 let lakehouse_table = self.try_decode_lakehouse_table(&lakehouse_table_json)?;
@@ -696,18 +680,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 commit_context,
                 lakehouse_table_json,
             }) => {
-                let input = self.try_decode_plan(&input, ctx)?;
-                let sink_schema = self.try_decode_schema(&sink_schema)?;
+                let input = try_decode_physical_plan(ctx, self, &input)?;
+                let sink_schema = try_decode_schema(&sink_schema)?;
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
 
                 let sink_mode = if let Some(sink_mode) = sink_mode {
-                    self.try_decode_physical_sink_mode(sink_mode, &sink_schema, ctx)?
+                    self.try_decode_physical_sink_mode(&sink_mode)?
                 } else {
                     return plan_err!("Missing sink_mode for DeltaCommitExec");
                 };
                 let commit_context = match commit_context {
-                    Some(commit_context) => self.try_decode_delta_commit_context(commit_context)?,
+                    Some(commit_context) => {
+                        self.try_decode_delta_commit_context(&commit_context)?
+                    }
                     None => return plan_err!("Missing commit_context for DeltaCommitExec"),
                 };
 
@@ -737,12 +723,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 statistics,
                 lakehouse_table_json,
             }) => {
-                let input = self.try_decode_plan(&input, ctx)?;
+                let input = try_decode_physical_plan(ctx, self, &input)?;
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
-                let table_schema = Arc::new(self.try_decode_schema(&table_schema)?);
+                let table_schema = Arc::new(try_decode_schema(&table_schema)?);
                 let output_schema = if let Some(schema_bytes) = output_schema {
-                    Arc::new(self.try_decode_schema(&schema_bytes)?)
+                    Arc::new(try_decode_schema(&schema_bytes)?)
                 } else {
                     Arc::clone(&table_schema)
                 };
@@ -765,12 +751,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .transpose()
                     .map_err(|_| plan_datafusion_err!("invalid limit for DeltaScanByAddsExec"))?;
                 let pushdown_filter = if let Some(pred_bytes) = pushdown_filter {
-                    let predicate = parse_physical_expr(
-                        &self.try_decode_message(&pred_bytes)?,
-                        ctx,
-                        &output_schema,
-                        self,
-                    )?;
+                    let predicate =
+                        try_decode_physical_expr(ctx, self, &pred_bytes, &output_schema)?;
                     Some(predicate)
                 } else {
                     None
@@ -808,25 +790,20 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
                 let table_schema = if let Some(schema_bytes) = table_schema {
-                    Some(Arc::new(self.try_decode_schema(&schema_bytes)?))
+                    Some(Arc::new(try_decode_schema(&schema_bytes)?))
                 } else {
                     None
                 };
                 let predicate = if let Some(pred_bytes) = predicate {
                     let empty_schema = Arc::new(Schema::empty());
                     let schema = table_schema.as_ref().unwrap_or(&empty_schema);
-                    Some(parse_physical_expr(
-                        &self.try_decode_message(&pred_bytes)?,
-                        ctx,
-                        schema,
-                        self,
-                    )?)
+                    Some(try_decode_physical_expr(ctx, self, &pred_bytes, schema)?)
                 } else {
                     None
                 };
                 let input = input
                     .ok_or_else(|| plan_datafusion_err!("Missing input for DeltaDiscoveryExec"))?;
-                let input = self.try_decode_plan(&input, ctx)?;
+                let input = try_decode_physical_plan(ctx, self, &input)?;
                 Ok(Arc::new(DeltaDiscoveryExec::with_input(
                     input,
                     table_url,
@@ -841,15 +818,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 stats_schema,
             }) => {
-                let input = self.try_decode_plan(&input, ctx)?;
-                let stats_schema = Arc::new(self.try_decode_schema(&stats_schema)?);
+                let input = try_decode_physical_plan(ctx, self, &input)?;
+                let stats_schema = Arc::new(try_decode_schema(&stats_schema)?);
                 Ok(Arc::new(DeltaMetadataStatsExec::new(input, stats_schema)))
             }
             NodeKind::DeltaRemoveActions(gen::DeltaRemoveActionsExecNode {
                 input,
                 partition_value_columns_json,
             }) => {
-                let input = self.try_decode_plan(&input, ctx)?;
+                let input = try_decode_physical_plan(ctx, self, &input)?;
                 let partition_value_columns = partition_value_columns_json
                     .as_deref()
                     .map(serde_json::from_str::<Vec<(String, String)>>)
@@ -874,8 +851,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
                 match (checkpoint_input.as_ref(), commits_input.as_ref()) {
                     (Some(checkpoint_input), Some(commits_input)) => {
-                        let checkpoint_input = self.try_decode_plan(checkpoint_input, ctx)?;
-                        let commits_input = self.try_decode_plan(commits_input, ctx)?;
+                        let checkpoint_input = try_decode_physical_plan(ctx, self, checkpoint_input)?;
+                        let commits_input = try_decode_physical_plan(ctx, self, commits_input)?;
                         Ok(Arc::new(DeltaLogReplayExec::new_hash(
                             checkpoint_input,
                             commits_input,
@@ -887,7 +864,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         )))
                     }
                     (None, None) => {
-                        let input = self.try_decode_plan(&input, ctx)?;
+                        let input = try_decode_physical_plan(ctx, self, &input)?;
                         Ok(Arc::new(DeltaLogReplayExec::new(
                             input,
                             table_url,
@@ -903,7 +880,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 }
             }
             NodeKind::ConsoleSink(gen::ConsoleSinkExecNode { input }) => {
-                let input = self.try_decode_plan(&input, ctx)?;
+                let input = try_decode_physical_plan(ctx, self, &input)?;
                 Ok(Arc::new(ConsoleSinkExec::new(input)))
             }
             NodeKind::SocketSource(gen::SocketSourceExecNode {
@@ -923,7 +900,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     })?,
                     timeout_sec,
                 };
-                let schema = self.try_decode_schema(&schema)?;
+                let schema = try_decode_schema(&schema)?;
                 let projection = self.try_decode_projection(&projection)?;
                 Ok(Arc::new(SocketSourceExec::try_new(
                     options,
@@ -946,7 +923,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     })?,
                 };
                 let projection = self.try_decode_projection(&projection)?;
-                let schema = self.try_decode_schema(&schema)?;
+                let schema = try_decode_schema(&schema)?;
                 Ok(Arc::new(RateSourceExec::try_new(
                     options,
                     Arc::new(schema),
@@ -961,8 +938,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 compression_type_variant,
                 sort_order,
             }) => {
-                let input = self.try_decode_plan(&input, ctx)?;
-                let schema = self.try_decode_schema(&schema)?;
+                let input = try_decode_physical_plan(ctx, self, &input)?;
+                let schema = try_decode_schema(&schema)?;
                 let compression_type_variant =
                     self.try_decode_compression_type_variant(compression_type_variant)?;
                 let line_sep = if line_sep.len() == 1 {
@@ -973,7 +950,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     );
                 };
                 let file_sink_config: datafusion_proto::protobuf::FileSinkConfig =
-                    self.try_decode_message(&base_config)?;
+                    try_decode_message(&base_config)?;
                 let file_sink_config = FileSinkConfig::try_from(&file_sink_config)?;
                 let writer_options = TextWriterOptions::new(line_sep, compression_type_variant);
                 let data_sink = TextSink::new(file_sink_config, writer_options);
@@ -981,7 +958,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     let physical_sort_expr_nodes: Vec<PhysicalSortExprNode> = sort_order
                         .physical_sort_expr_nodes
                         .iter()
-                        .map(|x| self.try_decode_message(x))
+                        .map(|x| try_decode_message(x))
                         .collect::<Result<Vec<_>>>()?;
                     Some(physical_sort_expr_nodes)
                 } else {
@@ -994,7 +971,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                             physical_sort_expr_nodes,
                             &PhysicalPlanDecodeContext::new(ctx, self),
                             &schema,
-                            &DefaultPhysicalProtoConverter {},
+                            &RemotePhysicalProtoConverter {},
                         )
                         .map(|sort_exprs| {
                             LexRequirement::new(sort_exprs.into_iter().map(Into::into))
@@ -1019,11 +996,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(FileDeleteExec::new(object_store_url, path)))
             }
             NodeKind::StreamCollector(gen::StreamCollectorExecNode { input }) => {
-                let input = self.try_decode_plan(&input, ctx)?;
+                let input = try_decode_physical_plan(ctx, self, &input)?;
                 Ok(Arc::new(StreamCollectorExec::try_new(input)?))
             }
             NodeKind::StreamLimit(gen::StreamLimitExecNode { input, skip, fetch }) => {
-                let input = self.try_decode_plan(&input, ctx)?;
+                let input = try_decode_physical_plan(ctx, self, &input)?;
                 let skip = usize::try_from(skip)
                     .map_err(|_| plan_datafusion_err!("invalid skip value for StreamLimitExec"))?;
                 let fetch = fetch
@@ -1033,17 +1010,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(StreamLimitExec::try_new(input, skip, fetch)?))
             }
             NodeKind::StreamFilter(gen::StreamFilterExecNode { input, predicate }) => {
-                let input = self.try_decode_plan(&input, ctx)?;
-                let predicate = parse_physical_expr(
-                    &self.try_decode_message(&predicate)?,
-                    ctx,
-                    &input.schema(),
-                    self,
-                )?;
+                let input = try_decode_physical_plan(ctx, self, &input)?;
+                let predicate = try_decode_physical_expr(ctx, self, &predicate, &input.schema())?;
                 Ok(Arc::new(StreamFilterExec::try_new(input, predicate)?))
             }
             NodeKind::StreamSourceAdapter(gen::StreamSourceAdapterExecNode { input }) => {
-                let input = self.try_decode_plan(&input, ctx)?;
+                let input = try_decode_physical_plan(ctx, self, &input)?;
                 Ok(Arc::new(StreamSourceAdapterExec::new(input)))
             }
             NodeKind::MergeCardinalityCheck(gen::MergeCardinalityCheckExecNode {
@@ -1052,7 +1024,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 target_present_col,
                 source_present_col,
             }) => Ok(Arc::new(MergeCardinalityCheckExec::new(
-                self.try_decode_plan(&input, ctx)?,
+                try_decode_physical_plan(ctx, self, &input)?,
                 target_row_id_col,
                 target_present_col,
                 source_present_col,
@@ -1062,9 +1034,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 column_name,
                 schema,
             }) => {
-                let schema = self.try_decode_schema(&schema)?;
+                let schema = try_decode_schema(&schema)?;
                 Ok(Arc::new(MonotonicIdExec::try_new(
-                    self.try_decode_plan(&input, ctx)?,
+                    try_decode_physical_plan(ctx, self, &input)?,
                     column_name,
                     Arc::new(schema),
                 )?))
@@ -1074,9 +1046,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 column_name,
                 schema,
             }) => {
-                let schema = self.try_decode_schema(&schema)?;
+                let schema = try_decode_schema(&schema)?;
                 Ok(Arc::new(SparkPartitionIdExec::try_new(
-                    self.try_decode_plan(&input, ctx)?,
+                    try_decode_physical_plan(ctx, self, &input)?,
                     column_name,
                     Arc::new(schema),
                 )?))
@@ -1085,12 +1057,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 output_partitions,
             }) => Ok(Arc::new(CoalesceExec::new(
-                self.try_decode_plan(&input, ctx)?,
+                try_decode_physical_plan(ctx, self, &input)?,
                 usize::try_from(output_partitions).map_err(|e| plan_datafusion_err!("{e}"))?,
             ))),
             NodeKind::RelaxedTzCast(gen::RelaxedTzCastExecNode { input, schema }) => {
-                let input = self.try_decode_plan(&input, ctx)?;
-                let schema = Arc::new(self.try_decode_schema(&schema)?);
+                let input = try_decode_physical_plan(ctx, self, &input)?;
+                let schema = Arc::new(try_decode_schema(&schema)?);
                 Ok(Arc::new(RelaxedTzCastExec::new(input, schema)))
             }
             NodeKind::DeletionVectorWriter(gen::DeletionVectorWriterExecNode {
@@ -1102,16 +1074,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 operation_json,
                 partition_value_columns_json,
             }) => {
-                let input = self.try_decode_plan(&input, ctx)?;
+                let input = try_decode_physical_plan(ctx, self, &input)?;
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
-                let table_schema = Arc::new(self.try_decode_schema(&table_schema)?);
-                let condition = parse_physical_expr(
-                    &self.try_decode_message(&condition)?,
-                    ctx,
-                    &table_schema,
-                    self,
-                )?;
+                let table_schema = Arc::new(try_decode_schema(&table_schema)?);
+                let condition = try_decode_physical_expr(ctx, self, &condition, &table_schema)?;
                 let operation = if let Some(s) = operation_json.as_ref() {
                     Some(
                         serde_json::from_str::<DeltaOperation>(s)
@@ -1145,8 +1112,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 operation_json,
                 partition_value_columns_json,
             }) => {
-                let input = self.try_decode_plan(&input, ctx)?;
-                let adds_input = self.try_decode_plan(&adds_input, ctx)?;
+                let input = try_decode_physical_plan(ctx, self, &input)?;
+                let adds_input = try_decode_physical_plan(ctx, self, &adds_input)?;
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
                 let operation = if let Some(s) = operation_json.as_ref() {
@@ -1183,18 +1150,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 logical_input_schema,
                 lakehouse_table_json,
             }) => {
-                let input = self.try_decode_plan(&input, ctx)?;
+                let input = try_decode_physical_plan(ctx, self, &input)?;
                 let sink_mode = match sink_mode {
                     Some(mode) => mode,
                     None => return plan_err!("Missing sink_mode for IcebergWriterExec"),
                 };
-                let sink_mode =
-                    self.try_decode_physical_sink_mode(sink_mode, &input.schema(), ctx)?;
+                let sink_mode = self.try_decode_physical_sink_mode(&sink_mode)?;
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
                 let partition_columns = partition_columns
                     .into_iter()
-                    .map(|field| self.try_decode_catalog_partition_field(field))
+                    .map(|field| self.try_decode_catalog_partition_field(&field))
                     .collect::<Result<Vec<_>>>()?;
                 let mut options = if options.is_empty() {
                     IcebergWriterExecOptions::default()
@@ -1211,7 +1177,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let logical_input_schema = if logical_input_schema.is_empty() {
                     None
                 } else {
-                    Some(Arc::new(self.try_decode_schema(&logical_input_schema)?))
+                    Some(Arc::new(try_decode_schema(&logical_input_schema)?))
                 };
 
                 Ok(Arc::new(IcebergWriterExec::new(
@@ -1229,7 +1195,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_url,
                 lakehouse_table_json,
             }) => {
-                let input = self.try_decode_plan(&input, ctx)?;
+                let input = try_decode_physical_plan(ctx, self, &input)?;
                 let table_url = Url::parse(&table_url)
                     .map_err(|e| plan_datafusion_err!("failed to parse table URL: {e}"))?;
                 let lakehouse_table = self.try_decode_lakehouse_table(&lakehouse_table_json)?;
@@ -1256,7 +1222,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 snapshot_id,
                 input_partition_scan,
             }) => {
-                let input = self.try_decode_plan(&input, ctx)?;
+                let input = try_decode_physical_plan(ctx, self, &input)?;
                 Ok(Arc::new(IcebergDiscoveryExec::new(
                     input,
                     table_url,
@@ -1269,8 +1235,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_url,
                 output_schema,
             }) => {
-                let input = self.try_decode_plan(&input, ctx)?;
-                let output_schema = Arc::new(self.try_decode_schema(&output_schema)?);
+                let input = try_decode_physical_plan(ctx, self, &input)?;
+                let output_schema = Arc::new(try_decode_schema(&output_schema)?);
                 Ok(Arc::new(IcebergScanByDataFilesExec::new(
                     input,
                     table_url,
@@ -1285,7 +1251,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 table_url,
                 iceberg_schema_json,
             }) => {
-                let input = self.try_decode_plan(&input, ctx)?;
+                let input = try_decode_physical_plan(ctx, self, &input)?;
                 let positional_deletes: Vec<sail_iceberg::spec::delete_index::DeleteFileRef> =
                     serde_json::from_str(&positional_deletes_json).map_err(|e| {
                         plan_datafusion_err!("failed to decode positional delete refs: {e}")
@@ -1312,7 +1278,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 schema,
                 partitions,
             }) => {
-                let schema = Arc::new(self.try_decode_schema(&schema)?);
+                let schema = Arc::new(try_decode_schema(&schema)?);
                 let partitions = partitions
                     .into_iter()
                     .map(|p| InputPartition {
@@ -1333,8 +1299,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 is_arrow,
                 input,
             }) => {
-                let schema = Arc::new(self.try_decode_schema(&schema)?);
-                let input = self.try_decode_plan(&input, ctx)?;
+                let schema = Arc::new(try_decode_schema(&schema)?);
+                let input = try_decode_physical_plan(ctx, self, &input)?;
                 if schema.as_ref() != input.schema().as_ref() {
                     return plan_err!(
                         "PythonDataSourceWriteExec schema mismatch: encoded schema does not match input schema"
@@ -1351,7 +1317,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 expected_partitions,
                 input,
             }) => {
-                let input = self.try_decode_plan(&input, ctx)?;
+                let input = try_decode_physical_plan(ctx, self, &input)?;
                 Ok(Arc::new(PythonDataSourceWriteCommitExec::new(
                     input,
                     pickled_writer,
@@ -1359,7 +1325,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 )))
             }
             NodeKind::CatalogCommand(gen::CatalogCommandExecNode { schema, command }) => {
-                let schema = Arc::new(self.try_decode_schema(&schema)?);
+                let schema = Arc::new(try_decode_schema(&schema)?);
                 let command: sail_catalog::command::CatalogCommand = serde_json::from_str(&command)
                     .map_err(|e| plan_datafusion_err!("failed to decode CatalogCommand: {e}"))?;
                 Ok(Arc::new(CatalogCommandExec::new(command, schema)))
@@ -1370,9 +1336,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }) => {
                 let preconditions = preconditions
                     .into_iter()
-                    .map(|i| self.try_decode_plan(&i, ctx))
+                    .map(|i| try_decode_physical_plan(ctx, self, &i))
                     .collect::<Result<_>>()?;
-                let plan = self.try_decode_plan(&plan, ctx)?;
+                let plan = try_decode_physical_plan(ctx, self, &plan)?;
                 Ok(Arc::new(BarrierExec::new(preconditions, plan)))
             }
             _ => plan_err!("unsupported physical plan node: {node_kind:?}"),
@@ -1381,7 +1347,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
 
     fn try_encode(&self, node: Arc<dyn ExecutionPlan>, buf: &mut Vec<u8>) -> Result<()> {
         let node_kind = if let Some(range) = node.downcast_ref::<RangeExec>() {
-            let schema = self.try_encode_schema(range.original_schema().as_ref())?;
+            let schema = try_encode_schema(range.original_schema().as_ref())?;
             let projection = self.try_encode_projection(range.projection())?;
             NodeKind::Range(gen::RangeExecNode {
                 start: range.range().start,
@@ -1392,9 +1358,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 projection,
             })
         } else if let Some(show_string) = node.downcast_ref::<ShowStringExec>() {
-            let schema = self.try_encode_schema(show_string.schema().as_ref())?;
+            let schema = try_encode_schema(show_string.schema().as_ref())?;
             NodeKind::ShowString(gen::ShowStringExecNode {
-                input: self.try_encode_plan(show_string.input().clone())?,
+                input: try_encode_physical_plan(self, show_string.input().clone())?,
                 names: show_string.names().to_vec(),
                 limit: show_string.limit() as u64,
                 style: self.try_encode_show_string_style(show_string.format().style())?,
@@ -1428,10 +1394,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let filters = system_table
                 .filters()
                 .iter()
-                .map(|expr| {
-                    let expr = serialize_physical_expr(expr, self)?;
-                    self.try_encode_message(expr)
-                })
+                .map(|expr| try_encode_physical_expr(self, expr))
                 .collect::<Result<_>>()?;
             let fetch = system_table.fetch().map(|f| f as u64);
             NodeKind::SystemTable(gen::SystemTableExecNode {
@@ -1441,28 +1404,30 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 fetch,
             })
         } else if let Some(schema_pivot) = node.downcast_ref::<SchemaPivotExec>() {
-            let schema = self.try_encode_schema(schema_pivot.schema().as_ref())?;
+            let schema = try_encode_schema(schema_pivot.schema().as_ref())?;
             NodeKind::SchemaPivot(gen::SchemaPivotExecNode {
-                input: self.try_encode_plan(schema_pivot.input().clone())?,
+                input: try_encode_physical_plan(self, schema_pivot.input().clone())?,
                 names: schema_pivot.names().to_vec(),
                 schema,
             })
         } else if let Some(map_partitions) = node.downcast_ref::<MapPartitionsExec>() {
             let udf = self.try_encode_stream_udf(map_partitions.udf().as_ref())?;
-            let schema = self.try_encode_schema(map_partitions.schema().as_ref())?;
+            let schema = try_encode_schema(map_partitions.schema().as_ref())?;
             NodeKind::MapPartitions(gen::MapPartitionsExecNode {
-                input: self.try_encode_plan(map_partitions.input().clone())?,
+                input: try_encode_physical_plan(self, map_partitions.input().clone())?,
                 udf: Some(udf),
                 schema,
             })
         } else if let Some(work_table) = node.downcast_ref::<WorkTableExec>() {
             let name = work_table.name().to_string();
-            let schema = self.try_encode_schema(work_table.schema().as_ref())?;
+            let schema = try_encode_schema(work_table.schema().as_ref())?;
             NodeKind::WorkTable(gen::WorkTableExecNode { name, schema })
         } else if let Some(recursive_query) = node.downcast_ref::<RecursiveQueryExec>() {
             let name = recursive_query.name().to_string();
-            let static_term = self.try_encode_plan(recursive_query.static_term().clone())?;
-            let recursive_term = self.try_encode_plan(recursive_query.recursive_term().clone())?;
+            let static_term =
+                try_encode_physical_plan(self, recursive_query.static_term().clone())?;
+            let recursive_term =
+                try_encode_physical_plan(self, recursive_query.recursive_term().clone())?;
             let is_distinct = recursive_query.is_distinct();
             NodeKind::RecursiveQuery(gen::RecursiveQueryExecNode {
                 name,
@@ -1471,14 +1436,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 is_distinct,
             })
         } else if let Some(sort_merge_join) = node.downcast_ref::<SortMergeJoinExec>() {
-            let left = self.try_encode_plan(sort_merge_join.left().clone())?;
-            let right = self.try_encode_plan(sort_merge_join.right().clone())?;
+            let left = try_encode_physical_plan(self, sort_merge_join.left().clone())?;
+            let right = try_encode_physical_plan(self, sort_merge_join.right().clone())?;
             let on: Vec<gen::JoinOn> = sort_merge_join
                 .on()
                 .iter()
                 .map(|(left, right)| {
-                    let left = self.try_encode_message(serialize_physical_expr(left, self)?)?;
-                    let right = self.try_encode_message(serialize_physical_expr(right, self)?)?;
+                    let left = try_encode_physical_expr(self, left)?;
+                    let right = try_encode_physical_expr(self, right)?;
                     Ok(gen::JoinOn { left, right })
                 })
                 .collect::<Result<_>>()?;
@@ -1486,10 +1451,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 .filter()
                 .as_ref()
                 .map(|join_filter| {
-                    let expression = self.try_encode_message(serialize_physical_expr(
-                        join_filter.expression(),
-                        self,
-                    )?)?;
+                    let expression = try_encode_physical_expr(self, join_filter.expression())?;
                     let column_indices = join_filter
                         .column_indices()
                         .iter()
@@ -1500,7 +1462,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                             gen::ColumnIndex { index, side }
                         })
                         .collect();
-                    let schema = self.try_encode_schema(join_filter.schema())?;
+                    let schema = try_encode_schema(join_filter.schema())?;
                     Ok(gen::JoinFilter {
                         expression,
                         column_indices,
@@ -1533,7 +1495,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             })
         } else if let Some(partial_sort) = node.downcast_ref::<PartialSortExec>() {
             let expr = Some(self.try_encode_lex_ordering(partial_sort.expr())?);
-            let input = self.try_encode_plan(partial_sort.input().clone())?;
+            let input = try_encode_physical_plan(self, partial_sort.input().clone())?;
             let common_prefix_length = partial_sort.common_prefix_length() as u64;
             NodeKind::PartialSort(gen::PartialSortExecNode {
                 expr,
@@ -1545,10 +1507,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             if let Some(file_scan) = source.downcast_ref::<FileScanConfig>() {
                 let file_source = file_scan.file_source();
                 if let Some(text_source) = file_source.downcast_ref::<TextSource>() {
-                    let base_config = self.try_encode_message(serialize_file_scan_config(
+                    let base_config = try_encode_message(serialize_file_scan_config(
                         file_scan,
                         self,
-                        &DefaultPhysicalProtoConverter {},
+                        &RemotePhysicalProtoConverter {},
                     )?)?;
                     let file_compression_type =
                         self.try_encode_file_compression_type(file_scan.file_compression_type)?;
@@ -1559,10 +1521,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         line_sep: text_source.line_sep().map(|x| vec![x]),
                     })
                 } else if let Some(binary_source) = file_source.downcast_ref::<BinarySource>() {
-                    let base_config = self.try_encode_message(serialize_file_scan_config(
+                    let base_config = try_encode_message(serialize_file_scan_config(
                         file_scan,
                         self,
-                        &DefaultPhysicalProtoConverter {},
+                        &RemotePhysicalProtoConverter {},
                     )?)?;
                     NodeKind::BinarySource(gen::BinarySourceExecNode {
                         base_config,
@@ -1570,10 +1532,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     })
                 } else if file_source.is::<JsonSource>() {
                     // TODO: Check if we still need to have JsonSource: https://github.com/apache/datafusion/pull/14224
-                    let base_config = self.try_encode_message(serialize_file_scan_config(
+                    let base_config = try_encode_message(serialize_file_scan_config(
                         file_scan,
                         self,
-                        &DefaultPhysicalProtoConverter {},
+                        &RemotePhysicalProtoConverter {},
                     )?)?;
                     let file_compression_type =
                         self.try_encode_file_compression_type(file_scan.file_compression_type)?;
@@ -1583,17 +1545,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     })
                 } else if file_source.is::<ArrowSource>() {
                     // TODO: Check if we still need to have ArrowSource: https://github.com/apache/datafusion/pull/14224
-                    let base_config = self.try_encode_message(serialize_file_scan_config(
+                    let base_config = try_encode_message(serialize_file_scan_config(
                         file_scan,
                         self,
-                        &DefaultPhysicalProtoConverter {},
+                        &RemotePhysicalProtoConverter {},
                     )?)?;
                     NodeKind::Arrow(gen::ArrowExecNode { base_config })
                 } else if file_source.is::<AvroSource>() {
-                    let base_config = self.try_encode_message(serialize_file_scan_config(
+                    let base_config = try_encode_message(serialize_file_scan_config(
                         file_scan,
                         self,
-                        &DefaultPhysicalProtoConverter {},
+                        &RemotePhysicalProtoConverter {},
                     )?)?;
                     NodeKind::Avro(gen::AvroExecNode { base_config })
                 } else {
@@ -1615,7 +1577,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map(|x| gen::PhysicalProjection {
                         columns: x.iter().map(|c| *c as u64).collect(),
                     });
-                let schema = self.try_encode_schema(schema.as_ref())?;
+                let schema = try_encode_schema(schema.as_ref())?;
                 let sort_information = self.try_encode_lex_orderings(memory.sort_information())?;
                 NodeKind::Memory(gen::MemoryExecNode {
                     partitions,
@@ -1629,14 +1591,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 return plan_err!("unsupported data source node: {data_source:?}");
             }
         } else if let Some(delta_writer_exec) = node.downcast_ref::<DeltaWriterExec>() {
-            let input = self.try_encode_plan(delta_writer_exec.input().clone())?;
+            let input = try_encode_physical_plan(self, delta_writer_exec.input().clone())?;
             let sink_mode = self.try_encode_physical_sink_mode(delta_writer_exec.sink_mode())?;
             NodeKind::DeltaWriter(Box::new(gen::DeltaWriterExecNode {
                 input,
                 table_url: delta_writer_exec.table_url().to_string(),
                 options: serde_json::to_string(delta_writer_exec.options())
                     .map_err(|e| plan_datafusion_err!("{e}"))?,
-                sink_schema: self.try_encode_schema(delta_writer_exec.sink_schema())?,
+                sink_schema: try_encode_schema(delta_writer_exec.sink_schema())?,
                 partition_columns: delta_writer_exec.partition_columns().to_vec(),
                 table_exists: delta_writer_exec.table_exists(),
                 sink_mode: Some(sink_mode),
@@ -1648,14 +1610,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .try_encode_lakehouse_table(delta_writer_exec.lakehouse_table())?,
             }))
         } else if let Some(delta_commit_exec) = node.downcast_ref::<DeltaCommitExec>() {
-            let input = self.try_encode_plan(delta_commit_exec.input().clone())?;
+            let input = try_encode_physical_plan(self, delta_commit_exec.input().clone())?;
             let sink_mode = self.try_encode_physical_sink_mode(delta_commit_exec.sink_mode())?;
             NodeKind::DeltaCommit(gen::DeltaCommitExecNode {
                 input,
                 table_url: delta_commit_exec.table_url().to_string(),
                 partition_columns: delta_commit_exec.partition_columns().to_vec(),
                 table_exists: delta_commit_exec.table_exists(),
-                sink_schema: self.try_encode_schema(delta_commit_exec.sink_schema())?,
+                sink_schema: try_encode_schema(delta_commit_exec.sink_schema())?,
                 sink_mode: Some(sink_mode),
                 user_metadata: delta_commit_exec.user_metadata().map(str::to_owned),
                 commit_context: Some(
@@ -1665,9 +1627,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .try_encode_lakehouse_table(delta_commit_exec.lakehouse_table())?,
             })
         } else if let Some(delta_scan_by_adds_exec) = node.downcast_ref::<DeltaScanByAddsExec>() {
-            let input = self.try_encode_plan(delta_scan_by_adds_exec.input().clone())?;
-            let table_schema = self.try_encode_schema(delta_scan_by_adds_exec.table_schema())?;
-            let output_schema = self.try_encode_schema(delta_scan_by_adds_exec.output_schema())?;
+            let input = try_encode_physical_plan(self, delta_scan_by_adds_exec.input().clone())?;
+            let table_schema = try_encode_schema(delta_scan_by_adds_exec.table_schema())?;
+            let output_schema = try_encode_schema(delta_scan_by_adds_exec.output_schema())?;
             let scan_config_json = serde_json::to_string(delta_scan_by_adds_exec.scan_config())
                 .map_err(|e| plan_datafusion_err!("failed to encode Delta scan config: {e}"))?;
             let projection = delta_scan_by_adds_exec
@@ -1684,8 +1646,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 .transpose()
                 .map_err(|_| plan_datafusion_err!("invalid limit for DeltaScanByAddsExec"))?;
             let pushdown_filter = if let Some(pred) = delta_scan_by_adds_exec.pushdown_filter() {
-                let predicate_node = serialize_physical_expr(pred, self)?;
-                Some(self.try_encode_message(predicate_node)?)
+                Some(try_encode_physical_expr(self, pred)?)
             } else {
                 None
             };
@@ -1706,15 +1667,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .try_encode_lakehouse_table(delta_scan_by_adds_exec.lakehouse_table())?,
             })
         } else if let Some(delta_discovery_exec) = node.downcast_ref::<DeltaDiscoveryExec>() {
-            let input = Some(self.try_encode_plan(delta_discovery_exec.input())?);
+            let input = Some(try_encode_physical_plan(
+                self,
+                delta_discovery_exec.input(),
+            )?);
             let predicate = if let Some(pred) = delta_discovery_exec.predicate() {
-                let predicate_node = serialize_physical_expr(&pred.clone(), self)?;
-                Some(self.try_encode_message(predicate_node)?)
+                Some(try_encode_physical_expr(self, &pred.clone())?)
             } else {
                 None
             };
             let table_schema = if let Some(schema) = delta_discovery_exec.table_schema() {
-                Some(self.try_encode_schema(schema)?)
+                Some(try_encode_schema(schema)?)
             } else {
                 None
             };
@@ -1731,13 +1694,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             node.downcast_ref::<DeltaMetadataStatsExec>()
         {
             NodeKind::DeltaMetadataStats(gen::DeltaMetadataStatsExecNode {
-                input: self.try_encode_plan(delta_metadata_stats_exec.input().clone())?,
-                stats_schema: self.try_encode_schema(delta_metadata_stats_exec.stats_schema())?,
+                input: try_encode_physical_plan(self, delta_metadata_stats_exec.input().clone())?,
+                stats_schema: try_encode_schema(delta_metadata_stats_exec.stats_schema())?,
             })
         } else if let Some(delta_remove_actions_exec) =
             node.downcast_ref::<DeltaRemoveActionsExec>()
         {
-            let input = self.try_encode_plan(delta_remove_actions_exec.children()[0].clone())?;
+            let input =
+                try_encode_physical_plan(self, delta_remove_actions_exec.children()[0].clone())?;
             let partition_value_columns_json = delta_remove_actions_exec
                 .partition_value_columns()
                 .map(serde_json::to_string)
@@ -1750,11 +1714,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(delta_log_replay_exec) = node.downcast_ref::<DeltaLogReplayExec>() {
             let children = delta_log_replay_exec.children();
             let (input, checkpoint_input, commits_input) = match children.as_slice() {
-                [input] => (self.try_encode_plan((*input).clone())?, None, None),
+                [input] => (try_encode_physical_plan(self, (*input).clone())?, None, None),
                 [checkpoint_input, commits_input] => (
                     Vec::new(),
-                    Some(self.try_encode_plan((*checkpoint_input).clone())?),
-                    Some(self.try_encode_plan((*commits_input).clone())?),
+                    Some(try_encode_physical_plan(self, (*checkpoint_input).clone())?),
+                    Some(try_encode_physical_plan(self, (*commits_input).clone())?),
                 ),
                 _ => {
                     return plan_err!(
@@ -1773,14 +1737,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 commits_input,
             })
         } else if let Some(console_sink) = node.downcast_ref::<ConsoleSinkExec>() {
-            let input = self.try_encode_plan(console_sink.input().clone())?;
+            let input = try_encode_physical_plan(self, console_sink.input().clone())?;
             NodeKind::ConsoleSink(gen::ConsoleSinkExecNode { input })
         } else if let Some(socket_source) = node.downcast_ref::<SocketSourceExec>() {
             let options = socket_source.options();
             let max_batch_size = u64::try_from(options.max_batch_size).map_err(|_| {
                 plan_datafusion_err!("cannot encode max batch size for socket source")
             })?;
-            let schema = self.try_encode_schema(socket_source.original_schema())?;
+            let schema = try_encode_schema(socket_source.original_schema())?;
             let projection = self.try_encode_projection(socket_source.projection())?;
             NodeKind::SocketSource(gen::SocketSourceExecNode {
                 host: options.host.clone(),
@@ -1798,7 +1762,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let num_partitions = u64::try_from(options.num_partitions).map_err(|_| {
                 plan_datafusion_err!("cannot encode number of partitions for rate source")
             })?;
-            let schema = self.try_encode_schema(rate_source.original_schema())?;
+            let schema = try_encode_schema(rate_source.original_schema())?;
             let projection = self.try_encode_projection(rate_source.projection())?;
             NodeKind::RateSource(gen::RateSourceExecNode {
                 rows_per_second,
@@ -1807,7 +1771,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 projection,
             })
         } else if let Some(data_sink) = node.downcast_ref::<DataSinkExec>() {
-            let input = self.try_encode_plan(data_sink.input().clone())?;
+            let input = try_encode_physical_plan(self, data_sink.input().clone())?;
             let sort_order = match data_sink.sort_order() {
                 Some(requirements) => {
                     let expr = requirements
@@ -1815,7 +1779,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         .map(|requirement| {
                             let expr: PhysicalSortExpr = requirement.to_owned().into();
                             let sort_expr = PhysicalSortExprNode {
-                                expr: Some(Box::new(serialize_physical_expr(&expr.expr, self)?)),
+                                expr: Some(Box::new(physical_expr_to_proto(self, &expr.expr)?)),
                                 asc: !expr.options.descending,
                                 nulls_first: expr.options.nulls_first,
                             };
@@ -1832,7 +1796,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let physical_sort_expr_nodes = sort_order
                     .physical_sort_expr_nodes
                     .into_iter()
-                    .map(|x| self.try_encode_message(x))
+                    .map(try_encode_message)
                     .collect::<Result<_>>()?;
                 Some(gen::PhysicalSortExprNodeCollection {
                     physical_sort_expr_nodes,
@@ -1841,7 +1805,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 None
             };
             if let Some(sink) = data_sink.sink().downcast_ref::<TextSink>() {
-                let base_config = self.try_encode_message(
+                let base_config = try_encode_message(
                     datafusion_proto::protobuf::FileSinkConfig::try_from(sink.config())
                         .map_err(|e| plan_datafusion_err!("failed to encode text sink: {e}"))?,
                 )?;
@@ -1849,7 +1813,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let compression_type_variant =
                     self.try_encode_compression_type_variant(writer_options.compression)?;
                 let line_sep = vec![writer_options.line_sep];
-                let schema = self.try_encode_schema(data_sink.schema().as_ref())?;
+                let schema = try_encode_schema(data_sink.schema().as_ref())?;
                 NodeKind::TextSink(gen::TextSinkExecNode {
                     input,
                     base_config,
@@ -1862,10 +1826,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 return plan_err!("unsupported data sink node: {data_sink:?}");
             }
         } else if let Some(stream_collector) = node.downcast_ref::<StreamCollectorExec>() {
-            let input = self.try_encode_plan(stream_collector.input().clone())?;
+            let input = try_encode_physical_plan(self, stream_collector.input().clone())?;
             NodeKind::StreamCollector(gen::StreamCollectorExecNode { input })
         } else if let Some(stream_limit) = node.downcast_ref::<StreamLimitExec>() {
-            let input = self.try_encode_plan(stream_limit.input().clone())?;
+            let input = try_encode_physical_plan(self, stream_limit.input().clone())?;
             let skip = u64::try_from(stream_limit.skip()).map_err(|_| {
                 plan_datafusion_err!("cannot encode skip value for StreamLimitExec")
             })?;
@@ -1878,15 +1842,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 })?;
             NodeKind::StreamLimit(gen::StreamLimitExecNode { input, skip, fetch })
         } else if let Some(stream_filter) = node.downcast_ref::<StreamFilterExec>() {
-            let input = self.try_encode_plan(stream_filter.input().clone())?;
-            let predicate =
-                self.try_encode_message(serialize_physical_expr(stream_filter.predicate(), self)?)?;
+            let input = try_encode_physical_plan(self, stream_filter.input().clone())?;
+            let predicate = try_encode_physical_expr(self, stream_filter.predicate())?;
             NodeKind::StreamFilter(gen::StreamFilterExecNode { input, predicate })
         } else if let Some(stream_source_adapter) = node.downcast_ref::<StreamSourceAdapterExec>() {
-            let input = self.try_encode_plan(stream_source_adapter.input().clone())?;
+            let input = try_encode_physical_plan(self, stream_source_adapter.input().clone())?;
             NodeKind::StreamSourceAdapter(gen::StreamSourceAdapterExecNode { input })
         } else if let Some(cardinality_check) = node.downcast_ref::<MergeCardinalityCheckExec>() {
-            let input = self.try_encode_plan(cardinality_check.input().clone())?;
+            let input = try_encode_physical_plan(self, cardinality_check.input().clone())?;
             NodeKind::MergeCardinalityCheck(gen::MergeCardinalityCheckExecNode {
                 input,
                 target_row_id_col: cardinality_check.target_row_id_col().to_string(),
@@ -1894,37 +1857,36 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 source_present_col: cardinality_check.source_present_col().to_string(),
             })
         } else if let Some(monotonic_id) = node.downcast_ref::<MonotonicIdExec>() {
-            let input = self.try_encode_plan(monotonic_id.input().clone())?;
-            let schema = self.try_encode_schema(monotonic_id.schema().as_ref())?;
+            let input = try_encode_physical_plan(self, monotonic_id.input().clone())?;
+            let schema = try_encode_schema(monotonic_id.schema().as_ref())?;
             NodeKind::MonotonicId(gen::MonotonicIdExecNode {
                 input,
                 column_name: monotonic_id.column_name().to_string(),
                 schema,
             })
         } else if let Some(spark_partition_id) = node.downcast_ref::<SparkPartitionIdExec>() {
-            let input = self.try_encode_plan(spark_partition_id.input().clone())?;
-            let schema = self.try_encode_schema(spark_partition_id.schema().as_ref())?;
+            let input = try_encode_physical_plan(self, spark_partition_id.input().clone())?;
+            let schema = try_encode_schema(spark_partition_id.schema().as_ref())?;
             NodeKind::SparkPartitionId(gen::SparkPartitionIdExecNode {
                 input,
                 column_name: spark_partition_id.column_name().to_string(),
                 schema,
             })
         } else if let Some(coalesce) = node.downcast_ref::<CoalesceExec>() {
-            let input = self.try_encode_plan(coalesce.input().clone())?;
+            let input = try_encode_physical_plan(self, coalesce.input().clone())?;
             NodeKind::Coalesce(gen::CoalesceExecNode {
                 input,
                 output_partitions: u64::try_from(coalesce.output_partitions())
                     .map_err(|e| plan_datafusion_err!("{e}"))?,
             })
         } else if let Some(relaxed_tz_cast) = node.downcast_ref::<RelaxedTzCastExec>() {
-            let input = self.try_encode_plan(relaxed_tz_cast.input().clone())?;
-            let schema = self.try_encode_schema(relaxed_tz_cast.schema().as_ref())?;
+            let input = try_encode_physical_plan(self, relaxed_tz_cast.input().clone())?;
+            let schema = try_encode_schema(relaxed_tz_cast.schema().as_ref())?;
             NodeKind::RelaxedTzCast(gen::RelaxedTzCastExecNode { input, schema })
         } else if let Some(dv_writer_exec) = node.downcast_ref::<DeletionVectorWriterExec>() {
-            let input = self.try_encode_plan(dv_writer_exec.input().clone())?;
-            let condition_node = serialize_physical_expr(dv_writer_exec.condition(), self)?;
-            let condition = self.try_encode_message(condition_node)?;
-            let table_schema = self.try_encode_schema(dv_writer_exec.table_schema())?;
+            let input = try_encode_physical_plan(self, dv_writer_exec.input().clone())?;
+            let condition = try_encode_physical_expr(self, dv_writer_exec.condition())?;
+            let table_schema = try_encode_schema(dv_writer_exec.table_schema())?;
             let operation_json = if let Some(op) = dv_writer_exec.operation() {
                 Some(serde_json::to_string(op).map_err(|e| plan_datafusion_err!("{e}"))?)
             } else {
@@ -1946,8 +1908,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(dv_rows_writer_exec) =
             node.downcast_ref::<DeletionVectorRowsWriterExec>()
         {
-            let input = self.try_encode_plan(dv_rows_writer_exec.input().clone())?;
-            let adds_input = self.try_encode_plan(dv_rows_writer_exec.adds_input().clone())?;
+            let input = try_encode_physical_plan(self, dv_rows_writer_exec.input().clone())?;
+            let adds_input =
+                try_encode_physical_plan(self, dv_rows_writer_exec.adds_input().clone())?;
             let operation_json = if let Some(op) = dv_rows_writer_exec.operation() {
                 Some(serde_json::to_string(op).map_err(|e| plan_datafusion_err!("{e}"))?)
             } else {
@@ -1968,13 +1931,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map_err(|e| plan_datafusion_err!("{e}"))?,
             })
         } else if let Some(iceberg_writer_exec) = node.downcast_ref::<IcebergWriterExec>() {
-            let input = self.try_encode_plan(iceberg_writer_exec.input().clone())?;
+            let input = try_encode_physical_plan(self, iceberg_writer_exec.input().clone())?;
             let sink_mode = self.try_encode_physical_sink_mode(iceberg_writer_exec.sink_mode())?;
             let options = serde_json::to_string(iceberg_writer_exec.options())
                 .map_err(|e| plan_datafusion_err!("failed to encode Iceberg options: {e}"))?;
             let logical_input_schema = iceberg_writer_exec
                 .logical_input_schema()
-                .map(|schema| self.try_encode_schema(schema.as_ref()))
+                .map(|schema| try_encode_schema(schema.as_ref()))
                 .transpose()?
                 .unwrap_or_default();
             NodeKind::IcebergWriter(gen::IcebergWriterExecNode {
@@ -1983,7 +1946,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 partition_columns: iceberg_writer_exec
                     .partition_columns()
                     .iter()
-                    .map(Self::try_encode_catalog_partition_field)
+                    .map(|field| self.try_encode_catalog_partition_field(field))
                     .collect::<Result<Vec<_>>>()?,
                 sink_mode: Some(sink_mode),
                 table_exists: iceberg_writer_exec.table_exists(),
@@ -1993,7 +1956,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .try_encode_lakehouse_table(iceberg_writer_exec.lakehouse_table())?,
             })
         } else if let Some(iceberg_commit_exec) = node.downcast_ref::<IcebergCommitExec>() {
-            let input = self.try_encode_plan(iceberg_commit_exec.input().clone())?;
+            let input = try_encode_physical_plan(self, iceberg_commit_exec.input().clone())?;
             NodeKind::IcebergCommit(gen::IcebergCommitExecNode {
                 input,
                 table_url: iceberg_commit_exec.table_url().to_string(),
@@ -2008,7 +1971,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 snapshot_json,
             })
         } else if let Some(discovery) = node.downcast_ref::<IcebergDiscoveryExec>() {
-            let input = self.try_encode_plan(discovery.input().clone())?;
+            let input = try_encode_physical_plan(self, discovery.input().clone())?;
             NodeKind::IcebergDiscovery(gen::IcebergDiscoveryExecNode {
                 input,
                 table_url: discovery.table_url().to_string(),
@@ -2016,15 +1979,15 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input_partition_scan: discovery.input_partition_scan(),
             })
         } else if let Some(scan_by_files) = node.downcast_ref::<IcebergScanByDataFilesExec>() {
-            let input = self.try_encode_plan(scan_by_files.input().clone())?;
-            let output_schema = self.try_encode_schema(scan_by_files.output_schema().as_ref())?;
+            let input = try_encode_physical_plan(self, scan_by_files.input().clone())?;
+            let output_schema = try_encode_schema(scan_by_files.output_schema().as_ref())?;
             NodeKind::IcebergScanByDataFiles(gen::IcebergScanByDataFilesExecNode {
                 input,
                 table_url: scan_by_files.table_url().to_string(),
                 output_schema,
             })
         } else if let Some(delete_apply) = node.downcast_ref::<IcebergDeleteApplyExec>() {
-            let input = self.try_encode_plan(delete_apply.input().clone())?;
+            let input = try_encode_physical_plan(self, delete_apply.input().clone())?;
             let positional_deletes_json = serde_json::to_string(delete_apply.positional_deletes())
                 .map_err(|e| {
                     plan_datafusion_err!("failed to encode positional delete refs: {e}")
@@ -2042,7 +2005,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 iceberg_schema_json,
             })
         } else if let Some(python_exec) = node.downcast_ref::<PythonDataSourceExec>() {
-            let schema = self.try_encode_schema(python_exec.schema().as_ref())?;
+            let schema = try_encode_schema(python_exec.schema().as_ref())?;
             let partitions = python_exec
                 .partitions()
                 .iter()
@@ -2057,8 +2020,8 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 partitions,
             })
         } else if let Some(python_write_exec) = node.downcast_ref::<PythonDataSourceWriteExec>() {
-            let schema = self.try_encode_schema(python_write_exec.input().schema().as_ref())?;
-            let input = self.try_encode_plan(python_write_exec.input().clone())?;
+            let schema = try_encode_schema(python_write_exec.input().schema().as_ref())?;
+            let input = try_encode_physical_plan(self, python_write_exec.input().clone())?;
             NodeKind::PythonDataSourceWrite(gen::PythonDataSourceWriteExecNode {
                 pickled_writer: python_write_exec.pickled_writer().to_vec(),
                 schema,
@@ -2068,14 +2031,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(python_commit_exec) =
             node.downcast_ref::<PythonDataSourceWriteCommitExec>()
         {
-            let input = self.try_encode_plan(python_commit_exec.input().clone())?;
+            let input = try_encode_physical_plan(self, python_commit_exec.input().clone())?;
             NodeKind::PythonDataSourceWriteCommit(gen::PythonDataSourceWriteCommitExecNode {
                 pickled_writer: python_commit_exec.pickled_writer().to_vec(),
                 expected_partitions: python_commit_exec.expected_partitions() as u64,
                 input,
             })
         } else if let Some(catalog_command_exec) = node.downcast_ref::<CatalogCommandExec>() {
-            let schema = self.try_encode_schema(catalog_command_exec.schema().as_ref())?;
+            let schema = try_encode_schema(catalog_command_exec.schema().as_ref())?;
             let command = serde_json::to_string(catalog_command_exec.command())
                 .map_err(|e| plan_datafusion_err!("failed to encode CatalogCommand: {e}"))?;
             NodeKind::CatalogCommand(gen::CatalogCommandExecNode { schema, command })
@@ -2088,9 +2051,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let preconditions = barrier_exec
                 .preconditions()
                 .iter()
-                .map(|child| self.try_encode_plan(child.clone()))
+                .map(|child| try_encode_physical_plan(self, child.clone()))
                 .collect::<Result<_>>()?;
-            let plan = self.try_encode_plan(barrier_exec.plan().clone())?;
+            let plan = try_encode_physical_plan(self, barrier_exec.plan().clone())?;
             NodeKind::Barrier(gen::BarrierExecNode {
                 preconditions,
                 plan,
@@ -2152,7 +2115,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .collect::<Result<Vec<_>>>()?;
                 let output_type = self.try_decode_data_type(&output_type)?;
                 let config = match config {
-                    Some(config) => self.try_decode_pyspark_udf_config(config)?,
+                    Some(config) => self.try_decode_pyspark_udf_config(&config)?,
                     None => return plan_err!("missing config for PySparkUDF"),
                 };
                 let udf = PySparkUDF::new(
@@ -2188,7 +2151,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .collect::<Result<Vec<_>>>()?;
                 let output_type = self.try_decode_data_type(&output_type)?;
                 let config = match config {
-                    Some(config) => self.try_decode_pyspark_udf_config(config)?,
+                    Some(config) => self.try_decode_pyspark_udf_config(&config)?,
                     None => return plan_err!("missing config for PySparkCoGroupMapUDF"),
                 };
                 let udf = PySparkCoGroupMapUDF::try_new(
@@ -2403,9 +2366,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkSchemaOfJson::new())))
             }
             "schema_of_csv" => Ok(Arc::new(ScalarUDF::from(SparkSchemaOfCsv::new()))),
-            "xpath" => Ok(Arc::new(ScalarUDF::from(
-                sail_function::scalar::xml::xpath::Xpath::new(),
-            ))),
+            "xpath" => Ok(Arc::new(ScalarUDF::from(Xpath::new()))),
             "spark_base64" | "base64" => Ok(Arc::new(ScalarUDF::from(SparkBase64::new()))),
             "spark_bround" | "bround" => Ok(Arc::new(ScalarUDF::from(SparkBRound::new()))),
             "spark_interval_div" => Ok(Arc::new(ScalarUDF::from(SparkIntervalDiv::new()))),
@@ -2874,7 +2835,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .collect::<Result<Vec<_>>>()?;
                 let output_type = self.try_decode_data_type(&output_type)?;
                 let config = match config {
-                    Some(config) => self.try_decode_pyspark_udf_config(config)?,
+                    Some(config) => self.try_decode_pyspark_udf_config(&config)?,
                     None => return plan_err!("missing config for PySparkGroupAggUDF"),
                 };
                 let kind = self.try_decode_pyspark_group_agg_kind(kind)?;
@@ -2911,7 +2872,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .collect::<Result<Vec<_>>>()?;
                 let output_type = self.try_decode_data_type(&output_type)?;
                 let config = match config {
-                    Some(config) => self.try_decode_pyspark_udf_config(config)?,
+                    Some(config) => self.try_decode_pyspark_udf_config(&config)?,
                     None => return plan_err!("missing config for PySparkGroupMapUDF"),
                 };
                 let udaf = PySparkGroupMapUDF::new(
@@ -3063,7 +3024,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         match expr_kind {
             ExprKind::SchemaEvolutionCast(node) => {
                 let (input, input_field, target_field) = self.try_decode_cast_column_expr(
-                    node,
+                    &node,
                     inputs,
                     "SchemaEvolutionCastColumnExpr",
                 )?;
@@ -3074,25 +3035,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     None,
                 )))
             }
-            ExprKind::HigherOrderFunction(node) => {
-                let fun = Self::try_decode_higher_order_udf(node.udf)?;
-                let input_schema = self.try_decode_schema(&node.input_schema)?;
-                // The planner's `ConfigOptions` are not serialized. This is safe
-                // because `filter` does not read config (its lambda parameters and
-                // result type are config-independent). Revisit when adding a
-                // higher-order function whose behavior depends on `ConfigOptions`
-                // (e.g. ANSI mode) — that config would need to be carried here.
-                let inner = HigherOrderFunctionExpr::try_new_with_schema(
-                    fun,
-                    inputs.to_vec(),
-                    &input_schema,
-                    Arc::new(ConfigOptions::default()),
-                )?;
-                Ok(Arc::new(DistributedHigherOrderExpr::new(
-                    Arc::new(inner),
-                    Arc::new(input_schema),
-                )))
-            }
+            // Lambdas are handled in converter.rs, but we leave it here for defensive programming.
             ExprKind::Lambda(node) => {
                 if inputs.len() != 1 {
                     return plan_err!("LambdaExpr expects exactly one input, got {}", inputs.len());
@@ -3103,12 +3046,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 )?))
             }
             ExprKind::LambdaVariable(node) => {
-                let schema = self.try_decode_schema(&node.field)?;
-                let field = schema
-                    .fields()
-                    .first()
-                    .ok_or_else(|| plan_datafusion_err!("LambdaVariable missing field"))?
-                    .clone();
+                let field = try_decode_field_ref(&node.field)?;
                 let index = usize::try_from(node.index).map_err(|_| {
                     plan_datafusion_err!(
                         "LambdaVariable index {} does not fit in usize",
@@ -3117,52 +3055,30 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 })?;
                 Ok(Arc::new(LambdaVariable::new(index, field)))
             }
+            other => plan_err!("Unsupported physical expr node: {other:?}"),
         }
     }
 
     fn try_encode_expr(&self, node: &Arc<dyn PhysicalExpr>, buf: &mut Vec<u8>) -> Result<()> {
+        // Lambdas are handled in converter.rs, but we leave it here for defensive programming.
         let expr_kind = if let Some(cast) = node.downcast_ref::<SchemaEvolutionCastColumnExpr>() {
             let node = self.try_encode_cast_column_expr(
                 cast.input_field().as_ref(),
                 cast.target_field().as_ref(),
             )?;
             ExprKind::SchemaEvolutionCast(node)
-        } else if let Some(w) = node.downcast_ref::<DistributedHigherOrderExpr>() {
-            let hof = w
-                .inner()
-                .downcast_ref::<HigherOrderFunctionExpr>()
-                .ok_or_else(|| {
-                    plan_datafusion_err!(
-                        "DistributedHigherOrderExpr inner is not a HigherOrderFunctionExpr"
-                    )
-                })?;
-            let input_schema = self.try_encode_schema(w.input_schema().as_ref())?;
-            ExprKind::HigherOrderFunction(HigherOrderFunctionExprNode {
-                input_schema,
-                udf: Some(Self::try_encode_higher_order_udf(hof)?),
-            })
         } else if let Some(lambda) = node.downcast_ref::<LambdaExpr>() {
             ExprKind::Lambda(LambdaExprNode {
                 params: lambda.params().to_vec(),
             })
         } else if let Some(var) = node.downcast_ref::<LambdaVariable>() {
-            let index = var.index() as u64;
-            let field = self.try_encode_schema(&Schema::new(vec![var.field().as_ref().clone()]))?;
+            let index = u32::try_from(var.index()).map_err(|_| {
+                plan_datafusion_err!("LambdaVariable index {} does not fit in u32", var.index())
+            })?;
+            let field = try_encode_field_ref(var.field())?;
             ExprKind::LambdaVariable(LambdaVariableExprNode { index, field })
-        } else if let Some(hof) = node.downcast_ref::<HigherOrderFunctionExpr>() {
-            // An unwrapped higher-order function reached serialization, which means
-            // it appeared in a plan node that `WrapHigherOrderFunctions` does not
-            // cover (it handles `ProjectionExec`, `FilterExec` and `SortExec`).
-            // Fail with a clear message (naming the function) instead of the
-            // generic "unsupported extension" error.
-            return plan_err!(
-                "higher-order function `{}` in an unsupported plan node cannot be \
-                 serialized for distributed execution (covered nodes: projection, \
-                 filter, sort)",
-                hof.name()
-            );
         } else {
-            return plan_err!("unsupported physical expr extension");
+            return plan_err!("unsupported physical expr extension: {node}");
         };
 
         let node = ExtendedPhysicalExprNode {
@@ -3174,48 +3090,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
 }
 
 impl RemoteExecutionCodec {
-    /// Encodes the concrete higher-order UDF of `hof` using a one-variant-per-function
-    /// `oneof` (the same pattern as `ExtendedScalarUdf`). Add a branch here for each
-    /// new higher-order function (`transform`, `exists`, `forall`, ...).
-    fn try_encode_higher_order_udf(hof: &HigherOrderFunctionExpr) -> Result<gen::HigherOrderUdf> {
-        let udf_inner = hof.fun().inner().as_ref() as &dyn std::any::Any;
-        let udf_kind = if let Some(filter) = udf_inner.downcast_ref::<SparkArrayFilter>() {
-            HigherOrderUdfKind::Filter(gen::SparkArrayFilterUdf {
-                index_first: filter.is_index_first(),
-            })
-        } else {
-            return plan_err!("unsupported higher-order function: {}", hof.name());
-        };
-        Ok(gen::HigherOrderUdf {
-            udf_kind: Some(udf_kind),
-        })
-    }
-
-    /// Rebuilds the higher-order UDF from its `oneof` encoding. The inverse of
-    /// [`Self::try_encode_higher_order_udf`].
-    fn try_decode_higher_order_udf(
-        udf: Option<gen::HigherOrderUdf>,
-    ) -> Result<Arc<HigherOrderUDF>> {
-        let udf_kind = udf
-            .and_then(|udf| udf.udf_kind)
-            .ok_or_else(|| plan_datafusion_err!("missing higher-order function UDF"))?;
-        Ok(match udf_kind {
-            HigherOrderUdfKind::Filter(gen::SparkArrayFilterUdf { index_first }) => {
-                if index_first {
-                    Arc::new(HigherOrderUDF::new_from_impl(
-                        SparkArrayFilter::new_index_first(),
-                    ))
-                } else {
-                    Arc::new(HigherOrderUDF::new_from_impl(SparkArrayFilter::new()))
-                }
-            }
-        })
-    }
-
     #[expect(clippy::type_complexity)]
     fn try_decode_cast_column_expr(
         &self,
-        node: CastColumnExprNode,
+        node: &CastColumnExprNode,
         inputs: &[Arc<dyn PhysicalExpr>],
         expr_name: &str,
     ) -> Result<(Arc<dyn PhysicalExpr>, Arc<Field>, Arc<Field>)> {
@@ -3230,8 +3108,8 @@ impl RemoteExecutionCodec {
             );
         }
 
-        let input_schema = self.try_decode_schema(&input_schema)?;
-        let target_schema = self.try_decode_schema(&target_schema)?;
+        let input_schema = try_decode_schema(input_schema)?;
+        let target_schema = try_decode_schema(target_schema)?;
 
         let input_field = input_schema
             .fields()
@@ -3259,9 +3137,9 @@ impl RemoteExecutionCodec {
         target_field: &Field,
     ) -> Result<CastColumnExprNode> {
         let input_schema = Schema::new(vec![input_field.clone()]);
-        let input_schema = self.try_encode_schema(&input_schema)?;
+        let input_schema = try_encode_schema(&input_schema)?;
         let target_schema = Schema::new(vec![target_field.clone()]);
-        let target_schema = self.try_encode_schema(&target_schema)?;
+        let target_schema = try_encode_schema(&target_schema)?;
         Ok(CastColumnExprNode {
             input_schema,
             target_schema,
@@ -3270,9 +3148,7 @@ impl RemoteExecutionCodec {
 
     fn try_decode_physical_sink_mode(
         &self,
-        proto_mode: gen::PhysicalSinkMode,
-        _schema: &Schema,
-        _ctx: &TaskContext,
+        proto_mode: &gen::PhysicalSinkMode,
     ) -> Result<PhysicalSinkMode> {
         let gen::PhysicalSinkMode { mode } = proto_mode;
         match mode {
@@ -3285,7 +3161,7 @@ impl RemoteExecutionCodec {
             Some(gen::physical_sink_mode::Mode::OverwriteIf(gen::OverwriteIfMode { source })) => {
                 Ok(PhysicalSinkMode::OverwriteIf {
                     condition: None,
-                    source,
+                    source: source.clone(),
                 })
             }
             Some(gen::physical_sink_mode::Mode::ErrorIfExists(gen::ErrorIfExistsMode {})) => {
@@ -3330,7 +3206,7 @@ impl RemoteExecutionCodec {
 
     fn try_decode_delta_snapshot_context(
         &self,
-        context: gen::DeltaSnapshotContext,
+        context: &gen::DeltaSnapshotContext,
     ) -> Result<DeltaSnapshotContext> {
         Ok(DeltaSnapshotContext {
             version: context.version,
@@ -3362,10 +3238,11 @@ impl RemoteExecutionCodec {
 
     fn try_decode_delta_commit_context(
         &self,
-        context: gen::DeltaCommitContext,
+        context: &gen::DeltaCommitContext,
     ) -> Result<DeltaCommitContext> {
         let base_snapshot = context
             .base_snapshot
+            .as_ref()
             .map(|context| self.try_decode_delta_snapshot_context(context))
             .transpose()?;
         Ok(DeltaCommitContext { base_snapshot })
@@ -3385,10 +3262,10 @@ impl RemoteExecutionCodec {
 
     fn try_decode_delta_write_context(
         &self,
-        context: gen::DeltaWriteContext,
+        context: &gen::DeltaWriteContext,
     ) -> Result<DeltaWriteContext> {
         let commit_context = match context.commit_context {
-            Some(context) => self.try_decode_delta_commit_context(context)?,
+            Some(ref context) => self.try_decode_delta_commit_context(context)?,
             None => return plan_err!("Missing commit_context for DeltaWriteContext"),
         };
         let initial_actions = context
@@ -3421,7 +3298,7 @@ impl RemoteExecutionCodec {
             schema_actions,
             operation,
             logical_kernel_for_mapping,
-            physical_partition_columns: context.physical_partition_columns,
+            physical_partition_columns: context.physical_partition_columns.clone(),
         })
     }
 
@@ -3455,7 +3332,7 @@ impl RemoteExecutionCodec {
             final_schema_json: self.try_encode_json(&context.final_schema, "Delta final schema")?,
             effective_column_mapping_mode: Self::try_encode_delta_column_mapping_mode(
                 context.effective_column_mapping_mode,
-            ),
+            )?,
             initial_actions_json,
             schema_actions_json,
             operation_json,
@@ -3474,12 +3351,12 @@ impl RemoteExecutionCodec {
         }
     }
 
-    fn try_encode_delta_column_mapping_mode(mode: ColumnMappingMode) -> i32 {
-        (match mode {
+    fn try_encode_delta_column_mapping_mode(mode: ColumnMappingMode) -> Result<i32> {
+        Ok((match mode {
             ColumnMappingMode::None => gen::DeltaColumnMappingMode::None,
             ColumnMappingMode::Name => gen::DeltaColumnMappingMode::Name,
             ColumnMappingMode::Id => gen::DeltaColumnMappingMode::Id,
-        }) as i32
+        }) as i32)
     }
 
     fn try_decode_json<T: DeserializeOwned>(&self, value: &str, description: &str) -> Result<T> {
@@ -3512,7 +3389,7 @@ impl RemoteExecutionCodec {
 
     fn try_decode_catalog_partition_field(
         &self,
-        field: gen::CatalogPartitionFieldNode,
+        field: &gen::CatalogPartitionFieldNode,
     ) -> Result<CatalogPartitionField> {
         let transform_kind = gen::PartitionTransformKind::try_from(field.transform_kind)
             .map_err(|_| plan_datafusion_err!("invalid partition transform kind"))?;
@@ -3532,12 +3409,13 @@ impl RemoteExecutionCodec {
             }
         };
         Ok(CatalogPartitionField {
-            column: field.column,
+            column: field.column.clone(),
             transform,
         })
     }
 
     fn try_encode_catalog_partition_field(
+        &self,
         field: &CatalogPartitionField,
     ) -> Result<gen::CatalogPartitionFieldNode> {
         let (transform_kind, transform_value) = match field.transform {
@@ -3559,7 +3437,7 @@ impl RemoteExecutionCodec {
         })
     }
 
-    fn try_decode_stream_udf(&self, udf: ExtendedStreamUdf) -> Result<Arc<dyn StreamUDF>> {
+    fn try_decode_stream_udf(&self, udf: &ExtendedStreamUdf) -> Result<Arc<dyn StreamUDF>> {
         let ExtendedStreamUdf { stream_udf_kind } = udf;
         let stream_udf_kind = match stream_udf_kind {
             Some(x) => x,
@@ -3574,17 +3452,17 @@ impl RemoteExecutionCodec {
                 output_schema,
                 config,
             }) => {
-                let kind = self.try_decode_pyspark_map_iter_kind(kind)?;
-                let output_schema = self.try_decode_schema(&output_schema)?;
+                let kind = self.try_decode_pyspark_map_iter_kind(*kind)?;
+                let output_schema = try_decode_schema(output_schema)?;
                 let config = match config {
                     Some(config) => self.try_decode_pyspark_udf_config(config)?,
                     None => return plan_err!("missing config for PySparkMapIterUDF"),
                 };
                 Arc::new(PySparkMapIterUDF::new(
                     kind,
-                    name,
-                    payload,
-                    input_names,
+                    name.clone(),
+                    payload.clone(),
+                    input_names.clone(),
                     Arc::new(output_schema),
                     Arc::new(config),
                 ))
@@ -3601,16 +3479,16 @@ impl RemoteExecutionCodec {
                 deterministic,
                 config,
             }) => {
-                let kind = self.try_decode_pyspark_udtf_kind(kind)?;
+                let kind = self.try_decode_pyspark_udtf_kind(*kind)?;
                 let input_types = input_types
                     .iter()
                     .map(|x| self.try_decode_data_type(x))
                     .collect::<Result<Vec<_>>>()?;
-                let function_return_type = self.try_decode_data_type(&function_return_type)?;
+                let function_return_type = self.try_decode_data_type(function_return_type)?;
                 let function_output_names = if function_output_names.is_empty() {
                     None
                 } else {
-                    Some(function_output_names)
+                    Some(function_output_names.clone())
                 };
                 let config = match config {
                     Some(config) => self.try_decode_pyspark_udf_config(config)?,
@@ -3618,14 +3496,14 @@ impl RemoteExecutionCodec {
                 };
                 Arc::new(PySparkUDTF::try_new(
                     kind,
-                    name,
-                    payload,
-                    input_names,
+                    name.clone(),
+                    payload.clone(),
+                    input_names.clone(),
                     input_types,
-                    passthrough_columns as usize,
+                    *passthrough_columns as usize,
                     function_return_type,
                     function_output_names,
-                    deterministic,
+                    *deterministic,
                     Arc::new(config),
                 )?)
             }
@@ -3637,7 +3515,7 @@ impl RemoteExecutionCodec {
         let udf = udf as &dyn Any;
         let stream_udf_kind = if let Some(func) = udf.downcast_ref::<PySparkMapIterUDF>() {
             let kind = self.try_encode_pyspark_map_iter_kind(func.kind())?;
-            let output_schema = self.try_encode_schema(func.output_schema().as_ref())?;
+            let output_schema = try_encode_schema(func.output_schema().as_ref())?;
             let config = self.try_encode_pyspark_udf_config(func.config())?;
             StreamUdfKind::PySparkMapIter(gen::PySparkMapIterUdf {
                 kind,
@@ -3712,14 +3590,14 @@ impl RemoteExecutionCodec {
         let lex_ordering: Vec<PhysicalSortExprNode> = lex_ordering
             .values
             .iter()
-            .map(|x| self.try_decode_message(x))
+            .map(|x| try_decode_message(x))
             .collect::<Result<_>>()?;
         let lex_ordering = LexOrdering::new(
             parse_physical_sort_exprs(
                 &lex_ordering,
                 &PhysicalPlanDecodeContext::new(ctx, self),
                 schema,
-                &DefaultPhysicalProtoConverter {},
+                &RemotePhysicalProtoConverter {},
             )
             .map_err(|e| plan_datafusion_err!("failed to decode lex ordering: {e}"))?,
         );
@@ -3733,11 +3611,11 @@ impl RemoteExecutionCodec {
         let lex_ordering = serialize_physical_sort_exprs(
             lex_ordering.to_vec(),
             self,
-            &DefaultPhysicalProtoConverter {},
+            &RemotePhysicalProtoConverter {},
         )?;
         let lex_ordering = lex_ordering
             .into_iter()
-            .map(|x| self.try_encode_message(x))
+            .map(try_encode_message)
             .collect::<Result<_>>()?;
         Ok(gen::LexOrdering {
             values: lex_ordering,
@@ -3802,14 +3680,14 @@ impl RemoteExecutionCodec {
 
     fn try_decode_equivalence_class(
         &self,
-        class: gen::EquivalenceClass,
+        class: &gen::EquivalenceClass,
         schema: &Schema,
         ctx: &TaskContext,
     ) -> Result<EquivalenceClass> {
         let gen::EquivalenceClass { exprs } = class;
         let exprs = exprs
             .iter()
-            .map(|expr| parse_physical_expr(&self.try_decode_message(expr)?, ctx, schema, self))
+            .map(|expr| try_decode_physical_expr(ctx, self, expr, schema))
             .collect::<Result<Vec<_>>>()?;
         // The constants are set by the equivalence properties, so we do nothing here.
         Ok(EquivalenceClass::new(exprs))
@@ -3821,10 +3699,7 @@ impl RemoteExecutionCodec {
     ) -> Result<gen::EquivalenceClass> {
         let exprs = class
             .iter()
-            .map(|expr| {
-                let expr = serialize_physical_expr(expr, self)?;
-                self.try_encode_message(expr)
-            })
+            .map(|expr| try_encode_physical_expr(self, expr))
             .collect::<Result<Vec<_>>>()?;
         Ok(gen::EquivalenceClass { exprs })
     }
@@ -3839,7 +3714,7 @@ impl RemoteExecutionCodec {
             expr,
             across_partitions,
         } = const_expr;
-        let expr = parse_physical_expr(&self.try_decode_message(expr)?, ctx, schema, self)?;
+        let expr = try_decode_physical_expr(ctx, self, expr, schema)?;
         let across_partitions = match across_partitions {
             Some(x) => self.try_decode_constant_across_partitions(x)?,
             None => return plan_err!("missing constant expression across partitions"),
@@ -3848,8 +3723,7 @@ impl RemoteExecutionCodec {
     }
 
     fn try_encode_constant_expression(&self, const_expr: &ConstExpr) -> Result<gen::ConstantExpr> {
-        let expr = serialize_physical_expr(&const_expr.expr, self)?;
-        let expr = self.try_encode_message(expr)?;
+        let expr = try_encode_physical_expr(self, &const_expr.expr)?;
         let across_partitions =
             self.try_encode_constant_across_partitions(&const_expr.across_partitions)?;
         Ok(gen::ConstantExpr {
@@ -3907,7 +3781,7 @@ impl RemoteExecutionCodec {
         let gen::EquivalenceGroup { classes } = eq_group;
         let classes = classes
             .iter()
-            .map(|class| self.try_decode_equivalence_class(class.clone(), schema, ctx))
+            .map(|class| self.try_decode_equivalence_class(class, schema, ctx))
             .collect::<Result<Vec<_>>>()?;
         Ok(EquivalenceGroup::new(classes))
     }
@@ -3935,7 +3809,7 @@ impl RemoteExecutionCodec {
             constraints,
             schema,
         } = eq_properties;
-        let schema = self.try_decode_schema(schema)?;
+        let schema = try_decode_schema(schema)?;
         let eq_group = match eq_group {
             Some(x) => self.try_decode_equivalence_group(x, &schema, ctx)?,
             None => return plan_err!("missing equivalence group"),
@@ -3961,7 +3835,7 @@ impl RemoteExecutionCodec {
         &self,
         eq_properties: &EquivalenceProperties,
     ) -> Result<gen::EquivalenceProperties> {
-        let schema = self.try_encode_schema(eq_properties.schema().as_ref())?;
+        let schema = try_encode_schema(eq_properties.schema().as_ref())?;
         let eq_group = self.try_encode_equivalence_group(eq_properties.eq_group())?;
         let constants = eq_properties
             .constants()
@@ -4087,11 +3961,11 @@ impl RemoteExecutionCodec {
 
     fn try_decode_pyspark_udf_config(
         &self,
-        config: gen::PySparkUdfConfig,
+        config: &gen::PySparkUdfConfig,
     ) -> Result<PySparkUdfConfig> {
         let config = PySparkUdfConfig {
-            session_timezone: config.session_timezone,
-            pandas_window_bound_types: config.pandas_window_bound_types,
+            session_timezone: config.session_timezone.clone(),
+            pandas_window_bound_types: config.pandas_window_bound_types.clone(),
             pandas_grouped_map_assign_columns_by_name: config
                 .pandas_grouped_map_assign_columns_by_name,
             pandas_convert_to_arrow_array_safely: config.pandas_convert_to_arrow_array_safely,
@@ -4161,94 +4035,63 @@ impl RemoteExecutionCodec {
         Ok(variant as i32)
     }
 
-    fn try_decode_plan(&self, buf: &[u8], ctx: &TaskContext) -> Result<Arc<dyn ExecutionPlan>> {
-        let plan = PhysicalPlanNode::decode(buf)
-            .map_err(|e| plan_datafusion_err!("failed to decode plan: {e}"))?;
-        plan.try_into_physical_plan(ctx, self)
-    }
-
-    fn try_encode_plan(&self, plan: Arc<dyn ExecutionPlan>) -> Result<Vec<u8>> {
-        let plan = PhysicalPlanNode::try_from_physical_plan(plan, self)?;
-        Ok(plan.encode_to_vec())
-    }
-
     fn try_decode_partitioning(
         &self,
         buf: &[u8],
         schema: &Schema,
         ctx: &TaskContext,
     ) -> Result<Partitioning> {
-        let partitioning = self.try_decode_message(buf)?;
+        let partitioning = try_decode_message(buf)?;
         parse_protobuf_partitioning(
             Some(&partitioning),
             &PhysicalPlanDecodeContext::new(ctx, self),
             schema,
-            &DefaultPhysicalProtoConverter {},
+            &RemotePhysicalProtoConverter {},
         )?
         .ok_or_else(|| plan_datafusion_err!("no partitioning found"))
     }
 
     fn try_encode_partitioning(&self, partitioning: &Partitioning) -> Result<Vec<u8>> {
         let partitioning =
-            serialize_partitioning(partitioning, self, &DefaultPhysicalProtoConverter {})?;
-        self.try_encode_message(partitioning)
+            serialize_partitioning(partitioning, self, &RemotePhysicalProtoConverter {})?;
+        try_encode_message(partitioning)
     }
 
     fn try_decode_data_type(&self, buf: &[u8]) -> Result<DataType> {
-        let arrow_type = self.try_decode_message::<gen_datafusion_common::ArrowType>(buf)?;
+        let arrow_type = try_decode_message::<gen_datafusion_common::ArrowType>(buf)?;
         Ok((&arrow_type).try_into()?)
     }
 
     fn try_encode_data_type(&self, data_type: &DataType) -> Result<Vec<u8>> {
-        self.try_encode_message::<gen_datafusion_common::ArrowType>(data_type.try_into()?)
+        try_encode_message::<gen_datafusion_common::ArrowType>(data_type.try_into()?)
     }
 
     fn try_decode_scalar_value(&self, buf: &[u8]) -> Result<ScalarValue> {
-        let value = self.try_decode_message::<gen_datafusion_common::ScalarValue>(buf)?;
+        let value = try_decode_message::<gen_datafusion_common::ScalarValue>(buf)?;
         Ok((&value).try_into()?)
     }
 
     fn try_encode_scalar_value(&self, value: &ScalarValue) -> Result<Vec<u8>> {
-        self.try_encode_message::<gen_datafusion_common::ScalarValue>(value.try_into()?)
-    }
-
-    fn try_decode_schema(&self, buf: &[u8]) -> Result<Schema> {
-        let schema = self.try_decode_message::<gen_datafusion_common::Schema>(buf)?;
-        Ok((&schema).try_into()?)
-    }
-
-    fn try_encode_schema(&self, schema: &Schema) -> Result<Vec<u8>> {
-        self.try_encode_message::<gen_datafusion_common::Schema>(schema.try_into()?)
+        try_encode_message::<gen_datafusion_common::ScalarValue>(value.try_into()?)
     }
 
     fn try_decode_statistics(&self, buf: &[u8]) -> Result<Statistics> {
-        let statistics = self.try_decode_message::<gen_datafusion_common::Statistics>(buf)?;
+        let statistics = try_decode_message::<gen_datafusion_common::Statistics>(buf)?;
         (&statistics).try_into()
     }
 
     fn try_encode_statistics(&self, statistics: &Statistics) -> Result<Vec<u8>> {
-        self.try_encode_message::<gen_datafusion_common::Statistics>(statistics.into())
-    }
-
-    fn try_decode_message<M>(&self, buf: &[u8]) -> Result<M>
-    where
-        M: Message + Default,
-    {
-        let message =
-            M::decode(buf).map_err(|e| plan_datafusion_err!("failed to decode message: {e}"))?;
-        Ok(message)
-    }
-
-    fn try_encode_message<M>(&self, message: M) -> Result<Vec<u8>>
-    where
-        M: Message,
-    {
-        Ok(message.encode_to_vec())
+        try_encode_message::<gen_datafusion_common::Statistics>(statistics.into())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use datafusion::arrow::array::{Array, ArrayRef, RecordBatch};
+    use datafusion::arrow::datatypes::{Schema, SchemaRef};
+    use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+    use datafusion::physical_expr::HigherOrderFunctionExpr;
+
     use super::*;
 
     fn round_trip_udf(udf: ScalarUDF) -> Result<Arc<ScalarUDF>> {
@@ -4272,11 +4115,51 @@ mod tests {
         Ok(())
     }
 
-    /// Builds a wrapped `filter(arr, v -> v > 2)` physical expression over a
+    fn round_trip_expr(
+        expr: &Arc<dyn PhysicalExpr>,
+        schema: &Schema,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_expr(&codec, expr)?;
+        let ctx = TaskContext::default();
+        try_decode_physical_expr(&ctx, &codec, &bytes, schema)
+    }
+
+    fn as_hof(expr: &Arc<dyn PhysicalExpr>) -> Result<&HigherOrderFunctionExpr> {
+        expr.downcast_ref::<HigherOrderFunctionExpr>()
+            .ok_or_else(|| plan_datafusion_err!("expression is not HigherOrderFunctionExpr"))
+    }
+
+    fn assert_same_result(
+        original: &Arc<dyn PhysicalExpr>,
+        decoded: &Arc<dyn PhysicalExpr>,
+        schema: SchemaRef,
+        columns: Vec<ArrayRef>,
+    ) -> Result<()> {
+        let batch = RecordBatch::try_new(schema, columns)?;
+        let rows = batch.num_rows();
+        let original = original.evaluate(&batch)?.into_array(rows)?;
+        let decoded = decoded.evaluate(&batch)?.into_array(rows)?;
+        assert_eq!(original.to_data(), decoded.to_data());
+        Ok(())
+    }
+
+    fn count_hofs(expr: &Arc<dyn PhysicalExpr>) -> Result<usize> {
+        let count = std::cell::Cell::new(0usize);
+        Arc::clone(expr).apply(|node| {
+            if node.is::<HigherOrderFunctionExpr>() {
+                count.set(count.get() + 1);
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        Ok(count.get())
+    }
+
+    /// Builds a `filter(arr, v -> v > 2)` physical expression over a
     /// single `List<Int32>` column "arr", plus the input schema and a sample
     /// `[[1, 2, 3]]` list array for evaluation. Shared by the expr- and
     /// plan-level distributed roundtrip tests.
-    fn build_wrapped_filter() -> Result<(
+    fn build_filter() -> Result<(
         Arc<dyn PhysicalExpr>,
         datafusion::arrow::datatypes::SchemaRef,
         datafusion::arrow::array::ListArray,
@@ -4292,7 +4175,6 @@ mod tests {
         use datafusion::logical_expr::{col, lambda, lit, Expr, HigherOrderUDF};
         use datafusion::physical_expr::create_physical_expr;
         use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
-        use sail_physical_plan::higher_order::wrap_distributed_higher_order;
 
         let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let list = ListArray::new(
@@ -4322,90 +4204,298 @@ mod tests {
         let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
 
         let schema_ref: SchemaRef = Arc::new(schema);
-        let wrapped = wrap_distributed_higher_order(physical, &schema_ref)?;
-        Ok((wrapped, schema_ref, list))
+        Ok((physical, schema_ref, list))
     }
 
     #[test]
     fn test_round_trip_distributed_filter_higher_order_expr() -> Result<()> {
-        use datafusion::arrow::array::RecordBatch;
+        let (physical, schema_ref, list) = build_filter()?;
+        as_hof(&physical)?;
 
-        let (wrapped, schema_ref, list) = build_wrapped_filter()?;
-        assert!(wrapped
-            .downcast_ref::<DistributedHigherOrderExpr>()
-            .is_some());
+        let decoded = round_trip_expr(&physical, &schema_ref)?;
+        as_hof(&decoded)?;
+        assert_same_result(&physical, &decoded, schema_ref, vec![Arc::new(list)])
+    }
 
-        // Serialize -> encode bytes -> decode bytes (prove the wire path).
-        let codec = RemoteExecutionCodec;
-        let proto = serialize_physical_expr(&wrapped, &codec)?;
-        let bytes = proto.encode_to_vec();
-        let proto2 = datafusion_proto::protobuf::PhysicalExprNode::decode(bytes.as_slice())
-            .map_err(|e| plan_datafusion_err!("failed to decode PhysicalExprNode: {e}"))?;
+    /// Distributed round-trip for `exists(arr, v -> v > 2)` over `[[1, 2, 3]]`.
+    /// Proves the `Exists` higher-order UDF kind survives remote encode/decode.
+    #[test]
+    fn test_round_trip_distributed_exists_higher_order_expr() -> Result<()> {
+        use std::collections::HashMap;
 
-        // Parse back into a physical expr; must be a DistributedHigherOrderExpr.
-        let ctx = TaskContext::default();
-        let decoded = parse_physical_expr(&proto2, &ctx, &schema_ref, &codec)?;
-        assert!(decoded
-            .downcast_ref::<DistributedHigherOrderExpr>()
-            .is_some());
+        use datafusion::arrow::array::{Array, Int32Array, ListArray};
+        use datafusion::arrow::buffer::OffsetBuffer;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{col, lambda, lit, Expr, HigherOrderUDF};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::array::spark_array_exists::SparkArrayExists;
 
-        // Both exprs must evaluate identically.
-        let batch = RecordBatch::try_new(Arc::clone(&schema_ref), vec![Arc::new(list)])?;
-        let original_result = wrapped.evaluate(&batch)?.into_array(1)?;
-        let decoded_result = decoded.evaluate(&batch)?.into_array(1)?;
-        assert_eq!(&original_result, &decoded_result);
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let list = ListArray::new(
+            list_field,
+            OffsetBuffer::<i32>::from_lengths(vec![3]),
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            None,
+        );
 
-        Ok(())
+        let fields = vec![Field::new("arr", list.data_type().clone(), true)];
+        let schema = Schema::new(fields.clone());
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+
+        let body = Expr::LambdaVariable(LambdaVariable::new(
+            "v".to_string(),
+            Some(Arc::new(Field::new("v", DataType::Int32, true))),
+        ))
+        .gt(lit(2i32));
+        let func = Arc::new(HigherOrderUDF::new_from_impl(SparkArrayExists::new()));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            func,
+            vec![col("arr"), lambda(["v"], body)],
+        ));
+        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+
+        let schema_ref: SchemaRef = Arc::new(schema);
+        as_hof(&physical)?;
+        let decoded = round_trip_expr(&physical, &schema_ref)?;
+        as_hof(&decoded)?;
+        assert_same_result(&physical, &decoded, schema_ref, vec![Arc::new(list)])
+    }
+
+    /// Distributed round-trip for `forall(arr, v -> v > 2)` over `[[1, 2, 3]]`.
+    /// Proves the `Forall` higher-order UDF kind survives remote encode/decode.
+    #[test]
+    fn test_round_trip_distributed_forall_higher_order_expr() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Array, Int32Array, ListArray};
+        use datafusion::arrow::buffer::OffsetBuffer;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{col, lambda, lit, Expr, HigherOrderUDF};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
+
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let list = ListArray::new(
+            list_field,
+            OffsetBuffer::<i32>::from_lengths(vec![3]),
+            Arc::new(Int32Array::from(vec![1, 2, 3])),
+            None,
+        );
+
+        let fields = vec![Field::new("arr", list.data_type().clone(), true)];
+        let schema = Schema::new(fields.clone());
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+
+        let body = Expr::LambdaVariable(LambdaVariable::new(
+            "v".to_string(),
+            Some(Arc::new(Field::new("v", DataType::Int32, true))),
+        ))
+        .gt(lit(2i32));
+        let func = Arc::new(HigherOrderUDF::new_from_impl(SparkArrayForall::new()));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            func,
+            vec![col("arr"), lambda(["v"], body)],
+        ));
+        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+
+        let schema_ref: SchemaRef = Arc::new(schema);
+        as_hof(&physical)?;
+        let decoded = round_trip_expr(&physical, &schema_ref)?;
+        as_hof(&decoded)?;
+        assert_same_result(&physical, &decoded, schema_ref, vec![Arc::new(list)])
+    }
+
+    #[test]
+    fn test_round_trip_distributed_aggregate_higher_order_expr() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Array, Int32Array, ListArray};
+        use datafusion::arrow::buffer::OffsetBuffer;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{col, lambda, lit, Expr, HigherOrderUDF};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
+
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let list = ListArray::new(
+            list_field,
+            OffsetBuffer::<i32>::from_lengths(vec![3, 1]),
+            Arc::new(Int32Array::from(vec![1, 2, 3, 10])),
+            None,
+        );
+
+        let fields = vec![Field::new("arr", list.data_type().clone(), true)];
+        let schema = Schema::new(fields.clone());
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+
+        let acc = Expr::LambdaVariable(LambdaVariable::new(
+            "acc".to_string(),
+            Some(Arc::new(Field::new("acc", DataType::Int32, true))),
+        ));
+        let value = Expr::LambdaVariable(LambdaVariable::new(
+            "v".to_string(),
+            Some(Arc::new(Field::new("v", DataType::Int32, true))),
+        ));
+        let finish_acc = Expr::LambdaVariable(LambdaVariable::new(
+            "acc".to_string(),
+            Some(Arc::new(Field::new("acc", DataType::Int32, true))),
+        ));
+
+        let func = Arc::new(HigherOrderUDF::new_from_impl(SparkArrayAggregate::new()));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            func,
+            vec![
+                col("arr"),
+                lit(0i32),
+                lambda(["acc", "v"], acc + value),
+                lambda(["acc"], finish_acc),
+            ],
+        ));
+        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+
+        let schema_ref: SchemaRef = Arc::new(schema);
+        as_hof(&physical)?;
+        let decoded = round_trip_expr(&physical, &schema_ref)?;
+        as_hof(&decoded)?;
+        assert_same_result(&physical, &decoded, schema_ref, vec![Arc::new(list)])
+    }
+
+    #[test]
+    fn test_round_trip_distributed_aggregate_element_first() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Array, Int32Array, ListArray};
+        use datafusion::arrow::buffer::OffsetBuffer;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{col, lambda, lit, Expr, HigherOrderUDF};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
+
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let list = ListArray::new(
+            list_field,
+            OffsetBuffer::<i32>::from_lengths(vec![3, 1]),
+            Arc::new(Int32Array::from(vec![1, 2, 3, 10])),
+            None,
+        );
+
+        let fields = vec![Field::new("arr", list.data_type().clone(), true)];
+        let schema = Schema::new(fields.clone());
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+
+        let value = Expr::LambdaVariable(LambdaVariable::new(
+            "v".to_string(),
+            Some(Arc::new(Field::new("v", DataType::Int32, true))),
+        ));
+        let finish_acc = Expr::LambdaVariable(LambdaVariable::new(
+            "acc".to_string(),
+            Some(Arc::new(Field::new("acc", DataType::Int32, true))),
+        ));
+
+        let func = Arc::new(HigherOrderUDF::new_from_impl(
+            SparkArrayAggregate::new_element_first(),
+        ));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            func,
+            vec![
+                col("arr"),
+                lit(0i32),
+                lambda(["v"], value),
+                lambda(["acc"], finish_acc),
+            ],
+        ));
+        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+
+        let schema_ref: SchemaRef = Arc::new(schema);
+        let decoded = round_trip_expr(&physical, &schema_ref)?;
+        let decoded_hof = as_hof(&decoded)?;
+
+        let udf_any = decoded_hof.fun().inner().as_ref() as &dyn std::any::Any;
+        let aggregate = udf_any
+            .downcast_ref::<SparkArrayAggregate>()
+            .ok_or_else(|| plan_datafusion_err!("inner UDF is not a SparkArrayAggregate"))?;
+        assert!(aggregate.is_element_first());
+
+        assert_same_result(&physical, &decoded, schema_ref, vec![Arc::new(list)])
     }
 
     #[test]
     fn test_round_trip_distributed_filter_in_projection_plan() -> Result<()> {
-        use datafusion::arrow::array::RecordBatch;
         use datafusion::physical_expr::projection::ProjectionExpr;
         use datafusion::physical_plan::empty::EmptyExec;
         use datafusion::physical_plan::projection::ProjectionExec;
 
-        // End-to-end at the PLAN level: a ProjectionExec carrying the wrapped
-        // higher-order function must survive try_encode_plan -> bytes ->
-        // try_decode_plan and still evaluate correctly. This exercises the path
+        // End-to-end at the PLAN level: a ProjectionExec carrying the
+        // higher-order function must survive remote encode/decode and still
+        // evaluate correctly. This exercises the path
         // datafusion-proto uses to serialize a real plan node (not just the
         // bare expression).
-        let (wrapped, schema_ref, list) = build_wrapped_filter()?;
-        let original_result = Arc::clone(&wrapped)
-            .evaluate(&RecordBatch::try_new(
-                Arc::clone(&schema_ref),
-                vec![Arc::new(list.clone())],
-            )?)?
-            .into_array(1)?;
+        let (physical, schema_ref, list) = build_filter()?;
 
         let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema_ref)));
         let projection = ProjectionExec::try_new(
             vec![ProjectionExpr {
-                expr: wrapped,
+                expr: Arc::clone(&physical),
                 alias: "result".to_string(),
             }],
             input,
         )?;
 
         let codec = RemoteExecutionCodec;
-        let bytes = codec.try_encode_plan(Arc::new(projection))?;
+        let bytes = try_encode_physical_plan(&codec, Arc::new(projection))?;
         let ctx = TaskContext::default();
-        let decoded = codec.try_decode_plan(&bytes, &ctx)?;
+        let decoded = try_decode_physical_plan(&ctx, &codec, &bytes)?;
 
         let decoded_proj = decoded
             .downcast_ref::<ProjectionExec>()
             .ok_or_else(|| plan_datafusion_err!("decoded plan is not a ProjectionExec"))?;
         let decoded_expr = &decoded_proj.expr()[0].expr;
-        assert!(decoded_expr
-            .downcast_ref::<DistributedHigherOrderExpr>()
-            .is_some());
+        as_hof(decoded_expr)?;
 
-        // The wrapped HOF inside the decoded plan still evaluates to [[3]].
-        let batch = RecordBatch::try_new(schema_ref, vec![Arc::new(list)])?;
-        let decoded_result = decoded_expr.evaluate(&batch)?.into_array(1)?;
-        assert_eq!(&original_result, &decoded_result);
+        assert_same_result(&physical, decoded_expr, schema_ref, vec![Arc::new(list)])
+    }
 
-        Ok(())
+    #[test]
+    fn test_hash_output_partitioning_decodes_higher_order_key() -> Result<()> {
+        use crate::task::definition::{TaskOutput, TaskOutputDistribution, TaskOutputLocator};
+
+        let (physical, schema_ref, list) = build_filter()?;
+        let codec = RemoteExecutionCodec;
+        let key = try_encode_physical_expr(&codec, &physical)?;
+        let output = TaskOutput {
+            distribution: TaskOutputDistribution::Hash {
+                keys: vec![Arc::from(key)],
+                channels: 4,
+            },
+            locator: TaskOutputLocator::Local { replicas: 1 },
+        };
+
+        let ctx = TaskContext::default();
+        let partitioning = output
+            .partitioning(&ctx, &schema_ref, &codec)
+            .map_err(|e| plan_datafusion_err!("{e}"))?;
+
+        let Partitioning::Hash(keys, channels) = partitioning else {
+            return plan_err!("expected hash partitioning");
+        };
+        assert_eq!(channels, 4);
+        let [decoded] = keys.as_slice() else {
+            return plan_err!("expected one hash key, got {}", keys.len());
+        };
+        as_hof(decoded)?;
+        assert_same_result(&physical, decoded, schema_ref, vec![Arc::new(list)])
     }
 
     /// `filter(arr, v -> v > threshold)` where the lambda captures an OUTER
@@ -4415,7 +4505,7 @@ mod tests {
     fn test_round_trip_distributed_filter_with_capture() -> Result<()> {
         use std::collections::HashMap;
 
-        use datafusion::arrow::array::{Array, Int32Array, ListArray, RecordBatch};
+        use datafusion::arrow::array::{Array, Int32Array, ListArray};
         use datafusion::arrow::buffer::OffsetBuffer;
         use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
         use datafusion::common::DFSchema;
@@ -4424,7 +4514,6 @@ mod tests {
         use datafusion::logical_expr::{col, lambda, Expr, HigherOrderUDF};
         use datafusion::physical_expr::create_physical_expr;
         use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
-        use sail_physical_plan::higher_order::wrap_distributed_higher_order;
 
         let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let list = ListArray::new(
@@ -4455,32 +4544,14 @@ mod tests {
         let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
 
         let schema_ref: SchemaRef = Arc::new(schema);
-        let wrapped = wrap_distributed_higher_order(physical, &schema_ref)?;
-        assert!(wrapped
-            .downcast_ref::<DistributedHigherOrderExpr>()
-            .is_some());
-
-        let codec = RemoteExecutionCodec;
-        let proto = serialize_physical_expr(&wrapped, &codec)?;
-        let bytes = proto.encode_to_vec();
-        let proto2 = datafusion_proto::protobuf::PhysicalExprNode::decode(bytes.as_slice())
-            .map_err(|e| plan_datafusion_err!("failed to decode PhysicalExprNode: {e}"))?;
-
-        let ctx = TaskContext::default();
-        let decoded = parse_physical_expr(&proto2, &ctx, &schema_ref, &codec)?;
-        assert!(decoded
-            .downcast_ref::<DistributedHigherOrderExpr>()
-            .is_some());
-
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema_ref),
+        let decoded = round_trip_expr(&physical, &schema_ref)?;
+        as_hof(&decoded)?;
+        assert_same_result(
+            &physical,
+            &decoded,
+            schema_ref,
             vec![Arc::new(list), Arc::new(threshold)],
-        )?;
-        let original_result = wrapped.evaluate(&batch)?.into_array(1)?;
-        let decoded_result = decoded.evaluate(&batch)?.into_array(1)?;
-        assert_eq!(&original_result, &decoded_result);
-
-        Ok(())
+        )
     }
 
     /// Index-first `filter(arr, i -> i = 0)` built directly from
@@ -4491,16 +4562,15 @@ mod tests {
     fn test_round_trip_distributed_filter_index_first() -> Result<()> {
         use std::collections::HashMap;
 
-        use datafusion::arrow::array::{Array, Int32Array, ListArray, RecordBatch};
+        use datafusion::arrow::array::{Array, Int32Array, ListArray};
         use datafusion::arrow::buffer::OffsetBuffer;
         use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
         use datafusion::common::DFSchema;
         use datafusion::logical_expr::execution_props::ExecutionProps;
         use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
         use datafusion::logical_expr::{col, lambda, lit, Expr, HigherOrderUDF};
-        use datafusion::physical_expr::{create_physical_expr, HigherOrderFunctionExpr};
+        use datafusion::physical_expr::create_physical_expr;
         use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
-        use sail_physical_plan::higher_order::wrap_distributed_higher_order;
 
         let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
         let list = ListArray::new(
@@ -4530,52 +4600,187 @@ mod tests {
         let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
 
         let schema_ref: SchemaRef = Arc::new(schema);
-        let wrapped = wrap_distributed_higher_order(physical, &schema_ref)?;
-        assert!(wrapped
-            .downcast_ref::<DistributedHigherOrderExpr>()
-            .is_some());
-
-        let codec = RemoteExecutionCodec;
-        let proto = serialize_physical_expr(&wrapped, &codec)?;
-        let bytes = proto.encode_to_vec();
-        let proto2 = datafusion_proto::protobuf::PhysicalExprNode::decode(bytes.as_slice())
-            .map_err(|e| plan_datafusion_err!("failed to decode PhysicalExprNode: {e}"))?;
-
-        let ctx = TaskContext::default();
-        let decoded = parse_physical_expr(&proto2, &ctx, &schema_ref, &codec)?;
-        let decoded_hof = decoded
-            .downcast_ref::<DistributedHigherOrderExpr>()
-            .ok_or_else(|| plan_datafusion_err!("decoded is not a DistributedHigherOrderExpr"))?;
+        let decoded = round_trip_expr(&physical, &schema_ref)?;
+        let decoded_hof = as_hof(&decoded)?;
 
         // Strongest check: the decoded inner UDF is still index-first.
-        let inner_hof = decoded_hof
-            .inner()
-            .downcast_ref::<HigherOrderFunctionExpr>()
-            .ok_or_else(|| plan_datafusion_err!("inner is not a HigherOrderFunctionExpr"))?;
-        let udf_any = inner_hof.fun().inner().as_ref() as &dyn std::any::Any;
+        let udf_any = decoded_hof.fun().inner().as_ref() as &dyn std::any::Any;
         let filter = udf_any
             .downcast_ref::<SparkArrayFilter>()
             .ok_or_else(|| plan_datafusion_err!("inner UDF is not a SparkArrayFilter"))?;
         assert!(filter.is_index_first());
 
-        let batch = RecordBatch::try_new(Arc::clone(&schema_ref), vec![Arc::new(list)])?;
-        let original_result = wrapped.evaluate(&batch)?.into_array(1)?;
-        let decoded_result = decoded.evaluate(&batch)?.into_array(1)?;
-        assert_eq!(&original_result, &decoded_result);
+        assert_same_result(&physical, &decoded, schema_ref, vec![Arc::new(list)])
+    }
 
-        Ok(())
+    /// `array_sort(arr, (l, r) -> case ... end)` round-trips through the remote
+    /// codec and still sorts correctly.
+    #[test]
+    fn test_round_trip_distributed_array_sort_higher_order_expr() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Array, Int32Array, ListArray};
+        use datafusion::arrow::buffer::OffsetBuffer;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{col, lambda, lit, Case, Expr, HigherOrderUDF};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::array::spark_array_sort::SparkArraySort;
+
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let list = ListArray::new(
+            list_field,
+            OffsetBuffer::<i32>::from_lengths(vec![3]),
+            Arc::new(Int32Array::from(vec![5, 6, 1])),
+            None,
+        );
+
+        let fields = vec![Field::new("arr", list.data_type().clone(), true)];
+        let schema = Schema::new(fields.clone());
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+
+        let l = Expr::LambdaVariable(LambdaVariable::new(
+            "l".to_string(),
+            Some(Arc::new(Field::new("l", DataType::Int32, true))),
+        ));
+        let r = Expr::LambdaVariable(LambdaVariable::new(
+            "r".to_string(),
+            Some(Arc::new(Field::new("r", DataType::Int32, true))),
+        ));
+        // (l, r) -> case when l < r then -1 when l > r then 1 else 0 end
+        let body = Expr::Case(Case::new(
+            None,
+            vec![
+                (Box::new(l.clone().lt(r.clone())), Box::new(lit(-1i32))),
+                (Box::new(l.gt(r)), Box::new(lit(1i32))),
+            ],
+            Some(Box::new(lit(0i32))),
+        ));
+        let func = Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new()));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            func,
+            vec![col("arr"), lambda(["l", "r"], body)],
+        ));
+        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+        as_hof(&physical)?;
+
+        let schema_ref: SchemaRef = Arc::new(schema);
+        let decoded = round_trip_expr(&physical, &schema_ref)?;
+        as_hof(&decoded)?;
+        assert_same_result(&physical, &decoded, schema_ref, vec![Arc::new(list)])
+    }
+
+    /// A right-only comparator routed to `SparkArraySort::new_swapped()`. Proves
+    /// the `swapped` flag survives encode/decode.
+    #[test]
+    fn test_round_trip_distributed_array_sort_swapped() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Array, Int32Array, ListArray};
+        use datafusion::arrow::buffer::OffsetBuffer;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{col, lambda, Expr, HigherOrderUDF};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::array::spark_array_sort::SparkArraySort;
+
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let list = ListArray::new(
+            list_field,
+            OffsetBuffer::<i32>::from_lengths(vec![3]),
+            Arc::new(Int32Array::from(vec![3, 1, 2])),
+            None,
+        );
+
+        let fields = vec![Field::new("arr", list.data_type().clone(), true)];
+        let schema = Schema::new(fields.clone());
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+
+        // The single-parameter lambda `r -> r` fed via the swapped instance.
+        let r = Expr::LambdaVariable(LambdaVariable::new(
+            "r".to_string(),
+            Some(Arc::new(Field::new("r", DataType::Int32, true))),
+        ));
+        let func = Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new_swapped()));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            func,
+            vec![col("arr"), lambda(["r"], r)],
+        ));
+        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+
+        let schema_ref: SchemaRef = Arc::new(schema);
+        let decoded = round_trip_expr(&physical, &schema_ref)?;
+        let decoded_hof = as_hof(&decoded)?;
+
+        // Strongest check: the decoded inner UDF is still swapped.
+        let udf_any = decoded_hof.fun().inner().as_ref() as &dyn std::any::Any;
+        let sort = udf_any
+            .downcast_ref::<SparkArraySort>()
+            .ok_or_else(|| plan_datafusion_err!("inner UDF is not a SparkArraySort"))?;
+        assert!(sort.is_swapped());
+
+        assert_same_result(&physical, &decoded, schema_ref, vec![Arc::new(list)])
+    }
+
+    #[test]
+    fn test_round_trip_distributed_filter_binary_index_lambda() -> Result<()> {
+        use std::collections::HashMap;
+
+        use datafusion::arrow::array::{Array, Int32Array, ListArray};
+        use datafusion::arrow::buffer::OffsetBuffer;
+        use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+        use datafusion::common::DFSchema;
+        use datafusion::logical_expr::execution_props::ExecutionProps;
+        use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
+        use datafusion::logical_expr::{col, lambda, lit, Expr, HigherOrderUDF};
+        use datafusion::physical_expr::create_physical_expr;
+        use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
+
+        let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let list = ListArray::new(
+            list_field,
+            OffsetBuffer::<i32>::from_lengths(vec![3]),
+            Arc::new(Int32Array::from(vec![10, 20, 30])),
+            None,
+        );
+
+        let fields = vec![Field::new("arr", list.data_type().clone(), true)];
+        let schema = Schema::new(fields.clone());
+        let dfschema = DFSchema::from_unqualified_fields(fields.into(), HashMap::new())?;
+
+        let x = Expr::LambdaVariable(LambdaVariable::new(
+            "x".to_string(),
+            Some(Arc::new(Field::new("x", DataType::Int32, true))),
+        ));
+        let i = Expr::LambdaVariable(LambdaVariable::new(
+            "i".to_string(),
+            Some(Arc::new(Field::new("i", DataType::Int32, false))),
+        ));
+        let body = x.gt(lit(0i32)).and(i.gt(lit(0i32)));
+        let logical = Expr::HigherOrderFunction(HigherOrderFunction::new(
+            Arc::new(HigherOrderUDF::new_from_impl(SparkArrayFilter::new())),
+            vec![col("arr"), lambda(["x", "i"], body)],
+        ));
+        let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
+
+        let schema_ref: SchemaRef = Arc::new(schema);
+        let decoded = round_trip_expr(&physical, &schema_ref)?;
+        as_hof(&decoded)?;
+
+        assert_same_result(&physical, &decoded, schema_ref, vec![Arc::new(list)])
     }
 
     /// Two nested `filter` HOFs: the inner filter sits in the OUTER filter's
     /// ARRAY-ARGUMENT position, i.e. `filter(filter(arr, x -> x > 1), v -> v >
     /// 2)` over a `List<Int32>` column. Because the inner filter is a non-lambda
-    /// argument of the outer filter, this exercises the BASE-schema recursion
-    /// branch in `wrap_distributed_higher_order` (the `else` arm that recurses
-    /// with the same schema), NOT the extended-schema branch. The
-    /// extended-schema (lambda-body) branch is covered by
-    /// `test_round_trip_distributed_filter_nested_in_lambda_body`. The decoded
-    /// tree must contain TWO nested `DistributedHigherOrderExpr` wrappers and
-    /// evaluate identically.
+    /// argument of the outer filter, this exercises recursive higher-order
+    /// expression encode/decode with the base schema. The extended-schema
+    /// lambda-body branch is covered by
+    /// `test_round_trip_distributed_filter_nested_in_lambda_body`.
     ///
     /// Note: the original "nested inside a lambda body via `cardinality(...)`"
     /// formulation could not be used because `cardinality` (a
@@ -4583,22 +4788,20 @@ mod tests {
     /// codec's scalar-function deserialization table, so it fails to round-trip
     /// with `ExtendedScalarUdf: no UDF found for cardinality`. That is a
     /// pre-existing scalar-UDF registration gap, unrelated to the higher-order
-    /// roundtrip under test, so we nest two `filter`s directly instead.
+    /// roundtrip under test, so we nest two `filter's directly instead.
     #[test]
     fn test_round_trip_distributed_filter_nested() -> Result<()> {
         use std::collections::HashMap;
 
-        use datafusion::arrow::array::{Array, Int32Array, ListArray, RecordBatch};
+        use datafusion::arrow::array::{Array, Int32Array, ListArray};
         use datafusion::arrow::buffer::OffsetBuffer;
         use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-        use datafusion::common::tree_node::TreeNode;
         use datafusion::common::DFSchema;
         use datafusion::logical_expr::execution_props::ExecutionProps;
         use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
         use datafusion::logical_expr::{col, lambda, lit, Expr, HigherOrderUDF};
         use datafusion::physical_expr::create_physical_expr;
         use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
-        use sail_physical_plan::higher_order::wrap_distributed_higher_order;
 
         // arr = [[1, 2, 3, 4, 5]] : one row, a single int array.
         let list_field = Arc::new(Field::new_list_field(DataType::Int32, true));
@@ -4634,54 +4837,21 @@ mod tests {
         let physical = create_physical_expr(&logical, &dfschema, &ExecutionProps::new())?;
 
         let schema_ref: SchemaRef = Arc::new(schema);
-        let wrapped = wrap_distributed_higher_order(physical, &schema_ref)?;
-        assert!(wrapped
-            .downcast_ref::<DistributedHigherOrderExpr>()
-            .is_some());
-
-        let codec = RemoteExecutionCodec;
-        let proto = serialize_physical_expr(&wrapped, &codec)?;
-        let bytes = proto.encode_to_vec();
-        let proto2 = datafusion_proto::protobuf::PhysicalExprNode::decode(bytes.as_slice())
-            .map_err(|e| plan_datafusion_err!("failed to decode PhysicalExprNode: {e}"))?;
-
-        let ctx = TaskContext::default();
-        let decoded = parse_physical_expr(&proto2, &ctx, &schema_ref, &codec)?;
-        assert!(decoded
-            .downcast_ref::<DistributedHigherOrderExpr>()
-            .is_some());
-
-        // The decoded tree must contain a NESTED wrapper inside the lambda body.
-        let nested_count = std::cell::Cell::new(0usize);
-        Arc::clone(&decoded).apply(|node| {
-            if node.is::<DistributedHigherOrderExpr>() {
-                nested_count.set(nested_count.get() + 1);
-            }
-            Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
-        })?;
+        let decoded = round_trip_expr(&physical, &schema_ref)?;
         assert!(
-            nested_count.get() >= 2,
-            "expected at least 2 DistributedHigherOrderExpr nodes, found {}",
-            nested_count.get()
+            count_hofs(&decoded)? >= 2,
+            "expected at least 2 HigherOrderFunctionExpr nodes"
         );
 
-        let batch = RecordBatch::try_new(Arc::clone(&schema_ref), vec![Arc::new(list)])?;
-        let original_result = wrapped.evaluate(&batch)?.into_array(1)?;
-        let decoded_result = decoded.evaluate(&batch)?.into_array(1)?;
-        assert_eq!(&original_result, &decoded_result);
-
-        Ok(())
+        assert_same_result(&physical, &decoded, schema_ref, vec![Arc::new(list)])
     }
 
     /// A `filter` HOF nested INSIDE the outer lambda's BODY:
     /// `filter(arr2d, a -> filter(a, y -> y > 1) IS NOT NULL)` over a single
     /// `List<List<Int32>>` column. Because the inner filter appears in the
     /// outer lambda's body (not in an array-argument position), this exercises
-    /// the EXTENDED-schema branch of `wrap_distributed_higher_order`: the inner
-    /// wrapper must serialize `input_schema = base_schema + the outer lambda's
-    /// `a` parameter field`, and its lambda variables carry indices beyond the
-    /// base schema width. The base-schema branch is covered by
-    /// `test_round_trip_distributed_filter_nested`.
+    /// lambda-body decode with the base schema extended by the outer lambda
+    /// parameter field.
     ///
     /// The outer lambda body uses only natively-serialized exprs (`IS NOT NULL`
     /// over the inner filter's list result) so no unregistered scalar UDF is
@@ -4690,17 +4860,15 @@ mod tests {
     fn test_round_trip_distributed_filter_nested_in_lambda_body() -> Result<()> {
         use std::collections::HashMap;
 
-        use datafusion::arrow::array::{Array, Int32Array, ListArray, RecordBatch};
+        use datafusion::arrow::array::{Array, Int32Array, ListArray};
         use datafusion::arrow::buffer::OffsetBuffer;
         use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
-        use datafusion::common::tree_node::TreeNode;
         use datafusion::common::DFSchema;
         use datafusion::logical_expr::execution_props::ExecutionProps;
         use datafusion::logical_expr::expr::{HigherOrderFunction, LambdaVariable};
         use datafusion::logical_expr::{col, lambda, lit, Expr, HigherOrderUDF};
         use datafusion::physical_expr::create_physical_expr;
         use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
-        use sail_physical_plan::higher_order::wrap_distributed_higher_order;
 
         // arr2d = [ [[1, 2], [3]] ] : one outer row holding two inner int
         // arrays, [1, 2] and [3].
@@ -4748,52 +4916,12 @@ mod tests {
         let physical = create_physical_expr(&outer, &dfschema, &ExecutionProps::new())?;
 
         let schema_ref: SchemaRef = Arc::new(schema);
-        let wrapped = wrap_distributed_higher_order(physical, &schema_ref)?;
-        assert!(wrapped
-            .downcast_ref::<DistributedHigherOrderExpr>()
-            .is_some());
-
-        let codec = RemoteExecutionCodec;
-        let proto = serialize_physical_expr(&wrapped, &codec)?;
-        let bytes = proto.encode_to_vec();
-        let proto2 = datafusion_proto::protobuf::PhysicalExprNode::decode(bytes.as_slice())
-            .map_err(|e| plan_datafusion_err!("failed to decode PhysicalExprNode: {e}"))?;
-
-        let ctx = TaskContext::default();
-        let decoded = parse_physical_expr(&proto2, &ctx, &schema_ref, &codec)?;
-        assert!(decoded
-            .downcast_ref::<DistributedHigherOrderExpr>()
-            .is_some());
-
-        // Extended-schema proof: collect every wrapper's carried input-schema
-        // width. The inner wrapper carries base + the `a` param, so its field
-        // count must exceed the outer (base-schema) wrapper's.
-        let widths = std::cell::RefCell::new(Vec::<usize>::new());
-        Arc::clone(&decoded).apply(|node| {
-            if let Some(hof) = node.downcast_ref::<DistributedHigherOrderExpr>() {
-                widths.borrow_mut().push(hof.input_schema().fields().len());
-            }
-            Ok(datafusion::common::tree_node::TreeNodeRecursion::Continue)
-        })?;
-        let widths = widths.into_inner();
+        let decoded = round_trip_expr(&physical, &schema_ref)?;
         assert!(
-            widths.len() >= 2,
-            "expected at least 2 DistributedHigherOrderExpr nodes, found {}",
-            widths.len()
-        );
-        let min = widths.iter().min().copied().unwrap_or_default();
-        let max = widths.iter().max().copied().unwrap_or_default();
-        assert!(
-            max > min,
-            "expected an inner wrapper with an EXTENDED schema (wider than the \
-             base schema); wrapper schema widths were {widths:?}"
+            count_hofs(&decoded)? >= 2,
+            "expected at least 2 HigherOrderFunctionExpr nodes"
         );
 
-        let batch = RecordBatch::try_new(Arc::clone(&schema_ref), vec![Arc::new(arr2d)])?;
-        let original_result = wrapped.evaluate(&batch)?.into_array(1)?;
-        let decoded_result = decoded.evaluate(&batch)?.into_array(1)?;
-        assert_eq!(&original_result, &decoded_result);
-
-        Ok(())
+        assert_same_result(&physical, &decoded, schema_ref, vec![Arc::new(arr2d)])
     }
 }

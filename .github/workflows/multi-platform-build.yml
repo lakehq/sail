@@ -34,9 +34,9 @@ jobs:
       platforms: ${{ steps.define-platforms.outputs.result }}
       package_version: ${{ steps.version.outputs.package_version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -54,7 +54,7 @@ jobs:
           echo "package_version=$(hatch version)+local" >> "$GITHUB_OUTPUT"
 
       - id: define-platforms
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const platforms = [];
@@ -85,9 +85,9 @@ jobs:
     needs:
       - setup
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -119,7 +119,7 @@ jobs:
           RUSTFLAGS: ${{ matrix.platform.os == 'windows' && '-C linker=rust-lld.exe' || '' }}
 
       - name: Upload Wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: python-package-${{ matrix.platform.os }}-${{ matrix.platform.target }}
           path: target/wheels
@@ -136,11 +136,11 @@ jobs:
       - setup
       - build
     steps:
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: python-package-${{ matrix.platform.os }}-${{ matrix.platform.target }}
           path: target/wheels
