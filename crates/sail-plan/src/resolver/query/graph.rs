@@ -1512,6 +1512,8 @@ fn string_lit(value: impl Into<String>) -> spec::Expr {
 
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::unwrap_used)]
+
     use datafusion::arrow::array::{ArrayRef, StringArray};
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
     use datafusion::arrow::record_batch::RecordBatch;

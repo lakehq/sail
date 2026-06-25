@@ -113,7 +113,7 @@ mod tests {
     use sail_sql_parser::ast::statement::Statement;
     use sail_sql_parser::tree::TreeText;
 
-    use crate::error::SqlResult;
+    use crate::error::{SqlError, SqlResult};
     use crate::parser::{parse_one_statement, parse_statements};
     use crate::statement::from_ast_statement;
 
@@ -184,7 +184,9 @@ mod tests {
             plan_id: None,
         }) = plan
         else {
-            panic!("expected graph query plan");
+            return Err(SqlError::InternalError(
+                "expected graph query plan".to_string(),
+            ));
         };
 
         let pattern = &graph.patterns[0];
@@ -223,7 +225,9 @@ mod tests {
             plan_id: None,
         }) = plan
         else {
-            panic!("expected graph query plan");
+            return Err(SqlError::InternalError(
+                "expected graph query plan".to_string(),
+            ));
         };
 
         assert_eq!(graph.patterns.len(), 1);
@@ -271,7 +275,9 @@ mod tests {
             plan_id: None,
         }) = plan
         else {
-            panic!("expected graph query plan");
+            return Err(SqlError::InternalError(
+                "expected graph query plan".to_string(),
+            ));
         };
 
         assert_eq!(graph.patterns.len(), 2);
@@ -313,7 +319,9 @@ mod tests {
             plan_id: None,
         }) = plan
         else {
-            panic!("expected graph query plan");
+            return Err(SqlError::InternalError(
+                "expected graph query plan".to_string(),
+            ));
         };
 
         assert_eq!(graph.order.len(), 1);
@@ -332,7 +340,9 @@ mod tests {
             plan_id: None,
         }) = plan
         else {
-            panic!("expected graph query plan");
+            return Err(SqlError::InternalError(
+                "expected graph query plan".to_string(),
+            ));
         };
         assert_eq!(
             graph.patterns[0].steps[0].direction,
@@ -347,7 +357,9 @@ mod tests {
             plan_id: None,
         }) = plan
         else {
-            panic!("expected graph query plan");
+            return Err(SqlError::InternalError(
+                "expected graph query plan".to_string(),
+            ));
         };
         assert_eq!(
             graph.patterns[0].steps[0].direction,
@@ -362,7 +374,9 @@ mod tests {
             plan_id: None,
         }) = plan
         else {
-            panic!("expected graph query plan");
+            return Err(SqlError::InternalError(
+                "expected graph query plan".to_string(),
+            ));
         };
         assert_eq!(
             graph.patterns[0].steps[0].direction,
@@ -379,7 +393,9 @@ mod tests {
             plan_id: None,
         }) = plan
         else {
-            panic!("expected graph query plan");
+            return Err(SqlError::InternalError(
+                "expected graph query plan".to_string(),
+            ));
         };
         assert_eq!(
             graph.patterns[0].steps[0].direction,
@@ -396,7 +412,9 @@ mod tests {
             plan_id: None,
         }) = plan
         else {
-            panic!("expected graph query plan");
+            return Err(SqlError::InternalError(
+                "expected graph query plan".to_string(),
+            ));
         };
         assert_eq!(
             graph.patterns[0].steps[0].direction,
