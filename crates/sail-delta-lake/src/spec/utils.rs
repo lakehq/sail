@@ -82,6 +82,10 @@ fn data_type_contains_timestampntz(dtype: &DataType) -> bool {
         DataType::Struct(struct_type) => struct_type
             .fields()
             .any(|field| data_type_contains_timestampntz(field.data_type())),
+        DataType::Map(map_type) => {
+            data_type_contains_timestampntz(map_type.key_type())
+                || data_type_contains_timestampntz(map_type.value_type())
+        }
         _ => false,
     }
 }
@@ -94,10 +98,13 @@ fn arrow_type_contains_timestampntz(dt: &datafusion::arrow::datatypes::DataType)
             .iter()
             .any(|field| arrow_type_contains_timestampntz(field.data_type())),
         ArrowDataType::List(elem)
+        | ArrowDataType::ListView(elem)
         | ArrowDataType::LargeList(elem)
+        | ArrowDataType::LargeListView(elem)
         | ArrowDataType::FixedSizeList(elem, _) => {
             arrow_type_contains_timestampntz(elem.data_type())
         }
+        ArrowDataType::Map(entries, _) => arrow_type_contains_timestampntz(entries.data_type()),
         _ => false,
     }
 }
@@ -168,4 +175,84 @@ pub(crate) fn contains_variant_arrow(schema: &datafusion::arrow::datatypes::Sche
         .fields()
         .iter()
         .any(|field| arrow_field_contains_variant(field.as_ref()))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema, TimeUnit};
+
+    use super::*;
+    use crate::spec::{MapType, StructType};
+
+    fn arrow_timestamp_ntz() -> ArrowDataType {
+        ArrowDataType::Timestamp(TimeUnit::Microsecond, None)
+    }
+
+    fn arrow_map(value_type: ArrowDataType) -> ArrowDataType {
+        ArrowDataType::Map(
+            Arc::new(Field::new(
+                "entries",
+                ArrowDataType::Struct(
+                    vec![
+                        Field::new("key", ArrowDataType::Utf8, false),
+                        Field::new("value", value_type, true),
+                    ]
+                    .into(),
+                ),
+                false,
+            )),
+            false,
+        )
+    }
+
+    #[test]
+    fn contains_timestampntz_detects_delta_map_key_or_value() -> crate::spec::DeltaResult<()> {
+        let value_schema = StructType::try_new([StructField::nullable(
+            "attrs",
+            MapType::new(DataType::STRING, DataType::TIMESTAMP_NTZ, true),
+        )])?;
+        assert!(contains_timestampntz(value_schema.fields()));
+
+        let key_schema = StructType::try_new([StructField::nullable(
+            "attrs",
+            MapType::new(DataType::TIMESTAMP_NTZ, DataType::STRING, true),
+        )])?;
+        assert!(contains_timestampntz(key_schema.fields()));
+        Ok(())
+    }
+
+    #[test]
+    fn contains_timestampntz_arrow_detects_map() {
+        let schema = Schema::new(vec![Field::new(
+            "attrs",
+            arrow_map(arrow_timestamp_ntz()),
+            true,
+        )]);
+
+        assert!(contains_timestampntz_arrow(&schema));
+    }
+
+    #[test]
+    fn contains_timestampntz_arrow_detects_list_views() {
+        let schema = Schema::new(vec![
+            Field::new(
+                "list_view",
+                ArrowDataType::ListView(Arc::new(Field::new("item", arrow_timestamp_ntz(), true))),
+                true,
+            ),
+            Field::new(
+                "large_list_view",
+                ArrowDataType::LargeListView(Arc::new(Field::new(
+                    "item",
+                    arrow_timestamp_ntz(),
+                    true,
+                ))),
+                true,
+            ),
+        ]);
+
+        assert!(contains_timestampntz_arrow(&schema));
+    }
 }
