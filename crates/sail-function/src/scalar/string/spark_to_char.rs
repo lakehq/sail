@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int64Array,
-    StringArray, UInt64Array,
+    new_null_array, Array, ArrayRef, Decimal128Array, Decimal256Array, Float32Array, Float64Array,
+    Int64Array, StringArray, StringBuilder, UInt64Array,
 };
 use datafusion::arrow::compute::{cast_with_options, CastOptions};
 use datafusion::arrow::datatypes::{i256, DataType};
@@ -121,21 +121,26 @@ fn spark_to_char_impl(args: &[ArrayRef], ansi_mode: bool) -> Result<ArrayRef> {
     // The format is foldable in Spark, so all (expanded) rows hold the same value.
     let format_arr = downcast_arg!(&args[1], StringArray);
     if format_arr.is_null(0) {
-        return Ok(Arc::new(StringArray::from(vec![None::<String>; num_rows])));
+        return Ok(new_null_array(&DataType::Utf8, num_rows));
     }
     // Spark uppercases the format before parsing it, making it case-insensitive.
     let format = format_arr.value(0).to_uppercase();
     let number_format = NumberFormat::try_new(&format)?;
 
     let values = decimal_string_values(&args[0], ansi_mode)?;
-    let result: Result<Vec<Option<String>>> = values
-        .into_iter()
-        .map(|value| match value {
-            None => Ok(None),
-            Some(value) => number_format.format(&value).map(Some),
-        })
-        .collect();
-    Ok(Arc::new(StringArray::from(result?)))
+    // Stream into one pre-sized buffer instead of collecting a `Vec<Option<String>>`
+    // and copying it — keeps a single growing buffer rather than N live `String`s.
+    // The values buffer is sized in BYTES: each formatted row is ~`format.len()`
+    // chars (the format is foldable, so one estimate fits every row), which is a
+    // tight data-driven estimate instead of a magic average.
+    let mut builder = StringBuilder::with_capacity(num_rows, num_rows.saturating_mul(format.len()));
+    for value in values {
+        match value {
+            None => builder.append_null(),
+            Some(value) => builder.append_value(number_format.format(&value)?),
+        }
+    }
+    Ok(Arc::new(builder.finish()))
 }
 
 /// A decimal value decomposed into its plain (non-scientific) string representation,
@@ -193,8 +198,11 @@ impl DecimalString {
                 Ok(None)
             }
         };
+        // NaN and ±Infinity are not representable as a number: Spark's `to_char`
+        // returns NULL for them regardless of ANSI mode (unlike a genuine overflow,
+        // which the closure below ANSI-gates).
         if !value.is_finite() {
-            return overflow(&value);
+            return Ok(None);
         }
         // Rust's `Display` for floats is the shortest representation that round-trips,
         // matching `Double.toString` semantics on the JVM.
