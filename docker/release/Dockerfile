@@ -2,9 +2,10 @@ ARG RELEASE_TAG
 ARG RUST_VERSION=1.95.0
 ARG RUST_PROFILE=release
 ARG RUSTFLAGS=""
+ARG PYTHON_VERSION=3.11
 ARG PYSPARK_VERSION=4.1.1
 
-FROM python:3.14-slim AS builder
+FROM python:${PYTHON_VERSION}-slim AS builder
 
 ARG RELEASE_TAG
 ARG RUST_VERSION
@@ -45,7 +46,7 @@ RUN --mount=type=cache,target=/root/.cargo/registry/ \
     cargo build -p sail-cli --profile ${RUST_PROFILE} --bins && \
     cp /app/target/${RUST_TARGET_SUBDIR}/sail /usr/local/bin
 
-FROM python:3.14-slim
+FROM python:${PYTHON_VERSION}-slim
 
 ARG PYSPARK_VERSION
 
