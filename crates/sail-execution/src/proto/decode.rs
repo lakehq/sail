@@ -12,7 +12,11 @@ use datafusion_proto::physical_plan::{
 };
 use datafusion_proto::protobuf::{PhysicalExprNode, PhysicalPlanNode};
 use prost::Message;
+use sail_function::scalar::array::spark_array_aggregate::SparkArrayAggregate;
+use sail_function::scalar::array::spark_array_exists::SparkArrayExists;
 use sail_function::scalar::array::spark_array_filter::SparkArrayFilter;
+use sail_function::scalar::array::spark_array_forall::SparkArrayForall;
+use sail_function::scalar::array::spark_array_sort::SparkArraySort;
 use sail_function::scalar::array::spark_array_transform::SparkArrayTransform;
 
 use crate::plan::gen;
@@ -99,6 +103,28 @@ pub fn try_decode_higher_order_udf(udf: &gen::HigherOrderUdf) -> Result<Arc<High
                 ))
             } else {
                 Arc::new(HigherOrderUDF::new_from_impl(SparkArrayTransform::new()))
+            }
+        }
+        HigherOrderUdfKind::Aggregate(gen::SparkArrayAggregateUdf { element_first }) => {
+            if element_first {
+                Arc::new(HigherOrderUDF::new_from_impl(
+                    SparkArrayAggregate::new_element_first(),
+                ))
+            } else {
+                Arc::new(HigherOrderUDF::new_from_impl(SparkArrayAggregate::new()))
+            }
+        }
+        HigherOrderUdfKind::Exists(gen::SparkArrayExistsUdf {}) => {
+            Arc::new(HigherOrderUDF::new_from_impl(SparkArrayExists::new()))
+        }
+        HigherOrderUdfKind::Forall(gen::SparkArrayForallUdf {}) => {
+            Arc::new(HigherOrderUDF::new_from_impl(SparkArrayForall::new()))
+        }
+        HigherOrderUdfKind::Sort(gen::SparkArraySortUdf { swapped }) => {
+            if swapped {
+                Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new_swapped()))
+            } else {
+                Arc::new(HigherOrderUDF::new_from_impl(SparkArraySort::new()))
             }
         }
     })

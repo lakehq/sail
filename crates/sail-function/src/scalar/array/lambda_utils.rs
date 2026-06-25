@@ -1,10 +1,13 @@
 /// [CREDIT]: https://github.com/apache/datafusion/blob/f911d529a57b211eb44a98b253f97d839f60019f/datafusion/functions-nested/src/lambda_utils.rs
 ///
-/// Shared helpers for Spark array higher-order functions (`filter`, `transform`, ...).
+/// Shared helpers for `(array, lambda)` higher-order array functions
+/// (`filter`, `transform`, `exists`, `forall`, ...).
 ///
 /// Mirrors the `pub(crate)` helpers in `datafusion-functions-nested` 54's
-/// `src/lambda_utils.rs`, with the Spark-specific addition of the optional
-/// 0-based index parameter (`index_array`/`offsets_to_indices`).
+/// `src/lambda_utils.rs`, kept here so every Spark HOF reuses the same
+/// argument-unpacking and list-coercion logic instead of duplicating it, with
+/// the Spark-specific addition of the optional 0-based index parameter
+/// (`index_array`/`offsets_to_indices`).
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int32Array, OffsetSizeTrait};

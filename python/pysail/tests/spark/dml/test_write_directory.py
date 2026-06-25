@@ -1,8 +1,6 @@
 import pandas as pd
-import pytest
 from pandas.testing import assert_frame_equal
 
-from pysail.testing.spark.utils.common import is_jvm_spark
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 
@@ -18,9 +16,6 @@ def test_insert_overwrite_directory(spark, tmpdir):
         {"id": [101], "name": ["Alice"], "age": [22]},
     ).astype({"age": "int32"})
     assert_frame_equal(actual, expected)
-
-    if not is_jvm_spark():
-        pytest.skip("overwrite for existing data is not supported in Sail yet")
 
     spark.sql(f"""
         INSERT OVERWRITE DIRECTORY '{escape_sql_string_literal(location)}' USING JSON
