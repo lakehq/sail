@@ -107,6 +107,7 @@ impl PySparkGroupMapUDF {
 
     fn udf(&self, py: Python) -> Result<Py<PyAny>> {
         let udf = self.udf.get_or_try_init(py, || {
+            self.config.install_python_artifacts(py)?;
             let udf = PySparkUdfPayload::load(py, &self.payload)?;
             Ok(PySpark::group_map_udf(
                 py,

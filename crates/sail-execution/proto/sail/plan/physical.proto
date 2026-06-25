@@ -440,6 +440,7 @@ message PySparkUdfConfig {
   bool python_udtf_pandas_conversion_enabled = 7;
   bool python_udf_pandas_int_to_decimal_coercion_enabled = 8;
   bool binary_as_bytes = 9;
+  repeated string python_artifact_paths = 10;
 }
 
 message EquivalenceProperties {

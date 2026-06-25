@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -22,6 +22,7 @@ use crate::streaming::{
 #[derive(Debug, Clone)]
 pub(crate) struct SparkSessionOptions {
     pub execution_heartbeat_interval: Duration,
+    pub artifact_root: Option<PathBuf>,
 }
 
 /// A Spark session extension to the DataFusion [`SessionContext`].
@@ -102,6 +103,13 @@ impl SparkSession {
         let state = self.state.lock()?;
         let mut config = PlanConfig::try_from(&state.config)?;
         config.session_user_id = self.user_id().to_string();
+        let mut pyspark_udf_config = (*config.pyspark_udf_config).clone();
+        pyspark_udf_config.python_artifact_paths = state
+            .artifacts
+            .iter()
+            .filter_map(|artifact| artifact.python_path.clone())
+            .collect();
+        config.pyspark_udf_config = Arc::new(pyspark_udf_config);
         Ok(Arc::new(config))
     }
 
@@ -314,9 +322,12 @@ impl SparkSession {
         if let Some(dir) = &state.artifact_dir {
             return Ok(dir.clone());
         }
-        let dir = std::env::temp_dir()
-            .join("sail-artifacts")
-            .join(&self.session_id);
+        let root = self
+            .options
+            .artifact_root
+            .clone()
+            .unwrap_or_else(|| std::env::temp_dir().join("sail-artifacts"));
+        let dir = root.join(&self.session_id);
         std::fs::create_dir_all(&dir).map_err(|e| {
             SparkError::internal(format!("failed to create artifact directory: {e}"))
         })?;
@@ -325,24 +336,44 @@ impl SparkSession {
     }
 
     /// Tracks an artifact name as added to this session.
-    pub(crate) fn add_artifact(&self, name: String) -> SparkResult<()> {
+    pub(crate) fn add_artifact(
+        &self,
+        name: String,
+        python_path: Option<String>,
+    ) -> SparkResult<()> {
         let mut state = self.state.lock()?;
-        state.artifacts.insert(name);
+        if let Some(artifact) = state
+            .artifacts
+            .iter_mut()
+            .find(|artifact| artifact.name == name)
+        {
+            artifact.python_path = python_path;
+        } else {
+            state
+                .artifacts
+                .push(SparkSessionArtifact { name, python_path });
+        }
         Ok(())
     }
 
     /// Returns whether an artifact with the given name has been added to this session.
     pub(crate) fn has_artifact(&self, name: &str) -> SparkResult<bool> {
         let state = self.state.lock()?;
-        Ok(state.artifacts.contains(name))
+        Ok(state.artifacts.iter().any(|artifact| artifact.name == name))
     }
+}
+
+#[derive(Debug, Clone)]
+struct SparkSessionArtifact {
+    name: String,
+    python_path: Option<String>,
 }
 
 struct SparkSessionState {
     config: SparkRuntimeConfig,
     executors: HashMap<String, Arc<Executor>>,
     streaming_queries: StreamingQueryManager,
-    artifacts: HashSet<String>,
+    artifacts: Vec<SparkSessionArtifact>,
     artifact_dir: Option<PathBuf>,
 }
 
@@ -352,7 +383,7 @@ impl SparkSessionState {
             config: SparkRuntimeConfig::new(),
             executors: HashMap::new(),
             streaming_queries: StreamingQueryManager::new(),
-            artifacts: HashSet::new(),
+            artifacts: vec![],
             artifact_dir: None,
         }
     }

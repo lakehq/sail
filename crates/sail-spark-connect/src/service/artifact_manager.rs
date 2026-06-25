@@ -85,7 +85,7 @@ fn artifact_target_path(name: &str, artifact_dir: &Path) -> SparkResult<PathBuf>
 }
 
 /// Processes a complete artifact (name + assembled data) and stores it appropriately.
-fn store_artifact(name: &str, data: &[u8], artifact_dir: &Path) -> SparkResult<()> {
+fn store_artifact(name: &str, data: &[u8], artifact_dir: &Path) -> SparkResult<Option<String>> {
     let normalized_name = normalize_artifact_name(name)?;
     if let Some(dest_path) = normalized_name.strip_prefix(FORWARD_TO_FS_PREFIX) {
         let relative_dest = validate_relative_path(dest_path, "forward_to_fs destination")?;
@@ -104,7 +104,7 @@ fn store_artifact(name: &str, data: &[u8], artifact_dir: &Path) -> SparkResult<(
         file.write_all(data).map_err(|e| {
             SparkError::internal(format!("failed to write file {}: {e}", dest.display()))
         })?;
-        return Ok(());
+        return Ok(None);
     }
 
     let target_path = artifact_target_path(name, artifact_dir)?;
@@ -116,8 +116,12 @@ fn store_artifact(name: &str, data: &[u8], artifact_dir: &Path) -> SparkResult<(
             ))
         })?;
         if existing == data {
-            add_python_artifact_to_sys_path(&normalized_name, &target_path, artifact_dir)?;
-            return Ok(());
+            let python_path =
+                python_artifact_import_path(&normalized_name, &target_path, artifact_dir)?;
+            if let Some(path) = &python_path {
+                add_to_sys_path(path)?;
+            }
+            return Ok(python_path);
         }
         return Err(SparkError::invalid(format!(
             "artifact already exists with different content: {name}"
@@ -145,28 +149,34 @@ fn store_artifact(name: &str, data: &[u8], artifact_dir: &Path) -> SparkResult<(
         ))
     })?;
 
-    add_python_artifact_to_sys_path(&normalized_name, &target_path, artifact_dir)?;
-    Ok(())
+    let python_path = python_artifact_import_path(&normalized_name, &target_path, artifact_dir)?;
+    if let Some(path) = &python_path {
+        add_to_sys_path(path)?;
+    }
+    Ok(python_path)
 }
 
-fn add_python_artifact_to_sys_path(
+fn python_artifact_import_path(
     normalized_name: &str,
     target_path: &Path,
     artifact_dir: &Path,
-) -> SparkResult<()> {
+) -> SparkResult<Option<String>> {
     let Some(file_name) = normalized_name.strip_prefix(PYFILES_PREFIX) else {
-        return Ok(());
+        return Ok(None);
     };
     if file_name.ends_with(".py") {
         let dir = target_path.parent().unwrap_or(artifact_dir);
-        add_to_sys_path(&dir.to_string_lossy())?;
+        Ok(Some(dir.to_string_lossy().into_owned()))
     } else if file_name.ends_with(".zip")
         || file_name.ends_with(".egg")
         || file_name.ends_with(".jar")
     {
-        add_to_sys_path(&target_path.to_string_lossy())?;
+        Ok(Some(target_path.to_string_lossy().into_owned()))
+    } else {
+        Err(SparkError::invalid(format!(
+            "unsupported Python artifact type: {file_name}"
+        )))
     }
-    Ok(())
 }
 
 fn add_to_sys_path(path: &str) -> SparkResult<()> {
@@ -283,8 +293,8 @@ fn add_artifact_summary(
     summaries: &mut Vec<ArtifactSummary>,
 ) -> SparkResult<()> {
     if is_crc_successful {
-        store_artifact(&name, data, artifact_dir)?;
-        spark.add_artifact(name.clone())?;
+        let python_path = store_artifact(&name, data, artifact_dir)?;
+        spark.add_artifact(name.clone(), python_path)?;
     }
     summaries.push(ArtifactSummary {
         name,

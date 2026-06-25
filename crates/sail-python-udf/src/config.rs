@@ -1,4 +1,10 @@
-use pyo3::pyclass;
+use std::path::Path;
+
+use pyo3::prelude::PyAnyMethods;
+use pyo3::types::PyModule;
+use pyo3::{pyclass, Python};
+
+use crate::error::{PyUdfError, PyUdfResult};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
 #[pyclass(frozen, from_py_object)]
@@ -21,6 +27,8 @@ pub struct PySparkUdfConfig {
     pub python_udf_pandas_int_to_decimal_coercion_enabled: bool,
     #[pyo3(get)]
     pub binary_as_bytes: bool,
+    #[pyo3(get)]
+    pub python_artifact_paths: Vec<String>,
 }
 
 impl Default for PySparkUdfConfig {
@@ -35,11 +43,33 @@ impl Default for PySparkUdfConfig {
             python_udtf_pandas_conversion_enabled: false,
             python_udf_pandas_int_to_decimal_coercion_enabled: false,
             binary_as_bytes: true,
+            python_artifact_paths: vec![],
         }
     }
 }
 
 impl PySparkUdfConfig {
+    pub fn install_python_artifacts(&self, py: Python) -> PyUdfResult<()> {
+        if self.python_artifact_paths.is_empty() {
+            return Ok(());
+        }
+        let sys = PyModule::import(py, "sys")?;
+        let path_list = sys.getattr("path")?;
+        for path in &self.python_artifact_paths {
+            if !Path::new(path).exists() {
+                return Err(PyUdfError::invalid(format!(
+                    "Python artifact path is not accessible in this worker: {path}"
+                )));
+            }
+            let contains: bool = path_list.call_method1("__contains__", (path,))?.extract()?;
+            if !contains {
+                path_list.call_method1("insert", (0, path))?;
+            }
+        }
+        PyModule::import(py, "importlib")?.call_method0("invalidate_caches")?;
+        Ok(())
+    }
+
     pub fn with_pandas_window_bound_types(mut self, value: Option<String>) -> Self {
         self.pandas_window_bound_types = value;
         self

@@ -112,6 +112,7 @@ impl PySparkGroupAggregateUDF {
 
     fn udf(&self, py: Python) -> Result<Py<PyAny>> {
         let udf = self.udf.get_or_try_init(py, || {
+            self.config.install_python_artifacts(py)?;
             let loaded = PySparkUdfPayload::load(py, &self.payload)?;
             let wrapped = match self.kind {
                 // Pandas path: wraps Arrow → named Pandas Series → user func → Arrow

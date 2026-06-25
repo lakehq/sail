@@ -41,6 +41,11 @@ impl ServerSessionMutator for SparkSessionMutator {
                 execution_heartbeat_interval: Duration::from_secs(
                     self.config.spark.execution_heartbeat_interval_secs,
                 ),
+                artifact_root: if self.config.spark.artifact_root.is_empty() {
+                    None
+                } else {
+                    Some(self.config.spark.artifact_root.clone().into())
+                },
             },
         )
         .map_err(|e| internal_datafusion_err!("{e}"))?;
