@@ -31,20 +31,22 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::delta_log::cleanup::cleanup_expired_delta_log_files;
-use crate::delta_log::{resolve_effective_protocol_and_metadata, resolve_version_timestamp};
-use crate::kernel::checkpoints::{
+use crate::checkpoint::{
     create_checkpoint_for, create_log_compaction_for, should_create_compaction,
 };
-use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
-use crate::kernel::{DeltaOperation, DeltaSnapshotConfig};
+use crate::delta_log::cleanup::cleanup_expired_delta_log_files;
+use crate::delta_log::{
+    resolve_effective_protocol_and_metadata, resolve_version_timestamp, CommitOrBytes, LogStoreRef,
+    ObjectStoreRef,
+};
+use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
     checksum_path, staged_commit_path, temp_commit_path, Action, CommitAction, DeltaError,
-    DeltaResult, Metadata, TableFeature, Transaction, VersionChecksum,
+    DeltaOperation, DeltaResult, Metadata, TableFeature, Transaction, VersionChecksum,
 };
 pub use crate::spec::{CommitConflictError, TransactionError};
-use crate::storage::{CommitOrBytes, LogStoreRef, ObjectStoreRef};
 use crate::table::DeltaSnapshot;
+use crate::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
 
 mod conflict_checker;
 mod protocol;
@@ -337,8 +339,8 @@ impl OperationMetrics {
     }
 
     /// Derive operation-specific metrics from generic counters. Call once at commit time.
-    pub fn finalize_for(&mut self, operation: &crate::kernel::DeltaOperation) {
-        use crate::kernel::DeltaOperation;
+    pub fn finalize_for(&mut self, operation: &crate::spec::DeltaOperation) {
+        use crate::spec::DeltaOperation;
 
         match operation {
             DeltaOperation::Delete { .. } => {
@@ -2208,12 +2210,12 @@ mod tests {
     use url::Url;
 
     use super::*;
+    use crate::delta_log::{default_logstore, get_actions, StorageConfig};
     use crate::schema::protocol_for_create;
     use crate::spec::{
         checksum_path, Action, CommitAction, CommitInfo, DataType, DeltaError, DomainMetadata,
         Metadata, Protocol, SaveMode, StructField, StructType, TableFeature, VersionChecksum,
     };
-    use crate::storage::{default_logstore, get_actions, StorageConfig};
 
     fn test_log_store(store: Arc<dyn ObjectStore>) -> LogStoreRef {
         default_logstore(

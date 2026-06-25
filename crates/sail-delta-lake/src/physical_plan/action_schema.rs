@@ -5,12 +5,11 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::kernel::transaction::OperationMetrics;
-use crate::kernel::DeltaOperation;
 use crate::spec::{
     add_struct_type, metadata_struct_type, protocol_struct_type, remove_struct_type, Action, Add,
-    Metadata, Protocol, Remove,
+    DeltaOperation, Metadata, Protocol, Remove,
 };
+use crate::transaction::OperationMetrics;
 
 pub const COL_ACTION: &str = "action";
 
@@ -250,8 +249,8 @@ mod tests {
     use datafusion::arrow::datatypes::DataType as ArrowDataType;
 
     use super::*;
-    use crate::kernel::transaction::OperationMetrics;
     use crate::spec::{DeletionVectorDescriptor, StorageType, StructType};
+    use crate::transaction::OperationMetrics;
 
     #[test]
     fn encode_actions_produces_action_column() -> Result<()> {

@@ -6,13 +6,13 @@ use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use super::timestamps::version_uses_in_commit_timestamps;
 use super::{list_delta_log_entries_from, read_last_checkpoint_version_from_store};
-use crate::kernel::{catalog_managed_commit_path, CatalogManagedCommitSet};
+use crate::delta_log::LogStore;
+use crate::snapshot::{catalog_managed_commit_path, CatalogManagedCommitSet};
 use crate::spec::{
     checksum_path, parse_checkpoint_version, parse_checksum_version, parse_commit_version,
     parse_compacted_json_versions, DeltaError, DeltaResult, DomainMetadata, Metadata, Protocol,
     Transaction, VersionChecksum,
 };
-use crate::storage::LogStore;
 
 const CHECKSUM_LOOKBACK_WINDOW: i64 = 100;
 

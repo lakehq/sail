@@ -26,6 +26,9 @@ pub use manager::{
     protocol_for_metadata, schema_has_column_defaults, schema_has_generated_columns,
     schema_has_identity_columns,
 };
+pub(crate) use manager::{
+    inject_default_expressions, inject_generation_expressions, inject_identity_columns,
+};
 pub use mapping::{
     annotate_new_fields_for_column_mapping, annotate_schema_for_column_mapping,
     annotate_schema_for_column_mapping as annotate_for_column_mapping, compute_max_column_id,

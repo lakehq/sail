@@ -1,3 +1,4 @@
+@lambda_hof
 Feature: array filter with lambda
 
   Rule: Filter array elements using lambda predicates

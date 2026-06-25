@@ -51,6 +51,10 @@ pub fn join_table_uri(table_uri: &str, rel: &str, mode: &WritePathMode) -> Strin
     }
 }
 
+pub fn parse_absolute_url(raw: &str) -> Option<Url> {
+    Url::parse(raw).ok().filter(|url| url.scheme().len() > 1)
+}
+
 pub fn url_to_object_path(url: &Url) -> Result<object_store::path::Path> {
     let is_file = url.scheme() == "file";
     let p = if is_file {

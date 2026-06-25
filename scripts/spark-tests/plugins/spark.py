@@ -404,6 +404,21 @@ SKIPPED_SPARK_TESTS = [
         reason="Not available in Spark Connect until Spark 4",
         spark_major_version_less_than=4,
     ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.foreach"],
+        reason="Not available in Spark Connect until Spark 4",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.foreachPartition"],
+        reason="Not available in Spark Connect until Spark 4",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.coalesce"],
+        reason="Spark 3.x doctest uses the JVM-dependent RDD API",
+        spark_major_version_less_than=4,
+    ),
 ]
 
 

@@ -21,13 +21,13 @@
     "module": "pyspark.sql.functions",
     "function": "-",
     "status": "supported",
-    "explanation": "substraction"
+    "explanation": "subtraction"
   },
   {
     "module": "pyspark.sql.functions",
     "function": "/",
     "status": "supported",
-    "explanation": "devision"
+    "explanation": "division"
   },
   {
     "module": "pyspark.sql.functions",

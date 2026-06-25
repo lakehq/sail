@@ -32,9 +32,9 @@ use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError};
 
 use crate::conversion::{parse_optional_partition_value, ScalarConverter};
+use crate::delta_log::LogStoreRef;
 use crate::spec::statistics::Stats;
 use crate::spec::Add;
-use crate::storage::LogStoreRef;
 use crate::table::DeltaSnapshot;
 
 /// Result of file pruning operation

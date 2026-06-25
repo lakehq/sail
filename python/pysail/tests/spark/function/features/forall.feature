@@ -1,3 +1,4 @@
+@lambda_hof
 @forall
 Feature: forall higher-order function
 
