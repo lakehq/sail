@@ -1,5 +1,4 @@
 use std::collections::VecDeque;
-use std::sync::Arc;
 
 use arrow::datatypes::DataType;
 use datafusion_common::{DFSchemaRef, TableReference};
@@ -9,7 +8,7 @@ use datafusion_expr::{col, expr, lit, ScalarUDF};
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::multi_expr::MultiExpr;
-use sail_function::scalar::struct_field::StructField;
+use sail_function::scalar::struct_field::struct_field_udf;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::attribute::qualifier_matches;
@@ -129,7 +128,7 @@ impl PlanResolver<'_> {
                         (
                             name,
                             expr::Expr::ScalarFunction(ScalarFunction::new_udf(
-                                Arc::new(ScalarUDF::from(StructField::new())),
+                                struct_field_udf(),
                                 args,
                             )),
                         )
@@ -146,7 +145,7 @@ impl PlanResolver<'_> {
                 .and_then(|field| {
                     let args = vec![expr, lit(field.name().to_string())];
                     let expr = expr::Expr::ScalarFunction(ScalarFunction::new_udf(
-                        Arc::new(ScalarUDF::from(StructField::new())),
+                        struct_field_udf(),
                         args,
                     ));
                     Self::resolve_nested_field_wildcard(expr, field.data_type(), remaining)

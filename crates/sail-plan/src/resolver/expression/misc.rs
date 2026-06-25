@@ -14,7 +14,7 @@ use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::drop_struct_field::DropStructField;
-use sail_function::scalar::struct_field::StructField;
+use sail_function::scalar::struct_field::struct_field_udf;
 use sail_function::scalar::table_input::TableInput;
 use sail_function::scalar::update_struct_field::UpdateStructField;
 
@@ -333,7 +333,7 @@ impl PlanResolver<'_> {
                     )));
                 };
                 expr::Expr::ScalarFunction(expr::ScalarFunction::new_udf(
-                    Arc::new(ScalarUDF::from(StructField::new())),
+                    struct_field_udf(),
                     vec![expr, lit(name)],
                 ))
             }

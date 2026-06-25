@@ -1,16 +1,28 @@
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 use datafusion::arrow::array::{make_array, Array, ArrayRef, StructArray};
 use datafusion::arrow::buffer::NullBuffer;
-use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::{
     exec_datafusion_err, exec_err, internal_err, plan_datafusion_err, plan_err, Result, ScalarValue,
 };
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
+    Volatility,
 };
 
 use crate::error::invalid_arg_count_exec_err;
+
+/// Shared `struct_field` UDF instance.
+///
+/// Struct field extraction (direct access, `getField`, and `struct.*` expansion) can
+/// resolve many fields per query, so the `ScalarUDF` is built once and the `Arc` is
+/// cloned at each call site instead of allocating a new UDF each time.
+pub fn struct_field_udf() -> Arc<ScalarUDF> {
+    static UDF: LazyLock<Arc<ScalarUDF>> =
+        LazyLock::new(|| Arc::new(ScalarUDF::from(StructField::new())));
+    Arc::clone(&UDF)
+}
 
 /// Extract a single field from a struct column.
 ///
@@ -120,17 +132,21 @@ impl ScalarUDFImpl for StructField {
         let (_, child) = fields
             .find(field_name)
             .ok_or_else(|| exec_datafusion_err!("missing field: {field_name}"))?;
-        // The result is null whenever the parent struct or the child field is null.
-        let nullable = struct_field.is_nullable() || child.is_nullable();
-        Ok(Arc::new(Field::new(
-            self.name(),
-            child.data_type().clone(),
-            nullable,
-        )))
+        // Preserve the child field's name and metadata; mark it nullable when the parent
+        // struct is nullable, since the result is null whenever the parent struct is null.
+        let field = if struct_field.is_nullable() {
+            child.as_ref().clone().with_nullable(true)
+        } else {
+            child.as_ref().clone()
+        };
+        Ok(Arc::new(field))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         let ScalarFunctionArgs { args, .. } = args;
+        if args.len() != 2 {
+            return Err(invalid_arg_count_exec_err(self.name(), (2, 2), args.len()));
+        }
         let field_name = args
             .get(1)
             .and_then(|arg| match arg {
