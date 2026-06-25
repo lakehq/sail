@@ -36,7 +36,7 @@ pub fn py_record_batch_to_rust(
     _py: Python<'_>,
     py_batch: &Bound<'_, PyAny>,
 ) -> Result<RecordBatch> {
-    use arrow_pyarrow::FromPyArrow;
+    use sail_pyarrow::FromPyArrow;
 
     RecordBatch::from_pyarrow_bound(py_batch).map_err(|e| {
         DataFusionError::External(Box::new(std::io::Error::other(format!(
@@ -48,7 +48,7 @@ pub fn py_record_batch_to_rust(
 
 /// Convert a Rust Arrow Schema to a Python PyArrow Schema.
 pub fn rust_schema_to_py(py: Python<'_>, schema: &SchemaRef) -> Result<Py<PyAny>> {
-    use arrow_pyarrow::ToPyArrow;
+    use sail_pyarrow::ToPyArrow;
 
     ToPyArrow::to_pyarrow(schema.as_ref(), py)
         .map(|obj| obj.unbind())
@@ -62,7 +62,7 @@ pub fn rust_schema_to_py(py: Python<'_>, schema: &SchemaRef) -> Result<Py<PyAny>
 
 /// Convert a Python PyArrow Schema to a Rust Arrow Schema.
 pub fn py_schema_to_rust(_py: Python<'_>, py_schema: &Bound<'_, PyAny>) -> Result<SchemaRef> {
-    use arrow_pyarrow::FromPyArrow;
+    use sail_pyarrow::FromPyArrow;
 
     let schema = Schema::from_pyarrow_bound(py_schema).map_err(|e| {
         DataFusionError::External(Box::new(std::io::Error::other(format!(
@@ -79,7 +79,7 @@ pub fn py_schema_to_rust(_py: Python<'_>, py_schema: &Bound<'_, PyAny>) -> Resul
 /// Uses the Arrow C Data Interface for zero-copy conversion.
 /// This is used for the Arrow-based write path (DataSourceArrowWriter).
 pub fn rust_record_batch_to_py(py: Python<'_>, batch: &RecordBatch) -> Result<Py<PyAny>> {
-    use arrow_pyarrow::ToPyArrow;
+    use sail_pyarrow::ToPyArrow;
 
     batch
         .to_pyarrow(py)

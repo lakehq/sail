@@ -117,7 +117,7 @@ impl ExtensionPlanner for NoopPhysicalPlanner {
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         _session_state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        if node.as_any().downcast_ref::<NoopWriteNode>().is_none() {
+        if !node.as_any().is::<NoopWriteNode>() {
             return Ok(None);
         }
         let [input] = physical_inputs else {

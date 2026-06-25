@@ -36,13 +36,14 @@ impl TableFormat for RateTableFormat {
     ) -> Result<Arc<dyn TableSource>> {
         let SourceInfo {
             paths: _,
-            catalog_table: _,
+            lakehouse_table: _,
             schema,
             constraints,
             partition_by,
             bucket_by,
             sort_order,
             options,
+            read_case_sensitive: _,
         } = info;
         if !constraints.deref().is_empty() {
             return plan_err!("the rate table format does not support constraints");

@@ -11,6 +11,8 @@ and are used to measure Spark feature parity for Sail.
 The Spark project itself uses the Python [unittest](https://docs.python.org/3/library/unittest.html) module to run the tests.
 We have developed custom scripts to run the tests using [pytest](https://docs.pytest.org/) instead.
 
+<!--@include: ../_common/server-issue.md-->
+
 ## Preparing the Test Environment
 
 Before running Spark tests, you need to install the [patched PySpark package](./spark-setup) to the `test-spark` matrix environments that supports testing against multiple Spark versions.

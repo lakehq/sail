@@ -10,10 +10,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use datafusion::arrow::datatypes::{Field as ArrowField, Schema as ArrowSchema};
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion::execution::SessionState;
@@ -25,21 +27,31 @@ use educe::Educe;
 use object_store::ObjectStoreExt;
 use sail_common_datafusion::catalog::iceberg::is_iceberg_table_marker;
 use sail_common_datafusion::catalog::managed::metadata_location_value;
-use sail_common_datafusion::catalog::CatalogPartitionField;
+use sail_common_datafusion::catalog::{
+    CatalogPartitionField, CommitAuthority, LakehouseExecutionContext, ScanAuthority,
+};
 use sail_common_datafusion::datasource::{
     create_sort_order, find_path_in_options, BucketBy, OptionLayer, PhysicalSinkMode, SinkInfo,
-    SinkMode, SourceInfo, TableFormat, TableFormatAlterTableOperation, TableFormatRegistry,
+    SinkMode, SourceInfo, TableFormat, TableFormatAlterTableOperation,
+    TableFormatCreateTableColumn, TableFormatCreateTableInfo, TableFormatCreateTableResult,
+    TableFormatRegistry,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 use sail_data_source::options::ResolveOptions;
 use url::Url;
 
 use crate::datasource::provider::IcebergTableProvider;
+use crate::datasource::type_converter::{arrow_schema_to_iceberg, ICEBERG_ARROW_FIELD_DOC_KEY};
 use crate::io::StoreContext;
 use crate::logical::IcebergTableSource;
+use crate::operations::bootstrap::{
+    bootstrap_empty_table_metadata, replace_empty_table_metadata, NewTableMetadataStyle,
+};
 use crate::options::gen::{IcebergReadOptions, IcebergWriteOptions};
 use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
 use crate::physical_plan::IcebergWriterExecOptions;
+use crate::schema_evolution::SchemaEvolver;
 use crate::spec::{MetadataLog, PartitionSpec, Schema, Snapshot, TableMetadata};
 use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
@@ -48,7 +60,8 @@ use crate::table::metadata_loader::{
 use crate::table::{find_latest_metadata_file, Table};
 use crate::utils::metadata::metadata_files_for_version;
 use crate::utils::partition_transform::{
-    catalog_partition_field_from_iceberg, format_partition_exprs,
+    catalog_partition_field_from_iceberg, format_partition_expr, format_partition_exprs,
+    iceberg_transform_from_partition_field, partition_field_name,
 };
 
 const MAX_ALTER_TABLE_PROPERTIES_COMMIT_RETRIES: usize = 5;
@@ -108,7 +121,7 @@ impl TableFormat for IcebergTableFormat {
             bucket_by,
             sort_order,
             options,
-            catalog_table,
+            lakehouse_table,
         } = info;
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for Iceberg format");
@@ -124,10 +137,127 @@ impl TableFormat for IcebergTableFormat {
                     bucket_by,
                     sort_order,
                     options,
-                    catalog_table,
+                    lakehouse_table,
                 },
             )),
         }))
+    }
+
+    async fn create_table_metadata(
+        &self,
+        runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
+        info: TableFormatCreateTableInfo,
+    ) -> Result<TableFormatCreateTableResult> {
+        let TableFormatCreateTableInfo {
+            path,
+            columns,
+            comment: _,
+            partition_by,
+            properties,
+            replace,
+            lakehouse_table,
+        } = info;
+        let catalog_table = lakehouse_table
+            .as_ref()
+            .map(|context| context.catalog_table().to_vec());
+
+        let table_url = Self::parse_table_url(vec![path]).await?;
+        let object_store = runtime_env
+            .object_store_registry
+            .get_store(&table_url)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let existing_metadata = match find_latest_metadata_file(&object_store, &table_url).await {
+            Ok(metadata_file) if columns.is_empty() && !replace => {
+                let metadata_location = table_metadata_location(&table_url, &metadata_file)?;
+                return Ok(TableFormatCreateTableResult {
+                    properties: vec![(
+                        sail_common_datafusion::catalog::managed::METADATA_LOCATION_UNDERSCORE_KEY
+                            .to_string(),
+                        metadata_location,
+                    )],
+                });
+            }
+            Ok(metadata_file) => {
+                let metadata_data = load_metadata_file_bytes(&object_store, &metadata_file).await?;
+                let metadata = TableMetadata::from_json(&metadata_data)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                if !replace {
+                    return plan_err!("Iceberg table metadata already exists at path: {table_url}");
+                }
+                Some((metadata_file, metadata))
+            }
+            Err(err)
+                if err.to_string().contains("No metadata files found")
+                    && columns.is_empty()
+                    && !replace =>
+            {
+                return plan_err!("Iceberg CREATE TABLE requires at least one column");
+            }
+            Err(err) if err.to_string().contains("No metadata files found") => None,
+            Err(err) => return Err(err),
+        };
+
+        let arrow_schema = create_table_arrow_schema(columns)?;
+        let mut iceberg_schema = arrow_schema_to_iceberg(&arrow_schema)?;
+        iceberg_schema = if let Some((_, metadata)) = existing_metadata.as_ref() {
+            let next_field_id = metadata.last_column_id + 1;
+            let schema =
+                SchemaEvolver::assign_schema_field_ids_starting_at(&iceberg_schema, next_field_id)?;
+            iceberg_schema_with_id(&schema, next_schema_id(metadata))?
+        } else {
+            SchemaEvolver::assign_schema_field_ids(&iceberg_schema)?
+        };
+        if iceberg_schema.fields().iter().any(|field| field.id == 0) {
+            return plan_err!("Invalid Iceberg schema: field id 0 detected after assignment");
+        }
+
+        let mut partition_spec = create_table_partition_spec(&iceberg_schema, &partition_by)?;
+        if let Some((_, metadata)) = existing_metadata.as_ref() {
+            partition_spec = partition_spec.with_spec_id(next_partition_spec_id(metadata));
+        }
+        let table_properties = iceberg_table_properties_from_catalog_create(properties)?;
+        let store_ctx = StoreContext::new(object_store, &table_url)?;
+        let metadata_style = if catalog_table.is_some() {
+            NewTableMetadataStyle::Uuid
+        } else {
+            NewTableMetadataStyle::Hadoop
+        };
+        let bootstrap = if let Some((metadata_file, previous_metadata)) = existing_metadata.as_ref()
+        {
+            replace_empty_table_metadata(
+                &table_url,
+                &store_ctx,
+                iceberg_schema,
+                partition_spec,
+                &table_properties,
+                previous_metadata,
+                metadata_file,
+                metadata_style,
+            )
+            .await?
+        } else {
+            bootstrap_empty_table_metadata(
+                &table_url,
+                &store_ctx,
+                iceberg_schema,
+                partition_spec,
+                &table_properties,
+                metadata_style,
+            )
+            .await?
+        };
+        let metadata_location = table_url
+            .join(&bootstrap.metadata_file)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .to_string();
+
+        Ok(TableFormatCreateTableResult {
+            properties: vec![(
+                sail_common_datafusion::catalog::managed::METADATA_LOCATION_UNDERSCORE_KEY
+                    .to_string(),
+                metadata_location,
+            )],
+        })
     }
 
     async fn alter_table(
@@ -135,7 +265,9 @@ impl TableFormat for IcebergTableFormat {
         runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
         path: &str,
         operation: TableFormatAlterTableOperation,
+        lakehouse_table: Option<LakehouseExecutionContext>,
     ) -> Result<()> {
+        reject_catalog_managed_iceberg_alter(lakehouse_table.as_ref())?;
         match operation {
             TableFormatAlterTableOperation::SetTableProperties { changes, if_exists } => {
                 self.alter_table_properties(runtime_env, path, changes, if_exists)
@@ -144,6 +276,21 @@ impl TableFormat for IcebergTableFormat {
             op => not_impl_err!("unsupported Iceberg ALTER TABLE operation: {op:?}"),
         }
     }
+}
+
+fn reject_catalog_managed_iceberg_alter(
+    lakehouse_table: Option<&LakehouseExecutionContext>,
+) -> Result<()> {
+    let Some(context) = lakehouse_table else {
+        return Ok(());
+    };
+    if context.commit != CommitAuthority::Filesystem {
+        return not_impl_err!(
+            "ALTER TABLE is not yet supported for catalog-managed Iceberg tables: {}",
+            context.catalog_table().join(".")
+        );
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Educe)]
@@ -155,7 +302,7 @@ pub struct IcebergWriteNodeOptions {
     pub bucket_by: Option<BucketBy>,
     pub sort_order: Vec<Sort>,
     pub options: Vec<OptionLayer>,
-    pub catalog_table: Option<Vec<String>>,
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
 }
 
 #[derive(Clone, Debug, Educe)]
@@ -227,7 +374,7 @@ pub(crate) async fn plan_iceberg_write(
         bucket_by: _,
         sort_order,
         options,
-        catalog_table,
+        lakehouse_table,
     } = node.options().clone();
 
     let mode = match mode {
@@ -239,6 +386,7 @@ pub(crate) async fn plan_iceberg_write(
             return not_impl_err!("predicate or partition overwrite for Iceberg");
         }
     };
+    validate_iceberg_lakehouse_storage_access(lakehouse_table.as_ref())?;
     let metadata_location = metadata_location_from_options(&options);
     let catalog_managed_table = catalog_managed_iceberg_from_options(&options);
     let (clean_options, table_properties) =
@@ -327,13 +475,7 @@ pub(crate) async fn plan_iceberg_write(
     let mut options = IcebergWriterExecOptions::from(iceberg_options);
     options.apply_variant_shredding_option_presence(variant_shredding_option_presence);
     options.table_properties = table_properties;
-    if let Some(catalog_table) = catalog_table {
-        options.table_properties.push((
-            sail_common_datafusion::datasource::CATALOG_TABLE_OPTION.to_string(),
-            serde_json::to_string(&catalog_table)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?,
-        ));
-    }
+    options.lakehouse_table = lakehouse_table;
     let table_config = IcebergTableConfig {
         table_url,
         partition_columns: resolved_partition_columns,
@@ -511,15 +653,17 @@ async fn build_iceberg_provider(
 ) -> Result<Arc<IcebergTableProvider>> {
     let SourceInfo {
         paths,
-        catalog_table: _,
+        lakehouse_table,
         schema: _,
         constraints: _,
         partition_by: _,
         bucket_by: _,
         sort_order: _,
         options,
+        read_case_sensitive: _,
     } = info;
 
+    validate_iceberg_read_lakehouse_context(lakehouse_table.as_ref())?;
     let table_url = IcebergTableFormat::parse_table_url(paths).await?;
     let metadata_location = metadata_location_from_options(&options);
     let catalog_managed_table = catalog_managed_iceberg_from_options(&options);
@@ -532,6 +676,55 @@ async fn build_iceberg_provider(
         catalog_managed_table,
     )
     .await
+}
+
+fn validate_iceberg_read_lakehouse_context(
+    lakehouse_table: Option<&LakehouseExecutionContext>,
+) -> Result<()> {
+    let Some(context) = lakehouse_table else {
+        return Ok(());
+    };
+    validate_iceberg_lakehouse_storage_access(Some(context))?;
+    if context.scan == ScanAuthority::IcebergRestServerSide {
+        // TODO: Implement Iceberg REST server-side scan planning sessions before
+        // allowing server-mode tables to fall through to client-side storage access.
+        return not_impl_err!(
+            "Iceberg REST catalog table {} requires server-side scan planning, which is not implemented yet",
+            context.catalog_table().join(".")
+        );
+    }
+    Ok(())
+}
+
+fn validate_iceberg_lakehouse_storage_access(
+    lakehouse_table: Option<&LakehouseExecutionContext>,
+) -> Result<()> {
+    let Some(context) = lakehouse_table else {
+        return Ok(());
+    };
+    if context
+        .rest_session
+        .as_ref()
+        .is_some_and(|session| session.remote_signing_enabled)
+    {
+        // TODO: Wire REST remote signing into Iceberg FileIO/object-store access.
+        return not_impl_err!(
+            "Iceberg REST catalog table {} requires remote signing, which is not implemented yet",
+            context.catalog_table().join(".")
+        );
+    }
+    if context
+        .rest_session
+        .as_ref()
+        .is_some_and(|session| session.storage_credential_count > 0)
+    {
+        // TODO: Apply REST vended credentials to operation-scoped storage access.
+        return not_impl_err!(
+            "Iceberg REST catalog table {} requires vended storage credentials, which is not implemented yet",
+            context.catalog_table().join(".")
+        );
+    }
+    Ok(())
 }
 
 /// Load metadata and pick snapshot per options (precedence: snapshot_id > ref > timestamp > current).
@@ -560,7 +753,14 @@ impl IcebergTableFormat {
         }
 
         let path = &paths[0];
-        let mut table_url = Url::parse(path).map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let mut table_url = match crate::utils::parse_absolute_url(path) {
+            Some(url) => url,
+            _ => file_url_from_absolute_path(path).ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "Iceberg table location must be an absolute path or URL: {path}"
+                ))
+            })?,
+        };
 
         if !table_url.path().ends_with('/') {
             table_url.set_path(&format!("{}/", table_url.path()));
@@ -569,38 +769,216 @@ impl IcebergTableFormat {
     }
 
     fn partition_columns_from_metadata(table: &Table) -> Result<Vec<CatalogPartitionField>> {
-        let metadata = table.metadata();
-        let spec = match metadata.default_partition_spec() {
-            Some(spec) => spec,
-            None => return Ok(vec![]),
-        };
-        if spec.is_unpartitioned() {
-            return Ok(vec![]);
-        }
-
-        let schema = metadata.current_schema().ok_or_else(|| {
-            DataFusionError::Plan("Iceberg table metadata is missing current schema".to_string())
-        })?;
-
-        let mut columns = Vec::with_capacity(spec.fields().len());
-        for field in spec.fields() {
-            let col_name = schema
-                .field_by_id(field.source_id)
-                .map(|f| f.name.clone())
-                .ok_or_else(|| {
-                    DataFusionError::Plan(format!(
-                        "Partition field references unknown source column id {}",
-                        field.source_id
-                    ))
-                })?;
-            columns.push(
-                catalog_partition_field_from_iceberg(col_name, field.transform)
-                    .map_err(DataFusionError::Plan)?,
-            );
-        }
-
-        Ok(columns)
+        partition_columns_from_table_metadata(table.metadata())
     }
+}
+
+fn partition_columns_from_table_metadata(
+    metadata: &TableMetadata,
+) -> Result<Vec<CatalogPartitionField>> {
+    let spec = match metadata.default_partition_spec() {
+        Some(spec) => spec,
+        None => return Ok(vec![]),
+    };
+    if spec.is_unpartitioned() {
+        return Ok(vec![]);
+    }
+
+    let schema = metadata.current_schema().ok_or_else(|| {
+        DataFusionError::Plan("Iceberg table metadata is missing current schema".to_string())
+    })?;
+
+    let mut columns = Vec::with_capacity(spec.fields().len());
+    for field in spec.fields() {
+        let col_name = schema
+            .field_by_id(field.source_id)
+            .map(|f| f.name.clone())
+            .ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "Partition field references unknown source column id {}",
+                    field.source_id
+                ))
+            })?;
+        columns.push(
+            catalog_partition_field_from_iceberg(col_name, field.transform)
+                .map_err(DataFusionError::Plan)?,
+        );
+    }
+
+    Ok(columns)
+}
+
+fn create_table_arrow_schema(columns: Vec<TableFormatCreateTableColumn>) -> Result<ArrowSchema> {
+    let fields = columns
+        .into_iter()
+        .map(
+            |TableFormatCreateTableColumn {
+                 name,
+                 data_type,
+                 nullable,
+                 comment,
+                 default,
+                 generated_always_as,
+                 identity,
+             }| {
+                if default.is_some() {
+                    return not_impl_err!("column DEFAULT in Iceberg CREATE TABLE");
+                }
+                if generated_always_as.is_some() {
+                    return not_impl_err!("generated columns in Iceberg CREATE TABLE");
+                }
+                if identity.is_some() {
+                    return not_impl_err!("identity columns in Iceberg CREATE TABLE");
+                }
+                let mut field = ArrowField::new(name, data_type, nullable);
+                if let Some(comment) = comment {
+                    field = field.with_metadata(std::collections::HashMap::from([(
+                        ICEBERG_ARROW_FIELD_DOC_KEY.to_string(),
+                        comment,
+                    )]));
+                }
+                field = with_variant_extension_if_marked_storage(field);
+                Ok(field)
+            },
+        )
+        .collect::<Result<Vec<_>>>()?;
+    Ok(ArrowSchema::new(fields))
+}
+
+fn create_table_partition_spec(
+    iceberg_schema: &Schema,
+    partition_by: &[CatalogPartitionField],
+) -> Result<PartitionSpec> {
+    let mut partition_spec_builder = PartitionSpec::builder();
+    for field in partition_by {
+        let source_id = iceberg_schema
+            .field_id_by_name(&field.column)
+            .ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "Partition column mismatch: column '{}' not found in schema",
+                    format_partition_expr(field)
+                ))
+            })?;
+        partition_spec_builder = partition_spec_builder.add_field(
+            source_id,
+            partition_field_name(field),
+            iceberg_transform_from_partition_field(field),
+        );
+    }
+    Ok(partition_spec_builder.build())
+}
+
+fn iceberg_schema_with_id(schema: &Schema, schema_id: i32) -> Result<Schema> {
+    Schema::builder()
+        .with_schema_id(schema_id)
+        .with_fields(schema.fields().iter().cloned())
+        .build()
+        .map_err(|e| DataFusionError::Plan(format!("Failed to assign Iceberg schema id: {e}")))
+}
+
+fn next_schema_id(metadata: &TableMetadata) -> i32 {
+    metadata
+        .schemas
+        .iter()
+        .map(|schema| schema.schema_id())
+        .max()
+        .unwrap_or(0)
+        + 1
+}
+
+fn next_partition_spec_id(metadata: &TableMetadata) -> i32 {
+    metadata
+        .partition_specs
+        .iter()
+        .map(|spec| spec.spec_id())
+        .max()
+        .unwrap_or(0)
+        + 1
+}
+
+fn file_url_from_absolute_path(path: &str) -> Option<Url> {
+    if Path::new(path).is_absolute() {
+        return Url::from_file_path(path).ok();
+    }
+    windows_drive_path_to_file_url(path)
+}
+
+fn windows_drive_path_to_file_url(path: &str) -> Option<Url> {
+    let bytes = path.as_bytes();
+    if bytes.len() < 3
+        || !bytes[0].is_ascii_alphabetic()
+        || bytes[1] != b':'
+        || !matches!(bytes[2], b'/' | b'\\')
+    {
+        return None;
+    }
+
+    let path = path.replace('\\', "/");
+    Url::parse(&format!("file:///{path}")).ok()
+}
+
+pub(crate) fn table_metadata_location(table_url: &Url, metadata_file: &str) -> Result<String> {
+    if crate::utils::parse_absolute_url(metadata_file).is_some() {
+        return Ok(metadata_file.to_string());
+    }
+
+    let relative_metadata_file = relative_metadata_file(table_url, metadata_file)?;
+    Ok(table_url
+        .join(&relative_metadata_file)
+        .map_err(|e| DataFusionError::External(Box::new(e)))?
+        .to_string())
+}
+
+fn relative_metadata_file(table_url: &Url, metadata_file: &str) -> Result<String> {
+    let base_path = crate::utils::url_to_object_path(table_url)?.to_string();
+    let metadata_file = metadata_file.trim_start_matches('/');
+
+    if let Some(relative) = strip_path_prefix(metadata_file, &base_path) {
+        return Ok(relative.to_string());
+    }
+    if table_url.scheme() == "file" {
+        if let Some(base_without_drive) = strip_windows_drive_prefix(&base_path) {
+            if let Some(relative) = strip_path_prefix(metadata_file, base_without_drive) {
+                return Ok(relative.to_string());
+            }
+        }
+    }
+    Ok(metadata_file.to_string())
+}
+
+fn strip_path_prefix<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
+    let prefix = prefix.trim_matches('/');
+    if prefix.is_empty() {
+        return None;
+    }
+    path.strip_prefix(prefix)?.strip_prefix('/')
+}
+
+fn strip_windows_drive_prefix(path: &str) -> Option<&str> {
+    let bytes = path.as_bytes();
+    if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/' {
+        Some(&path[3..])
+    } else {
+        None
+    }
+}
+
+fn iceberg_table_properties_from_catalog_create(
+    properties: Vec<(String, String)>,
+) -> Result<Vec<(String, String)>> {
+    let catalog_table_option = sail_common_datafusion::datasource::CATALOG_TABLE_OPTION;
+    if properties
+        .iter()
+        .any(|(key, _)| key.eq_ignore_ascii_case(catalog_table_option))
+    {
+        return plan_err!(
+            "Iceberg table property `{catalog_table_option}` is reserved for internal use"
+        );
+    }
+    Ok(properties
+        .into_iter()
+        .filter(|(key, _)| !key.starts_with("option."))
+        .collect())
 }
 
 pub(crate) fn metadata_location_from_properties(properties: &[(String, String)]) -> Option<String> {
@@ -635,22 +1013,6 @@ pub fn catalog_managed_iceberg_from_options(options: &[OptionLayer]) -> bool {
         }
         _ => false,
     })
-}
-
-pub(crate) fn catalog_table_from_properties(
-    properties: &[(String, String)],
-) -> Result<Option<Vec<String>>> {
-    properties
-        .iter()
-        .rev()
-        .find(|(key, _)| {
-            key.eq_ignore_ascii_case(sail_common_datafusion::datasource::CATALOG_TABLE_OPTION)
-        })
-        .map(|(_, value)| {
-            serde_json::from_str::<Vec<String>>(value)
-                .map_err(|e| DataFusionError::Plan(format!("invalid catalog table reference: {e}")))
-        })
-        .transpose()
 }
 
 #[expect(clippy::type_complexity)]
@@ -709,6 +1071,12 @@ fn alter_table_properties_conflict_error() -> DataFusionError {
 
 #[cfg(test)]
 mod tests {
+    use sail_common_datafusion::catalog::{
+        CatalogProviderId, CatalogTableIdentity, CommitAuthority, IcebergRestTableSessionRef,
+        LakehouseAuthority, LakehouseFormat, LakehouseOperation, MetadataPointerAuthority,
+        TableLifecycle,
+    };
+
     use super::*;
 
     #[test]
@@ -809,5 +1177,146 @@ mod tests {
             "metadata.table-uuid".to_string(),
             "9f7c2fc5-2e7d-4a6a-b3f9-0f6a47a3522c".to_string(),
         )]));
+    }
+
+    #[test]
+    fn parse_table_url_accepts_windows_drive_paths() -> Result<()> {
+        let url = futures::executor::block_on(IcebergTableFormat::parse_table_url(vec![
+            r"C:\Users\runneradmin\AppData\Local\Temp\iceberg_table".to_string(),
+        ]))?;
+        assert_eq!(
+            url.as_str(),
+            "file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parse_table_url_preserves_windows_file_uri_drive() -> Result<()> {
+        let url = futures::executor::block_on(IcebergTableFormat::parse_table_url(vec![
+            "file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table".to_string(),
+        ]))?;
+        assert_eq!(
+            url.as_str(),
+            "file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn table_metadata_location_preserves_file_uri_drive() -> Result<()> {
+        let table_url =
+            Url::parse("file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/")
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        assert_eq!(
+            table_metadata_location(&table_url, "metadata/v1.metadata.json")?,
+            "file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json"
+        );
+        assert_eq!(
+            table_metadata_location(
+                &table_url,
+                "C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json",
+            )?,
+            "file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json"
+        );
+        assert_eq!(
+            table_metadata_location(
+                &table_url,
+                "Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json",
+            )?,
+            "file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn read_rejects_required_rest_server_side_scan_planning() {
+        let context = LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("rest".to_string()),
+            vec!["rest".to_string(), "db".to_string(), "tbl".to_string()],
+            CatalogTableIdentity {
+                table_id: Some("12345678-1234-1234-1234-123456789012".to_string()),
+                table_uri: Some("s3://bucket/table".to_string()),
+            },
+            LakehouseOperation::Read,
+            LakehouseFormat::Iceberg,
+            LakehouseAuthority::CatalogAuthoritative {
+                lifecycle: TableLifecycle::External,
+                pointer: MetadataPointerAuthority::IcebergRest,
+                commit: CommitAuthority::IcebergRestCommit,
+            },
+            ScanAuthority::IcebergRestServerSide,
+        );
+
+        let result = validate_iceberg_read_lakehouse_context(Some(&context));
+        assert!(matches!(
+            &result,
+            Err(err) if format!("{err}").contains("requires server-side scan planning")
+        ));
+    }
+
+    #[test]
+    fn storage_access_rejects_required_rest_remote_signing() {
+        let mut context = LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("rest".to_string()),
+            vec!["rest".to_string(), "db".to_string(), "tbl".to_string()],
+            CatalogTableIdentity {
+                table_id: Some("12345678-1234-1234-1234-123456789012".to_string()),
+                table_uri: Some("s3://bucket/table".to_string()),
+            },
+            LakehouseOperation::Read,
+            LakehouseFormat::Iceberg,
+            LakehouseAuthority::CatalogAuthoritative {
+                lifecycle: TableLifecycle::External,
+                pointer: MetadataPointerAuthority::IcebergRest,
+                commit: CommitAuthority::IcebergRestCommit,
+            },
+            ScanAuthority::ClientTableFormat,
+        );
+        context.rest_session = Some(IcebergRestTableSessionRef {
+            fingerprint: "rest-session".to_string(),
+            scan_planning_mode: Some("client".to_string()),
+            storage_credential_count: 0,
+            remote_signing_enabled: true,
+        });
+
+        let result = validate_iceberg_lakehouse_storage_access(Some(&context));
+        assert!(matches!(
+            &result,
+            Err(err) if format!("{err}").contains("requires remote signing")
+        ));
+    }
+
+    #[test]
+    fn storage_access_rejects_required_rest_vended_credentials() {
+        let mut context = LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("rest".to_string()),
+            vec!["rest".to_string(), "db".to_string(), "tbl".to_string()],
+            CatalogTableIdentity {
+                table_id: Some("12345678-1234-1234-1234-123456789012".to_string()),
+                table_uri: Some("s3://bucket/table".to_string()),
+            },
+            LakehouseOperation::Read,
+            LakehouseFormat::Iceberg,
+            LakehouseAuthority::CatalogAuthoritative {
+                lifecycle: TableLifecycle::External,
+                pointer: MetadataPointerAuthority::IcebergRest,
+                commit: CommitAuthority::IcebergRestCommit,
+            },
+            ScanAuthority::ClientTableFormat,
+        );
+        context.rest_session = Some(IcebergRestTableSessionRef {
+            fingerprint: "rest-session".to_string(),
+            scan_planning_mode: Some("client".to_string()),
+            storage_credential_count: 1,
+            remote_signing_enabled: false,
+        });
+
+        let result = validate_iceberg_lakehouse_storage_access(Some(&context));
+        assert!(matches!(
+            &result,
+            Err(err) if format!("{err}").contains("vended storage credentials")
+        ));
     }
 }

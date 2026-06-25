@@ -119,7 +119,7 @@ mod tests {
 
         let optimized = optimize(plan);
 
-        assert!(optimized.downcast_ref::<CoalescePartitionsExec>().is_some());
+        assert!(optimized.is::<CoalescePartitionsExec>());
         assert_eq!(optimized.output_partitioning().partition_count(), 1);
     }
 
@@ -153,8 +153,8 @@ mod tests {
 
         let optimized = optimize(plan);
 
-        assert!(optimized.downcast_ref::<UnionExec>().is_some());
-        assert!(optimized.downcast_ref::<CoalesceExec>().is_none());
+        assert!(optimized.is::<UnionExec>());
+        assert!(!optimized.is::<CoalesceExec>());
         assert_eq!(optimized.output_partitioning().partition_count(), 2);
     }
 

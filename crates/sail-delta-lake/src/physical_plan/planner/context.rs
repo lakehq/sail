@@ -17,17 +17,17 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::common::{DataFusionError, Result};
 use object_store::ObjectStore;
-use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
+use sail_common_datafusion::catalog::{CatalogTableColumnIdentity, LakehouseExecutionContext};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use super::log_segment::LogSegmentFiles;
-use crate::kernel::DeltaSnapshotConfig;
+use crate::delta_log::{default_logstore, LogStoreRef, StorageConfig};
 use crate::options::gen::DeltaWriteOptions;
 use crate::physical_plan::{
     prepare_delta_write_context, DeltaCommitContext, DeltaWriteContext, DeltaWriterExecOptions,
 };
-use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
+use crate::snapshot::DeltaSnapshotConfig;
 use crate::table::{
     create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot, DeltaSnapshot,
     DeltaTable,
@@ -59,7 +59,7 @@ pub struct DeltaPlannerConfig {
     pub metadata_schema: Option<SchemaRef>,
     pub identity_columns: HashMap<String, CatalogTableColumnIdentity>,
     pub table_snapshot: Option<Arc<DeltaSnapshot>>,
-    pub catalog_table: Option<Vec<String>>,
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
 }
 
 impl DeltaPlannerConfig {
@@ -84,7 +84,7 @@ impl DeltaPlannerConfig {
             metadata_schema: None,
             identity_columns: HashMap::new(),
             table_snapshot: None,
-            catalog_table: None,
+            lakehouse_table: None,
         }
     }
 
@@ -127,8 +127,11 @@ impl DeltaPlannerConfig {
         self
     }
 
-    pub fn with_catalog_table(mut self, catalog_table: Option<Vec<String>>) -> Self {
-        self.catalog_table = catalog_table;
+    pub fn with_lakehouse_table(
+        mut self,
+        lakehouse_table: Option<LakehouseExecutionContext>,
+    ) -> Self {
+        self.lakehouse_table = lakehouse_table;
         self
     }
 }
@@ -207,8 +210,19 @@ impl<'a> PlannerContext<'a> {
         self.config.table_snapshot.as_ref()
     }
 
-    pub fn catalog_table(&self) -> Option<&Vec<String>> {
-        self.config.catalog_table.as_ref()
+    pub fn catalog_table(&self) -> Option<&[String]> {
+        self.config
+            .lakehouse_table
+            .as_ref()
+            .map(LakehouseExecutionContext::catalog_table)
+    }
+
+    pub fn catalog_table_vec(&self) -> Option<Vec<String>> {
+        self.catalog_table().map(<[String]>::to_vec)
+    }
+
+    pub fn lakehouse_table(&self) -> Option<&LakehouseExecutionContext> {
+        self.config.lakehouse_table.as_ref()
     }
 
     pub fn commit_context(&self) -> DeltaCommitContext {
@@ -221,7 +235,7 @@ impl<'a> PlannerContext<'a> {
         &self,
         input_schema: &SchemaRef,
         sink_mode: &PhysicalSinkMode,
-        operation_override: Option<crate::kernel::DeltaOperation>,
+        operation_override: Option<crate::spec::DeltaOperation>,
     ) -> Result<DeltaWriteContext> {
         let options = DeltaWriterExecOptions::from(self.options().clone())
             .with_generation_expressions(self.generation_expressions().clone())
@@ -304,10 +318,10 @@ impl<'a> PlannerContext<'a> {
         } else {
             let log_store = self.log_store()?;
             let mut table_config = table_config;
-            if let Some(catalog_table) = &self.config.catalog_table {
+            if let Some(lakehouse_table) = &self.config.lakehouse_table {
                 table_config.catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
                     &self.session,
-                    catalog_table,
+                    lakehouse_table,
                     &self.config.table_url,
                     log_store.clone(),
                     None,

@@ -11,6 +11,7 @@ use datafusion::arrow::datatypes::{
 use datafusion::arrow::error::ArrowError;
 use itertools::Itertools;
 use parquet_variant_compute::VariantType;
+use sail_common_datafusion::variant::is_marked_variant_storage_type;
 
 use crate::spec::schema::{
     ArrayType, DataType, MapType, MetadataValue, PrimitiveType, StructField, StructType,
@@ -205,6 +206,7 @@ fn parse_metadata_value(v: &str) -> MetadataValue {
 
 fn is_variant_arrow_field(field: &ArrowField) -> bool {
     field.extension_type_name() == Some(VariantType::NAME)
+        || is_marked_variant_storage_type(field.data_type())
 }
 
 fn is_unshredded_variant_arrow_type(data_type: &ArrowDataType) -> bool {

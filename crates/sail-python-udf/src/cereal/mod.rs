@@ -1,9 +1,9 @@
-use arrow_pyarrow::ToPyArrow;
 use datafusion::arrow::datatypes::DataType;
 use pyo3::prelude::PyAnyMethods;
 use pyo3::types::{PyList, PyModule};
 use pyo3::{intern, PyResult, Python};
 use sail_common::spec;
+use sail_pyarrow::ToPyArrow;
 
 use crate::error::{PyUdfError, PyUdfResult};
 
@@ -44,7 +44,7 @@ fn get_pyspark_version() -> PyUdfResult<PySparkVersion> {
 }
 
 fn check_python_udf_version(version: &str) -> PyUdfResult<()> {
-    let pyo3_version: String = Python::attach(|py| py.version().to_string());
+    let pyo3_version = Python::version_str();
     if pyo3_version.starts_with(version) {
         Ok(())
     } else {

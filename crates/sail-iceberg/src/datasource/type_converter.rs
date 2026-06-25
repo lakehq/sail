@@ -24,7 +24,8 @@ use parquet_variant_compute::VariantType;
 use rust_decimal::prelude::ToPrimitive;
 use sail_common::spec::{SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME};
 use sail_common_datafusion::variant::{
-    is_variant_arrow_field, is_variant_storage_type as is_variant_arrow_storage_type,
+    is_marked_variant_storage_type, is_variant_arrow_field,
+    is_variant_storage_type as is_variant_arrow_storage_type,
 };
 use serde_json;
 
@@ -118,17 +119,18 @@ pub fn iceberg_field_to_arrow(field: &NestedField) -> Result<ArrowField> {
 
 /// Convert Arrow field to Iceberg field
 pub fn arrow_field_to_iceberg(field: &ArrowField) -> Result<NestedField> {
-    let iceberg_type = if is_variant_arrow_field(field) {
-        if !is_variant_arrow_storage_type(field.data_type()) {
-            return plan_err!(
-                "Invalid Variant data type for Iceberg conversion: {}",
-                field.data_type()
-            );
-        }
-        Type::Primitive(PrimitiveType::Variant)
-    } else {
-        arrow_type_to_iceberg(field.data_type())?
-    };
+    let iceberg_type =
+        if is_variant_arrow_field(field) || is_marked_variant_storage_type(field.data_type()) {
+            if !is_variant_arrow_storage_type(field.data_type()) {
+                return plan_err!(
+                    "Invalid Variant data type for Iceberg conversion: {}",
+                    field.data_type()
+                );
+            }
+            Type::Primitive(PrimitiveType::Variant)
+        } else {
+            arrow_type_to_iceberg(field.data_type())?
+        };
     let required = !field.is_nullable();
     let doc = get_field_doc(field);
     let mut nested_field = NestedField::new(

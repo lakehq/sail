@@ -11,6 +11,7 @@ use glob::Pattern;
 use log::debug;
 use object_store::ObjectStoreExt;
 use percent_encoding::percent_decode;
+use sail_common_datafusion::utils::items::ItemTaker;
 use url::Url;
 
 /// A parsed pattern segment in a glob pattern.
@@ -502,6 +503,22 @@ pub async fn resolve_listing_urls(
         }
     }
     Ok(urls)
+}
+
+pub fn resolve_listing_writer_url(path: String) -> Result<Url> {
+    // Listing writes always target a directory of output files.
+    let path = if path.ends_with(object_store::path::DELIMITER) {
+        path
+    } else {
+        format!("{path}{}", object_store::path::DELIMITER)
+    };
+    let Ok(GlobUrl { base, glob }) = GlobUrl::parse(&path)?.one() else {
+        return plan_err!("exactly one URL should be provided for writing: {path}");
+    };
+    if glob.is_some() {
+        return plan_err!("glob pattern is not allowed in the output URL: {path}");
+    }
+    Ok(base)
 }
 
 /// If `url` points to a directory and the user did not supply an explicit

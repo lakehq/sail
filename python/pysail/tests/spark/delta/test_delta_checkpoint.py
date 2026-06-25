@@ -3,10 +3,7 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-import pytest
 from pyspark.sql import Row
-
-from pysail.testing.spark.utils.common import is_jvm_spark
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -23,7 +20,6 @@ def _read_first_commit_metadata(table_path: Path) -> dict:
     raise AssertionError(msg)
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Spark does not handle v1 and v2 tables properly")
 def test_delta_write_to_table_properties_materialize_metadata(spark, tmp_path: Path):
     """Test that .writeTo().tableProperty() materializes Delta table properties on first commit.
 
@@ -49,7 +45,6 @@ def test_delta_write_to_table_properties_materialize_metadata(spark, tmp_path: P
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
 
-@pytest.mark.skipif(is_jvm_spark(), reason="Spark does not handle v1 and v2 tables properly")
 def test_delta_write_option_routes_table_property_to_metadata(spark, tmp_path: Path):
     """Test that Delta table properties can be passed through DataFrame write options.
 

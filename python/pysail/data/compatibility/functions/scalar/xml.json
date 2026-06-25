@@ -14,8 +14,7 @@
   {
     "module": "pyspark.sql.functions",
     "function": "to_xml",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/231"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",

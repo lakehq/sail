@@ -46,7 +46,7 @@ impl TableFormat for ConsoleTableFormat {
             bucket_by,
             sort_order,
             options,
-            catalog_table: _,
+            lakehouse_table: _,
         } = info;
         if !matches!(mode, SinkMode::Append) {
             return not_impl_err!("the console table format only supports append mode");
@@ -125,7 +125,7 @@ impl ExtensionPlanner for ConsolePhysicalPlanner {
         physical_inputs: &[Arc<dyn ExecutionPlan>],
         _session_state: &SessionState,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        if node.as_any().downcast_ref::<ConsoleWriteNode>().is_none() {
+        if !node.as_any().is::<ConsoleWriteNode>() {
             return Ok(None);
         }
         let [input] = physical_inputs else {

@@ -492,6 +492,8 @@ impl PlanFormatter for SparkPlanFormatter {
                 Ok(result)
             }
             "timestamp" | "date" => Ok(arguments.one()?.to_string()),
+            // Spark always names the time window column `window`.
+            "window" => Ok("window".to_string()),
             "to_unix_timestamp" => {
                 let mut argv = arguments.clone();
                 if argv.len() == 1 {
@@ -500,6 +502,18 @@ impl PlanFormatter for SparkPlanFormatter {
                 let args = argv.join(", ");
                 Ok(format!("{name}({args})"))
             }
+            "hll_sketch_agg" | "theta_sketch_agg" | "theta_union_agg" => Ok(
+                format_function_with_default_argument(name, arguments, 1, "12"),
+            ),
+            "hll_union" => Ok(format_function_with_default_argument(
+                name, arguments, 2, "false",
+            )),
+            "hll_union_agg" => Ok(format_function_with_default_argument(
+                name, arguments, 1, "false",
+            )),
+            "theta_union" => Ok(format_function_with_default_argument(
+                name, arguments, 2, "12",
+            )),
             "dateadd" => {
                 let arguments = arguments.join(", ");
                 Ok(format!("date_add({arguments})"))
@@ -515,6 +529,25 @@ impl PlanFormatter for SparkPlanFormatter {
                 let name = name.to_lowercase();
                 let (arg, _) = arguments.at_least_one()?;
                 Ok(format!("{name}({arg})"))
+            }
+            "mode" => {
+                let name = name.to_lowercase();
+                // Spark hides the optional `deterministic` flag in the column name:
+                // `mode(col)` when it is false or absent, and the WITHIN GROUP form
+                // when it is true.
+                // The "lowest"/"highest" sentinels come from the plan resolver rewrite
+                // of `mode() WITHIN GROUP (ORDER BY col)`. Spark displays its internal
+                // reverse flag rather than the original sort direction, so an ascending
+                // query is named DESC and a descending query is named without a
+                // direction.
+                let (arg, rest) = arguments.at_least_one()?;
+                match rest.first() {
+                    Some(&"true") | Some(&"lowest") => {
+                        Ok(format!("{name}() WITHIN GROUP (ORDER BY {arg} DESC)"))
+                    }
+                    Some(&"highest") => Ok(format!("{name}() WITHIN GROUP (ORDER BY {arg})")),
+                    _ => Ok(format!("{name}({arg})")),
+                }
             }
             "from_json" => {
                 let (arg, rest) = arguments.at_least_one()?;
@@ -535,7 +568,8 @@ impl PlanFormatter for SparkPlanFormatter {
                 }
                 Ok(format!("{name}({arg})"))
             }
-            "from_csv" | "to_csv" | "any_value" | "first_value" | "last_value" => {
+            "from_csv" | "schema_of_csv" | "schema_of_json" | "to_csv" | "to_json"
+            | "any_value" | "first_value" | "last_value" => {
                 let (arg, _) = arguments.at_least_one()?;
                 Ok(format!("{name}({arg})"))
             }
@@ -696,6 +730,19 @@ fn append_start_pos_if_arglen_eq(
     };
     let args = args.join(", ");
     format!("{name}({args}{start_pos_str})")
+}
+
+fn format_function_with_default_argument(
+    name: &str,
+    mut arguments: Vec<&str>,
+    default_argument_count: usize,
+    default_argument: &'static str,
+) -> String {
+    if arguments.len() == default_argument_count {
+        arguments.push(default_argument);
+    }
+    let arguments = arguments.join(", ");
+    format!("{name}({arguments})")
 }
 
 fn format_decimal(value: &str, scale: i8) -> String {

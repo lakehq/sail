@@ -25,11 +25,11 @@ use super::commit::assemble_commit_plan;
 use super::context::PlannerContext;
 use super::metadata_predicate::{build_metadata_filter, predicate_requires_stats};
 use super::utils::{build_log_replay_pipeline_with_options, LogReplayOptions};
-use crate::kernel::DeltaOperation;
 use crate::physical_plan::{
     prepare_delta_write_context, DeltaCommitContext, DeltaDiscoveryExec, DeltaScanByAddsExec,
     DeltaWriterExecOptions,
 };
+use crate::spec::DeltaOperation;
 
 pub async fn build_delete_plan(
     ctx: &PlannerContext<'_>,
@@ -121,7 +121,7 @@ pub async fn build_delete_plan(
         None,
         None,
         None,
-        ctx.catalog_table().cloned(),
+        ctx.lakehouse_table().cloned(),
     ));
 
     // Adapt the predicate to the scan schema. PhysicalExpr Column indices are schema-dependent,
@@ -166,7 +166,7 @@ pub async fn build_delete_plan(
         table_schema,
         ctx.options().user_metadata.clone(),
         write_context,
-        ctx.catalog_table().cloned(),
+        ctx.lakehouse_table().cloned(),
     )
 }
 
@@ -274,6 +274,6 @@ pub async fn build_delete_plan_mor(
         sail_common_datafusion::datasource::PhysicalSinkMode::Append,
         ctx.options().user_metadata.clone(),
         DeltaCommitContext::from_snapshot(snapshot_state.as_ref()),
-        ctx.catalog_table().cloned(),
+        ctx.lakehouse_table().cloned(),
     )))
 }

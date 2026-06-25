@@ -121,13 +121,14 @@ impl PlanResolver<'_> {
         })?;
         let source_info = SourceInfo {
             paths: vec![path.clone()],
-            catalog_table: None,
+            lakehouse_table: None,
             schema: None,
             constraints: Default::default(),
             partition_by: vec![],
             bucket_by: None,
             sort_order: vec![],
             options: vec![],
+            read_case_sensitive: self.config.case_sensitive,
         };
         let metadata = match table_format
             .infer_metadata(&self.ctx.state(), source_info)
@@ -179,7 +180,7 @@ impl PlanResolver<'_> {
         }
 
         let info = TableInfo {
-            catalog_table: info.catalog_table.clone(),
+            lakehouse_table: info.lakehouse_table.clone(),
             columns,
             location: Some(path),
             format: format.to_string(),
@@ -521,7 +522,7 @@ impl PlanResolver<'_> {
         })?;
         let source = SourceInfo {
             paths: vec![location.clone()],
-            catalog_table: info.catalog_table.clone(),
+            lakehouse_table: info.lakehouse_table.clone(),
             schema: None,
             constraints: Default::default(),
             partition_by: vec![],
@@ -530,6 +531,7 @@ impl PlanResolver<'_> {
             options: vec![OptionLayer::TablePropertyList {
                 items: info.properties.clone(),
             }],
+            read_case_sensitive: self.config.case_sensitive,
         };
         match table_format.infer_metadata(&self.ctx.state(), source).await {
             Ok(metadata) => Ok(Some(metadata)),

@@ -7,6 +7,7 @@ use datafusion::functions::expr_fn;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{self, Expr};
 use datafusion_expr::{cast, lit, try_cast, when, BinaryExpr, ExprSchemable, Operator, ScalarUDF};
+use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_functions::expr_fn::to_time;
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
@@ -26,8 +27,12 @@ use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
 use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
+use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
 use sail_function::scalar::datetime::timestamp_now::TimestampNow;
+use sail_function::scalar::explode::{Explode, ExplodeKind};
+use sail_sql_analyzer::literal::interval::IntervalValue;
+use sail_sql_analyzer::parser::parse_interval;
 
 use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
@@ -149,6 +154,92 @@ fn format_interval(interval: Expr, unit: &str) -> Expr {
         op: Operator::StringConcat,
         right: Box::new(lit(format!(" {unit}"))),
     })
+}
+
+fn timestampadd_interval(unit: &str, quantity: Expr) -> PlanResult<Expr> {
+    let zero_i32 = || lit(0_i32);
+    let zero_f64 = || lit(0_f64);
+    let quantity_i32 = || cast(quantity.clone(), DataType::Int32);
+    let quantity_f64 = || cast(quantity.clone(), DataType::Float64);
+    let make_interval = |args: Vec<Expr>| ScalarUDF::from(SparkMakeInterval::new()).call(args);
+    let make_dt_interval = |args: Vec<Expr>| ScalarUDF::from(SparkMakeDtInterval::new()).call(args);
+
+    let normalized = unit.trim().to_uppercase();
+    match normalized.as_str() {
+        "YEAR" => Ok(make_interval(vec![quantity_i32()])),
+        "QUARTER" => Ok(make_interval(vec![
+            zero_i32(),
+            cast(quantity.clone() * lit(3_i32), DataType::Int32),
+        ])),
+        "MONTH" => Ok(make_interval(vec![zero_i32(), quantity_i32()])),
+        "WEEK" => Ok(make_dt_interval(vec![
+            cast(quantity.clone() * lit(7_i32), DataType::Int32),
+            zero_i32(),
+            zero_i32(),
+            zero_f64(),
+        ])),
+        "DAY" | "DAYOFYEAR" => Ok(make_dt_interval(vec![
+            quantity_i32(),
+            zero_i32(),
+            zero_i32(),
+            zero_f64(),
+        ])),
+        "HOUR" => Ok(make_dt_interval(vec![
+            zero_i32(),
+            quantity_i32(),
+            zero_i32(),
+            zero_f64(),
+        ])),
+        "MINUTE" => Ok(make_dt_interval(vec![
+            zero_i32(),
+            zero_i32(),
+            quantity_i32(),
+            zero_f64(),
+        ])),
+        "SECOND" => Ok(make_dt_interval(vec![
+            zero_i32(),
+            zero_i32(),
+            zero_i32(),
+            quantity_f64(),
+        ])),
+        "MILLISECOND" => Ok(make_dt_interval(vec![
+            zero_i32(),
+            zero_i32(),
+            zero_i32(),
+            quantity_f64() / lit(1_000_f64),
+        ])),
+        "MICROSECOND" => Ok(make_dt_interval(vec![
+            zero_i32(),
+            zero_i32(),
+            zero_i32(),
+            quantity_f64() / lit(1_000_000_f64),
+        ])),
+        _ => Err(PlanError::invalid(format!(
+            "timestampadd does not support interval unit type '{unit}'"
+        ))),
+    }
+}
+
+fn timestampadd(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let (unit, quantity, timestamp) = input.arguments.three()?;
+    let unit = match &unit {
+        Expr::Literal(ScalarValue::Utf8(Some(s)), _)
+        | Expr::Literal(ScalarValue::LargeUtf8(Some(s)), _) => s.clone(),
+        Expr::Column(col) => col.name().to_string(),
+        _ => {
+            return Err(PlanError::invalid(
+                "timestampadd unit must be a string literal or keyword",
+            ))
+        }
+    };
+    let interval = timestampadd_interval(&unit, quantity)?;
+    Ok(cast(
+        timestamp,
+        DataType::Timestamp(
+            TimeUnit::Microsecond,
+            Some(input.function_context.plan_config.session_timezone.clone()),
+        ),
+    ) + interval)
 }
 
 fn make_date(year: Expr, month: Expr, day: Expr) -> Expr {
@@ -316,7 +407,7 @@ fn next_day(input: ScalarFunctionInput) -> PlanResult<Expr> {
     Ok(udf.call(input.arguments))
 }
 
-fn date_format(expr: Expr, format: Expr) -> Expr {
+pub(super) fn date_format(expr: Expr, format: Expr) -> Expr {
     // Handle standalone fractional seconds format (e.g., 'SSS' for milliseconds).
     // Chrono's %.Nf always includes a leading dot (e.g., ".000"), so for standalone
     // S-patterns we strip the dot using substr.
@@ -699,6 +790,192 @@ fn months_between(input: ScalarFunctionInput) -> PlanResult<Expr> {
     .end()?)
 }
 
+const MICROS_PER_DAY: i64 = 24 * 60 * 60 * 1_000_000;
+
+/// Parses a `window` duration/start-time argument (interval string, day-time
+/// interval, or integer number of microseconds, matching Spark's
+/// `TimeWindow.parseExpression`) into microseconds. Months/years are rejected
+/// (non-constant length).
+fn window_interval_micros(expr: &Expr) -> PlanResult<i64> {
+    let Expr::Literal(value, _) = expr else {
+        return Err(PlanError::invalid(
+            "window durations and start time must be literal strings, intervals, or integers",
+        ));
+    };
+    if let Some(s) = value.try_as_str().flatten() {
+        return match parse_interval(s)
+            .map_err(|e| PlanError::invalid(format!("invalid window interval {s:?}: {e}")))?
+        {
+            IntervalValue::Microsecond { microseconds } => Ok(microseconds),
+            _ => Err(PlanError::invalid(format!(
+                "window interval must not contain months or years: {s:?}"
+            ))),
+        };
+    }
+    match value {
+        // Spark interprets integer literals as microseconds.
+        ScalarValue::Int32(Some(v)) => Ok(*v as i64),
+        ScalarValue::Int64(Some(v)) => Ok(*v),
+        ScalarValue::DurationMicrosecond(Some(v)) => Ok(*v),
+        ScalarValue::DurationMillisecond(Some(v)) => Ok(*v * 1_000),
+        ScalarValue::DurationSecond(Some(v)) => Ok(*v * 1_000_000),
+        ScalarValue::DurationNanosecond(Some(v)) => Ok(*v / 1_000),
+        ScalarValue::IntervalDayTime(Some(v)) => {
+            Ok(v.days as i64 * MICROS_PER_DAY + v.milliseconds as i64 * 1_000)
+        }
+        ScalarValue::IntervalMonthDayNano(Some(v)) if v.months == 0 => {
+            Ok(v.days as i64 * MICROS_PER_DAY + v.nanoseconds / 1_000)
+        }
+        _ => Err(PlanError::invalid(
+            "window durations and start time must be literal strings, day-time intervals, or integers",
+        )),
+    }
+}
+
+/// The parsed durations (in microseconds) of a Spark `window` call.
+#[derive(Debug, Clone, Copy)]
+struct WindowSpec {
+    window_duration: i64,
+    slide_duration: i64,
+    start_time: i64,
+}
+
+/// Bound on `ceil(windowDuration / slideDuration)`
+const MAX_OVERLAPPING_WINDOWS: i64 = 1_000_000;
+
+/// Parses and validates the `window` durations from the full argument list
+/// (`args[0]` is the time column; `args[1..]` are window/slide/start).
+fn parse_window_spec(args: &[Expr]) -> PlanResult<WindowSpec> {
+    if !(2..=4).contains(&args.len()) {
+        return Err(PlanError::invalid(format!(
+            "window requires 2 to 4 arguments, got {}",
+            args.len()
+        )));
+    }
+    let window_duration = window_interval_micros(&args[1])?;
+    let slide_duration = match args.get(2) {
+        Some(arg) => window_interval_micros(arg)?,
+        None => window_duration,
+    };
+    let start_time = match args.get(3) {
+        Some(arg) => window_interval_micros(arg)?,
+        None => 0,
+    };
+    if window_duration <= 0 {
+        return Err(PlanError::invalid(
+            "window: the window duration must be greater than 0",
+        ));
+    }
+    if slide_duration <= 0 {
+        return Err(PlanError::invalid(
+            "window: the slide duration must be greater than 0",
+        ));
+    }
+    if slide_duration > window_duration {
+        return Err(PlanError::invalid(
+            "window: the slide duration must be less than or equal to the window duration",
+        ));
+    }
+    if start_time >= slide_duration || start_time <= -slide_duration {
+        return Err(PlanError::invalid(format!(
+            "The `abs(start_time)`({start_time}L) must be < the `slide_duration`({slide_duration}L)."
+        )));
+    }
+    let overlapping = (window_duration + slide_duration - 1) / slide_duration;
+    if overlapping > MAX_OVERLAPPING_WINDOWS {
+        return Err(PlanError::invalid(format!(
+            "window: ceil(windowDuration / slideDuration) = {overlapping} exceeds the limit of {MAX_OVERLAPPING_WINDOWS}"
+        )));
+    }
+    Ok(WindowSpec {
+        window_duration,
+        slide_duration,
+        start_time,
+    })
+}
+
+/// The `window` struct field type: a microsecond timestamp (non-timestamp inputs
+/// are cast, matching Spark's cast of the time column to `TimestampType`).
+fn window_field_type(
+    time_type: &DataType,
+    session_tz: &std::sync::Arc<str>,
+) -> PlanResult<DataType> {
+    Ok(match time_type {
+        DataType::Timestamp(_, tz) => DataType::Timestamp(TimeUnit::Microsecond, tz.clone()),
+        // Spark casts dates and strings to `TimestampType` (session time zone), so a
+        // date becomes midnight in the session time zone, not a naive timestamp.
+        DataType::Date32
+        | DataType::Date64
+        | DataType::Utf8
+        | DataType::LargeUtf8
+        | DataType::Utf8View => {
+            DataType::Timestamp(TimeUnit::Microsecond, Some(session_tz.clone()))
+        }
+        other => {
+            return Err(PlanError::invalid(format!(
+                "window requires a timestamp time column, got {other:?}"
+            )))
+        }
+    })
+}
+
+/// The Spark `window` time function: buckets a timestamp into `struct<start, end>`
+/// windows. The candidate enumeration is deferred to the `SparkWindowBuckets` UDF
+/// so the plan stays bounded regardless of the `window/slide` ratio.
+fn window(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let schema = input.function_context.schema;
+    let args = input.arguments;
+    let spec = parse_window_spec(&args)?;
+    let session_tz = input.function_context.plan_config.session_timezone.clone();
+    let time = args
+        .into_iter()
+        .next()
+        .ok_or_else(|| PlanError::internal("window missing time column"))?;
+    let field_type = window_field_type(&time.get_type(schema)?, &session_tz)?;
+    let time_ts = cast(time, field_type);
+    let buckets = ScalarUDF::from(SparkWindowBuckets::new(
+        spec.window_duration,
+        spec.slide_duration,
+        spec.start_time,
+    ))
+    .call(vec![time_ts]);
+    Ok(ScalarUDF::from(Explode::new(ExplodeKind::Explode)).call(vec![buckets]))
+}
+
+/// The Spark `window_time` function: the event-time of a time window, defined as
+/// `window.end - 1 microsecond`. Spark validates the argument via column metadata
+/// markers; we approximate that with a structural check on the window struct type.
+fn window_time(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let schema = input.function_context.schema;
+    let arg = input.arguments.one()?;
+    let end_type = match arg.get_type(schema)? {
+        DataType::Struct(fields)
+            if fields.len() == 2
+                && fields[0].name() == "start"
+                && fields[1].name() == "end"
+                && matches!(
+                    fields[0].data_type(),
+                    DataType::Timestamp(TimeUnit::Microsecond, _)
+                )
+                && matches!(
+                    fields[1].data_type(),
+                    DataType::Timestamp(TimeUnit::Microsecond, _)
+                ) =>
+        {
+            fields[1].data_type().clone()
+        }
+        other => {
+            return Err(PlanError::invalid(format!(
+                "window_time requires a window column (struct with start and end timestamps), got {other:?}"
+            )))
+        }
+    };
+    Ok(cast(
+        cast(arg.field("end"), DataType::Int64) - lit(1_i64),
+        end_type,
+    ))
+}
+
 pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -820,7 +1097,10 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
                 )
             }),
         ),
+        ("timestampadd", F::custom(timestampadd)),
+        ("timestamp_add", F::custom(timestampadd)),
         ("timestampdiff", F::custom(datediff)),
+        ("timestamp_diff", F::custom(datediff)),
         ("to_date", F::custom(to_date)),
         ("to_time", F::var_arg(to_time)),
         (
@@ -901,8 +1181,8 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             "weekofyear",
             F::unary(|arg| cast(expr_fn::to_char(arg, lit("%V")), DataType::Int32)),
         ),
-        ("window", F::unknown("window")),
-        ("window_time", F::unknown("window_time")),
+        ("window", F::custom(window)),
+        ("window_time", F::custom(window_time)),
         ("year", F::udf(SparkYear::new())),
         ("years", F::unary(years)),
     ]

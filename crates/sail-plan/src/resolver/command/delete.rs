@@ -1,16 +1,19 @@
 use std::sync::Arc;
 
 use datafusion_common::{DFSchemaRef, ToDFSchema};
-use datafusion_expr::{Extension, LogicalPlan};
+use datafusion_expr::LogicalPlan;
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::{TableKind, TableStatus};
-use sail_common_datafusion::datasource::{OptionLayer, SourceInfo, TableFormatRegistry};
+use sail_common_datafusion::catalog::{
+    LakehouseExecutionContext, LakehouseOperation, TableKind, TableStatus,
+};
+use sail_common_datafusion::datasource::{
+    DeleteInfo, OptionLayer, SourceInfo, TableFormatRegistry,
+};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::expression::expression_before_rename;
 use sail_common_datafusion::rename::schema::rename_schema;
-use sail_logical_plan::file_delete::{FileDeleteNode, FileDeleteOptions};
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::state::PlanResolverState;
@@ -63,19 +66,22 @@ impl PlanResolver<'_> {
             None
         };
 
-        let file_delete_options = FileDeleteOptions {
+        let delete_info = DeleteInfo {
             table_name,
             path: info.location,
-            format: info.format,
             condition,
+            lakehouse_table: info.lakehouse_table,
             options: vec![OptionLayer::TablePropertyList {
                 items: info.properties,
             }],
         };
 
-        Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(FileDeleteNode::new(file_delete_options)),
-        }))
+        let registry = self.ctx.extension::<TableFormatRegistry>()?;
+        registry
+            .get(&info.format)?
+            .create_deleter(&self.ctx.state(), delete_info)
+            .await
+            .map_err(PlanError::from)
     }
 
     async fn get_table_info_for_delete(
@@ -105,18 +111,27 @@ impl PlanResolver<'_> {
 
         let location =
             location.ok_or_else(|| PlanError::unsupported("DELETE on tables without location"))?;
+        let lakehouse_table = self
+            .resolve_lakehouse_table_context(
+                table_name,
+                LakehouseOperation::Read,
+                Some(&format),
+                vec![],
+            )
+            .await?;
 
         let schema = if columns.is_empty() && format.eq_ignore_ascii_case("DELTA") {
             // Schema is not in catalog, try to infer from data source
             let source_info = SourceInfo {
                 paths: vec![location.clone()],
-                catalog_table: Some(table_name.to_vec()),
+                lakehouse_table: Some(lakehouse_table.clone()),
                 schema: None,
                 constraints: Default::default(),
                 partition_by: vec![],
                 bucket_by: None,
                 sort_order: vec![],
                 options: vec![],
+                read_case_sensitive: self.config.case_sensitive,
             };
             let registry = self.ctx.extension::<TableFormatRegistry>()?;
             let table_format = registry.get(&format)?;
@@ -136,6 +151,7 @@ impl PlanResolver<'_> {
             format,
             schema,
             properties,
+            lakehouse_table: Some(lakehouse_table.for_operation(LakehouseOperation::Write)),
         })
     }
 }
@@ -145,4 +161,5 @@ struct TableInfo {
     format: String,
     schema: DFSchemaRef,
     properties: Vec<(String, String)>,
+    lakehouse_table: Option<LakehouseExecutionContext>,
 }
