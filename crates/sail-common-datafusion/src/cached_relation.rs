@@ -607,7 +607,7 @@ fn create_arrow_checkpoint_scan(
             "reliable checkpoint did not produce any files"
         ));
     }
-    let source = ArrowSource::new_stream_file_source(TableSchema::new(Arc::clone(schema), vec![]));
+    let source = ArrowSource::new_file_source(TableSchema::new(Arc::clone(schema), vec![]));
     let file_groups = object_meta
         .into_iter()
         .map(|object_meta| FileGroup::new(vec![PartitionedFile::new_from_meta(object_meta)]))

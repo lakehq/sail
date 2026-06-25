@@ -6,7 +6,7 @@ use datafusion::physical_plan::{execute_stream_partitioned, ExecutionPlan};
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 use futures::StreamExt;
-use sail_common_datafusion::array::record_batch::write_record_batches;
+use sail_common_datafusion::array::record_batch::write_record_batches_file;
 use sail_common_datafusion::session::checkpoint::{CheckpointStore, ReliableCheckpoint};
 use sail_object_store::{delete_object_store_prefix, resolve_object_store_path};
 
@@ -32,13 +32,16 @@ impl CheckpointStore for ObjectStoreCheckpointStore {
             while let Some(batch) = stream.next().await {
                 batches.push(batch?);
             }
-            let bytes = write_record_batches(&batches, schema.as_ref())?;
+            if batches.iter().all(|batch| batch.num_rows() == 0) {
+                continue;
+            }
+            let bytes = write_record_batches_file(&batches, schema.as_ref())?;
             let file_path = checkpoint_path.child(&format!("part-{file_index:05}.arrow"));
             files.push(checkpoint_path.put_bytes(&file_path, bytes).await?);
         }
 
         if files.is_empty() {
-            let bytes = write_record_batches(&[], schema.as_ref())?;
+            let bytes = write_record_batches_file(&[], schema.as_ref())?;
             let file_path = checkpoint_path.child("part-00000.arrow");
             files.push(checkpoint_path.put_bytes(&file_path, bytes).await?);
         }

@@ -12,7 +12,7 @@ use datafusion::arrow::datatypes::{
     TimestampSecondType,
 };
 use datafusion::arrow::ipc::reader::StreamReader;
-use datafusion::arrow::ipc::writer::StreamWriter;
+use datafusion::arrow::ipc::writer::{FileWriter, StreamWriter};
 use datafusion_common::{DataFusionError, Result};
 
 pub fn cast_record_batch_positionally(
@@ -366,6 +366,16 @@ pub fn read_record_batches(data: &[u8]) -> Result<Vec<RecordBatch>> {
 pub fn write_record_batches(batches: &[RecordBatch], schema: &Schema) -> Result<Vec<u8>> {
     let mut output = Vec::new();
     let mut writer = StreamWriter::try_new(&mut output, schema)?;
+    for batch in batches {
+        writer.write(batch)?;
+    }
+    writer.finish()?;
+    Ok(output)
+}
+
+pub fn write_record_batches_file(batches: &[RecordBatch], schema: &Schema) -> Result<Vec<u8>> {
+    let mut output = Vec::new();
+    let mut writer = FileWriter::try_new(&mut output, schema)?;
     for batch in batches {
         writer.write(batch)?;
     }

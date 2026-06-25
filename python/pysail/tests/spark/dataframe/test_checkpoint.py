@@ -1,3 +1,4 @@
+import os
 import shutil
 import time
 
@@ -7,6 +8,7 @@ from pandas.testing import assert_frame_equal
 from pyspark import StorageLevel
 from pyspark.sql.functions import col, lit
 
+from pysail.testing.spark.session import spark_session_factory
 from pysail.testing.spark.steps.plan import normalize_plan_text
 from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
@@ -14,6 +16,12 @@ pytestmark = pytest.mark.skipif(
     pyspark_version() < (4,),
     reason="checkpoint and localCheckpoint require PySpark Connect 4+",
 )
+
+
+@pytest.fixture(name="spark_session_factory")
+def spark_session_factory_fixture(remote):
+    with spark_session_factory(remote) as sessions:
+        yield sessions.create
 
 
 def test_dataframe_local_checkpoint_survives_source_removal(spark, tmp_path):
@@ -94,6 +102,10 @@ def test_dataframe_checkpoint(spark, tmp_path):
 
 
 @pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific object-store checkpoint URL")
+@pytest.mark.skipif(
+    os.environ.get("SAIL_MODE") == "local-cluster",
+    reason="memory object stores are scoped to one runtime and are not shared with workers",
+)
 def test_dataframe_checkpoint_with_memory_object_store(spark, tmp_path):
     source_path = tmp_path / "source"
     spark.createDataFrame(
