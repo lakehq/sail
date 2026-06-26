@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, ListArray, StringArray};
-use datafusion::arrow::datatypes::{DataType, Field};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{internal_err, Result};
 use datafusion_expr::function::Hint;
@@ -59,6 +59,16 @@ impl ScalarUDFImpl for StrToMap {
             &DataType::Utf8,
             &DataType::Utf8,
         ))
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        // The map is null only when an input is null (matching Spark).
+        let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
+        Ok(Arc::new(Field::new(
+            self.name(),
+            self.return_type(&[])?,
+            nullable,
+        )))
     }
 
     fn invoke_with_args(&self, args: datafusion_expr::ScalarFunctionArgs) -> Result<ColumnarValue> {
