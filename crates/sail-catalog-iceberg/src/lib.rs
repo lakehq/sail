@@ -15,12 +15,18 @@
 #![expect(clippy::all)]
 
 pub mod apis;
-mod models;
+pub mod models;
+mod planning;
 mod provider;
 
+pub use crate::models::{LoadTableResult, TableMetadata};
+pub use planning::{
+    completed_planning_result_from_values, completed_planning_with_id_result_from_values,
+    fetch_scan_tasks_result_from_values,
+};
 pub use provider::{
-    IcebergRestCatalogProvider, REST_CATALOG_PROP_PREFIX, REST_CATALOG_PROP_URI,
-    REST_CATALOG_PROP_WAREHOUSE,
+    load_table_result_to_status, IcebergRestCatalogProvider, REST_CATALOG_PROP_PREFIX,
+    REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE,
 };
 
 #[cfg(test)]
