@@ -35,7 +35,6 @@ use crate::utils::transform::apply_transform;
 /// Pruning statistics over Iceberg DataFiles
 pub struct IcebergPruningStats {
     files: Vec<DataFile>,
-    #[expect(unused)]
     arrow_schema: Arc<ArrowSchema>,
     /// Arrow field name -> Iceberg field id
     name_to_field_id: HashMap<String, i32>,
@@ -101,6 +100,20 @@ impl IcebergPruningStats {
             }
         }
     }
+
+    /// True when `arr`'s Arrow type matches the logical column type, so
+    /// DataFusion's pruning comparisons are well-typed. An Iceberg bound can
+    /// decode to a primitive whose scalar type differs from how the predicate
+    /// treats the column (e.g. an `Int32` fallback for a `Timestamp`/`Date`
+    /// column), and feeding that to the pruning predicate trips DataFusion's
+    /// "same data type are comparable" assertion. Callers skip mismatched
+    /// stats rather than prune on an incomparable type.
+    fn stats_type_matches(&self, column: &Column, arr: &ArrayRef) -> bool {
+        match self.arrow_schema.field_with_name(&column.name) {
+            Ok(field) => field.data_type() == arr.data_type(),
+            Err(_) => false,
+        }
+    }
 }
 
 impl PruningStatistics for IcebergPruningStats {
@@ -118,6 +131,9 @@ impl PruningStatistics for IcebergPruningStats {
         let values =
             scalars.map(|opt| opt.unwrap_or(datafusion::common::scalar::ScalarValue::Null));
         let arr = datafusion::common::scalar::ScalarValue::iter_to_array(values).ok()?;
+        if !self.stats_type_matches(column, &arr) {
+            return None;
+        }
         self.min_cache.borrow_mut().insert(field_id, arr.clone());
         Some(arr)
     }
@@ -135,6 +151,9 @@ impl PruningStatistics for IcebergPruningStats {
         let values =
             scalars.map(|opt| opt.unwrap_or(datafusion::common::scalar::ScalarValue::Null));
         let arr = datafusion::common::scalar::ScalarValue::iter_to_array(values).ok()?;
+        if !self.stats_type_matches(column, &arr) {
+            return None;
+        }
         self.max_cache.borrow_mut().insert(field_id, arr.clone());
         Some(arr)
     }
