@@ -22,25 +22,17 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::models;
-
-#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
-pub struct CommitViewRequest {
-    /// View identifier to update
-    #[serde(rename = "identifier", skip_serializing_if = "Option::is_none")]
-    pub identifier: Option<Box<models::TableIdentifier>>,
-    #[serde(rename = "requirements", skip_serializing_if = "Option::is_none")]
-    pub requirements: Option<Vec<models::ViewRequirement>>,
-    #[serde(rename = "updates")]
-    pub updates: Vec<models::ViewUpdate>,
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ViewRequirement {
+    #[serde(rename = "assert-view-uuid")]
+    AssertViewUuid { uuid: String },
 }
 
-impl CommitViewRequest {
-    pub fn new(updates: Vec<models::ViewUpdate>) -> CommitViewRequest {
-        CommitViewRequest {
-            identifier: None,
-            requirements: None,
-            updates,
+impl Default for ViewRequirement {
+    fn default() -> Self {
+        Self::AssertViewUuid {
+            uuid: Default::default(),
         }
     }
 }

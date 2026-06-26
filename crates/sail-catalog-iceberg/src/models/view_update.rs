@@ -28,25 +28,43 @@ use crate::models;
 #[serde(tag = "action")]
 pub enum ViewUpdate {
     #[serde(rename = "add-schema")]
-    AddSchemaUpdate {},
+    AddSchemaUpdate {
+        #[serde(rename = "schema")]
+        schema: Box<models::Schema>,
+        #[serde(rename = "last-column-id", skip_serializing_if = "Option::is_none")]
+        last_column_id: Option<i32>,
+    },
     #[serde(rename = "add-view-version")]
-    AddViewVersionUpdate {},
+    AddViewVersionUpdate {
+        #[serde(rename = "view-version")]
+        view_version: Box<models::ViewVersion>,
+    },
     #[serde(rename = "assign-uuid")]
-    AssignUuidUpdate {},
+    AssignUuidUpdate { uuid: String },
     #[serde(rename = "remove-properties")]
-    RemovePropertiesUpdate {},
+    RemovePropertiesUpdate { removals: Vec<String> },
     #[serde(rename = "set-current-view-version")]
-    SetCurrentViewVersionUpdate {},
+    SetCurrentViewVersionUpdate {
+        #[serde(rename = "view-version-id")]
+        view_version_id: i32,
+    },
     #[serde(rename = "set-location")]
-    SetLocationUpdate {},
+    SetLocationUpdate { location: String },
     #[serde(rename = "set-properties")]
-    SetPropertiesUpdate {},
+    SetPropertiesUpdate {
+        updates: std::collections::HashMap<String, String>,
+    },
     #[serde(rename = "upgrade-format-version")]
-    UpgradeFormatVersionUpdate {},
+    UpgradeFormatVersionUpdate {
+        #[serde(rename = "format-version")]
+        format_version: i32,
+    },
 }
 
 impl Default for ViewUpdate {
     fn default() -> Self {
-        Self::AddSchemaUpdate {}
+        Self::SetPropertiesUpdate {
+            updates: Default::default(),
+        }
     }
 }
