@@ -309,13 +309,21 @@ impl PlanResolver<'_> {
             | DataType::FixedSizeList(field, _)
             | DataType::ListView(field)
             | DataType::LargeListView(field) => {
-                let index = cast(expr::Expr::Literal(extraction, None), DataType::Int64);
-                let element = array_element(expr.clone(), index.clone() + lit(1_i64));
+                let ScalarValue::Int64(index) = extraction.cast_to(&DataType::Int64)? else {
+                    return Err(PlanError::AnalysisError(format!(
+                        "invalid extraction value for array: {extraction}"
+                    )));
+                };
+                let index_expr = lit(ScalarValue::Int64(index));
+                let element = array_element(
+                    expr.clone(),
+                    lit(ScalarValue::Int64(index.map(|x| x.saturating_add(1)))),
+                );
                 if self.config.ansi_mode {
                     let length = cast(array_length(expr.clone()), DataType::Int64);
                     let message = datafusion_fn::concat(vec![
                         lit("[INVALID_ARRAY_INDEX] The index "),
-                        cast(index.clone(), DataType::Utf8),
+                        cast(index_expr, DataType::Utf8),
                         lit(" is out of bounds. The array has "),
                         cast(length.clone(), DataType::Utf8),
                         lit(" elements. Use the SQL function `get()` to tolerate accessing element at invalid index and return NULL instead."),
@@ -324,16 +332,12 @@ impl PlanResolver<'_> {
                         ScalarUDF::from(RaiseError::new()).call(vec![message]),
                         field.data_type().clone(),
                     );
-                    when(
-                        expr.is_not_null().and(
-                            index
-                                .clone()
-                                .is_not_null()
-                                .and(index.clone().lt(lit(0_i64)).or(index.gt_eq(length))),
-                        ),
-                        error,
-                    )
-                    .otherwise(element)?
+                    let out_of_bounds = match index {
+                        Some(index) if index < 0 => expr.is_not_null(),
+                        Some(index) => expr.is_not_null().and(length.lt_eq(lit(index))),
+                        None => lit(false),
+                    };
+                    when(out_of_bounds, error).otherwise(element)?
                 } else {
                     element
                 }
