@@ -46,6 +46,7 @@ pub(crate) const DEFAULT_URI: &str = "http://localhost:8080/api/2.1/unity-catalo
 pub struct UnityCatalogProvider {
     name: String,
     options: UnityCatalogOptions,
+    http_client: reqwest::Client,
 }
 
 #[derive(Debug, Clone)]
@@ -59,11 +60,15 @@ pub struct UnityCatalogOptions {
 
 impl UnityCatalogProvider {
     pub fn new(name: String, options: UnityCatalogOptions) -> CatalogResult<Self> {
-        Ok(Self { name, options })
+        let http_client = reqwest::Client::new();
+        Ok(Self {
+            name,
+            options,
+            http_client,
+        })
     }
 
     async fn get_client(&self) -> CatalogResult<Client> {
-        let mut client_builder = reqwest::Client::builder();
         let mut headers = reqwest::header::HeaderMap::new();
 
         if let Some(token) = self.options.credentials.retrieve().await? {
@@ -83,15 +88,11 @@ impl UnityCatalogProvider {
             headers.insert(reqwest::header::USER_AGENT, header);
         }
 
-        if !headers.is_empty() {
-            client_builder = client_builder.default_headers(headers);
-        }
-
-        let reqwest_client = client_builder
-            .build()
-            .map_err(|e| CatalogError::External(format!("Failed to build HTTP client: {e}")))?;
-
-        Ok(Client::new_with_client(&self.options.uri, reqwest_client))
+        Ok(Client::new_with_client_and_headers(
+            &self.options.uri,
+            self.http_client.clone(),
+            headers,
+        ))
     }
 
     fn object_name(&self, name: &str) -> String {

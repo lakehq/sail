@@ -129,6 +129,7 @@ pub struct IcebergRestCatalogOptions {
 pub struct IcebergRestCatalogProvider {
     name: String,
     options: IcebergRestCatalogOptions,
+    http_client: reqwest::Client,
     resolved_catalog_config: OnceCell<CatalogConfig<'static>>,
 }
 
@@ -137,6 +138,7 @@ impl IcebergRestCatalogProvider {
         Self {
             name,
             options,
+            http_client: reqwest::Client::new(),
             resolved_catalog_config: OnceCell::new(),
         }
     }
@@ -145,14 +147,22 @@ impl IcebergRestCatalogProvider {
         catalog_config: &CatalogConfig<'_>,
         credentials: &Arc<dyn CatalogCredentials>,
         user_agent: Option<String>,
+        http_client: reqwest::Client,
     ) -> CatalogResult<Configuration> {
-        let mut client_config = Configuration::new();
-        client_config.user_agent = user_agent;
-        client_config.base_path = catalog_config.uri().ok_or_else(|| {
+        let base_path = catalog_config.uri().ok_or_else(|| {
             CatalogError::InvalidArgument(format!(
                 "Iceberg REST catalog property '{REST_CATALOG_PROP_URI}' is required"
             ))
         })?;
+        let mut client_config = Configuration {
+            base_path,
+            user_agent,
+            client: http_client,
+            basic_auth: None,
+            oauth_access_token: None,
+            bearer_access_token: None,
+            api_key: None,
+        };
         if let Some(credential) = credentials.retrieve().await? {
             client_config.bearer_access_token = Some(credential);
         }
@@ -168,6 +178,7 @@ impl IcebergRestCatalogProvider {
                 &catalog_config,
                 &self.options.credentials,
                 self.options.user_agent.clone(),
+                self.http_client.clone(),
             )
             .await?,
         )))
@@ -180,6 +191,7 @@ impl IcebergRestCatalogProvider {
                 catalog_config,
                 &self.options.credentials,
                 self.options.user_agent.clone(),
+                self.http_client.clone(),
             )
             .await?,
         )))

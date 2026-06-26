@@ -35,6 +35,18 @@ fn build_unity_catalog() -> Result<(), Box<dyn std::error::Error>> {
             "Self::new_with_client(baseurl, client.build().unwrap())",
             "Ok(Self::new_with_client(baseurl, client.build()?))",
         )
+        .replace(
+            "pub(crate) client: reqwest::Client,\n}",
+            "pub(crate) client: reqwest::Client,\n    pub(crate) request_headers: reqwest::header::HeaderMap,\n}",
+        )
+        .replace(
+            "Self {\n            baseurl: baseurl.to_string(),\n            client,\n        }\n    }\n}",
+            "Self::new_with_client_and_headers(baseurl, client, reqwest::header::HeaderMap::new())\n    }\n\n    /// Construct a new client with an existing `reqwest::Client` and per-request headers.\n    pub fn new_with_client_and_headers(\n        baseurl: &str,\n        client: reqwest::Client,\n        request_headers: reqwest::header::HeaderMap,\n    ) -> Self {\n        Self {\n            baseurl: baseurl.to_string(),\n            client,\n            request_headers,\n        }\n    }\n}",
+        )
+        .replace(
+            "impl ClientHooks<()> for &Client {}\n",
+            "impl ClientHooks<()> for &Client {}\nimpl ClientHooks<()> for Client {\n    async fn pre<E>(\n        &self,\n        request: &mut reqwest::Request,\n        _info: &OperationInfo,\n    ) -> ::std::result::Result<(), Error<E>> {\n        request.headers_mut().extend(self.request_headers.clone());\n        Ok(())\n    }\n}\n",
+        )
         // We need to prevent the code examples from being treated as ignored tests.
         // These code snippets do not compile when running `cargo test -- --ignored`.
         .replace("```ignore", "```notrust");
