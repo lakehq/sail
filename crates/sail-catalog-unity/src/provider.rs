@@ -982,7 +982,7 @@ impl CatalogProvider for UnityCatalogProvider {
             .await
             .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
-        let full_name = format!("{catalog_name}.{schema_name}.{table}");
+        let full_name = self.qualified_object_name(&[&catalog_name, &schema_name, table]);
 
         match client.get_commits().body(request).send().await {
             Ok(response) => {

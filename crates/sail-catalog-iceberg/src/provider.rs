@@ -2340,7 +2340,7 @@ mod tests {
                 REST_CATALOG_PROP_NAMESPACE_SEPARATOR.to_string(),
                 "/".to_string(),
             )]),
-            HashMap::from([("namespace_separator".to_string(), "%3A%3A".to_string())]),
+            HashMap::from([]),
             HashMap::new(),
             None,
         )
@@ -2355,7 +2355,7 @@ mod tests {
                 REST_CATALOG_PROP_NAMESPACE_SEPARATOR.to_string(),
                 "/".to_string(),
             )]),
-            HashMap::from([("namespace_separator".to_string(), "::".to_string())]),
+            HashMap::from([]),
             HashMap::from([(
                 REST_CATALOG_PROP_NAMESPACE_SEPARATOR.to_string(),
                 "%7C".to_string(),
@@ -2373,7 +2373,7 @@ mod tests {
                 REST_CATALOG_PROP_NAMESPACE_SEPARATOR.to_string(),
                 "/".to_string(),
             )]),
-            HashMap::from([("namespace_separator".to_string(), "::".to_string())]),
+            HashMap::from([]),
             HashMap::from([(
                 REST_CATALOG_PROP_NAMESPACE_SEPARATOR.to_string(),
                 " ".to_string(),
