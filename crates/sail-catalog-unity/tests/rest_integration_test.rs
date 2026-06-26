@@ -150,7 +150,6 @@ async fn setup_catalog(
                     default_catalog: DEFAULT_CATALOG.to_string(),
                     uri: rest_url.clone(),
                     credentials: Arc::new(EmptyCatalogCredentials),
-                    user_agent: Some("Sail".to_string()),
                     quote_object_name: true,
                 },
             )

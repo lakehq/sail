@@ -28,6 +28,7 @@ use sail_catalog::provider::{
     TableFormatCreateMetadataMode,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
+use sail_common::http::SAIL_USER_AGENT;
 use sail_common_datafusion::catalog::delta::{
     unity_table_id_value, DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
 };
@@ -54,7 +55,6 @@ pub struct UnityCatalogOptions {
     pub default_catalog: String,
     pub uri: String,
     pub credentials: Arc<dyn CatalogCredentials>,
-    pub user_agent: Option<String>,
     pub quote_object_name: bool,
 }
 
@@ -79,14 +79,10 @@ impl UnityCatalogProvider {
             headers.insert(reqwest::header::AUTHORIZATION, header);
         }
 
-        if let Some(user_agent) = &self.options.user_agent {
-            let header = reqwest::header::HeaderValue::from_str(user_agent).map_err(|e| {
-                CatalogError::External(format!(
-                    "Failed to create header value from user agent: {e}"
-                ))
-            })?;
-            headers.insert(reqwest::header::USER_AGENT, header);
-        }
+        headers.insert(
+            reqwest::header::USER_AGENT,
+            reqwest::header::HeaderValue::from_static(SAIL_USER_AGENT),
+        );
 
         Ok(Client::new_with_client_and_headers(
             &self.options.uri,
@@ -1081,7 +1077,6 @@ mod tests {
             default_catalog: default_catalog.into(),
             uri: config.uri,
             credentials,
-            user_agent: Some("Sail".to_string()),
             quote_object_name: true,
         }
     }
@@ -1094,7 +1089,6 @@ mod tests {
             default_catalog: default_catalog.into(),
             uri: DEFAULT_URI.to_string(),
             credentials: Arc::new(EmptyCatalogCredentials),
-            user_agent: Some("Sail".to_string()),
             quote_object_name,
         }
     }

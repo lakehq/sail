@@ -117,7 +117,6 @@ async fn setup_catalog(
                 IcebergRestCatalogOptions {
                     credentials: Arc::new(EmptyCatalogCredentials),
                     properties: props,
-                    user_agent: Some("Sail".to_string()),
                 },
             );
             Ok(provider)

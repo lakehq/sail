@@ -84,7 +84,6 @@ impl OneLakeCatalogProvider {
                         default_catalog: catalog_name,
                         uri,
                         credentials,
-                        user_agent: Some("Sail".to_string()),
                         quote_object_name: false,
                     },
                 )?)
@@ -100,7 +99,6 @@ impl OneLakeCatalogProvider {
                     IcebergRestCatalogOptions {
                         credentials,
                         properties,
-                        user_agent: Some("Sail".to_string()),
                     },
                 ))
             }

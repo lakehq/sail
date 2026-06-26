@@ -86,7 +86,6 @@ pub fn create_catalog_manager(
                                 IcebergRestCatalogOptions {
                                     credentials,
                                     properties,
-                                    user_agent: Some("Sail".to_string()),
                                 },
                             );
                             Ok(provider)
@@ -126,7 +125,6 @@ pub fn create_catalog_manager(
                                     default_catalog,
                                     uri: config.uri,
                                     credentials,
-                                    user_agent: Some("Sail".to_string()),
                                     quote_object_name: true,
                                 },
                             )

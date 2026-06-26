@@ -29,6 +29,7 @@ use sail_catalog::provider::{
     PartitionTransform,
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
+use sail_common::http::SAIL_USER_AGENT;
 use sail_common_datafusion::catalog::managed::METADATA_LOCATION_KEY;
 use sail_common_datafusion::catalog::{
     CapabilityFingerprint, CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
@@ -122,7 +123,6 @@ impl CatalogConfig<'_> {
 pub struct IcebergRestCatalogOptions {
     pub credentials: Arc<dyn CatalogCredentials>,
     pub properties: HashMap<String, String>,
-    pub user_agent: Option<String>,
 }
 
 /// Provider for Apache Iceberg REST Catalog.
@@ -146,7 +146,6 @@ impl IcebergRestCatalogProvider {
     async fn configuration(
         catalog_config: &CatalogConfig<'_>,
         credentials: &Arc<dyn CatalogCredentials>,
-        user_agent: Option<String>,
         http_client: reqwest::Client,
     ) -> CatalogResult<Configuration> {
         let base_path = catalog_config.uri().ok_or_else(|| {
@@ -156,7 +155,7 @@ impl IcebergRestCatalogProvider {
         })?;
         let mut client_config = Configuration {
             base_path,
-            user_agent,
+            user_agent: Some(SAIL_USER_AGENT.to_string()),
             client: http_client,
             basic_auth: None,
             oauth_access_token: None,
@@ -177,7 +176,6 @@ impl IcebergRestCatalogProvider {
             Self::configuration(
                 &catalog_config,
                 &self.options.credentials,
-                self.options.user_agent.clone(),
                 self.http_client.clone(),
             )
             .await?,
@@ -190,7 +188,6 @@ impl IcebergRestCatalogProvider {
             Self::configuration(
                 catalog_config,
                 &self.options.credentials,
-                self.options.user_agent.clone(),
                 self.http_client.clone(),
             )
             .await?,
@@ -2016,7 +2013,6 @@ mod tests {
         IcebergRestCatalogOptions {
             credentials: Arc::new(EmptyCatalogCredentials),
             properties,
-            user_agent: Some("Sail".to_string()),
         }
     }
 
