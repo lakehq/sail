@@ -40,12 +40,17 @@ impl PlanResolver<'_> {
         let input = self.resolve_query_plan(*input, state).await?;
         let schema = input.schema().clone();
 
-        // Only a single pivot column is supported.
         let mut pivot_columns = self.resolve_expressions(columns, &schema, state).await?;
-        if pivot_columns.len() != 1 {
-            return Err(PlanError::todo("pivot with multiple pivot columns"));
-        }
-        let pivot_column = pivot_columns.swap_remove(0);
+        let column_arity = pivot_columns.len();
+        let pivot_column = match column_arity {
+            0 => {
+                return Err(PlanError::AnalysisError(
+                    "pivot column required".to_string(),
+                ))
+            }
+            1 => pivot_columns.swap_remove(0),
+            _ => make_pivot_struct(pivot_columns),
+        };
 
         let aggregates = self
             .resolve_named_expressions(aggregate, &schema, state)
@@ -96,17 +101,21 @@ impl PlanResolver<'_> {
                     values: exprs,
                     alias,
                 } = value;
-                if exprs.len() != 1 {
-                    return Err(PlanError::todo(
-                        "pivot value with multiple expressions (struct pivot)",
-                    ));
+                if exprs.len() != column_arity {
+                    return Err(PlanError::AnalysisError(format!(
+                        "pivot value has {} expressions, but pivot column has {}",
+                        exprs.len(),
+                        column_arity
+                    )));
                 }
-                let Some(expr) = exprs.into_iter().next() else {
-                    return Err(PlanError::AnalysisError(
-                        "pivot value must have a value".to_string(),
-                    ));
+                let mut exprs = self
+                    .resolve_expressions(exprs, &empty_schema, state)
+                    .await?;
+                let expr = if column_arity == 1 {
+                    exprs.swap_remove(0)
+                } else {
+                    make_pivot_struct(exprs)
                 };
-                let expr = self.resolve_expression(expr, &empty_schema, state).await?;
                 let scalar = evaluator
                     .evaluate(&expr)
                     .map_err(|e| PlanError::invalid(e.to_string()))?;
@@ -402,6 +411,13 @@ fn pivot_value_name(scalar: &ScalarValue) -> PlanResult<String> {
         .value(0)
         .try_to_string()
         .map_err(|e| PlanError::invalid(e.to_string()))
+}
+
+fn make_pivot_struct(exprs: Vec<expr::Expr>) -> expr::Expr {
+    ScalarUDF::from(StructFunction::new(
+        (0..exprs.len()).map(|i| format!("col{}", i + 1)).collect(),
+    ))
+    .call(exprs)
 }
 
 /// Add `predicate` as a FILTER to every aggregate function inside `expr`,

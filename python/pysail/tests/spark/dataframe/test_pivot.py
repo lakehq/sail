@@ -97,6 +97,40 @@ def test_pivot_allows_duplicate_aliases(spark):
     assert actual.values.tolist() == [[2012, 20000, 10000], [2013, 30000, 48000]]
 
 
+def test_pivot_multi_column_struct(spark):
+    actual = spark.sql("""
+        SELECT * FROM (
+          SELECT year, course, training, earnings FROM VALUES
+            (2012, 'Java', 'Dummies', 20000),
+            (2012, 'dotNET', 'Experts', 10000),
+            (2013, 'Java', 'Dummies', 30000),
+            (2013, 'dotNET', 'Experts', 48000)
+          AS s(year, course, training, earnings)
+        ) PIVOT (sum(earnings) FOR (course, training)
+                 IN (('Java', 'Dummies'), ('dotNET', 'Experts')))
+        ORDER BY year
+    """).toPandas()
+    assert list(actual.columns) == ["year", "{Java, Dummies}", "{dotNET, Experts}"]
+    assert actual.values.tolist() == [[2012, 20000, 10000], [2013, 30000, 48000]]
+
+
+def test_pivot_multi_column_struct_alias(spark):
+    actual = spark.sql("""
+        SELECT * FROM (
+          SELECT year, course, training, earnings FROM VALUES
+            (2012, 'Java', 'Dummies', 20000),
+            (2012, 'dotNET', 'Experts', 10000),
+            (2013, 'Java', 'Dummies', 30000),
+            (2013, 'dotNET', 'Experts', 48000)
+          AS s(year, course, training, earnings)
+        ) PIVOT (sum(earnings) FOR (course, training)
+                 IN (('Java', 'Dummies') AS java_dummies))
+        ORDER BY year
+    """).toPandas()
+    assert list(actual.columns) == ["year", "java_dummies"]
+    assert actual.values.tolist() == [[2012, 20000], [2013, 30000]]
+
+
 # SQL for a pivot whose value alias collides with a grouping column, producing two
 # output columns both named `year` (Spark allows this). Shared by the pair of tests below.
 _PIVOT_GROUPING_COLLISION_SQL = """
