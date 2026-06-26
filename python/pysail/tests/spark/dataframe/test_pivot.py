@@ -153,17 +153,9 @@ def test_pivot_value_colliding_with_grouping_column(spark):
     assert rows == [(2012, 20000), (2013, 30000)]
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="Known flaky bug: with duplicate output column names, the Arrow/toPandas path "
-    'intermittently fails with an internal field-id error (No field named s."#0") while '
-    "collect() always succeeds. Paired with the collect test above to isolate the failure "
-    "to toPandas. Separate core field-id resolution bug, not specific to pivot.",
-)
 def test_pivot_value_colliding_with_grouping_column_to_pandas(spark):
     # Same query as the collect-based test above, but materialized via toPandas. This is the
-    # path that intermittently breaks; the pairing pinpoints toPandas (Arrow conversion) as
-    # the culprit rather than the pivot resolution or execution itself.
+    # path that exercises duplicate output names through Arrow conversion
     actual = spark.sql(_PIVOT_GROUPING_COLLISION_SQL).toPandas()
     assert list(actual.columns) == ["year", "year"]
     assert sorted(actual.values.tolist()) == [[2012, 20000], [2013, 30000]]
@@ -226,6 +218,35 @@ def test_pivot_decimal_value_naming_matches_spark(spark):
         ORDER BY g
     """).toPandas()
     assert list(actual.columns) == ["g", "1.50", "2.00"]
+    assert actual.values.tolist() == [["a", 10, 20], ["b", 5, 8]]
+
+
+def test_pivot_value_cast_to_int_column(spark):
+    actual = spark.sql("""
+        SELECT * FROM (
+          SELECT g, k, v FROM VALUES
+            ('a', 1, 10), ('a', 2, 20), ('b', 1, 5)
+          AS t(g, k, v)
+        ) PIVOT (sum(v) FOR (k) IN (1.2))
+        ORDER BY g
+    """).toPandas()
+    assert list(actual.columns) == ["g", "1.2"]
+    assert actual.values.tolist() == [["a", 10], ["b", 5]]
+
+
+def test_pivot_value_cast_to_string_column(spark):
+    actual = spark.sql("""
+        SELECT * FROM (
+          SELECT g, k, v FROM VALUES
+            ('a', '1', 10), ('a', '01', 99),
+            ('a', '2', 20), ('a', '02', 99),
+            ('b', '1', 5),  ('b', '01', 99),
+            ('b', '2', 8),  ('b', '02', 99)
+          AS t(g, k, v)
+        ) PIVOT (sum(v) FOR (k) IN (1, 2))
+        ORDER BY g
+    """).toPandas()
+    assert list(actual.columns) == ["g", "1", "2"]
     assert actual.values.tolist() == [["a", 10, 20], ["b", 5, 8]]
 
 

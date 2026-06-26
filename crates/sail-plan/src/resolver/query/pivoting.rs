@@ -124,6 +124,12 @@ impl PlanResolver<'_> {
             resolved
         };
 
+        // Spark casts each pivot value to the pivot column's type before comparing
+        // (`Cast(value, pivotColumn.dataType)`), so an `int` literal matches a `bigint` column and
+        // a struct value matches the struct column's field types. The output name still uses the
+        // raw value (Spark casts the original value to string), so it is taken from `scalar` below
+        // before the cast.
+        let column_type = pivot_column.get_type(&schema)?;
         let single_aggregate = aggregates.len() == 1;
         let mut projections = grouping.clone();
         for (scalar, alias) in pivot_values {
@@ -139,6 +145,9 @@ impl PlanResolver<'_> {
             let predicate = if is_null {
                 pivot_column.clone().is_null()
             } else {
+                let scalar = scalar
+                    .cast_to(&column_type)
+                    .map_err(|e| PlanError::invalid(e.to_string()))?;
                 pivot_column.clone().eq(lit(scalar))
             };
             for agg in &aggregates {
