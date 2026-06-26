@@ -31,15 +31,29 @@ def test_pivot_infers_values_sorted(spark):
     assert_frame_equal(actual, expected)
 
 
+def test_pivot_infers_numeric_values_sorted_numerically(spark):
+    actual = (
+        spark.createDataFrame(
+            [("a", 10, 100), ("a", 2, 20), ("b", 2, 5)],
+            schema="g STRING, k INT, v INT",
+        )
+        .groupBy("g")
+        .pivot("k")
+        .sum("v")
+        .orderBy("g")
+        .toPandas()
+    )
+    assert list(actual.columns) == ["g", "2", "10"]
+    expected = pd.DataFrame({"g": ["a", "b"], "2": [20, 5], "10": [100.0, float("nan")]})
+    assert_frame_equal(actual, expected)
+
+
 def test_pivot_infers_float_values_with_nan_last(spark):
     # Edge case: pivoting on a floating-point column whose inferred values include NaN.
     # NaN is incomparable under `partial_cmp`, so the sort falls back to a deterministic
     # tiebreaker instead of treating NaN as equal to its neighbour (which left the column
     # order dependent on the non-deterministic aggregate row order). This pins that guarantee:
     # finite values come first in ascending order, with their `.0` preserved, and NaN sorts last.
-    #
-    # One unrelated Spark-parity gap is intentionally NOT asserted here: the `NaN` pivot column
-    # counts the `k=NaN` row whereas Spark yields NULL (see the dedicated xfail below).
     actual = (
         spark.createDataFrame(
             [
@@ -57,6 +71,7 @@ def test_pivot_infers_float_values_with_nan_last(spark):
         .toPandas()
     )
     assert list(actual.columns) == ["g", "1.0", "2.0", "NaN"]
+    assert actual["NaN"].isna().all()
     # Sanity: the first finite column (k=1.0) holds its sums for both groups.
     assert actual.set_index("g")["1.0"].to_dict() == {"a": 10, "b": 5}
 
@@ -97,6 +112,55 @@ def test_pivot_allows_duplicate_aliases(spark):
     assert actual.values.tolist() == [[2012, 20000, 10000], [2013, 30000, 48000]]
 
 
+def test_pivot_allows_literal_aggregate_expression(spark):
+    actual = spark.sql("""
+        SELECT * FROM (
+          SELECT g, k FROM VALUES
+            ('a', 'x'),
+            ('a', 'y'),
+            ('b', 'x')
+          AS t(g, k)
+        ) PIVOT (1 FOR (k) IN ('x', 'y'))
+        ORDER BY g
+    """).toPandas()
+    assert list(actual.columns) == ["g", "x", "y"]
+    assert actual.values.tolist() == [["a", 1, 1], ["b", 1, 1]]
+
+
+def test_pivot_rejects_bare_column_outside_aggregate(spark):
+    with pytest.raises(
+        Exception,
+        match=r"Aggregate expression required for pivot, but 'v' did not appear in any aggregate function",
+    ):
+        spark.sql("""
+            SELECT * FROM (
+              SELECT g, k, v FROM VALUES
+                ('a', 'x', 10)
+              AS t(g, k, v)
+            ) PIVOT (count(*) + v FOR (k) IN ('x'))
+        """).collect()
+
+
+def test_pivot_first_last_string_ignores_nulls_like_spark_general_path(spark):
+    actual = spark.sql("""
+        SELECT * FROM (
+          SELECT g, k, s FROM VALUES
+            ('a', 'x', CAST(NULL AS STRING)),
+            ('a', 'x', 'alpha'),
+            ('b', 'x', CAST(NULL AS STRING)),
+            ('b', 'x', 'bravo')
+          AS t(g, k, s)
+        ) PIVOT (
+          first(s) AS first_s,
+          last(s) AS last_s
+          FOR (k) IN ('x')
+        )
+        ORDER BY g
+    """).toPandas()
+    assert list(actual.columns) == ["g", "x_first_s", "x_last_s"]
+    assert actual.values.tolist() == [["a", "alpha", "alpha"], ["b", "bravo", "bravo"]]
+
+
 def test_pivot_multi_column_struct(spark):
     actual = spark.sql("""
         SELECT * FROM (
@@ -129,6 +193,20 @@ def test_pivot_multi_column_struct_alias(spark):
     """).toPandas()
     assert list(actual.columns) == ["year", "java_dummies"]
     assert actual.values.tolist() == [[2012, 20000], [2013, 30000]]
+
+
+def test_pivot_multi_column_value_arity_mismatch_errors(spark):
+    with pytest.raises(
+        Exception,
+        match="pivot value has 1 expressions, but pivot column has 2",
+    ):
+        spark.sql("""
+            SELECT * FROM (
+              SELECT year, course, training, earnings FROM VALUES
+                (2012, 'Java', 'Dummies', 20000)
+              AS s(year, course, training, earnings)
+            ) PIVOT (sum(earnings) FOR (course, training) IN ('Java'))
+        """).collect()
 
 
 # SQL for a pivot whose value alias collides with a grouping column, producing two
@@ -166,7 +244,10 @@ def test_pivot_inference_rejects_too_many_distinct_values(spark):
     # errors beyond it. The distinct-value scan is bounded by a LIMIT of one past the cap,
     # so a high-cardinality pivot column never collects an unbounded result into the planner.
     df = spark.range(10001).selectExpr("CAST(0 AS INT) AS g", "id AS k", "CAST(1 AS INT) AS v")
-    with pytest.raises(Exception, match="10000"):
+    with pytest.raises(
+        Exception,
+        match=r"The pivot column k has more than 10000 distinct values.*spark\.sql\.pivotMaxValues",
+    ):
         df.groupBy("g").pivot("k").sum("v").collect()
 
 
@@ -180,7 +261,10 @@ def test_pivot_max_values_config_is_honored(spark):
             [("a", 1, 10), ("a", 2, 20), ("a", 3, 30)],
             schema="g STRING, k INT, v INT",
         )
-        with pytest.raises(Exception, match="more than 2 distinct values"):
+        with pytest.raises(
+            Exception,
+            match=r"The pivot column k has more than 2 distinct values.*spark\.sql\.pivotMaxValues",
+        ):
             df.groupBy("g").pivot("k").sum("v").collect()
     finally:
         spark.conf.set("spark.sql.pivotMaxValues", original)
@@ -250,14 +334,17 @@ def test_pivot_value_cast_to_string_column(spark):
     assert actual.values.tolist() == [["a", 10, 20], ["b", 5, 8]]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="A NaN pivot value matches the NaN row in Sail (the pivot predicate `k = NaN` "
-    "evaluates true, consistent with Sail's `=` operator), so the NaN column is populated. "
-    "Spark leaves it NULL: although Spark SQL's `NaN = NaN` is also true, its pivot uses raw "
-    "IEEE `==` in codegen (NaN != NaN) and so contradicts its own `=`. Matching that would make "
-    "Sail's pivot inconsistent with its own equality, so this extreme edge is left as-is.",
-)
+def test_pivot_rejects_non_castable_value(spark):
+    with pytest.raises(Exception, match=r"(?i)cast"):
+        spark.sql("""
+            SELECT * FROM (
+              SELECT g, k, v FROM VALUES
+                ('a', 1, 10)
+              AS t(g, k, v)
+            ) PIVOT (sum(v) FOR (k) IN ('not-an-int'))
+        """).collect()
+
+
 def test_pivot_nan_value_yields_null_column_like_spark(spark):
     # In Spark the NaN row matches no pivot value, so the `NaN` column is entirely NULL.
     actual = (
