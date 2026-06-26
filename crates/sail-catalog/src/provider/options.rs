@@ -157,3 +157,41 @@ pub enum AlterTableOptions {
         expression: String,
     },
 }
+
+/// Options for [`CatalogProvider::commit_table`](super::CatalogProvider::commit_table),
+/// the Iceberg REST commit-table extension. `requirements` and `updates` carry the
+/// raw Iceberg REST JSON requirement/update objects.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CommitTableOptions {
+    pub format: String,
+    pub requirements: Vec<serde_json::Value>,
+    pub updates: Vec<serde_json::Value>,
+}
+
+/// Options for
+/// [`CatalogProvider::get_table_commits`](super::CatalogProvider::get_table_commits).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GetTableCommitsOptions {
+    pub format: String,
+    pub table_uri: String,
+    pub start_version: i64,
+    pub end_version: Option<i64>,
+}
+
+/// A single historical table-commit descriptor returned by `get_table_commits`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TableCommitInfo {
+    pub version: i64,
+    pub timestamp: i64,
+    pub file_name: String,
+    pub file_size: i64,
+    pub file_modification_timestamp: i64,
+}
+
+/// Response for
+/// [`CatalogProvider::get_table_commits`](super::CatalogProvider::get_table_commits).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GetTableCommitsResponse {
+    pub latest_table_version: i64,
+    pub commits: Vec<TableCommitInfo>,
+}
