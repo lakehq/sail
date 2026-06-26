@@ -24,6 +24,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, Extension, UserDefinedLogicalNodeCore};
 use educe::Educe;
+use log::warn;
 use object_store::ObjectStoreExt;
 use sail_common_datafusion::catalog::iceberg::is_iceberg_table_marker;
 use sail_common_datafusion::catalog::managed::metadata_location_value;
@@ -719,7 +720,7 @@ fn validate_iceberg_lakehouse_storage_access(
         .is_some_and(|session| session.storage_credential_count > 0)
     {
         // TODO: Apply REST vended credentials to operation-scoped storage access.
-        return not_impl_err!(
+        warn!(
             "Iceberg REST catalog table {} requires vended storage credentials, which is not implemented yet",
             context.catalog_table().join(".")
         );
