@@ -599,6 +599,8 @@ pub struct SparkConfig {
     pub session_timeout_secs: u64,
     pub execution_heartbeat_interval_secs: u64,
     pub artifact_root: String,
+    pub artifact_inline_max_bytes: usize,
+    pub artifact_store_uri: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

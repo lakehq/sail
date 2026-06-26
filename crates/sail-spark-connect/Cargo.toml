@@ -29,6 +29,7 @@ pbjson = { workspace = true }
 pbjson-types = { workspace = true }
 uuid = { workspace = true }
 datafusion = { workspace = true }
+object_store = { workspace = true }
 arrow-schema = { workspace = true }
 parquet-variant-compute = { workspace = true }
 async-stream = { workspace = true }
@@ -44,6 +45,8 @@ fastrace = { workspace = true }
 pyo3 = { workspace = true }
 crc32fast = { workspace = true }
 datafusion-datasource = { workspace = true }
+sha2 = { workspace = true }
+url = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true }

@@ -4,9 +4,13 @@ use std::path::{Component, Path, PathBuf};
 
 use datafusion::prelude::SessionContext;
 use futures::StreamExt;
+use object_store::{ObjectStoreExt, ObjectStoreScheme, PutPayload};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
+use sail_python_udf::config::{PySparkArtifactKind, PySparkPythonArtifact};
+use sha2::{Digest, Sha256};
 use tonic::codegen::tokio_stream::Stream;
 use tonic::Status;
+use url::Url;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::session::SparkSession;
@@ -15,6 +19,7 @@ use crate::spark::connect::add_artifacts_response::ArtifactSummary;
 use crate::spark::connect::artifact_statuses_response::ArtifactStatus;
 
 const PYFILES_PREFIX: &str = "pyfiles/";
+const FILES_PREFIX: &str = "files/";
 const ARCHIVES_PREFIX: &str = "archives/";
 const FORWARD_TO_FS_PREFIX: &str = "forward_to_fs/";
 
@@ -84,8 +89,59 @@ fn artifact_target_path(name: &str, artifact_dir: &Path) -> SparkResult<PathBuf>
     Ok(artifact_dir.join(relative_path))
 }
 
+fn artifact_kind(normalized_name: &str) -> SparkResult<Option<PySparkArtifactKind>> {
+    if let Some(file_name) = normalized_name.strip_prefix(PYFILES_PREFIX) {
+        if file_name.ends_with(".py")
+            || file_name.ends_with(".zip")
+            || file_name.ends_with(".egg")
+            || file_name.ends_with(".jar")
+        {
+            validate_relative_path(file_name, "Python artifact name")?;
+            return Ok(Some(PySparkArtifactKind::PyFile));
+        }
+        return Err(SparkError::invalid(format!(
+            "unsupported Python artifact type: {file_name}"
+        )));
+    }
+
+    if let Some(file_name) = normalized_name.strip_prefix(FILES_PREFIX) {
+        validate_relative_path(file_name, "file artifact name")?;
+        return Ok(Some(PySparkArtifactKind::File));
+    }
+
+    if let Some(rest) = normalized_name.strip_prefix(ARCHIVES_PREFIX) {
+        let storage_name = artifact_storage_name(normalized_name)?;
+        let archive_name = storage_name
+            .strip_prefix(ARCHIVES_PREFIX)
+            .ok_or_else(|| SparkError::internal("archive prefix was not preserved"))?;
+        validate_relative_path(archive_name, "archive artifact name")?;
+        if !is_supported_archive(archive_name) {
+            return Err(SparkError::invalid(format!(
+                "unsupported archive artifact type: {rest}"
+            )));
+        }
+        return Ok(Some(PySparkArtifactKind::Archive));
+    }
+
+    Ok(None)
+}
+
+fn is_supported_archive(path: &str) -> bool {
+    path.ends_with(".zip")
+        || path.ends_with(".jar")
+        || path.ends_with(".tar.gz")
+        || path.ends_with(".tgz")
+        || path.ends_with(".tar")
+}
+
+struct StoredArtifact {
+    normalized_name: String,
+    local_path: Option<String>,
+    kind: Option<PySparkArtifactKind>,
+}
+
 /// Processes a complete artifact (name + assembled data) and stores it appropriately.
-fn store_artifact(name: &str, data: &[u8], artifact_dir: &Path) -> SparkResult<Option<String>> {
+fn store_artifact(name: &str, data: &[u8], artifact_dir: &Path) -> SparkResult<StoredArtifact> {
     let normalized_name = normalize_artifact_name(name)?;
     if let Some(dest_path) = normalized_name.strip_prefix(FORWARD_TO_FS_PREFIX) {
         let relative_dest = validate_relative_path(dest_path, "forward_to_fs destination")?;
@@ -104,10 +160,15 @@ fn store_artifact(name: &str, data: &[u8], artifact_dir: &Path) -> SparkResult<O
         file.write_all(data).map_err(|e| {
             SparkError::internal(format!("failed to write file {}: {e}", dest.display()))
         })?;
-        return Ok(None);
+        return Ok(StoredArtifact {
+            normalized_name,
+            local_path: None,
+            kind: None,
+        });
     }
 
     let target_path = artifact_target_path(name, artifact_dir)?;
+    let kind = artifact_kind(&normalized_name)?;
     if target_path.exists() {
         let existing = std::fs::read(&target_path).map_err(|e| {
             SparkError::internal(format!(
@@ -121,7 +182,11 @@ fn store_artifact(name: &str, data: &[u8], artifact_dir: &Path) -> SparkResult<O
             if let Some(path) = &python_path {
                 add_to_sys_path(path)?;
             }
-            return Ok(python_path);
+            return Ok(StoredArtifact {
+                normalized_name,
+                local_path: kind.map(|_| target_path.to_string_lossy().into_owned()),
+                kind,
+            });
         }
         return Err(SparkError::invalid(format!(
             "artifact already exists with different content: {name}"
@@ -153,7 +218,11 @@ fn store_artifact(name: &str, data: &[u8], artifact_dir: &Path) -> SparkResult<O
     if let Some(path) = &python_path {
         add_to_sys_path(path)?;
     }
-    Ok(python_path)
+    Ok(StoredArtifact {
+        normalized_name,
+        local_path: kind.map(|_| target_path.to_string_lossy().into_owned()),
+        kind,
+    })
 }
 
 fn python_artifact_import_path(
@@ -198,6 +267,97 @@ fn add_to_sys_path(path: &str) -> SparkResult<()> {
         Ok::<(), pyo3::PyErr>(())
     })
     .map_err(|e: pyo3::PyErr| SparkError::internal(format!("failed to add to sys.path: {e}")))
+}
+
+async fn artifact_transport(
+    ctx: &SessionContext,
+    spark: &SparkSession,
+    name: &str,
+    sha256: &str,
+    data: &[u8],
+) -> SparkResult<(Option<Vec<u8>>, Option<String>)> {
+    let options = spark.options();
+    if data.len() <= options.artifact_inline_max_bytes {
+        return Ok((Some(data.to_vec()), None));
+    }
+
+    let Some(base_uri) = &options.artifact_store_uri else {
+        return Err(SparkError::invalid(format!(
+            "artifact {name} is {} bytes, exceeding spark.artifact_inline_max_bytes={}, and spark.artifact_store_uri is not configured",
+            data.len(),
+            options.artifact_inline_max_bytes
+        )));
+    };
+    let uri = upload_artifact(ctx, base_uri, sha256, data).await?;
+    Ok((None, Some(uri)))
+}
+
+async fn upload_artifact(
+    ctx: &SessionContext,
+    base_uri: &str,
+    sha256: &str,
+    data: &[u8],
+) -> SparkResult<String> {
+    let uri = artifact_object_uri(base_uri, sha256)?;
+    let url = Url::parse(&uri).map_err(|e| {
+        SparkError::invalid(format!("invalid artifact object-store URI {uri}: {e}"))
+    })?;
+    let (_scheme, path) = ObjectStoreScheme::parse(&url).map_err(|e| {
+        SparkError::invalid(format!("invalid artifact object-store path {uri}: {e}"))
+    })?;
+    let object_store_url = artifact_object_store_url(&url)?;
+    let store = ctx
+        .runtime_env()
+        .object_store(object_store_url)
+        .map_err(|e| {
+            SparkError::internal(format!("failed to create artifact object store {uri}: {e}"))
+        })?;
+    store
+        .put(&path, PutPayload::from(data.to_vec()))
+        .await
+        .map_err(|e| SparkError::internal(format!("failed to write artifact {uri}: {e}")))?;
+    Ok(uri)
+}
+
+fn artifact_object_store_url(
+    url: &Url,
+) -> SparkResult<datafusion::execution::object_store::ObjectStoreUrl> {
+    if url.scheme() == "file" {
+        return Ok(datafusion::execution::object_store::ObjectStoreUrl::local_filesystem());
+    }
+    let root = &url[..url::Position::BeforePath];
+    datafusion::execution::object_store::ObjectStoreUrl::parse(root)
+        .map_err(|e| SparkError::invalid(format!("invalid artifact object-store URL {root}: {e}")))
+}
+
+fn artifact_object_uri(base_uri: &str, sha256: &str) -> SparkResult<String> {
+    let mut url = Url::parse(base_uri).map_err(|e| {
+        SparkError::invalid(format!(
+            "invalid spark.artifact_store_uri value {base_uri}: {e}"
+        ))
+    })?;
+    if sha256.len() < 2 {
+        return Err(SparkError::internal(format!(
+            "artifact SHA-256 is unexpectedly short: {sha256}"
+        )));
+    }
+    let prefix = url.path().trim_end_matches('/');
+    let path = if prefix.is_empty() {
+        format!("/sail-artifacts/{}/{sha256}", &sha256[..2])
+    } else {
+        format!("{prefix}/sail-artifacts/{}/{sha256}", &sha256[..2])
+    };
+    url.set_path(&path);
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url.to_string())
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    Sha256::digest(data)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 struct ChunkedArtifact {
@@ -284,7 +444,8 @@ fn process_chunk(artifact: &mut ChunkedArtifact, chunk: &ArtifactChunk) -> Spark
     artifact.process_chunk(chunk)
 }
 
-fn add_artifact_summary(
+async fn add_artifact_summary(
+    ctx: &SessionContext,
     name: String,
     data: &[u8],
     is_crc_successful: bool,
@@ -293,10 +454,22 @@ fn add_artifact_summary(
     summaries: &mut Vec<ArtifactSummary>,
 ) -> SparkResult<()> {
     if is_crc_successful {
-        let normalized_name = normalize_artifact_name(&name)?;
-        let python_path = store_artifact(&normalized_name, data, artifact_dir)?;
-        let artifact_data = python_path.as_ref().map(|_| data.to_vec());
-        spark.add_artifact(normalized_name, python_path, artifact_data)?;
+        let stored = store_artifact(&name, data, artifact_dir)?;
+        if let Some(kind) = stored.kind {
+            let sha256 = sha256_hex(data);
+            let size = data.len() as u64;
+            let (data, uri) =
+                artifact_transport(ctx, spark, &stored.normalized_name, &sha256, data).await?;
+            spark.add_artifact(PySparkPythonArtifact {
+                name: stored.normalized_name,
+                python_path: stored.local_path.unwrap_or_default(),
+                data,
+                uri,
+                sha256,
+                size,
+                kind,
+            })?;
+        }
     }
     summaries.push(ArtifactSummary {
         name,
@@ -305,7 +478,8 @@ fn add_artifact_summary(
     Ok(())
 }
 
-fn add_single_chunk_artifact(
+async fn add_single_chunk_artifact(
+    ctx: &SessionContext,
     name: String,
     chunk: ArtifactChunk,
     artifact_dir: &Path,
@@ -313,10 +487,20 @@ fn add_single_chunk_artifact(
     summaries: &mut Vec<ArtifactSummary>,
 ) -> SparkResult<()> {
     let chunk_ok = validate_crc(&chunk.data, chunk.crc);
-    add_artifact_summary(name, &chunk.data, chunk_ok, artifact_dir, spark, summaries)
+    add_artifact_summary(
+        ctx,
+        name,
+        &chunk.data,
+        chunk_ok,
+        artifact_dir,
+        spark,
+        summaries,
+    )
+    .await
 }
 
-fn finalize_chunked_artifact(
+async fn finalize_chunked_artifact(
+    ctx: &SessionContext,
     chunked: ChunkedArtifact,
     artifact_dir: &Path,
     spark: &SparkSession,
@@ -324,6 +508,7 @@ fn finalize_chunked_artifact(
 ) -> SparkResult<()> {
     chunked.validate_complete()?;
     add_artifact_summary(
+        ctx,
         chunked.name,
         &chunked.data,
         chunked.is_crc_successful,
@@ -331,6 +516,7 @@ fn finalize_chunked_artifact(
         spark,
         summaries,
     )
+    .await
 }
 
 pub(crate) async fn handle_add_artifacts(
@@ -357,7 +543,15 @@ pub(crate) async fn handle_add_artifacts(
                 for artifact in batch.artifacts {
                     let name = artifact.name;
                     let chunk = artifact.data.required("artifact data")?;
-                    add_single_chunk_artifact(name, chunk, &artifact_dir, &spark, &mut summaries)?;
+                    add_single_chunk_artifact(
+                        ctx,
+                        name,
+                        chunk,
+                        &artifact_dir,
+                        &spark,
+                        &mut summaries,
+                    )
+                    .await?;
                 }
             }
             Payload::BeginChunk(begin) => {
@@ -374,7 +568,8 @@ pub(crate) async fn handle_add_artifacts(
                     begin.initial_chunk,
                 )?;
                 if chunked.is_complete() {
-                    finalize_chunked_artifact(chunked, &artifact_dir, &spark, &mut summaries)?;
+                    finalize_chunked_artifact(ctx, chunked, &artifact_dir, &spark, &mut summaries)
+                        .await?;
                 } else {
                     current_chunked = Some(chunked);
                 }
@@ -390,7 +585,14 @@ pub(crate) async fn handle_add_artifacts(
                 };
                 if is_complete {
                     if let Some(chunked) = current_chunked.take() {
-                        finalize_chunked_artifact(chunked, &artifact_dir, &spark, &mut summaries)?;
+                        finalize_chunked_artifact(
+                            ctx,
+                            chunked,
+                            &artifact_dir,
+                            &spark,
+                            &mut summaries,
+                        )
+                        .await?;
                     }
                 }
             }
@@ -399,7 +601,7 @@ pub(crate) async fn handle_add_artifacts(
 
     // Finalize any remaining chunked artifact
     if let Some(chunked) = current_chunked.take() {
-        finalize_chunked_artifact(chunked, &artifact_dir, &spark, &mut summaries)?;
+        finalize_chunked_artifact(ctx, chunked, &artifact_dir, &spark, &mut summaries).await?;
     }
 
     Ok(summaries)
@@ -412,7 +614,8 @@ pub(crate) async fn handle_artifact_statuses(
     let spark = ctx.extension::<SparkSession>()?;
     let mut statuses = HashMap::new();
     for name in names {
-        let exists = spark.has_artifact(&name)?;
+        let normalized = normalize_artifact_name(&name)?;
+        let exists = spark.has_artifact(&normalized)?;
         statuses.insert(name, ArtifactStatus { exists });
     }
     Ok(statuses)

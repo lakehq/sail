@@ -777,9 +777,28 @@
   type: string
   default: ""
   description: |
-    The root directory used to store Spark Connect session artifacts such as Python files.
+    The server-local root directory used to stage Spark Connect session artifacts.
     If empty, Sail stores artifacts under the system temporary directory.
-    In cluster modes, this directory must be accessible by the driver and all workers.
+    Cluster workers do not rely on this path for artifact correctness; Python artifacts
+    are distributed through inline payloads or the configured artifact object store.
+  experimental: true
+
+- key: spark.artifact_inline_max_bytes
+  type: number
+  default: "1048576"
+  description: |
+    The maximum artifact size, in bytes, that Sail embeds directly into physical plans.
+    Larger Python, file, and archive artifacts require spark.artifact_store_uri so that
+    cluster workers can fetch them without depending on the driver's local filesystem.
+  experimental: true
+
+- key: spark.artifact_store_uri
+  type: string
+  default: ""
+  description: |
+    Optional object-store URI prefix used for Spark Connect artifacts larger than
+    spark.artifact_inline_max_bytes. Examples include file:///shared/sail-artifacts
+    for local development or s3://bucket/prefix for Kubernetes deployments.
   experimental: true
 
 - key: flight.session_timeout_secs

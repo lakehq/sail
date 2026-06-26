@@ -252,7 +252,7 @@ use sail_physical_plan::streaming::collector::StreamCollectorExec;
 use sail_physical_plan::streaming::filter::StreamFilterExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
-use sail_python_udf::config::{PySparkPythonArtifact, PySparkUdfConfig};
+use sail_python_udf::config::{PySparkArtifactKind, PySparkPythonArtifact, PySparkUdfConfig};
 use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
 use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
 use sail_python_udf::udf::pyspark_group_map_udf::{PySparkGroupMapMode, PySparkGroupMapUDF};
@@ -3979,12 +3979,18 @@ impl RemoteExecutionCodec {
             python_artifacts: config
                 .python_artifacts
                 .iter()
-                .map(|artifact| PySparkPythonArtifact {
-                    name: artifact.name.clone(),
-                    python_path: artifact.python_path.clone(),
-                    data: artifact.data.clone(),
+                .map(|artifact| {
+                    Ok(PySparkPythonArtifact {
+                        name: artifact.name.clone(),
+                        python_path: artifact.python_path.clone(),
+                        data: artifact.data.clone(),
+                        uri: artifact.uri.clone(),
+                        sha256: artifact.sha256.clone(),
+                        size: artifact.size,
+                        kind: self.try_decode_pyspark_artifact_kind(artifact.kind)?,
+                    })
                 })
-                .collect(),
+                .collect::<Result<_>>()?,
         };
         Ok(config)
     }
@@ -4013,10 +4019,35 @@ impl RemoteExecutionCodec {
                     name: artifact.name.clone(),
                     python_path: artifact.python_path.clone(),
                     data: artifact.data.clone(),
+                    uri: artifact.uri.clone(),
+                    sha256: artifact.sha256.clone(),
+                    size: artifact.size,
+                    kind: self.encode_pyspark_artifact_kind(artifact.kind) as i32,
                 })
                 .collect(),
         };
         Ok(config)
+    }
+
+    fn try_decode_pyspark_artifact_kind(&self, kind: i32) -> Result<PySparkArtifactKind> {
+        let kind = gen::PySparkArtifactKind::try_from(kind)
+            .map_err(|e| plan_datafusion_err!("failed to decode PySpark artifact kind: {e}"))?;
+        match kind {
+            gen::PySparkArtifactKind::Unspecified => Err(plan_datafusion_err!(
+                "PySpark artifact kind must not be unspecified"
+            )),
+            gen::PySparkArtifactKind::PyFile => Ok(PySparkArtifactKind::PyFile),
+            gen::PySparkArtifactKind::File => Ok(PySparkArtifactKind::File),
+            gen::PySparkArtifactKind::Archive => Ok(PySparkArtifactKind::Archive),
+        }
+    }
+
+    fn encode_pyspark_artifact_kind(&self, kind: PySparkArtifactKind) -> gen::PySparkArtifactKind {
+        match kind {
+            PySparkArtifactKind::PyFile => gen::PySparkArtifactKind::PyFile,
+            PySparkArtifactKind::File => gen::PySparkArtifactKind::File,
+            PySparkArtifactKind::Archive => gen::PySparkArtifactKind::Archive,
+        }
     }
 
     fn try_decode_file_compression_type(&self, variant: i32) -> Result<FileCompressionType> {

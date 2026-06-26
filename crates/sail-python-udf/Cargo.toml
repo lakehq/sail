@@ -9,6 +9,7 @@ workspace = true
 [dependencies]
 sail-common = { path = "../sail-common" }
 sail-common-datafusion = { path = "../sail-common-datafusion" }
+sail-object-store = { path = "../sail-object-store" }
 sail-pyarrow = { path = "../sail-pyarrow" }
 
 thiserror = { workspace = true }
@@ -22,7 +23,9 @@ tokio = { workspace = true }
 tokio-stream = { workspace = true }
 md-5 = { workspace = true }
 num-bigint = { workspace = true }
+object_store = { workspace = true }
 sha2 = { workspace = true }
+url = { workspace = true }
 
 [lib]
 crate-type = ["cdylib", "rlib"]

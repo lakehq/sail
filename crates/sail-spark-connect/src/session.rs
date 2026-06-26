@@ -24,6 +24,8 @@ use crate::streaming::{
 pub(crate) struct SparkSessionOptions {
     pub execution_heartbeat_interval: Duration,
     pub artifact_root: Option<PathBuf>,
+    pub artifact_inline_max_bytes: usize,
+    pub artifact_store_uri: Option<String>,
 }
 
 /// A Spark session extension to the DataFusion [`SessionContext`].
@@ -105,24 +107,8 @@ impl SparkSession {
         let mut config = PlanConfig::try_from(&state.config)?;
         config.session_user_id = self.user_id().to_string();
         let mut pyspark_udf_config = (*config.pyspark_udf_config).clone();
-        pyspark_udf_config.python_artifact_paths = state
-            .artifacts
-            .iter()
-            .filter_map(|artifact| artifact.python_path.clone())
-            .collect();
-        pyspark_udf_config.python_artifacts = state
-            .artifacts
-            .iter()
-            .filter_map(|artifact| {
-                let python_path = artifact.python_path.clone()?;
-                let data = artifact.data.clone()?;
-                Some(PySparkPythonArtifact {
-                    name: artifact.name.clone(),
-                    python_path,
-                    data,
-                })
-            })
-            .collect();
+        pyspark_udf_config.python_artifact_paths = vec![];
+        pyspark_udf_config.python_artifacts = state.artifacts.clone();
         config.pyspark_udf_config = Arc::new(pyspark_udf_config);
         Ok(Arc::new(config))
     }
@@ -350,26 +336,16 @@ impl SparkSession {
     }
 
     /// Tracks an artifact name as added to this session.
-    pub(crate) fn add_artifact(
-        &self,
-        name: String,
-        python_path: Option<String>,
-        data: Option<Vec<u8>>,
-    ) -> SparkResult<()> {
+    pub(crate) fn add_artifact(&self, artifact: PySparkPythonArtifact) -> SparkResult<()> {
         let mut state = self.state.lock()?;
-        if let Some(artifact) = state
+        if let Some(existing) = state
             .artifacts
             .iter_mut()
-            .find(|artifact| artifact.name == name)
+            .find(|existing| existing.name == artifact.name)
         {
-            artifact.python_path = python_path;
-            artifact.data = data;
+            *existing = artifact;
         } else {
-            state.artifacts.push(SparkSessionArtifact {
-                name,
-                python_path,
-                data,
-            });
+            state.artifacts.push(artifact);
         }
         Ok(())
     }
@@ -381,18 +357,11 @@ impl SparkSession {
     }
 }
 
-#[derive(Debug, Clone)]
-struct SparkSessionArtifact {
-    name: String,
-    python_path: Option<String>,
-    data: Option<Vec<u8>>,
-}
-
 struct SparkSessionState {
     config: SparkRuntimeConfig,
     executors: HashMap<String, Arc<Executor>>,
     streaming_queries: StreamingQueryManager,
-    artifacts: Vec<SparkSessionArtifact>,
+    artifacts: Vec<PySparkPythonArtifact>,
     artifact_dir: Option<PathBuf>,
 }
 

@@ -46,6 +46,12 @@ impl ServerSessionMutator for SparkSessionMutator {
                 } else {
                     Some(self.config.spark.artifact_root.clone().into())
                 },
+                artifact_inline_max_bytes: self.config.spark.artifact_inline_max_bytes,
+                artifact_store_uri: if self.config.spark.artifact_store_uri.is_empty() {
+                    None
+                } else {
+                    Some(self.config.spark.artifact_store_uri.clone())
+                },
             },
         )
         .map_err(|e| internal_datafusion_err!("{e}"))?;

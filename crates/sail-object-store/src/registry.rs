@@ -114,7 +114,7 @@ impl ObjectStoreRegistry for DynamicObjectStoreRegistry {
     }
 }
 
-fn get_dynamic_object_store(url: &Url) -> object_store::Result<Arc<dyn ObjectStore>> {
+pub fn get_dynamic_object_store(url: &Url) -> object_store::Result<Arc<dyn ObjectStore>> {
     let key = ObjectStoreKey::new(url, None);
     let store: Arc<dyn ObjectStore> = match key.scheme.as_str() {
         #[cfg(feature = "hdfs")]

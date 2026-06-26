@@ -8031,14 +8031,17 @@ dependencies = [
  "futures",
  "md-5 0.11.0",
  "num-bigint",
+ "object_store",
  "pyo3",
  "sail-common",
  "sail-common-datafusion",
+ "sail-object-store",
  "sail-pyarrow",
  "sha2 0.11.0",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
+ "url",
 ]
 
 [[package]]
@@ -8116,6 +8119,7 @@ dependencies = [
  "lazy_static",
  "log",
  "monostate",
+ "object_store",
  "parquet-variant-compute",
  "pbjson",
  "pbjson-build",
@@ -8140,6 +8144,7 @@ dependencies = [
  "sail-sql-analyzer",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "syn 2.0.118",
  "thiserror 2.0.18",
  "tokio",
@@ -8147,6 +8152,7 @@ dependencies = [
  "tonic-prost",
  "tonic-prost-build",
  "tonic-types",
+ "url",
  "uuid",
 ]
 
