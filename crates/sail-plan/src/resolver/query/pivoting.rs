@@ -170,7 +170,7 @@ impl PlanResolver<'_> {
         // values into the planner process; the extra row still lets us detect overflow.
         let plan = LogicalPlanBuilder::from(input.clone())
             .aggregate(vec![pivot_column.clone()], Vec::<expr::Expr>::new())?
-            .limit(0, Some(max_pivot_values + 1))?
+            .limit(0, Some(max_pivot_values.saturating_add(1)))?
             .build()?;
         let batches = self.ctx.execute_logical_plan(plan).await?.collect().await?;
         let mut values = Vec::new();
