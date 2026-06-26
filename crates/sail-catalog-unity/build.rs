@@ -48,6 +48,7 @@ fn build_unity_catalog() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn add_column_type_name_aliases(content: String) -> String {
+    // OneLake returns data types in uppercase.
     [
         ("BOOLEAN", "boolean", "Boolean"),
         ("BYTE", "byte", "Byte"),
@@ -81,6 +82,7 @@ fn add_column_type_name_aliases(content: String) -> String {
 }
 
 fn add_nullable_array_deserializer(content: String) -> String {
+    // OneLake may return `null` for columns when listing tables.
     content.replace(
         "pub mod types {\n",
         r#"pub mod types {

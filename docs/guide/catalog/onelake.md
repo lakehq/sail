@@ -83,7 +83,7 @@ export SAIL_CATALOG__LIST='[{type="onelake", name="fabric", url="workspace/lakeh
 export SAIL_CATALOG__LIST='[{type="onelake", name="fabric", url="workspace/lakehouse.Lakehouse", bearer_token="..."}]'
 
 # OAuth authentication with a tenant ID
-export AZURE_TENANT_ID="00000000-0000-0000-0000-000000000000"
+export AZURE_TENANT_ID="..."
 export AZURE_CLIENT_ID="..."
 export AZURE_CLIENT_SECRET="..."
 export SAIL_CATALOG__LIST='[{type="onelake", name="fabric", url="workspace/lakehouse.Lakehouse"}]'
