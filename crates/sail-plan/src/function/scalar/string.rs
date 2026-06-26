@@ -214,8 +214,7 @@ fn is_valid_utf8(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     // Spark returns NULL for a NULL input. `try_cast` nulls out both a NULL input and
     // invalid bytes, so `IS NOT NULL` alone would turn NULL into `false`; re-propagate
     // the input NULL explicitly.
-    Ok(when(arg.is_null(), lit(ScalarValue::Boolean(None)))
-        .otherwise(validated.is_not_null())?)
+    Ok(when(arg.is_null(), lit(ScalarValue::Boolean(None))).otherwise(validated.is_not_null())?)
 }
 
 fn in_str_str_out_bool(
