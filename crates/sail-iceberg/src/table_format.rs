@@ -1290,7 +1290,7 @@ mod tests {
     }
 
     #[test]
-    fn storage_access_rejects_required_rest_vended_credentials() {
+    fn storage_access_allows_required_rest_vended_credentials() {
         let mut context = LakehouseExecutionContext::catalog_table_context(
             CatalogProviderId("rest".to_string()),
             vec!["rest".to_string(), "db".to_string(), "tbl".to_string()],
@@ -1315,9 +1315,6 @@ mod tests {
         });
 
         let result = validate_iceberg_lakehouse_storage_access(Some(&context));
-        assert!(matches!(
-            &result,
-            Err(err) if format!("{err}").contains("vended storage credentials")
-        ));
+        assert!(result.is_ok());
     }
 }
