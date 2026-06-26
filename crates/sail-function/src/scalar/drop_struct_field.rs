@@ -53,8 +53,13 @@ impl DropStructField {
                 }
 
                 // Spark's `dropFields` silently ignores field names that do not
-                // exist, returning the struct unchanged rather than raising.
-                Ok(DataType::Struct(new_fields.into()))
+                // exist (the struct is returned unchanged), but raises when every
+                // field would be dropped.
+                if new_fields.is_empty() {
+                    plan_err!("[CANNOT_DROP_ALL_FIELDS] Cannot drop all fields in struct")
+                } else {
+                    Ok(DataType::Struct(new_fields.into()))
+                }
             }
             _ => plan_err!("Expected Struct, found {data_type}"),
         }

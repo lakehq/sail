@@ -221,7 +221,6 @@ pub(crate) enum SparkThrowable {
     IllegalArgumentException(String),
     ArithmeticException(String),
     UnsupportedOperationException(String),
-    #[expect(dead_code)]
     ArrayIndexOutOfBoundsException(String),
     DateTimeException(String),
     SparkRuntimeException(String),
@@ -399,6 +398,8 @@ impl From<CommonErrorCause> for SparkThrowable {
             CommonErrorCause::Execution(x) => {
                 if is_timestamp_parse_error(&x) {
                     SparkThrowable::DateTimeException(x)
+                } else if is_array_index_out_of_bounds_error(&x) {
+                    SparkThrowable::ArrayIndexOutOfBoundsException(x)
                 } else {
                     // TODO: handle situations where a different exception type is more appropriate.
                     SparkThrowable::AnalysisException(x)
@@ -411,6 +412,10 @@ impl From<CommonErrorCause> for SparkThrowable {
 
 fn is_timestamp_parse_error(message: &str) -> bool {
     message.starts_with("Error parsing timestamp")
+}
+
+fn is_array_index_out_of_bounds_error(message: &str) -> bool {
+    message.contains("[INVALID_ARRAY_INDEX]")
 }
 
 fn cast_error_to_throwable(message: String) -> SparkThrowable {
