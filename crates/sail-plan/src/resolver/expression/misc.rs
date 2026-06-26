@@ -364,15 +364,29 @@ impl PlanResolver<'_> {
             )));
         };
 
-        let new_expr = if let Some(value_expression) = value_expression {
-            let value_expr = self
-                .resolve_expression(value_expression, schema, state)
+        // Spark names the column after the `UpdateFields` expression tree, e.g.
+        // `update_fields(x, WithField(e))` for `x.withField("z", e)` (the value
+        // expression's display name is shown, not the target field name) and
+        // `update_fields(x, dropfield())` for `x.dropFields("z")`.
+        let (result_name, new_expr) = if let Some(value_expression) = value_expression {
+            let NamedExpr {
+                name: value_name,
+                expr: value_expr,
+                ..
+            } = self
+                .resolve_named_expression(value_expression, schema, state)
                 .await?;
-            ScalarUDF::from(UpdateStructField::new(field_name)).call(vec![expr, value_expr])
+            (
+                format!("update_fields({name}, WithField({}))", value_name.one()?),
+                ScalarUDF::from(UpdateStructField::new(field_name)).call(vec![expr, value_expr]),
+            )
         } else {
-            ScalarUDF::from(DropStructField::new(field_name)).call(vec![expr])
+            (
+                format!("update_fields({name}, dropfield())"),
+                ScalarUDF::from(DropStructField::new(field_name)).call(vec![expr]),
+            )
         };
-        Ok(NamedExpr::new(vec![name], new_expr))
+        Ok(NamedExpr::new(vec![result_name], new_expr))
     }
 
     /// Rewrites the resolved expression to refer to columns in an external schema.

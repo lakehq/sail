@@ -217,7 +217,6 @@ pub(crate) enum SparkThrowable {
     #[expect(dead_code)]
     StreamingQueryException(String),
     QueryExecutionException(String),
-    #[expect(dead_code)]
     NumberFormatException(String),
     IllegalArgumentException(String),
     ArithmeticException(String),
@@ -393,8 +392,8 @@ impl From<CommonErrorCause> for SparkThrowable {
                     SparkThrowable::PythonException(message)
                 }
             }
-            CommonErrorCause::ArrowCast(x)
-            | CommonErrorCause::Schema(x)
+            CommonErrorCause::ArrowCast(x) => cast_error_to_throwable(x),
+            CommonErrorCause::Schema(x)
             | CommonErrorCause::Plan(x)
             | CommonErrorCause::Configuration(x) => SparkThrowable::AnalysisException(x),
             CommonErrorCause::Execution(x) => {
@@ -412,6 +411,25 @@ impl From<CommonErrorCause> for SparkThrowable {
 
 fn is_timestamp_parse_error(message: &str) -> bool {
     message.starts_with("Error parsing timestamp")
+}
+
+fn cast_error_to_throwable(message: String) -> SparkThrowable {
+    // Spark ANSI cast failures map by target type:
+    //   numeric target -> NumberFormatException   (CAST('abc' AS DOUBLE/INT/...))
+    //   boolean target -> SparkRuntimeException    (CAST('abc' AS BOOLEAN))
+    // Arrow's `CastError` message ends with "to value of <Type> type".
+    if message.contains("Boolean type") {
+        SparkThrowable::SparkRuntimeException(message)
+    } else if [
+        "Int8", "Int16", "Int32", "Int64", "UInt", "Float16", "Float32", "Float64", "Decimal",
+    ]
+    .iter()
+    .any(|t| message.contains(t))
+    {
+        SparkThrowable::NumberFormatException(message)
+    } else {
+        SparkThrowable::AnalysisException(message)
+    }
 }
 
 impl From<SparkError> for Status {
