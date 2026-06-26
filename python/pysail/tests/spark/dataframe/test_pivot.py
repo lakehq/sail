@@ -432,3 +432,22 @@ def test_pivot_inference_includes_null_pivot_value(spark):
     )
     assert df.columns == ["g", "null", "1"]
     assert [tuple(r) for r in df.collect()] == [("a", 5, 10), ("b", None, 7)]
+
+
+def test_pivot_nan_value_matches_in_general_path(spark):
+    import pyspark.sql.functions as F  # noqa: N812
+
+    # Non-numeric aggregate -> Spark's general (If/EqualNullSafe) pivot path, where NaN DOES
+    # match (unlike the PivotFirst path). Pins the `spark_uses_pivot_first` gate's other branch.
+    actual = (
+        spark.createDataFrame(
+            [("a", 1.0, "x"), ("a", float("nan"), "z"), ("b", 1.0, "y")],
+            schema="g STRING, k DOUBLE, s STRING",
+        )
+        .groupBy("g")
+        .pivot("k")
+        .agg(F.first("s"))
+        .orderBy("g")
+        .toPandas()
+    )
+    assert actual.set_index("g")["NaN"].to_dict() == {"a": "z", "b": None}
