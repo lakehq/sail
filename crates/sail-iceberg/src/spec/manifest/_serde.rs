@@ -35,7 +35,63 @@ pub(super) struct IntLongMapEntry {
 #[derive(Serialize, Deserialize)]
 pub(super) struct IntBytesMapEntry {
     key: i32,
+    // The Iceberg manifest Avro schema types this as `bytes`. `serde`'s default
+    // for `Vec<u8>` emits an Avro *array*, which fails to resolve against the
+    // `bytes` schema and silently nulls out the (nullable) bounds map. Force the
+    // byte-string encoding on both sides so lower/upper bounds round-trip.
+    #[serde(
+        serialize_with = "serialize_byte_buf",
+        deserialize_with = "deserialize_byte_buf"
+    )]
     value: Vec<u8>,
+}
+
+fn serialize_byte_buf<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_bytes(bytes)
+}
+
+fn deserialize_byte_buf<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct ByteBufVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for ByteBufVisitor {
+        type Value = Vec<u8>;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("Avro bytes or a sequence of byte values")
+        }
+
+        fn visit_bytes<E>(self, v: &[u8]) -> Result<Vec<u8>, E> {
+            Ok(v.to_vec())
+        }
+
+        fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Vec<u8>, E> {
+            Ok(v)
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Vec<u8>, E> {
+            Ok(v.as_bytes().to_vec())
+        }
+
+        // Backward-compat: tolerate manifests previously written as an array.
+        fn visit_seq<A>(self, mut seq: A) -> Result<Vec<u8>, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            let mut out = Vec::new();
+            while let Some(byte) = seq.next_element::<u8>()? {
+                out.push(byte);
+            }
+            Ok(out)
+        }
+    }
+
+    deserializer.deserialize_byte_buf(ByteBufVisitor)
 }
 
 #[derive(Deserialize)]
