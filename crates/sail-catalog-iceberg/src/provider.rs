@@ -543,241 +543,7 @@ impl IcebergRestCatalogProvider {
         database: &Namespace,
         result: crate::models::LoadTableResult,
     ) -> CatalogResult<TableStatus> {
-        // Table-specific config and storage credentials are access-session state, not
-        // display table properties.
-        // TODO: Preserve unused fields in `TableMetadata` when Sail exposes them.
-        let crate::models::TableMetadata {
-            format_version,
-            table_uuid,
-            location,
-            last_updated_ms,
-            next_row_id,
-            properties,
-            schemas,
-            current_schema_id,
-            last_column_id,
-            partition_specs,
-            default_spec_id,
-            last_partition_id,
-            sort_orders,
-            default_sort_order_id,
-            encryption_keys: _,
-            snapshots: _,
-            refs: _,
-            current_snapshot_id,
-            last_sequence_number,
-            snapshot_log: _,
-            metadata_log: _,
-            statistics,
-            partition_statistics,
-        } = *result.metadata;
-
-        let current_schema =
-            find_by_id_or_last(schemas.as_ref(), current_schema_id, |s| s.schema_id);
-        let default_partition_spec =
-            find_by_id_or_last(partition_specs.as_ref(), default_spec_id, |s| s.spec_id);
-
-        let partition_field_ids: std::collections::HashSet<i32> = default_partition_spec
-            .map(|spec| spec.fields.iter().map(|f| f.source_id).collect())
-            .unwrap_or_default();
-
-        let bucket_field_ids: std::collections::HashSet<i32> = default_partition_spec
-            .map(|spec| {
-                spec.fields
-                    .iter()
-                    .filter(|f| f.transform.trim().to_lowercase().starts_with("bucket"))
-                    .map(|f| f.source_id)
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let partition_by = match (current_schema, default_partition_spec) {
-            (Some(schema), Some(spec)) => spec
-                .fields
-                .iter()
-                .map(|field| {
-                    let source_column = schema
-                        .fields
-                        .iter()
-                        .find(|f| f.id == field.source_id)
-                        .ok_or_else(|| {
-                            CatalogError::External(format!(
-                                "Partition field source id {} not found in schema",
-                                field.source_id
-                            ))
-                        })?
-                        .name
-                        .clone();
-                    let transform = field.transform.parse().map_err(CatalogError::External)?;
-                    catalog_partition_field_from_iceberg(source_column, transform)
-                        .map_err(CatalogError::External)
-                })
-                .collect::<CatalogResult<Vec<_>>>()?,
-            _ => Vec::new(),
-        };
-
-        let columns = if let Some(schema) = current_schema {
-            let mut cols = Vec::new();
-            for field in &schema.fields {
-                let data_type = iceberg_type_to_arrow(&field.field_type).map_err(|e| {
-                    CatalogError::External(format!(
-                        "Failed to convert Iceberg type to Arrow type for field '{}': {e}",
-                        field.name
-                    ))
-                })?;
-                let field_id = field.id;
-                cols.push(TableColumnStatus {
-                    name: field.name.clone(),
-                    data_type,
-                    nullable: !field.required,
-                    comment: field.doc.clone(),
-                    default: None,
-                    generated_always_as: None,
-                    identity: None,
-                    is_partition: partition_field_ids.contains(&field_id),
-                    is_bucket: bucket_field_ids.contains(&field_id),
-                    is_cluster: false,
-                });
-            }
-            cols
-        } else {
-            Vec::new()
-        };
-
-        let default_sort_order =
-            find_by_id_or_last(sort_orders.as_ref(), default_sort_order_id, |o| {
-                Some(o.order_id)
-            });
-
-        let sort_by: Vec<CatalogTableSort> = default_sort_order
-            .map(|order| {
-                order
-                    .fields
-                    .iter()
-                    .filter_map(|sort_field| {
-                        let field_id = sort_field.source_id;
-                        current_schema.and_then(|schema| {
-                            schema
-                                .fields
-                                .iter()
-                                .find(|f| f.id == field_id)
-                                .map(|field| {
-                                    let ascending = match sort_field.direction {
-                                        crate::models::SortDirection::Asc => true,
-                                        crate::models::SortDirection::Desc => false,
-                                    };
-                                    CatalogTableSort {
-                                        column: field.name.clone(),
-                                        ascending,
-                                    }
-                                })
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        let constraints = current_schema
-            .and_then(|schema| {
-                schema.identifier_field_ids.as_ref().and_then(|ids| {
-                    if ids.is_empty() {
-                        None
-                    } else {
-                        let pk_columns: Vec<String> = ids
-                            .iter()
-                            .filter_map(|id| {
-                                schema
-                                    .fields
-                                    .iter()
-                                    .find(|f| f.id == *id)
-                                    .map(|f| f.name.clone())
-                            })
-                            .collect();
-                        if pk_columns.is_empty() {
-                            None
-                        } else {
-                            Some(vec![CatalogTableConstraint::PrimaryKey {
-                                name: None,
-                                columns: pk_columns,
-                            }])
-                        }
-                    }
-                })
-            })
-            .unwrap_or_default();
-
-        let mut properties: HashMap<String, String> = properties.unwrap_or_default();
-
-        let comment = get_property(&properties, "comment");
-
-        if let Some(metadata_location) = result.metadata_location {
-            properties.insert(METADATA_LOCATION_KEY.to_string(), metadata_location);
-        }
-        properties.insert(
-            "metadata.format-version".to_string(),
-            format_version.to_string(),
-        );
-        properties.insert("metadata.table-uuid".to_string(), table_uuid);
-
-        if let Some(v) = last_updated_ms {
-            properties.insert("metadata.last-updated-ms".to_string(), v.to_string());
-        }
-        if let Some(v) = next_row_id {
-            properties.insert("metadata.next-row-id".to_string(), v.to_string());
-        }
-        if let Some(v) = current_schema_id {
-            properties.insert("metadata.current-schema-id".to_string(), v.to_string());
-        }
-        if let Some(v) = last_column_id {
-            properties.insert("metadata.last-column-id".to_string(), v.to_string());
-        }
-        if let Some(v) = default_spec_id {
-            properties.insert("metadata.default-spec-id".to_string(), v.to_string());
-        }
-        if let Some(v) = last_partition_id {
-            properties.insert("metadata.last-partition-id".to_string(), v.to_string());
-        }
-        if let Some(v) = default_sort_order_id {
-            properties.insert("metadata.default-sort-order-id".to_string(), v.to_string());
-        }
-        if let Some(v) = current_snapshot_id {
-            properties.insert("metadata.current-snapshot-id".to_string(), v.to_string());
-        }
-        if let Some(v) = last_sequence_number {
-            properties.insert("metadata.last-sequence-number".to_string(), v.to_string());
-        }
-        if let Some(v) = statistics {
-            properties.insert(
-                "metadata.statistics".to_string(),
-                serde_json::to_string(&v).unwrap_or_default(),
-            );
-        }
-        if let Some(v) = partition_statistics {
-            properties.insert(
-                "metadata.partition-statistics".to_string(),
-                serde_json::to_string(&v).unwrap_or_default(),
-            );
-        }
-
-        let properties: Vec<_> = properties.into_iter().collect();
-
-        Ok(TableStatus {
-            catalog: Some(self.name.clone()),
-            database: database.clone().into(),
-            name: table_name.to_string(),
-            kind: TableKind::Table {
-                columns,
-                comment,
-                constraints,
-                location,
-                format: "iceberg".to_string(),
-                partition_by,
-                sort_by,
-                bucket_by: None,
-                properties,
-                is_external: true,
-            },
-        })
+        load_table_result_to_status(&self.name, table_name, database, result)
     }
 
     fn load_view_result_to_status(
@@ -3471,4 +3237,248 @@ mod tests {
         test_get_database_impl(None).await;
         test_get_database_impl(Some("test")).await;
     }
+}
+
+/// Converts an Iceberg REST API table load result into a catalog `TableStatus`
+/// for an explicitly named catalog. Standalone form of the provider method so
+/// callers (e.g. the LakeCat Sail bridge) can reuse the conversion.
+pub fn load_table_result_to_status(
+    catalog: &str,
+    table_name: &str,
+    database: &Namespace,
+    result: crate::models::LoadTableResult,
+) -> CatalogResult<TableStatus> {
+    // Table-specific config and storage credentials are access-session state, not
+    // display table properties.
+    // TODO: Preserve unused fields in `TableMetadata` when Sail exposes them.
+    let crate::models::TableMetadata {
+        format_version,
+        table_uuid,
+        location,
+        last_updated_ms,
+        next_row_id,
+        properties,
+        schemas,
+        current_schema_id,
+        last_column_id,
+        partition_specs,
+        default_spec_id,
+        last_partition_id,
+        sort_orders,
+        default_sort_order_id,
+        encryption_keys: _,
+        snapshots: _,
+        refs: _,
+        current_snapshot_id,
+        last_sequence_number,
+        snapshot_log: _,
+        metadata_log: _,
+        statistics,
+        partition_statistics,
+    } = *result.metadata;
+
+    let current_schema = find_by_id_or_last(schemas.as_ref(), current_schema_id, |s| s.schema_id);
+    let default_partition_spec =
+        find_by_id_or_last(partition_specs.as_ref(), default_spec_id, |s| s.spec_id);
+
+    let partition_field_ids: std::collections::HashSet<i32> = default_partition_spec
+        .map(|spec| spec.fields.iter().map(|f| f.source_id).collect())
+        .unwrap_or_default();
+
+    let bucket_field_ids: std::collections::HashSet<i32> = default_partition_spec
+        .map(|spec| {
+            spec.fields
+                .iter()
+                .filter(|f| f.transform.trim().to_lowercase().starts_with("bucket"))
+                .map(|f| f.source_id)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let partition_by = match (current_schema, default_partition_spec) {
+        (Some(schema), Some(spec)) => spec
+            .fields
+            .iter()
+            .map(|field| {
+                let source_column = schema
+                    .fields
+                    .iter()
+                    .find(|f| f.id == field.source_id)
+                    .ok_or_else(|| {
+                        CatalogError::External(format!(
+                            "Partition field source id {} not found in schema",
+                            field.source_id
+                        ))
+                    })?
+                    .name
+                    .clone();
+                let transform = field.transform.parse().map_err(CatalogError::External)?;
+                catalog_partition_field_from_iceberg(source_column, transform)
+                    .map_err(CatalogError::External)
+            })
+            .collect::<CatalogResult<Vec<_>>>()?,
+        _ => Vec::new(),
+    };
+
+    let columns = if let Some(schema) = current_schema {
+        let mut cols = Vec::new();
+        for field in &schema.fields {
+            let data_type = iceberg_type_to_arrow(&field.field_type).map_err(|e| {
+                CatalogError::External(format!(
+                    "Failed to convert Iceberg type to Arrow type for field '{}': {e}",
+                    field.name
+                ))
+            })?;
+            let field_id = field.id;
+            cols.push(TableColumnStatus {
+                name: field.name.clone(),
+                data_type,
+                nullable: !field.required,
+                comment: field.doc.clone(),
+                default: None,
+                generated_always_as: None,
+                identity: None,
+                is_partition: partition_field_ids.contains(&field_id),
+                is_bucket: bucket_field_ids.contains(&field_id),
+                is_cluster: false,
+            });
+        }
+        cols
+    } else {
+        Vec::new()
+    };
+
+    let default_sort_order = find_by_id_or_last(sort_orders.as_ref(), default_sort_order_id, |o| {
+        Some(o.order_id)
+    });
+
+    let sort_by: Vec<CatalogTableSort> = default_sort_order
+        .map(|order| {
+            order
+                .fields
+                .iter()
+                .filter_map(|sort_field| {
+                    let field_id = sort_field.source_id;
+                    current_schema.and_then(|schema| {
+                        schema
+                            .fields
+                            .iter()
+                            .find(|f| f.id == field_id)
+                            .map(|field| {
+                                let ascending = match sort_field.direction {
+                                    crate::models::SortDirection::Asc => true,
+                                    crate::models::SortDirection::Desc => false,
+                                };
+                                CatalogTableSort {
+                                    column: field.name.clone(),
+                                    ascending,
+                                }
+                            })
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let constraints = current_schema
+        .and_then(|schema| {
+            schema.identifier_field_ids.as_ref().and_then(|ids| {
+                if ids.is_empty() {
+                    None
+                } else {
+                    let pk_columns: Vec<String> = ids
+                        .iter()
+                        .filter_map(|id| {
+                            schema
+                                .fields
+                                .iter()
+                                .find(|f| f.id == *id)
+                                .map(|f| f.name.clone())
+                        })
+                        .collect();
+                    if pk_columns.is_empty() {
+                        None
+                    } else {
+                        Some(vec![CatalogTableConstraint::PrimaryKey {
+                            name: None,
+                            columns: pk_columns,
+                        }])
+                    }
+                }
+            })
+        })
+        .unwrap_or_default();
+
+    let mut properties: HashMap<String, String> = properties.unwrap_or_default();
+
+    let comment = get_property(&properties, "comment");
+
+    if let Some(metadata_location) = result.metadata_location {
+        properties.insert(METADATA_LOCATION_KEY.to_string(), metadata_location);
+    }
+    properties.insert(
+        "metadata.format-version".to_string(),
+        format_version.to_string(),
+    );
+    properties.insert("metadata.table-uuid".to_string(), table_uuid);
+
+    if let Some(v) = last_updated_ms {
+        properties.insert("metadata.last-updated-ms".to_string(), v.to_string());
+    }
+    if let Some(v) = next_row_id {
+        properties.insert("metadata.next-row-id".to_string(), v.to_string());
+    }
+    if let Some(v) = current_schema_id {
+        properties.insert("metadata.current-schema-id".to_string(), v.to_string());
+    }
+    if let Some(v) = last_column_id {
+        properties.insert("metadata.last-column-id".to_string(), v.to_string());
+    }
+    if let Some(v) = default_spec_id {
+        properties.insert("metadata.default-spec-id".to_string(), v.to_string());
+    }
+    if let Some(v) = last_partition_id {
+        properties.insert("metadata.last-partition-id".to_string(), v.to_string());
+    }
+    if let Some(v) = default_sort_order_id {
+        properties.insert("metadata.default-sort-order-id".to_string(), v.to_string());
+    }
+    if let Some(v) = current_snapshot_id {
+        properties.insert("metadata.current-snapshot-id".to_string(), v.to_string());
+    }
+    if let Some(v) = last_sequence_number {
+        properties.insert("metadata.last-sequence-number".to_string(), v.to_string());
+    }
+    if let Some(v) = statistics {
+        properties.insert(
+            "metadata.statistics".to_string(),
+            serde_json::to_string(&v).unwrap_or_default(),
+        );
+    }
+    if let Some(v) = partition_statistics {
+        properties.insert(
+            "metadata.partition-statistics".to_string(),
+            serde_json::to_string(&v).unwrap_or_default(),
+        );
+    }
+
+    let properties: Vec<_> = properties.into_iter().collect();
+
+    Ok(TableStatus {
+        catalog: Some(catalog.to_string()),
+        database: database.clone().into(),
+        name: table_name.to_string(),
+        kind: TableKind::Table {
+            columns,
+            comment,
+            constraints,
+            location,
+            format: "iceberg".to_string(),
+            partition_by,
+            sort_by,
+            bucket_by: None,
+            properties,
+            is_external: true,
+        },
+    })
 }

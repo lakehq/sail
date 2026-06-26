@@ -182,6 +182,35 @@ pub trait CatalogProvider: Send + Sync {
         options: AlterTableOptions,
     ) -> CatalogResult<()>;
 
+    /// Commits requirement-guarded updates to a table (Iceberg REST commit-table
+    /// extension). Providers that do not support server-side commit return
+    /// `NotSupported`.
+    async fn commit_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: CommitTableOptions,
+    ) -> CatalogResult<TableStatus> {
+        let _ = (database, table, options);
+        Err(CatalogError::NotSupported(
+            "commit_table is not supported by this catalog provider".to_string(),
+        ))
+    }
+
+    /// Lists historical table commits (Iceberg REST extension). Providers that do
+    /// not track commit history return `NotSupported`.
+    async fn get_table_commits(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: GetTableCommitsOptions,
+    ) -> CatalogResult<GetTableCommitsResponse> {
+        let _ = (database, table, options);
+        Err(CatalogError::NotSupported(
+            "get_table_commits is not supported by this catalog provider".to_string(),
+        ))
+    }
+
     /// Creates a view in the catalog.
     async fn create_view(
         &self,
