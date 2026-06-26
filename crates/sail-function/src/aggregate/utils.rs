@@ -73,6 +73,21 @@ pub fn filtered_null_mask(
     NullBuffer::union(opt_filter.as_ref(), input.nulls())
 }
 
+/// The 0-based index into an ascending-sorted slice of `len` (> 0) values that
+/// holds the discrete percentile: `ceil(percentile * len) - 1`, clamped to the
+/// valid range (no interpolation).
+fn percentile_disc_index(percentile: f64, len: usize) -> usize {
+    if percentile == 0.0 {
+        0
+    } else if percentile == 1.0 {
+        len - 1
+    } else {
+        ((percentile * len as f64).ceil() as usize)
+            .saturating_sub(1)
+            .min(len - 1)
+    }
+}
+
 /// Returns the value at the given discrete percentile.
 ///
 /// Returns an actual value from the dataset (no interpolation). Specifically,
@@ -88,19 +103,30 @@ pub fn calculate_percentile_disc<T: ArrowNumericType>(
 
     let cmp = |x: &T::Native, y: &T::Native| x.compare(*y);
 
-    // percentile_disc: return actual value at the target index (no interpolation)
-    // index = ceil(percentile * len) - 1, clamped to valid range
-    let index = if percentile == 0.0 {
-        0
-    } else if percentile == 1.0 {
-        len - 1
-    } else {
-        ((percentile * len as f64).ceil() as usize)
-            .saturating_sub(1)
-            .min(len - 1)
-    };
-
     // select_nth_unstable_by is O(n) partial sort - finds the value at index
-    let (_, value, _) = values.select_nth_unstable_by(index, cmp);
+    let (_, value, _) = values.select_nth_unstable_by(percentile_disc_index(percentile, len), cmp);
     Some(*value)
+}
+
+/// Returns the discrete percentile for each requested fraction, sorting the
+/// values once instead of re-selecting (and cloning) the whole vector per
+/// percentile. Returns `None` when there are no values (the caller maps this to
+/// a NULL result). The output preserves the order of `percentiles`.
+pub fn calculate_percentiles_disc<T: ArrowNumericType>(
+    mut values: Vec<T::Native>,
+    percentiles: &[f64],
+) -> Option<Vec<T::Native>> {
+    let len = values.len();
+    if len == 0 {
+        return None;
+    }
+
+    let cmp = |x: &T::Native, y: &T::Native| x.compare(*y);
+    values.sort_unstable_by(cmp);
+    Some(
+        percentiles
+            .iter()
+            .map(|percentile| values[percentile_disc_index(*percentile, len)])
+            .collect(),
+    )
 }

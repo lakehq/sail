@@ -1556,7 +1556,9 @@ impl Accumulator for MultiIntervalPercentileAccumulator {
 }
 
 /// Extract an array of f64 percentile values from a PhysicalExpr
-fn extract_percentiles_array(expr: &Arc<dyn PhysicalExpr>) -> Result<Vec<f64>, DataFusionError> {
+pub(crate) fn extract_percentiles_array(
+    expr: &Arc<dyn PhysicalExpr>,
+) -> Result<Vec<f64>, DataFusionError> {
     // Create empty batch to evaluate the physical expression
     let fields: Vec<Field> = vec![];
     let schema = Arc::new(Schema::new(fields));
@@ -1628,7 +1630,7 @@ fn extract_percentiles_array(expr: &Arc<dyn PhysicalExpr>) -> Result<Vec<f64>, D
 }
 
 /// Convert a ScalarValue to f64 (helper for percentile extraction)
-fn scalar_to_f64(scalar: &ScalarValue) -> Result<f64, DataFusionError> {
+pub(crate) fn scalar_to_f64(scalar: &ScalarValue) -> Result<f64, DataFusionError> {
     let percentile: f64 = match scalar {
         ScalarValue::Float64(Some(v)) => *v,
         ScalarValue::Float32(Some(v)) => *v as f64,
@@ -1663,7 +1665,7 @@ fn scalar_to_f64(scalar: &ScalarValue) -> Result<f64, DataFusionError> {
 }
 
 /// Extract a literal f64 value from a PhysicalExpr (for percentile parameter)
-fn extract_literal(expr: &Arc<dyn PhysicalExpr>) -> Result<f64, DataFusionError> {
+pub(crate) fn extract_literal(expr: &Arc<dyn PhysicalExpr>) -> Result<f64, DataFusionError> {
     // Create empty batch to evaluate the physical expression
     let fields: Vec<Field> = vec![];
     let schema = Arc::new(Schema::new(fields));
