@@ -7475,12 +7475,12 @@ dependencies = [
 name = "sail-catalog-onelake"
 version = "0.6.4"
 dependencies = [
- "arrow",
  "async-trait",
- "reqwest",
+ "object_store",
  "sail-catalog",
+ "sail-catalog-iceberg",
+ "sail-catalog-unity",
  "sail-common-datafusion",
- "serde",
  "tokio",
 ]
 

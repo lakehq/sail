@@ -3,6 +3,9 @@ use std::sync::Arc;
 
 use datafusion::common::{plan_datafusion_err, Result};
 use datafusion_common::plan_err;
+use sail_catalog::credentials::{
+    CatalogCredentials, EmptyCatalogCredentials, StaticCatalogCredentials,
+};
 use sail_catalog::error::CatalogResult;
 use sail_catalog::manager::{CatalogManager, CatalogManagerOptions};
 use sail_catalog::provider::{
@@ -10,12 +13,12 @@ use sail_catalog::provider::{
 };
 use sail_catalog_glue::{GlueCatalogConfig, GlueCatalogProvider};
 use sail_catalog_hms::{HmsCatalogConfig, HmsCatalogProvider};
-use sail_catalog_iceberg::IcebergRestCatalogProvider;
+use sail_catalog_iceberg::{IcebergRestCatalogOptions, IcebergRestCatalogProvider};
 use sail_catalog_memory::MemoryCatalogProvider;
-use sail_catalog_onelake::OneLakeCatalogProvider;
+use sail_catalog_onelake::{OneLakeApiKind, OneLakeCatalogProvider};
 use sail_catalog_system::{SystemCatalogProvider, SYSTEM_CATALOG_NAME};
-use sail_catalog_unity::UnityCatalogProvider;
-use sail_common::config::{AppConfig, CacheType, CatalogCacheConfig, CatalogType};
+use sail_catalog_unity::{UnityCatalogConfig, UnityCatalogOptions, UnityCatalogProvider};
+use sail_common::config::{AppConfig, CacheType, CatalogCacheConfig, CatalogType, OneLakeApi};
 use sail_common::runtime::RuntimeHandle;
 use secrecy::ExposeSecret;
 
@@ -66,23 +69,26 @@ pub fn create_catalog_manager(
                             namespace_separator.to_string(),
                         );
                     }
-                    if let Some(oauth_access_token) = oauth_access_token {
-                        properties.insert(
-                            "oauth-access-token".to_string(), // Iceberg uses kebab-case
-                            oauth_access_token.expose_secret().to_string(), // FIXME: Only expose when necessary
-                        );
-                    }
-                    if let Some(bearer_access_token) = bearer_access_token {
-                        properties.insert(
-                            "bearer-access-token".to_string(), // Iceberg uses kebab-case
-                            bearer_access_token.expose_secret().to_string(), // FIXME: Only expose when necessary
-                        );
-                    }
+                    let credentials = bearer_access_token
+                        .as_ref()
+                        .or(oauth_access_token.as_ref())
+                        .map(|token| {
+                            Arc::new(StaticCatalogCredentials::new(
+                                token.expose_secret().to_string(),
+                            )) as Arc<dyn CatalogCredentials>
+                        })
+                        .unwrap_or_else(|| Arc::new(EmptyCatalogCredentials));
 
                     let runtime_aware = RuntimeAwareCatalogProvider::try_new(
                         || {
-                            let provider =
-                                IcebergRestCatalogProvider::new(name.to_string(), properties);
+                            let provider = IcebergRestCatalogProvider::new(
+                                name.to_string(),
+                                IcebergRestCatalogOptions {
+                                    credentials,
+                                    properties,
+                                    user_agent: Some("Sail".to_string()),
+                                },
+                            );
                             Ok(provider)
                         },
                         runtime.io().clone(),
@@ -103,7 +109,28 @@ pub fn create_catalog_manager(
                     cache,
                 } => {
                     let runtime_aware = RuntimeAwareCatalogProvider::try_new(
-                        || UnityCatalogProvider::new(name.to_string(), default_catalog, uri, token),
+                        || {
+                            let config = UnityCatalogConfig::new(uri.clone(), token, None)?;
+                            let credentials = config
+                                .get_credential_provider()
+                                .map(|credentials| {
+                                    Arc::new(credentials) as Arc<dyn CatalogCredentials>
+                                })
+                                .unwrap_or_else(|| Arc::new(EmptyCatalogCredentials));
+                            let default_catalog = default_catalog
+                                .clone()
+                                .unwrap_or_else(|| "unity".to_string());
+                            UnityCatalogProvider::new(
+                                name.to_string(),
+                                UnityCatalogOptions {
+                                    default_catalog,
+                                    uri: config.uri,
+                                    credentials,
+                                    user_agent: Some("Sail".to_string()),
+                                    quote_object_name: true,
+                                },
+                            )
+                        },
                         runtime.io().clone(),
                     )?;
                     let provider = wrap_catalog_provider(
@@ -117,6 +144,7 @@ pub fn create_catalog_manager(
                 CatalogType::OneLake {
                     name,
                     url,
+                    api,
                     bearer_token,
                     cache,
                 } => {
@@ -137,15 +165,20 @@ pub fn create_catalog_manager(
                     })?;
 
                     let token = bearer_token.as_ref().map(|t| t.expose_secret().to_string());
+                    let api = match api {
+                        OneLakeApi::Delta => OneLakeApiKind::Delta,
+                        OneLakeApi::Iceberg => OneLakeApiKind::Iceberg,
+                    };
                     let runtime_aware = RuntimeAwareCatalogProvider::try_new(
                         || {
-                            Ok(OneLakeCatalogProvider::new(
+                            OneLakeCatalogProvider::new(
                                 name.clone(),
                                 workspace.to_string(),
                                 item_name.to_string(),
                                 item_type.to_string(),
+                                api,
                                 token.clone(),
-                            ))
+                            )
                         },
                         runtime.io().clone(),
                     )?;

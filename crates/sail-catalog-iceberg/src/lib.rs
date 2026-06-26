@@ -19,8 +19,8 @@ mod models;
 mod provider;
 
 pub use provider::{
-    IcebergRestCatalogProvider, REST_CATALOG_PROP_PREFIX, REST_CATALOG_PROP_URI,
-    REST_CATALOG_PROP_WAREHOUSE,
+    IcebergRestCatalogOptions, IcebergRestCatalogProvider, REST_CATALOG_PROP_PREFIX,
+    REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE,
 };
 
 #[cfg(test)]

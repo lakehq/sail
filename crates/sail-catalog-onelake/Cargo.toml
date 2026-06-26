@@ -9,9 +9,9 @@ workspace = true
 [dependencies]
 sail-common-datafusion = { path = "../sail-common-datafusion" }
 sail-catalog = { path = "../sail-catalog" }
+sail-catalog-iceberg = { path = "../sail-catalog-iceberg" }
+sail-catalog-unity = { path = "../sail-catalog-unity" }
 
-arrow = { workspace = true }
 async-trait = { workspace = true }
-reqwest = { workspace = true }
-serde = { workspace = true }
+object_store = { workspace = true }
 tokio = { workspace = true }
