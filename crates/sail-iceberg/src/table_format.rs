@@ -1258,7 +1258,7 @@ mod tests {
     }
 
     #[test]
-    fn storage_access_rejects_required_rest_remote_signing() {
+    fn storage_access_allows_required_rest_remote_signing() {
         let mut context = LakehouseExecutionContext::catalog_table_context(
             CatalogProviderId("rest".to_string()),
             vec!["rest".to_string(), "db".to_string(), "tbl".to_string()],
@@ -1283,10 +1283,7 @@ mod tests {
         });
 
         let result = validate_iceberg_lakehouse_storage_access(Some(&context));
-        assert!(matches!(
-            &result,
-            Err(err) if format!("{err}").contains("requires remote signing")
-        ));
+        assert!(result.is_ok());
     }
 
     #[test]
