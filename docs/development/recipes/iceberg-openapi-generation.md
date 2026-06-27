@@ -67,4 +67,13 @@ After running the generation script, you must manually fix the following:
    - Replace `models::models::TokenType` with `models::TokenType`
 
 3. In `src/models/schema.rs`:
+
    - Replace `models::StructField` with `NestedFieldRef`
+
+4. In `src/models/table_update.rs` and `src/models/view_update.rs`:
+   - The upstream spec declares `TableUpdate`/`ViewUpdate` as a bare `anyOf`
+     with no discriminator (unlike `BaseUpdate`, which has one), so the
+     generator emits a degenerate flat struct with every field of every
+     variant marked required. Replace each generated struct with a
+     hand-written `#[serde(tag = "action")]` enum (mirroring `base_update.rs`),
+     with one variant per action.

@@ -442,8 +442,10 @@ impl TryFrom<RelType> for RelationNode {
                         let values = values
                             .into_iter()
                             .map(|x| {
+                                // The Connect DataFrame API sends pivot values as literals; wrap
+                                // each in `spec::Expr::Literal` now that values are expressions.
                                 Ok(spec::PivotValue {
-                                    values: vec![x.try_into()?],
+                                    values: vec![spec::Expr::Literal(x.try_into()?)],
                                     alias: None,
                                 })
                             })
