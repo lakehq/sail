@@ -880,13 +880,13 @@ fn validate_effective_commit_target(
         return Err(TransactionError::TableFeaturesRequired(TableFeature::DeletionVectors).into());
     }
 
-    // TODO(cdf-writes): Data-changing operations still do not emit AddCDCFile actions. Commit-time
-    // protocol checks currently reject changeDataFeed tables before these writes can land, but once
-    // the feature is enabled here we need an operation-aware validation instead of relying on that.
-    if table_property_enabled(&metadata, "delta.enableChangeDataFeed")
-        && !protocol_supports_legacy_change_data_feed(&protocol)
-        && !protocol_has_writer_feature(&protocol, &TableFeature::ChangeDataFeed)
-    {
+    // TODO(cdf-writes): Data-changing operations still do not emit AddCDCFile actions. Until CDF
+    // write support is implemented, reject all writes to tables with CDF enabled, regardless of
+    // whether the protocol support is legacy (writer v4-6) or explicit (writer v7+ feature).
+    // Previously this guard only rejected v7+ tables, relying on `can_write_to_protocol` to reject
+    // legacy tables via implied-feature expansion. Now that legacy versions no longer expand
+    // implied features (matching delta-spark), this guard must cover legacy tables too.
+    if table_property_enabled(&metadata, "delta.enableChangeDataFeed") {
         return Err(TransactionError::TableFeaturesRequired(TableFeature::ChangeDataFeed).into());
     }
 
