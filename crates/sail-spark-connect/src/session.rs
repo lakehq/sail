@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -6,10 +6,12 @@ use std::time::Duration;
 
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::logical_expr::StringifiedPlan;
+use object_store::{ObjectStoreExt, ObjectStoreScheme};
 use sail_common::datetime::get_system_timezone;
 use sail_common_datafusion::extension::SessionExtension;
 use sail_plan::config::PlanConfig;
 use sail_python_udf::config::PySparkPythonArtifact;
+use url::Url;
 
 use crate::config::{ConfigKeyValue, SparkRuntimeConfig};
 use crate::error::{SparkError, SparkResult, SparkThrowable};
@@ -62,6 +64,14 @@ impl Drop for SparkSession {
                 );
             }
         }
+        let artifact_uris = state
+            .artifacts
+            .iter()
+            .filter_map(|artifact| artifact.uri.clone())
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        cleanup_artifact_uris(artifact_uris);
     }
 }
 
@@ -374,5 +384,55 @@ impl SparkSessionState {
             artifacts: vec![],
             artifact_dir: None,
         }
+    }
+}
+
+fn cleanup_artifact_uris(uris: Vec<String>) {
+    if uris.is_empty() {
+        return;
+    }
+    let handle = std::thread::Builder::new()
+        .name("sail-artifact-cleanup".to_string())
+        .spawn(move || -> Result<(), String> {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("failed to create artifact cleanup runtime: {e}"))?;
+            runtime.block_on(async move {
+                let mut errors = vec![];
+                for uri in uris {
+                    if let Err(error) = cleanup_artifact_uri(&uri).await {
+                        errors.push(error);
+                    }
+                }
+                if errors.is_empty() {
+                    Ok(())
+                } else {
+                    Err(errors.join("; "))
+                }
+            })
+        });
+    match handle {
+        Ok(handle) => match handle.join() {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                log::warn!("Failed to clean up Spark session artifact objects: {error}")
+            }
+            Err(_) => log::warn!("Spark session artifact cleanup thread panicked"),
+        },
+        Err(error) => log::warn!("Failed to spawn Spark session artifact cleanup: {error}"),
+    }
+}
+
+async fn cleanup_artifact_uri(uri: &str) -> Result<(), String> {
+    let url =
+        Url::parse(uri).map_err(|e| format!("invalid artifact object-store URI {uri}: {e}"))?;
+    let (_scheme, path) = ObjectStoreScheme::parse(&url)
+        .map_err(|e| format!("invalid artifact object-store path {uri}: {e}"))?;
+    let store = sail_object_store::get_dynamic_object_store(&url)
+        .map_err(|e| format!("failed to create artifact object store {uri}: {e}"))?;
+    match store.delete(&path).await {
+        Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
+        Err(e) => Err(format!("failed to delete artifact {uri}: {e}")),
     }
 }

@@ -10,7 +10,7 @@ import pytest
 from pyspark.sql.functions import udf
 from pyspark.sql.types import IntegerType, StringType
 
-from pysail.testing.spark.session import spark_connect_server
+from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 from pysail.testing.spark.utils.common import is_jvm_spark
 
 pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
@@ -75,24 +75,26 @@ def test_add_artifact_zip_materializes_when_shared_path_is_missing(spark, artifa
     assert {row.value for row in rows} == {123}
 
 
-def test_add_artifact_file_is_available_via_spark_files(spark, tmp_path):
+def test_add_artifact_file_is_available_via_spark_files(spark, artifact_root, tmp_path):
     file_path = tmp_path / "sail_file_artifact.txt"
-    file_path.write_text("file artifact payload", encoding="utf-8")
+    payload = "file artifact payload " * 4
+    file_path.write_text(payload, encoding="utf-8")
 
     spark.addArtifact(str(file_path), file=True)
+    shutil.rmtree(artifact_root, ignore_errors=True)
 
     @udf(StringType())
     def read_file_artifact(_):
-        from pyspark.core.files import SparkFiles
+        from pyspark import SparkFiles
 
         with open(SparkFiles.get("sail_file_artifact.txt"), encoding="utf-8") as file:
             return file.read()
 
     rows = spark.range(8).repartition(4).select(read_file_artifact("id").alias("value")).collect()
-    assert {row.value for row in rows} == {"file artifact payload"}
+    assert {row.value for row in rows} == {payload}
 
 
-def test_add_artifact_archive_is_unpacked_under_spark_files_root(spark, tmp_path):
+def test_add_artifact_archive_is_unpacked_under_spark_files_root(spark, artifact_root, tmp_path):
     archive_dir = tmp_path / "archive_payload"
     archive_dir.mkdir()
     (archive_dir / "payload.txt").write_text("archive artifact payload", encoding="utf-8")
@@ -104,6 +106,7 @@ def test_add_artifact_archive_is_unpacked_under_spark_files_root(spark, tmp_path
     )
 
     spark.addArtifact(f"{archive_path}#sail_archive", archive=True)
+    shutil.rmtree(artifact_root, ignore_errors=True)
 
     @udf(StringType())
     def read_archive_artifact(_):
@@ -122,3 +125,98 @@ def test_add_artifact_archive_is_unpacked_under_spark_files_root(spark, tmp_path
 
     rows = spark.range(8).repartition(4).select(read_archive_artifact("id").alias("value")).collect()
     assert {row.value for row in rows} == {"archive artifact payload"}
+
+
+def test_add_artifact_archive_uses_default_directory_without_fragment(spark, artifact_root, tmp_path):
+    archive_dir = tmp_path / "default_archive_payload"
+    archive_dir.mkdir()
+    (archive_dir / "payload.txt").write_text("default archive payload", encoding="utf-8")
+    archive_path = shutil.make_archive(
+        str(tmp_path / "sail_default_archive"),
+        "zip",
+        tmp_path,
+        "default_archive_payload",
+    )
+
+    spark.addArtifact(archive_path, archive=True)
+    shutil.rmtree(artifact_root, ignore_errors=True)
+
+    @udf(StringType())
+    def read_default_archive_artifact(_):
+        import os
+
+        from pyspark.core.files import SparkFiles
+
+        path = os.path.join(
+            SparkFiles.getRootDirectory(),
+            "sail_default_archive",
+            "default_archive_payload",
+            "payload.txt",
+        )
+        with open(path, encoding="utf-8") as file:
+            return file.read()
+
+    rows = spark.range(8).repartition(4).select(read_default_archive_artifact("id").alias("value")).collect()
+    assert {row.value for row in rows} == {"default archive payload"}
+
+
+def test_artifact_store_hash_mismatch_fails_closed(tmp_path):
+    if os.environ.get("SPARK_REMOTE"):
+        pytest.skip("external Spark Connect endpoint owns the artifact store")
+
+    artifact_root = tempfile.mkdtemp(prefix="sail-corrupt-artifact-root-")
+    artifact_store = tempfile.mkdtemp(prefix="sail-corrupt-artifact-store-")
+    try:
+        with (
+            spark_connect_server(
+                envs={
+                    "SAIL_MODE": "local-cluster",
+                    "SAIL_SPARK__ARTIFACT_ROOT": artifact_root,
+                    "SAIL_SPARK__ARTIFACT_INLINE_MAX_BYTES": "32",
+                    "SAIL_SPARK__ARTIFACT_STORE_URI": Path(artifact_store).as_uri(),
+                }
+            ) as server,
+            spark_session_factory(server.remote) as sessions,
+        ):
+            session = sessions.create()
+            file_path = tmp_path / "sail_corrupt_artifact.txt"
+            file_path.write_text("corruptible artifact payload " * 4, encoding="utf-8")
+
+            existing_files = {path for path in Path(artifact_store).rglob("*") if path.is_file()}
+            session.addArtifact(str(file_path), file=True)
+            stored_files = [
+                path for path in Path(artifact_store).rglob("*") if path.is_file() and path not in existing_files
+            ]
+            assert stored_files
+            stored_files[0].write_text("corrupted", encoding="utf-8")
+            shutil.rmtree(artifact_root, ignore_errors=True)
+
+            @udf(StringType())
+            def read_corrupt_artifact(_):
+                from pyspark.core.files import SparkFiles
+
+                with open(SparkFiles.get("sail_corrupt_artifact.txt"), encoding="utf-8") as file:
+                    return file.read()
+
+            with pytest.raises(Exception, match=r"SHA-256 mismatch|size mismatch"):
+                session.range(1).select(read_corrupt_artifact("id").alias("value")).collect()
+    finally:
+        shutil.rmtree(artifact_root, ignore_errors=True)
+        shutil.rmtree(artifact_store, ignore_errors=True)
+
+
+def test_add_artifact_rejects_unsafe_archive_member(spark, tmp_path):
+    archive_path = tmp_path / "sail_unsafe_archive.zip"
+    with zipfile.ZipFile(str(archive_path), "w") as zf:
+        zf.writestr("../escape.txt", "unsafe")
+
+    spark.addArtifact(f"{archive_path}#sail_unsafe", archive=True)
+
+    @udf(StringType())
+    def trigger_archive_unpack(_):
+        from pyspark.core.files import SparkFiles
+
+        return SparkFiles.getRootDirectory()
+
+    with pytest.raises(Exception, match="unsafe archive member path"):
+        spark.range(1).select(trigger_archive_unpack("id").alias("value")).collect()

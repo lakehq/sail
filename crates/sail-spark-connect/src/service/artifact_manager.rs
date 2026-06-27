@@ -288,17 +288,18 @@ async fn artifact_transport(
             options.artifact_inline_max_bytes
         )));
     };
-    let uri = upload_artifact(ctx, base_uri, sha256, data).await?;
+    let uri = upload_artifact(ctx, base_uri, spark.session_id(), sha256, data).await?;
     Ok((None, Some(uri)))
 }
 
 async fn upload_artifact(
     ctx: &SessionContext,
     base_uri: &str,
+    session_id: &str,
     sha256: &str,
     data: &[u8],
 ) -> SparkResult<String> {
-    let uri = artifact_object_uri(base_uri, sha256)?;
+    let uri = artifact_object_uri(base_uri, session_id, sha256)?;
     let url = Url::parse(&uri).map_err(|e| {
         SparkError::invalid(format!("invalid artifact object-store URI {uri}: {e}"))
     })?;
@@ -330,7 +331,7 @@ fn artifact_object_store_url(
         .map_err(|e| SparkError::invalid(format!("invalid artifact object-store URL {root}: {e}")))
 }
 
-fn artifact_object_uri(base_uri: &str, sha256: &str) -> SparkResult<String> {
+fn artifact_object_uri(base_uri: &str, session_id: &str, sha256: &str) -> SparkResult<String> {
     let mut url = Url::parse(base_uri).map_err(|e| {
         SparkError::invalid(format!(
             "invalid spark.artifact_store_uri value {base_uri}: {e}"
@@ -341,11 +342,18 @@ fn artifact_object_uri(base_uri: &str, sha256: &str) -> SparkResult<String> {
             "artifact SHA-256 is unexpectedly short: {sha256}"
         )));
     }
+    let session_hash = sha256_hex(session_id.as_bytes());
     let prefix = url.path().trim_end_matches('/');
     let path = if prefix.is_empty() {
-        format!("/sail-artifacts/{}/{sha256}", &sha256[..2])
+        format!(
+            "/sail-artifacts/sessions/{session_hash}/{}/{sha256}",
+            &sha256[..2]
+        )
     } else {
-        format!("{prefix}/sail-artifacts/{}/{sha256}", &sha256[..2])
+        format!(
+            "{prefix}/sail-artifacts/sessions/{session_hash}/{}/{sha256}",
+            &sha256[..2]
+        )
     };
     url.set_path(&path);
     url.set_query(None);

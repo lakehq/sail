@@ -21,6 +21,7 @@ pyo3 = { workspace = true }
 futures = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
+log = { workspace = true }
 md-5 = { workspace = true }
 num-bigint = { workspace = true }
 object_store = { workspace = true }

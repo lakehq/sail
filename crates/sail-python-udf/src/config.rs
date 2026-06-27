@@ -1,5 +1,8 @@
 use std::ffi::CString;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::OnceLock;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use num_bigint::BigUint;
 use object_store::ObjectStoreExt;
@@ -14,6 +17,8 @@ use crate::error::{PyUdfError, PyUdfResult};
 const PYFILES_PREFIX: &str = "pyfiles/";
 const FILES_PREFIX: &str = "files/";
 const ARCHIVES_PREFIX: &str = "archives/";
+static ARTIFACT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+static ARTIFACT_PROCESS_NAMESPACE: OnceLock<String> = OnceLock::new();
 const SPARK_FILES_SHIM_SOURCE: &str = r#"
 import os
 
@@ -52,6 +57,60 @@ core.files = files
 sys.modules["pyspark.files"] = files
 pyspark.files = files
 pyspark.SparkFiles = files.SparkFiles
+"#;
+const ARCHIVE_VALIDATION_SOURCE: &str = r#"
+import os
+import stat
+import tarfile
+import zipfile
+
+
+def _validate_relative_member(name, root):
+    if name is None:
+        raise ValueError("unsafe archive member path: <none>")
+    name = str(name)
+    if "\\" in name:
+        raise ValueError(f"unsafe archive member path: {name}")
+    name = name.rstrip("/")
+    if not name or name.startswith("/"):
+        raise ValueError(f"unsafe archive member path: {name}")
+    parts = name.split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        raise ValueError(f"unsafe archive member path: {name}")
+    root_abs = os.path.abspath(root)
+    target_abs = os.path.abspath(os.path.join(root_abs, *parts))
+    if os.path.commonpath([root_abs, target_abs]) != root_abs:
+        raise ValueError(f"unsafe archive member path: {name}")
+
+
+def validate_archive(archive_name, archive_path, root):
+    if archive_name.endswith((".zip", ".jar")):
+        with zipfile.ZipFile(archive_path) as archive:
+            for info in archive.infolist():
+                _validate_relative_member(info.filename, root)
+                mode = info.external_attr >> 16
+                if stat.S_ISLNK(mode):
+                    raise ValueError(f"unsafe archive symlink member: {info.filename}")
+        return
+
+    with tarfile.open(archive_path, "r:*") as archive:
+        for member in archive.getmembers():
+            _validate_relative_member(member.name, root)
+            if member.issym() or member.islnk():
+                raise ValueError(f"unsafe archive link member: {member.name}")
+            if not (member.isfile() or member.isdir()):
+                raise ValueError(f"unsupported archive member type: {member.name}")
+
+
+def validate_extracted_tree(root):
+    root_abs = os.path.abspath(root)
+    for dirpath, dirnames, filenames in os.walk(root_abs, followlinks=False):
+        for name in dirnames + filenames:
+            path = os.path.join(dirpath, name)
+            if os.path.islink(path):
+                raise ValueError(f"unsafe extracted archive symlink: {path}")
+            if os.path.commonpath([root_abs, os.path.abspath(path)]) != root_abs:
+                raise ValueError(f"unsafe extracted archive path: {path}")
 "#;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -248,7 +307,20 @@ fn spark_files_root(artifacts: &[PySparkPythonArtifact]) -> PyUdfResult<PathBuf>
     Ok(std::env::temp_dir()
         .join("sail-python-artifacts")
         .join("spark-files")
+        .join(artifact_process_namespace())
         .join(hash))
+}
+
+fn artifact_process_namespace() -> &'static str {
+    ARTIFACT_PROCESS_NAMESPACE
+        .get_or_init(|| {
+            let nanos = match SystemTime::now().duration_since(UNIX_EPOCH) {
+                Ok(duration) => duration.as_nanos(),
+                Err(_) => 0,
+            };
+            format!("{}-{nanos}", std::process::id())
+        })
+        .as_str()
 }
 
 fn configure_spark_files(py: Python, root: &Path) -> PyUdfResult<()> {
@@ -316,13 +388,18 @@ fn materialize_artifact_file(
     if let Some(parent) = target_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let tmp_path = target_path.with_extension(format!("sail-tmp-{}", std::process::id()));
+    let tmp_path = artifact_temp_path(target_path);
     std::fs::write(&tmp_path, data)?;
     match std::fs::rename(&tmp_path, target_path) {
         Ok(()) => Ok(()),
         Err(error) => {
-            let _ = std::fs::remove_file(&tmp_path);
-            Err(error.into())
+            if file_matches_artifact(target_path, artifact)? {
+                let _ = std::fs::remove_file(&tmp_path);
+                Ok(())
+            } else {
+                let _ = std::fs::remove_file(&tmp_path);
+                Err(error.into())
+            }
         }
     }
 }
@@ -420,17 +497,21 @@ fn extract_archive(
     sha256: &str,
 ) -> PyUdfResult<()> {
     let marker = destination.join(".sail-artifact.sha256");
-    if marker.exists() && std::fs::read_to_string(&marker)?.trim() == sha256 {
+    let lock_path = artifact_lock_path(destination);
+    let _lock = py.detach(|| acquire_artifact_lock(&lock_path))?;
+    if archive_destination_is_complete(destination, &marker, sha256)? {
         return Ok(());
     }
     if destination.exists() {
         std::fs::remove_dir_all(destination)?;
     }
-    let tmp_path = destination.with_extension(format!("sail-tmp-{}", std::process::id()));
+    let tmp_path = artifact_temp_path(destination);
     if tmp_path.exists() {
         std::fs::remove_dir_all(&tmp_path)?;
     }
     std::fs::create_dir_all(&tmp_path)?;
+
+    validate_archive(py, name, archive_path, &tmp_path)?;
 
     let archive = archive_path.to_string_lossy();
     let tmp = tmp_path.to_string_lossy();
@@ -443,6 +524,12 @@ fn extract_archive(
         let shutil = PyModule::import(py, "shutil")?;
         shutil.call_method1("unpack_archive", (archive.as_ref(), tmp.as_ref()))?;
     }
+    validate_extracted_archive_tree(py, &tmp_path)?;
+    if !directory_has_non_marker_entry(&tmp_path)? {
+        return Err(PyUdfError::invalid(format!(
+            "archive {name} did not extract any entries"
+        )));
+    }
 
     std::fs::write(tmp_path.join(".sail-artifact.sha256"), sha256)?;
     match std::fs::rename(&tmp_path, destination) {
@@ -452,6 +539,104 @@ fn extract_archive(
             Err(error.into())
         }
     }
+}
+
+fn archive_destination_is_complete(
+    destination: &Path,
+    marker: &Path,
+    sha256: &str,
+) -> PyUdfResult<bool> {
+    if !marker.exists() || std::fs::read_to_string(marker)?.trim() != sha256 {
+        return Ok(false);
+    }
+    directory_has_non_marker_entry(destination).map_err(Into::into)
+}
+
+fn directory_has_non_marker_entry(path: &Path) -> std::io::Result<bool> {
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        if entry.file_name() != ".sail-artifact.sha256" {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn artifact_temp_path(path: &Path) -> PathBuf {
+    let counter = ARTIFACT_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    path.with_extension(format!("sail-tmp-{}-{counter}", std::process::id()))
+}
+
+fn artifact_lock_path(path: &Path) -> PathBuf {
+    path.with_extension("sail-lock")
+}
+
+struct ArtifactLock {
+    path: PathBuf,
+}
+
+impl Drop for ArtifactLock {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_dir(&self.path) {
+            log::warn!(
+                "failed to remove artifact materialization lock {}: {error}",
+                self.path.display()
+            );
+        }
+    }
+}
+
+fn acquire_artifact_lock(path: &Path) -> PyUdfResult<ArtifactLock> {
+    const ATTEMPTS: usize = 6000;
+    const SLEEP: Duration = Duration::from_millis(10);
+    for _ in 0..ATTEMPTS {
+        match std::fs::create_dir(path) {
+            Ok(()) => {
+                return Ok(ArtifactLock {
+                    path: path.to_path_buf(),
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                std::thread::sleep(SLEEP);
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Err(PyUdfError::internal(format!(
+        "timed out acquiring artifact materialization lock {}",
+        path.display()
+    )))
+}
+
+fn validate_archive(py: Python, name: &str, archive_path: &Path, root: &Path) -> PyUdfResult<()> {
+    let module = archive_validation_module(py)?;
+    let archive_name = archive_name(name);
+    module.getattr("validate_archive")?.call1((
+        archive_name,
+        archive_path.to_string_lossy().as_ref(),
+        root.to_string_lossy().as_ref(),
+    ))?;
+    Ok(())
+}
+
+fn validate_extracted_archive_tree(py: Python, root: &Path) -> PyUdfResult<()> {
+    let module = archive_validation_module(py)?;
+    module
+        .getattr("validate_extracted_tree")?
+        .call1((root.to_string_lossy().as_ref(),))?;
+    Ok(())
+}
+
+fn archive_validation_module<'py>(py: Python<'py>) -> PyUdfResult<pyo3::Bound<'py, PyModule>> {
+    let source = c_string(ARCHIVE_VALIDATION_SOURCE, "archive validation source")?;
+    let filename = c_string("archive_validation.py", "archive validation filename")?;
+    let module_name = c_string("_sail_archive_validation", "archive validation module name")?;
+    Ok(PyModule::from_code(
+        py,
+        source.as_c_str(),
+        filename.as_c_str(),
+        module_name.as_c_str(),
+    )?)
 }
 
 fn artifact_spark_files_relative_path(artifact: &PySparkPythonArtifact) -> PyUdfResult<PathBuf> {
