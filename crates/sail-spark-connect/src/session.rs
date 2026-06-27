@@ -1,17 +1,13 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Debug;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::logical_expr::StringifiedPlan;
-use object_store::{ObjectStoreExt, ObjectStoreScheme};
 use sail_common::datetime::get_system_timezone;
 use sail_common_datafusion::extension::SessionExtension;
 use sail_plan::config::PlanConfig;
-use sail_python_udf::config::PySparkPythonArtifact;
-use url::Url;
 
 use crate::config::{ConfigKeyValue, SparkRuntimeConfig};
 use crate::error::{SparkError, SparkResult, SparkThrowable};
@@ -25,9 +21,6 @@ use crate::streaming::{
 #[derive(Debug, Clone)]
 pub(crate) struct SparkSessionOptions {
     pub execution_heartbeat_interval: Duration,
-    pub artifact_root: Option<PathBuf>,
-    pub artifact_inline_max_bytes: usize,
-    pub artifact_store_uri: Option<String>,
 }
 
 /// A Spark session extension to the DataFusion [`SessionContext`].
@@ -47,31 +40,6 @@ impl Debug for SparkSession {
             .field("user_id", &self.user_id)
             .field("options", &self.options)
             .finish()
-    }
-}
-
-impl Drop for SparkSession {
-    fn drop(&mut self) {
-        let state = match self.state.get_mut() {
-            Ok(state) => state,
-            Err(error) => error.into_inner(),
-        };
-        if let Some(dir) = state.artifact_dir.take() {
-            if let Err(error) = std::fs::remove_dir_all(&dir) {
-                log::warn!(
-                    "Failed to remove Spark session artifact directory {}: {error}",
-                    dir.display()
-                );
-            }
-        }
-        let artifact_uris = state
-            .artifacts
-            .iter()
-            .filter_map(|artifact| artifact.uri.clone())
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        cleanup_artifact_uris(artifact_uris);
     }
 }
 
@@ -116,10 +84,6 @@ impl SparkSession {
         let state = self.state.lock()?;
         let mut config = PlanConfig::try_from(&state.config)?;
         config.session_user_id = self.user_id().to_string();
-        let mut pyspark_udf_config = (*config.pyspark_udf_config).clone();
-        pyspark_udf_config.python_artifact_paths = vec![];
-        pyspark_udf_config.python_artifacts = state.artifacts.clone();
-        config.pyspark_udf_config = Arc::new(pyspark_udf_config);
         Ok(Arc::new(config))
     }
 
@@ -324,55 +288,12 @@ impl SparkSession {
         state.streaming_queries.reset_stopped_queries();
         Ok(())
     }
-
-    /// Returns the path to the session-specific artifact directory.
-    /// The directory is created lazily on first access.
-    pub(crate) fn artifact_dir(&self) -> SparkResult<PathBuf> {
-        let mut state = self.state.lock()?;
-        if let Some(dir) = &state.artifact_dir {
-            return Ok(dir.clone());
-        }
-        let root = self
-            .options
-            .artifact_root
-            .clone()
-            .unwrap_or_else(|| std::env::temp_dir().join("sail-artifacts"));
-        let dir = root.join(&self.session_id);
-        std::fs::create_dir_all(&dir).map_err(|e| {
-            SparkError::internal(format!("failed to create artifact directory: {e}"))
-        })?;
-        state.artifact_dir = Some(dir.clone());
-        Ok(dir)
-    }
-
-    /// Tracks an artifact name as added to this session.
-    pub(crate) fn add_artifact(&self, artifact: PySparkPythonArtifact) -> SparkResult<()> {
-        let mut state = self.state.lock()?;
-        if let Some(existing) = state
-            .artifacts
-            .iter_mut()
-            .find(|existing| existing.name == artifact.name)
-        {
-            *existing = artifact;
-        } else {
-            state.artifacts.push(artifact);
-        }
-        Ok(())
-    }
-
-    /// Returns whether an artifact with the given name has been added to this session.
-    pub(crate) fn has_artifact(&self, name: &str) -> SparkResult<bool> {
-        let state = self.state.lock()?;
-        Ok(state.artifacts.iter().any(|artifact| artifact.name == name))
-    }
 }
 
 struct SparkSessionState {
     config: SparkRuntimeConfig,
     executors: HashMap<String, Arc<Executor>>,
     streaming_queries: StreamingQueryManager,
-    artifacts: Vec<PySparkPythonArtifact>,
-    artifact_dir: Option<PathBuf>,
 }
 
 impl SparkSessionState {
@@ -381,58 +302,6 @@ impl SparkSessionState {
             config: SparkRuntimeConfig::new(),
             executors: HashMap::new(),
             streaming_queries: StreamingQueryManager::new(),
-            artifacts: vec![],
-            artifact_dir: None,
         }
-    }
-}
-
-fn cleanup_artifact_uris(uris: Vec<String>) {
-    if uris.is_empty() {
-        return;
-    }
-    let handle = std::thread::Builder::new()
-        .name("sail-artifact-cleanup".to_string())
-        .spawn(move || -> Result<(), String> {
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .map_err(|e| format!("failed to create artifact cleanup runtime: {e}"))?;
-            runtime.block_on(async move {
-                let mut errors = vec![];
-                for uri in uris {
-                    if let Err(error) = cleanup_artifact_uri(&uri).await {
-                        errors.push(error);
-                    }
-                }
-                if errors.is_empty() {
-                    Ok(())
-                } else {
-                    Err(errors.join("; "))
-                }
-            })
-        });
-    match handle {
-        Ok(handle) => match handle.join() {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                log::warn!("Failed to clean up Spark session artifact objects: {error}")
-            }
-            Err(_) => log::warn!("Spark session artifact cleanup thread panicked"),
-        },
-        Err(error) => log::warn!("Failed to spawn Spark session artifact cleanup: {error}"),
-    }
-}
-
-async fn cleanup_artifact_uri(uri: &str) -> Result<(), String> {
-    let url =
-        Url::parse(uri).map_err(|e| format!("invalid artifact object-store URI {uri}: {e}"))?;
-    let (_scheme, path) = ObjectStoreScheme::parse(&url)
-        .map_err(|e| format!("invalid artifact object-store path {uri}: {e}"))?;
-    let store = sail_object_store::get_dynamic_object_store(&url)
-        .map_err(|e| format!("failed to create artifact object store {uri}: {e}"))?;
-    match store.delete(&path).await {
-        Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
-        Err(e) => Err(format!("failed to delete artifact {uri}: {e}")),
     }
 }

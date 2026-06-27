@@ -15,10 +15,10 @@ mod tests {
     use sail_plan::resolve_and_execute_plan;
     use serde::{Deserialize, Serialize};
 
+    use crate::artifact::plan_config_with_artifacts;
     use crate::error::{SparkError, SparkResult};
     use crate::executor::read_stream;
     use crate::proto::data_type_json::JsonDataType;
-    use crate::session::SparkSession;
     use crate::session_manager::create_spark_session_manager;
     use crate::spark::connect::relation::RelType;
     use crate::spark::connect::{Relation, Sql};
@@ -85,10 +85,13 @@ mod tests {
                 };
                 let plan = relation.try_into()?;
                 let result = handle.primary().block_on(async {
-                    let spark = context.extension::<SparkSession>()?;
                     let service = context.extension::<JobService>()?;
-                    let (plan, _) =
-                        resolve_and_execute_plan(&context, spark.plan_config()?, plan).await?;
+                    let (plan, _) = resolve_and_execute_plan(
+                        &context,
+                        plan_config_with_artifacts(&context)?,
+                        plan,
+                    )
+                    .await?;
                     let stream = service.runner().execute(&context, plan).await?;
                     read_stream(stream).await
                 });

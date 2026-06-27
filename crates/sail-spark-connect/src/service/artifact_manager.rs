@@ -12,8 +12,8 @@ use tonic::codegen::tokio_stream::Stream;
 use tonic::Status;
 use url::Url;
 
+use crate::artifact::SparkArtifactRegistry;
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
-use crate::session::SparkSession;
 use crate::spark::connect::add_artifacts_request::{ArtifactChunk, Payload};
 use crate::spark::connect::add_artifacts_response::ArtifactSummary;
 use crate::spark::connect::artifact_statuses_response::ArtifactStatus;
@@ -271,24 +271,24 @@ fn add_to_sys_path(path: &str) -> SparkResult<()> {
 
 async fn artifact_transport(
     ctx: &SessionContext,
-    spark: &SparkSession,
+    artifacts: &SparkArtifactRegistry,
     name: &str,
     sha256: &str,
     data: &[u8],
 ) -> SparkResult<(Option<Vec<u8>>, Option<String>)> {
-    let options = spark.options();
-    if data.len() <= options.artifact_inline_max_bytes {
+    let options = artifacts.options();
+    if data.len() <= options.inline_max_bytes {
         return Ok((Some(data.to_vec()), None));
     }
 
-    let Some(base_uri) = &options.artifact_store_uri else {
+    let Some(base_uri) = &options.store_uri else {
         return Err(SparkError::invalid(format!(
             "artifact {name} is {} bytes, exceeding spark.artifact_inline_max_bytes={}, and spark.artifact_store_uri is not configured",
             data.len(),
-            options.artifact_inline_max_bytes
+            options.inline_max_bytes
         )));
     };
-    let uri = upload_artifact(ctx, base_uri, spark.session_id(), sha256, data).await?;
+    let uri = upload_artifact(ctx, base_uri, artifacts.session_id(), sha256, data).await?;
     Ok((None, Some(uri)))
 }
 
@@ -458,7 +458,7 @@ async fn add_artifact_summary(
     data: &[u8],
     is_crc_successful: bool,
     artifact_dir: &Path,
-    spark: &SparkSession,
+    artifacts: &SparkArtifactRegistry,
     summaries: &mut Vec<ArtifactSummary>,
 ) -> SparkResult<()> {
     if is_crc_successful {
@@ -467,8 +467,8 @@ async fn add_artifact_summary(
             let sha256 = sha256_hex(data);
             let size = data.len() as u64;
             let (data, uri) =
-                artifact_transport(ctx, spark, &stored.normalized_name, &sha256, data).await?;
-            spark.add_artifact(PySparkPythonArtifact {
+                artifact_transport(ctx, artifacts, &stored.normalized_name, &sha256, data).await?;
+            artifacts.add_artifact(PySparkPythonArtifact {
                 name: stored.normalized_name,
                 python_path: stored.local_path.unwrap_or_default(),
                 data,
@@ -491,7 +491,7 @@ async fn add_single_chunk_artifact(
     name: String,
     chunk: ArtifactChunk,
     artifact_dir: &Path,
-    spark: &SparkSession,
+    artifacts: &SparkArtifactRegistry,
     summaries: &mut Vec<ArtifactSummary>,
 ) -> SparkResult<()> {
     let chunk_ok = validate_crc(&chunk.data, chunk.crc);
@@ -501,7 +501,7 @@ async fn add_single_chunk_artifact(
         &chunk.data,
         chunk_ok,
         artifact_dir,
-        spark,
+        artifacts,
         summaries,
     )
     .await
@@ -511,7 +511,7 @@ async fn finalize_chunked_artifact(
     ctx: &SessionContext,
     chunked: ChunkedArtifact,
     artifact_dir: &Path,
-    spark: &SparkSession,
+    artifacts: &SparkArtifactRegistry,
     summaries: &mut Vec<ArtifactSummary>,
 ) -> SparkResult<()> {
     chunked.validate_complete()?;
@@ -521,7 +521,7 @@ async fn finalize_chunked_artifact(
         &chunked.data,
         chunked.is_crc_successful,
         artifact_dir,
-        spark,
+        artifacts,
         summaries,
     )
     .await
@@ -531,8 +531,8 @@ pub(crate) async fn handle_add_artifacts(
     ctx: &SessionContext,
     stream: impl Stream<Item = Result<Payload, Status>>,
 ) -> SparkResult<Vec<ArtifactSummary>> {
-    let spark = ctx.extension::<SparkSession>()?;
-    let artifact_dir = spark.artifact_dir()?;
+    let artifacts = ctx.extension::<SparkArtifactRegistry>()?;
+    let artifact_dir = artifacts.artifact_dir()?;
 
     let mut summaries: Vec<ArtifactSummary> = Vec::new();
     let mut current_chunked: Option<ChunkedArtifact> = None;
@@ -556,7 +556,7 @@ pub(crate) async fn handle_add_artifacts(
                         name,
                         chunk,
                         &artifact_dir,
-                        &spark,
+                        &artifacts,
                         &mut summaries,
                     )
                     .await?;
@@ -576,8 +576,14 @@ pub(crate) async fn handle_add_artifacts(
                     begin.initial_chunk,
                 )?;
                 if chunked.is_complete() {
-                    finalize_chunked_artifact(ctx, chunked, &artifact_dir, &spark, &mut summaries)
-                        .await?;
+                    finalize_chunked_artifact(
+                        ctx,
+                        chunked,
+                        &artifact_dir,
+                        &artifacts,
+                        &mut summaries,
+                    )
+                    .await?;
                 } else {
                     current_chunked = Some(chunked);
                 }
@@ -597,7 +603,7 @@ pub(crate) async fn handle_add_artifacts(
                             ctx,
                             chunked,
                             &artifact_dir,
-                            &spark,
+                            &artifacts,
                             &mut summaries,
                         )
                         .await?;
@@ -609,7 +615,7 @@ pub(crate) async fn handle_add_artifacts(
 
     // Finalize any remaining chunked artifact
     if let Some(chunked) = current_chunked.take() {
-        finalize_chunked_artifact(ctx, chunked, &artifact_dir, &spark, &mut summaries).await?;
+        finalize_chunked_artifact(ctx, chunked, &artifact_dir, &artifacts, &mut summaries).await?;
     }
 
     Ok(summaries)
@@ -619,11 +625,11 @@ pub(crate) async fn handle_artifact_statuses(
     ctx: &SessionContext,
     names: Vec<String>,
 ) -> SparkResult<HashMap<String, ArtifactStatus>> {
-    let spark = ctx.extension::<SparkSession>()?;
+    let artifacts = ctx.extension::<SparkArtifactRegistry>()?;
     let mut statuses = HashMap::new();
     for name in names {
         let normalized = normalize_artifact_name(&name)?;
-        let exists = spark.has_artifact(&normalized)?;
+        let exists = artifacts.has_artifact(&normalized)?;
         statuses.insert(name, ArtifactStatus { exists });
     }
     Ok(statuses)

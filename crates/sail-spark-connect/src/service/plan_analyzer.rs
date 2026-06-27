@@ -8,18 +8,17 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::source::DataSourceExec;
 use log::warn;
 use sail_common::spec;
-use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::schema::rename_schema;
 use sail_plan::explain::{explain_string, ExplainOptions};
 use sail_plan::resolver::plan::NamedPlan;
 use sail_plan::resolver::PlanResolver;
 
+use crate::artifact::plan_config_with_artifacts;
 use crate::config::get_pyspark_version;
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::proto::data_type::parse_spark_data_type;
 use crate::proto::data_type_json::parse_spark_json_data_type;
 use crate::schema::{to_ddl_string, to_spark_schema, to_tree_string};
-use crate::session::SparkSession;
 use crate::spark::connect as sc;
 use crate::spark::connect::analyze_plan_request::explain::ExplainMode;
 use crate::spark::connect::analyze_plan_request::{
@@ -41,8 +40,7 @@ use crate::spark::connect::analyze_plan_response::{
 use crate::spark::connect::{plan, StorageLevel};
 
 async fn analyze_schema(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<sc::DataType> {
-    let spark = ctx.extension::<SparkSession>()?;
-    let resolver = PlanResolver::new(ctx, spark.plan_config()?);
+    let resolver = PlanResolver::new(ctx, plan_config_with_artifacts(ctx)?);
     let NamedPlan { plan, fields } = resolver
         .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
         .await?;
@@ -70,7 +68,6 @@ pub(crate) async fn handle_analyze_explain(
     ctx: &SessionContext,
     request: ExplainRequest,
 ) -> SparkResult<ExplainResponse> {
-    let spark = ctx.extension::<SparkSession>()?;
     let ExplainRequest { plan, explain_mode } = request;
     let plan = plan.required("plan")?;
     let explain_mode = ExplainMode::try_from(explain_mode)?;
@@ -78,7 +75,7 @@ pub(crate) async fn handle_analyze_explain(
     let options = ExplainOptions::from_mode(spec_mode);
     let explain = explain_string(
         ctx,
-        spark.plan_config()?,
+        plan_config_with_artifacts(ctx)?,
         spec::Plan::Query(plan.try_into()?),
         options,
     )
@@ -124,10 +121,9 @@ pub(crate) async fn handle_analyze_input_files(
     ctx: &SessionContext,
     request: InputFilesRequest,
 ) -> SparkResult<InputFilesResponse> {
-    let spark = ctx.extension::<SparkSession>()?;
     let InputFilesRequest { plan } = request;
     let plan = plan.required("plan")?;
-    let resolver = PlanResolver::new(ctx, spark.plan_config()?);
+    let resolver = PlanResolver::new(ctx, plan_config_with_artifacts(ctx)?);
     let NamedPlan { plan, .. } = resolver
         .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
         .await?;
@@ -187,8 +183,7 @@ pub(crate) async fn handle_analyze_ddl_parse(
     request: DdlParseRequest,
 ) -> SparkResult<DdlParseResponse> {
     let data_type = parse_spark_data_type(request.ddl_string.as_str())?;
-    let spark = ctx.extension::<SparkSession>()?;
-    let resolver = PlanResolver::new(ctx, spark.plan_config()?);
+    let resolver = PlanResolver::new(ctx, plan_config_with_artifacts(ctx)?);
     let data_type = resolver.resolve_data_type_for_plan(&data_type)?;
     Ok(DdlParseResponse {
         parsed: Some(data_type.try_into()?),
@@ -213,8 +208,7 @@ pub(crate) async fn handle_analyze_same_semantics(
 }
 
 async fn resolve_logical_plan(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<LogicalPlan> {
-    let spark = ctx.extension::<SparkSession>()?;
-    let resolver = PlanResolver::new(ctx, spark.plan_config()?);
+    let resolver = PlanResolver::new(ctx, plan_config_with_artifacts(ctx)?);
     let NamedPlan { plan, .. } = resolver
         .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
         .await?;
