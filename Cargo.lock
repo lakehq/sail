@@ -7434,6 +7434,7 @@ dependencies = [
  "serde",
  "serde_yaml",
  "syn 2.0.118",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -7518,6 +7519,7 @@ dependencies = [
  "log",
  "percent-encoding",
  "reqwest 0.12.28",
+ "sail-build-scripts",
  "sail-catalog",
  "sail-common",
  "sail-common-datafusion",
@@ -7581,6 +7583,7 @@ dependencies = [
  "progenitor",
  "progenitor-client",
  "reqwest 0.12.28",
+ "sail-build-scripts",
  "sail-catalog",
  "sail-common",
  "sail-common-datafusion",

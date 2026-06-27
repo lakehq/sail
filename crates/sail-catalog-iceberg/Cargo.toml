@@ -40,3 +40,6 @@ tokio = { workspace = true }
 wiremock = { workspace = true }
 testcontainers = { workspace = true }
 arrow = { workspace = true }
+
+[build-dependencies]
+sail-build-scripts = { path = "../sail-build-scripts" }

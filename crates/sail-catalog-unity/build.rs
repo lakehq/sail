@@ -13,6 +13,8 @@ fn build_unity_catalog() -> Result<(), Box<dyn std::error::Error>> {
     let src = "spec/unity-catalog-all.yaml";
     println!("cargo:rerun-if-changed={src}");
 
+    let _openapi = sail_build_scripts::openapi::load_spec(src)?;
+
     let file = std::fs::File::open(src)?;
     let spec = serde_yaml::from_reader(file)?;
 

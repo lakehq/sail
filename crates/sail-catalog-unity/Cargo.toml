@@ -40,6 +40,7 @@ wiremock = { workspace = true }
 tempfile = { workspace = true }
 
 [build-dependencies]
+sail-build-scripts = { path = "../sail-build-scripts" }
 progenitor = { workspace = true }
 prettyplease = { workspace = true }
 serde_yaml = { workspace = true }
