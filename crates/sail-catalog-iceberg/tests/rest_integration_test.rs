@@ -13,15 +13,19 @@
 #![expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use arrow::datatypes::DataType;
+use sail_catalog::credentials::EmptyCatalogCredentials;
 use sail_catalog::provider::{
     CatalogPartitionField, CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions,
     CreateTableMode, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
     DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
     RuntimeAwareCatalogProvider,
 };
-use sail_catalog_iceberg::{IcebergRestCatalogProvider, REST_CATALOG_PROP_URI};
+use sail_catalog_iceberg::{
+    IcebergRestCatalogOptions, IcebergRestCatalogProvider, REST_CATALOG_PROP_URI,
+};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::{
     CatalogTableConstraint, CatalogTableSort, TableColumnStatus, TableKind,
@@ -108,7 +112,13 @@ async fn setup_catalog(
     let catalog = RuntimeAwareCatalogProvider::try_new(
         || {
             let props = HashMap::from([(REST_CATALOG_PROP_URI.to_string(), rest_url)]);
-            let provider = IcebergRestCatalogProvider::new("test".to_string(), props);
+            let provider = IcebergRestCatalogProvider::new(
+                "test".to_string(),
+                IcebergRestCatalogOptions {
+                    credentials: Arc::new(EmptyCatalogCredentials),
+                    properties: props,
+                },
+            );
             Ok(provider)
         },
         runtime.io().clone(),
