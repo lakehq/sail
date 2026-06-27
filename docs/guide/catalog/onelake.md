@@ -12,7 +12,7 @@ OneLake catalog can be configured using the following options:
 - `type` (required): The string `onelake`.
 - `name` (required): The name of the catalog.
 - `url` (required): The OneLake item location.
-- `api` (optional): The OneLake catalog API. Use `delta` for the Unity Catalog endpoint or `iceberg` for the Iceberg REST catalog endpoint. The default is `delta`.
+- `api` (optional): The OneLake catalog API. Use `delta` for the Unity Catalog endpoint or `iceberg` for the Iceberg REST catalog endpoint. The default is `iceberg`.
 - `bearer_token` (optional): The bearer token for authentication.
 
 See [Common Options](./index.md#common-options) for caching configuration.

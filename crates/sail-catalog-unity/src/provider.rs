@@ -487,6 +487,7 @@ impl CatalogProvider for UnityCatalogProvider {
             {
                 Ok(())
             }
+            Err(e) if e.status().is_some_and(|status| status.is_success()) => Ok(()),
             Err(progenitor_client::Error::UnexpectedResponse(response))
                 if response.status().as_u16() == 404 && if_exists =>
             {
@@ -797,6 +798,7 @@ impl CatalogProvider for UnityCatalogProvider {
             {
                 Ok(())
             }
+            Err(e) if e.status().is_some_and(|status| status.is_success()) => Ok(()),
             Err(e)
                 if e.status()
                     .is_some_and(|status| status.as_u16() == 404 && if_exists) =>

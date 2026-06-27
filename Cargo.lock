@@ -7445,6 +7445,7 @@ version = "0.6.4"
 dependencies = [
  "arrow",
  "async-trait",
+ "log",
  "percent-encoding",
  "reqwest",
  "sail-catalog",
@@ -7482,6 +7483,7 @@ dependencies = [
  "sail-catalog-unity",
  "sail-common-datafusion",
  "tokio",
+ "url",
 ]
 
 [[package]]

@@ -512,8 +512,8 @@ pub struct OptimizerConfig {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OneLakeApi {
-    #[default]
     Delta,
+    #[default]
     Iceberg,
 }
 

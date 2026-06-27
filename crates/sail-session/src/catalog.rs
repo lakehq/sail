@@ -146,21 +146,24 @@ pub fn create_catalog_manager(
                     bearer_token,
                     cache,
                 } => {
-                    // Parse URL format: workspace/item.type (e.g., "duckrun/data.lakehouse", "duckrun/data.datawarehouse")
+                    // Parse URL format:
+                    //   - `workspace/item.type`: friendly names (e.g. "duckrun/data.lakehouse")
+                    //   - `workspaceId/itemId`: GUIDs (e.g. "8f.../3a...").
+                    // GUID form is required when the workspace has friendly-name support disabled,
+                    // because the data/metadata paths are then GUID-addressed at the storage layer.
                     let (workspace, item) = url.split_once('/').ok_or_else(|| {
                         plan_datafusion_err!(
-                            "Invalid OneLake URL format: expected 'workspace/item.type', got '{}'",
+                            "Invalid OneLake URL format: expected 'workspace/item.type' or 'workspaceId/itemId', got '{}'",
                             url
                         )
                     })?;
 
-                    // Extract item name and type (e.g., "data.Lakehouse" -> name="data", type="Lakehouse")
-                    let (item_name, item_type) = item.split_once('.').ok_or_else(|| {
-                        plan_datafusion_err!(
-                            "Invalid OneLake item format: expected 'name.type', got '{}'",
-                            item
-                        )
-                    })?;
+                    // Friendly form: ("data.Lakehouse" -> name="data", type=Some("Lakehouse"))
+                    // GUID form: ("data" -> name="data", type=None)
+                    let (item_name, item_type) = match item.split_once('.') {
+                        Some((name, item_type)) => (name, Some(item_type.to_string())),
+                        None => (item, None),
+                    };
 
                     let token = bearer_token.as_ref().map(|t| t.expose_secret().to_string());
                     let api = match api {
@@ -173,7 +176,7 @@ pub fn create_catalog_manager(
                                 name.clone(),
                                 workspace.to_string(),
                                 item_name.to_string(),
-                                item_type.to_string(),
+                                item_type,
                                 api,
                                 token.clone(),
                             )

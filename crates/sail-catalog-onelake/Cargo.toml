@@ -15,3 +15,4 @@ sail-catalog-unity = { path = "../sail-catalog-unity" }
 async-trait = { workspace = true }
 object_store = { workspace = true }
 tokio = { workspace = true }
+url = { workspace = true }

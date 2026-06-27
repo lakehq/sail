@@ -709,8 +709,8 @@ fn validate_iceberg_lakehouse_storage_access(
         .is_some_and(|session| session.remote_signing_enabled)
     {
         // TODO: Wire REST remote signing into Iceberg FileIO/object-store access.
-        return not_impl_err!(
-            "Iceberg REST catalog table {} requires remote signing, which is not implemented yet",
+        warn!(
+            "Iceberg REST catalog table {} advertises remote signing, which is not implemented yet",
             context.catalog_table().join(".")
         );
     }
@@ -721,7 +721,7 @@ fn validate_iceberg_lakehouse_storage_access(
     {
         // TODO: Apply REST vended credentials to operation-scoped storage access.
         warn!(
-            "Iceberg REST catalog table {} requires vended storage credentials, which is not implemented yet",
+            "Iceberg REST catalog table {} advertises vended storage credentials, which is not implemented yet",
             context.catalog_table().join(".")
         );
     }

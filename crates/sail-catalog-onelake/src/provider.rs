@@ -21,6 +21,7 @@ use sail_catalog_iceberg::{
 use sail_catalog_unity::{UnityCatalogOptions, UnityCatalogProvider};
 use sail_common_datafusion::catalog::{DatabaseStatus, TableKind, TableStatus};
 use tokio::sync::OnceCell;
+use url::Url;
 
 use crate::credentials::OneLakeCredentials;
 
@@ -39,7 +40,7 @@ pub struct OneLakeCatalogConfig {
     #[expect(unused)]
     pub workspace: String,
     pub item_name: String,
-    pub item_type: String,
+    pub item_type: Option<String>,
     pub api: OneLakeApiKind,
 }
 
@@ -58,7 +59,7 @@ impl OneLakeCatalogProvider {
         name: String,
         workspace: String,
         item_name: String,
-        item_type: String,
+        item_type: Option<String>,
         api: OneLakeApiKind,
         bearer_token: Option<String>,
     ) -> CatalogResult<Self> {
@@ -70,14 +71,16 @@ impl OneLakeCatalogProvider {
             },
         };
         let credentials = Arc::new(credentials) as Arc<dyn CatalogCredentials>;
-        let item_path = format!("{workspace}/{item_name}.{item_type}");
+        // `<workspace>/<item>.<type>` for friendly names, or
+        // `<workspaceId>/<itemId>`(no type segment) for GUIDs
+        let item_path = onelake_item_path(&workspace, &item_name, item_type.as_deref());
         let inner: Arc<dyn CatalogProvider> = match api {
             OneLakeApiKind::Delta => {
                 let uri = format!(
                     "{}/{}/api/2.1/unity-catalog",
                     ONE_LAKE_DELTA_ENDPOINT, item_path
                 );
-                let catalog_name = format!("{item_name}.{item_type}");
+                let catalog_name = onelake_catalog_name(&item_name, item_type.as_deref());
                 Arc::new(UnityCatalogProvider::new(
                     name.clone(),
                     UnityCatalogOptions {
@@ -117,12 +120,28 @@ impl OneLakeCatalogProvider {
     }
 
     fn catalog_name(&self) -> String {
-        format!("{}.{}", self.config.item_name, self.config.item_type)
+        onelake_catalog_name(&self.config.item_name, self.config.item_type.as_deref())
     }
 
     fn normalize_database_status(&self, mut status: DatabaseStatus) -> DatabaseStatus {
         if matches!(self.config.api, OneLakeApiKind::Delta) {
             status.database = self.normalize_delta_database(status.database);
+        }
+        // OneLake's Iceberg REST API returns the namespace `location` as a workspace-relative
+        // path (e.g. `workspace/item.Type/Tables/schema`). `resolve_default_table_location` then
+        // seems to append the table name and hand the result to the Iceberg writer, which seems
+        // to reject any non-absolute location, so convert it to an absolute `abfss://` URL.
+        if let Some(location) = status.location.take() {
+            status.location = Some(normalize_onelake_location(&location).unwrap_or(location));
+        }
+        // Keep the mirrored `location` table property consistent with the field above
+        // (DESCRIBE DATABASE EXTENDED surfaces both).
+        for (key, value) in status.properties.iter_mut() {
+            if key.eq_ignore_ascii_case("location") {
+                if let Some(abfss) = normalize_onelake_location(value) {
+                    *value = abfss;
+                }
+            }
         }
         status
     }
@@ -132,7 +151,7 @@ impl OneLakeCatalogProvider {
             status.database = self.normalize_delta_database(status.database);
             if let TableKind::Table { location, .. } = &mut status.kind {
                 if let Some(url) = location.take() {
-                    *location = Some(convert_to_abfss_url(&url).unwrap_or(url));
+                    *location = Some(normalize_onelake_location(&url).unwrap_or(url));
                 }
             }
         }
@@ -162,16 +181,48 @@ impl OneLakeCatalogProvider {
     }
 }
 
-/// Converts OneLake https:// URL to abfss:// URL for Delta Lake access.
-/// From: https://onelake.dfs.fabric.microsoft.com/workspace/item.ItemType/Tables/schema/table
-/// To:   abfss://workspace@onelake.dfs.fabric.microsoft.com/item.ItemType/Tables/schema/table
-fn convert_to_abfss_url(https_url: &str) -> Option<String> {
-    let url = https_url.strip_prefix("https://onelake.dfs.fabric.microsoft.com/")?;
-    let (workspace, rest) = url.split_once('/')?;
-    Some(format!(
-        "abfss://{}@onelake.dfs.fabric.microsoft.com/{}",
-        workspace, rest
-    ))
+// OneLake reports locations in different forms depending on the API:
+// - Delta (Unity) returns an absolute `https://` URL:
+//   From: https://onelake.dfs.fabric.microsoft.com/workspace/item.ItemType/Tables/schema/table
+//   To:   abfss://workspace@onelake.dfs.fabric.microsoft.com/item.ItemType/Tables/schema/table
+// - Iceberg (REST) returns the namespace `location` as a workspace-relative path:
+//   From: workspace/item.ItemType/Tables/schema
+//   To:   abfss://workspace@onelake.dfs.fabric.microsoft.com/item.ItemType/Tables/schema
+fn normalize_onelake_location(location: &str) -> Option<String> {
+    let trimmed = location.trim();
+    let relative =
+        if let Some(rest) = trimmed.strip_prefix("https://onelake.dfs.fabric.microsoft.com/") {
+            // OneLake `https://` form.
+            rest
+        } else if Url::parse(trimmed)
+            .ok()
+            .is_some_and(|url| url.scheme().len() > 1)
+        {
+            // Already absolute with another scheme (e.g., `abfss://`, `file://`, ...).
+            return None;
+        } else {
+            // Workspace-relative form (Iceberg namespace location).
+            trimmed
+        };
+    let (workspace, rest) = relative.split_once('/')?;
+    (!workspace.is_empty() && !rest.is_empty())
+        .then(|| format!("abfss://{workspace}@onelake.dfs.fabric.microsoft.com/{rest}"))
+}
+
+// `<workspace>/<item>.<type>` for friendly names, or `<workspaceId>/<itemId>` for GUIDs.
+fn onelake_item_path(workspace: &str, item_name: &str, item_type: Option<&str>) -> String {
+    match item_type {
+        Some(item_type) => format!("{workspace}/{item_name}.{item_type}"),
+        None => format!("{workspace}/{item_name}"),
+    }
+}
+
+// `<item>.<type>` for friendly names, or `<itemId>` for GUIDs.
+fn onelake_catalog_name(item_name: &str, item_type: Option<&str>) -> String {
+    match item_type {
+        Some(item_type) => format!("{item_name}.{item_type}"),
+        None => item_name.to_string(),
+    }
 }
 
 #[async_trait::async_trait]
@@ -352,5 +403,39 @@ impl CatalogProvider for OneLakeCatalogProvider {
         options: DropViewOptions,
     ) -> CatalogResult<()> {
         self.inner.drop_view(database, view, options).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_onelake_location;
+
+    #[test]
+    fn normalize_onelake_location_handles_each_form() {
+        // Iceberg: workspace-relative namespace location -> abfss (the reported bug).
+        assert_eq!(
+            normalize_onelake_location("OneLake_LakeSail_Testing/LakeSail.Lakehouse/Tables/dbo")
+                .as_deref(),
+            Some("abfss://OneLake_LakeSail_Testing@onelake.dfs.fabric.microsoft.com/LakeSail.Lakehouse/Tables/dbo"),
+        );
+        // Delta/Unity: absolute https OneLake URL -> abfss (unchanged from before).
+        assert_eq!(
+            normalize_onelake_location(
+                "https://onelake.dfs.fabric.microsoft.com/ws/item.Lakehouse/Tables/dbo/t",
+            )
+            .as_deref(),
+            Some("abfss://ws@onelake.dfs.fabric.microsoft.com/item.Lakehouse/Tables/dbo/t"),
+        );
+        // Already absolute -> None so the caller keeps the original (never double-convert).
+        assert_eq!(
+            normalize_onelake_location("abfss://ws@onelake.dfs.fabric.microsoft.com/x"),
+            None,
+        );
+        assert_eq!(normalize_onelake_location("s3://bucket/x"), None);
+        // Single-slash scheme: `Url::parse` should detect it.
+        assert_eq!(normalize_onelake_location("file:/tmp/onelake"), None);
+        // Degenerate inputs -> no conversion.
+        assert_eq!(normalize_onelake_location("single-segment"), None);
+        assert_eq!(normalize_onelake_location("ws/"), None);
     }
 }

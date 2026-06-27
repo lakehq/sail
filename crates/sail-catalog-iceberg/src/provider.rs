@@ -415,6 +415,14 @@ impl IcebergRestCatalogProvider {
         table: &str,
         result: crate::models::LoadTableResult,
     ) -> CatalogResult<TableStatus> {
+        log::trace!(
+            "Iceberg REST table load result: catalog={}, database={:?}, table={}, metadata.location={:?}, metadata-location={:?}",
+            catalog,
+            database,
+            table,
+            result.metadata.location,
+            result.metadata_location,
+        );
         // Table-specific config and storage credentials are access-session state, not
         // display table properties.
         // TODO: Preserve unused fields in `TableMetadata` when Sail exposes them.
@@ -1480,6 +1488,15 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             .await
             .map_err(|e| match e {
                 apis::Error::ResponseError(apis::ResponseContent { status, .. })
+                    if matches!(
+                        status,
+                        reqwest::StatusCode::METHOD_NOT_ALLOWED
+                            | reqwest::StatusCode::NOT_IMPLEMENTED
+                    ) =>
+                {
+                    CatalogError::NotSupported("get view".to_string())
+                }
+                apis::Error::ResponseError(apis::ResponseContent { status, .. })
                     if status == reqwest::StatusCode::NOT_FOUND =>
                 {
                     CatalogError::NotFound(
@@ -1513,7 +1530,26 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                 catalog_config.prefix(),
             )
             .await
-            .map_err(|e| CatalogError::External(format!("Failed to list views: {e}")))?;
+            .map_err(|e| match e {
+                apis::Error::ResponseError(apis::ResponseContent { status, .. })
+                    if matches!(status, reqwest::StatusCode::NOT_FOUND) =>
+                {
+                    CatalogError::NotFound(
+                        CatalogObject::Namespace,
+                        quote_namespace_if_needed(database),
+                    )
+                }
+                apis::Error::ResponseError(apis::ResponseContent { status, .. })
+                    if matches!(
+                        status,
+                        reqwest::StatusCode::METHOD_NOT_ALLOWED
+                            | reqwest::StatusCode::NOT_IMPLEMENTED
+                    ) =>
+                {
+                    CatalogError::NotSupported("list views".to_string())
+                }
+                _ => CatalogError::External(format!("Failed to list views: {e}")),
+            })?;
         let catalog = &self.name;
         Ok(result
             .identifiers
@@ -1563,11 +1599,7 @@ impl CatalogProvider for IcebergRestCatalogProvider {
 }
 
 /// Finds an item by ID, falling back to the last item if not found or no ID is provided.
-fn find_by_id_or_last<'a, T, F>(
-    items: Option<&'a Vec<T>>,
-    id: Option<i32>,
-    get_id: F,
-) -> Option<&'a T>
+fn find_by_id_or_last<T, F>(items: Option<&Vec<T>>, id: Option<i32>, get_id: F) -> Option<&T>
 where
     F: Fn(&T) -> Option<i32>,
 {
@@ -2575,6 +2607,22 @@ mod tests {
         test_list_views_impl(Some("test")).await;
     }
 
+    #[tokio::test]
+    async fn test_list_views_unsupported_endpoint() {
+        let ctx = TestContext::new(None).await;
+
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/ns1/views")))
+            .respond_with(ResponseTemplate::new(405))
+            .mount(&ctx.server)
+            .await;
+
+        let namespace = Namespace::try_from(vec!["ns1".to_string()]).unwrap();
+        let error = ctx.catalog.list_views(&namespace).await.unwrap_err();
+
+        assert!(matches!(error, CatalogError::NotSupported(_)));
+    }
+
     async fn test_drop_database_impl(name: Option<&str>) {
         let ctx = TestContext::new(name).await;
 
@@ -3191,6 +3239,22 @@ mod tests {
     async fn test_get_view() {
         test_get_view_impl(None).await;
         test_get_view_impl(Some("test")).await;
+    }
+
+    #[tokio::test]
+    async fn test_get_view_unsupported_endpoint() {
+        let ctx = TestContext::new(None).await;
+
+        Mock::given(method("GET"))
+            .and(path(ctx.path("/namespaces/db1/views/view1")))
+            .respond_with(ResponseTemplate::new(501))
+            .mount(&ctx.server)
+            .await;
+
+        let namespace = Namespace::try_from(vec!["db1".to_string()]).unwrap();
+        let error = ctx.catalog.get_view(&namespace, "view1").await.unwrap_err();
+
+        assert!(matches!(error, CatalogError::NotSupported(_)));
     }
 
     async fn test_create_database_impl(name: Option<&str>) {
