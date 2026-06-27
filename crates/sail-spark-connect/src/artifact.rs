@@ -130,7 +130,7 @@ impl SparkArtifactState {
     }
 }
 
-pub(crate) fn plan_config_with_artifacts(ctx: &SessionContext) -> SparkResult<Arc<PlanConfig>> {
+pub(crate) fn resolve_plan_config(ctx: &SessionContext) -> SparkResult<Arc<PlanConfig>> {
     let spark = ctx.extension::<SparkSession>()?;
     let mut config = (*spark.plan_config()?).clone();
     let artifacts = ctx.extension::<SparkArtifactRegistry>()?.artifacts()?;

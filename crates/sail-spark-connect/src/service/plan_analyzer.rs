@@ -13,7 +13,7 @@ use sail_plan::explain::{explain_string, ExplainOptions};
 use sail_plan::resolver::plan::NamedPlan;
 use sail_plan::resolver::PlanResolver;
 
-use crate::artifact::plan_config_with_artifacts;
+use crate::artifact::resolve_plan_config;
 use crate::config::get_pyspark_version;
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::proto::data_type::parse_spark_data_type;
@@ -40,7 +40,7 @@ use crate::spark::connect::analyze_plan_response::{
 use crate::spark::connect::{plan, StorageLevel};
 
 async fn analyze_schema(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<sc::DataType> {
-    let resolver = PlanResolver::new(ctx, plan_config_with_artifacts(ctx)?);
+    let resolver = PlanResolver::new(ctx, resolve_plan_config(ctx)?);
     let NamedPlan { plan, fields } = resolver
         .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
         .await?;
@@ -75,7 +75,7 @@ pub(crate) async fn handle_analyze_explain(
     let options = ExplainOptions::from_mode(spec_mode);
     let explain = explain_string(
         ctx,
-        plan_config_with_artifacts(ctx)?,
+        resolve_plan_config(ctx)?,
         spec::Plan::Query(plan.try_into()?),
         options,
     )
@@ -123,7 +123,7 @@ pub(crate) async fn handle_analyze_input_files(
 ) -> SparkResult<InputFilesResponse> {
     let InputFilesRequest { plan } = request;
     let plan = plan.required("plan")?;
-    let resolver = PlanResolver::new(ctx, plan_config_with_artifacts(ctx)?);
+    let resolver = PlanResolver::new(ctx, resolve_plan_config(ctx)?);
     let NamedPlan { plan, .. } = resolver
         .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
         .await?;
@@ -183,7 +183,7 @@ pub(crate) async fn handle_analyze_ddl_parse(
     request: DdlParseRequest,
 ) -> SparkResult<DdlParseResponse> {
     let data_type = parse_spark_data_type(request.ddl_string.as_str())?;
-    let resolver = PlanResolver::new(ctx, plan_config_with_artifacts(ctx)?);
+    let resolver = PlanResolver::new(ctx, resolve_plan_config(ctx)?);
     let data_type = resolver.resolve_data_type_for_plan(&data_type)?;
     Ok(DdlParseResponse {
         parsed: Some(data_type.try_into()?),
@@ -208,7 +208,7 @@ pub(crate) async fn handle_analyze_same_semantics(
 }
 
 async fn resolve_logical_plan(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<LogicalPlan> {
-    let resolver = PlanResolver::new(ctx, plan_config_with_artifacts(ctx)?);
+    let resolver = PlanResolver::new(ctx, resolve_plan_config(ctx)?);
     let NamedPlan { plan, .. } = resolver
         .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
         .await?;
