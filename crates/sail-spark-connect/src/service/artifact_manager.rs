@@ -270,7 +270,6 @@ fn add_to_sys_path(path: &str) -> SparkResult<()> {
 }
 
 async fn artifact_transport(
-    ctx: &SessionContext,
     artifacts: &SparkArtifactRegistry,
     name: &str,
     sha256: &str,
@@ -288,12 +287,11 @@ async fn artifact_transport(
             options.inline_max_bytes
         )));
     };
-    let uri = upload_artifact(ctx, base_uri, artifacts.session_id(), sha256, data).await?;
+    let uri = upload_artifact(base_uri, artifacts.session_id(), sha256, data).await?;
     Ok((None, Some(uri)))
 }
 
 async fn upload_artifact(
-    ctx: &SessionContext,
     base_uri: &str,
     session_id: &str,
     sha256: &str,
@@ -306,29 +304,14 @@ async fn upload_artifact(
     let (_scheme, path) = ObjectStoreScheme::parse(&url).map_err(|e| {
         SparkError::invalid(format!("invalid artifact object-store path {uri}: {e}"))
     })?;
-    let object_store_url = artifact_object_store_url(&url)?;
-    let store = ctx
-        .runtime_env()
-        .object_store(object_store_url)
-        .map_err(|e| {
-            SparkError::internal(format!("failed to create artifact object store {uri}: {e}"))
-        })?;
+    let store = sail_object_store::get_dynamic_object_store(&url).map_err(|e| {
+        SparkError::internal(format!("failed to create artifact object store {uri}: {e}"))
+    })?;
     store
         .put(&path, PutPayload::from(data.to_vec()))
         .await
         .map_err(|e| SparkError::internal(format!("failed to write artifact {uri}: {e}")))?;
     Ok(uri)
-}
-
-fn artifact_object_store_url(
-    url: &Url,
-) -> SparkResult<datafusion::execution::object_store::ObjectStoreUrl> {
-    if url.scheme() == "file" {
-        return Ok(datafusion::execution::object_store::ObjectStoreUrl::local_filesystem());
-    }
-    let root = &url[..url::Position::BeforePath];
-    datafusion::execution::object_store::ObjectStoreUrl::parse(root)
-        .map_err(|e| SparkError::invalid(format!("invalid artifact object-store URL {root}: {e}")))
 }
 
 fn artifact_object_uri(base_uri: &str, session_id: &str, sha256: &str) -> SparkResult<String> {
@@ -453,7 +436,6 @@ fn process_chunk(artifact: &mut ChunkedArtifact, chunk: &ArtifactChunk) -> Spark
 }
 
 async fn add_artifact_summary(
-    ctx: &SessionContext,
     name: String,
     data: &[u8],
     is_crc_successful: bool,
@@ -467,7 +449,7 @@ async fn add_artifact_summary(
             let sha256 = sha256_hex(data);
             let size = data.len() as u64;
             let (data, uri) =
-                artifact_transport(ctx, artifacts, &stored.normalized_name, &sha256, data).await?;
+                artifact_transport(artifacts, &stored.normalized_name, &sha256, data).await?;
             artifacts.add_artifact(PySparkPythonArtifact {
                 name: stored.normalized_name,
                 python_path: stored.local_path.unwrap_or_default(),
@@ -487,7 +469,6 @@ async fn add_artifact_summary(
 }
 
 async fn add_single_chunk_artifact(
-    ctx: &SessionContext,
     name: String,
     chunk: ArtifactChunk,
     artifact_dir: &Path,
@@ -496,7 +477,6 @@ async fn add_single_chunk_artifact(
 ) -> SparkResult<()> {
     let chunk_ok = validate_crc(&chunk.data, chunk.crc);
     add_artifact_summary(
-        ctx,
         name,
         &chunk.data,
         chunk_ok,
@@ -508,7 +488,6 @@ async fn add_single_chunk_artifact(
 }
 
 async fn finalize_chunked_artifact(
-    ctx: &SessionContext,
     chunked: ChunkedArtifact,
     artifact_dir: &Path,
     artifacts: &SparkArtifactRegistry,
@@ -516,7 +495,6 @@ async fn finalize_chunked_artifact(
 ) -> SparkResult<()> {
     chunked.validate_complete()?;
     add_artifact_summary(
-        ctx,
         chunked.name,
         &chunked.data,
         chunked.is_crc_successful,
@@ -552,7 +530,6 @@ pub(crate) async fn handle_add_artifacts(
                     let name = artifact.name;
                     let chunk = artifact.data.required("artifact data")?;
                     add_single_chunk_artifact(
-                        ctx,
                         name,
                         chunk,
                         &artifact_dir,
@@ -576,14 +553,8 @@ pub(crate) async fn handle_add_artifacts(
                     begin.initial_chunk,
                 )?;
                 if chunked.is_complete() {
-                    finalize_chunked_artifact(
-                        ctx,
-                        chunked,
-                        &artifact_dir,
-                        &artifacts,
-                        &mut summaries,
-                    )
-                    .await?;
+                    finalize_chunked_artifact(chunked, &artifact_dir, &artifacts, &mut summaries)
+                        .await?;
                 } else {
                     current_chunked = Some(chunked);
                 }
@@ -600,7 +571,6 @@ pub(crate) async fn handle_add_artifacts(
                 if is_complete {
                     if let Some(chunked) = current_chunked.take() {
                         finalize_chunked_artifact(
-                            ctx,
                             chunked,
                             &artifact_dir,
                             &artifacts,
@@ -615,7 +585,7 @@ pub(crate) async fn handle_add_artifacts(
 
     // Finalize any remaining chunked artifact
     if let Some(chunked) = current_chunked.take() {
-        finalize_chunked_artifact(ctx, chunked, &artifact_dir, &artifacts, &mut summaries).await?;
+        finalize_chunked_artifact(chunked, &artifact_dir, &artifacts, &mut summaries).await?;
     }
 
     Ok(summaries)

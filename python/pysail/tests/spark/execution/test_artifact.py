@@ -3,6 +3,7 @@
 import os
 import shutil
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -14,6 +15,12 @@ from pysail.testing.spark.session import spark_connect_server, spark_session_fac
 from pysail.testing.spark.utils.common import is_jvm_spark
 
 pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
+
+_ARTIFACT_S3_BUCKET = "sail-artifact-store"
+_ARTIFACT_S3_IMAGE = "minio/minio:RELEASE.2025-05-24T17-08-30Z"
+_ARTIFACT_S3_PORT = 9000
+_ARTIFACT_S3_USER = "admin"
+_ARTIFACT_S3_PASSWORD = "password"  # noqa: S105
 
 
 @pytest.fixture(scope="module")
@@ -32,6 +39,66 @@ def artifact_store():
         yield artifact_store
     finally:
         shutil.rmtree(artifact_store, ignore_errors=True)
+
+
+@pytest.fixture(scope="module")
+def artifact_s3_store():
+    boto3 = pytest.importorskip("boto3")
+    container_module = pytest.importorskip("testcontainers.core.container")
+    wait_strategy_module = pytest.importorskip("testcontainers.core.wait_strategies")
+
+    container = container_module.DockerContainer(_ARTIFACT_S3_IMAGE)
+    container.with_exposed_ports(_ARTIFACT_S3_PORT)
+    container.with_env("MINIO_ROOT_USER", _ARTIFACT_S3_USER)
+    container.with_env("MINIO_ROOT_PASSWORD", _ARTIFACT_S3_PASSWORD)
+    container.with_command(["server", "/data", "--console-address", ":9001"])
+    container.waiting_for(
+        wait_strategy_module.LogMessageWaitStrategy("MinIO Object Storage Server").with_startup_timeout(120)
+    )
+    container.start()
+
+    try:
+        endpoint = f"http://{container.get_container_host_ip()}:{container.get_exposed_port(_ARTIFACT_S3_PORT)}"
+        client = boto3.client(
+            "s3",
+            endpoint_url=endpoint,
+            aws_access_key_id=_ARTIFACT_S3_USER,
+            aws_secret_access_key=_ARTIFACT_S3_PASSWORD,
+            region_name="us-east-1",
+        )
+        _create_s3_bucket(client)
+        yield {
+            "client": client,
+            "env": {
+                "AWS_ACCESS_KEY_ID": _ARTIFACT_S3_USER,
+                "AWS_SECRET_ACCESS_KEY": _ARTIFACT_S3_PASSWORD,
+                "AWS_REGION": "us-east-1",
+                "AWS_ENDPOINT": endpoint,
+                "AWS_VIRTUAL_HOSTED_STYLE_REQUEST": "false",
+                "AWS_ALLOW_HTTP": "true",
+            },
+            "uri": f"s3://{_ARTIFACT_S3_BUCKET}/artifacts",
+        }
+    finally:
+        container.stop()
+
+
+def _create_s3_bucket(client):
+    deadline = time.time() + 60
+    while True:
+        try:
+            client.create_bucket(Bucket=_ARTIFACT_S3_BUCKET)
+        except Exception:
+            if time.time() >= deadline:
+                raise
+            time.sleep(1)
+        else:
+            return
+
+
+def _s3_keys(client):
+    response = client.list_objects_v2(Bucket=_ARTIFACT_S3_BUCKET)
+    return sorted(item["Key"] for item in response.get("Contents", []))
 
 
 @pytest.fixture(scope="module")
@@ -203,6 +270,51 @@ def test_artifact_store_hash_mismatch_fails_closed(tmp_path):
     finally:
         shutil.rmtree(artifact_root, ignore_errors=True)
         shutil.rmtree(artifact_store, ignore_errors=True)
+
+
+@pytest.mark.integration
+def test_add_artifact_file_uses_s3_object_store(artifact_s3_store, tmp_path):
+    if os.environ.get("SPARK_REMOTE"):
+        pytest.skip("external Spark Connect endpoint owns the artifact store")
+
+    artifact_root = tempfile.mkdtemp(prefix="sail-s3-artifact-root-")
+    try:
+        with (
+            spark_connect_server(
+                envs={
+                    "SAIL_MODE": "local-cluster",
+                    "SAIL_SPARK__ARTIFACT_ROOT": artifact_root,
+                    "SAIL_SPARK__ARTIFACT_INLINE_MAX_BYTES": "0",
+                    "SAIL_SPARK__ARTIFACT_STORE_URI": artifact_s3_store["uri"],
+                    **artifact_s3_store["env"],
+                }
+            ) as server,
+            spark_session_factory(server.remote) as sessions,
+        ):
+            session = sessions.create()
+            file_path = tmp_path / "sail_s3_artifact.txt"
+            payload = "s3 artifact payload " * 8
+            file_path.write_text(payload, encoding="utf-8")
+
+            session.addArtifact(str(file_path), file=True)
+            stored_keys = _s3_keys(artifact_s3_store["client"])
+            assert any(key.startswith("artifacts/sail-artifacts/sessions/") for key in stored_keys)
+            shutil.rmtree(artifact_root, ignore_errors=True)
+
+            @udf(StringType())
+            def read_s3_artifact(_):
+                from pyspark.core.files import SparkFiles
+
+                with open(SparkFiles.get("sail_s3_artifact.txt"), encoding="utf-8") as file:
+                    return file.read()
+
+            rows = session.range(8).repartition(4).select(read_s3_artifact("id").alias("value")).collect()
+            assert {row.value for row in rows} == {payload}
+
+            session.stop()
+            assert not _s3_keys(artifact_s3_store["client"])
+    finally:
+        shutil.rmtree(artifact_root, ignore_errors=True)
 
 
 def test_add_artifact_rejects_unsafe_archive_member(spark, tmp_path):
