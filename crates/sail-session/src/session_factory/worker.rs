@@ -5,9 +5,12 @@ use datafusion::execution::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;
+use sail_common_datafusion::cached_relation::CachedRelationRegistry;
+use sail_common_datafusion::session::checkpoint::CheckpointStoreService;
 use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
 use sail_delta_lake::session_extension::DeltaTableCache;
 
+use crate::checkpoint::ObjectStoreCheckpointStore;
 use crate::runtime::RuntimeEnvFactory;
 use crate::session_factory::SessionFactory;
 
@@ -35,6 +38,10 @@ impl SessionFactory<()> for WorkerSessionFactory {
         // when decoding the execution plan.
         let config = SessionConfig::default()
             .with_extension(Arc::new(DeltaTableCache::default()))
+            .with_extension(Arc::new(CachedRelationRegistry::default()))
+            .with_extension(Arc::new(CheckpointStoreService::new(Arc::new(
+                ObjectStoreCheckpointStore,
+            ))))
             .with_extension(Arc::new(RepartitionBufferConfig::new(
                 self.repartition_buffer_size,
             )));

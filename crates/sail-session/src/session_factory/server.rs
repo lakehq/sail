@@ -13,7 +13,9 @@ use sail_catalog::provider::CatalogCacheManager;
 use sail_catalog_system::service::SystemTableService;
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
+use sail_common_datafusion::cached_relation::CachedRelationRegistry;
 use sail_common_datafusion::session::activity::ActivityTracker;
+use sail_common_datafusion::session::checkpoint::CheckpointStoreService;
 use sail_common_datafusion::session::job::{JobRunner, JobService};
 use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
 use sail_delta_lake::session_extension::DeltaTableCache;
@@ -26,6 +28,7 @@ use sail_physical_optimizer::{get_physical_optimizers, PhysicalOptimizerOptions}
 use sail_server::actor::{ActorHandle, ActorSystem};
 
 use crate::catalog::create_catalog_manager;
+use crate::checkpoint::ObjectStoreCheckpointStore;
 use crate::formats::create_table_format_registry;
 use crate::observable::SessionManagerHandle;
 use crate::optimizer::{default_analyzer_rules, default_optimizer_rules};
@@ -121,6 +124,10 @@ impl ServerSessionFactory {
                 self.catalog_cache_manager.clone(),
             )?))
             .with_extension(Arc::new(ActivityTracker::new()))
+            .with_extension(Arc::new(CachedRelationRegistry::default()))
+            .with_extension(Arc::new(CheckpointStoreService::new(Arc::new(
+                ObjectStoreCheckpointStore,
+            ))))
             .with_extension(Arc::new(JobService::new(job_runner)))
             .with_extension(Arc::new(RepartitionBufferConfig::new(
                 self.config.cluster.task_stream_buffer,
