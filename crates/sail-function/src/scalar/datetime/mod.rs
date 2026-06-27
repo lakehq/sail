@@ -1,6 +1,8 @@
 pub mod convert_tz;
+pub mod format;
 pub mod negate_duration;
 pub mod spark_date;
+pub mod spark_date_format;
 pub mod spark_date_part;
 pub mod spark_date_trunc;
 pub mod spark_interval;
@@ -13,7 +15,6 @@ pub mod spark_time;
 pub mod spark_time_diff;
 pub mod spark_time_trunc;
 pub mod spark_timestamp;
-pub mod spark_to_chrono_fmt;
 pub mod spark_try_to_timestamp;
 pub mod spark_unix_timestamp;
 pub mod spark_window_buckets;

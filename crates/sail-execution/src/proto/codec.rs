@@ -136,6 +136,8 @@ use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::spark_date::SparkDate;
+use sail_function::scalar::datetime::spark_date_format::SparkDateFormat;
+use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
@@ -149,7 +151,6 @@ use sail_function::scalar::datetime::spark_time::SparkTime;
 use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
-use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
 use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
@@ -2186,8 +2187,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkToXml::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkUnixTimestamp(gen::SparkUnixTimestampUdf { timezone }) => {
-                let udf = SparkUnixTimestamp::new(Arc::from(timezone));
+            UdfKind::SparkUnixTimestamp(gen::SparkUnixTimestampUdf { session_timezone }) => {
+                let udf = SparkUnixTimestamp::new(Arc::from(session_timezone));
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::SparkDateFormat(gen::SparkDateFormatUdf { session_timezone }) => {
+                let udf = SparkDateFormat::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::StructFunction(gen::StructFunctionUdf { field_names }) => {
@@ -2203,13 +2208,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::TimestampNow(gen::TimestampNowUdf {
-                timezone,
+                session_timezone,
                 time_unit,
             }) => {
                 let time_unit = gen_datafusion_common::TimeUnit::from_str_name(time_unit.as_str())
                     .ok_or_else(|| plan_datafusion_err!("invalid time unit: {time_unit}"))?;
                 let time_unit: TimeUnit = time_unit.into();
-                let udf = TimestampNow::new(Arc::from(timezone), time_unit);
+                let udf = TimestampNow::new(Arc::from(session_timezone), time_unit);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone, is_try }) => {
@@ -2218,6 +2223,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             UdfKind::SparkDate(gen::SparkDateUdf { is_try }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkDate::new(is_try))));
+            }
+            UdfKind::SparkTryToTimestamp(gen::SparkTryToTimestampUdf { timezone }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkTryToTimestamp::try_new(
+                    timezone.map(Arc::from),
+                ))));
             }
             UdfKind::SparkTime(gen::SparkTimeUdf { is_try }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkTime::new(is_try))));
@@ -2397,6 +2407,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_conv" | "conv" => Ok(Arc::new(ScalarUDF::from(SparkConv::new()))),
             "spark_signum" | "signum" => Ok(Arc::new(ScalarUDF::from(SparkSignum::new()))),
             "spark_last_day" | "last_day" => Ok(Arc::new(ScalarUDF::from(SparkLastDay::new()))),
+            "spark_date_part" | "date_part" | "datepart" | "extract" => {
+                Ok(Arc::new(ScalarUDF::from(SparkDatePart::new())))
+            }
             "spark_year" | "year" => Ok(Arc::new(ScalarUDF::from(SparkYear::new()))),
             "spark_luhn_check" | "luhn_check" => {
                 Ok(Arc::new(ScalarUDF::from(SparkLuhnCheck::new())))
@@ -2431,7 +2444,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_calendar_interval" => {
                 Ok(Arc::new(ScalarUDF::from(SparkCalendarInterval::new())))
             }
-            "spark_to_chrono_fmt" => Ok(Arc::new(ScalarUDF::from(SparkToChronoFmt::new()))),
+            "spark_date_format" | "date_format" => {
+                // Use UTC as default timezone when creating from name only
+                Ok(Arc::new(ScalarUDF::from(SparkDateFormat::new(Arc::from(
+                    "UTC",
+                )))))
+            }
             "spark_try_to_timestamp" | "try_to_timestamp" => {
                 Ok(Arc::new(ScalarUDF::from(SparkTryToTimestamp::new())))
             }
@@ -2517,6 +2535,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkConcat>()
             || node_inner.is::<SparkConv>()
             || node_inner.is::<SparkCrc32>()
+            || node_inner.is::<SparkDatePart>()
             || node_inner.is::<SparkDateTrunc>()
             || node_inner.is::<SparkDayTimeInterval>()
             || node_inner.is::<SparkDecode>()
@@ -2555,7 +2574,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkSentences>()
             || node_inner.is::<SparkSplit>()
             || node_inner.is::<SparkToBinary>()
-            || node_inner.is::<SparkToChronoFmt>()
             || node_inner.is::<SparkToLargeUtf8>()
             || node_inner.is::<SparkToUtf8>()
             || node_inner.is::<SparkToUtf8View>()
@@ -2568,7 +2586,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkTryParseUrl>()
             || node_inner.is::<SparkTrySubtract>()
             || node_inner.is::<SparkTryToBinary>()
-            || node_inner.is::<SparkTryToTimestamp>()
             || node_inner.is::<HllSketchEstimateFunction>()
             || node_inner.is::<HllUnionFunction>()
             || node_inner.is::<ThetaDifferenceFunction>()
@@ -2649,9 +2666,16 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkToXml>() {
             let session_timezone = func.session_timezone().to_string();
             UdfKind::SparkToXml(gen::SparkToXmlUdf { session_timezone })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkTimestamp>() {
+            let timezone = func.timezone().map(|x| x.to_string());
+            let is_try = func.is_try();
+            UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone, is_try })
         } else if let Some(func) = node.inner().downcast_ref::<SparkUnixTimestamp>() {
-            let timezone = func.timezone().to_string();
-            UdfKind::SparkUnixTimestamp(gen::SparkUnixTimestampUdf { timezone })
+            let session_timezone = func.session_timezone().to_string();
+            UdfKind::SparkUnixTimestamp(gen::SparkUnixTimestampUdf { session_timezone })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkDateFormat>() {
+            let session_timezone = func.session_timezone().to_string();
+            UdfKind::SparkDateFormat(gen::SparkDateFormatUdf { session_timezone })
         } else if let Some(func) = node.inner().downcast_ref::<StructFunction>() {
             let field_names = func.field_names().to_vec();
             UdfKind::StructFunction(gen::StructFunctionUdf { field_names })
@@ -2662,20 +2686,19 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             let field_names = func.field_names().to_vec();
             UdfKind::UpdateStructField(gen::UpdateStructFieldUdf { field_names })
         } else if let Some(func) = node.inner().downcast_ref::<TimestampNow>() {
-            let timezone = func.timezone().to_string();
+            let session_timezone = func.session_timezone().to_string();
             let time_unit: gen_datafusion_common::TimeUnit = func.time_unit().into();
             let time_unit = time_unit.as_str_name().to_string();
             UdfKind::TimestampNow(gen::TimestampNowUdf {
-                timezone,
+                session_timezone,
                 time_unit,
             })
-        } else if let Some(func) = node.inner().downcast_ref::<SparkTimestamp>() {
-            let timezone = func.timezone().map(|x| x.to_string());
-            let is_try = func.is_try();
-            UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone, is_try })
         } else if let Some(func) = node.inner().downcast_ref::<SparkDate>() {
             let is_try = func.is_try();
             UdfKind::SparkDate(gen::SparkDateUdf { is_try })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkTryToTimestamp>() {
+            let timezone = func.timezone().map(|x| x.to_string());
+            UdfKind::SparkTryToTimestamp(gen::SparkTryToTimestampUdf { timezone })
         } else if let Some(func) = node.inner().downcast_ref::<SparkTime>() {
             let is_try = func.is_try();
             UdfKind::SparkTime(gen::SparkTimeUdf { is_try })
@@ -4102,6 +4125,12 @@ mod tests {
         codec.try_decode_udf(&name, &buf)
     }
 
+    fn downcast_udf<'a, T: ScalarUDFImpl>(udf: &'a ScalarUDF, name: &str) -> Result<&'a T> {
+        udf.inner()
+            .downcast_ref::<T>()
+            .ok_or_else(|| plan_datafusion_err!("decoded UDF should be {name}"))
+    }
+
     #[test]
     fn test_round_trip_spark_variant_explode_helper_udf() -> Result<()> {
         let decoded = round_trip_udf(ScalarUDF::from(SparkVariantExplodeUdf::new()))?;
@@ -4842,7 +4871,6 @@ mod tests {
             count_hofs(&decoded)? >= 2,
             "expected at least 2 HigherOrderFunctionExpr nodes"
         );
-
         assert_same_result(&physical, &decoded, schema_ref, vec![Arc::new(list)])
     }
 
@@ -4921,7 +4949,70 @@ mod tests {
             count_hofs(&decoded)? >= 2,
             "expected at least 2 HigherOrderFunctionExpr nodes"
         );
-
         assert_same_result(&physical, &decoded, schema_ref, vec![Arc::new(arr2d)])
+    }
+
+    #[test]
+    fn test_round_trip_spark_timestamp_preserves_options() -> Result<()> {
+        let udf = SparkTimestamp::try_new(Some(Arc::from("America/Los_Angeles")), true)?;
+        let decoded = round_trip_udf(ScalarUDF::from(udf))?;
+
+        let decoded = downcast_udf::<SparkTimestamp>(&decoded, "SparkTimestamp")?;
+        assert_eq!(decoded.timezone(), Some("America/Los_Angeles"));
+        assert!(decoded.is_try());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_date_preserves_options() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkDate::new(true)))?;
+
+        let decoded = downcast_udf::<SparkDate>(&decoded, "SparkDate")?;
+        assert!(decoded.is_try());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_try_to_timestamp_preserves_options() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkTryToTimestamp::try_new(Some(
+            Arc::from("America/Los_Angeles"),
+        ))))?;
+
+        let decoded = downcast_udf::<SparkTryToTimestamp>(&decoded, "SparkTryToTimestamp")?;
+        assert_eq!(decoded.timezone(), Some("America/Los_Angeles"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_unix_timestamp_preserves_options() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkUnixTimestamp::new(Arc::from(
+            "America/Los_Angeles",
+        ))))?;
+
+        let decoded = downcast_udf::<SparkUnixTimestamp>(&decoded, "SparkUnixTimestamp")?;
+        assert_eq!(decoded.session_timezone(), "America/Los_Angeles");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_date_format_round_trip() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkDateFormat::new(Arc::from("UTC"))))?;
+
+        assert!(decoded.inner().downcast_ref::<SparkDateFormat>().is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_date_part_standard_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkDatePart::new()))?;
+
+        assert!(decoded.inner().downcast_ref::<SparkDatePart>().is_some());
+        assert_eq!(decoded.name(), "date_part");
+
+        Ok(())
     }
 }

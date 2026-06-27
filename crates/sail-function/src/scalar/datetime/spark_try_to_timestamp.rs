@@ -1,12 +1,14 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
-use datafusion::functions::datetime::to_timestamp::ToTimestampMicrosFunc;
-use datafusion_common::{plan_err, Result, ScalarValue};
+use datafusion_common::{plan_err, Result};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+
+use crate::scalar::datetime::spark_timestamp::SparkTimestamp;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkTryToTimestamp {
+    timezone: Option<Arc<str>>,
     signature: Signature,
 }
 
@@ -18,9 +20,18 @@ impl Default for SparkTryToTimestamp {
 
 impl SparkTryToTimestamp {
     pub fn new() -> Self {
+        Self::try_new(None)
+    }
+
+    pub fn try_new(timezone: Option<Arc<str>>) -> Self {
         Self {
+            timezone,
             signature: Signature::variadic_any(Volatility::Immutable),
         }
+    }
+
+    pub fn timezone(&self) -> Option<&str> {
+        self.timezone.as_deref()
     }
 }
 
@@ -47,22 +58,9 @@ impl ScalarUDFImpl for SparkTryToTimestamp {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let [first, ..] = args.args.as_slice() else {
-            return plan_err!("`try_to_timestamp` function requires at least 1 argument");
-        };
-        let data_type = first.data_type();
-        let result = ToTimestampMicrosFunc::new_with_config(args.config_options.as_ref())
-            .invoke_with_args(args);
-        match result {
-            Ok(result) => Ok(result),
-            Err(_) => match data_type {
-                DataType::Timestamp(_, Some(tz)) => Ok(ColumnarValue::Scalar(
-                    ScalarValue::TimestampMicrosecond(None, Some(tz)),
-                )),
-                _ => Ok(ColumnarValue::Scalar(ScalarValue::TimestampMicrosecond(
-                    None, None,
-                ))),
-            },
-        }
+        // Delegate to SparkTimestamp with is_try=true
+        // This will return NULL on parse failure instead of raising an error
+        let spark_timestamp = SparkTimestamp::try_new(self.timezone.clone(), true)?;
+        spark_timestamp.invoke_with_args(args)
     }
 }
