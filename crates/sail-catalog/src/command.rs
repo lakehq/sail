@@ -72,6 +72,11 @@ pub enum CatalogCommand {
         database: Vec<String>,
         pattern: String,
     },
+    ShowFunctions {
+        database: Vec<String>,
+        pattern: Option<String>,
+        system_functions: Vec<String>,
+    },
     ListTables {
         database: Vec<String>,
         pattern: Option<String>,
@@ -101,6 +106,7 @@ pub enum CatalogCommand {
     ListFunctions {
         database: Vec<String>,
         pattern: Option<String>,
+        system_functions: Vec<String>,
     },
     DropFunction {
         function: Vec<String>,
@@ -168,6 +174,7 @@ impl CatalogCommand {
             CatalogCommand::GetTable { .. } => "GetTable",
             CatalogCommand::ShowTables { .. } => "ShowTables",
             CatalogCommand::ShowTableExtended { .. } => "ShowTableExtended",
+            CatalogCommand::ShowFunctions { .. } => "ShowFunctions",
             CatalogCommand::ListTables { .. } => "ListTables",
             CatalogCommand::ListViews { .. } => "ListViews",
             CatalogCommand::DropTable { .. } => "DropTable",
@@ -204,6 +211,9 @@ impl CatalogCommand {
             }
             CatalogCommand::ShowTableExtended { .. } => {
                 ArrowSerializer::default().schema::<ShowTableExtendedRow>()?
+            }
+            CatalogCommand::ShowFunctions { .. } => {
+                ArrowSerializer::default().schema::<ShowFunctionsRow>()?
             }
             CatalogCommand::ListColumns { .. } => display.table_columns().schema()?,
             CatalogCommand::GetFunction { .. } | CatalogCommand::ListFunctions { .. } => {
@@ -378,6 +388,19 @@ impl CatalogCommand {
                     .collect::<CatalogResult<Vec<_>>>()?;
                 ArrowSerializer::default().build_record_batch(&rows)?
             }
+            CatalogCommand::ShowFunctions {
+                database,
+                pattern,
+                system_functions,
+            } => {
+                let rows = manager
+                    .list_functions(&database, pattern.as_deref(), &system_functions)
+                    .await?
+                    .into_iter()
+                    .map(|function| ShowFunctionsRow { function })
+                    .collect::<Vec<_>>();
+                ArrowSerializer::default().build_record_batch(&rows)?
+            }
             CatalogCommand::ListTables { database, pattern } => {
                 let rows = manager
                     .list_tables_and_views(&database, pattern.as_deref())
@@ -546,8 +569,15 @@ impl CatalogCommand {
             CatalogCommand::GetFunction { .. } => {
                 return Err(CatalogError::NotSupported("get function".to_string()));
             }
-            CatalogCommand::ListFunctions { .. } => {
-                return Err(CatalogError::NotSupported("list functions".to_string()));
+            CatalogCommand::ListFunctions {
+                database,
+                pattern,
+                system_functions,
+            } => {
+                let rows = manager
+                    .list_functions(&database, pattern.as_deref(), &system_functions)
+                    .await?;
+                display.functions().to_record_batch(rows)?
             }
             CatalogCommand::DropFunction {
                 function,
@@ -986,6 +1016,11 @@ struct ShowTableExtendedRow {
     table_name: String,
     is_temporary: bool,
     information: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ShowFunctionsRow {
+    function: String,
 }
 
 #[cfg(test)]

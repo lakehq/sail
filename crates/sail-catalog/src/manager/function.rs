@@ -6,6 +6,7 @@ use datafusion_expr::ScalarUDF;
 use crate::command::CatalogTableFunction;
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::manager::CatalogManager;
+use crate::utils::{filter_pattern, match_pattern};
 
 impl CatalogManager {
     fn canonical_function_name(name: &str) -> Arc<str> {
@@ -23,6 +24,33 @@ impl CatalogManager {
         let state = self.state()?;
         let name = Self::canonical_function_name(name.as_ref());
         Ok(state.functions.get(&name).cloned())
+    }
+
+    pub async fn list_functions<T: AsRef<str>>(
+        &self,
+        database: &[T],
+        pattern: Option<&str>,
+        system_functions: &[String],
+    ) -> CatalogResult<Vec<String>> {
+        let _ = self.get_database_by_qualifier(database).await?;
+        let state = self.state()?;
+        let mut functions = filter_pattern(
+            system_functions
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            pattern,
+        );
+        functions.extend(
+            state
+                .functions
+                .keys()
+                .filter(|name| match_pattern(name.as_ref(), pattern))
+                .map(|name| name.to_string()),
+        );
+        functions.sort();
+        functions.dedup();
+        Ok(functions)
     }
 
     pub fn register_table_function(

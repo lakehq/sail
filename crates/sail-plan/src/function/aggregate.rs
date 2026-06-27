@@ -765,3 +765,7 @@ pub(crate) fn get_built_in_aggregate_function(name: &str) -> PlanResult<AggFunct
         .ok_or_else(|| PlanError::unsupported(format!("unknown aggregate function: {name}")))?
         .clone())
 }
+
+pub(crate) fn list_built_in_aggregate_function_names() -> Vec<&'static str> {
+    BUILT_IN_AGGREGATE_FUNCTIONS.keys().copied().collect()
+}

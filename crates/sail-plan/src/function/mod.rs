@@ -29,6 +29,8 @@ lazy_static! {
         HashMap::from_iter(table::list_built_in_table_functions());
 }
 
+const BUILT_IN_OPERATOR_FUNCTION_NAMES: &[&str] = &["<>", "between", "||"];
+
 pub fn get_built_in_function(name: &str) -> PlanResult<ScalarFunction> {
     Ok(BUILT_IN_SCALAR_FUNCTIONS
         .get(name)
@@ -46,6 +48,21 @@ pub fn get_built_in_table_function(name: &str) -> PlanResult<Arc<TableFunction>>
 
 pub fn is_built_in_generator_function(name: &str) -> bool {
     BUILT_IN_GENERATOR_FUNCTIONS.contains_key(name)
+}
+
+pub(crate) fn list_built_in_function_names() -> Vec<String> {
+    let mut names = BUILT_IN_SCALAR_FUNCTIONS
+        .keys()
+        .chain(BUILT_IN_GENERATOR_FUNCTIONS.keys())
+        .chain(BUILT_IN_TABLE_FUNCTIONS.keys())
+        .copied()
+        .collect::<Vec<_>>();
+    names.extend(aggregate::list_built_in_aggregate_function_names());
+    names.extend(window::list_built_in_window_function_names());
+    names.extend(BUILT_IN_OPERATOR_FUNCTION_NAMES.iter().copied());
+    names.sort_unstable();
+    names.dedup();
+    names.into_iter().map(str::to_string).collect()
 }
 
 pub use generator::get_outer_built_in_generator_functions;

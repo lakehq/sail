@@ -533,7 +533,13 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
-        Statement::ShowFunctions { .. } => Err(SqlError::todo("SHOW FUNCTIONS")),
+        Statement::ShowFunctions { .. } => {
+            let node = spec::CommandNode::ShowFunctions {
+                database: None,
+                pattern: None,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::Explain {
             explain: _,
             format,
