@@ -20,7 +20,8 @@ def test_list_functions_returns_spark_function_fields(spark):
         "className",
         "isTemporary",
     )
-    assert "Signatures: to_date(expr)" in function.description
+    assert "Signatures: to_date(date_str[, fmt])" in function.description
+    assert "Parses" in function.description
 
 
 def test_list_functions_includes_built_ins(spark):
@@ -34,6 +35,12 @@ def test_list_functions_includes_built_ins(spark):
         "window",
         "||",
     }.issubset(names)
+
+
+def test_list_functions_has_metadata_for_built_ins(spark):
+    functions = spark.catalog.listFunctions()
+    missing = sorted(f.name for f in functions if not f.isTemporary and not f.description)
+    assert missing == []
 
 
 def test_list_functions_respects_database_and_pattern(spark):

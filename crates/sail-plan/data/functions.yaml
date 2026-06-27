@@ -1,108 +1,2078 @@
+- name: "!"
+  signatures:
+    - "! expr"
+  description: "Logical not."
+- name: "!="
+  signatures:
+    - "expr1 != expr2"
+  description: "Returns true if expr1 is not equal to expr2, or false otherwise."
 - name: "%"
   signatures:
-    - "%(left, right)"
-  description: Returns the remainder after dividing left by right.
+    - "expr1 % expr2, or mod(expr1, expr2)"
+  description: "Returns the remainder after expr1/expr2."
+- name: "&"
+  signatures:
+    - "expr1 & expr2"
+  description: "Returns the result of bitwise AND of expr1 and expr2."
 - name: "*"
   signatures:
-    - "*(left, right)"
-  description: Multiplies two numeric values.
+    - "expr1 * expr2"
+  description: "Returns expr1*expr2."
 - name: "+"
   signatures:
-    - "+(left, right)"
-  description: Adds two values.
+    - "expr1 + expr2"
+  description: "Returns expr1+expr2."
 - name: "-"
   signatures:
-    - "-(left, right)"
-  description: Subtracts right from left.
+    - "expr1 - expr2"
+  description: "Returns expr1-expr2."
 - name: "/"
   signatures:
-    - "/(left, right)"
-  description: Divides left by right.
+    - "expr1 / expr2"
+  description: "Returns expr1/expr2. It always performs floating point division."
+- name: "<"
+  signatures:
+    - "expr1 < expr2"
+  description: "Returns true if expr1 is less than expr2."
+- name: "<<"
+  signatures:
+    - "base << exp"
+  description: "Bitwise left shift."
+- name: "<="
+  signatures:
+    - "expr1 <= expr2"
+  description: "Returns true if expr1 is less than or equal to expr2."
+- name: "<=>"
+  signatures:
+    - "expr1 <=> expr2"
+  description: "Returns same result as the EQUAL(=) operator for non-null operands, but returns true if both are null, false if one of the them is null."
 - name: "<>"
   signatures:
-    - "<>(left, right)"
-  description: Returns true when left and right are not equal.
+    - "expr1 != expr2"
+  description: "Returns true if expr1 is not equal to expr2, or false otherwise."
+- name: "="
+  signatures:
+    - "expr1 = expr2"
+  description: "Returns true if expr1 equals expr2, or false otherwise."
+- name: "=="
+  signatures:
+    - "expr1 == expr2"
+  description: "Returns true if expr1 equals expr2, or false otherwise."
+- name: ">"
+  signatures:
+    - "expr1 > expr2"
+  description: "Returns true if expr1 is greater than expr2."
+- name: ">="
+  signatures:
+    - "expr1 >= expr2"
+  description: "Returns true if expr1 is greater than or equal to expr2."
+- name: ">>"
+  signatures:
+    - "base >> expr"
+  description: "Bitwise (signed) right shift."
+- name: ">>>"
+  signatures:
+    - "base >>> expr"
+  description: "Bitwise unsigned right shift."
+- name: "^"
+  signatures:
+    - "expr1 ^ expr2"
+  description: "Returns the result of bitwise exclusive OR of expr1 and expr2."
+- name: abs
+  signatures:
+    - "abs(expr)"
+  description: "Returns the absolute value of the numeric or interval value."
+- name: acos
+  signatures:
+    - "acos(expr)"
+  description: "Returns the inverse cosine (a.k.a. arc cosine) of expr, as if computed by java.lang.Math.acos."
+- name: acosh
+  signatures:
+    - "acosh(expr)"
+  description: "Returns inverse hyperbolic cosine of expr."
+- name: add_days
+  signatures:
+    - "add_days(start_date, num_days)"
+  description: "Returns the date that is num_days after start_date."
+- name: add_months
+  signatures:
+    - "add_months(start_date, num_months)"
+  description: "Returns the date that is num_months after start_date."
+- name: add_years
+  signatures:
+    - "add_years(start_date, num_years)"
+  description: "Returns the date that is num_years after start_date."
+- name: aes_decrypt
+  signatures:
+    - "aes_decrypt(expr, key[, mode[, padding[, aad]]])"
+  description: "Returns a decrypted value of expr using AES in mode with padding. Key lengths of 16, 24 and 32 bits are supported. Supported combinations of (mode, padding) are ('ECB', 'PKCS'), ('GCM', 'NONE') and ('CBC', 'PKCS'). Optional additional authenticated data (AAD) is only supported for GCM. If provided for encryption, the identical AAD value must be provided for decryption. The default mode is GCM."
+- name: aes_encrypt
+  signatures:
+    - "aes_encrypt(expr, key[, mode[, padding[, iv[, aad]]]])"
+  description: "Returns an encrypted value of expr using AES in given mode with the specified padding. Key lengths of 16, 24 and 32 bits are supported. Supported combinations of (mode, padding) are ('ECB', 'PKCS'), ('GCM', 'NONE') and ('CBC', 'PKCS'). Optional initialization vectors (IVs) are only supported for CBC and GCM modes. These must be 16 bytes for CBC and 12 bytes for GCM. If not provided, a random vector will be generated and prepended to the output. Optional additional authenticated data (AAD) is only supported for GCM. If provided for encryption, the identical AAD value must be provided for decryption. The default mode is GCM."
+- name: aggregate
+  signatures:
+    - "aggregate(expr, start, merge, finish)"
+  description: "Applies a binary operator to an initial state and all elements in the array, and reduces this to a single state. The final state is converted into the final result by applying a finish function."
+- name: and
+  signatures:
+    - "expr1 and expr2"
+  description: "Logical AND."
+- name: any
+  signatures:
+    - "any(expr)"
+  description: "Returns true if at least one value of expr is true."
+- name: any_value
+  signatures:
+    - "any_value(expr[, isIgnoreNull])"
+  description: "Returns some value of expr for a group of rows. If isIgnoreNull is true, returns only non-null values."
+- name: approx_count_distinct
+  signatures:
+    - "approx_count_distinct(expr[, relativeSD])"
+  description: "Returns the estimated cardinality by HyperLogLog++. relativeSD defines the maximum relative standard deviation allowed."
+- name: approx_percentile
+  signatures:
+    - "approx_percentile(col, percentage [, accuracy])"
+  description: "Returns the approximate percentile of the numeric or ansi interval column col which is the smallest value in the ordered col values (sorted from least to greatest) such that no more than percentage of col values is less than the value or equal to that value. The value of percentage must be between 0.0 and 1.0. The accuracy parameter (default: 10000) is a positive numeric literal which controls approximation accuracy at the cost of memory. Higher value of accuracy yields better accuracy, 1.0/accuracy is the relative error of the approximation. When percentage is an array, each value of the percentage array must be between 0.0 and 1.0. In this case, returns the approximate percentile array of column col at the given percentage array."
+- name: array
+  signatures:
+    - "array(expr, ...)"
+  description: "Returns an array with the given elements."
+- name: array_agg
+  signatures:
+    - "array_agg(expr)"
+  description: "Collects and returns a list of non-unique elements."
+- name: array_append
+  signatures:
+    - "array_append(array, element)"
+  description: "Add the element at the end of the array passed as first argument. Type of element should be similar to type of the elements of the array. Null element is also appended into the array. But if the array passed, is NULL output is NULL"
+- name: array_compact
+  signatures:
+    - "array_compact(array)"
+  description: "Removes null values from the array."
+- name: array_concat
+  signatures:
+    - "array_concat(array, ...)"
+  description: "Concatenates input arrays and returns the resulting array."
+- name: array_contains
+  signatures:
+    - "array_contains(array, value)"
+  description: "Returns true if the array contains the value."
+- name: array_contains_all
+  signatures:
+    - "array_contains_all(array, values)"
+  description: "Returns true if array contains every element in values."
+- name: array_distinct
+  signatures:
+    - "array_distinct(array)"
+  description: "Removes duplicate values from the array."
+- name: array_except
+  signatures:
+    - "array_except(array1, array2)"
+  description: "Returns an array of the elements in array1 but not in array2, without duplicates."
+- name: array_insert
+  signatures:
+    - "array_insert(x, pos, val)"
+  description: "Places val into index pos of array x. Array indices start at 1. The maximum negative index is -1 for which the function inserts new element after the current last element. Index above array size appends the array, or prepends the array if index is negative, with 'null' elements."
+- name: array_intersect
+  signatures:
+    - "array_intersect(array1, array2)"
+  description: "Returns an array of the elements in the intersection of array1 and array2, without duplicates."
+- name: array_join
+  signatures:
+    - "array_join(array, delimiter[, nullReplacement])"
+  description: "Concatenates the elements of the given array using the delimiter and an optional string to replace nulls. If no value is set for nullReplacement, any null value is filtered."
+- name: array_max
+  signatures:
+    - "array_max(array)"
+  description: "Returns the maximum value in the array. NaN is greater than any non-NaN elements for double/float type. NULL elements are skipped."
+- name: array_min
+  signatures:
+    - "array_min(array)"
+  description: "Returns the minimum value in the array. NaN is greater than any non-NaN elements for double/float type. NULL elements are skipped."
+- name: array_position
+  signatures:
+    - "array_position(array, element)"
+  description: "Returns the (1-based) index of the first matching element of the array as long, or 0 if no match is found."
+- name: array_prepend
+  signatures:
+    - "array_prepend(array, element)"
+  description: "Add the element at the beginning of the array passed as first argument. Type of element should be the same as the type of the elements of the array. Null element is also prepended to the array. But if the array passed is NULL output is NULL"
+- name: array_remove
+  signatures:
+    - "array_remove(array, element)"
+  description: "Remove all elements that equal to element from array."
+- name: array_repeat
+  signatures:
+    - "array_repeat(element, count)"
+  description: "Returns the array containing element count times."
+- name: array_size
+  signatures:
+    - "array_size(expr)"
+  description: "Returns the size of an array. The function returns null for null input."
+- name: array_sort
+  signatures:
+    - "array_sort(expr, func)"
+  description: "Sorts the input array. If func is omitted, sort in ascending order. The elements of the input array must be orderable. NaN is greater than any non-NaN elements for double/float type. Null elements will be placed at the end of the returned array. Since 3.0.0 this function also sorts and returns the array based on the given comparator function. The comparator will take two arguments representing two elements of the array. It returns a negative integer, 0, or a positive integer as the first element is less than, equal to, or greater than the second element. If the comparator function returns null, the function will fail and raise an error."
+- name: array_union
+  signatures:
+    - "array_union(array1, array2)"
+  description: "Returns an array of the elements in the union of array1 and array2, without duplicates."
+- name: arrays_overlap
+  signatures:
+    - "arrays_overlap(a1, a2)"
+  description: "Returns true if a1 contains at least a non-null element present also in a2. If the arrays have no common element and they are both non-empty and either of them contains a null element null is returned, false otherwise."
+- name: arrays_zip
+  signatures:
+    - "arrays_zip(a1, a2, ...)"
+  description: "Returns a merged array of structs in which the N-th struct contains all N-th values of input arrays."
+- name: ascii
+  signatures:
+    - "ascii(str)"
+  description: "Returns the numeric value of the first character of str."
+- name: asin
+  signatures:
+    - "asin(expr)"
+  description: "Returns the inverse sine (a.k.a. arc sine) the arc sin of expr, as if computed by java.lang.Math.asin."
+- name: asinh
+  signatures:
+    - "asinh(expr)"
+  description: "Returns inverse hyperbolic sine of expr."
+- name: assert_true
+  signatures:
+    - "assert_true(expr [, message])"
+  description: "Throws an exception if expr is not true."
+- name: atan
+  signatures:
+    - "atan(expr)"
+  description: "Returns the inverse tangent (a.k.a. arc tangent) of expr, as if computed by java.lang.Math.atan"
+- name: atan2
+  signatures:
+    - "atan2(exprY, exprX)"
+  description: "Returns the angle in radians between the positive x-axis of a plane and the point given by the coordinates (exprX, exprY), as if computed by java.lang.Math.atan2."
+- name: atanh
+  signatures:
+    - "atanh(expr)"
+  description: "Returns inverse hyperbolic tangent of expr."
 - name: avg
   signatures:
-    - avg(expr)
-  description: Returns the mean value for a group.
+    - "avg(expr)"
+  description: "Returns the mean calculated from values of a group."
+- name: base64
+  signatures:
+    - "base64(bin)"
+  description: "Converts the argument from a binary bin to a base 64 string."
 - name: between
   signatures:
-    - between(expr, lower, upper)
-  description: Returns true when expr is greater than or equal to lower and less than or equal to upper.
+    - "input [NOT] between lower AND upper"
+  description: "evaluate if input is [not] in between lower and upper"
+- name: bigint
+  signatures:
+    - "bigint(expr)"
+  description: "Casts the value expr to the target data type bigint."
+- name: bin
+  signatures:
+    - "bin(expr)"
+  description: "Returns the string representation of the long value expr represented in binary."
+- name: binary
+  signatures:
+    - "binary(expr)"
+  description: "Casts the value expr to the target data type binary."
+- name: bit_and
+  signatures:
+    - "bit_and(expr)"
+  description: "Returns the bitwise AND of all non-null input values, or null if none."
+- name: bit_count
+  signatures:
+    - "bit_count(expr)"
+  description: "Returns the number of bits that are set in the argument expr as an unsigned 64-bit integer, or NULL if the argument is NULL."
+- name: bit_get
+  signatures:
+    - "bit_get(expr, pos)"
+  description: "Returns the value of the bit (0 or 1) at the specified position. The positions are numbered from right to left, starting at zero. The position argument cannot be negative."
+- name: bit_length
+  signatures:
+    - "bit_length(expr)"
+  description: "Returns the bit length of string data or number of bits of binary data."
+- name: bit_or
+  signatures:
+    - "bit_or(expr)"
+  description: "Returns the bitwise OR of all non-null input values, or null if none."
+- name: bit_xor
+  signatures:
+    - "bit_xor(expr)"
+  description: "Returns the bitwise XOR of all non-null input values, or null if none."
+- name: bitmap_and_agg
+  signatures:
+    - "bitmap_and_agg(child)"
+  description: "Returns a bitmap that is the bitwise AND of all of the bitmaps from the child expression. The input should be bitmaps created from bitmap_construct_agg()."
+- name: bitmap_bit_position
+  signatures:
+    - "bitmap_bit_position(child)"
+  description: "Returns the bit position for the given input child expression."
+- name: bitmap_bucket_number
+  signatures:
+    - "bitmap_bucket_number(child)"
+  description: "Returns the bucket number for the given input child expression."
+- name: bitmap_construct_agg
+  signatures:
+    - "bitmap_construct_agg(child)"
+  description: "Returns a bitmap with the positions of the bits set from all the values from the child expression. The child expression will most likely be bitmap_bit_position()."
+- name: bitmap_count
+  signatures:
+    - "bitmap_count(child)"
+  description: "Returns the number of set bits in the child bitmap."
+- name: bitmap_or_agg
+  signatures:
+    - "bitmap_or_agg(child)"
+  description: "Returns a bitmap that is the bitwise OR of all of the bitmaps from the child expression. The input should be bitmaps created from bitmap_construct_agg()."
+- name: bitwise_not
+  signatures:
+    - "bitwise_not(expr)"
+  description: "Returns the bitwise NOT of expr."
+- name: bool_and
+  signatures:
+    - "bool_and(expr)"
+  description: "Returns true if all values of expr are true."
+- name: bool_or
+  signatures:
+    - "bool_or(expr)"
+  description: "Returns true if at least one value of expr is true."
+- name: boolean
+  signatures:
+    - "boolean(expr)"
+  description: "Casts the value expr to the target data type boolean."
+- name: bround
+  signatures:
+    - "bround(expr, d)"
+  description: "Returns expr rounded to d decimal places using HALF_EVEN rounding mode."
+- name: btrim
+  signatures:
+    - "btrim(str)"
+  description: "Removes the leading and trailing space characters from str."
+- name: cardinality
+  signatures:
+    - "cardinality(expr)"
+  description: "Returns the size of an array or a map. This function returns -1 for null input only if spark.sql.ansi.enabled is false and spark.sql.legacy.sizeOfNull is true. Otherwise, it returns null for null input. With the default settings, the function returns null for null input."
+- name: case
+  signatures:
+    - "CASE expr1 WHEN expr2 THEN expr3 [WHEN expr4 THEN expr5]* [ELSE expr6] END"
+  description: "When expr1 = expr2, returns expr3; when expr1 = expr4, return expr5; else return expr6."
+- name: cast
+  signatures:
+    - "cast(expr AS type)"
+  description: "Casts the value expr to the target data type type. expr :: type alternative casting syntax is also supported."
+- name: cbrt
+  signatures:
+    - "cbrt(expr)"
+  description: "Returns the cube root of expr."
+- name: ceil
+  signatures:
+    - "ceil(expr[, scale])"
+  description: "Returns the smallest number after rounding up that is not smaller than expr. An optional scale parameter can be specified to control the rounding behavior."
+- name: ceiling
+  signatures:
+    - "ceiling(expr[, scale])"
+  description: "Returns the smallest number after rounding up that is not smaller than expr. An optional scale parameter can be specified to control the rounding behavior."
+- name: char
+  signatures:
+    - "char(expr)"
+  description: "Returns the ASCII character having the binary equivalent to expr. If n is larger than 256 the result is equivalent to chr(n % 256)"
+- name: char_length
+  signatures:
+    - "char_length(expr)"
+  description: "Returns the character length of string data or number of bytes of binary data. The length of string data includes the trailing spaces. The length of binary data includes binary zeros."
+- name: character_length
+  signatures:
+    - "character_length(expr)"
+  description: "Returns the character length of string data or number of bytes of binary data. The length of string data includes the trailing spaces. The length of binary data includes binary zeros."
+- name: chr
+  signatures:
+    - "chr(expr)"
+  description: "Returns the ASCII character having the binary equivalent to expr. If n is larger than 256 the result is equivalent to chr(n % 256)"
+- name: coalesce
+  signatures:
+    - "coalesce(expr1, expr2, ...)"
+  description: "Returns the first non-null argument if exists. Otherwise, null."
+- name: collate
+  signatures:
+    - "collate(expr, collationName)"
+  description: "Marks a given expression with the specified collation."
+- name: collation
+  signatures:
+    - "collation(expr)"
+  description: "Returns the collation name of a given expression."
+- name: collect_list
+  signatures:
+    - "collect_list(expr)"
+  description: "Collects and returns a list of non-unique elements."
+- name: collect_set
+  signatures:
+    - "collect_set(expr)"
+  description: "Collects and returns a set of unique elements."
+- name: concat
+  signatures:
+    - "concat(col1, col2, ..., colN)"
+  description: "Returns the concatenation of col1, col2, ..., colN."
+- name: concat_ws
+  signatures:
+    - "concat_ws(sep[, str | array(str)]+)"
+  description: "Returns the concatenation of the strings separated by sep, skipping null values."
+- name: contains
+  signatures:
+    - "contains(left, right)"
+  description: "Returns a boolean. The value is True if right is found inside left. Returns NULL if either input expression is NULL. Otherwise, returns False. Both left or right must be of STRING or BINARY type."
+- name: conv
+  signatures:
+    - "conv(num, from_base, to_base)"
+  description: "Convert num from from_base to to_base."
+- name: convert_timezone
+  signatures:
+    - "convert_timezone([sourceTz, ]targetTz, sourceTs)"
+  description: "Converts the timestamp without time zone sourceTs from the sourceTz time zone to targetTz."
+- name: corr
+  signatures:
+    - "corr(expr1, expr2)"
+  description: "Returns Pearson coefficient of correlation between a set of number pairs."
+- name: cos
+  signatures:
+    - "cos(expr)"
+  description: "Returns the cosine of expr, as if computed by java.lang.Math.cos."
+- name: cosh
+  signatures:
+    - "cosh(expr)"
+  description: "Returns the hyperbolic cosine of expr, as if computed by java.lang.Math.cosh."
+- name: cot
+  signatures:
+    - "cot(expr)"
+  description: "Returns the cotangent of expr, as if computed by 1/java.lang.Math.tan."
 - name: count
   signatures:
-    - count(*)
-    - count(expr)
-  description: Returns the number of rows or non-null values for a group.
+    - "count(*)"
+  description: "Returns the total number of retrieved rows, including rows containing null."
+- name: count_if
+  signatures:
+    - "count_if(expr)"
+  description: "Returns the number of TRUE values for the expression."
+- name: count_min_sketch
+  signatures:
+    - "count_min_sketch(col, eps, confidence, seed)"
+  description: "Returns a count-min sketch of a column with the given esp, confidence and seed. The result is an array of bytes, which can be deserialized to a CountMinSketch before usage. Count-min sketch is a probabilistic data structure used for cardinality estimation using sub-linear space."
+- name: covar_pop
+  signatures:
+    - "covar_pop(expr1, expr2)"
+  description: "Returns the population covariance of a set of number pairs."
+- name: covar_samp
+  signatures:
+    - "covar_samp(expr1, expr2)"
+  description: "Returns the sample covariance of a set of number pairs."
+- name: crc32
+  signatures:
+    - "crc32(expr)"
+  description: "Returns a cyclic redundancy check value of the expr as a bigint."
+- name: csc
+  signatures:
+    - "csc(expr)"
+  description: "Returns the cosecant of expr, as if computed by 1/java.lang.Math.sin."
+- name: cume_dist
+  signatures:
+    - "cume_dist()"
+  description: "Computes the position of a value relative to all values in the partition."
+- name: curdate
+  signatures:
+    - "curdate()"
+  description: "Returns the current date at the start of query evaluation. All calls of curdate within the same query return the same value."
+- name: current_catalog
+  signatures:
+    - "current_catalog()"
+  description: "Returns the current catalog."
 - name: current_database
   signatures:
-    - current_database()
-  description: Returns the current database.
+    - "current_database()"
+  description: "Returns the current database."
+- name: current_date
+  signatures:
+    - "current_date()"
+  description: "Returns the current date at the start of query evaluation. All calls of current_date within the same query return the same value."
+- name: current_schema
+  signatures:
+    - "current_schema()"
+  description: "Returns the current database."
+- name: current_time
+  signatures:
+    - "current_time([precision])"
+  description: "Returns the current time at the start of query evaluation. All calls of current_time within the same query return the same value."
+- name: current_timestamp
+  signatures:
+    - "current_timestamp()"
+  description: "Returns the current timestamp at the start of query evaluation. All calls of current_timestamp within the same query return the same value."
+- name: current_timezone
+  signatures:
+    - "current_timezone()"
+  description: "Returns the current session local timezone."
+- name: current_user
+  signatures:
+    - "current_user()"
+  description: "user name of current execution context."
+- name: date
+  signatures:
+    - "date(expr)"
+  description: "Casts the value expr to the target data type date."
+- name: date_add
+  signatures:
+    - "date_add(start_date, num_days)"
+  description: "Returns the date that is num_days after start_date."
+- name: date_diff
+  signatures:
+    - "date_diff(endDate, startDate)"
+  description: "Returns the number of days from startDate to endDate."
+- name: date_format
+  signatures:
+    - "date_format(timestamp, fmt)"
+  description: "Converts timestamp to a value of string in the format specified by the date format fmt."
+- name: date_from_unix_date
+  signatures:
+    - "date_from_unix_date(days)"
+  description: "Create date from the number of days since 1970-01-01."
+- name: date_part
+  signatures:
+    - "date_part(field, source)"
+  description: "Extracts a part of the date/timestamp or interval source."
+- name: date_sub
+  signatures:
+    - "date_sub(start_date, num_days)"
+  description: "Returns the date that is num_days before start_date."
+- name: date_trunc
+  signatures:
+    - "date_trunc(fmt, ts)"
+  description: "Returns timestamp ts truncated to the unit specified by the format model fmt."
+- name: dateadd
+  signatures:
+    - "dateadd(start_date, num_days)"
+  description: "Returns the date that is num_days after start_date."
+- name: datediff
+  signatures:
+    - "datediff(endDate, startDate)"
+  description: "Returns the number of days from startDate to endDate."
+- name: datepart
+  signatures:
+    - "datepart(field, source)"
+  description: "Extracts a part of the date/timestamp or interval source."
+- name: day
+  signatures:
+    - "day(date)"
+  description: "Returns the day of month of the date/timestamp."
+- name: dayname
+  signatures:
+    - "dayname(date)"
+  description: "Returns the three-letter abbreviated day name from the given date."
+- name: dayofmonth
+  signatures:
+    - "dayofmonth(date)"
+  description: "Returns the day of month of the date/timestamp."
+- name: dayofweek
+  signatures:
+    - "dayofweek(date)"
+  description: "Returns the day of the week for date/timestamp (1 = Sunday, 2 = Monday, ..., 7 = Saturday)."
+- name: dayofyear
+  signatures:
+    - "dayofyear(date)"
+  description: "Returns the day of year of the date/timestamp."
+- name: decimal
+  signatures:
+    - "decimal(expr)"
+  description: "Casts the value expr to the target data type decimal."
+- name: decode
+  signatures:
+    - "decode(bin, charset)"
+  description: "Decodes the first argument using the second argument character set. If either argument is null, the result will also be null."
+- name: deep_size
+  signatures:
+    - "deep_size(expr)"
+  description: "Returns the number of elements in an array or map."
+- name: degrees
+  signatures:
+    - "degrees(expr)"
+  description: "Converts radians to degrees."
 - name: dense_rank
   signatures:
-    - dense_rank()
-  description: Returns the rank of a row without gaps in an ordered window partition.
+    - "dense_rank()"
+  description: "Computes the rank of a value in a group of values. The result is one plus the previously assigned rank value. Unlike the function rank, dense_rank will not produce gaps in the ranking sequence."
+- name: div
+  signatures:
+    - "expr1 div expr2"
+  description: "Divide expr1 by expr2. It returns NULL if an operand is NULL or expr2 is 0. The result is casted to long."
+- name: double
+  signatures:
+    - "double(expr)"
+  description: "Casts the value expr to the target data type double."
+- name: e
+  signatures:
+    - "e()"
+  description: "Returns Euler's number, e."
+- name: element_at
+  signatures:
+    - "element_at(array, index)"
+  description: "Returns element of array at given (1-based) index. If Index is 0, Spark will throw an error. If index < 0, accesses elements from the last to the first. The function returns NULL if the index exceeds the length of the array and spark.sql.ansi.enabled is set to false. If spark.sql.ansi.enabled is set to true, it throws ArrayIndexOutOfBoundsException for invalid indices."
+- name: elt
+  signatures:
+    - "elt(n, input1, input2, ...)"
+  description: "Returns the n-th input, e.g., returns input2 when n is 2. The function returns NULL if the index exceeds the length of the array and spark.sql.ansi.enabled is set to false. If spark.sql.ansi.enabled is set to true, it throws ArrayIndexOutOfBoundsException for invalid indices."
+- name: encode
+  signatures:
+    - "encode(str, charset)"
+  description: "Encodes the first argument using the second argument character set. If either argument is null, the result will also be null."
+- name: endswith
+  signatures:
+    - "endswith(left, right)"
+  description: "Returns a boolean. The value is True if left ends with right. Returns NULL if either input expression is NULL. Otherwise, returns False. Both left or right must be of STRING or BINARY type."
+- name: equal_null
+  signatures:
+    - "equal_null(expr1, expr2)"
+  description: "Returns same result as the EQUAL(=) operator for non-null operands, but returns true if both are null, false if one of the them is null."
+- name: every
+  signatures:
+    - "every(expr)"
+  description: "Returns true if all values of expr are true."
+- name: exists
+  signatures:
+    - "exists(expr, pred)"
+  description: "Tests whether a predicate holds for one or more elements in the array."
+- name: exp
+  signatures:
+    - "exp(expr)"
+  description: "Returns e to the power of expr."
 - name: explode
   signatures:
-    - explode(expr)
-  description: Separates the elements of an array or map into multiple rows.
+    - "explode(expr)"
+  description: "Separates the elements of array expr into multiple rows, or the elements of map expr into multiple rows and columns. Unless specified otherwise, uses the default column name col for elements of the array or key and value for the elements of the map."
+- name: explode_outer
+  signatures:
+    - "explode_outer(expr)"
+  description: "Separates the elements of array expr into multiple rows, or the elements of map expr into multiple rows and columns. Unless specified otherwise, uses the default column name col for elements of the array or key and value for the elements of the map."
+- name: expm1
+  signatures:
+    - "expm1(expr)"
+  description: "Returns exp(expr) - 1."
+- name: extract
+  signatures:
+    - "extract(field FROM source)"
+  description: "Extracts a part of the date or timestamp or time or interval source."
+- name: factorial
+  signatures:
+    - "factorial(expr)"
+  description: "Returns the factorial of expr. expr is [0..20]. Otherwise, null."
+- name: filter
+  signatures:
+    - "filter(expr, func)"
+  description: "Filters the input array using the given predicate."
+- name: find_in_set
+  signatures:
+    - "find_in_set(str, str_array)"
+  description: "Returns the index (1-based) of the given string (str) in the comma-delimited list (str_array). Returns 0, if the string was not found or if the given string (str) contains a comma."
+- name: first
+  signatures:
+    - "first(expr[, isIgnoreNull])"
+  description: "Returns the first value of expr for a group of rows. If isIgnoreNull is true, returns only non-null values."
+- name: first_value
+  signatures:
+    - "first_value(expr[, isIgnoreNull])"
+  description: "Returns the first value of expr for a group of rows. If isIgnoreNull is true, returns only non-null values."
+- name: flatten
+  signatures:
+    - "flatten(arrayOfArrays)"
+  description: "Transforms an array of arrays into a single array."
+- name: float
+  signatures:
+    - "float(expr)"
+  description: "Casts the value expr to the target data type float."
+- name: floor
+  signatures:
+    - "floor(expr[, scale])"
+  description: "Returns the largest number after rounding down that is not greater than expr. An optional scale parameter can be specified to control the rounding behavior."
+- name: forall
+  signatures:
+    - "forall(expr, pred)"
+  description: "Tests whether a predicate holds for all elements in the array."
+- name: format_number
+  signatures:
+    - "format_number(expr1, expr2)"
+  description: "Formats the number expr1 like '#,###,###.##', rounded to expr2 decimal places. If expr2 is 0, the result has no decimal point or fractional part. expr2 also accept a user specified format. This is supposed to function like MySQL's FORMAT."
+- name: format_string
+  signatures:
+    - "format_string(strfmt, obj, ...)"
+  description: "Returns a formatted string from printf-style format strings."
+- name: from_avro
+  signatures:
+    - "from_avro(child, jsonFormatSchema, options)"
+  description: "Converts a binary Avro value into a Catalyst value."
+- name: from_csv
+  signatures:
+    - "from_csv(csvStr, schema[, options])"
+  description: "Returns a struct value with the given csvStr and schema."
+- name: from_json
+  signatures:
+    - "from_json(jsonStr, schema[, options])"
+  description: "Returns a struct value with the given jsonStr and schema."
+- name: from_protobuf
+  signatures:
+    - "from_protobuf(data, messageName, descFilePath, options)"
+  description: "Converts a binary Protobuf value into a Catalyst value."
+- name: from_unixtime
+  signatures:
+    - "from_unixtime(unix_time[, fmt])"
+  description: "Returns unix_time in the specified fmt."
+- name: from_utc_timestamp
+  signatures:
+    - "from_utc_timestamp(timestamp, timezone)"
+  description: "Given a timestamp like '2017-07-14 02:40:00.0', interprets it as a time in UTC, and renders that time as a timestamp in the given time zone. For example, 'GMT+1' would yield '2017-07-14 03:40:00.0'."
+- name: from_xml
+  signatures:
+    - "from_xml(xmlStr, schema[, options])"
+  description: "Returns a struct value with the given xmlStr and schema."
+- name: get
+  signatures:
+    - "get(array, index)"
+  description: "Returns element of array at given (0-based) index. If the index points outside of the array boundaries, then this function returns NULL."
+- name: get_json_object
+  signatures:
+    - "get_json_object(json_txt, path)"
+  description: "Extracts a json object from path."
+- name: getbit
+  signatures:
+    - "getbit(expr, pos)"
+  description: "Returns the value of the bit (0 or 1) at the specified position. The positions are numbered from right to left, starting at zero. The position argument cannot be negative."
+- name: greatest
+  signatures:
+    - "greatest(expr, ...)"
+  description: "Returns the greatest value of all parameters, skipping null values."
+- name: grouping
+  signatures:
+    - "grouping(col)"
+  description: "indicates whether a specified column in a GROUP BY is aggregated or not, returns 1 for aggregated or 0 for not aggregated in the result set.\","
+- name: grouping_id
+  signatures:
+    - "grouping_id([col1[, col2 ..]])"
+  description: "returns the level of grouping, equals to (grouping(c1) << (n-1)) + (grouping(c2) << (n-2)) + ... + grouping(cn)"
+- name: hash
+  signatures:
+    - "hash(expr1, expr2, ...)"
+  description: "Returns a hash value of the arguments."
+- name: hex
+  signatures:
+    - "hex(expr)"
+  description: "Converts expr to hexadecimal."
+- name: histogram_numeric
+  signatures:
+    - "histogram_numeric(expr, nb)"
+  description: "Computes a histogram on numeric 'expr' using nb bins. The return value is an array of (x,y) pairs representing the centers of the histogram's bins. As the value of 'nb' is increased, the histogram approximation gets finer-grained, but may yield artifacts around outliers. In practice, 20-40 histogram bins appear to work well, with more bins being required for skewed or smaller datasets. Note that this function creates a histogram with non-uniform bin widths. It offers no guarantees in terms of the mean-squared-error of the histogram, but in practice is comparable to the histograms produced by the R/S-Plus statistical computing packages. Note: the output type of the 'x' field in the return value is propagated from the input value consumed in the aggregate function."
+- name: hll_sketch_agg
+  signatures:
+    - "hll_sketch_agg(expr, lgConfigK)"
+  description: "Returns the HllSketch's updatable binary representation. lgConfigK (optional) the log-base-2 of K, with K is the number of buckets or slots for the HllSketch."
+- name: hll_sketch_estimate
+  signatures:
+    - "hll_sketch_estimate(expr)"
+  description: "Returns the estimated number of unique values given the binary representation of a Datasketches HllSketch."
+- name: hll_union
+  signatures:
+    - "hll_union(first, second, allowDifferentLgConfigK)"
+  description: "Merges two binary representations of Datasketches HllSketch objects, using a Datasketches Union object. Set allowDifferentLgConfigK to true to allow unions of sketches with different lgConfigK values (defaults to false)."
+- name: hll_union_agg
+  signatures:
+    - "hll_union_agg(expr, allowDifferentLgConfigK)"
+  description: "Returns the estimated number of unique values. allowDifferentLgConfigK (optional) Allow sketches with different lgConfigK values to be unioned (defaults to false)."
+- name: hour
+  signatures:
+    - "hour(expr)"
+  description: "Returns the hour component of the given expression."
+- name: hypot
+  signatures:
+    - "hypot(expr1, expr2)"
+  description: "Returns sqrt(expr1² + expr2²)."
+- name: if
+  signatures:
+    - "if(expr1, expr2, expr3)"
+  description: "If expr1 evaluates to true, then returns expr2; otherwise returns expr3."
+- name: ifnull
+  signatures:
+    - "ifnull(expr1, expr2)"
+  description: "Returns expr2 if expr1 is null, or expr1 otherwise."
+- name: ilike
+  signatures:
+    - "str ilike pattern[ ESCAPE escape]"
+  description: "Returns true if str matches pattern with escape case-insensitively, null if any arguments are null, false otherwise."
+- name: in
+  signatures:
+    - "expr1 in(expr2, expr3, ...)"
+  description: "Returns true if expr equals to any valN."
+- name: initcap
+  signatures:
+    - "initcap(str)"
+  description: "Returns str with the first letter of each word in uppercase. All other letters are in lowercase. Words are delimited by white space."
+- name: inline
+  signatures:
+    - "inline(expr)"
+  description: "Explodes an array of structs into a table. Uses column names col1, col2, etc. by default unless specified otherwise."
+- name: inline_outer
+  signatures:
+    - "inline_outer(expr)"
+  description: "Explodes an array of structs into a table. Uses column names col1, col2, etc. by default unless specified otherwise."
+- name: input_file_block_length
+  signatures:
+    - "input_file_block_length()"
+  description: "Returns the length of the block being read, or -1 if not available."
+- name: input_file_block_start
+  signatures:
+    - "input_file_block_start()"
+  description: "Returns the start offset of the block being read, or -1 if not available."
+- name: input_file_name
+  signatures:
+    - "input_file_name()"
+  description: "Returns the name of the file being read, or empty string if not available."
+- name: instr
+  signatures:
+    - "instr(str, substr)"
+  description: "Returns the (1-based) index of the first occurrence of substr in str."
+- name: int
+  signatures:
+    - "int(expr)"
+  description: "Casts the value expr to the target data type int."
+- name: is_valid_utf8
+  signatures:
+    - "is_valid_utf8(str)"
+  description: "Returns true if str is a valid UTF-8 string, otherwise returns false."
+- name: is_variant_null
+  signatures:
+    - "is_variant_null(expr)"
+  description: "Check if a variant value is a variant null. Returns true if and only if the input is a variant null and false otherwise (including in the case of SQL NULL)."
+- name: isnan
+  signatures:
+    - "isnan(expr)"
+  description: "Returns true if expr is NaN, or false otherwise."
+- name: isnotnull
+  signatures:
+    - "isnotnull(expr)"
+  description: "Returns true if expr is not null, or false otherwise."
+- name: isnull
+  signatures:
+    - "isnull(expr)"
+  description: "Returns true if expr is null, or false otherwise."
+- name: java_method
+  signatures:
+    - "java_method(class, method[, arg1[, arg2 ..]])"
+  description: "Calls a method with reflection."
+- name: json_array_length
+  signatures:
+    - "json_array_length(jsonArray)"
+  description: "Returns the number of elements in the outermost JSON array."
+- name: json_object_keys
+  signatures:
+    - "json_object_keys(json_object)"
+  description: "Returns all the keys of the outermost JSON object as an array."
+- name: json_tuple
+  signatures:
+    - "json_tuple(jsonStr, p1, p2, ..., pn)"
+  description: "Returns a tuple like the function get_json_object, but it takes multiple names. All the input parameters and output column types are string."
+- name: kurtosis
+  signatures:
+    - "kurtosis(expr)"
+  description: "Returns the kurtosis value calculated from values of a group."
 - name: lag
   signatures:
-    - lag(expr)
-    - lag(expr, offset)
-    - lag(expr, offset, default)
-  description: Returns a value from a preceding row in an ordered window partition.
+    - "lag(input[, offset[, default]])"
+  description: "Returns the value of input at the offsetth row before the current row in the window. The default value of offset is 1 and the default value of default is null. If the value of input at the offsetth row is null, null is returned. If there is no such offset row (e.g., when the offset is 1, the first row of the window does not have any previous row), default is returned."
+- name: last
+  signatures:
+    - "last(expr[, isIgnoreNull])"
+  description: "Returns the last value of expr for a group of rows. If isIgnoreNull is true, returns only non-null values"
+- name: last_day
+  signatures:
+    - "last_day(date)"
+  description: "Returns the last day of the month which the date belongs to."
+- name: last_value
+  signatures:
+    - "last_value(expr[, isIgnoreNull])"
+  description: "Returns the last value of expr for a group of rows. If isIgnoreNull is true, returns only non-null values"
+- name: lcase
+  signatures:
+    - "lcase(str)"
+  description: "Returns str with all characters changed to lowercase."
 - name: lead
   signatures:
-    - lead(expr)
-    - lead(expr, offset)
-    - lead(expr, offset, default)
-  description: Returns a value from a following row in an ordered window partition.
+    - "lead(input[, offset[, default]])"
+  description: "Returns the value of input at the offsetth row after the current row in the window. The default value of offset is 1 and the default value of default is null. If the value of input at the offsetth row is null, null is returned. If there is no such an offset row (e.g., when the offset is 1, the last row of the window does not have any subsequent row), default is returned."
+- name: least
+  signatures:
+    - "least(expr, ...)"
+  description: "Returns the least value of all parameters, skipping null values."
+- name: left
+  signatures:
+    - "left(str, len)"
+  description: "Returns the leftmost len(len can be string type) characters from the string str,if len is less or equal than 0 the result is an empty string."
+- name: len
+  signatures:
+    - "len(expr)"
+  description: "Returns the character length of string data or number of bytes of binary data. The length of string data includes the trailing spaces. The length of binary data includes binary zeros."
+- name: length
+  signatures:
+    - "length(expr)"
+  description: "Returns the character length of string data or number of bytes of binary data. The length of string data includes the trailing spaces. The length of binary data includes binary zeros."
+- name: levenshtein
+  signatures:
+    - "levenshtein(str1, str2[, threshold])"
+  description: "Returns the Levenshtein distance between the two given strings. If threshold is set and distance more than it, return -1."
+- name: like
+  signatures:
+    - "str like pattern[ ESCAPE escape]"
+  description: "Returns true if str matches pattern with escape, null if any arguments are null, false otherwise."
+- name: listagg
+  signatures:
+    - "listagg(expr[, delimiter])[ WITHIN GROUP (ORDER BY key [ASC | DESC] [,...])]"
+  description: "Returns the concatenation of non-NULL input values, separated by the delimiter ordered by key. If all values are NULL, NULL is returned."
+- name: ln
+  signatures:
+    - "ln(expr)"
+  description: "Returns the natural logarithm (base e) of expr."
+- name: localtimestamp
+  signatures:
+    - "localtimestamp()"
+  description: "Returns the current timestamp without time zone at the start of query evaluation. All calls of localtimestamp within the same query return the same value."
+- name: locate
+  signatures:
+    - "locate(substr, str[, pos])"
+  description: "Returns the position of the first occurrence of substr in str after position pos. The given pos and return value are 1-based."
+- name: log
+  signatures:
+    - "log(base, expr)"
+  description: "Returns the logarithm of expr with base."
+- name: log10
+  signatures:
+    - "log10(expr)"
+  description: "Returns the logarithm of expr with base 10."
+- name: log1p
+  signatures:
+    - "log1p(expr)"
+  description: "Returns log(1 + expr)."
+- name: log2
+  signatures:
+    - "log2(expr)"
+  description: "Returns the logarithm of expr with base 2."
+- name: lower
+  signatures:
+    - "lower(str)"
+  description: "Returns str with all characters changed to lowercase."
+- name: lpad
+  signatures:
+    - "lpad(str, len[, pad])"
+  description: "Returns str, left-padded with pad to a length of len. If str is longer than len, the return value is shortened to len characters or bytes. If pad is not specified, str will be padded to the left with space characters if it is a character string, and with zeros if it is a byte sequence."
+- name: ltrim
+  signatures:
+    - "ltrim(str)"
+  description: "Removes the leading space characters from str."
+- name: luhn_check
+  signatures:
+    - "luhn_check(str )"
+  description: "Checks that a string of digits is valid according to the Luhn algorithm. This checksum function is widely applied on credit card numbers and government identification numbers to distinguish valid numbers from mistyped, incorrect numbers."
+- name: make_date
+  signatures:
+    - "make_date(year, month, day)"
+  description: "Create date from year, month and day fields. If the configuration spark.sql.ansi.enabled is false, the function returns NULL on invalid inputs. Otherwise, it will throw an error instead."
+- name: make_dt_interval
+  signatures:
+    - "make_dt_interval([days[, hours[, mins[, secs]]]])"
+  description: "Make DayTimeIntervalType duration from days, hours, mins and secs."
+- name: make_interval
+  signatures:
+    - "make_interval([years[, months[, weeks[, days[, hours[, mins[, secs]]]]]]])"
+  description: "Make interval from years, months, weeks, days, hours, mins and secs."
+- name: make_time
+  signatures:
+    - "make_time(hour, minute, second)"
+  description: "Create time from hour, minute and second fields. For invalid inputs it will throw an error."
+- name: make_timestamp
+  signatures:
+    - "make_timestamp(year, month, day, hour, min, sec[, timezone])"
+  description: "Create the current timestamp with local time zone from year, month, day, hour, min, sec and timezone fields. If the configuration spark.sql.ansi.enabled is false, the function returns NULL on invalid inputs. Otherwise, it will throw an error instead."
+- name: make_timestamp_ltz
+  signatures:
+    - "make_timestamp_ltz(year, month, day, hour, min, sec[, timezone])"
+  description: "Create the current timestamp with local time zone from year, month, day, hour, min, sec and (optional) timezone fields. If the configuration spark.sql.ansi.enabled is false, the function returns NULL on invalid inputs. Otherwise, it will throw an error instead."
+- name: make_timestamp_ntz
+  signatures:
+    - "make_timestamp_ntz(year, month, day, hour, min, sec)"
+  description: "Create local date-time from year, month, day, hour, min, sec fields. If the configuration spark.sql.ansi.enabled is false, the function returns NULL on invalid inputs. Otherwise, it will throw an error instead."
+- name: make_valid_utf8
+  signatures:
+    - "make_valid_utf8(str)"
+  description: "Returns the original string if str is a valid UTF-8 string, otherwise returns a new string whose invalid UTF8 byte sequences are replaced using the UNICODE replacement character U+FFFD."
+- name: make_ym_interval
+  signatures:
+    - "make_ym_interval([years[, months]])"
+  description: "Make year-month interval from years, months."
+- name: map
+  signatures:
+    - "map(key0, value0, key1, value1, ...)"
+  description: "Creates a map with the given key/value pairs."
+- name: map_concat
+  signatures:
+    - "map_concat(map, ...)"
+  description: "Returns the union of all the given maps"
+- name: map_contains_key
+  signatures:
+    - "map_contains_key(map, key)"
+  description: "Returns true if the map contains the key."
+- name: map_entries
+  signatures:
+    - "map_entries(map)"
+  description: "Returns an unordered array of all entries in the given map."
+- name: map_filter
+  signatures:
+    - "map_filter(expr, func)"
+  description: "Filters entries in a map using the function."
+- name: map_from_arrays
+  signatures:
+    - "map_from_arrays(keys, values)"
+  description: "Creates a map with a pair of the given key/value arrays. All elements in keys should not be null"
+- name: map_from_entries
+  signatures:
+    - "map_from_entries(arrayOfEntries)"
+  description: "Returns a map created from the given array of entries."
+- name: map_keys
+  signatures:
+    - "map_keys(map)"
+  description: "Returns an unordered array containing the keys of the map."
+- name: map_values
+  signatures:
+    - "map_values(map)"
+  description: "Returns an unordered array containing the values of the map."
+- name: map_zip_with
+  signatures:
+    - "map_zip_with(map1, map2, function)"
+  description: "Merges two given maps into a single map by applying function to the pair of values with the same key. For keys only presented in one map, NULL will be passed as the value for the missing key. If an input map contains duplicated keys, only the first entry of the duplicated key is passed into the lambda function."
+- name: mask
+  signatures:
+    - "mask(input[, upperChar, lowerChar, digitChar, otherChar])"
+  description: "masks the given string value. The function replaces characters with 'X' or 'x', and numbers with 'n'. This can be useful for creating copies of tables with sensitive information removed."
 - name: max
   signatures:
-    - max(expr)
-  description: Returns the maximum value for a group.
+    - "max(expr)"
+  description: "Returns the maximum value of expr."
+- name: max_by
+  signatures:
+    - "max_by(x, y)"
+  description: "Returns the value of x associated with the maximum value of y."
+- name: md5
+  signatures:
+    - "md5(expr)"
+  description: "Returns an MD5 128-bit checksum as a hex string of expr."
+- name: mean
+  signatures:
+    - "mean(expr)"
+  description: "Returns the mean calculated from values of a group."
+- name: median
+  signatures:
+    - "median(col)"
+  description: "Returns the median of numeric or ANSI interval column col."
 - name: min
   signatures:
-    - min(expr)
-  description: Returns the minimum value for a group.
+    - "min(expr)"
+  description: "Returns the minimum value of expr."
+- name: min_by
+  signatures:
+    - "min_by(x, y)"
+  description: "Returns the value of x associated with the minimum value of y."
+- name: minute
+  signatures:
+    - "minute(expr)"
+  description: "Returns the minute component of the given expression."
+- name: mod
+  signatures:
+    - "expr1 % expr2, or mod(expr1, expr2)"
+  description: "Returns the remainder after expr1/expr2."
+- name: mode
+  signatures:
+    - "mode(col[, deterministic])"
+  description: "Returns the most frequent value for the values within col. NULL values are ignored. If all the values are NULL, or there are 0 rows, returns NULL. When multiple values have the same greatest frequency then either any of values is returned if deterministic is false or is not defined, or the lowest value is returned if deterministic is true. mode() WITHIN GROUP (ORDER BY col) - Returns the most frequent value for the values within col (specified in ORDER BY clause). NULL values are ignored. If all the values are NULL, or there are 0 rows, returns NULL. When multiple values have the same greatest frequency only one value will be returned. The value will be chosen based on sort direction. Return the smallest value if sort direction is asc or the largest value if sort direction is desc from multiple values with the same frequency."
+- name: monotonically_increasing_id
+  signatures:
+    - "monotonically_increasing_id()"
+  description: "Returns monotonically increasing 64-bit integers. The generated ID is guaranteed to be monotonically increasing and unique, but not consecutive. The current implementation puts the partition ID in the upper 31 bits, and the lower 33 bits represent the record number within each partition. The assumption is that the data frame has less than 1 billion partitions, and each partition has less than 8 billion records. The function is non-deterministic because its result depends on partition IDs."
+- name: month
+  signatures:
+    - "month(date)"
+  description: "Returns the month component of the date/timestamp."
+- name: monthname
+  signatures:
+    - "monthname(date)"
+  description: "Returns the three-letter abbreviated month name from the given date."
+- name: months_between
+  signatures:
+    - "months_between(timestamp1, timestamp2[, roundOff])"
+  description: "If timestamp1 is later than timestamp2, then the result is positive. If timestamp1 and timestamp2 are on the same day of month, or both are the last day of month, time of day will be ignored. Otherwise, the difference is calculated based on 31 days per month, and rounded to 8 digits unless roundOff=false."
+- name: named_struct
+  signatures:
+    - "named_struct(name1, val1, name2, val2, ...)"
+  description: "Creates a struct with the given field names and values."
+- name: nanvl
+  signatures:
+    - "nanvl(expr1, expr2)"
+  description: "Returns expr1 if it's not NaN, or expr2 otherwise."
+- name: negative
+  signatures:
+    - "negative(expr)"
+  description: "Returns the negated value of expr."
+- name: next_day
+  signatures:
+    - "next_day(start_date, day_of_week)"
+  description: "Returns the first date which is later than start_date and named as indicated. The function returns NULL if at least one of the input parameters is NULL. When both of the input parameters are not NULL and day_of_week is an invalid input, the function throws SparkIllegalArgumentException if spark.sql.ansi.enabled is set to true, otherwise NULL."
+- name: not
+  signatures:
+    - "not expr"
+  description: "Logical not."
+- name: now
+  signatures:
+    - "now()"
+  description: "Returns the current timestamp at the start of query evaluation."
+- name: nth_value
+  signatures:
+    - "nth_value(input[, offset])"
+  description: "Returns the value of input at the row that is the offsetth row from beginning of the window frame. Offset starts at 1. If ignoreNulls=true, we will skip nulls when finding the offsetth row. Otherwise, every row counts for the offset. If there is no such an offsetth row (e.g., when the offset is 10, size of the window frame is less than 10), null is returned."
+- name: ntile
+  signatures:
+    - "ntile(n)"
+  description: "Divides the rows for each window partition into n buckets ranging from 1 to at most n."
+- name: nullif
+  signatures:
+    - "nullif(expr1, expr2)"
+  description: "Returns null if expr1 equals to expr2, or expr1 otherwise."
+- name: nullifzero
+  signatures:
+    - "nullifzero(expr)"
+  description: "Returns null if expr is equal to zero, or expr otherwise."
+- name: nvl
+  signatures:
+    - "nvl(expr1, expr2)"
+  description: "Returns expr2 if expr1 is null, or expr1 otherwise."
+- name: nvl2
+  signatures:
+    - "nvl2(expr1, expr2, expr3)"
+  description: "Returns expr2 if expr1 is not null, or expr3 otherwise."
+- name: octet_length
+  signatures:
+    - "octet_length(expr)"
+  description: "Returns the byte length of string data or number of bytes of binary data."
+- name: or
+  signatures:
+    - "expr1 or expr2"
+  description: "Logical OR."
+- name: overlay
+  signatures:
+    - "overlay(input, replace, pos[, len])"
+  description: "Replace input with replace that starts at pos and is of length len."
+- name: parse_json
+  signatures:
+    - "parse_json(jsonStr)"
+  description: "Parse a JSON string as a Variant value. Throw an exception when the string is not valid JSON value."
+- name: parse_url
+  signatures:
+    - "parse_url(url, partToExtract[, key])"
+  description: "Extracts a part from a URL."
+- name: percent_rank
+  signatures:
+    - "percent_rank()"
+  description: "Computes the percentage ranking of a value in a group of values."
+- name: percentile
+  signatures:
+    - "percentile(col, percentage [, frequency])"
+  description: "Returns the exact percentile value of numeric or ANSI interval column col at the given percentage. The value of percentage must be between 0.0 and 1.0. The value of frequency should be positive integral"
+- name: percentile_approx
+  signatures:
+    - "percentile_approx(col, percentage [, accuracy])"
+  description: "Returns the approximate percentile of the numeric or ansi interval column col which is the smallest value in the ordered col values (sorted from least to greatest) such that no more than percentage of col values is less than the value or equal to that value. The value of percentage must be between 0.0 and 1.0. The accuracy parameter (default: 10000) is a positive numeric literal which controls approximation accuracy at the cost of memory. Higher value of accuracy yields better accuracy, 1.0/accuracy is the relative error of the approximation. When percentage is an array, each value of the percentage array must be between 0.0 and 1.0. In this case, returns the approximate percentile array of column col at the given percentage array."
+- name: percentile_cont
+  signatures:
+    - "percentile_cont(percentage) WITHIN GROUP (ORDER BY col)"
+  description: "Return a percentile value based on a continuous distribution of numeric or ANSI interval column col at the given percentage (specified in ORDER BY clause)."
+- name: percentile_disc
+  signatures:
+    - "percentile_disc(percentage) WITHIN GROUP (ORDER BY col)"
+  description: "Return a percentile value based on a discrete distribution of numeric or ANSI interval column col at the given percentage (specified in ORDER BY clause)."
+- name: pi
+  signatures:
+    - "pi()"
+  description: "Returns pi."
+- name: pmod
+  signatures:
+    - "pmod(expr1, expr2)"
+  description: "Returns the positive value of expr1 mod expr2."
+- name: posexplode
+  signatures:
+    - "posexplode(expr)"
+  description: "Separates the elements of array expr into multiple rows with positions, or the elements of map expr into multiple rows and columns with positions. Unless specified otherwise, uses the column name pos for position, col for elements of the array or key and value for elements of the map."
+- name: posexplode_outer
+  signatures:
+    - "posexplode_outer(expr)"
+  description: "Separates the elements of array expr into multiple rows with positions, or the elements of map expr into multiple rows and columns with positions. Unless specified otherwise, uses the column name pos for position, col for elements of the array or key and value for elements of the map."
+- name: position
+  signatures:
+    - "position(substr, str[, pos])"
+  description: "Returns the position of the first occurrence of substr in str after position pos. The given pos and return value are 1-based."
+- name: positive
+  signatures:
+    - "positive(expr)"
+  description: "Returns the value of expr."
+- name: pow
+  signatures:
+    - "pow(expr1, expr2)"
+  description: "Raises expr1 to the power of expr2."
+- name: power
+  signatures:
+    - "power(expr1, expr2)"
+  description: "Raises expr1 to the power of expr2."
+- name: printf
+  signatures:
+    - "printf(strfmt, obj, ...)"
+  description: "Returns a formatted string from printf-style format strings."
+- name: product
+  signatures:
+    - "product(expr)"
+  description: "Returns the product of non-null numeric values in a group."
+- name: quarter
+  signatures:
+    - "quarter(date)"
+  description: "Returns the quarter of the year for date, in the range 1 to 4."
+- name: quote
+  signatures:
+    - "quote(str)"
+  description: "Returns str enclosed by single quotes and each instance of single quote in it is preceded by a backslash."
+- name: radians
+  signatures:
+    - "radians(expr)"
+  description: "Converts degrees to radians."
+- name: raise_error
+  signatures:
+    - "raise_error( expr )"
+  description: "Throws a USER_RAISED_EXCEPTION with expr as message."
+- name: rand
+  signatures:
+    - "rand([seed])"
+  description: "Returns a random value with independent and identically distributed (i.i.d.) uniformly distributed values in [0, 1)."
+- name: randn
+  signatures:
+    - "randn([seed])"
+  description: "Returns a random value with independent and identically distributed (i.i.d.) values drawn from the standard normal distribution."
+- name: random
+  signatures:
+    - "random([seed])"
+  description: "Returns a random value with independent and identically distributed (i.i.d.) uniformly distributed values in [0, 1)."
+- name: random_poisson
+  signatures:
+    - "random_poisson(lambda)"
+    - "random_poisson(lambda, seed)"
+  description: "Returns random values drawn from a Poisson distribution with rate lambda. If seed is provided, the generated sequence is deterministic."
+- name: randstr
+  signatures:
+    - "randstr(length[, seed])"
+  description: "Returns a string of the specified length whose characters are chosen uniformly at random from the following pool of characters: 0-9, a-z, A-Z. The random seed is optional. The string length must be a constant two-byte or four-byte integer (SMALLINT or INT, respectively)."
 - name: range
   signatures:
-    - range(end)
-    - range(start, end)
-    - range(start, end, step)
-    - range(start, end, step, num_partitions)
-  description: Creates a relation containing a sequence of 64-bit integer values.
+    - "range(start[, end[, step[, numSlices]]]) / range(end)"
+  description: "Returns a table of values within a specified range."
 - name: rank
   signatures:
-    - rank()
-  description: Returns the rank of a row with gaps in an ordered window partition.
+    - "rank()"
+  description: "Computes the rank of a value in a group of values. The result is one plus the number of rows preceding or equal to the current row in the ordering of the partition. The values will produce gaps in the sequence."
+- name: reduce
+  signatures:
+    - "reduce(expr, start, merge, finish)"
+  description: "Applies a binary operator to an initial state and all elements in the array, and reduces this to a single state. The final state is converted into the final result by applying a finish function."
+- name: reflect
+  signatures:
+    - "reflect(class, method[, arg1[, arg2 ..]])"
+  description: "Calls a method with reflection."
+- name: regexp
+  signatures:
+    - "regexp(str, regexp)"
+  description: "Returns true if str matches regexp, or false otherwise."
+- name: regexp_count
+  signatures:
+    - "regexp_count(str, regexp)"
+  description: "Returns a count of the number of times that the regular expression pattern regexp is matched in the string str."
+- name: regexp_extract
+  signatures:
+    - "regexp_extract(str, regexp[, idx])"
+  description: "Extract the first string in the str that match the regexp expression and corresponding to the regex group index."
+- name: regexp_extract_all
+  signatures:
+    - "regexp_extract_all(str, regexp[, idx])"
+  description: "Extract all strings in the str that match the regexp expression and corresponding to the regex group index."
+- name: regexp_instr
+  signatures:
+    - "regexp_instr(str, regexp)"
+  description: "Searches a string for a regular expression and returns an integer that indicates the beginning position of the matched substring. Positions are 1-based, not 0-based. If no match is found, returns 0."
+- name: regexp_like
+  signatures:
+    - "regexp_like(str, regexp)"
+  description: "Returns true if str matches regexp, or false otherwise."
+- name: regexp_replace
+  signatures:
+    - "regexp_replace(str, regexp, rep[, position])"
+  description: "Replaces all substrings of str that match regexp with rep."
+- name: regexp_substr
+  signatures:
+    - "regexp_substr(str, regexp)"
+  description: "Returns the substring that matches the regular expression regexp within the string str. If the regular expression is not found, the result is null."
+- name: regr_avgx
+  signatures:
+    - "regr_avgx(y, x)"
+  description: "Returns the average of the independent variable for non-null pairs in a group, where y is the dependent variable and x is the independent variable."
+- name: regr_avgy
+  signatures:
+    - "regr_avgy(y, x)"
+  description: "Returns the average of the dependent variable for non-null pairs in a group, where y is the dependent variable and x is the independent variable."
+- name: regr_count
+  signatures:
+    - "regr_count(y, x)"
+  description: "Returns the number of non-null number pairs in a group, where y is the dependent variable and x is the independent variable."
+- name: regr_intercept
+  signatures:
+    - "regr_intercept(y, x)"
+  description: "Returns the intercept of the univariate linear regression line for non-null pairs in a group, where y is the dependent variable and x is the independent variable."
+- name: regr_r2
+  signatures:
+    - "regr_r2(y, x)"
+  description: "Returns the coefficient of determination for non-null pairs in a group, where y is the dependent variable and x is the independent variable."
+- name: regr_slope
+  signatures:
+    - "regr_slope(y, x)"
+  description: "Returns the slope of the linear regression line for non-null pairs in a group, where y is the dependent variable and x is the independent variable."
+- name: regr_sxx
+  signatures:
+    - "regr_sxx(y, x)"
+  description: "Returns REGR_COUNT(y, x) * VAR_POP(x) for non-null pairs in a group, where y is the dependent variable and x is the independent variable."
+- name: regr_sxy
+  signatures:
+    - "regr_sxy(y, x)"
+  description: "Returns REGR_COUNT(y, x) * COVAR_POP(y, x) for non-null pairs in a group, where y is the dependent variable and x is the independent variable."
+- name: regr_syy
+  signatures:
+    - "regr_syy(y, x)"
+  description: "Returns REGR_COUNT(y, x) * VAR_POP(y) for non-null pairs in a group, where y is the dependent variable and x is the independent variable."
+- name: repeat
+  signatures:
+    - "repeat(str, n)"
+  description: "Returns the string which repeats the given string value n times."
+- name: replace
+  signatures:
+    - "replace(str, search[, replace])"
+  description: "Replaces all occurrences of search with replace."
+- name: reverse
+  signatures:
+    - "reverse(array)"
+  description: "Returns a reversed string or an array with reverse order of elements."
+- name: right
+  signatures:
+    - "right(str, len)"
+  description: "Returns the rightmost len(len can be string type) characters from the string str,if len is less or equal than 0 the result is an empty string."
+- name: rint
+  signatures:
+    - "rint(expr)"
+  description: "Returns the double value that is closest in value to the argument and is equal to a mathematical integer."
+- name: rlike
+  signatures:
+    - "rlike(str, regexp)"
+  description: "Returns true if str matches regexp, or false otherwise."
+- name: round
+  signatures:
+    - "round(expr, d)"
+  description: "Returns expr rounded to d decimal places using HALF_UP rounding mode."
 - name: row_number
   signatures:
-    - row_number()
-  description: Returns a sequential row number within an ordered window partition.
+    - "row_number()"
+  description: "Assigns a unique, sequential number to each row, starting with one, according to the ordering of rows within the window partition."
+- name: rpad
+  signatures:
+    - "rpad(str, len[, pad])"
+  description: "Returns str, right-padded with pad to a length of len. If str is longer than len, the return value is shortened to len characters. If pad is not specified, str will be padded to the right with space characters if it is a character string, and with zeros if it is a binary string."
+- name: rtrim
+  signatures:
+    - "rtrim(str)"
+  description: "Removes the trailing space characters from str."
+- name: schema_of_avro
+  signatures:
+    - "schema_of_avro(jsonFormatSchema, options)"
+  description: "Returns schema in the DDL format of the avro schema in JSON string format."
+- name: schema_of_csv
+  signatures:
+    - "schema_of_csv(csv[, options])"
+  description: "Returns schema in the DDL format of CSV string."
+- name: schema_of_json
+  signatures:
+    - "schema_of_json(json[, options])"
+  description: "Returns schema in the DDL format of JSON string."
+- name: schema_of_variant
+  signatures:
+    - "schema_of_variant(v)"
+  description: "Returns schema in the SQL format of a variant."
+- name: schema_of_variant_agg
+  signatures:
+    - "schema_of_variant_agg(v)"
+  description: "Returns the merged schema in the SQL format of a variant column."
+- name: schema_of_xml
+  signatures:
+    - "schema_of_xml(xml[, options])"
+  description: "Returns schema in the DDL format of XML string."
+- name: sec
+  signatures:
+    - "sec(expr)"
+  description: "Returns the secant of expr, as if computed by 1/java.lang.Math.cos."
+- name: second
+  signatures:
+    - "second(expr)"
+  description: "Returns the second component of the given expression."
+- name: sentences
+  signatures:
+    - "sentences(str[, lang[, country]])"
+  description: "Splits str into an array of array of words."
+- name: sequence
+  signatures:
+    - "sequence(start, stop, step)"
+  description: "Generates an array of elements from start to stop (inclusive), incrementing by step. The type of the returned elements is the same as the type of argument expressions."
+- name: session_user
+  signatures:
+    - "session_user()"
+  description: "user name of current execution context."
+- name: session_window
+  signatures:
+    - "session_window(time_column, gap_duration)"
+  description: "Generates session window given a timestamp specifying column and gap duration. See 'Types of time windows' in Structured Streaming guide doc for detailed explanation and examples."
+- name: sha
+  signatures:
+    - "sha(expr)"
+  description: "Returns a sha1 hash value as a hex string of the expr."
+- name: sha1
+  signatures:
+    - "sha1(expr)"
+  description: "Returns a sha1 hash value as a hex string of the expr."
+- name: sha2
+  signatures:
+    - "sha2(expr, bitLength)"
+  description: "Returns a checksum of SHA-2 family as a hex string of expr. SHA-224, SHA-256, SHA-384, and SHA-512 are supported. Bit length of 0 is equivalent to 256."
+- name: shiftleft
+  signatures:
+    - "base shiftleft exp"
+  description: "Bitwise left shift."
+- name: shiftright
+  signatures:
+    - "base shiftright expr"
+  description: "Bitwise (signed) right shift."
+- name: shiftrightunsigned
+  signatures:
+    - "base shiftrightunsigned expr"
+  description: "Bitwise unsigned right shift."
+- name: shuffle
+  signatures:
+    - "shuffle(array)"
+  description: "Returns a random permutation of the given array."
+- name: sign
+  signatures:
+    - "sign(expr)"
+  description: "Returns -1.0, 0.0 or 1.0 as expr is negative, 0 or positive."
+- name: signum
+  signatures:
+    - "signum(expr)"
+  description: "Returns -1.0, 0.0 or 1.0 as expr is negative, 0 or positive."
+- name: sin
+  signatures:
+    - "sin(expr)"
+  description: "Returns the sine of expr, as if computed by java.lang.Math.sin."
+- name: sinh
+  signatures:
+    - "sinh(expr)"
+  description: "Returns hyperbolic sine of expr, as if computed by java.lang.Math.sinh."
+- name: size
+  signatures:
+    - "size(expr)"
+  description: "Returns the size of an array or a map. This function returns -1 for null input only if spark.sql.ansi.enabled is false and spark.sql.legacy.sizeOfNull is true. Otherwise, it returns null for null input. With the default settings, the function returns null for null input."
+- name: skewness
+  signatures:
+    - "skewness(expr)"
+  description: "Returns the skewness value calculated from values of a group."
+- name: slice
+  signatures:
+    - "slice(x, start, length)"
+  description: "Subsets array x starting from index start (array indices start at 1, or starting from the end if start is negative) with the specified length."
+- name: smallint
+  signatures:
+    - "smallint(expr)"
+  description: "Casts the value expr to the target data type smallint."
+- name: some
+  signatures:
+    - "some(expr)"
+  description: "Returns true if at least one value of expr is true."
+- name: sort_array
+  signatures:
+    - "sort_array(array[, ascendingOrder])"
+  description: "Sorts the input array in ascending or descending order according to the natural ordering of the array elements. NaN is greater than any non-NaN elements for double/float type. Null elements will be placed at the beginning of the returned array in ascending order or at the end of the returned array in descending order."
+- name: soundex
+  signatures:
+    - "soundex(str)"
+  description: "Returns Soundex code of the string."
+- name: space
+  signatures:
+    - "space(n)"
+  description: "Returns a string consisting of n spaces."
+- name: spark_partition_id
+  signatures:
+    - "spark_partition_id()"
+  description: "Returns the current partition id."
+- name: split
+  signatures:
+    - "split(str, regex, limit)"
+  description: "Splits str around occurrences that match regex and returns an array with a length of at most limit"
+- name: split_part
+  signatures:
+    - "split_part(str, delimiter, partNum)"
+  description: "Splits str by delimiter and return requested part of the split (1-based). If any input is null, returns null. if partNum is out of range of split parts, returns empty string. If partNum is 0, throws an error. If partNum is negative, the parts are counted backward from the end of the string. If the delimiter is an empty string, the str is not split."
+- name: sqrt
+  signatures:
+    - "sqrt(expr)"
+  description: "Returns the square root of expr."
+- name: st_asbinary
+  signatures:
+    - "st_asbinary(geo)"
+  description: "Returns the geospatial value (value of type GEOGRAPHY or GEOMETRY) in WKB format."
+- name: st_geogfromwkb
+  signatures:
+    - "st_geogfromwkb(wkb)"
+  description: "Parses the WKB description of a geography and returns the corresponding GEOGRAPHY value."
+- name: st_geomfromwkb
+  signatures:
+    - "st_geomfromwkb(wkb)"
+  description: "Parses the WKB description of a geometry and returns the corresponding GEOMETRY value."
+- name: st_setsrid
+  signatures:
+    - "st_setsrid(geo, srid)"
+  description: "Returns a new GEOGRAPHY or GEOMETRY value whose SRID is the specified SRID value."
+- name: st_srid
+  signatures:
+    - "st_srid(geo)"
+  description: "Returns the SRID of the input GEOGRAPHY or GEOMETRY value."
+- name: stack
+  signatures:
+    - "stack(n, expr1, ..., exprk)"
+  description: "Separates expr1, ..., exprk into n rows. Uses column names col0, col1, etc. by default unless specified otherwise."
+- name: startswith
+  signatures:
+    - "startswith(left, right)"
+  description: "Returns a boolean. The value is True if left starts with right. Returns NULL if either input expression is NULL. Otherwise, returns False. Both left or right must be of STRING or BINARY type."
+- name: std
+  signatures:
+    - "std(expr)"
+  description: "Returns the sample standard deviation calculated from values of a group."
+- name: stddev
+  signatures:
+    - "stddev(expr)"
+  description: "Returns the sample standard deviation calculated from values of a group."
+- name: stddev_pop
+  signatures:
+    - "stddev_pop(expr)"
+  description: "Returns the population standard deviation calculated from values of a group."
+- name: stddev_samp
+  signatures:
+    - "stddev_samp(expr)"
+  description: "Returns the sample standard deviation calculated from values of a group."
+- name: str_to_map
+  signatures:
+    - "str_to_map(text[, pairDelim[, keyValueDelim]])"
+  description: "Creates a map after splitting the text into key/value pairs using delimiters. Default delimiters are ',' for pairDelim and ':' for keyValueDelim. Both pairDelim and keyValueDelim are treated as regular expressions."
+- name: string
+  signatures:
+    - "string(expr)"
+  description: "Casts the value expr to the target data type string."
+- name: string_agg
+  signatures:
+    - "string_agg(expr[, delimiter])[ WITHIN GROUP (ORDER BY key [ASC | DESC] [,...])]"
+  description: "Returns the concatenation of non-NULL input values, separated by the delimiter ordered by key. If all values are NULL, NULL is returned."
+- name: strpos
+  signatures:
+    - "strpos(str, substr)"
+  description: "Returns the 1-based position of substr in str, or 0 if substr is not found."
+- name: struct
+  signatures:
+    - "struct(col1, col2, col3, ...)"
+  description: "Creates a struct with the given field values."
+- name: substr
+  signatures:
+    - "substr(str, pos[, len])"
+  description: "Returns the substring of str that starts at pos and is of length len, or the slice of byte array that starts at pos and is of length len."
+- name: substring
+  signatures:
+    - "substring(str, pos[, len])"
+  description: "Returns the substring of str that starts at pos and is of length len, or the slice of byte array that starts at pos and is of length len."
+- name: substring_index
+  signatures:
+    - "substring_index(str, delim, count)"
+  description: "Returns the substring from str before count occurrences of the delimiter delim. If count is positive, everything to the left of the final delimiter (counting from the left) is returned. If count is negative, everything to the right of the final delimiter (counting from the right) is returned. The function substring_index performs a case-sensitive match when searching for delim."
 - name: sum
   signatures:
-    - sum(expr)
-  description: Returns the sum of non-null values for a group.
+    - "sum(expr)"
+  description: "Returns the sum calculated from values of a group."
+- name: tan
+  signatures:
+    - "tan(expr)"
+  description: "Returns the tangent of expr, as if computed by java.lang.Math.tan."
+- name: tanh
+  signatures:
+    - "tanh(expr)"
+  description: "Returns the hyperbolic tangent of expr, as if computed by java.lang.Math.tanh."
+- name: theta_difference
+  signatures:
+    - "theta_difference(first, second)"
+  description: "Subtracts two binary representations of Datasketches ThetaSketch objects from two input columns using a ThetaSketch AnotB object."
+- name: theta_intersection
+  signatures:
+    - "theta_intersection(first, second)"
+  description: "Intersects two binary representations of Datasketches ThetaSketch objects from two input columns using a ThetaSketch Intersect object."
+- name: theta_intersection_agg
+  signatures:
+    - "theta_intersection_agg(expr)"
+  description: "Returns the ThetaSketch's Compact binary representation by intersecting all the Theta sketches in the input column."
+- name: theta_sketch_agg
+  signatures:
+    - "theta_sketch_agg(expr, lgNomEntries)"
+  description: "Returns the ThetaSketch compact binary representation. lgNomEntries (optional) is the log-base-2 of nominal entries, with nominal entries deciding the number buckets or slots for the ThetaSketch."
+- name: theta_sketch_estimate
+  signatures:
+    - "theta_sketch_estimate(expr)"
+  description: "Returns the estimated number of unique values given the binary representation of a Datasketches ThetaSketch."
+- name: theta_union
+  signatures:
+    - "theta_union(first, second, lgNomEntries)"
+  description: "Merges two binary representations of Datasketches ThetaSketch objects using a ThetaSketch Union object. Users can set lgNomEntries to a value between 4 and 26 to find the union of sketches with different union buffer size values (defaults to 12)."
+- name: theta_union_agg
+  signatures:
+    - "theta_union_agg(expr, lgNomEntries)"
+  description: "Returns the ThetaSketch's Compact binary representation. lgNomEntries (optional) the log-base-2 of Nominal Entries, with Nominal Entries deciding the number buckets or slots for the ThetaSketch."
+- name: time
+  signatures:
+    - "time(expr)"
+  description: "Casts the value expr to the target data type time."
+- name: time_diff
+  signatures:
+    - "time_diff(unit, start, end)"
+  description: "Gets the difference between the times in the specified units."
+- name: time_trunc
+  signatures:
+    - "time_trunc(unit, time)"
+  description: "Returns time truncated to the unit."
+- name: timestamp
+  signatures:
+    - "timestamp(expr)"
+  description: "Casts the value expr to the target data type timestamp."
+- name: timestamp_add
+  signatures:
+    - "timestamp_add(unit, quantity, timestamp)"
+  description: "Adds quantity units to timestamp."
+- name: timestamp_diff
+  signatures:
+    - "timestamp_diff(unit, start_timestamp, end_timestamp)"
+  description: "Returns the difference between start_timestamp and end_timestamp in unit."
+- name: timestamp_micros
+  signatures:
+    - "timestamp_micros(microseconds)"
+  description: "Creates timestamp from the number of microseconds since UTC epoch."
+- name: timestamp_millis
+  signatures:
+    - "timestamp_millis(milliseconds)"
+  description: "Creates timestamp from the number of milliseconds since UTC epoch."
+- name: timestamp_seconds
+  signatures:
+    - "timestamp_seconds(seconds)"
+  description: "Creates timestamp from the number of seconds (can be fractional) since UTC epoch."
+- name: timestampadd
+  signatures:
+    - "timestampadd(unit, quantity, timestamp)"
+  description: "Adds quantity units to timestamp."
+- name: timestampdiff
+  signatures:
+    - "timestampdiff(unit, start_timestamp, end_timestamp)"
+  description: "Returns the difference between start_timestamp and end_timestamp in unit."
+- name: tinyint
+  signatures:
+    - "tinyint(expr)"
+  description: "Casts the value expr to the target data type tinyint."
+- name: to_avro
+  signatures:
+    - "to_avro(child[, jsonFormatSchema])"
+  description: "Converts a Catalyst binary input value into its corresponding Avro format result."
+- name: to_binary
+  signatures:
+    - "to_binary(str[, fmt])"
+  description: "Converts the input str to a binary value based on the supplied fmt. fmt can be a case-insensitive string literal of \"hex\", \"utf-8\", \"utf8\", or \"base64\". By default, the binary format for conversion is \"hex\" if fmt is omitted. The function returns NULL if at least one of the input parameters is NULL."
+- name: to_char
+  signatures:
+    - "to_char(expr, format)"
+  description: "Convert expr to a string based on the format. Throws an exception if the conversion fails. The format can consist of the following characters, case insensitive: '0' or '9': Specifies an expected digit between 0 and 9. A sequence of 0 or 9 in the format string matches a sequence of digits in the input value, generating a result string of the same length as the corresponding sequence in the format string. The result string is left-padded with zeros if the 0/9 sequence comprises more digits than the matching part of the decimal value, starts with 0, and is before the decimal point. Otherwise, it is padded with spaces. '.' or 'D': Specifies the position of the decimal point (optional, only allowed once). ',' or 'G': Specifies the position of the grouping (thousands) separator (,). There must be a 0 or 9 to the left and right of each grouping separator. '$': Specifies the location of the $ currency sign. This character may only be specified once. 'S' or 'MI': Specifies the position of a '-' or '+' sign (optional, only allowed once at the beginning or end of the format string). Note that 'S' prints '+' for positive values but 'MI' prints a space. 'PR': Only allowed at the end of the format string; specifies that the result string will be wrapped by angle brackets if the input value is negative. ('<1>'). If expr is a datetime, format shall be a valid datetime pattern, see Datetime Patterns. If expr is a binary, it is converted to a string in one of the formats: 'base64': a base 64 string. 'hex': a string in the hexadecimal format. 'utf-8': the input binary is decoded to UTF-8 string."
+- name: to_csv
+  signatures:
+    - "to_csv(expr[, options])"
+  description: "Returns a CSV string with a given struct value"
 - name: to_date
   signatures:
-    - to_date(expr)
-    - to_date(expr, fmt)
-  description: Converts expr to a date using an optional datetime pattern.
+    - "to_date(date_str[, fmt])"
+  description: "Parses the date_str expression with the fmt expression to a date. Returns null with invalid input. By default, it follows casting rules to a date if the fmt is omitted."
+- name: to_json
+  signatures:
+    - "to_json(expr[, options])"
+  description: "Returns a JSON string with a given struct value"
+- name: to_number
+  signatures:
+    - "to_number(expr, fmt)"
+  description: "Convert string 'expr' to a number based on the string format 'fmt'. Throws an exception if the conversion fails. The format can consist of the following characters, case insensitive: '0' or '9': Specifies an expected digit between 0 and 9. A sequence of 0 or 9 in the format string matches a sequence of digits in the input string. If the 0/9 sequence starts with 0 and is before the decimal point, it can only match a digit sequence of the same size. Otherwise, if the sequence starts with 9 or is after the decimal point, it can match a digit sequence that has the same or smaller size. '.' or 'D': Specifies the position of the decimal point (optional, only allowed once). ',' or 'G': Specifies the position of the grouping (thousands) separator (,). There must be a 0 or 9 to the left and right of each grouping separator. 'expr' must match the grouping separator relevant for the size of the number. '$': Specifies the location of the $ currency sign. This character may only be specified once. 'S' or 'MI': Specifies the position of a '-' or '+' sign (optional, only allowed once at the beginning or end of the format string). Note that 'S' allows '-' but 'MI' does not. 'PR': Only allowed at the end of the format string; specifies that 'expr' indicates a negative number with wrapping angled brackets. ('<1>')."
+- name: to_protobuf
+  signatures:
+    - "to_protobuf(child, messageName, descFilePath, options)"
+  description: "Converts a Catalyst binary input value into its corresponding Protobuf format result."
+- name: to_time
+  signatures:
+    - "to_time(str[, format])"
+  description: "Parses the str expression with the format expression to a time. If format is malformed or its application does not result in a well formed time, the function raises an error. By default, it follows casting rules to a time if the format is omitted."
 - name: to_timestamp
   signatures:
-    - to_timestamp(expr)
-    - to_timestamp(expr, fmt)
-  description: Converts expr to a timestamp using an optional datetime pattern.
+    - "to_timestamp(timestamp_str[, fmt])"
+  description: "Parses the timestamp_str expression with the fmt expression to a timestamp. Returns null with invalid input. By default, it follows casting rules to a timestamp if the fmt is omitted. The result data type is consistent with the value of configuration spark.sql.timestampType."
+- name: to_timestamp_ltz
+  signatures:
+    - "to_timestamp_ltz(timestamp_str[, fmt])"
+  description: "Parses the timestamp_str expression with the fmt expression to a timestamp with local time zone. Returns null with invalid input. By default, it follows casting rules to a timestamp if the fmt is omitted."
+- name: to_timestamp_ntz
+  signatures:
+    - "to_timestamp_ntz(timestamp_str[, fmt])"
+  description: "Parses the timestamp_str expression with the fmt expression to a timestamp without time zone. Returns null with invalid input. By default, it follows casting rules to a timestamp if the fmt is omitted."
+- name: to_unix_timestamp
+  signatures:
+    - "to_unix_timestamp(timeExp[, fmt])"
+  description: "Returns the UNIX timestamp of the given time."
+- name: to_utc_timestamp
+  signatures:
+    - "to_utc_timestamp(timestamp, timezone)"
+  description: "Given a timestamp like '2017-07-14 02:40:00.0', interprets it as a time in the given time zone, and renders that time as a timestamp in UTC. For example, 'GMT+1' would yield '2017-07-14 01:40:00.0'."
+- name: to_varchar
+  signatures:
+    - "to_varchar(expr, format)"
+  description: "Convert expr to a string based on the format. Throws an exception if the conversion fails. The format can consist of the following characters, case insensitive: '0' or '9': Specifies an expected digit between 0 and 9. A sequence of 0 or 9 in the format string matches a sequence of digits in the input value, generating a result string of the same length as the corresponding sequence in the format string. The result string is left-padded with zeros if the 0/9 sequence comprises more digits than the matching part of the decimal value, starts with 0, and is before the decimal point. Otherwise, it is padded with spaces. '.' or 'D': Specifies the position of the decimal point (optional, only allowed once). ',' or 'G': Specifies the position of the grouping (thousands) separator (,). There must be a 0 or 9 to the left and right of each grouping separator. '$': Specifies the location of the $ currency sign. This character may only be specified once. 'S' or 'MI': Specifies the position of a '-' or '+' sign (optional, only allowed once at the beginning or end of the format string). Note that 'S' prints '+' for positive values but 'MI' prints a space. 'PR': Only allowed at the end of the format string; specifies that the result string will be wrapped by angle brackets if the input value is negative. ('<1>'). If expr is a datetime, format shall be a valid datetime pattern, see Datetime Patterns. If expr is a binary, it is converted to a string in one of the formats: 'base64': a base 64 string. 'hex': a string in the hexadecimal format. 'utf-8': the input binary is decoded to UTF-8 string."
+- name: to_variant_object
+  signatures:
+    - "to_variant_object(expr)"
+  description: "Convert a nested input (array/map/struct) into a variant where maps and structs are converted to variant objects which are unordered unlike SQL structs. Input maps can only have string keys."
+- name: to_xml
+  signatures:
+    - "to_xml(expr[, options])"
+  description: "Returns a XML string with a given struct value"
+- name: transform
+  signatures:
+    - "transform(expr, func)"
+  description: "Transforms elements in an array using the function."
+- name: transform_keys
+  signatures:
+    - "transform_keys(expr, func)"
+  description: "Transforms elements in a map using the function."
+- name: transform_values
+  signatures:
+    - "transform_values(expr, func)"
+  description: "Transforms values in the map using the function."
+- name: translate
+  signatures:
+    - "translate(input, from, to)"
+  description: "Translates the input string by replacing the characters present in the from string with the corresponding characters in the to string."
+- name: trim
+  signatures:
+    - "trim(str)"
+  description: "Removes the leading and trailing space characters from str."
+- name: trunc
+  signatures:
+    - "trunc(date, fmt)"
+  description: "Returns date with the time portion of the day truncated to the unit specified by the format model fmt."
+- name: try_add
+  signatures:
+    - "try_add(expr1, expr2)"
+  description: "Returns the sum of expr1and expr2 and the result is null on overflow. The acceptable input types are the same with the + operator."
+- name: try_aes_decrypt
+  signatures:
+    - "try_aes_decrypt(expr, key[, mode[, padding[, aad]]])"
+  description: "This is a special version of aes_decrypt that performs the same operation, but returns a NULL value instead of raising an error if the decryption cannot be performed."
+- name: try_aes_encrypt
+  signatures:
+    - "try_aes_encrypt(expr, key[, mode[, padding[, iv[, aad]]]])"
+  description: "This is a special version of aes_encrypt that performs the same operation, but returns a NULL value instead of raising an error if encryption cannot be performed."
+- name: try_avg
+  signatures:
+    - "try_avg(expr)"
+  description: "Returns the mean calculated from values of a group and the result is null on overflow."
+- name: try_divide
+  signatures:
+    - "try_divide(dividend, divisor)"
+  description: "Returns dividend/divisor. It always performs floating point division. Its result is always null if expr2 is 0. dividend must be a numeric or an interval. divisor must be a numeric."
+- name: try_element_at
+  signatures:
+    - "try_element_at(array, index)"
+  description: "Returns element of array at given (1-based) index. If Index is 0, Spark will throw an error. If index < 0, accesses elements from the last to the first. The function always returns NULL if the index exceeds the length of the array."
+- name: try_make_interval
+  signatures:
+    - "try_make_interval([years[, months[, weeks[, days[, hours[, mins[, secs]]]]]]])"
+  description: "This is a special version of make_interval that performs the same operation, but returns NULL when an overflow occurs."
+- name: try_make_timestamp
+  signatures:
+    - "try_make_timestamp(year, month, day, hour, min, sec[, timezone])"
+  description: "Try to create a timestamp from year, month, day, hour, min, sec and timezone fields. The result data type is consistent with the value of configuration spark.sql.timestampType. The function returns NULL on invalid inputs."
+- name: try_make_timestamp_ltz
+  signatures:
+    - "try_make_timestamp_ltz(year, month, day, hour, min, sec[, timezone])"
+  description: "Try to create the current timestamp with local time zone from year, month, day, hour, min, sec and (optional) timezone fields. The function returns NULL on invalid inputs."
+- name: try_make_timestamp_ntz
+  signatures:
+    - "try_make_timestamp_ntz(year, month, day, hour, min, sec)"
+  description: "Try to create local date-time from year, month, day, hour, min, sec fields. The function returns NULL on invalid inputs."
+- name: try_mod
+  signatures:
+    - "try_mod(dividend, divisor)"
+  description: "Returns the remainder after expr1/expr2. dividend must be a numeric. divisor must be a numeric."
+- name: try_multiply
+  signatures:
+    - "try_multiply(expr1, expr2)"
+  description: "Returns expr1*expr2 and the result is null on overflow. The acceptable input types are the same with the * operator."
+- name: try_parse_json
+  signatures:
+    - "try_parse_json(jsonStr)"
+  description: "Parse a JSON string as a Variant value. Return NULL when the string is not valid JSON value."
+- name: try_parse_url
+  signatures:
+    - "try_parse_url(url, partToExtract[, key])"
+  description: "This is a special version of parse_url that performs the same operation, but returns a NULL value instead of raising an error if the parsing cannot be performed."
+- name: try_reflect
+  signatures:
+    - "try_reflect(class, method[, arg1[, arg2 ..]])"
+  description: "This is a special version of reflect that performs the same operation, but returns a NULL value instead of raising an error if the invoke method thrown exception."
+- name: try_subtract
+  signatures:
+    - "try_subtract(expr1, expr2)"
+  description: "Returns expr1-expr2 and the result is null on overflow. The acceptable input types are the same with the - operator."
+- name: try_sum
+  signatures:
+    - "try_sum(expr)"
+  description: "Returns the sum calculated from values of a group and the result is null on overflow."
+- name: try_to_binary
+  signatures:
+    - "try_to_binary(str[, fmt])"
+  description: "This is a special version of to_binary that performs the same operation, but returns a NULL value instead of raising an error if the conversion cannot be performed."
+- name: try_to_number
+  signatures:
+    - "try_to_number(expr, fmt)"
+  description: "Convert string 'expr' to a number based on the string format fmt. Returns NULL if the string 'expr' does not match the expected format. The format follows the same semantics as the to_number function."
+- name: try_to_timestamp
+  signatures:
+    - "try_to_timestamp(timestamp_str[, fmt])"
+  description: "Parses the timestamp_str expression with the fmt expression to a timestamp. The function always returns null on an invalid input with/without ANSI SQL mode enabled. By default, it follows casting rules to a timestamp if the fmt is omitted. The result data type is consistent with the value of configuration spark.sql.timestampType."
+- name: try_url_decode
+  signatures:
+    - "try_url_decode(str)"
+  description: "This is a special version of url_decode that performs the same operation, but returns a NULL value instead of raising an error if the decoding cannot be performed."
+- name: try_validate_utf8
+  signatures:
+    - "try_validate_utf8(str)"
+  description: "Returns the original string if str is a valid UTF-8 string, otherwise returns NULL."
+- name: try_variant_get
+  signatures:
+    - "try_variant_get(v, path[, type])"
+  description: "Extracts a sub-variant from v according to path, and then cast the sub-variant to type. When type is omitted, it is default to variant. Returns null if the path does not exist or the cast fails."
+- name: typeof
+  signatures:
+    - "typeof(expr)"
+  description: "Return DDL-formatted type string for the data type of the input."
+- name: ucase
+  signatures:
+    - "ucase(str)"
+  description: "Returns str with all characters changed to uppercase."
+- name: unbase64
+  signatures:
+    - "unbase64(str)"
+  description: "Converts the argument from a base 64 string str to a binary."
+- name: unhex
+  signatures:
+    - "unhex(expr)"
+  description: "Converts hexadecimal expr to binary."
+- name: uniform
+  signatures:
+    - "uniform(min, max[, seed])"
+  description: "Returns a random value with independent and identically distributed (i.i.d.) values with the specified range of numbers. The random seed is optional. The provided numbers specifying the minimum and maximum values of the range must be constant. If both of these numbers are integers, then the result will also be an integer. Otherwise if one or both of these are floating-point numbers, then the result will also be a floating-point number."
+- name: unix_date
+  signatures:
+    - "unix_date(date)"
+  description: "Returns the number of days since 1970-01-01."
+- name: unix_micros
+  signatures:
+    - "unix_micros(timestamp)"
+  description: "Returns the number of microseconds since 1970-01-01 00:00:00 UTC."
+- name: unix_millis
+  signatures:
+    - "unix_millis(timestamp)"
+  description: "Returns the number of milliseconds since 1970-01-01 00:00:00 UTC. Truncates higher levels of precision."
+- name: unix_seconds
+  signatures:
+    - "unix_seconds(timestamp)"
+  description: "Returns the number of seconds since 1970-01-01 00:00:00 UTC. Truncates higher levels of precision."
+- name: unix_timestamp
+  signatures:
+    - "unix_timestamp([timeExp[, fmt]])"
+  description: "Returns the UNIX timestamp of current or specified time."
+- name: upper
+  signatures:
+    - "upper(str)"
+  description: "Returns str with all characters changed to uppercase."
+- name: url_decode
+  signatures:
+    - "url_decode(str)"
+  description: "Decodes a str in 'application/x-www-form-urlencoded' format using a specific encoding scheme."
+- name: url_encode
+  signatures:
+    - "url_encode(str)"
+  description: "Translates a string into 'application/x-www-form-urlencoded' format using a specific encoding scheme."
+- name: user
+  signatures:
+    - "user()"
+  description: "user name of current execution context."
+- name: uuid
+  signatures:
+    - "uuid()"
+  description: "Returns an universally unique identifier (UUID) string. The value is returned as a canonical UUID 36-character string."
+- name: validate_utf8
+  signatures:
+    - "validate_utf8(str)"
+  description: "Returns the original string if str is a valid UTF-8 string, otherwise throws an exception."
+- name: var_pop
+  signatures:
+    - "var_pop(expr)"
+  description: "Returns the population variance calculated from values of a group."
+- name: var_samp
+  signatures:
+    - "var_samp(expr)"
+  description: "Returns the sample variance calculated from values of a group."
+- name: variance
+  signatures:
+    - "variance(expr)"
+  description: "Returns the sample variance calculated from values of a group."
+- name: variant_explode
+  signatures:
+    - "variant_explode(expr)"
+  description: "It separates a variant object/array into multiple rows containing its fields/elements. Its result schema is struct<pos int, key string, value variant>. pos is the position of the field/element in its parent object/array, and value is the field/element value. key is the field name when exploding a variant object, or is NULL when exploding a variant array. It ignores any input that is not a variant array/object, including SQL NULL, variant null, and any other variant values."
+- name: variant_explode_outer
+  signatures:
+    - "variant_explode_outer(expr)"
+  description: "It separates a variant object/array into multiple rows containing its fields/elements. Its result schema is struct<pos int, key string, value variant>. pos is the position of the field/element in its parent object/array, and value is the field/element value. key is the field name when exploding a variant object, or is NULL when exploding a variant array. It ignores any input that is not a variant array/object, including SQL NULL, variant null, and any other variant values."
+- name: variant_get
+  signatures:
+    - "variant_get(v, path[, type])"
+  description: "Extracts a sub-variant from v according to path, and then cast the sub-variant to type. When type is omitted, it is default to variant. Returns null if the path does not exist. Throws an exception if the cast fails."
+- name: variant_to_json
+  signatures:
+    - "variant_to_json(expr)"
+    - "variant_to_json(expr, options)"
+  description: "Returns a JSON string representation of a VARIANT expression."
+- name: version
+  signatures:
+    - "version()"
+  description: "Returns the Spark version. The string contains 2 fields, the first being a release version and the second being a git revision."
+- name: weekday
+  signatures:
+    - "weekday(date)"
+  description: "Returns the day of the week for date/timestamp (0 = Monday, 1 = Tuesday, ..., 6 = Sunday)."
+- name: weekofyear
+  signatures:
+    - "weekofyear(date)"
+  description: "Returns the week of the year of the given date. A week is considered to start on a Monday and week 1 is the first week with >3 days."
+- name: when
+  signatures:
+    - "CASE WHEN expr1 THEN expr2 [WHEN expr3 THEN expr4]* [ELSE expr5] END"
+  description: "When expr1 = true, returns expr2; else when expr3 = true, returns expr4; else returns expr5."
+- name: width_bucket
+  signatures:
+    - "width_bucket(value, min_value, max_value, num_bucket)"
+  description: "Returns the bucket number to which value would be assigned in an equiwidth histogram with num_bucket buckets, in the range min_value to max_value.\""
 - name: window
   signatures:
-    - window(time_column, window_duration)
-    - window(time_column, window_duration, slide_duration)
-    - window(time_column, window_duration, slide_duration, start_time)
-  description: Groups timestamp values into fixed-duration window buckets.
+    - "window(time_column, window_duration[, slide_duration[, start_time]])"
+  description: "Bucketize rows into one or more time windows given a timestamp specifying column. Window starts are inclusive but the window ends are exclusive, e.g. 12:05 will be in the window [12:05,12:10) but not in [12:00,12:05). Windows can support microsecond precision. Windows in the order of months are not supported. See 'Window Operations on Event Time' in Structured Streaming guide doc for detailed explanation and examples."
+- name: window_time
+  signatures:
+    - "window_time(window_column)"
+  description: "Extract the time value from time/session window column which can be used for event time value of window. The extracted time is (window.end - 1) which reflects the fact that the aggregating windows have exclusive upper bound - [start, end) See 'Window Operations on Event Time' in Structured Streaming guide doc for detailed explanation and examples."
+- name: xpath
+  signatures:
+    - "xpath(xml, xpath)"
+  description: "Returns a string array of values within the nodes of xml that match the XPath expression."
+- name: xpath_boolean
+  signatures:
+    - "xpath_boolean(xml, xpath)"
+  description: "Returns true if the XPath expression evaluates to true, or if a matching node is found."
+- name: xpath_double
+  signatures:
+    - "xpath_double(xml, xpath)"
+  description: "Returns a double value, the value zero if no match is found, or NaN if a match is found but the value is non-numeric."
+- name: xpath_float
+  signatures:
+    - "xpath_float(xml, xpath)"
+  description: "Returns a float value, the value zero if no match is found, or NaN if a match is found but the value is non-numeric."
+- name: xpath_int
+  signatures:
+    - "xpath_int(xml, xpath)"
+  description: "Returns an integer value, or the value zero if no match is found, or a match is found but the value is non-numeric."
+- name: xpath_long
+  signatures:
+    - "xpath_long(xml, xpath)"
+  description: "Returns a long integer value, or the value zero if no match is found, or a match is found but the value is non-numeric."
+- name: xpath_number
+  signatures:
+    - "xpath_number(xml, xpath)"
+  description: "Returns a double value, the value zero if no match is found, or NaN if a match is found but the value is non-numeric."
+- name: xpath_short
+  signatures:
+    - "xpath_short(xml, xpath)"
+  description: "Returns a short integer value, or the value zero if no match is found, or a match is found but the value is non-numeric."
+- name: xpath_string
+  signatures:
+    - "xpath_string(xml, xpath)"
+  description: "Returns the text contents of the first xml node that matches the XPath expression."
+- name: xxhash64
+  signatures:
+    - "xxhash64(expr1, expr2, ...)"
+  description: "Returns a 64-bit hash value of the arguments. Hash seed is 42."
+- name: year
+  signatures:
+    - "year(date)"
+  description: "Returns the year component of the date/timestamp."
+- name: years
+  signatures:
+    - "years(date)"
+  description: "Returns the year component of the date/timestamp."
+- name: zeroifnull
+  signatures:
+    - "zeroifnull(expr)"
+  description: "Returns zero if expr is equal to null, or expr otherwise."
+- name: zip_with
+  signatures:
+    - "zip_with(left, right, func)"
+  description: "Merges the two given arrays, element-wise, into a single array using function. If one array is shorter, nulls are appended at the end to match the length of the longer array, before applying function."
+- name: "|"
+  signatures:
+    - "expr1 | expr2"
+  description: "Returns the result of bitwise OR of expr1 and expr2."
 - name: "||"
   signatures:
-    - "||(left, right)"
-  description: Concatenates two strings.
+    - "expr1 || expr2"
+  description: "Returns the concatenation of expr1 and expr2."
+- name: "~"
+  signatures:
+    - "~ expr"
+  description: "Returns the result of bitwise NOT of expr."

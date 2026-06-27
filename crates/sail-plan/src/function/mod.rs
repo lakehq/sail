@@ -79,12 +79,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn generated_function_metadata_names_are_registered() {
-        let names = list_built_in_function_names_raw();
+    fn generated_function_metadata_names_match_registered_functions() {
+        let registered_names = list_built_in_function_names_raw();
+        let metadata_names = metadata::built_in_function_metadata_names().collect::<Vec<_>>();
         for name in metadata::built_in_function_metadata_names() {
             assert!(
-                names.contains(&name),
+                registered_names.contains(&name),
                 "metadata for unregistered function: {name}"
+            );
+        }
+        for name in registered_names {
+            assert!(
+                metadata_names.contains(&name),
+                "registered function missing metadata: {name}"
             );
         }
     }
@@ -94,7 +101,7 @@ mod tests {
         let status = metadata::built_in_function_status("to_date");
         assert_eq!(status.name, "to_date");
         assert!(status.description.as_deref().is_some_and(|description| {
-            description.contains("to_date(expr)") && description.contains("Converts")
+            description.contains("to_date(date_str[, fmt])") && description.contains("Parses")
         }));
     }
 }
