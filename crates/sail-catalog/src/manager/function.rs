@@ -31,23 +31,31 @@ impl CatalogManager {
         database: &[T],
         pattern: Option<&str>,
         system_functions: &[String],
+        show_user_functions: bool,
+        show_system_functions: bool,
     ) -> CatalogResult<Vec<String>> {
         let _ = self.get_database_by_qualifier(database).await?;
         let state = self.state()?;
-        let mut functions = filter_pattern(
-            system_functions
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-            pattern,
-        );
-        functions.extend(
-            state
-                .functions
-                .keys()
-                .filter(|name| match_pattern(name.as_ref(), pattern))
-                .map(|name| name.to_string()),
-        );
+        let mut functions = if show_system_functions {
+            filter_pattern(
+                system_functions
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+                pattern,
+            )
+        } else {
+            vec![]
+        };
+        if show_user_functions {
+            functions.extend(
+                state
+                    .functions
+                    .keys()
+                    .filter(|name| match_pattern(name.as_ref(), pattern))
+                    .map(|name| name.to_string()),
+            );
+        }
         functions.sort();
         functions.dedup();
         Ok(functions)

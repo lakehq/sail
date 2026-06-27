@@ -5931,6 +5931,14 @@
               }
             },
             {
+              "name": "Keyword(System)",
+              "node": {
+                "terminal": {
+                  "keyword": "SYSTEM"
+                }
+              }
+            },
+            {
               "name": "Keyword(SystemTime)",
               "node": {
                 "terminal": {
@@ -6215,6 +6223,14 @@
               "node": {
                 "terminal": {
                   "keyword": "USE"
+                }
+              }
+            },
+            {
+              "name": "Keyword(User)",
+              "node": {
+                "terminal": {
+                  "keyword": "USER"
                 }
               }
             },
@@ -7592,6 +7608,22 @@
               "node": {
                 "optional": {
                   "nonTerminal": "SetQuantifier"
+                }
+              }
+            },
+            {
+              "name": "Option(ShowFunctionScope)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "ShowFunctionScope"
+                }
+              }
+            },
+            {
+              "name": "Option(ShowFunctionsClause)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "ShowFunctionsClause"
                 }
               }
             },
@@ -9229,6 +9261,98 @@
               }
             },
             {
+              "name": "ShowFunctionScope",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(All)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(User)"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Keyword(System)"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "name": "ShowFunctionsClause",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Either(Keyword(From), Keyword(In))"
+                      },
+                      {
+                        "nonTerminal": "ObjectName"
+                      },
+                      {
+                        "nonTerminal": "Keyword(Like)"
+                      },
+                      {
+                        "nonTerminal": "ShowFunctionsPattern"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Either(Keyword(From), Keyword(In))"
+                      },
+                      {
+                        "nonTerminal": "ObjectName"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "Option(Keyword(Like))"
+                      },
+                      {
+                        "nonTerminal": "ShowFunctionsPattern"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "name": "ShowFunctionsPattern",
+              "node": {
+                "choice": [
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "StringLiteral"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
+                        "nonTerminal": "ObjectName"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
               "name": "SortByClause",
               "node": {
                 "sequence": [
@@ -9704,7 +9828,13 @@
                         "nonTerminal": "Keyword(Show)"
                       },
                       {
+                        "nonTerminal": "Option(ShowFunctionScope)"
+                      },
+                      {
                         "nonTerminal": "Keyword(Functions)"
+                      },
+                      {
+                        "nonTerminal": "Option(ShowFunctionsClause)"
                       }
                     ]
                   },

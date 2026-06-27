@@ -63,13 +63,18 @@ impl PlanResolver<'_> {
                     pattern,
                 })
             }
-            CommandNode::ShowFunctions { database, pattern } => {
-                self.resolve_catalog_command(CatalogCommand::ShowFunctions {
-                    database: database.map(|x| x.into()).unwrap_or_default(),
-                    pattern,
-                    system_functions: list_built_in_function_names(),
-                })
-            }
+            CommandNode::ShowFunctions {
+                database,
+                pattern,
+                show_user_functions,
+                show_system_functions,
+            } => self.resolve_catalog_command(CatalogCommand::ShowFunctions {
+                database: database.map(|x| x.into()).unwrap_or_default(),
+                pattern,
+                system_functions: list_built_in_function_names(),
+                show_user_functions,
+                show_system_functions,
+            }),
             CommandNode::ListTables { database, pattern } => {
                 self.resolve_catalog_command(CatalogCommand::ListTables {
                     database: database.map(|x| x.into()).unwrap_or_default(),

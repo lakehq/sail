@@ -76,6 +76,8 @@ pub enum CatalogCommand {
         database: Vec<String>,
         pattern: Option<String>,
         system_functions: Vec<String>,
+        show_user_functions: bool,
+        show_system_functions: bool,
     },
     ListTables {
         database: Vec<String>,
@@ -392,9 +394,17 @@ impl CatalogCommand {
                 database,
                 pattern,
                 system_functions,
+                show_user_functions,
+                show_system_functions,
             } => {
                 let rows = manager
-                    .list_functions(&database, pattern.as_deref(), &system_functions)
+                    .list_functions(
+                        &database,
+                        pattern.as_deref(),
+                        &system_functions,
+                        show_user_functions,
+                        show_system_functions,
+                    )
                     .await?
                     .into_iter()
                     .map(|function| ShowFunctionsRow { function })
@@ -575,7 +585,7 @@ impl CatalogCommand {
                 system_functions,
             } => {
                 let rows = manager
-                    .list_functions(&database, pattern.as_deref(), &system_functions)
+                    .list_functions(&database, pattern.as_deref(), &system_functions, true, true)
                     .await?;
                 display.functions().to_record_batch(rows)?
             }

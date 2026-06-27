@@ -16,9 +16,9 @@ use crate::ast::keywords::{
     Name, Namespace, Namespaces, Noscan, Not, Null, On, Options, Or, Outputformat, Overwrite,
     Partition, Partitioned, Partitions, Properties, Purge, Recover, Refresh, Rename, Replace,
     Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted, Source, Start,
-    Statistics, Stored, Table, Tables, Target, Tblproperties, Temp, Temporary, Terminated, Then,
-    Time, To, Type, Uncache, Unset, Update, Use, Using, Values, Verbose, View, Views, When, With,
-    Zone,
+    Statistics, Stored, System, Table, Tables, Target, Tblproperties, Temp, Temporary, Terminated,
+    Then, Time, To, Type, Uncache, Unset, Update, Use, User, Using, Values, Verbose, View, Views,
+    When, With, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{
@@ -193,7 +193,9 @@ pub enum Statement {
     },
     ShowFunctions {
         show: Show,
+        scope: Option<ShowFunctionScope>,
         functions: Functions,
+        clause: Option<ShowFunctionsClause>,
     },
     Explain {
         explain: Explain,
@@ -569,6 +571,26 @@ pub enum DatabaseKeyword {
     Database(Database),
     Schema(Schema),
     Namespace(Namespace),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum ShowFunctionScope {
+    All(All),
+    User(User),
+    System(System),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum ShowFunctionsClause {
+    NamespacePattern(Either<From, In>, ObjectName, Like, ShowFunctionsPattern),
+    Namespace(Either<From, In>, ObjectName),
+    Pattern(Option<Like>, ShowFunctionsPattern),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum ShowFunctionsPattern {
+    String(StringLiteral),
+    Name(ObjectName),
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]

@@ -17,7 +17,8 @@ use sail_sql_parser::ast::statement::{
     MergeNotMatchedBySourceAction, MergeNotMatchedByTargetAction, MergeSource, PartitionByItem,
     PartitionByList, PartitionClause, PartitionValue, PartitionValueList, PropertyKey,
     PropertyKeyList, PropertyKeyValue, PropertyList, PropertyValue, RowFormat,
-    RowFormatDelimitedClause, SetClause, SortColumn, SortColumnClause, SortColumnList, Statement,
+    RowFormatDelimitedClause, SetClause, ShowFunctionScope, ShowFunctionsClause,
+    ShowFunctionsPattern, SortColumn, SortColumnClause, SortColumnList, Statement,
     TableColumnIdentityOption, TableColumnIdentityOptions, UpdateTableAlias, ViewColumn,
     ViewColumnList, ViewUsingClause,
 };
@@ -31,6 +32,56 @@ use crate::expression::{
 };
 use crate::query::from_ast_query;
 use crate::value::from_ast_string;
+
+fn from_ast_show_function_scope(scope: Option<ShowFunctionScope>) -> (bool, bool) {
+    match scope {
+        None | Some(ShowFunctionScope::All(_)) => (true, true),
+        Some(ShowFunctionScope::User(_)) => (true, false),
+        Some(ShowFunctionScope::System(_)) => (false, true),
+    }
+}
+
+fn from_ast_show_functions_clause(
+    clause: Option<ShowFunctionsClause>,
+) -> SqlResult<(Option<spec::ObjectName>, Option<String>)> {
+    let Some(clause) = clause else {
+        return Ok((None, None));
+    };
+    match clause {
+        ShowFunctionsClause::NamespacePattern(_, database, _, pattern) => Ok((
+            Some(from_ast_object_name(database)?),
+            Some(from_ast_show_functions_pattern(pattern)?),
+        )),
+        ShowFunctionsClause::Namespace(_, database) => {
+            Ok((Some(from_ast_object_name(database)?), None))
+        }
+        ShowFunctionsClause::Pattern(_, ShowFunctionsPattern::String(pattern)) => {
+            Ok((None, Some(from_ast_string(pattern)?)))
+        }
+        ShowFunctionsClause::Pattern(_, ShowFunctionsPattern::Name(pattern)) => {
+            let mut parts: Vec<String> = from_ast_object_name(pattern)?.into();
+            let Some(pattern) = parts.pop() else {
+                return Err(SqlError::invalid("SHOW FUNCTIONS with empty pattern"));
+            };
+            let database = if parts.is_empty() {
+                None
+            } else {
+                Some(parts.into())
+            };
+            Ok((database, Some(pattern)))
+        }
+    }
+}
+
+fn from_ast_show_functions_pattern(pattern: ShowFunctionsPattern) -> SqlResult<String> {
+    match pattern {
+        ShowFunctionsPattern::String(pattern) => from_ast_string(pattern),
+        ShowFunctionsPattern::Name(pattern) => {
+            let parts: Vec<String> = from_ast_object_name(pattern)?.into();
+            Ok(parts.join("."))
+        }
+    }
+}
 
 /// Converts a parsed SQL AST statement into a spec plan (either a query or a command).
 pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
@@ -533,10 +584,19 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
-        Statement::ShowFunctions { .. } => {
+        Statement::ShowFunctions {
+            show: _,
+            scope,
+            functions: _,
+            clause,
+        } => {
+            let (database, pattern) = from_ast_show_functions_clause(clause)?;
+            let (show_user_functions, show_system_functions) = from_ast_show_function_scope(scope);
             let node = spec::CommandNode::ShowFunctions {
-                database: None,
-                pattern: None,
+                database,
+                pattern,
+                show_user_functions,
+                show_system_functions,
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
