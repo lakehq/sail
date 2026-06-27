@@ -1,0 +1,108 @@
+- name: "%"
+  signatures:
+    - "%(left, right)"
+  description: Returns the remainder after dividing left by right.
+- name: "*"
+  signatures:
+    - "*(left, right)"
+  description: Multiplies two numeric values.
+- name: "+"
+  signatures:
+    - "+(left, right)"
+  description: Adds two values.
+- name: "-"
+  signatures:
+    - "-(left, right)"
+  description: Subtracts right from left.
+- name: "/"
+  signatures:
+    - "/(left, right)"
+  description: Divides left by right.
+- name: "<>"
+  signatures:
+    - "<>(left, right)"
+  description: Returns true when left and right are not equal.
+- name: avg
+  signatures:
+    - avg(expr)
+  description: Returns the mean value for a group.
+- name: between
+  signatures:
+    - between(expr, lower, upper)
+  description: Returns true when expr is greater than or equal to lower and less than or equal to upper.
+- name: count
+  signatures:
+    - count(*)
+    - count(expr)
+  description: Returns the number of rows or non-null values for a group.
+- name: current_database
+  signatures:
+    - current_database()
+  description: Returns the current database.
+- name: dense_rank
+  signatures:
+    - dense_rank()
+  description: Returns the rank of a row without gaps in an ordered window partition.
+- name: explode
+  signatures:
+    - explode(expr)
+  description: Separates the elements of an array or map into multiple rows.
+- name: lag
+  signatures:
+    - lag(expr)
+    - lag(expr, offset)
+    - lag(expr, offset, default)
+  description: Returns a value from a preceding row in an ordered window partition.
+- name: lead
+  signatures:
+    - lead(expr)
+    - lead(expr, offset)
+    - lead(expr, offset, default)
+  description: Returns a value from a following row in an ordered window partition.
+- name: max
+  signatures:
+    - max(expr)
+  description: Returns the maximum value for a group.
+- name: min
+  signatures:
+    - min(expr)
+  description: Returns the minimum value for a group.
+- name: range
+  signatures:
+    - range(end)
+    - range(start, end)
+    - range(start, end, step)
+    - range(start, end, step, num_partitions)
+  description: Creates a relation containing a sequence of 64-bit integer values.
+- name: rank
+  signatures:
+    - rank()
+  description: Returns the rank of a row with gaps in an ordered window partition.
+- name: row_number
+  signatures:
+    - row_number()
+  description: Returns a sequential row number within an ordered window partition.
+- name: sum
+  signatures:
+    - sum(expr)
+  description: Returns the sum of non-null values for a group.
+- name: to_date
+  signatures:
+    - to_date(expr)
+    - to_date(expr, fmt)
+  description: Converts expr to a date using an optional datetime pattern.
+- name: to_timestamp
+  signatures:
+    - to_timestamp(expr)
+    - to_timestamp(expr, fmt)
+  description: Converts expr to a timestamp using an optional datetime pattern.
+- name: window
+  signatures:
+    - window(time_column, window_duration)
+    - window(time_column, window_duration, slide_duration)
+    - window(time_column, window_duration, slide_duration, start_time)
+  description: Groups timestamp values into fixed-duration window buckets.
+- name: "||"
+  signatures:
+    - "||(left, right)"
+  description: Concatenates two strings.

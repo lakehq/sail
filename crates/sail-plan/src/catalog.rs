@@ -8,7 +8,9 @@ use educe::Educe;
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::utils::quote_names_if_needed;
 use sail_common_datafusion::catalog::display::CatalogObjectDisplay;
-use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableStatus};
+use sail_common_datafusion::catalog::{
+    DatabaseStatus, FunctionStatus, TableColumnStatus, TableStatus,
+};
 use sail_common_datafusion::session::plan::PlanFormatter;
 use sail_common_datafusion::utils::items::ItemTaker;
 
@@ -177,14 +179,14 @@ impl CatalogObjectDisplay for SparkCatalogObjectDisplay {
         }
     }
 
-    fn function(name: String) -> Self::Function {
+    fn function(status: FunctionStatus) -> Self::Function {
         Self::Function {
-            name,
-            catalog: None,
-            namespace: None,
-            description: None,
-            class_name: "".to_string(),
-            is_temporary: false,
+            name: status.name,
+            catalog: status.catalog,
+            namespace: status.namespace,
+            description: status.description,
+            class_name: status.class_name,
+            is_temporary: status.is_temporary,
         }
     }
 }

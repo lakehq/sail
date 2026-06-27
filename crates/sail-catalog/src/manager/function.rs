@@ -2,11 +2,12 @@ use std::sync::Arc;
 
 use datafusion::catalog::TableFunctionImpl;
 use datafusion_expr::ScalarUDF;
+use sail_common_datafusion::catalog::FunctionStatus;
 
 use crate::command::CatalogTableFunction;
 use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::manager::CatalogManager;
-use crate::utils::{filter_pattern, match_pattern};
+use crate::utils::match_pattern;
 
 impl CatalogManager {
     fn canonical_function_name(name: &str) -> Arc<str> {
@@ -30,20 +31,18 @@ impl CatalogManager {
         &self,
         database: &[T],
         pattern: Option<&str>,
-        system_functions: &[String],
+        system_functions: &[FunctionStatus],
         show_user_functions: bool,
         show_system_functions: bool,
-    ) -> CatalogResult<Vec<String>> {
+    ) -> CatalogResult<Vec<FunctionStatus>> {
         let _ = self.get_database_by_qualifier(database).await?;
         let state = self.state()?;
         let mut functions = if show_system_functions {
-            filter_pattern(
-                system_functions
-                    .iter()
-                    .map(String::as_str)
-                    .collect::<Vec<_>>(),
-                pattern,
-            )
+            system_functions
+                .iter()
+                .filter(|status| match_pattern(&status.name, pattern))
+                .cloned()
+                .collect::<Vec<_>>()
         } else {
             vec![]
         };
@@ -53,11 +52,11 @@ impl CatalogManager {
                     .functions
                     .keys()
                     .filter(|name| match_pattern(name.as_ref(), pattern))
-                    .map(|name| name.to_string()),
+                    .map(|name| FunctionStatus::temporary(name.to_string())),
             );
         }
-        functions.sort();
-        functions.dedup();
+        functions.sort_by(|left, right| left.name.cmp(&right.name));
+        functions.dedup_by(|left, right| left.name == right.name);
         Ok(functions)
     }
 

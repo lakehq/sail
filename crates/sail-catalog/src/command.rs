@@ -1,7 +1,7 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use sail_common_datafusion::array::serde::ArrowSerializer;
-use sail_common_datafusion::catalog::LakehouseOperation;
+use sail_common_datafusion::catalog::{FunctionStatus, LakehouseOperation};
 use sail_common_datafusion::datasource::{
     is_lakehouse_format, TableFormatAlterTableOperation, TableFormatCreateTableColumn,
     TableFormatCreateTableInfo, TableFormatRegistry,
@@ -75,7 +75,7 @@ pub enum CatalogCommand {
     ShowFunctions {
         database: Vec<String>,
         pattern: Option<String>,
-        system_functions: Vec<String>,
+        system_functions: Vec<FunctionStatus>,
         show_user_functions: bool,
         show_system_functions: bool,
     },
@@ -108,7 +108,7 @@ pub enum CatalogCommand {
     ListFunctions {
         database: Vec<String>,
         pattern: Option<String>,
-        system_functions: Vec<String>,
+        system_functions: Vec<FunctionStatus>,
     },
     DropFunction {
         function: Vec<String>,
@@ -407,7 +407,9 @@ impl CatalogCommand {
                     )
                     .await?
                     .into_iter()
-                    .map(|function| ShowFunctionsRow { function })
+                    .map(|status| ShowFunctionsRow {
+                        function: status.name,
+                    })
                     .collect::<Vec<_>>();
                 ArrowSerializer::default().build_record_batch(&rows)?
             }
@@ -1045,7 +1047,7 @@ mod tests {
     use datafusion_expr::{LogicalPlan, TableSource};
     use sail_common_datafusion::catalog::display::{CatalogObjectDisplay, DefaultCatalogDisplay};
     use sail_common_datafusion::catalog::{
-        DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
+        DatabaseStatus, FunctionStatus, TableColumnStatus, TableKind, TableStatus,
     };
     use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
     use sail_common_datafusion::session::plan::{PlanFormatter, PlanService};
@@ -1087,8 +1089,8 @@ mod tests {
             TestCatalogOutput { value: status.name }
         }
 
-        fn function(name: String) -> Self::Function {
-            TestCatalogOutput { value: name }
+        fn function(status: FunctionStatus) -> Self::Function {
+            TestCatalogOutput { value: status.name }
         }
     }
 

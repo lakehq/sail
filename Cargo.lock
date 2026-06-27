@@ -8061,6 +8061,7 @@ dependencies = [
  "sail-sql-analyzer",
  "serde",
  "serde_json",
+ "serde_yaml",
  "thiserror 2.0.18",
  "tokio",
  "tonic",

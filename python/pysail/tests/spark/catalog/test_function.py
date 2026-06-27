@@ -20,6 +20,7 @@ def test_list_functions_returns_spark_function_fields(spark):
         "className",
         "isTemporary",
     )
+    assert "Signatures: to_date(expr)" in function.description
 
 
 def test_list_functions_includes_built_ins(spark):

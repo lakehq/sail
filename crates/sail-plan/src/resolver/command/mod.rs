@@ -7,7 +7,7 @@ use sail_common::spec;
 
 use crate::catalog::CatalogCommandNode;
 use crate::error::{PlanError, PlanResult};
-use crate::function::list_built_in_function_names;
+use crate::function::list_built_in_function_statuses;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
@@ -71,7 +71,7 @@ impl PlanResolver<'_> {
             } => self.resolve_catalog_command(CatalogCommand::ShowFunctions {
                 database: database.map(|x| x.into()).unwrap_or_default(),
                 pattern,
-                system_functions: list_built_in_function_names(),
+                system_functions: list_built_in_function_statuses(),
                 show_user_functions,
                 show_system_functions,
             }),
@@ -91,7 +91,7 @@ impl PlanResolver<'_> {
                 self.resolve_catalog_command(CatalogCommand::ListFunctions {
                     database: database.map(|x| x.into()).unwrap_or_default(),
                     pattern,
-                    system_functions: list_built_in_function_names(),
+                    system_functions: list_built_in_function_statuses(),
                 })
             }
             CommandNode::ListColumns { table } => {

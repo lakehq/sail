@@ -5,6 +5,7 @@ use datafusion::catalog::TableFunction;
 use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 use datafusion_expr::expr::Expr;
 use lazy_static::lazy_static;
+use sail_common_datafusion::catalog::FunctionStatus;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::ScalarFunction;
@@ -12,6 +13,7 @@ use crate::function::common::ScalarFunction;
 mod aggregate;
 pub(crate) mod common;
 mod generator;
+mod metadata;
 mod scalar;
 mod table;
 mod window;
@@ -50,7 +52,7 @@ pub fn is_built_in_generator_function(name: &str) -> bool {
     BUILT_IN_GENERATOR_FUNCTIONS.contains_key(name)
 }
 
-pub(crate) fn list_built_in_function_names() -> Vec<String> {
+fn list_built_in_function_names_raw() -> Vec<&'static str> {
     let mut names = BUILT_IN_SCALAR_FUNCTIONS
         .keys()
         .chain(BUILT_IN_GENERATOR_FUNCTIONS.keys())
@@ -62,7 +64,39 @@ pub(crate) fn list_built_in_function_names() -> Vec<String> {
     names.extend(BUILT_IN_OPERATOR_FUNCTION_NAMES.iter().copied());
     names.sort_unstable();
     names.dedup();
-    names.into_iter().map(str::to_string).collect()
+    names
+}
+
+pub(crate) fn list_built_in_function_statuses() -> Vec<FunctionStatus> {
+    list_built_in_function_names_raw()
+        .into_iter()
+        .map(metadata::built_in_function_status)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn generated_function_metadata_names_are_registered() {
+        let names = list_built_in_function_names_raw();
+        for name in metadata::built_in_function_metadata_names() {
+            assert!(
+                names.contains(&name),
+                "metadata for unregistered function: {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn generated_function_metadata_populates_status_description() {
+        let status = metadata::built_in_function_status("to_date");
+        assert_eq!(status.name, "to_date");
+        assert!(status.description.as_deref().is_some_and(|description| {
+            description.contains("to_date(expr)") && description.contains("Converts")
+        }));
+    }
 }
 
 pub use generator::get_outer_built_in_generator_functions;

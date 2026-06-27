@@ -34,6 +34,40 @@ pub struct TableStatus {
     pub kind: TableKind,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+pub struct FunctionStatus {
+    pub name: String,
+    pub catalog: Option<String>,
+    pub namespace: Option<Vec<String>>,
+    pub description: Option<String>,
+    pub class_name: String,
+    pub is_temporary: bool,
+}
+
+impl FunctionStatus {
+    pub fn built_in(name: String) -> Self {
+        Self {
+            name,
+            catalog: None,
+            namespace: None,
+            description: None,
+            class_name: String::new(),
+            is_temporary: false,
+        }
+    }
+
+    pub fn temporary(name: String) -> Self {
+        Self {
+            name,
+            catalog: None,
+            namespace: None,
+            description: None,
+            class_name: String::new(),
+            is_temporary: true,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TableKind {
     Table {
