@@ -41,6 +41,9 @@ pub struct FunctionStatus {
     pub namespace: Option<Vec<String>>,
     pub signatures: Vec<String>,
     pub description: Option<String>,
+    pub examples: Option<String>,
+    pub note: Option<String>,
+    pub since: Option<String>,
     pub class_name: String,
     pub is_temporary: bool,
 }
@@ -53,6 +56,9 @@ impl FunctionStatus {
             namespace: None,
             signatures: vec![],
             description: None,
+            examples: None,
+            note: None,
+            since: None,
             class_name: String::new(),
             is_temporary: false,
         }
@@ -65,6 +71,9 @@ impl FunctionStatus {
             namespace: None,
             signatures: vec![],
             description: None,
+            examples: None,
+            note: None,
+            since: None,
             class_name: String::new(),
             is_temporary: true,
         }
@@ -92,6 +101,35 @@ impl FunctionStatus {
                 format!("{} - {description}", self.signatures.join(", "))
             }
         }
+    }
+
+    pub fn extended_usage(&self) -> String {
+        let mut output = String::new();
+        if let Some(examples) = self.examples.as_deref().filter(|value| !value.is_empty()) {
+            output.push('\n');
+            output.push_str("    Examples:\n");
+            for line in examples.trim_end().lines() {
+                output.push_str("      ");
+                output.push_str(line);
+                output.push('\n');
+            }
+        }
+        if let Some(note) = self.note.as_deref().filter(|value| !value.is_empty()) {
+            output.push('\n');
+            output.push_str("    Note:\n");
+            for line in note.trim_end().lines() {
+                output.push_str("      ");
+                output.push_str(line);
+                output.push('\n');
+            }
+        }
+        if let Some(since) = self.since.as_deref().filter(|value| !value.is_empty()) {
+            output.push('\n');
+            output.push_str("    Since: ");
+            output.push_str(since);
+            output.push('\n');
+        }
+        output
     }
 }
 

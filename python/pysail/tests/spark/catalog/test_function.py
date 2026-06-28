@@ -80,7 +80,9 @@ def test_describe_function_extended_adds_extended_usage(spark):
         row.function_desc
         for row in spark.sql("DESC FUNCTION EXTENDED to_date").collect()
     ]
-    assert rows[-1] == "Extended Usage:"
+    assert rows[-1].startswith("Extended Usage:\n    Examples:\n")
+    assert "> SELECT to_date('2009-07-30 04:17:52');" in rows[-1]
+    assert "    Since: 1.5.0" in rows[-1]
 
 
 def test_describe_function_supports_string_literal_name(spark):

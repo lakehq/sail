@@ -105,6 +105,11 @@ mod tests {
             .description
             .as_deref()
             .is_some_and(|description| { description.contains("Parses") }));
+        assert!(status
+            .examples
+            .as_deref()
+            .is_some_and(|examples| examples.contains("SELECT to_date")));
+        assert_eq!(status.since.as_deref(), Some("1.5.0"));
     }
 }
 

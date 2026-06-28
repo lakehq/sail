@@ -12,6 +12,12 @@ struct FunctionMetadataEntry {
     #[serde(default)]
     description: Option<String>,
     #[serde(default)]
+    examples: Option<String>,
+    #[serde(default)]
+    note: Option<String>,
+    #[serde(default)]
+    since: Option<String>,
+    #[serde(default)]
     class_name: Option<String>,
 }
 
@@ -25,6 +31,17 @@ impl FunctionMetadataEntry {
         }
         if self.signatures.iter().any(|signature| signature.is_empty()) {
             return Err(format!("function metadata has an empty signature: {}", self.name).into());
+        }
+        if self.examples.as_deref().is_some_and(str::is_empty) {
+            return Err(format!("function metadata has empty examples: {}", self.name).into());
+        }
+        if self.note.as_deref().is_some_and(str::is_empty) {
+            return Err(format!("function metadata has an empty note: {}", self.name).into());
+        }
+        if self.since.as_deref().is_some_and(str::is_empty) {
+            return Err(
+                format!("function metadata has an empty since value: {}", self.name).into(),
+            );
         }
         Ok(())
     }
@@ -79,9 +96,12 @@ fn build_function_metadata(
             .collect::<Vec<_>>()
             .join(", ");
         let description = rust_option_string(entry.description.as_deref());
+        let examples = rust_option_string(entry.examples.as_deref());
+        let note = rust_option_string(entry.note.as_deref());
+        let since = rust_option_string(entry.since.as_deref());
         let class_name = rust_string(entry.class_name.as_deref().unwrap_or(""));
         output.push_str(&format!(
-            "    BuiltInFunctionMetadata {{ name: {name}, signatures: &[{signatures}], description: {description}, class_name: {class_name} }},\n"
+            "    BuiltInFunctionMetadata {{ name: {name}, signatures: &[{signatures}], description: {description}, examples: {examples}, note: {note}, since: {since}, class_name: {class_name} }},\n"
         ));
     }
     output.push_str("];\n");

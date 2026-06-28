@@ -621,7 +621,7 @@ impl CatalogCommand {
                 });
                 if extended {
                     rows.push(DescribeFunctionRow {
-                        function_desc: "Extended Usage:".to_string(),
+                        function_desc: format!("Extended Usage:{}", status.extended_usage()),
                     });
                 }
                 ArrowSerializer::default().build_record_batch(&rows)?

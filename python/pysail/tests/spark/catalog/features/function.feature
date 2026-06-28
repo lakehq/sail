@@ -33,3 +33,33 @@ Feature: Catalog function queries
     Then query result
       | function |
       | to_date  |
+
+  Scenario: DESCRIBE FUNCTION returns usage for a built-in function
+    When query
+      """
+      DESCRIBE FUNCTION abs
+      """
+    Then query result ordered
+      | function_desc                                                             |
+      | Function: abs                                                             |
+      | Usage: abs(expr) - Returns the absolute value of the numeric or interval value. |
+
+  Scenario: DESCRIBE FUNCTION supports string literal names
+    When query
+      """
+      DESC FUNCTION 'concat'
+      """
+    Then query result ordered
+      | function_desc                                                                    |
+      | Function: concat                                                                 |
+      | Usage: concat(col1, col2, ..., colN) - Returns the concatenation of col1, col2, ..., colN. |
+
+  Scenario: DESCRIBE FUNCTION supports operator names
+    When query
+      """
+      DESCRIBE FUNCTION +
+      """
+    Then query result ordered
+      | function_desc                              |
+      | Function: +                                |
+      | Usage: expr1 + expr2 - Returns expr1+expr2. |

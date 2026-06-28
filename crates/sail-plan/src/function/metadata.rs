@@ -8,6 +8,9 @@ pub(crate) struct BuiltInFunctionMetadata {
     pub name: &'static str,
     pub signatures: &'static [&'static str],
     pub description: Option<&'static str>,
+    pub examples: Option<&'static str>,
+    pub note: Option<&'static str>,
+    pub since: Option<&'static str>,
     pub class_name: &'static str,
 }
 
@@ -38,6 +41,9 @@ pub(crate) fn built_in_function_status(name: &str) -> FunctionStatus {
         description: metadata
             .description
             .map(|description| description.to_string()),
+        examples: metadata.examples.map(|examples| examples.to_string()),
+        note: metadata.note.map(|note| note.to_string()),
+        since: metadata.since.map(|since| since.to_string()),
         class_name: metadata.class_name.to_string(),
         is_temporary: false,
     }
