@@ -10,3 +10,7 @@ workspace = true
 datafusion = { workspace = true }
 datafusion-common = { workspace = true }
 datafusion-expr = { workspace = true }
+itertools = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
