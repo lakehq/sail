@@ -4,6 +4,7 @@ pub mod coalesce;
 pub mod map_partitions;
 pub mod merge_cardinality_check;
 pub mod monotonic_id;
+pub mod output_file_count;
 pub mod range;
 pub mod repartition;
 pub mod schema_pivot;
