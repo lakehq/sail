@@ -110,6 +110,11 @@ pub enum CatalogCommand {
         pattern: Option<String>,
         system_functions: Vec<FunctionStatus>,
     },
+    DescribeFunction {
+        function: Vec<String>,
+        extended: bool,
+        system_functions: Vec<FunctionStatus>,
+    },
     DropFunction {
         function: Vec<String>,
         if_exists: bool,
@@ -185,6 +190,7 @@ impl CatalogCommand {
             CatalogCommand::FunctionExists { .. } => "FunctionExists",
             CatalogCommand::GetFunction { .. } => "GetFunction",
             CatalogCommand::ListFunctions { .. } => "ListFunctions",
+            CatalogCommand::DescribeFunction { .. } => "DescribeFunction",
             CatalogCommand::RegisterFunction { .. } => "RegisterFunction",
             CatalogCommand::RegisterTableFunction { .. } => "RegisterTableFunction",
             CatalogCommand::DropFunction { .. } => "DropFunction",
@@ -220,6 +226,9 @@ impl CatalogCommand {
             CatalogCommand::ListColumns { .. } => display.table_columns().schema()?,
             CatalogCommand::GetFunction { .. } | CatalogCommand::ListFunctions { .. } => {
                 display.functions().schema()?
+            }
+            CatalogCommand::DescribeFunction { .. } => {
+                ArrowSerializer::default().schema::<DescribeFunctionRow>()?
             }
             CatalogCommand::SetCurrentCatalog { .. }
             | CatalogCommand::SetCurrentDatabase { .. }
@@ -590,6 +599,32 @@ impl CatalogCommand {
                     .list_functions(&database, pattern.as_deref(), &system_functions, true, true)
                     .await?;
                 display.functions().to_record_batch(rows)?
+            }
+            CatalogCommand::DescribeFunction {
+                function,
+                extended,
+                system_functions,
+            } => {
+                let status = manager
+                    .get_function_status(&function, &system_functions)
+                    .await?;
+                let mut rows = vec![DescribeFunctionRow {
+                    function_desc: format!("Function: {}", status.name),
+                }];
+                if !status.class_name.is_empty() {
+                    rows.push(DescribeFunctionRow {
+                        function_desc: format!("Class: {}", status.class_name),
+                    });
+                }
+                rows.push(DescribeFunctionRow {
+                    function_desc: format!("Usage: {}", status.usage()),
+                });
+                if extended {
+                    rows.push(DescribeFunctionRow {
+                        function_desc: "Extended Usage:".to_string(),
+                    });
+                }
+                ArrowSerializer::default().build_record_batch(&rows)?
             }
             CatalogCommand::DropFunction {
                 function,
@@ -1033,6 +1068,11 @@ struct ShowTableExtendedRow {
 #[derive(Serialize, Deserialize)]
 struct ShowFunctionsRow {
     function: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct DescribeFunctionRow {
+    function_desc: String,
 }
 
 #[cfg(test)]

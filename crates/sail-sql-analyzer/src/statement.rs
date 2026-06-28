@@ -12,8 +12,8 @@ use sail_sql_parser::ast::statement::{
     AsQueryClause, Assignment, AssignmentList, ColumnAlteration, ColumnAlterationList,
     ColumnAlterationOption, ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption,
     ColumnPosition, ColumnTypeDefinition, CommentValue, CreateDatabaseClause, CreateTableClause,
-    CreateViewClause, CreateViewDefinition, DeleteTableAlias, DescribeItem, ExplainFormat,
-    FileFormat, InsertDirectoryDestination, MergeMatchClause, MergeMatchedAction,
+    CreateViewClause, CreateViewDefinition, DeleteTableAlias, DescribeFunctionName, DescribeItem,
+    ExplainFormat, FileFormat, InsertDirectoryDestination, MergeMatchClause, MergeMatchedAction,
     MergeNotMatchedBySourceAction, MergeNotMatchedByTargetAction, MergeSource, PartitionByItem,
     PartitionByList, PartitionClause, PartitionValue, PartitionValueList, PropertyKey,
     PropertyKeyList, PropertyKeyValue, PropertyList, PropertyValue, RowFormat,
@@ -81,6 +81,37 @@ fn from_ast_show_functions_pattern(pattern: ShowFunctionsPattern) -> SqlResult<S
             Ok(parts.join("."))
         }
     }
+}
+
+fn from_ast_describe_function_name(name: DescribeFunctionName) -> SqlResult<spec::ObjectName> {
+    let name = match name {
+        DescribeFunctionName::Name(name) => return from_ast_object_name(name),
+        DescribeFunctionName::String(name) => from_ast_string(name)?,
+        DescribeFunctionName::TripleGreaterThan(name) => name.text().trim().to_string(),
+        DescribeFunctionName::DoubleVerticalBar(name) => name.text().trim().to_string(),
+        DescribeFunctionName::DoubleGreaterThan(name) => name.text().trim().to_string(),
+        DescribeFunctionName::DoubleLessThan(name) => name.text().trim().to_string(),
+        DescribeFunctionName::GreaterThanEquals(name) => name.text().trim().to_string(),
+        DescribeFunctionName::LessThanEquals(name) => name.text().trim().to_string(),
+        DescribeFunctionName::LessThanGreaterThan(name) => name.text().trim().to_string(),
+        DescribeFunctionName::Spaceship(name) => name.text().trim().to_string(),
+        DescribeFunctionName::NotEquals(name) => name.text().trim().to_string(),
+        DescribeFunctionName::DoubleEquals(name) => name.text().trim().to_string(),
+        DescribeFunctionName::ExclamationMark(name) => name.text().trim().to_string(),
+        DescribeFunctionName::GreaterThan(name) => name.text().trim().to_string(),
+        DescribeFunctionName::LessThan(name) => name.text().trim().to_string(),
+        DescribeFunctionName::Plus(name) => name.text().trim().to_string(),
+        DescribeFunctionName::Minus(name) => name.text().trim().to_string(),
+        DescribeFunctionName::Asterisk(name) => name.text().trim().to_string(),
+        DescribeFunctionName::Slash(name) => name.text().trim().to_string(),
+        DescribeFunctionName::Percent(name) => name.text().trim().to_string(),
+        DescribeFunctionName::Ampersand(name) => name.text().trim().to_string(),
+        DescribeFunctionName::VerticalBar(name) => name.text().trim().to_string(),
+        DescribeFunctionName::Caret(name) => name.text().trim().to_string(),
+        DescribeFunctionName::Tilde(name) => name.text().trim().to_string(),
+        DescribeFunctionName::Equals(name) => name.text().trim().to_string(),
+    };
+    Ok(spec::ObjectName::bare(name))
 }
 
 /// Converts a parsed SQL AST statement into a spec plan (either a query or a command).
@@ -1162,18 +1193,10 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     function: _,
                     extended,
                     item,
-                } => {
-                    let function = match item {
-                        Either::Left(x @ ObjectName { .. }) => from_ast_object_name(x)?,
-                        Either::Right(x @ StringLiteral { .. }) => {
-                            spec::ObjectName::bare(from_ast_string(x)?)
-                        }
-                    };
-                    spec::CommandNode::DescribeFunction {
-                        function,
-                        extended: extended.is_some(),
-                    }
-                }
+                } => spec::CommandNode::DescribeFunction {
+                    function: from_ast_describe_function_name(item)?,
+                    extended: extended.is_some(),
+                },
                 DescribeItem::Catalog {
                     catalog: _,
                     extended,

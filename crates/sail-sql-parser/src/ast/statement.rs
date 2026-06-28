@@ -22,7 +22,10 @@ use crate::ast::keywords::{
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{
-    Asterisk, Colon, Comma, Equals, ExclamationMark, LeftParenthesis, Minus, Plus, RightParenthesis,
+    Ampersand, Asterisk, Caret, Colon, Comma, DoubleEquals, DoubleGreaterThan, DoubleLessThan,
+    DoubleVerticalBar, Equals, ExclamationMark, GreaterThan, GreaterThanEquals, LeftParenthesis,
+    LessThan, LessThanEquals, LessThanGreaterThan, Minus, NotEquals, Percent, Plus,
+    RightParenthesis, Slash, Spaceship, Tilde, TripleGreaterThan, VerticalBar,
 };
 use crate::ast::query::{AliasClause, IdentList, Query, WhereClause};
 use crate::combinator::{boxed, compose, sequence, unit};
@@ -1077,7 +1080,7 @@ pub enum DescribeItem {
     Function {
         function: Function,
         extended: Option<Extended>,
-        item: Either<ObjectName, StringLiteral>,
+        item: DescribeFunctionName,
     },
     Catalog {
         catalog: Catalog,
@@ -1112,6 +1115,35 @@ pub enum DescribeItem {
         #[parser(function = |(q, _), _| q)]
         item: Query,
     },
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum DescribeFunctionName {
+    Name(ObjectName),
+    String(StringLiteral),
+    TripleGreaterThan(TripleGreaterThan),
+    DoubleVerticalBar(DoubleVerticalBar),
+    DoubleGreaterThan(DoubleGreaterThan),
+    DoubleLessThan(DoubleLessThan),
+    GreaterThanEquals(GreaterThanEquals),
+    LessThanEquals(LessThanEquals),
+    LessThanGreaterThan(LessThanGreaterThan),
+    Spaceship(Spaceship),
+    NotEquals(NotEquals),
+    DoubleEquals(DoubleEquals),
+    ExclamationMark(ExclamationMark),
+    GreaterThan(GreaterThan),
+    LessThan(LessThan),
+    Plus(Plus),
+    Minus(Minus),
+    Asterisk(Asterisk),
+    Slash(Slash),
+    Percent(Percent),
+    Ampersand(Ampersand),
+    VerticalBar(VerticalBar),
+    Caret(Caret),
+    Tilde(Tilde),
+    Equals(Equals),
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]

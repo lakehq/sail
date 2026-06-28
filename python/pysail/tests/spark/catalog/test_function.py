@@ -59,6 +59,47 @@ def test_show_functions_returns_spark_sql_shape(spark):
     assert names == {"+", "to_date"}
 
 
+def test_describe_function_returns_signature_and_description(spark):
+    result = spark.sql("DESCRIBE FUNCTION to_date")
+    assert result.columns == ["function_desc"]
+
+    rows = [row.function_desc for row in result.collect()]
+    expected_usage = (
+        "Usage: to_date(date_str[, fmt]) - Parses the date_str expression with the "
+        "fmt expression to a date. Returns null with invalid input. By default, it "
+        "follows casting rules to a date if the fmt is omitted."
+    )
+    assert rows == [
+        "Function: to_date",
+        expected_usage,
+    ]
+
+
+def test_describe_function_extended_adds_extended_usage(spark):
+    rows = [
+        row.function_desc
+        for row in spark.sql("DESC FUNCTION EXTENDED to_date").collect()
+    ]
+    assert rows[-1] == "Extended Usage:"
+
+
+def test_describe_function_supports_string_literal_name(spark):
+    rows = [row.function_desc for row in spark.sql("DESC FUNCTION 'concat'").collect()]
+    assert rows[0] == "Function: concat"
+    assert rows[1].startswith("Usage: concat(col1, col2, ..., colN) - ")
+
+
+def test_describe_function_supports_operator_name(spark):
+    rows = [row.function_desc for row in spark.sql("DESCRIBE FUNCTION +").collect()]
+    assert rows[0] == "Function: +"
+    assert rows[1].startswith("Usage: expr1 + expr2 - ")
+
+
+def test_describe_function_reports_unknown_function(spark):
+    with pytest.raises(Exception, match="(?i)(not found|function)"):
+        spark.sql("DESCRIBE FUNCTION no_such_function").collect()
+
+
 def test_show_functions_respects_scope(spark):
     assert _show_function_names(spark, "SHOW SYSTEM FUNCTIONS LIKE 'to_date'") == {"to_date"}
     assert _show_function_names(spark, "SHOW USER FUNCTIONS LIKE 'to_date'") == set()

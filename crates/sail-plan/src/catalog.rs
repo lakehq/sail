@@ -180,11 +180,12 @@ impl CatalogObjectDisplay for SparkCatalogObjectDisplay {
     }
 
     fn function(status: FunctionStatus) -> Self::Function {
+        let description = status.list_description();
         Self::Function {
             name: status.name,
             catalog: status.catalog,
             namespace: status.namespace,
-            description: status.description,
+            description,
             class_name: status.class_name,
             is_temporary: status.is_temporary,
         }

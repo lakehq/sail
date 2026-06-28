@@ -297,8 +297,12 @@ impl PlanResolver<'_> {
             CommandNode::AnalyzeTable { .. } => Err(PlanError::todo("CommandNode::AnalyzeTable")),
             CommandNode::AnalyzeTables { .. } => Err(PlanError::todo("CommandNode::AnalyzeTables")),
             CommandNode::DescribeQuery { .. } => Err(PlanError::todo("CommandNode::DescribeQuery")),
-            CommandNode::DescribeFunction { .. } => {
-                Err(PlanError::todo("CommandNode::DescribeFunction"))
+            CommandNode::DescribeFunction { function, extended } => {
+                self.resolve_catalog_command(CatalogCommand::DescribeFunction {
+                    function: function.into(),
+                    extended,
+                    system_functions: list_built_in_function_statuses(),
+                })
             }
             CommandNode::DescribeCatalog { .. } => {
                 Err(PlanError::todo("CommandNode::DescribeCatalog"))

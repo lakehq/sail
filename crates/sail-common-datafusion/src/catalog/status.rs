@@ -39,6 +39,7 @@ pub struct FunctionStatus {
     pub name: String,
     pub catalog: Option<String>,
     pub namespace: Option<Vec<String>>,
+    pub signatures: Vec<String>,
     pub description: Option<String>,
     pub class_name: String,
     pub is_temporary: bool,
@@ -50,6 +51,7 @@ impl FunctionStatus {
             name,
             catalog: None,
             namespace: None,
+            signatures: vec![],
             description: None,
             class_name: String::new(),
             is_temporary: false,
@@ -61,9 +63,34 @@ impl FunctionStatus {
             name,
             catalog: None,
             namespace: None,
+            signatures: vec![],
             description: None,
             class_name: String::new(),
             is_temporary: true,
+        }
+    }
+
+    pub fn list_description(&self) -> Option<String> {
+        match (self.signatures.is_empty(), self.description.as_deref()) {
+            (true, None) => None,
+            (true, Some(description)) => Some(description.to_string()),
+            (false, None) => Some(format!("Signatures: {}", self.signatures.join(", "))),
+            (false, Some(description)) => Some(format!(
+                "Signatures: {}\n{}",
+                self.signatures.join(", "),
+                description
+            )),
+        }
+    }
+
+    pub fn usage(&self) -> String {
+        match (self.signatures.is_empty(), self.description.as_deref()) {
+            (true, None) => "N/A.".to_string(),
+            (true, Some(description)) => description.to_string(),
+            (false, None) => self.signatures.join(", "),
+            (false, Some(description)) => {
+                format!("{} - {description}", self.signatures.join(", "))
+            }
         }
     }
 }

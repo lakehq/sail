@@ -60,6 +60,29 @@ impl CatalogManager {
         Ok(functions)
     }
 
+    pub async fn get_function_status<T: AsRef<str>>(
+        &self,
+        function: &[T],
+        system_functions: &[FunctionStatus],
+    ) -> CatalogResult<FunctionStatus> {
+        let (name, database) = function
+            .split_last()
+            .ok_or_else(|| CatalogError::InvalidArgument("empty function name".to_string()))?;
+        if !database.is_empty() {
+            let _ = self.get_database_by_qualifier(database).await?;
+        }
+        let name = Self::canonical_function_name(name.as_ref());
+        let state = self.state()?;
+        if state.functions.contains_key(&name) {
+            return Ok(FunctionStatus::temporary(name.to_string()));
+        }
+        system_functions
+            .iter()
+            .find(|status| Self::canonical_function_name(&status.name) == name)
+            .cloned()
+            .ok_or_else(|| CatalogError::NotFound(CatalogObject::Function, name.to_string()))
+    }
+
     pub fn register_table_function(
         &self,
         _name: String,

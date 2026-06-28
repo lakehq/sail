@@ -26,21 +26,18 @@ pub(crate) fn built_in_function_status(name: &str) -> FunctionStatus {
     let Some(metadata) = BUILT_IN_FUNCTION_METADATA_BY_NAME.get(name) else {
         return FunctionStatus::built_in(name.to_string());
     };
-    let description = match (metadata.signatures.is_empty(), metadata.description) {
-        (true, None) => None,
-        (true, Some(description)) => Some(description.to_string()),
-        (false, None) => Some(format!("Signatures: {}", metadata.signatures.join(", "))),
-        (false, Some(description)) => Some(format!(
-            "Signatures: {}\n{}",
-            metadata.signatures.join(", "),
-            description
-        )),
-    };
     FunctionStatus {
         name: name.to_string(),
         catalog: None,
         namespace: None,
-        description,
+        signatures: metadata
+            .signatures
+            .iter()
+            .map(|signature| signature.to_string())
+            .collect(),
+        description: metadata
+            .description
+            .map(|description| description.to_string()),
         class_name: metadata.class_name.to_string(),
         is_temporary: false,
     }

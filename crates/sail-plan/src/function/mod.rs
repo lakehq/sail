@@ -100,9 +100,11 @@ mod tests {
     fn generated_function_metadata_populates_status_description() {
         let status = metadata::built_in_function_status("to_date");
         assert_eq!(status.name, "to_date");
-        assert!(status.description.as_deref().is_some_and(|description| {
-            description.contains("to_date(date_str[, fmt])") && description.contains("Parses")
-        }));
+        assert_eq!(status.signatures, vec!["to_date(date_str[, fmt])"]);
+        assert!(status
+            .description
+            .as_deref()
+            .is_some_and(|description| { description.contains("Parses") }));
     }
 }
 
