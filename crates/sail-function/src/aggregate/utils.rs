@@ -98,7 +98,8 @@ pub fn filtered_null_mask(
     NullBuffer::union(opt_filter.as_ref(), input.nulls())
 }
 
-/// Convert a `ScalarValue` to `f64`, supporting floats, integers, and Decimal128.
+/// Convert a `ScalarValue` to `f64`, supporting floats, integers, and decimals
+/// (`Decimal32`/`Decimal64`/`Decimal128`).
 ///
 /// Used for extracting percentile literals from physical expressions where the
 /// literal may arrive as any numeric scalar.
@@ -121,6 +122,12 @@ pub(crate) fn scalar_to_f64(scalar: &ScalarValue) -> Result<f64> {
                 ))
             })?;
             int_val as f64
+        }
+        ScalarValue::Decimal32(Some(v), _precision, scale) => {
+            (*v as f64) / 10f64.powi(*scale as i32)
+        }
+        ScalarValue::Decimal64(Some(v), _precision, scale) => {
+            (*v as f64) / 10f64.powi(*scale as i32)
         }
         ScalarValue::Decimal128(Some(v), _precision, scale) => {
             (*v as f64) / 10f64.powi(*scale as i32)
