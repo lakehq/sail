@@ -467,8 +467,12 @@ fn time_with_try(input: ScalarFunctionInput, is_try: bool) -> PlanResult<Expr> {
     if input.arguments.len() == 1 {
         Ok(udf.call(input.arguments))
     } else if input.arguments.len() == 2 {
+        // Pass `expr` through unchanged so `SparkTime::coerce_types` validates it
+        // and the kernel dispatches by type (strings parse with the format,
+        // TIME/TIMESTAMP cast directly), exactly as in the 1-arg form. Forcing a
+        // cast to Utf8 here would route non-string inputs through string parsing,
+        // bypassing the coercion checks and diverging from the 1-arg behavior.
         let (expr, format) = input.arguments.two()?;
-        let expr = cast(expr, DataType::Utf8);
         let format = to_chrono_fmt(format);
         Ok(udf.call(vec![expr, format]))
     } else {

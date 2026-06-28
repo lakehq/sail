@@ -40,6 +40,51 @@ Feature: to_time (strict variant)
       | result   |
       | 10:30:45 |
 
+  Rule: Two-argument form is type-consistent with the one-argument form
+
+    # Regression: in the 2-arg form a non-string first argument (TIME/TIMESTAMP)
+    # must be coerced exactly as in the 1-arg form — cast straight to TIME with
+    # the format ignored — not stringified and re-parsed through the format
+    # (which would fail). See `time_with_try` in datetime.rs.
+
+    @sail-only
+    Scenario: TIMESTAMP first argument ignores the format and extracts the time
+      When query
+      """
+      SELECT to_time(TIMESTAMP '2024-01-15 10:30:45', 'HH:mm:ss') AS result
+      """
+      Then query result
+      | result   |
+      | 10:30:45 |
+
+    @sail-only
+    Scenario: TIME first argument ignores the format
+      When query
+      """
+      SELECT to_time(TIME '10:30:45', 'HH-mm-ss') AS result
+      """
+      Then query result
+      | result   |
+      | 10:30:45 |
+
+    @sail-only
+    Scenario: Unsupported first-argument type is rejected with a format too
+      When query
+      """
+      SELECT to_time(123, 'HH:mm:ss')
+      """
+      Then query error (?i)STRING, TIME, TIMESTAMP or NULL|data type|Unsupported
+
+  Rule: Wrong argument count is rejected
+
+    @sail-only
+    Scenario: Three arguments raise an error
+      When query
+      """
+      SELECT to_time('10:30:45', 'HH:mm:ss', 'extra')
+      """
+      Then query error (?i)requires 1 or 2 arguments|arguments
+
   Rule: Invalid input throws
 
     @sail-only
