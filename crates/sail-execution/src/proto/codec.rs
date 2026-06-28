@@ -162,6 +162,7 @@ use sail_function::scalar::geo::st_geomfromwkb::StGeomFromWKB;
 use sail_function::scalar::hash::spark_murmur3_hash::SparkMurmur3Hash;
 use sail_function::scalar::json::{SparkFromJson, SparkSchemaOfJson, SparkToJson};
 use sail_function::scalar::map::map_entries::SparkMapEntries;
+use sail_function::scalar::map::map_keys::SparkMapKeys;
 use sail_function::scalar::map::str_to_map::StrToMap;
 use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
@@ -2311,6 +2312,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "levenshtein" => Ok(Arc::new(ScalarUDF::from(Levenshtein::new()))),
             "make_valid_utf8" => Ok(Arc::new(ScalarUDF::from(MakeValidUtf8::new()))),
             "map_entries" => Ok(Arc::new(ScalarUDF::from(SparkMapEntries::new()))),
+            "map_keys" => Ok(Arc::new(ScalarUDF::from(SparkMapKeys::new()))),
             "map_from_arrays" => Ok(Arc::new(ScalarUDF::from(MapFromArrays::new()))),
             "map_from_entries" => Ok(Arc::new(ScalarUDF::from(MapFromEntries::new()))),
             "multi_expr" => Ok(Arc::new(ScalarUDF::from(MultiExpr::new()))),
@@ -2492,6 +2494,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<StGeogFromWKB>()
             || node_inner.is::<MakeValidUtf8>()
             || node_inner.is::<SparkMapEntries>()
+            || node_inner.is::<SparkMapKeys>()
             || node_inner.is::<MapFromArrays>()
             || node_inner.is::<MapFromEntries>()
             || node_inner.is::<MultiExpr>()
