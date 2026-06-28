@@ -76,10 +76,7 @@ def test_describe_function_returns_signature_and_description(spark):
 
 
 def test_describe_function_extended_adds_extended_usage(spark):
-    rows = [
-        row.function_desc
-        for row in spark.sql("DESC FUNCTION EXTENDED to_date").collect()
-    ]
+    rows = [row.function_desc for row in spark.sql("DESC FUNCTION EXTENDED to_date").collect()]
     assert rows[-1].startswith("Extended Usage:\n    Examples:\n")
     assert "> SELECT to_date('2009-07-30 04:17:52');" in rows[-1]
     assert "    Since: 1.5.0" in rows[-1]
@@ -98,7 +95,7 @@ def test_describe_function_supports_operator_name(spark):
 
 
 def test_describe_function_reports_unknown_function(spark):
-    with pytest.raises(Exception, match="(?i)(not found|function)"):
+    with pytest.raises(Exception, match=r"(?i)(not found|function)"):
         spark.sql("DESCRIBE FUNCTION no_such_function").collect()
 
 
@@ -109,12 +106,8 @@ def test_show_functions_respects_scope(spark):
 
 
 def test_show_functions_respects_namespace_and_pattern(spark):
-    assert _show_function_names(spark, "SHOW FUNCTIONS IN default LIKE 'to_date'") == {
-        "to_date"
-    }
-    assert _show_function_names(spark, "SHOW FUNCTIONS FROM default LIKE 'to_date'") == {
-        "to_date"
-    }
+    assert _show_function_names(spark, "SHOW FUNCTIONS IN default LIKE 'to_date'") == {"to_date"}
+    assert _show_function_names(spark, "SHOW FUNCTIONS FROM default LIKE 'to_date'") == {"to_date"}
 
 
 def test_show_functions_supports_legacy_identifier_pattern(spark):
@@ -125,5 +118,5 @@ def test_show_functions_supports_legacy_identifier_pattern(spark):
 
 
 def test_show_functions_requires_like_after_namespace(spark):
-    with pytest.raises(Exception, match="(?i)(expected|parse|syntax|extra input)"):
+    with pytest.raises(Exception, match=r"(?i)(expected|parse|syntax|extra input)"):
         spark.sql("SHOW FUNCTIONS IN default to_date").collect()

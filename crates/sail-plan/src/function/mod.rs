@@ -74,6 +74,29 @@ pub(crate) fn list_built_in_function_statuses() -> Vec<FunctionStatus> {
         .collect()
 }
 
+pub use generator::get_outer_built_in_generator_functions;
+
+/// This function is temporary and should ONLY be used for COUNT(*).
+/// [`Expr::Wildcard`]
+///
+/// Only aware of this being applicable to [`datafusion::functions_aggregate::count`],
+/// although it may be applicable elsewhere as well.
+/// Similarly, this function may need to be adjusted if there are other possible pattern matches
+/// that were not considered.
+#[inline(always)]
+pub(super) fn transform_count_star_wildcard_expr(arguments: Vec<Expr>) -> Vec<Expr> {
+    match arguments.as_slice() {
+        #[expect(deprecated)]
+        [Expr::Wildcard {
+            qualifier: None,
+            options: _,
+        }] => {
+            vec![Expr::Literal(COUNT_STAR_EXPANSION, None)]
+        }
+        _ => arguments,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,28 +133,5 @@ mod tests {
             .as_deref()
             .is_some_and(|examples| examples.contains("SELECT to_date")));
         assert_eq!(status.since.as_deref(), Some("1.5.0"));
-    }
-}
-
-pub use generator::get_outer_built_in_generator_functions;
-
-/// This function is temporary and should ONLY be used for COUNT(*).
-/// [`Expr::Wildcard`]
-///
-/// Only aware of this being applicable to [`datafusion::functions_aggregate::count`],
-/// although it may be applicable elsewhere as well.
-/// Similarly, this function may need to be adjusted if there are other possible pattern matches
-/// that were not considered.
-#[inline(always)]
-pub(super) fn transform_count_star_wildcard_expr(arguments: Vec<Expr>) -> Vec<Expr> {
-    match arguments.as_slice() {
-        #[expect(deprecated)]
-        [Expr::Wildcard {
-            qualifier: None,
-            options: _,
-        }] => {
-            vec![Expr::Literal(COUNT_STAR_EXPANSION, None)]
-        }
-        _ => arguments,
     }
 }
