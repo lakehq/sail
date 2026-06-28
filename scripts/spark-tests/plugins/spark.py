@@ -340,6 +340,10 @@ SKIPPED_SPARK_TESTS = [
         keywords=["pyspark.sql.functions.java_method"],
         reason="JVM-dependent test",
     ),
+    TestMarker(
+        keywords=["pyspark.sql.functions.reflect"],
+        reason="JVM-dependent test",
+    ),
     # We skip all the streaming tests since some of them are slow,
     # and some of them test behaviors that are tied to the specific JVM implementation
     # of Spark Structured Streaming.

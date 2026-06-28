@@ -11,18 +11,18 @@ use datafusion::logical_expr::{
 use datafusion::scalar::ScalarValue;
 use parquet_variant::Variant;
 use parquet_variant_compute::{VariantArray, VariantArrayBuilder, VariantType};
-use sail_common_datafusion::variant::variant_metadata_field;
+use sail_common_datafusion::variant::{variant_metadata_field, VARIANT_VALUE_FIELD_NAME};
 
 use crate::error::invalid_arg_count_exec_err;
-use crate::scalar::variant::spark_parse_json::convert_binaryview_to_binary;
+use crate::scalar::variant::spark_parse_json::convert_variant_binaryview_to_binary;
 use crate::scalar::variant::utils::helper::try_field_as_variant_array;
 
 fn variant_explode_value_field() -> Field {
     Field::new(
-        "value",
+        VARIANT_VALUE_FIELD_NAME,
         DataType::Struct(Fields::from(vec![
+            Field::new(VARIANT_VALUE_FIELD_NAME, DataType::Binary, false),
             variant_metadata_field(DataType::Binary, false),
-            Field::new("value", DataType::Binary, false),
         ])),
         true,
     )
@@ -223,7 +223,7 @@ fn build_list_array(
     let key_arr: ArrayRef = Arc::new(key_builder.finish());
 
     let value_struct: StructArray = value_builder.build().into();
-    let value_struct = convert_binaryview_to_binary(value_struct)?;
+    let value_struct = convert_variant_binaryview_to_binary(value_struct)?;
     let value_arr: ArrayRef = Arc::new(value_struct);
 
     let struct_arr = StructArray::try_new(
