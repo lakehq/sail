@@ -39,9 +39,9 @@ use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapter
 
 use crate::conversion::ScalarConverter;
 use crate::datasource::{create_object_store_url, partitioned_file_from_action, DeltaScanConfig};
+use crate::delta_log::LogStoreRef;
 use crate::schema::arrow_field_physical_name;
 use crate::spec::{Add, MaxStat, MinStat};
-use crate::storage::LogStoreRef;
 use crate::table::DeltaSnapshot;
 
 /// Parameters for building file scan configuration

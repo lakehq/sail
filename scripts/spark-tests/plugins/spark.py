@@ -340,6 +340,10 @@ SKIPPED_SPARK_TESTS = [
         keywords=["pyspark.sql.functions.java_method"],
         reason="JVM-dependent test",
     ),
+    TestMarker(
+        keywords=["pyspark.sql.functions.reflect"],
+        reason="JVM-dependent test",
+    ),
     # We skip all the streaming tests since some of them are slow,
     # and some of them test behaviors that are tied to the specific JVM implementation
     # of Spark Structured Streaming.
@@ -402,6 +406,21 @@ SKIPPED_SPARK_TESTS = [
     TestMarker(
         keywords=["pyspark.sql.dataframe.DataFrame.localCheckpoint"],
         reason="Not available in Spark Connect until Spark 4",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.foreach"],
+        reason="Not available in Spark Connect until Spark 4",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.foreachPartition"],
+        reason="Not available in Spark Connect until Spark 4",
+        spark_major_version_less_than=4,
+    ),
+    TestMarker(
+        keywords=["pyspark.sql.dataframe.DataFrame.coalesce"],
+        reason="Spark 3.x doctest uses the JVM-dependent RDD API",
         spark_major_version_less_than=4,
     ),
 ]

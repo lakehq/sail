@@ -368,8 +368,18 @@ pub struct ParquetConfig {
     pub allow_single_file_parallelism: bool,
     pub maximum_parallel_row_group_writers: usize,
     pub maximum_buffered_record_batches_per_stream: usize,
+    pub content_defined_chunking: ParquetCdcConfig,
     pub file_statistics_cache: FileStatisticsCacheConfig,
     pub file_metadata_cache: FileMetadataCacheConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ParquetCdcConfig {
+    pub enabled: bool,
+    pub min_chunk_size: usize,
+    pub max_chunk_size: usize,
+    pub norm_level: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -499,6 +509,14 @@ pub struct OptimizerConfig {
     pub expand_views_at_output: bool,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OneLakeApi {
+    Delta,
+    #[default]
+    Iceberg,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -552,6 +570,8 @@ pub enum CatalogType {
     OneLake {
         name: String,
         url: String,
+        #[serde(default)]
+        api: OneLakeApi,
         #[serde(
             skip_serializing_if = "Option::is_none",
             serialize_with = "serialize_optional_secret"

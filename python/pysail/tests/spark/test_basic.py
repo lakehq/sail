@@ -359,6 +359,30 @@ def test_explode(spark):
     )
 
 
+def test_inline_null_struct(spark):
+    data = spark.createDataFrame(
+        [
+            Row(structlist=[Row(b=1, c=2), Row(b=3, c=4)]),
+            Row(structlist=[Row(b=None, c=5), None]),
+            Row(structlist=[]),
+        ]
+    )
+
+    assert [tuple(x) for x in data.select(F.inline("structlist")).collect()] == [
+        (1, 2),
+        (3, 4),
+        (None, 5),
+        (None, None),
+    ]
+    assert [tuple(x) for x in data.select(F.inline_outer("structlist")).collect()] == [
+        (1, 2),
+        (3, 4),
+        (None, 5),
+        (None, None),
+        (None, None),
+    ]
+
+
 def test_udf(df, udf_add_one, udf_add_x_y, udf_add):
     assert_frame_equal(
         df.sort("a").limit(1).select(udf_add_one(F.col("a"))).toPandas(),

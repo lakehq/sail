@@ -22,12 +22,12 @@ use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use super::log_segment::LogSegmentFiles;
-use crate::kernel::DeltaSnapshotConfig;
+use crate::delta_log::{default_logstore, LogStoreRef, StorageConfig};
 use crate::options::gen::DeltaWriteOptions;
 use crate::physical_plan::{
     prepare_delta_write_context, DeltaCommitContext, DeltaWriteContext, DeltaWriterExecOptions,
 };
-use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
+use crate::snapshot::DeltaSnapshotConfig;
 use crate::table::{
     create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot, DeltaSnapshot,
     DeltaTable,
@@ -235,7 +235,7 @@ impl<'a> PlannerContext<'a> {
         &self,
         input_schema: &SchemaRef,
         sink_mode: &PhysicalSinkMode,
-        operation_override: Option<crate::kernel::DeltaOperation>,
+        operation_override: Option<crate::spec::DeltaOperation>,
     ) -> Result<DeltaWriteContext> {
         let options = DeltaWriterExecOptions::from(self.options().clone())
             .with_generation_expressions(self.generation_expressions().clone())

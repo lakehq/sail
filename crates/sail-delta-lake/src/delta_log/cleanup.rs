@@ -12,13 +12,13 @@ use super::{
     parse_commit_version_from_location, parse_compacted_json_versions_from_location,
     resolve_version_timestamp,
 };
-use crate::kernel::checkpoints::read_checkpoint_main_rows_from_checkpoint_file;
-use crate::kernel::snapshot::DeltaSnapshot;
+use crate::checkpoint::read_checkpoint_main_rows_from_checkpoint_file;
+use crate::delta_log::LogStore;
+use crate::snapshot::DeltaSnapshot;
 use crate::spec::{
-    checkpoint_path, delta_log_root_path, is_uuid_checkpoint_filename, sidecars_dir_path,
-    DeltaResult,
+    checkpoint_path, delta_log_root_path, is_uuid_checkpoint_filename, sidecar_file_name,
+    sidecars_dir_path, DeltaResult,
 };
-use crate::storage::LogStore;
 
 #[derive(Debug, Clone, Copy)]
 struct LogRetentionWindow {
@@ -148,11 +148,8 @@ pub(crate) async fn cleanup_expired_delta_log_files(
 /// Ensures a classic single-file checkpoint (`{version:020}.checkpoint.parquet`) exists at
 /// `version` when the checkpoint at that version is a UUID-named V2 checkpoint.
 ///
-/// The compat file is a byte-copy of the UUID-named V2 main checkpoint to the classic
-/// filename. Its content is identical to the V2 main file: it follows V2 spec (contains
-/// `checkpointMetadata`, `sidecar` references) but uses a classic filename so that
-/// readers which do not recognise UUID-named checkpoints can still find a checkpoint,
-/// discover the protocol version, and fail gracefully with an unsupported-protocol error.
+/// The compat file is a byte-copy of a UUID-named V2 parquet main checkpoint to the classic
+/// filename. JSON manifests are never copied to a parquet checkpoint path.
 async fn ensure_v2_compat_classic_checkpoint(
     object_store: Arc<dyn ObjectStore>,
     version: i64,
@@ -177,7 +174,7 @@ async fn ensure_v2_compat_classic_checkpoint(
             .rsplit('/')
             .next()
             .unwrap_or_default();
-        if is_uuid_checkpoint_filename(filename) {
+        if is_uuid_checkpoint_filename(filename) && filename.ends_with(".parquet") {
             if let Some(v) = parse_checkpoint_version_from_location(&meta.location) {
                 if v == version {
                     uuid_checkpoint_meta = Some(meta);
@@ -317,7 +314,7 @@ async fn cleanup_orphaned_sidecars(object_store: Arc<dyn ObjectStore>) -> DeltaR
             Ok(rows) => {
                 for row in rows {
                     if let Some(sidecar) = row.sidecar {
-                        referenced_sidecars.insert(sidecar.path);
+                        referenced_sidecars.insert(sidecar_file_name(&sidecar.path));
                     }
                 }
             }
@@ -381,12 +378,12 @@ mod tests {
     use url::Url;
 
     use super::*;
-    use crate::kernel::snapshot::DeltaSnapshot;
+    use crate::delta_log::{default_logstore, LogStoreRef, StorageConfig};
+    use crate::snapshot::DeltaSnapshot;
     use crate::spec::{
         checkpoint_path, checksum_path, commit_path, Action, CommitInfo, DataType, Metadata,
         Protocol, StructField, StructType, TableFeature, VersionChecksum,
     };
-    use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
 
     fn test_log_store(store: Arc<dyn ObjectStore>) -> LogStoreRef {
         default_logstore(

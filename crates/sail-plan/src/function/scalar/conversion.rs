@@ -70,6 +70,7 @@ fn cast_to_timestamp(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         Ok(expr::Expr::ScalarFunction(expr::ScalarFunction {
             func: Arc::new(ScalarUDF::from(SparkTimestamp::try_new(
                 Some(input.function_context.plan_config.session_timezone.clone()),
+                input.function_context.plan_config.ansi_mode,
                 false,
             )?)),
             args: vec![arg],

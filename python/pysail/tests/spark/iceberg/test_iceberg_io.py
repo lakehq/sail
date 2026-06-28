@@ -28,6 +28,17 @@ def expected_pandas_df():
     )
 
 
+def latest_iceberg_metadata(table_path):
+    metadata_dir = table_path / "metadata"
+    hint = (metadata_dir / "version-hint.text").read_text(encoding="utf-8").strip()
+    if hint.isdigit():
+        metadata_file = metadata_dir / f"v{hint}.metadata.json"
+    else:
+        file_name = hint if hint.endswith(".metadata.json") else f"{hint}.metadata.json"
+        metadata_file = metadata_dir / file_name
+    return json.loads(metadata_file.read_text(encoding="utf-8"))
+
+
 def test_iceberg_io_basic_read(spark, iceberg_test_data, expected_pandas_df, sql_catalog):
     table_name = "test_table"
 
@@ -95,6 +106,7 @@ def test_iceberg_io_read_with_sql(spark, iceberg_test_data, expected_pandas_df, 
 
 def test_iceberg_io_create_table_materializes_empty_metadata(spark, tmp_path):
     table_path = tmp_path / "iceberg_empty_table"
+    table_location = table_path.as_uri()
     table_name = "iceberg_empty_materialized_test"
 
     spark.sql(f"DROP TABLE IF EXISTS {table_name}")
@@ -106,7 +118,7 @@ def test_iceberg_io_create_table_materializes_empty_metadata(spark, tmp_path):
               name STRING
             )
             USING ICEBERG
-            LOCATION '{escape_sql_string_literal(str(table_path))}'
+            LOCATION '{escape_sql_string_literal(table_location)}'
             """
         )
 
@@ -135,9 +147,51 @@ def test_iceberg_io_create_table_materializes_empty_metadata(spark, tmp_path):
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
 
-def test_iceberg_io_create_or_replace_existing_table_adopts_metadata_location(spark, tmp_path):
+def test_iceberg_io_create_or_replace_existing_table_replaces_metadata_and_clears_rows(spark, tmp_path):
     table_path = tmp_path / "iceberg_replace_existing"
+    table_location = table_path.as_uri()
     table_name = "iceberg_create_or_replace_existing_test"
+
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (
+              id BIGINT,
+              name STRING
+            )
+            USING ICEBERG
+            LOCATION '{escape_sql_string_literal(table_location)}'
+            """
+        )
+        spark.sql(f"INSERT INTO {table_name} VALUES (1, 'one')")  # noqa: S608
+
+        spark.sql(
+            f"""
+            CREATE OR REPLACE TABLE {table_name} (
+              id BIGINT,
+              name STRING
+            )
+            USING ICEBERG
+            LOCATION '{escape_sql_string_literal(table_location)}'
+            """
+        )
+
+        rows = spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect()  # noqa: S608
+        assert rows == []
+
+        replacement_metadata = latest_iceberg_metadata(table_path)
+        assert replacement_metadata["current-snapshot-id"] == -1
+        assert replacement_metadata["snapshots"] == []
+        assert [field["name"] for field in replacement_metadata["schemas"][-1]["fields"]] == ["id", "name"]
+        assert replacement_metadata["metadata-log"][-1]["metadata-file"].endswith("/metadata/v2.metadata.json")
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def test_iceberg_io_create_or_replace_existing_table_changes_schema(spark, tmp_path):
+    table_path = tmp_path / "iceberg_replace_schema_change"
+    table_name = "iceberg_create_or_replace_schema_change_test"
 
     spark.sql(f"DROP TABLE IF EXISTS {table_name}")
     try:
@@ -156,16 +210,99 @@ def test_iceberg_io_create_or_replace_existing_table_adopts_metadata_location(sp
         spark.sql(
             f"""
             CREATE OR REPLACE TABLE {table_name} (
-              id BIGINT,
-              name STRING
+              replacement STRING
             )
             USING ICEBERG
             LOCATION '{escape_sql_string_literal(str(table_path))}'
             """
         )
 
-        rows = spark.sql(f"SELECT id, name FROM {table_name} ORDER BY id").collect()  # noqa: S608
-        assert [(row.id, row.name) for row in rows] == [(1, "one")]
+        rows = spark.sql(f"SELECT replacement FROM {table_name}").collect()  # noqa: S608
+        assert rows == []
+
+        replacement_metadata = latest_iceberg_metadata(table_path)
+        assert replacement_metadata["current-snapshot-id"] == -1
+        assert replacement_metadata["snapshots"] == []
+        assert [field["name"] for field in replacement_metadata["schemas"][-1]["fields"]] == ["replacement"]
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def test_iceberg_io_create_or_replace_existing_table_without_schema_creates_empty_schema(spark, tmp_path):
+    table_path = tmp_path / "iceberg_replace_no_schema"
+    table_name = "iceberg_create_or_replace_no_schema_test"
+
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (
+              id BIGINT
+            )
+            USING ICEBERG
+            LOCATION '{escape_sql_string_literal(str(table_path))}'
+            """
+        )
+        spark.sql(f"INSERT INTO {table_name} VALUES (1)")  # noqa: S608
+
+        spark.sql(
+            f"""
+            CREATE OR REPLACE TABLE {table_name}
+            USING ICEBERG
+            LOCATION '{escape_sql_string_literal(str(table_path))}'
+            """
+        )
+
+        assert spark.table(table_name).schema.fields == []
+        assert spark.sql(f"SELECT * FROM {table_name}").collect() == []  # noqa: S608
+
+        replacement_metadata = latest_iceberg_metadata(table_path)
+        assert replacement_metadata["current-snapshot-id"] == -1
+        assert replacement_metadata["snapshots"] == []
+        assert replacement_metadata["schemas"][-1]["fields"] == []
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def test_iceberg_io_replace_table_missing_errors_without_materializing_metadata(spark, tmp_path):
+    table_path = tmp_path / "iceberg_replace_missing"
+    table_name = "iceberg_replace_missing_test"
+
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+    try:
+        with pytest.raises(Exception, match=r"(?i)(not found|does not exist|table_or_view_not_found)"):
+            spark.sql(
+                f"""
+                REPLACE TABLE {table_name} (
+                  id BIGINT
+                )
+                USING ICEBERG
+                LOCATION '{escape_sql_string_literal(str(table_path))}'
+                """
+            )
+
+        assert not (table_path / "metadata").exists()
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def test_iceberg_io_replace_table_as_select_missing_errors_without_materializing_metadata(spark, tmp_path):
+    table_path = tmp_path / "iceberg_replace_as_select_missing"
+    table_name = "iceberg_replace_as_select_missing_test"
+
+    spark.sql(f"DROP TABLE IF EXISTS {table_name}")
+    try:
+        with pytest.raises(Exception, match=r"(?i)(not found|does not exist|table_or_view_not_found)"):
+            spark.sql(
+                f"""
+                REPLACE TABLE {table_name}
+                USING ICEBERG
+                LOCATION '{escape_sql_string_literal(str(table_path))}'
+                AS SELECT 1 AS id
+                """
+            )
+
+        assert not (table_path / "metadata").exists()
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
@@ -173,6 +310,8 @@ def test_iceberg_io_create_or_replace_existing_table_adopts_metadata_location(sp
 def test_iceberg_io_create_table_if_not_exists_does_not_materialize_new_location(spark, tmp_path):
     table_path = tmp_path / "iceberg_if_not_exists_table"
     alternate_path = tmp_path / "iceberg_if_not_exists_alternate"
+    table_location = table_path.as_uri()
+    alternate_location = alternate_path.as_uri()
     table_name = "iceberg_if_not_exists_materialized_test"
 
     spark.sql(f"DROP TABLE IF EXISTS {table_name}")
@@ -184,7 +323,7 @@ def test_iceberg_io_create_table_if_not_exists_does_not_materialize_new_location
               name STRING
             )
             USING ICEBERG
-            LOCATION '{escape_sql_string_literal(str(table_path))}'
+            LOCATION '{escape_sql_string_literal(table_location)}'
             """
         )
         assert (table_path / "metadata" / "version-hint.text").exists()
@@ -196,7 +335,7 @@ def test_iceberg_io_create_table_if_not_exists_does_not_materialize_new_location
               name STRING
             )
             USING ICEBERG
-            LOCATION '{escape_sql_string_literal(str(alternate_path))}'
+            LOCATION '{escape_sql_string_literal(alternate_location)}'
             """
         )
 
@@ -207,6 +346,7 @@ def test_iceberg_io_create_table_if_not_exists_does_not_materialize_new_location
 
 def test_iceberg_io_create_table_rejects_existing_metadata_location(spark, tmp_path):
     table_path = tmp_path / "iceberg_existing_metadata"
+    table_location = table_path.as_uri()
     first_table = "iceberg_existing_metadata_first_test"
     second_table = "iceberg_existing_metadata_second_test"
 
@@ -220,7 +360,7 @@ def test_iceberg_io_create_table_rejects_existing_metadata_location(spark, tmp_p
               name STRING
             )
             USING ICEBERG
-            LOCATION '{escape_sql_string_literal(str(table_path))}'
+            LOCATION '{escape_sql_string_literal(table_location)}'
             """
         )
 
@@ -232,7 +372,7 @@ def test_iceberg_io_create_table_rejects_existing_metadata_location(spark, tmp_p
                   name STRING
                 )
                 USING ICEBERG
-                LOCATION '{escape_sql_string_literal(str(table_path))}'
+                LOCATION '{escape_sql_string_literal(table_location)}'
                 """
             )
     finally:

@@ -1,4 +1,4 @@
-Tests for `to_char` and `to_varchar` (an alias of `to_char`).
+Tests for `to_char`.
 
 All expected values below were captured from JVM Spark. Numeric cases are
 verified identical on 3.5.7 and 4.1.1. Datetime and binary inputs are only
@@ -6,12 +6,10 @@ supported by JVM Spark 4.x (3.5 requires a DECIMAL input), so those examples
 are marked SAIL_ONLY; their expected values were captured from JVM Spark
 4.1.1.
 
->>> from pyspark.sql.functions import lit, to_char, to_varchar
+>>> from pyspark.sql.functions import lit, to_char
 
 >>> df = spark.createDataFrame([(78.12,)], ["e"])
 >>> df.select(to_char(df.e, lit("$99.99")).alias("r")).collect()
-[Row(r='$78.12')]
->>> df.select(to_varchar(df.e, lit("$99.99")).alias("r")).collect()
 [Row(r='$78.12')]
 
 The helpers below evaluate a SQL expression and return the result value, or
@@ -384,20 +382,7 @@ expected values match JVM Spark 4.1.1.
 '537061726B2053514C'
 >>> c("to_char(encode('abc', 'utf-8'), 'UTF-8')")  # doctest: +SAIL_ONLY
 'abc'
->>> c("to_varchar(encode('Spark SQL', 'utf-8'), 'hex')")  # doctest: +SAIL_ONLY
-'537061726B2053514C'
 >>> err("to_char(encode('abc', 'utf-8'), 'foo')")  # doctest: +SAIL_ONLY
 error
 >>> err("to_char(encode('abc', 'utf-8'), CAST(NULL AS STRING))")  # doctest: +SAIL_ONLY
-error
-
-`to_varchar` is a full alias of `to_char`.
-
->>> c("to_varchar(454, '999')")
-'454'
->>> c("to_varchar(78.12, '$99.99')")
-'$78.12'
->>> c("to_varchar(-12454.8, '99G999D9S')")
-'12,454.8-'
->>> err("to_varchar(454, 'PR999')")
 error

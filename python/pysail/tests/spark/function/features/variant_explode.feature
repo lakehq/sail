@@ -1,4 +1,4 @@
-@variant @spark-4
+@spark-4
 Feature: variant_explode and variant_explode_outer
 
   Rule: variant_explode analysis and schema

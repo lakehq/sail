@@ -12,7 +12,10 @@ use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{AggFunctionInput, FunctionContextInput, ScalarFunctionInput};
-use crate::function::{get_built_in_aggregate_function, get_built_in_function};
+use crate::function::{
+    get_built_in_aggregate_function, get_built_in_function, is_higher_order_function,
+};
+use crate::resolver::expression::lambda::is_spec_lambda_argument;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::function::PythonUdf;
 use crate::resolver::state::PlanResolverState;
@@ -88,13 +91,25 @@ impl PlanResolver<'_> {
         let (arguments, order_by) =
             Self::convert_mode_within_group(&canonical_function_name, arguments, order_by)?;
 
+        let has_spec_lambda_argument = arguments.iter().any(is_spec_lambda_argument);
+
         let (argument_display_names, arguments) = if canonical_function_name == "struct" {
             self.resolve_struct_expressions_and_names(arguments, schema, state)
                 .await?
+        } else if has_spec_lambda_argument && is_higher_order_function(&canonical_function_name) {
+            self.resolve_higher_order_function_arguments(
+                &canonical_function_name,
+                arguments,
+                schema,
+                state,
+            )
+            .await?
         } else {
             self.resolve_expressions_and_names(arguments, schema, state)
                 .await?
         };
+
+        let has_lambda_argument = arguments.iter().any(|x| matches!(x, expr::Expr::Lambda(_)));
 
         // FIXME: `is_user_defined_function` is always false,
         //   so we need to check UDFs before built-in functions.
@@ -203,6 +218,17 @@ impl PlanResolver<'_> {
             return Err(PlanError::unsupported(format!(
                 "unknown function: {function_name}",
             )));
+        };
+
+        // DataFusion lambda variables carry no type until resolved against the schema.
+        // Sail bypasses the DataFusion SQL planner, so resolution happens here — but
+        // only when not inside an enclosing lambda scope: a higher-order function
+        // nested in another lambda body has free variables that only the outermost
+        // resolution, which sees the whole expression tree, can bind.
+        let func = if has_lambda_argument && !state.in_lambda_scope() {
+            func.resolve_lambda_variables(schema)?.data
+        } else {
+            func
         };
 
         // When `COUNT(DISTINCT *)` is used, expand the wildcard display names
@@ -409,8 +435,17 @@ impl PlanResolver<'_> {
         function_name: &str,
         mut arguments: Vec<spec::Expr>,
     ) -> Vec<spec::Expr> {
-        const DATE_PART_FUNCTIONS: &[&str] = &["datediff", "date_diff", "timestampdiff"];
-        if arguments.len() >= 3 && DATE_PART_FUNCTIONS.contains(&function_name) {
+        const DATE_PART_FUNCTIONS: &[&str] = &[
+            "datediff",
+            "date_diff",
+            "timestampadd",
+            "timestamp_add",
+            "timestampdiff",
+            "timestamp_diff",
+        ];
+        if arguments.len() >= 3
+            && DATE_PART_FUNCTIONS.contains(&function_name.trim().to_lowercase().as_str())
+        {
             if let spec::Expr::UnresolvedAttribute { ref name, .. } = arguments[0] {
                 let parts: Vec<String> = name.clone().into();
                 if parts.len() == 1 {
