@@ -1,7 +1,21 @@
-use datafusion::optimizer::{ApplyOrder, OptimizerConfig, OptimizerRule};
+use datafusion::optimizer::{AnalyzerRule, ApplyOrder, OptimizerConfig, OptimizerRule};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::Result;
 use datafusion_expr::LogicalPlan;
+
+#[derive(Debug, Default)]
+pub struct ResolveLambdaVariables;
+
+impl AnalyzerRule for ResolveLambdaVariables {
+    fn analyze(&self, plan: LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
+        Ok(plan.resolve_lambda_variables()?.data)
+    }
+
+    fn name(&self) -> &str {
+        "resolve_lambda_variables"
+    }
+}
 
 /// Re-resolves lambda variable fields after the other optimizer rules have run.
 ///
@@ -11,15 +25,6 @@ use datafusion_expr::LogicalPlan;
 /// variable fields resolved during logical planning stale. The physical planner
 /// compares those fields against the planning schema with strict equality, so
 /// they are refreshed here.
-#[derive(Debug, Default)]
-pub struct ResolveLambdaVariables;
-
-impl ResolveLambdaVariables {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
 impl OptimizerRule for ResolveLambdaVariables {
     fn name(&self) -> &str {
         "resolve_lambda_variables"

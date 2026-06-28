@@ -53,21 +53,19 @@ use sail_common_datafusion::datasource::{
 use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
-use crate::kernel::transaction::OperationMetrics;
-use crate::kernel::DeltaOperation;
-use crate::operations::write::variant_shredding::{
-    variant_top_level_columns, VariantShreddingConfig,
-};
-use crate::operations::write::writer::{DeltaWriter, WriterConfig};
+use crate::delta_log::get_object_store_from_context;
 use crate::physical_plan::catalog_location::resolve_catalog_table_url;
 use crate::physical_plan::writer_options::DeltaWriterExecOptions;
 use crate::physical_plan::{
     delta_action_schema, encode_actions, DeltaWriteContext, ExecCommitMeta,
 };
 use crate::spec::{
-    Action, ColumnMappingMode, Metadata, Protocol, StructType, TableFeature, TableProperties,
+    Action, ColumnMappingMode, DeltaOperation, Metadata, Protocol, StructType, TableFeature,
+    TableProperties,
 };
-use crate::storage::get_object_store_from_context;
+use crate::transaction::OperationMetrics;
+use crate::writer::variant_shredding::{variant_top_level_columns, VariantShreddingConfig};
+use crate::writer::{DeltaWriter, WriterConfig};
 
 /// Counts internal row intent tags before they are stripped from writer input.
 ///

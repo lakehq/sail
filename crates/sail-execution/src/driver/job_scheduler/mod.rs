@@ -11,10 +11,10 @@ pub use options::JobSchedulerOptions;
 use sail_common_datafusion::error::CommonErrorCause;
 pub use state::TaskState;
 
-use crate::codec::RemoteExecutionCodec;
 use crate::driver::job_scheduler::state::JobDescriptor;
 use crate::driver::output::JobOutputHandle;
 use crate::id::{IdGenerator, JobId, TaskKey, TaskStreamKey};
+use crate::proto::codec::RemoteExecutionCodec;
 use crate::task::scheduling::TaskRegion;
 
 pub struct JobScheduler {

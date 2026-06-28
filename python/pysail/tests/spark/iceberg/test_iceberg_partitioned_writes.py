@@ -200,7 +200,7 @@ def test_partitioned_write_then_pyiceberg_read_all(spark, tmp_path, table_name, 
 def test_iceberg_partition_writes_sql(spark, tmp_path):
     warehouse = tmp_path / "warehouse"
     warehouse.mkdir(parents=True, exist_ok=True)
-    path_single = f"file://{warehouse / 'ice_single'}"
+    path_single = (warehouse / "ice_single").as_uri()
     spark.sql(
         f"""
         CREATE TABLE tmp_ice_single (
@@ -222,7 +222,7 @@ def test_iceberg_partition_writes_sql(spark, tmp_path):
     finally:
         spark.sql("DROP TABLE IF EXISTS tmp_ice_single")
 
-    path_multi = f"file://{warehouse / 'ice_multi'}"
+    path_multi = (warehouse / "ice_multi").as_uri()
     spark.sql(
         f"""
         CREATE TABLE tmp_ice_multi (

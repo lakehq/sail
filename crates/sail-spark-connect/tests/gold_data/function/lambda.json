@@ -19,7 +19,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: aggregate"
+        "success": "ok"
       }
     },
     {
@@ -41,7 +41,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: aggregate"
+        "success": "ok"
       }
     },
     {
@@ -93,7 +93,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: array_sort with lambda comparator is not yet implemented"
+        "success": "ok"
       }
     },
     {
@@ -119,7 +119,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: array_sort with lambda comparator is not yet implemented"
+        "success": "ok"
       }
     },
     {
@@ -141,7 +141,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: exists"
+        "success": "ok"
       }
     },
     {
@@ -163,7 +163,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: exists"
+        "success": "ok"
       }
     },
     {
@@ -185,7 +185,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: exists"
+        "success": "ok"
       }
     },
     {
@@ -207,7 +207,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: exists"
+        "success": "ok"
       }
     },
     {
@@ -229,7 +229,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: exists"
+        "success": "ok"
       }
     },
     {
@@ -329,7 +329,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: forall"
+        "success": "ok"
       }
     },
     {
@@ -351,7 +351,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: forall"
+        "success": "ok"
       }
     },
     {
@@ -373,7 +373,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: forall"
+        "success": "ok"
       }
     },
     {
@@ -395,7 +395,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: forall"
+        "success": "ok"
       }
     },
     {
@@ -498,7 +498,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: reduce"
+        "success": "ok"
       }
     },
     {
@@ -520,7 +520,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: reduce"
+        "success": "ok"
       }
     },
     {
@@ -546,7 +546,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: transform"
+        "success": "ok"
       }
     },
     {
@@ -572,7 +572,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: transform"
+        "success": "ok"
       }
     },
     {

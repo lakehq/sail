@@ -5,13 +5,14 @@ use sail_catalog::lakehouse::{
     LakehouseCommitRequest,
 };
 use sail_catalog::manager::CatalogManager;
+use sail_common::spec::{SAIL_SPARK_UDT_METADATA_KEY, SPARK_METADATA_JSON_KEY};
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 
-use crate::kernel::transaction::CatalogManagedStagedCommit;
 use crate::spec::{
     CommitAction, DataType as DeltaDataType, Metadata, MetadataValue, PrimitiveType, StructField,
 };
+use crate::transaction::CatalogManagedStagedCommit;
 
 #[derive(Debug, Clone)]
 pub(crate) struct DeltaCatalogManagedTable {
@@ -203,7 +204,7 @@ fn unity_column_info(
         "nullable": field.is_nullable(),
         "position": i32::try_from(position).unwrap_or(i32::MAX),
         "type_text": column_type.type_text,
-        "type_json": column_type.type_json.to_string(),
+        "type_json": unity_struct_field_type_json(field)?.to_string(),
         "type_name": column_type.type_name,
     });
 
@@ -226,6 +227,66 @@ fn unity_column_info(
     }
 
     Ok(column)
+}
+
+fn unity_struct_field_type_json(field: &StructField) -> Result<serde_json::Value> {
+    Ok(serde_json::json!({
+        "name": field.name(),
+        "type": spark_delta_data_type_json(field.data_type())?,
+        "nullable": field.is_nullable(),
+        "metadata": unity_field_metadata(field)?,
+    }))
+}
+
+fn spark_delta_data_type_json(data_type: &DeltaDataType) -> Result<serde_json::Value> {
+    match data_type {
+        DeltaDataType::Primitive(primitive) => Ok(spark_delta_primitive_json(primitive)),
+        DeltaDataType::Array(array) => Ok(serde_json::json!({
+            "type": "array",
+            "elementType": spark_delta_data_type_json(array.element_type())?,
+            "containsNull": array.contains_null(),
+        })),
+        DeltaDataType::Struct(struct_type) => {
+            let fields = struct_type
+                .fields()
+                .map(unity_struct_field_type_json)
+                .collect::<Result<Vec<_>>>()?;
+            Ok(serde_json::json!({
+                "type": "struct",
+                "fields": fields,
+            }))
+        }
+        DeltaDataType::Map(map) => Ok(serde_json::json!({
+            "type": "map",
+            "keyType": spark_delta_data_type_json(map.key_type())?,
+            "valueType": spark_delta_data_type_json(map.value_type())?,
+            "valueContainsNull": map.value_contains_null(),
+        })),
+        DeltaDataType::Variant(_) => Err(DataFusionError::NotImplemented(
+            "Unity Catalog metadata payloads for Delta variant columns".to_string(),
+        )),
+    }
+}
+
+fn spark_delta_primitive_json(primitive: &PrimitiveType) -> serde_json::Value {
+    let type_name = match primitive {
+        PrimitiveType::String => "string".to_string(),
+        PrimitiveType::Long => "long".to_string(),
+        PrimitiveType::Integer => "integer".to_string(),
+        PrimitiveType::Short => "short".to_string(),
+        PrimitiveType::Byte => "byte".to_string(),
+        PrimitiveType::Float => "float".to_string(),
+        PrimitiveType::Double => "double".to_string(),
+        PrimitiveType::Boolean => "boolean".to_string(),
+        PrimitiveType::Binary => "binary".to_string(),
+        PrimitiveType::Date => "date".to_string(),
+        PrimitiveType::Timestamp => "timestamp".to_string(),
+        PrimitiveType::TimestampNtz => "timestamp_ntz".to_string(),
+        PrimitiveType::Decimal(decimal) => {
+            format!("decimal({},{})", decimal.precision(), decimal.scale())
+        }
+    };
+    serde_json::Value::String(type_name)
 }
 
 fn unity_column_type(data_type: &DeltaDataType) -> Result<UnityCommitColumnType> {
@@ -257,7 +318,7 @@ fn unity_column_type(data_type: &DeltaDataType) -> Result<UnityCommitColumnType>
                     "name": field.name(),
                     "type": field_type.type_json,
                     "nullable": field.is_nullable(),
-                    "metadata": unity_field_metadata(field),
+                    "metadata": unity_field_metadata(field)?,
                 }));
             }
             Ok(UnityCommitColumnType {
@@ -337,16 +398,49 @@ fn unity_primitive_column_type(primitive: &PrimitiveType) -> UnityCommitColumnTy
     }
 }
 
-fn unity_field_metadata(field: &StructField) -> serde_json::Value {
-    let metadata = field
-        .metadata()
-        .iter()
-        .map(|(key, value)| {
-            (
-                key.clone(),
-                serde_json::to_value(value).unwrap_or(serde_json::Value::Null),
-            )
-        })
-        .collect();
-    serde_json::Value::Object(metadata)
+fn unity_field_metadata(field: &StructField) -> Result<serde_json::Value> {
+    let mut out = if let Some(value) = field.metadata().get(SPARK_METADATA_JSON_KEY) {
+        match spark_metadata_value_json(value)? {
+            serde_json::Value::Object(object) => object,
+            other => {
+                return Err(DataFusionError::External(Box::new(
+                    CatalogError::InvalidArgument(format!(
+                        "{SPARK_METADATA_JSON_KEY} must contain a JSON object, got {other:?}",
+                    )),
+                )));
+            }
+        }
+    } else {
+        serde_json::Map::new()
+    };
+
+    for (key, value) in field.metadata() {
+        if key == SPARK_METADATA_JSON_KEY || key == SAIL_SPARK_UDT_METADATA_KEY {
+            continue;
+        }
+        out.entry(key.clone())
+            .or_insert(metadata_value_json(value)?);
+    }
+
+    Ok(serde_json::Value::Object(out))
+}
+
+fn spark_metadata_value_json(value: &MetadataValue) -> Result<serde_json::Value> {
+    match value {
+        MetadataValue::String(value) => serde_json::from_str(value).map_err(|e| {
+            DataFusionError::External(Box::new(CatalogError::InvalidArgument(format!(
+                "{SPARK_METADATA_JSON_KEY} contains invalid JSON: {e}",
+            ))))
+        }),
+        other => metadata_value_json(other),
+    }
+}
+
+fn metadata_value_json(value: &MetadataValue) -> Result<serde_json::Value> {
+    match value {
+        MetadataValue::Number(value) => Ok(serde_json::Value::Number((*value).into())),
+        MetadataValue::String(value) => Ok(serde_json::Value::String(value.clone())),
+        MetadataValue::Boolean(value) => Ok(serde_json::Value::Bool(*value)),
+        MetadataValue::Other(value) => Ok(value.clone()),
+    }
 }

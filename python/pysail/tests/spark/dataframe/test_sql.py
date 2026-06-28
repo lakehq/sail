@@ -5,6 +5,15 @@ def test_default_can_be_column_name(spark):
     assert spark.sql("SELECT DEFAULT FROM VALUES (1) AS t(DEFAULT)").collect() == [(1,)]
 
 
+def test_sql_positional_parameters(spark):
+    assert spark.sql("SELECT * FROM range(10) WHERE id > ?", args=[7]).collect() == [(8,), (9,)]
+    assert spark.sql("SELECT ? AS v FROM range(10) WHERE id > ? ORDER BY id", args=[1, 7]).collect() == [
+        (1,),
+        (1,),
+    ]
+    assert spark.sql("SELECT ? AS v", args=[1, 2]).collect() == [(1,)]
+
+
 def test_keyword_as_explicit_column_alias(spark):
     # Keywords are not reserved in Spark and can be used as column aliases
     # when the `AS` keyword is explicit.

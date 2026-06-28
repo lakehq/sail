@@ -22,7 +22,6 @@ use std::collections::HashMap;
 use std::str::FromStr;
 
 use sail_catalog::error::{CatalogError, CatalogResult};
-use sail_catalog::utils::quote_name_if_needed;
 use secrecy::{ExposeSecret, SecretString};
 
 use crate::credential::{
@@ -221,7 +220,6 @@ impl AsRef<str> for UnityCatalogConfigKey {
 
 #[derive(Debug)]
 pub struct UnityCatalogConfig {
-    pub default_catalog: String,
     pub uri: String,
     pub bearer_token: Option<SecretString>,
     pub client_id: Option<String>,
@@ -234,7 +232,6 @@ pub struct UnityCatalogConfig {
     pub federated_token_file: Option<String>,
     pub use_azure_cli: bool,
     pub allow_http_url: bool,
-    pub credential_provider: Option<CredentialProvider>,
 }
 
 fn str_is_truthy(value: &str) -> bool {
@@ -248,15 +245,11 @@ fn str_is_truthy(value: &str) -> bool {
 
 impl UnityCatalogConfig {
     pub fn new(
-        default_catalog: Option<String>,
         uri: Option<String>,
         token: &Option<SecretString>,
         options: Option<HashMap<String, String>>,
     ) -> CatalogResult<Self> {
         let mut config = Self {
-            default_catalog: quote_name_if_needed(
-                &default_catalog.unwrap_or_else(|| "unity".to_string()),
-            ),
             uri: uri.unwrap_or_else(|| DEFAULT_URI.to_string()),
             bearer_token: None,
             client_id: None,
@@ -269,7 +262,6 @@ impl UnityCatalogConfig {
             federated_token_file: None,
             use_azure_cli: false,
             allow_http_url: false,
-            credential_provider: None,
         };
 
         if let Some(token) = token {
@@ -282,8 +274,6 @@ impl UnityCatalogConfig {
         }
 
         config.apply_env()?;
-
-        config.credential_provider = config.get_credential_provider();
 
         Ok(config)
     }

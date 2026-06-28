@@ -24,7 +24,7 @@ use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, Schema as ArrowSchema, SchemaRef,
 };
 
-use crate::kernel::snapshot::DeltaSnapshot;
+use crate::snapshot::DeltaSnapshot;
 use crate::spec::DeltaResult;
 
 /// Build the logical schema for a Delta table.

@@ -11,6 +11,7 @@ use sail_common::spec;
 use sail_common::spec::{
     SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
 };
+use sail_common_datafusion::variant::{variant_metadata_field, VARIANT_VALUE_FIELD_NAME};
 use serde_json::json;
 
 use crate::config::DefaultTimestampType;
@@ -282,10 +283,8 @@ impl PlanResolver<'_> {
                 // Variant layout using Binary for PySpark compatibility.
                 // parquet-variant uses BinaryView internally but we convert to Binary
                 let fields = adt::Fields::from(vec![
-                    adt::Field::new("value", adt::DataType::Binary, false),
-                    adt::Field::new("metadata", adt::DataType::Binary, false).with_metadata(
-                        HashMap::from([("variant".to_string(), "true".to_string())]),
-                    ),
+                    adt::Field::new(VARIANT_VALUE_FIELD_NAME, adt::DataType::Binary, false),
+                    variant_metadata_field(adt::DataType::Binary, false),
                 ]);
                 Ok(adt::DataType::Struct(fields))
             }

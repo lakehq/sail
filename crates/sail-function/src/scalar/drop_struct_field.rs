@@ -33,11 +33,9 @@ impl DropStructField {
 
                 let current_field = &field_names[0];
                 let mut new_fields = Vec::new();
-                let mut field_found = false;
 
                 for field in fields.iter() {
                     if field.name() == current_field {
-                        field_found = true;
                         if field_names.len() == 1 {
                             continue;
                         } else {
@@ -54,8 +52,11 @@ impl DropStructField {
                     }
                 }
 
-                if !field_found {
-                    plan_err!("Field `{current_field}` not found")
+                // Spark's `dropFields` silently ignores field names that do not
+                // exist (the struct is returned unchanged), but raises when every
+                // field would be dropped.
+                if new_fields.is_empty() {
+                    plan_err!("[CANNOT_DROP_ALL_FIELDS] Cannot drop all fields in struct")
                 } else {
                     Ok(DataType::Struct(new_fields.into()))
                 }
