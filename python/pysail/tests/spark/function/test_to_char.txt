@@ -25,6 +25,12 @@ raise errors with different classes and messages.
 ...         print("no error")
 ...     except Exception:
 ...         print("error")
+>>> def err_query(query):
+...     try:
+...         spark.sql(query).collect()
+...         print("no error")
+...     except Exception:
+...         print("error")
 
 Digit sequences: '9' pads with spaces, '0' pads with zeros. A sequence
 starting with '0' before the decimal point zero-pads the whole sequence.
@@ -274,6 +280,17 @@ String inputs are parsed as decimals.
 >>> c("to_char('-454', 'S999')")
 '-454'
 
+The numeric format may be any foldable string expression, but not a column.
+
+>>> c("to_char(454, CAST('999' AS STRING))")
+'454'
+>>> c("to_char('454', CAST('999' AS STRING))")
+'454'
+>>> err_query("SELECT to_char(v, fmt) AS r FROM VALUES (454, '999') AS t(v, fmt)")
+error
+>>> err_query("SELECT to_char(v, fmt) AS r FROM VALUES ('454', '999') AS t(v, fmt)")
+error
+
 NULL handling: a NULL value or a NULL format yields NULL.
 
 >>> c("to_char(CAST(NULL AS DECIMAL(5,2)), '999')") is None
@@ -382,6 +399,10 @@ expected values match JVM Spark 4.1.1.
 '537061726B2053514C'
 >>> c("to_char(encode('abc', 'utf-8'), 'UTF-8')")  # doctest: +SAIL_ONLY
 'abc'
+>>> c("to_char(encode('Spark SQL', 'utf-8'), lower('HEX'))")  # doctest: +SAIL_ONLY
+'537061726B2053514C'
+>>> c("to_char(encode('Spark SQL', 'utf-8'), CAST('hex' AS STRING))")  # doctest: +SAIL_ONLY
+'537061726B2053514C'
 >>> err("to_char(encode('abc', 'utf-8'), 'foo')")  # doctest: +SAIL_ONLY
 error
 >>> err("to_char(encode('abc', 'utf-8'), CAST(NULL AS STRING))")  # doctest: +SAIL_ONLY
