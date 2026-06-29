@@ -1,7 +1,5 @@
 use std::collections::BTreeSet;
-use std::hash::{DefaultHasher, Hash, Hasher};
 
-use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
 use datafusion_datasource::file_scan_config::FileScanConfig;
@@ -191,41 +189,17 @@ pub(crate) async fn handle_analyze_ddl_parse(
 }
 
 pub(crate) async fn handle_analyze_same_semantics(
-    ctx: &SessionContext,
-    request: SameSemanticsRequest,
+    _ctx: &SessionContext,
+    _request: SameSemanticsRequest,
 ) -> SparkResult<SameSemanticsResponse> {
-    let SameSemanticsRequest {
-        target_plan,
-        other_plan,
-    } = request;
-    let target_plan = target_plan.required("target plan")?;
-    let other_plan = other_plan.required("other plan")?;
-    let target_plan = resolve_logical_plan(ctx, target_plan).await?;
-    let other_plan = resolve_logical_plan(ctx, other_plan).await?;
-    Ok(SameSemanticsResponse {
-        result: target_plan == other_plan,
-    })
-}
-
-async fn resolve_logical_plan(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<LogicalPlan> {
-    let resolver = PlanResolver::new(ctx, resolve_plan_config(ctx)?);
-    let NamedPlan { plan, .. } = resolver
-        .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
-        .await?;
-    Ok(plan)
+    Err(SparkError::todo("handle analyze same semantics"))
 }
 
 pub(crate) async fn handle_analyze_semantic_hash(
-    ctx: &SessionContext,
-    request: SemanticHashRequest,
+    _ctx: &SessionContext,
+    _request: SemanticHashRequest,
 ) -> SparkResult<SemanticHashResponse> {
-    let SemanticHashRequest { plan } = request;
-    let plan = plan.required("plan")?;
-    let plan = resolve_logical_plan(ctx, plan).await?;
-    let mut hasher = DefaultHasher::new();
-    plan.hash(&mut hasher);
-    let hash = hasher.finish() as i32;
-    Ok(SemanticHashResponse { result: hash })
+    Err(SparkError::todo("handle analyze semantic hash"))
 }
 
 pub(crate) async fn handle_analyze_persist(
