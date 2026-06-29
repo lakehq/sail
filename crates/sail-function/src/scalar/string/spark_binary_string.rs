@@ -3,8 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{Array, ArrayRef, AsArray, BinaryBuilder, FixedSizeBinaryArray};
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{exec_err, Result};
-use datafusion_expr::ScalarFunctionArgs;
-use datafusion_expr::ScalarUDFImpl;
+use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl};
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::signature::{Signature, Volatility};
 
