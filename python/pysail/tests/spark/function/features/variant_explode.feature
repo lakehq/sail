@@ -52,7 +52,6 @@ Feature: variant_explode and variant_explode_outer
 
   Rule: variant_explode with array input
 
-    @sail-bug
     Scenario: Explode a variant array of strings
       When query
         """
@@ -76,7 +75,6 @@ Feature: variant_explode and variant_explode_outer
         | 1   | NULL | 2     |
         | 2   | NULL | 3     |
 
-    @sail-bug
     Scenario: Explode a variant array of mixed types
       When query
         """
@@ -113,7 +111,6 @@ Feature: variant_explode and variant_explode_outer
         | 0   | a   | true  |
         | 1   | b   | 3.14  |
 
-    @sail-bug
     Scenario: Explode a single-field variant object
       When query
         """
@@ -124,7 +121,6 @@ Feature: variant_explode and variant_explode_outer
         | pos | key | value |
         | 0   | x   | hello |
 
-    @sail-bug
     Scenario: Explode a variant object with various value types
       When query
         """
@@ -237,7 +233,6 @@ Feature: variant_explode and variant_explode_outer
 
   Rule: variant_explode_outer with non-empty input
 
-    @sail-bug
     Scenario: Outer explode a variant array of strings
       When query
         """
@@ -336,7 +331,6 @@ Feature: variant_explode and variant_explode_outer
 
   Rule: variant_explode with table column
 
-    @sail-bug
     Scenario: Explode variant column from a table with mixed values
       When query
         """
@@ -450,7 +444,6 @@ Feature: variant_explode and variant_explode_outer
 
   Rule: variant_explode with null values inside collections
 
-    @sail-bug
     Scenario: Null values in variant object are returned as NULL values
       When query
         """
@@ -462,7 +455,6 @@ Feature: variant_explode and variant_explode_outer
         | 0   | a   | NULL  |
         | 1   | b   | 1     |
 
-    @sail-bug
     Scenario: Null values in variant array are returned as NULL values
       When query
         """
@@ -576,7 +568,6 @@ Feature: variant_explode and variant_explode_outer
 
   Rule: variant_explode_outer with null values inside containers
 
-    @sail-bug
     Scenario: Outer explode object with null value field
       When query
         """
@@ -588,7 +579,6 @@ Feature: variant_explode and variant_explode_outer
         | 0   | a   | NULL  |
         | 1   | b   | 1     |
 
-    @sail-bug
     Scenario: Outer explode array with null elements
       When query
         """

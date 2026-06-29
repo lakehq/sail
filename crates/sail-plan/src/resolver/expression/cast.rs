@@ -19,7 +19,7 @@ use sail_function::scalar::spark_struct_rename::SparkStructRename;
 use sail_function::scalar::spark_to_string::{SparkToLargeUtf8, SparkToUtf8, SparkToUtf8View};
 use sail_function::scalar::variant::spark_cast_to_variant::SparkCastToVariant;
 use sail_function::scalar::variant::spark_variant_get::SparkVariantGet;
-use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf;
+use sail_function::scalar::variant::spark_variant_to_string::SparkVariantToStringUdf;
 
 use crate::error::{PlanError, PlanResult};
 use crate::resolver::expression::NamedExpr;
@@ -103,15 +103,15 @@ impl PlanResolver<'_> {
         );
         let expr = match (expr_type, cast_to_type.clone(), is_try) {
             (_, DataType::Utf8, _) if expr_is_variant => cast(
-                ScalarUDF::new_from_impl(SparkVariantToJsonUdf::new()).call(vec![expr]),
+                ScalarUDF::new_from_impl(SparkVariantToStringUdf::new()).call(vec![expr]),
                 DataType::Utf8,
             ),
             (_, DataType::LargeUtf8, _) if expr_is_variant => cast(
-                ScalarUDF::new_from_impl(SparkVariantToJsonUdf::new()).call(vec![expr]),
+                ScalarUDF::new_from_impl(SparkVariantToStringUdf::new()).call(vec![expr]),
                 DataType::LargeUtf8,
             ),
             (_, DataType::Utf8View, _) if expr_is_variant => {
-                ScalarUDF::new_from_impl(SparkVariantToJsonUdf::new()).call(vec![expr])
+                ScalarUDF::new_from_impl(SparkVariantToStringUdf::new()).call(vec![expr])
             }
             (_, to, is_try) if expr_is_variant => {
                 let service = self.ctx.extension::<PlanService>()?;
