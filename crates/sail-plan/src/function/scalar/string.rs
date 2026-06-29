@@ -379,7 +379,8 @@ fn decode(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
         .ok_or_else(|| PlanError::internal("decode missing expression"))?;
     let mut rest = args.collect::<Vec<_>>();
     let default = if rest.len() % 2 == 1 {
-        rest.pop().expect("decode default exists")
+        rest.pop()
+            .ok_or_else(|| PlanError::internal("decode missing default"))?
     } else {
         lit(ScalarValue::Utf8(None))
     };

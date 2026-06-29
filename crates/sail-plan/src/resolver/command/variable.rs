@@ -1,6 +1,10 @@
-#[expect(clippy::disallowed_types)]
 use datafusion_common::{DFSchema, DFSchemaRef};
-use datafusion_expr::{EmptyRelation, LogicalPlan, SetVariable, Statement};
+#[expect(
+    clippy::disallowed_types,
+    reason = "DataFusion exposes SET variable plans through LogicalPlan::Statement."
+)]
+use datafusion_expr::logical_plan::Statement;
+use datafusion_expr::{EmptyRelation, LogicalPlan, SetVariable};
 
 use crate::error::PlanResult;
 use crate::resolver::PlanResolver;

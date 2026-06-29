@@ -122,7 +122,7 @@ fn columnar_values_to_arrays(args: &[ColumnarValue], number_rows: usize) -> Resu
     }
 }
 
-fn binary_value<'a>(array: &'a ArrayRef, row: usize) -> Result<Option<&'a [u8]>> {
+fn binary_value(array: &ArrayRef, row: usize) -> Result<Option<&[u8]>> {
     if array.is_null(row) {
         return Ok(None);
     }

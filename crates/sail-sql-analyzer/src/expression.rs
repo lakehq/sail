@@ -23,6 +23,10 @@ use crate::value::{
     from_ast_boolean_literal, from_ast_number_literal, from_ast_string, from_ast_string_literal,
 };
 
+pub(crate) type PositionalFunctionArgs = Vec<spec::Expr>;
+pub(crate) type NamedFunctionArgs = Vec<(spec::Identifier, spec::Expr)>;
+pub(crate) type FunctionArgs = (PositionalFunctionArgs, NamedFunctionArgs);
+
 #[derive(Default)]
 struct WindowModifiers {
     cluster_by: Option<Vec<Expr>>,
@@ -96,10 +100,9 @@ fn negated(expr: spec::Expr) -> spec::Expr {
     })
 }
 
-#[expect(clippy::type_complexity)]
 pub(crate) fn from_ast_function_arguments(
     args: impl IntoIterator<Item = FunctionArgument>,
-) -> SqlResult<(Vec<spec::Expr>, Vec<(spec::Identifier, spec::Expr)>)> {
+) -> SqlResult<FunctionArgs> {
     let mut arguments = vec![];
     let mut named_arguments = vec![];
     for arg in args {
@@ -124,7 +127,7 @@ pub(crate) fn from_ast_function_arguments(
 
 fn from_ast_encode_arguments(
     args: impl IntoIterator<Item = FunctionArgument>,
-) -> SqlResult<Option<(Vec<spec::Expr>, Vec<(spec::Identifier, spec::Expr)>)>> {
+) -> SqlResult<Option<FunctionArgs>> {
     let mut value = None;
     let mut charset = None;
     let mut positional_index = 0;
@@ -164,7 +167,7 @@ fn from_ast_encode_arguments(
 fn from_ast_scalar_function_arguments(
     name: &spec::ObjectName,
     args: impl IntoIterator<Item = FunctionArgument>,
-) -> SqlResult<(Vec<spec::Expr>, Vec<(spec::Identifier, spec::Expr)>)> {
+) -> SqlResult<FunctionArgs> {
     let args = args.into_iter().collect::<Vec<_>>();
     if name.parts().len() == 1 && name.parts()[0].as_ref().eq_ignore_ascii_case("encode") {
         if let Some(arguments) = from_ast_encode_arguments(args.clone())? {
