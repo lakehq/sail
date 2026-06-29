@@ -26,6 +26,7 @@ use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_common::{not_impl_err, JoinType, NullEquality};
 use datafusion_physical_expr::expressions::{Column, IsNullExpr};
+use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::{OptionLayer, PhysicalSinkMode, RowLevelCommand};
 use sail_common_datafusion::logical_expr::ExprWithSource;
 
@@ -36,8 +37,8 @@ use super::commit::{
 use super::context::PlannerContext;
 use super::utils::LogReplayOptions;
 use crate::datasource::PATH_COLUMN;
-use crate::kernel::{DeltaOperation, MergePredicate};
 use crate::physical_plan::{prepare_delta_write_context, DeltaCommitExec, DeltaWriterExec};
+use crate::spec::{DeltaOperation, MergePredicate};
 
 /// Target table information shared by Delta row-level operations.
 #[derive(Debug, Clone)]
@@ -46,6 +47,7 @@ pub struct RowLevelTargetInfo {
     pub path: String,
     pub partition_by: Vec<String>,
     pub options: Vec<OptionLayer>,
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
 }
 
 /// Operation metadata used to construct MERGE commit log `operationParameters`.
@@ -185,7 +187,7 @@ pub async fn build_merge_plan(
         table_schema,
         ctx.options().user_metadata.clone(),
         write_context,
-        ctx.catalog_table().cloned(),
+        ctx.lakehouse_table().cloned(),
     )
 }
 
@@ -266,7 +268,7 @@ pub async fn build_merge_plan_mor(
         true,
         table_schema.clone(),
         write_context.clone(),
-        ctx.catalog_table().cloned(),
+        ctx.lakehouse_table().cloned(),
     )?);
 
     let commit_input: Arc<dyn ExecutionPlan> =
@@ -322,7 +324,7 @@ pub async fn build_merge_plan_mor(
         PhysicalSinkMode::Append,
         ctx.options().user_metadata.clone(),
         write_context.commit_context.clone(),
-        ctx.catalog_table().cloned(),
+        ctx.lakehouse_table().cloned(),
     )))
 }
 

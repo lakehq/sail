@@ -12,28 +12,33 @@
 
 use std::collections::HashMap;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use arrow::datatypes::DataType;
-use reqwest::header::HeaderValue;
+use sail_catalog::credentials::CatalogCredentials;
 use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
-use sail_catalog::provider::{
-    AlterTableOptions, CatalogProvider, CommitTableOptions, CreateDatabaseOptions,
-    CreateTableOptions, CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions,
-    GetTableCommitsOptions, GetTableCommitsResponse, Namespace, TableCommitInfo,
+use sail_catalog::lakehouse::{
+    DeltaRatifiedCommit, DeltaRatifiedCommitRequest, DeltaRatifiedCommitResponse,
+    LakehouseCapability, LakehouseCommitOutcome, LakehouseCommitRequest,
+    LakehouseCreateMaterialization, LakehouseCreatePlan, LakehouseCreateRequest,
 };
-use sail_catalog::utils::{get_property, quote_namespace_if_needed};
+use sail_catalog::provider::{
+    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
+    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    TableFormatCreateMetadataMode,
+};
+use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
+use sail_common::http::SAIL_USER_AGENT;
 use sail_common_datafusion::catalog::delta::{
     unity_table_id_value, DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
 };
 use sail_common_datafusion::catalog::{
     identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
 };
-use secrecy::SecretString;
-use tokio::sync::OnceCell;
 
-use crate::config::UnityCatalogConfig;
-use crate::credential::CredentialProvider;
-use crate::data_type::{data_type_to_unity_type, unity_type_to_data_type};
+use crate::data_type::{
+    data_type_to_unity_type, unity_struct_field_type_json, unity_type_to_data_type,
+};
 use crate::unity::{types, Client};
 
 pub(crate) const DEFAULT_URI: &str = "http://localhost:8080/api/2.1/unity-catalog";
@@ -41,82 +46,57 @@ pub(crate) const DEFAULT_URI: &str = "http://localhost:8080/api/2.1/unity-catalo
 /// Provider for Unity Catalog
 pub struct UnityCatalogProvider {
     name: String,
-    catalog_config: UnityCatalogConfig,
-    client: OnceCell<Client>,
+    options: UnityCatalogOptions,
+    http_client: reqwest::Client,
+}
+
+#[derive(Debug, Clone)]
+pub struct UnityCatalogOptions {
+    pub default_catalog: String,
+    pub uri: String,
+    pub credentials: Arc<dyn CatalogCredentials>,
+    pub quote_object_name: bool,
 }
 
 impl UnityCatalogProvider {
-    pub fn new(
-        name: String,
-        default_catalog: &Option<String>,
-        uri: &Option<String>,
-        token: &Option<SecretString>,
-    ) -> CatalogResult<Self> {
-        Self::with_options(name, default_catalog.clone(), uri.clone(), token, None)
-    }
-
-    pub fn with_options(
-        name: String,
-        default_catalog: Option<String>,
-        uri: Option<String>,
-        token: &Option<SecretString>,
-        options: Option<HashMap<String, String>>,
-    ) -> CatalogResult<Self> {
-        let catalog_config = UnityCatalogConfig::new(default_catalog, uri, token, options)?;
+    pub fn new(name: String, options: UnityCatalogOptions) -> CatalogResult<Self> {
+        let http_client = reqwest::Client::new();
         Ok(Self {
             name,
-            catalog_config,
-            client: OnceCell::new(),
+            options,
+            http_client,
         })
     }
 
-    async fn get_client(&self) -> CatalogResult<&Client> {
-        let config = &self.catalog_config;
-        let client = self
-            .client
-            .get_or_try_init(|| async move {
-                let mut client_builder = reqwest::Client::builder();
+    async fn get_client(&self) -> CatalogResult<Client> {
+        let mut headers = reqwest::header::HeaderMap::new();
 
-                if let Some(credential_provider) = &config.credential_provider {
-                    let header = match credential_provider {
-                        CredentialProvider::BearerToken(token) => {
-                            HeaderValue::from_str(&format!("Bearer {token}")).map_err(|e| {
-                                CatalogError::External(format!(
-                                    "Failed to create header value from token: {e}"
-                                ))
-                            })
-                        }
-                        CredentialProvider::TokenCredential(cache, cred) => {
-                            let oauth_client = reqwest::Client::builder().build().map_err(|e| {
-                                CatalogError::External(format!("Failed to build OAuth client: {e}"))
-                            })?;
-                            let token = cache
-                                .get_or_insert_with(|| cred.fetch_token(&oauth_client))
-                                .await?;
-                            HeaderValue::from_str(&format!("Bearer {token}")).map_err(|e| {
-                                CatalogError::External(format!(
-                                    "Failed to create header value from token: {e}"
-                                ))
-                            })
-                        }
-                    }?;
-                    let mut headers = reqwest::header::HeaderMap::new();
-                    headers.insert(reqwest::header::AUTHORIZATION, header);
-                    client_builder = client_builder.default_headers(headers);
-                }
-
-                if config.allow_http_url {
-                    client_builder = client_builder.https_only(false);
-                }
-
-                let reqwest_client = client_builder.build().map_err(|e| {
-                    CatalogError::External(format!("Failed to build HTTP client: {e}"))
+        if let Some(token) = self.options.credentials.retrieve().await? {
+            let header = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
+                .map_err(|e| {
+                    CatalogError::External(format!("Failed to create header value from token: {e}"))
                 })?;
+            headers.insert(reqwest::header::AUTHORIZATION, header);
+        }
 
-                Ok::<_, CatalogError>(Client::new_with_client(&config.uri, reqwest_client))
-            })
-            .await?;
-        Ok(client)
+        headers.insert(
+            reqwest::header::USER_AGENT,
+            reqwest::header::HeaderValue::from_static(SAIL_USER_AGENT),
+        );
+
+        Ok(Client::new_with_client_and_headers(
+            &self.options.uri,
+            self.http_client.clone(),
+            headers,
+        ))
+    }
+
+    fn object_name(&self, name: &str) -> String {
+        if self.options.quote_object_name {
+            quote_name_if_needed(name)
+        } else {
+            name.to_string()
+        }
     }
 
     fn get_catalog_and_schema_name(
@@ -125,7 +105,7 @@ impl UnityCatalogProvider {
     ) -> CatalogResult<(String, String)> {
         match namespace.tail.as_slice() {
             [] => Ok((
-                self.catalog_config.default_catalog.to_string(),
+                self.options.default_catalog.to_string(),
                 namespace.head.to_string(),
             )),
             [x] => Ok((namespace.head.to_string(), x.to_string())),
@@ -136,15 +116,12 @@ impl UnityCatalogProvider {
         }
     }
 
-    // Unity Catalog does not quote names in full names even if they contain special characters,
-    // so we only concatenate the names with dot ('.').
-
-    fn get_full_schema_name(catalog_name: &str, schema_name: &str) -> String {
-        format!("{catalog_name}.{schema_name}")
-    }
-
-    fn get_full_table_name(catalog_name: &str, schema_name: &str, table_name: &str) -> String {
-        format!("{catalog_name}.{schema_name}.{table_name}")
+    fn qualified_object_name(&self, names: &[&str]) -> String {
+        names
+            .iter()
+            .map(|name| self.object_name(name))
+            .collect::<Vec<_>>()
+            .join(".")
     }
 
     fn schema_info_to_database_status(
@@ -234,6 +211,10 @@ impl UnityCatalogProvider {
         let database = vec![catalog.clone(), schema];
 
         let mut partition_by: Vec<String> = vec![];
+        // If all partition indices are 0, treat the table as unpartitioned.
+        // This can happen in the Unity Catalog endpoint in OneLake.
+        let ignore_partition_index =
+            !columns.is_empty() && columns.iter().all(|col| col.partition_index == Some(0));
         let columns = columns
             .into_iter()
             .map(|col| {
@@ -250,6 +231,11 @@ impl UnityCatalogProvider {
                     type_scale,
                     type_text,
                 } = col;
+                let partition_index = if ignore_partition_index {
+                    None
+                } else {
+                    partition_index
+                };
                 if partition_index.is_some() {
                     if let Some(col_name) = &name {
                         partition_by.push(col_name.to_string());
@@ -370,8 +356,8 @@ impl CatalogProvider for UnityCatalogProvider {
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
 
         let request = types::CreateSchema::builder()
-            .catalog_name(&catalog_name)
-            .name(&schema_name)
+            .catalog_name(self.object_name(&catalog_name))
+            .name(self.object_name(&schema_name))
             .comment(comment)
             .properties(if props.is_empty() {
                 None
@@ -408,7 +394,7 @@ impl CatalogProvider for UnityCatalogProvider {
             .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
 
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
-        let full_name = Self::get_full_schema_name(&catalog_name, &schema_name);
+        let full_name = self.qualified_object_name(&[&catalog_name, &schema_name]);
 
         let result = client.get_schema().full_name(&full_name).send().await;
 
@@ -440,7 +426,7 @@ impl CatalogProvider for UnityCatalogProvider {
             .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
 
         let catalog_name = match prefix {
-            None => self.catalog_config.default_catalog.to_string(),
+            None => self.options.default_catalog.to_string(),
             Some(Namespace { head, tail }) if tail.is_empty() => head.to_string(),
             Some(x) => {
                 return Err(CatalogError::InvalidArgument(format!(
@@ -451,7 +437,7 @@ impl CatalogProvider for UnityCatalogProvider {
         };
         let result = client
             .list_schemas()
-            .catalog_name(&catalog_name)
+            .catalog_name(self.object_name(&catalog_name))
             .send()
             .await;
 
@@ -485,7 +471,7 @@ impl CatalogProvider for UnityCatalogProvider {
             .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
 
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
-        let full_name = Self::get_full_schema_name(&catalog_name, &schema_name);
+        let full_name = self.qualified_object_name(&[&catalog_name, &schema_name]);
 
         let result = client
             .delete_schema()
@@ -501,6 +487,7 @@ impl CatalogProvider for UnityCatalogProvider {
             {
                 Ok(())
             }
+            Err(e) if e.status().is_some_and(|status| status.is_success()) => Ok(()),
             Err(progenitor_client::Error::UnexpectedResponse(response))
                 if response.status().as_u16() == 404 && if_exists =>
             {
@@ -527,14 +514,13 @@ impl CatalogProvider for UnityCatalogProvider {
             partition_by,
             sort_by,
             bucket_by,
-            if_not_exists,
-            replace,
+            mode,
             properties,
             is_external,
             is_write_precondition: _,
         } = options;
 
-        if replace {
+        if mode.is_replace() {
             return Err(CatalogError::NotSupported(
                 "Open source Unity Catalog does not support REPLACE option".to_string(),
             ));
@@ -570,7 +556,7 @@ impl CatalogProvider for UnityCatalogProvider {
             .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
 
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
-        if !is_external && if_not_exists {
+        if !is_external && mode.ignore_if_exists() {
             match self.get_table(database, table).await {
                 Ok(status) => return Ok(status),
                 Err(CatalogError::NotFound(_, _)) => {}
@@ -622,7 +608,15 @@ impl CatalogProvider for UnityCatalogProvider {
                     partition_index,
                     position: Some(idx as i32),
                     type_interval_type,
-                    type_json: Some(unity_type.type_json.to_string()),
+                    type_json: Some(
+                        unity_struct_field_type_json(
+                            &col.name,
+                            &col.data_type,
+                            col.nullable,
+                            &HashMap::new(),
+                        )?
+                        .to_string(),
+                    ),
                     type_name: Some(unity_type.type_name),
                     type_precision,
                     type_scale,
@@ -654,17 +648,17 @@ impl CatalogProvider for UnityCatalogProvider {
             // The SQL planner supplies generated default locations for managed tables. Unity
             // managed table creation must use a staging location allocated by the catalog.
             let request = types::CreateStagingTable::builder()
-                .name(table)
-                .catalog_name(&catalog_name)
-                .schema_name(&schema_name);
-            let response = client
-                .create_staging_table()
-                .body(request)
-                .send()
-                .await
-                .map_err(|e| {
-                    CatalogError::External(format!("Failed to create staging table: {e}"))
-                })?;
+                .name(self.object_name(table))
+                .catalog_name(self.object_name(&catalog_name))
+                .schema_name(self.object_name(&schema_name));
+            let response = match client.create_staging_table().body(request).send().await {
+                Ok(response) => response,
+                Err(e) => {
+                    return Err(CatalogError::External(format!(
+                        "Failed to create staging table: {e}"
+                    )));
+                }
+            };
             response.into_inner().staging_location.ok_or_else(|| {
                 CatalogError::External(
                     "Unity Catalog staging table response is missing a staging location"
@@ -674,9 +668,9 @@ impl CatalogProvider for UnityCatalogProvider {
         };
 
         let request = types::CreateTable::builder()
-            .name(table)
-            .catalog_name(&catalog_name)
-            .schema_name(&schema_name)
+            .name(self.object_name(table))
+            .catalog_name(self.object_name(&catalog_name))
+            .schema_name(self.object_name(&schema_name))
             .table_type(table_type)
             .data_source_format(data_source_format)
             .columns(unity_columns)
@@ -696,7 +690,7 @@ impl CatalogProvider for UnityCatalogProvider {
                 self.table_info_to_table_status(table_info, &catalog_name, &schema_name)
             }
             Err(progenitor_client::Error::UnexpectedResponse(response))
-                if response.status().as_u16() == 409 && if_not_exists =>
+                if response.status().as_u16() == 409 && mode.ignore_if_exists() =>
             {
                 self.get_table(database, table).await
             }
@@ -723,7 +717,7 @@ impl CatalogProvider for UnityCatalogProvider {
             .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
 
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
-        let full_name = Self::get_full_table_name(&catalog_name, &schema_name, table);
+        let full_name = self.qualified_object_name(&[&catalog_name, &schema_name, table]);
 
         let result = client.get_table().full_name(&full_name).send().await;
 
@@ -751,8 +745,8 @@ impl CatalogProvider for UnityCatalogProvider {
 
         let result = client
             .list_tables()
-            .catalog_name(&catalog_name)
-            .schema_name(&schema_name)
+            .catalog_name(self.object_name(&catalog_name))
+            .schema_name(self.object_name(&schema_name))
             .send()
             .await;
 
@@ -793,7 +787,7 @@ impl CatalogProvider for UnityCatalogProvider {
             .map_err(|e| CatalogError::External(format!("Failed to load config: {e}")))?;
 
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
-        let full_name = Self::get_full_table_name(&catalog_name, &schema_name, table);
+        let full_name = self.qualified_object_name(&[&catalog_name, &schema_name, table]);
 
         match client.delete_table().full_name(full_name).send().await {
             Ok(_) => Ok(()),
@@ -804,6 +798,7 @@ impl CatalogProvider for UnityCatalogProvider {
             {
                 Ok(())
             }
+            Err(e) if e.status().is_some_and(|status| status.is_success()) => Ok(()),
             Err(e)
                 if e.status()
                     .is_some_and(|status| status.as_u16() == 404 && if_exists) =>
@@ -828,30 +823,65 @@ impl CatalogProvider for UnityCatalogProvider {
         Ok(())
     }
 
-    async fn commit_table(
+    fn lakehouse_capabilities(&self) -> Vec<LakehouseCapability> {
+        vec![
+            LakehouseCapability::CatalogCommit,
+            LakehouseCapability::DeltaRatifiedCommits,
+        ]
+    }
+
+    async fn plan_lakehouse_create(
         &self,
         database: &Namespace,
         table: &str,
-        options: CommitTableOptions,
-    ) -> CatalogResult<TableStatus> {
-        if !options.format.eq_ignore_ascii_case("delta") {
+        request: LakehouseCreateRequest,
+    ) -> CatalogResult<LakehouseCreatePlan> {
+        let mut plan = sail_catalog::lakehouse::plan_lakehouse_create_from_requirement(
+            self.get_name(),
+            request.catalog_table,
+            &request.options,
+            sail_catalog::provider::CreateTableMetadataRequirement::None,
+            &self.lakehouse_capabilities(),
+        );
+        let _ = (database, table);
+        if request.options.format.eq_ignore_ascii_case("delta") && !request.options.is_external {
+            plan.materialization = LakehouseCreateMaterialization::AfterCatalogTableFormat {
+                mode: TableFormatCreateMetadataMode::CatalogCoordinated,
+            };
+        }
+        Ok(plan)
+    }
+
+    async fn commit_lakehouse_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        request: LakehouseCommitRequest,
+    ) -> CatalogResult<LakehouseCommitOutcome> {
+        let LakehouseCommitRequest {
+            context,
+            format,
+            requirements,
+            updates,
+            payload,
+        } = request;
+        if !format.eq_ignore_ascii_case("delta") {
             return Err(CatalogError::NotSupported(format!(
-                "Unity Catalog commit for {} tables",
-                options.format
+                "Unity Catalog commit for {format} tables"
             )));
         }
-        if !options.requirements.is_empty() {
+        if !requirements.is_empty() {
             return Err(CatalogError::NotSupported(
                 "Unity Catalog Delta commits do not support generic commit requirements"
                     .to_string(),
             ));
         }
-        let [update] = options.updates.as_slice() else {
+        let [update] = updates.as_slice() else {
             return Err(CatalogError::InvalidArgument(
                 "Unity Catalog Delta commit expects exactly one update payload".to_string(),
             ));
         };
-        let request: types::DeltaCommit = serde_json::from_value(update.clone()).map_err(|e| {
+        let commit: types::DeltaCommit = serde_json::from_value(update.clone()).map_err(|e| {
             CatalogError::InvalidArgument(format!("Invalid Delta commit payload: {e}"))
         })?;
 
@@ -860,14 +890,15 @@ impl CatalogProvider for UnityCatalogProvider {
             .await
             .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
 
-        match client.commit().body(request).send().await {
-            Ok(_) => self.get_table(database, table).await,
+        let _ = (database, table);
+        match client.commit().body(commit).send().await {
+            Ok(_) => Ok(LakehouseCommitOutcome::Committed { context, payload }),
             // The OSS Unity Catalog server currently returns a plain "200 OK" body
             // for Delta commits even though the OpenAPI spec declares a JSON response.
             Err(progenitor_client::Error::InvalidResponsePayload(bytes, _))
                 if bytes.as_ref() == b"200 OK" =>
             {
-                self.get_table(database, table).await
+                Ok(LakehouseCommitOutcome::Committed { context, payload })
             }
             Err(e) if e.status().is_some_and(|status| status.as_u16() == 409) => Err(
                 CatalogError::Conflict(format!("Unity Catalog Delta commit conflict: {e}")),
@@ -877,8 +908,17 @@ impl CatalogProvider for UnityCatalogProvider {
                     "Unity Catalog Delta commit invalid argument: {e}"
                 )))
             }
+            Err(e) if e.status().is_some_and(|status| status.as_u16() == 401) => Err(
+                CatalogError::Unauthorized(format!("Unity Catalog Delta commit unauthorized: {e}")),
+            ),
+            Err(e) if e.status().is_some_and(|status| status.as_u16() == 403) => Err(
+                CatalogError::Forbidden(format!("Unity Catalog Delta commit forbidden: {e}")),
+            ),
+            Err(e) if e.status().is_some_and(|status| status.as_u16() == 429) => Err(
+                CatalogError::RateLimited(format!("Unity Catalog Delta commit rate limited: {e}")),
+            ),
             Err(e) if e.status().is_some_and(|status| status.as_u16() == 501) => Err(
-                CatalogError::NotSupported("Unity Catalog Delta commit endpoint".to_string()),
+                CatalogError::NotSupported(format!("Unity Catalog Delta commit endpoint: {e}")),
             ),
             Err(e) => Err(CatalogError::External(format!(
                 "Failed to commit Delta table to Unity Catalog: {e}"
@@ -886,19 +926,12 @@ impl CatalogProvider for UnityCatalogProvider {
         }
     }
 
-    async fn get_table_commits(
+    async fn get_delta_ratified_commits(
         &self,
         database: &Namespace,
         table: &str,
-        options: GetTableCommitsOptions,
-    ) -> CatalogResult<GetTableCommitsResponse> {
-        if !options.format.eq_ignore_ascii_case("delta") {
-            return Err(CatalogError::NotSupported(format!(
-                "Unity Catalog commit discovery for {} tables",
-                options.format
-            )));
-        }
-
+        request: DeltaRatifiedCommitRequest,
+    ) -> CatalogResult<DeltaRatifiedCommitResponse> {
         let status = self.get_table(database, table).await?;
         let (format, location, properties) = match &status.kind {
             TableKind::Table {
@@ -919,15 +952,15 @@ impl CatalogProvider for UnityCatalogProvider {
             )));
         }
         let table_uri = if let Some(location) = location {
-            if location.trim_end_matches('/') != options.table_uri.trim_end_matches('/') {
+            if location.trim_end_matches('/') != request.table_uri.trim_end_matches('/') {
                 return Err(CatalogError::InvalidArgument(format!(
                     "Unity Catalog Delta commit discovery table URI mismatch: catalog location `{location}`, requested `{}`",
-                    options.table_uri
+                    request.table_uri
                 )));
             }
             location.clone()
         } else {
-            options.table_uri
+            request.table_uri
         };
         let table_id = unity_table_id_value(
             properties
@@ -941,8 +974,8 @@ impl CatalogProvider for UnityCatalogProvider {
         })?;
 
         let request = types::DeltaGetCommits {
-            end_version: options.end_version,
-            start_version: options.start_version,
+            end_version: request.end_version,
+            start_version: request.start_version,
             table_id: table_id.to_string(),
             table_uri,
         };
@@ -951,17 +984,17 @@ impl CatalogProvider for UnityCatalogProvider {
             .await
             .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
-        let full_name = Self::get_full_table_name(&catalog_name, &schema_name, table);
+        let full_name = self.qualified_object_name(&[&catalog_name, &schema_name, table]);
 
         match client.get_commits().body(request).send().await {
             Ok(response) => {
                 let response = response.into_inner();
-                Ok(GetTableCommitsResponse {
+                Ok(DeltaRatifiedCommitResponse {
                     latest_table_version: response.latest_table_version,
                     commits: response
                         .commits
                         .into_iter()
-                        .map(|commit| TableCommitInfo {
+                        .map(|commit| DeltaRatifiedCommit {
                             version: commit.version,
                             timestamp: commit.timestamp,
                             file_name: commit.file_name,
@@ -980,9 +1013,9 @@ impl CatalogProvider for UnityCatalogProvider {
                 Err(CatalogError::NotFound(CatalogObject::Table, full_name))
             }
             Err(e) if e.status().is_some_and(|status| status.as_u16() == 501) => {
-                Err(CatalogError::NotSupported(
-                    "Unity Catalog Delta commit discovery endpoint".to_string(),
-                ))
+                Err(CatalogError::NotSupported(format!(
+                    "Unity Catalog Delta commit discovery endpoint: {e}"
+                )))
             }
             Err(e) => Err(CatalogError::External(format!(
                 "Failed to get Delta commits from Unity Catalog: {e}"
@@ -1028,9 +1061,39 @@ impl CatalogProvider for UnityCatalogProvider {
 #[expect(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
+    use sail_catalog::credentials::{CatalogCredentials, EmptyCatalogCredentials};
     use secrecy::ExposeSecret;
 
     use super::*;
+    use crate::config::UnityCatalogConfig;
+
+    fn options_from_config(
+        default_catalog: impl Into<String>,
+        config: UnityCatalogConfig,
+    ) -> UnityCatalogOptions {
+        let credentials = config
+            .get_credential_provider()
+            .map(|credentials| Arc::new(credentials) as Arc<dyn CatalogCredentials>)
+            .unwrap_or_else(|| Arc::new(EmptyCatalogCredentials));
+        UnityCatalogOptions {
+            default_catalog: default_catalog.into(),
+            uri: config.uri,
+            credentials,
+            quote_object_name: true,
+        }
+    }
+
+    fn empty_options(
+        default_catalog: impl Into<String>,
+        quote_object_name: bool,
+    ) -> UnityCatalogOptions {
+        UnityCatalogOptions {
+            default_catalog: default_catalog.into(),
+            uri: DEFAULT_URI.to_string(),
+            credentials: Arc::new(EmptyCatalogCredentials),
+            quote_object_name,
+        }
+    }
 
     #[test]
     fn test_config_with_token() {
@@ -1041,7 +1104,7 @@ mod tests {
             "https://test.databricks.com".to_string(),
         );
 
-        let config = UnityCatalogConfig::new(None, None, &None, Some(options)).unwrap();
+        let config = UnityCatalogConfig::new(None, &None, Some(options)).unwrap();
         assert!(config.bearer_token.is_some());
         assert_eq!(config.bearer_token.unwrap().expose_secret(), "test_token");
         assert_eq!(config.uri, "https://test.databricks.com");
@@ -1067,7 +1130,7 @@ mod tests {
             "test_tenant".to_string(),
         );
 
-        let config = UnityCatalogConfig::new(None, None, &None, Some(options)).unwrap();
+        let config = UnityCatalogConfig::new(None, &None, Some(options)).unwrap();
         assert_eq!(config.uri, "https://test.databricks.com");
         assert_eq!(config.client_id, Some("test_client_id".to_string()));
         assert!(config.client_secret.is_some());
@@ -1090,7 +1153,7 @@ mod tests {
             options.insert("unity_allow_http_url".to_string(), value.to_string());
             options.insert("unity_use_azure_cli".to_string(), value.to_string());
 
-            let config = UnityCatalogConfig::new(None, None, &None, Some(options)).unwrap();
+            let config = UnityCatalogConfig::new(None, &None, Some(options)).unwrap();
             assert_eq!(config.allow_http_url, expected, "Failed for value: {value}");
             assert_eq!(config.use_azure_cli, expected, "Failed for value: {value}");
         }
@@ -1114,7 +1177,7 @@ mod tests {
             let test_value = format!("test_value_for_{key}");
             options.insert(key.to_string(), test_value.clone());
 
-            let result = UnityCatalogConfig::new(None, None, &None, Some(options));
+            let result = UnityCatalogConfig::new(None, &None, Some(options));
             assert!(result.is_ok(), "Failed to parse key: {key}");
 
             let config = result.unwrap();
@@ -1136,18 +1199,197 @@ mod tests {
             "https://test.databricks.com".to_string(),
         );
 
-        let provider = UnityCatalogProvider::with_options(
+        let config = UnityCatalogConfig::new(None, &None, Some(options)).unwrap();
+        assert!(config.bearer_token.is_some());
+
+        let provider = UnityCatalogProvider::new(
             "test".to_string(),
-            Some("test_catalog".to_string()),
-            None,
-            &None,
-            Some(options),
+            options_from_config("test_catalog", config),
         )
         .unwrap();
 
         assert_eq!(provider.name, "test");
-        assert_eq!(provider.catalog_config.default_catalog, "test_catalog");
-        assert_eq!(provider.catalog_config.uri, "https://test.databricks.com");
-        assert!(provider.catalog_config.bearer_token.is_some());
+        assert_eq!(provider.options.default_catalog, "test_catalog");
+        assert_eq!(provider.options.uri, "https://test.databricks.com");
+    }
+
+    #[test]
+    fn test_provider_quotes_object_names_by_default() {
+        let config = UnityCatalogConfig::new(None, &None, None).unwrap();
+        let provider = UnityCatalogProvider::new(
+            "test".to_string(),
+            options_from_config("catalog.name", config),
+        )
+        .unwrap();
+
+        assert_eq!(provider.options.default_catalog, "catalog.name");
+        assert_eq!(
+            provider.object_name(&provider.options.default_catalog),
+            "`catalog.name`"
+        );
+        assert_eq!(provider.object_name("schema.name"), "`schema.name`");
+        assert_eq!(
+            provider.qualified_object_name(&["catalog.name", "schema.name", "table.name"]),
+            "`catalog.name`.`schema.name`.`table.name`"
+        );
+        let namespace = Namespace::try_from(vec!["schema.name"]).unwrap();
+        assert_eq!(
+            provider.get_catalog_and_schema_name(&namespace).unwrap(),
+            ("catalog.name".to_string(), "schema.name".to_string())
+        );
+    }
+
+    #[test]
+    fn test_provider_can_preserve_unquoted_object_names() {
+        let provider = UnityCatalogProvider::new(
+            "test".to_string(),
+            empty_options("lakehouse.Lakehouse", false),
+        )
+        .unwrap();
+
+        assert_eq!(provider.options.default_catalog, "lakehouse.Lakehouse");
+        assert_eq!(
+            provider.object_name(&provider.options.default_catalog),
+            "lakehouse.Lakehouse"
+        );
+        assert_eq!(provider.object_name("schema.name"), "schema.name");
+        assert_eq!(
+            provider.qualified_object_name(&["catalog.name", "schema.name", "table.name"]),
+            "catalog.name.schema.name.table.name"
+        );
+    }
+
+    #[test]
+    #[expect(clippy::panic)]
+    fn test_table_info_accepts_null_columns_and_lowercase_column_type_name() {
+        let response: types::ListTablesResponse = serde_json::from_value(serde_json::json!({
+            "tables": [{
+                "catalog_name": "catalog",
+                "schema_name": "schema",
+                "name": "empty_table",
+                "columns": null
+            }, {
+                "catalog_name": "catalog",
+                "schema_name": "schema",
+                "name": "typed_table",
+                "columns": [{
+                    "name": "value",
+                    "type_name": "string",
+                    "type_text": "string",
+                    "nullable": true
+                }]
+            }]
+        }))
+        .unwrap();
+
+        let provider =
+            UnityCatalogProvider::new("test".to_string(), empty_options("catalog", true)).unwrap();
+
+        let mut tables = response.tables.into_iter();
+        let empty_table = provider
+            .table_info_to_table_status(tables.next().unwrap(), "catalog", "schema")
+            .unwrap();
+        let typed_table = provider
+            .table_info_to_table_status(tables.next().unwrap(), "catalog", "schema")
+            .unwrap();
+
+        let TableKind::Table {
+            columns, comment, ..
+        } = empty_table.kind
+        else {
+            panic!("expected table status");
+        };
+        assert_eq!(comment, None);
+        assert!(columns.is_empty());
+
+        let TableKind::Table { columns, .. } = typed_table.kind else {
+            panic!("expected table status");
+        };
+        assert_eq!(columns[0].data_type, DataType::Utf8);
+    }
+
+    #[test]
+    #[expect(clippy::panic)]
+    fn test_table_info_ignores_onelake_all_zero_partition_indexes() {
+        let response: types::TableInfo = serde_json::from_value(serde_json::json!({
+            "catalog_name": "catalog",
+            "schema_name": "schema",
+            "name": "typed_table",
+            "columns": [{
+                "name": "id",
+                "type_name": "int",
+                "type_text": "int",
+                "nullable": true,
+                "partition_index": 0
+            }, {
+                "name": "value",
+                "type_name": "string",
+                "type_text": "string",
+                "nullable": true,
+                "partition_index": 0
+            }]
+        }))
+        .unwrap();
+
+        let provider =
+            UnityCatalogProvider::new("test".to_string(), empty_options("catalog", true)).unwrap();
+
+        let status = provider
+            .table_info_to_table_status(response, "catalog", "schema")
+            .unwrap();
+
+        let TableKind::Table {
+            columns,
+            partition_by,
+            ..
+        } = status.kind
+        else {
+            panic!("expected table status");
+        };
+        assert!(partition_by.is_empty());
+        assert!(columns.iter().all(|column| !column.is_partition));
+    }
+
+    #[test]
+    #[expect(clippy::panic)]
+    fn test_table_info_preserves_real_partition_index() {
+        let response: types::TableInfo = serde_json::from_value(serde_json::json!({
+            "catalog_name": "catalog",
+            "schema_name": "schema",
+            "name": "typed_table",
+            "columns": [{
+                "name": "id",
+                "type_name": "int",
+                "type_text": "int",
+                "nullable": true
+            }, {
+                "name": "value",
+                "type_name": "string",
+                "type_text": "string",
+                "nullable": true,
+                "partition_index": 0
+            }]
+        }))
+        .unwrap();
+
+        let provider =
+            UnityCatalogProvider::new("test".to_string(), empty_options("catalog", true)).unwrap();
+
+        let status = provider
+            .table_info_to_table_status(response, "catalog", "schema")
+            .unwrap();
+
+        let TableKind::Table {
+            columns,
+            partition_by,
+            ..
+        } = status.kind
+        else {
+            panic!("expected table status");
+        };
+        assert_eq!(partition_by.len(), 1);
+        assert_eq!(partition_by[0].column, "value");
+        assert!(!columns[0].is_partition);
+        assert!(columns[1].is_partition);
     }
 }

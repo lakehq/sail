@@ -1,6 +1,5 @@
 Feature: Delta Lake ALTER TABLE SET/UNSET TBLPROPERTIES
 
-  @sail-only
   Rule: ALTER TABLE SET TBLPROPERTIES persists properties to the Delta log
 
     Scenario: ALTER TABLE SET TBLPROPERTIES writes a new metadata action to the Delta log
@@ -61,7 +60,6 @@ Feature: Delta Lake ALTER TABLE SET/UNSET TBLPROPERTIES
         | path                                                        | value |
         | metaData.configuration['delta.checkpointInterval']          | "10"  |
 
-  @sail-only
   Rule: ALTER TABLE SET TBLPROPERTIES can enable in-commit timestamps on an existing Delta table
 
     Background:
@@ -123,7 +121,6 @@ Feature: Delta Lake ALTER TABLE SET/UNSET TBLPROPERTIES
         | 1  | v0    |
         | 2  | v1    |
 
-  @sail-only
   Rule: ALTER TABLE SET TBLPROPERTIES can enable type widening on an existing Delta table
 
     Scenario: Delta log protocol is upgraded when ALTER TABLE enables type widening
@@ -372,7 +369,6 @@ Feature: Delta Lake ALTER TABLE SET/UNSET TBLPROPERTIES
         ALTER COLUMN id TYPE BIGINT
         """
 
-  @sail-only
   Rule: ALTER TABLE UNSET TBLPROPERTIES records a dedicated Delta log operation
 
     Scenario: Delta log commit info records UNSET TBLPROPERTIES operation on ALTER TABLE UNSET
@@ -404,7 +400,6 @@ Feature: Delta Lake ALTER TABLE SET/UNSET TBLPROPERTIES
         | operation                                | "UNSET TBLPROPERTIES" |
         | operationParameters.properties           | ["my.tag"]    |
 
-  @sail-only
   Rule: ALTER TABLE UNSET TBLPROPERTIES validates property existence unless IF EXISTS is specified
 
     Scenario: ALTER TABLE UNSET TBLPROPERTIES on a missing property fails without IF EXISTS

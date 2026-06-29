@@ -1,4 +1,3 @@
-@to_number
 Feature: to_number comprehensive tests
 
   Rule: Argument count validation

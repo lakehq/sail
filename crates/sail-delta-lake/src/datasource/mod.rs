@@ -29,8 +29,8 @@ pub use sail_common_datafusion::datasource::MERGE_FILE_COLUMN as PATH_COLUMN;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::kernel::snapshot::SnapshotPruningStats;
 use crate::options::{default_delta_log_replay_hash_threshold, DeltaLogReplayStrategy};
+use crate::snapshot::SnapshotPruningStats;
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
 use crate::table::DeltaSnapshot;
 pub const COMMIT_VERSION_COLUMN: &str = "_commit_version";

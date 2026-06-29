@@ -17,9 +17,9 @@ jobs:
       LLVM_PROFILE_FILE: ${{ github.workspace }}/target/sail-ibis-%p-%m.profraw
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -37,13 +37,13 @@ jobs:
         uses: taiki-e/install-action@grcov
 
       - name: Checkout ibis testing data
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ibis-project/testing-data
           path: opt/ibis-testing-data
 
       - name: Download Python Package
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: python-package
           path: target/wheels
@@ -115,7 +115,7 @@ jobs:
 
       - name: Upload Test Logs
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ibis-test-logs
           path: tmp/spark-tests/ibis
@@ -127,7 +127,7 @@ jobs:
     needs:
       - test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/commit-baseline
         id: baseline
@@ -140,14 +140,14 @@ jobs:
           artifact_name: ibis-test-logs
 
       - name: Download Test Logs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ibis-test-logs
           path: /tmp/test-after
 
       - name: Download Test Logs (Baseline)
         if: ${{ steps.baseline-workflow.outputs.workflow_run_id != '' }}
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: ibis-test-logs
           path: /tmp/test-before
@@ -180,7 +180,7 @@ jobs:
           echo "$NUMBER" > /tmp/report/pull-request.txt
 
       - name: Upload Test Report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ibis-test-report
           path: /tmp/report

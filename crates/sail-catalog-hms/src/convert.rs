@@ -16,7 +16,9 @@ use sail_common_datafusion::catalog::iceberg::{
 use sail_common_datafusion::catalog::{
     identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
 };
-use sail_common_datafusion::column_features::{ColumnFeatures, ColumnFeaturesBuilder};
+use sail_common_datafusion::column_features::{
+    ColumnFeatureKey, ColumnFeatures, ColumnFeaturesBuilder,
+};
 use sail_common_hms::hms::{
     Database, FieldSchema, PrincipalType, SerDeInfo, StorageDescriptor, Table,
 };
@@ -304,9 +306,7 @@ pub(crate) fn inject_spark_metadata(
     let schema_json = serde_json::to_string(&schema_value).map_err(|e| {
         CatalogError::External(format!("Failed to serialize Spark schema JSON: {e}"))
     })?;
-    for (key, value) in split_large_table_prop(SPARK_SCHEMA_KEY, &schema_json, 4000) {
-        parameters.insert(FastStr::from_string(key), FastStr::from_string(value));
-    }
+    write_large_table_prop(parameters, SPARK_SCHEMA_KEY, &schema_json);
 
     if !partition_columns.is_empty() {
         parameters.insert(
@@ -344,40 +344,68 @@ pub(crate) fn alter_spark_column_default(
             "Hive Metastore catalog does not support altering nested column defaults".to_string(),
         ));
     };
-    let Some(mut columns) = columns_from_spark_properties(table.parameters.as_ref())? else {
+    let Some(schema) = read_large_table_prop(table.parameters.as_ref(), SPARK_SCHEMA_KEY)? else {
         return Ok(());
     };
-    let Some(column) = columns
-        .iter_mut()
-        .find(|column| column.name.eq_ignore_ascii_case(column_name))
-    else {
+    // Edit the stored schema JSON surgically instead of rebuilding it, so
+    // that the metadata of all other columns (including keys written by
+    // foreign engines, such as `EXISTS_DEFAULT`) is preserved verbatim.
+    let mut schema_value: serde_json::Value = serde_json::from_str(&schema)
+        .map_err(|e| CatalogError::External(format!("Failed to parse Spark schema JSON: {e}")))?;
+    let fields = schema_value
+        .get_mut("fields")
+        .and_then(serde_json::Value::as_array_mut)
+        .ok_or_else(|| CatalogError::External("Spark schema JSON is missing fields".to_string()))?;
+    let Some(field) = fields.iter_mut().find(|field| {
+        field
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|name| name.eq_ignore_ascii_case(column_name))
+    }) else {
         return Err(CatalogError::InvalidArgument(format!(
             "Column '{column_name}' does not exist"
         )));
     };
-    column.default = default;
-
-    let fields = columns
-        .iter()
-        .map(TableColumnStatus::field)
-        .collect::<Vec<_>>();
-    let schema_value = spark_struct_json_from_fields(&fields)?;
+    let metadata = field
+        .as_object_mut()
+        .ok_or_else(|| CatalogError::External("Spark schema field must be an object".to_string()))?
+        .entry("metadata")
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()))
+        .as_object_mut()
+        .ok_or_else(|| {
+            CatalogError::External("Spark schema field metadata must be an object".to_string())
+        })?;
+    let key = ColumnFeatureKey::CurrentDefault.as_str();
+    match default {
+        Some(default) => {
+            metadata.insert(key.to_string(), serde_json::Value::String(default));
+        }
+        None => {
+            metadata.remove(key);
+        }
+    }
     let schema_json = serde_json::to_string(&schema_value).map_err(|e| {
         CatalogError::External(format!("Failed to serialize Spark schema JSON: {e}"))
     })?;
     let parameters = table.parameters.get_or_insert_with(AHashMap::new);
-    let num_parts_prefix = format!("{SPARK_SCHEMA_KEY}.numParts");
-    let part_prefix = format!("{SPARK_SCHEMA_KEY}.part.");
-    parameters.retain(|key, _| {
-        let key = key.as_str();
-        key != SPARK_SCHEMA_KEY
-            && !key.starts_with(&num_parts_prefix)
-            && !key.starts_with(&part_prefix)
-    });
-    for (key, value) in split_large_table_prop(SPARK_SCHEMA_KEY, &schema_json, 4000) {
-        parameters.insert(FastStr::from_string(key), FastStr::from_string(value));
-    }
+    write_large_table_prop(parameters, SPARK_SCHEMA_KEY, &schema_json);
     Ok(())
+}
+
+/// Writes a potentially large table property, replacing any existing plain
+/// or chunked values for the key. Removing stale keys matters for
+/// correctness since `read_large_table_prop` prefers the plain key, which
+/// would otherwise shadow rewritten chunks.
+fn write_large_table_prop(parameters: &mut AHashMap<FastStr, FastStr>, key: &str, value: &str) {
+    let num_parts_prefix = format!("{key}.numParts");
+    let part_prefix = format!("{key}.part.");
+    parameters.retain(|k, _| {
+        let k = k.as_str();
+        k != key && !k.starts_with(&num_parts_prefix) && !k.starts_with(&part_prefix)
+    });
+    for (k, v) in split_large_table_prop(key, value, 4000) {
+        parameters.insert(FastStr::from_string(k), FastStr::from_string(v));
+    }
 }
 
 pub(crate) fn build_view(
@@ -1131,6 +1159,199 @@ mod tests {
             .iter()
             .any(|(k, v)| k == "spark.sql.sources.provider" && v == "parquet"));
         assert!(props.iter().any(|(k, _)| k == "spark.sql.create.version"));
+    }
+
+    #[test]
+    fn test_spark_metadata_round_trips_column_features() {
+        let columns = vec![
+            CreateTableColumnOptions {
+                name: "id".to_string(),
+                data_type: DataType::Int64,
+                nullable: false,
+                comment: Some("pk".to_string()),
+                default: Some("42".to_string()),
+                generated_always_as: None,
+                identity: None,
+            },
+            CreateTableColumnOptions {
+                name: "text".to_string(),
+                data_type: DataType::Utf8,
+                nullable: true,
+                comment: None,
+                default: Some("'hello'".to_string()),
+                generated_always_as: None,
+                identity: None,
+            },
+            CreateTableColumnOptions {
+                name: "gen".to_string(),
+                data_type: DataType::Int64,
+                nullable: true,
+                comment: None,
+                default: None,
+                generated_always_as: Some("id + 1".to_string()),
+                identity: None,
+            },
+        ];
+        let mut table = build_generic_table(
+            "default",
+            "items",
+            columns.clone(),
+            vec![],
+            Some("s3://warehouse/items".to_string()),
+            GenericTableFormat {
+                logical_format: "parquet",
+                storage: &HiveStorageFormat::parquet(),
+            },
+            None,
+            vec![],
+        )
+        .unwrap();
+        inject_spark_metadata(&mut table, &columns, &[], "parquet").unwrap();
+
+        let columns = columns_from_spark_properties(table.parameters.as_ref())
+            .unwrap()
+            .expect("expected Spark schema metadata");
+        assert_eq!(columns[0].name, "id");
+        assert_eq!(columns[0].comment.as_deref(), Some("pk"));
+        assert_eq!(columns[0].default.as_deref(), Some("42"));
+        assert_eq!(columns[1].name, "text");
+        assert_eq!(columns[1].default.as_deref(), Some("'hello'"));
+        assert_eq!(columns[2].name, "gen");
+        assert_eq!(columns[2].generated_always_as.as_deref(), Some("id + 1"));
+    }
+
+    #[test]
+    fn test_columns_from_spark_properties_reads_foreign_spark_defaults() {
+        // Spark serializes the full `StructField.metadata` object, so a table
+        // created by Spark with column defaults carries `CURRENT_DEFAULT` (and
+        // `EXISTS_DEFAULT`) in the schema JSON. The default may be SQL text
+        // (`'hello'`) or a JSON-encoded string (`"hello"`), which is decoded.
+        let schema_json = concat!(
+            r#"{"type":"struct","fields":["#,
+            r#"{"name":"a","type":"string","nullable":true,"#,
+            r#""metadata":{"CURRENT_DEFAULT":"'hello'","EXISTS_DEFAULT":"'hello'"}},"#,
+            r#"{"name":"b","type":"string","nullable":true,"#,
+            r#""metadata":{"CURRENT_DEFAULT":"\"hello\""}}]}"#,
+        );
+        let parameters: AHashMap<FastStr, FastStr> = [(
+            FastStr::from_static_str(SPARK_SCHEMA_KEY),
+            FastStr::from_string(schema_json.to_string()),
+        )]
+        .into_iter()
+        .collect();
+
+        let columns = columns_from_spark_properties(Some(&parameters))
+            .unwrap()
+            .expect("expected Spark schema metadata");
+        assert_eq!(columns[0].name, "a");
+        assert_eq!(columns[0].default.as_deref(), Some("'hello'"));
+        assert_eq!(columns[1].name, "b");
+        // The JSON-encoded string is decoded; the write path interprets the
+        // bare word as a string literal value rather than a column reference.
+        assert_eq!(columns[1].default.as_deref(), Some("hello"));
+    }
+
+    #[test]
+    fn test_alter_spark_column_default_preserves_other_features() {
+        let columns = vec![
+            CreateTableColumnOptions {
+                name: "id".to_string(),
+                data_type: DataType::Int64,
+                nullable: false,
+                comment: Some("pk".to_string()),
+                default: None,
+                generated_always_as: None,
+                identity: None,
+            },
+            CreateTableColumnOptions {
+                name: "gen".to_string(),
+                data_type: DataType::Int64,
+                nullable: true,
+                comment: None,
+                default: None,
+                generated_always_as: Some("id + 1".to_string()),
+                identity: None,
+            },
+        ];
+        let mut table = build_generic_table(
+            "default",
+            "items",
+            columns.clone(),
+            vec![],
+            Some("s3://warehouse/items".to_string()),
+            GenericTableFormat {
+                logical_format: "parquet",
+                storage: &HiveStorageFormat::parquet(),
+            },
+            None,
+            vec![],
+        )
+        .unwrap();
+        inject_spark_metadata(&mut table, &columns, &[], "parquet").unwrap();
+
+        super::alter_spark_column_default(&mut table, &["id".to_string()], Some("42".to_string()))
+            .unwrap();
+
+        let columns = columns_from_spark_properties(table.parameters.as_ref())
+            .unwrap()
+            .expect("expected Spark schema metadata");
+        assert_eq!(columns[0].default.as_deref(), Some("42"));
+        assert_eq!(columns[0].comment.as_deref(), Some("pk"));
+        assert_eq!(columns[1].generated_always_as.as_deref(), Some("id + 1"));
+
+        super::alter_spark_column_default(&mut table, &["id".to_string()], None).unwrap();
+        let columns = columns_from_spark_properties(table.parameters.as_ref())
+            .unwrap()
+            .expect("expected Spark schema metadata");
+        assert_eq!(columns[0].default, None);
+        assert_eq!(columns[1].generated_always_as.as_deref(), Some("id + 1"));
+    }
+
+    #[test]
+    fn test_alter_spark_column_default_preserves_foreign_metadata() {
+        let schema_json = concat!(
+            r#"{"type":"struct","fields":["#,
+            r#"{"name":"a","type":"string","nullable":true,"#,
+            r#""metadata":{"CURRENT_DEFAULT":"'old'","EXISTS_DEFAULT":"'old'"}},"#,
+            r#"{"name":"b","type":"string","nullable":true,"#,
+            r#""metadata":{"CURRENT_DEFAULT":"\"hello\"","EXISTS_DEFAULT":"\"hello\""}}]}"#,
+        );
+        let mut table = Table {
+            parameters: Some(
+                [(
+                    FastStr::from_static_str(SPARK_SCHEMA_KEY),
+                    FastStr::from_string(schema_json.to_string()),
+                )]
+                .into_iter()
+                .collect(),
+            ),
+            ..Default::default()
+        };
+
+        super::alter_spark_column_default(
+            &mut table,
+            &["a".to_string()],
+            Some("'new'".to_string()),
+        )
+        .unwrap();
+
+        let schema = super::read_large_table_prop(table.parameters.as_ref(), SPARK_SCHEMA_KEY)
+            .unwrap()
+            .expect("expected Spark schema metadata");
+        let value: serde_json::Value = serde_json::from_str(&schema).unwrap();
+        let fields = value.get("fields").unwrap().as_array().unwrap();
+        // The altered column gets the new default and keeps its existence
+        // default.
+        assert_eq!(
+            fields[0].get("metadata").unwrap(),
+            &serde_json::json!({"CURRENT_DEFAULT": "'new'", "EXISTS_DEFAULT": "'old'"})
+        );
+        // The other column's metadata is preserved verbatim, including the
+        // JSON-encoded default representation.
+        assert_eq!(
+            fields[1].get("metadata").unwrap(),
+            &serde_json::json!({"CURRENT_DEFAULT": "\"hello\"", "EXISTS_DEFAULT": "\"hello\""})
+        );
     }
 
     #[test]

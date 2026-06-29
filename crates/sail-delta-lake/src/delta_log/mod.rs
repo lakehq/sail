@@ -2,6 +2,8 @@ pub(crate) mod cleanup;
 mod listing;
 mod replay;
 mod segment;
+pub(crate) mod segment_files;
+mod store;
 mod timestamps;
 
 pub(crate) use listing::{
@@ -15,6 +17,10 @@ pub(crate) use replay::{
 };
 pub(crate) use segment::{
     list_log_files, LogSegmentResolver, ReplayedTableHeader, ResolvedLogSegment,
+};
+pub(crate) use store::{default_logstore, get_actions, get_object_store_from_context};
+pub use store::{
+    CommitOrBytes, LogStore, LogStoreConfig, LogStoreRef, ObjectStoreRef, StorageConfig,
 };
 pub(crate) use timestamps::{
     resolve_commit_timestamp_from_actions, resolve_effective_protocol_and_metadata,

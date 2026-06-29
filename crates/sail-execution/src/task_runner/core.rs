@@ -9,10 +9,7 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
-use datafusion_proto::physical_plan::AsExecutionPlan;
-use datafusion_proto::protobuf::PhysicalPlanNode;
 use log::debug;
-use prost::Message;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 use sail_python_udf::error::PyErrExtractor;
@@ -21,11 +18,12 @@ use sail_telemetry::telemetry::global_metrics;
 use sail_telemetry::{trace_execution_plan, TracingExecOptions};
 use tokio::sync::oneshot;
 
-use crate::codec::RemoteExecutionCodec;
 use crate::driver::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskKey, TaskKeyDisplay};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec, StageInputExec};
+use crate::proto::codec::RemoteExecutionCodec;
+use crate::proto::decode::try_decode_physical_plan;
 use crate::stream_accessor::{StreamAccessor, StreamAccessorMessage};
 use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
 use crate::task_runner::monitor::TaskMonitor;
@@ -85,8 +83,8 @@ impl TaskRunner {
     where
         T::Message: TaskRunnerMessage + StreamAccessorMessage,
     {
-        let plan = PhysicalPlanNode::decode(definition.plan.as_ref())?;
-        let plan = plan.try_into_physical_plan(&context, self.codec.as_ref())?;
+        let plan =
+            try_decode_physical_plan(&context, self.codec.as_ref(), definition.plan.as_ref())?;
         let plan = self.rewrite_parquet_adapters(plan)?;
         let plan = self.rewrite_shuffle(
             ctx,

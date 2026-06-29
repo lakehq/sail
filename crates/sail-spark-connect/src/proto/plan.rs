@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use sail_common::spec;
 use sail_sql_analyzer::expression::{from_ast_expression, from_ast_object_name};
-use sail_sql_analyzer::parser::{parse_expression, parse_object_name, parse_one_statement};
+use sail_sql_analyzer::parser::{
+    parse_expression, parse_object_name, parse_one_statement, rewrite_positional_parameter_markers,
+};
 use sail_sql_analyzer::statement::from_ast_statement;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
@@ -442,8 +444,10 @@ impl TryFrom<RelType> for RelationNode {
                         let values = values
                             .into_iter()
                             .map(|x| {
+                                // The Connect DataFrame API sends pivot values as literals; wrap
+                                // each in `spec::Expr::Literal` now that values are expressions.
                                 Ok(spec::PivotValue {
-                                    values: vec![x.try_into()?],
+                                    values: vec![spec::Expr::Literal(x.try_into()?)],
                                     alias: None,
                                 })
                             })
@@ -489,39 +493,49 @@ impl TryFrom<RelType> for RelationNode {
                     named_arguments,
                     pos_arguments,
                 } = sql;
+                let positional_arguments = match (pos_args.is_empty(), pos_arguments.is_empty()) {
+                    (false, false) => {
+                        return Err(SparkError::invalid("conflicting positional arguments"))
+                    }
+                    (false, true) => pos_args
+                        .into_iter()
+                        .map(|x| Ok(spec::Expr::Literal(x.try_into()?)))
+                        .collect::<SparkResult<Vec<_>>>()?,
+                    (true, false) => pos_arguments
+                        .into_iter()
+                        .map(|x| x.try_into())
+                        .collect::<SparkResult<Vec<_>>>()?,
+                    (true, true) => vec![],
+                };
+                let named_arguments = match (args.is_empty(), named_arguments.is_empty()) {
+                    (false, false) => {
+                        return Err(SparkError::invalid("conflicting named arguments"))
+                    }
+                    (false, true) => args
+                        .into_iter()
+                        .map(|(k, v)| Ok((k, spec::Expr::Literal(v.try_into()?))))
+                        .collect::<SparkResult<Vec<_>>>()?,
+                    (true, false) => named_arguments
+                        .into_iter()
+                        .map(|(k, v)| Ok((k, v.try_into()?)))
+                        .collect::<SparkResult<Vec<_>>>()?,
+                    (true, true) => vec![],
+                };
+                let (query, positional_marker_count) = if positional_arguments.is_empty() {
+                    (query, 0)
+                } else {
+                    rewrite_positional_parameter_markers(&query)?
+                };
+                if positional_marker_count > positional_arguments.len() {
+                    // Mirror Spark's `UNBOUND_SQL_PARAMETER`. Positional parameters are
+                    // named `_N` (0-based), so the first unbound marker is `_<len>`.
+                    return Err(SparkError::invalid(format!(
+                        "Found the unbound parameter: _{}. Please, fix `args` and provide a mapping of the parameter to either a SQL literal or collection constructor functions such as `map()`, `array()`, `struct()`.",
+                        positional_arguments.len()
+                    )));
+                }
                 match from_ast_statement(parse_one_statement(query.as_str())?)? {
                     spec::Plan::Query(input) => {
-                        let positional_arguments =
-                            match (pos_args.is_empty(), pos_arguments.is_empty()) {
-                                (false, false) => {
-                                    return Err(SparkError::invalid(
-                                        "conflicting positional arguments",
-                                    ))
-                                }
-                                (false, true) => pos_args
-                                    .into_iter()
-                                    .map(|x| Ok(spec::Expr::Literal(x.try_into()?)))
-                                    .collect::<SparkResult<Vec<_>>>()?,
-                                (true, false) => pos_arguments
-                                    .into_iter()
-                                    .map(|x| x.try_into())
-                                    .collect::<SparkResult<Vec<_>>>()?,
-                                (true, true) => vec![],
-                            };
-                        let named_arguments = match (args.is_empty(), named_arguments.is_empty()) {
-                            (false, false) => {
-                                return Err(SparkError::invalid("conflicting named arguments"))
-                            }
-                            (false, true) => args
-                                .into_iter()
-                                .map(|(k, v)| Ok((k, spec::Expr::Literal(v.try_into()?))))
-                                .collect::<SparkResult<Vec<_>>>()?,
-                            (true, false) => named_arguments
-                                .into_iter()
-                                .map(|(k, v)| Ok((k, v.try_into()?)))
-                                .collect::<SparkResult<Vec<_>>>()?,
-                            (true, true) => vec![],
-                        };
                         Ok(RelationNode::Query(spec::QueryNode::WithParameters {
                             input: Box::new(input),
                             positional_arguments,
@@ -529,7 +543,7 @@ impl TryFrom<RelType> for RelationNode {
                         }))
                     }
                     spec::Plan::Command(command) => {
-                        if !pos_args.is_empty() || !args.is_empty() {
+                        if !positional_arguments.is_empty() || !named_arguments.is_empty() {
                             Err(SparkError::invalid("command with parameters"))
                         } else {
                             Ok(RelationNode::Command(command.node))
@@ -1459,8 +1473,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         sort_by: vec![],
                         bucket_by: None,
                         cluster_by: vec![],
-                        if_not_exists: false,
-                        replace: false,
+                        mode: spec::CreateTableMode::Create,
                         options: options.into_iter().collect(),
                         properties: vec![],
                     },
@@ -1498,8 +1511,7 @@ impl TryFrom<Catalog> for spec::CommandNode {
                         sort_by: vec![],
                         bucket_by: None,
                         cluster_by: vec![],
-                        if_not_exists: false,
-                        replace: false,
+                        mode: spec::CreateTableMode::Create,
                         options,
                         properties: vec![],
                     },

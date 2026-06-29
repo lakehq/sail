@@ -13,12 +13,12 @@ jobs:
     name: Run
     runs-on: ubuntu-slim
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/commit-baseline
         id: baseline
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: tmp/baseline
           ref: ${{ steps.baseline.outputs.sha }}
@@ -40,7 +40,7 @@ jobs:
           echo "$NUMBER" > tmp/report/pull-request.txt
 
       - name: Upload Report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gold-data-report
           path: tmp/report

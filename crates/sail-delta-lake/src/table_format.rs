@@ -2,49 +2,70 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use chrono::Utc;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
 use datafusion::datasource::listing::ListingTableUrl;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::{LogicalPlan, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, Extension, UserDefinedLogicalNodeCore};
 use educe::Educe;
-use sail_common_datafusion::catalog::CatalogPartitionField;
+use sail_common_datafusion::catalog::delta::{
+    unity_table_id_value, DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
+};
+use sail_common_datafusion::catalog::{
+    CatalogPartitionField, CatalogTableColumnIdentity, CommitAuthority, LakehouseExecutionContext,
+    LakehouseOperation,
+};
 use sail_common_datafusion::column_features::{
     ColumnFeatureKey, ColumnFeatures, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
 use sail_common_datafusion::datasource::{
     create_sort_order, find_path_in_options, BucketBy, DeleteInfo, MergeInfo, OptionLayer,
     PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo, TableFormat, TableFormatAlterTableOperation,
+    TableFormatCreateTableColumn, TableFormatCreateTableInfo, TableFormatCreateTableResult,
     TableFormatMetadata, TableFormatRegistry, CATALOG_TABLE_OPTION,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
 use sail_data_source::options::ResolveOptions;
 use sail_data_source::resolve_listing_urls;
 use sail_logical_plan::merge::RowLevelWriteNode;
 use url::Url;
 
-use crate::kernel::DeltaSnapshotConfig;
+use crate::catalog_managed::{metadata_with_catalog_managed, protocol_with_catalog_managed};
+use crate::datasource::actions::adds_to_remove_actions;
+use crate::delta_log::StorageConfig;
 use crate::options::gen::{DeltaReadOptions, DeltaWriteOptions};
 use crate::physical_plan::planner::{DeltaPhysicalPlanner, DeltaPlannerConfig, PlannerContext};
 use crate::schema::type_widening::alter_column_type as alter_delta_column_type;
 use crate::schema::{
-    add_type_widening_metadata, collect_type_changes, evolve_schema, format_type_change_path,
-    is_supported_type_change_for_write, protocol_can_write_type_widening,
+    add_type_widening_metadata, annotate_for_column_mapping, collect_type_changes,
+    compute_max_column_id, evolve_schema, format_type_change_path, inject_default_expressions,
+    inject_generation_expressions, inject_identity_columns, is_supported_type_change_for_write,
+    metadata_for_create_with_struct_type, normalize_delta_schema, protocol_can_write_type_widening,
+    protocol_for_create, schema_has_column_defaults, schema_has_generated_columns,
+    schema_has_identity_columns,
 };
+use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
-    canonicalize_and_validate_table_properties, route_table_property_key, ColumnMetadataKey,
-    CommitAction, DataType as DeltaDataType, DeltaOperation, MetadataValue, Protocol, StructField,
-    StructType, TableFeature,
+    canonicalize_and_validate_table_properties, contains_timestampntz_arrow,
+    contains_variant_arrow, route_table_property_key, ColumnMappingMode, ColumnMetadataKey,
+    CommitAction, DataType as DeltaDataType, DeltaOperation, MetadataValue, Protocol, SaveMode,
+    StructField, StructType, TableFeature, TableProperties,
 };
 use crate::table::{
+    create_delta_table_with_object_store, create_logstore_with_object_store,
     infer_delta_logical_metadata, infer_delta_logical_schema,
-    open_table_with_object_store_and_table_config,
+    load_catalog_managed_commits_for_snapshot, open_table_with_object_store_and_table_config,
+    DeltaTable,
 };
+use crate::transaction::CommitBuilder;
 use crate::{create_delta_source, DeltaTableError};
 
 /// Delta Lake implementation of [`TableFormat`].
@@ -71,7 +92,7 @@ impl TableFormat for DeltaTableFormat {
     ) -> Result<Arc<dyn TableSource>> {
         let SourceInfo {
             paths,
-            catalog_table,
+            lakehouse_table,
             schema,
             constraints: _,
             partition_by: _,
@@ -82,13 +103,13 @@ impl TableFormat for DeltaTableFormat {
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
         let options = DeltaReadOptions::resolve(ctx, options)?;
-        create_delta_source(ctx, table_url, schema, options, catalog_table).await
+        create_delta_source(ctx, table_url, schema, options, lakehouse_table).await
     }
 
     async fn infer_schema(&self, ctx: &dyn Session, info: SourceInfo) -> Result<SchemaRef> {
         let SourceInfo {
             paths,
-            catalog_table,
+            lakehouse_table,
             schema,
             constraints: _,
             partition_by: _,
@@ -99,7 +120,7 @@ impl TableFormat for DeltaTableFormat {
         } = info;
         let table_url = Self::parse_table_url(ctx, paths).await?;
         let options = DeltaReadOptions::resolve(ctx, options)?;
-        infer_delta_logical_schema(ctx, table_url, schema, options, catalog_table).await
+        infer_delta_logical_schema(ctx, table_url, schema, options, lakehouse_table).await
     }
 
     async fn infer_metadata(
@@ -109,7 +130,7 @@ impl TableFormat for DeltaTableFormat {
     ) -> Result<TableFormatMetadata> {
         let SourceInfo {
             paths,
-            catalog_table,
+            lakehouse_table,
             schema,
             constraints: _,
             partition_by: _,
@@ -121,8 +142,259 @@ impl TableFormat for DeltaTableFormat {
         let table_url = Self::parse_table_url(ctx, paths).await?;
         let options = DeltaReadOptions::resolve(ctx, options)?;
         let (schema, properties) =
-            infer_delta_logical_metadata(ctx, table_url, schema, options, catalog_table).await?;
+            infer_delta_logical_metadata(ctx, table_url, schema, options, lakehouse_table).await?;
         Ok(TableFormatMetadata { schema, properties })
+    }
+
+    async fn create_table_metadata(
+        &self,
+        runtime_env: Arc<RuntimeEnv>,
+        info: TableFormatCreateTableInfo,
+    ) -> Result<TableFormatCreateTableResult> {
+        let TableFormatCreateTableInfo {
+            path,
+            columns,
+            comment,
+            partition_by,
+            properties,
+            replace,
+            lakehouse_table,
+        } = info;
+        let catalog_table = lakehouse_table
+            .as_ref()
+            .map(|context| context.catalog_table().to_vec());
+
+        let catalog_managed_table_id = if catalog_table.is_some() {
+            Some(
+                unity_table_id_value(
+                    properties
+                        .iter()
+                        .map(|(key, value)| (key.as_str(), value.as_str())),
+                )
+                .ok_or_else(|| {
+                    DataFusionError::Plan(
+                        "catalog-managed Delta CREATE TABLE requires a Unity table id".to_string(),
+                    )
+                })?
+                .to_string(),
+            )
+        } else {
+            None
+        };
+
+        if partition_by.iter().any(|field| field.transform.is_some()) {
+            return not_impl_err!("partition transforms for Delta CREATE TABLE");
+        }
+
+        let table_url = parse_location_to_url(&path)?;
+        let object_store = runtime_env
+            .object_store_registry
+            .get_store(&table_url)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        let existing_table = match open_table_with_object_store_and_table_config(
+            table_url.clone(),
+            object_store.clone(),
+            Default::default(),
+            DeltaSnapshotConfig {
+                require_files: replace,
+                ..Default::default()
+            },
+        )
+        .await
+        {
+            Ok(table) => Some(table),
+            Err(DeltaTableError::InvalidTableLocation(_))
+            | Err(DeltaTableError::FileNotFound(_)) => None,
+            Err(err) => return Err(DataFusionError::External(Box::new(err))),
+        };
+
+        let declared_schema = delta_create_table_arrow_schema(&columns)?;
+        if let Some(table) = existing_table.as_ref() {
+            if replace {
+                if declared_schema.fields().is_empty() {
+                    return plan_err!("schema is not provided");
+                }
+            } else {
+                if !declared_schema.fields().is_empty() {
+                    let snapshot = table
+                        .snapshot()
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    let existing_schema = snapshot
+                        .arrow_schema()
+                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                    validate_existing_delta_create_table_schema(
+                        existing_schema.as_ref(),
+                        declared_schema.as_ref(),
+                        &path,
+                    )?;
+                    let declared_partitions = partition_by
+                        .iter()
+                        .map(|field| field.column.clone())
+                        .collect::<Vec<_>>();
+                    let existing_partitions = snapshot.metadata().partition_columns();
+                    if existing_partitions.as_slice() != declared_partitions.as_slice() {
+                        return plan_err!(
+                            "Delta table already exists at {path} with different partition columns: \
+                             existing {existing_partitions:?}, declared {declared_partitions:?}"
+                        );
+                    }
+                }
+                return Ok(TableFormatCreateTableResult::default());
+            }
+        }
+
+        if declared_schema.fields().is_empty() {
+            if replace {
+                return plan_err!("schema is not provided");
+            } else {
+                return plan_err!(
+                    "Delta CREATE TABLE requires at least one column when no existing Delta metadata is present"
+                );
+            }
+        }
+
+        let replace_snapshot = if let Some(table) = existing_table.as_ref() {
+            Some(
+                table
+                    .snapshot()
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?
+                    .clone(),
+            )
+        } else {
+            None
+        };
+
+        let properties = if catalog_managed_table_id.is_some() {
+            delta_catalog_managed_create_table_properties(properties)
+        } else {
+            properties
+        };
+        let metadata_configuration = delta_create_table_metadata_configuration(properties)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let normalized_schema = normalize_delta_schema(&declared_schema);
+        let mut kernel_schema = StructType::try_from(normalized_schema.as_ref())
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        kernel_schema = inject_generation_expressions(
+            kernel_schema,
+            &delta_create_table_generation_expressions(&columns),
+        );
+        kernel_schema = inject_default_expressions(
+            kernel_schema,
+            &delta_create_table_default_expressions(&columns),
+        );
+        kernel_schema = inject_identity_columns(
+            kernel_schema,
+            &delta_create_table_identity_columns(&columns),
+        );
+
+        let effective_mode = metadata_configuration
+            .get("delta.columnMapping.mode")
+            .and_then(|v| ColumnMappingMode::try_from(v.as_str()).ok())
+            .unwrap_or_default();
+
+        let mut configuration = metadata_configuration;
+        let metadata_schema = if !matches!(effective_mode, ColumnMappingMode::None) {
+            let annotated = annotate_for_column_mapping(&kernel_schema);
+            configuration.insert(
+                "delta.columnMapping.mode".to_string(),
+                effective_mode.as_ref().to_string(),
+            );
+            configuration.insert(
+                "delta.columnMapping.maxColumnId".to_string(),
+                compute_max_column_id(&annotated).to_string(),
+            );
+            annotated
+        } else {
+            kernel_schema
+        };
+
+        let mut protocol = protocol_for_create(
+            !matches!(effective_mode, ColumnMappingMode::None),
+            contains_timestampntz_arrow(normalized_schema.as_ref()),
+            TableProperties::from(configuration.iter()).enable_in_commit_timestamps(),
+            schema_has_generated_columns(&metadata_schema),
+            schema_has_column_defaults(&metadata_schema),
+            schema_has_identity_columns(&metadata_schema),
+            contains_variant_arrow(normalized_schema.as_ref()),
+            &configuration,
+        )
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        if catalog_managed_table_id.is_some() {
+            protocol = protocol_with_catalog_managed(&protocol);
+        }
+
+        let partition_columns = partition_by
+            .iter()
+            .map(|field| field.column.clone())
+            .collect::<Vec<_>>();
+        let mut metadata = metadata_for_create_with_struct_type(
+            metadata_schema,
+            partition_columns,
+            Utc::now().timestamp_millis(),
+            configuration,
+        )
+        .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        if let Some(comment) = comment {
+            metadata = metadata.with_description(comment);
+        }
+        if let Some(table_id) = &catalog_managed_table_id {
+            metadata = metadata_with_catalog_managed(metadata, table_id);
+        }
+
+        let log_store = if let Some(table) = existing_table.as_ref() {
+            table.log_store()
+        } else {
+            create_delta_table_with_object_store(
+                table_url.clone(),
+                object_store,
+                Default::default(),
+            )
+            .await
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+            .log_store()
+        };
+        let operation = DeltaOperation::Create {
+            mode: if replace {
+                SaveMode::Overwrite
+            } else {
+                SaveMode::ErrorIfExists
+            },
+            location: table_url.to_string(),
+            protocol: Box::new(protocol.clone()),
+            metadata: Box::new(metadata.clone()),
+        };
+
+        let mut actions = Vec::new();
+        if let Some(snapshot) = replace_snapshot.as_ref() {
+            let desired_protocol = avoid_stable_type_widening_auto_upgrade_for_preview_tables(
+                snapshot.protocol(),
+                &protocol,
+                metadata.configuration(),
+            );
+            let (merged_protocol, protocol_upgraded) =
+                merge_protocol_for_upgrade(snapshot.protocol(), &desired_protocol);
+            if protocol_upgraded {
+                actions.push(CommitAction::Protocol(merged_protocol));
+            }
+        } else {
+            actions.push(CommitAction::Protocol(protocol));
+        }
+        actions.push(CommitAction::Metadata(metadata));
+        if let Some(snapshot) = replace_snapshot.as_ref() {
+            actions.extend(
+                adds_to_remove_actions(snapshot.adds().to_vec())
+                    .into_iter()
+                    .map(CommitAction::Remove),
+            );
+        }
+
+        CommitBuilder::default()
+            .with_actions(actions)
+            .build(replace_snapshot, log_store, operation)
+            .await
+            .map(|_| TableFormatCreateTableResult::default())
+            .map_err(|e| DataFusionError::External(Box::new(e)))
     }
 
     async fn create_writer(&self, _ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan> {
@@ -136,7 +408,7 @@ impl TableFormat for DeltaTableFormat {
             bucket_by,
             sort_order,
             options,
-            catalog_table,
+            lakehouse_table,
         } = info;
         if bucket_by.is_some() {
             return not_impl_err!("bucketing for Delta format");
@@ -154,7 +426,7 @@ impl TableFormat for DeltaTableFormat {
                     bucket_by,
                     sort_order,
                     options,
-                    catalog_table,
+                    lakehouse_table,
                 },
             )),
         }))
@@ -165,6 +437,7 @@ impl TableFormat for DeltaTableFormat {
             table_name,
             path,
             condition,
+            lakehouse_table,
             options,
         } = info;
         let write_node = RowLevelWriteNode::new_delete(
@@ -180,6 +453,7 @@ impl TableFormat for DeltaTableFormat {
             path,
             table_name,
             options,
+            lakehouse_table,
         );
 
         Ok(LogicalPlan::Extension(Extension {
@@ -196,7 +470,9 @@ impl TableFormat for DeltaTableFormat {
         runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
         path: &str,
         operation: TableFormatAlterTableOperation,
+        lakehouse_table: Option<LakehouseExecutionContext>,
     ) -> Result<()> {
+        reject_catalog_managed_delta_alter(lakehouse_table.as_ref(), &operation)?;
         match operation {
             TableFormatAlterTableOperation::SetTableProperties { changes, if_exists } => {
                 self.alter_table_properties(runtime_env, path, changes, if_exists)
@@ -224,6 +500,35 @@ impl TableFormat for DeltaTableFormat {
     }
 }
 
+fn reject_catalog_managed_delta_alter(
+    lakehouse_table: Option<&LakehouseExecutionContext>,
+    operation: &TableFormatAlterTableOperation,
+) -> Result<()> {
+    let Some(context) = lakehouse_table else {
+        return Ok(());
+    };
+    if context.commit == CommitAuthority::DeltaRatifiedCommit {
+        return not_impl_err!(
+            "{} is not yet supported for catalog-managed Delta tables",
+            delta_alter_operation_name(operation)
+        );
+    }
+    Ok(())
+}
+
+fn delta_alter_operation_name(operation: &TableFormatAlterTableOperation) -> &'static str {
+    match operation {
+        TableFormatAlterTableOperation::SetTableProperties { .. } => {
+            "ALTER TABLE SET/UNSET TBLPROPERTIES"
+        }
+        TableFormatAlterTableOperation::AlterColumnType { .. } => "ALTER TABLE ALTER COLUMN TYPE",
+        TableFormatAlterTableOperation::AlterColumnDefault { .. } => {
+            "ALTER TABLE ALTER COLUMN DEFAULT"
+        }
+        TableFormatAlterTableOperation::AddCheckConstraint { .. } => "ALTER TABLE ADD CONSTRAINT",
+    }
+}
+
 #[derive(Clone, Debug, Educe)]
 #[educe(PartialEq, Eq, Hash, PartialOrd)]
 pub struct DeltaWriteNodeOptions {
@@ -234,7 +539,7 @@ pub struct DeltaWriteNodeOptions {
     pub sort_order: Vec<Sort>,
     #[educe(PartialEq(ignore), Hash(ignore), PartialOrd(ignore))]
     pub options: Vec<OptionLayer>,
-    pub catalog_table: Option<Vec<String>>,
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
 }
 
 #[derive(Clone, Debug, Educe)]
@@ -304,7 +609,7 @@ pub(crate) async fn plan_delta_write(
         bucket_by: _,
         sort_order,
         options,
-        catalog_table,
+        lakehouse_table,
     } = node.options().clone();
 
     if is_flow_event_schema(logical_input.schema().as_arrow()) {
@@ -342,16 +647,18 @@ pub(crate) async fn plan_delta_write(
         .object_store_registry
         .get_store(&table_url)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let table = match open_table_with_object_store_and_table_config(
+    let lakehouse_planning_context = lakehouse_table.as_ref().filter(|context| {
+        context.table_identity.table_id.is_some()
+            && !matches!(
+                context.operation,
+                LakehouseOperation::Create | LakehouseOperation::Register
+            )
+    });
+    let table = match open_delta_write_planning_table(
+        ctx,
         table_url.clone(),
         object_store,
-        Default::default(),
-        // Only partition columns and table existence are needed at planning time;
-        // skip replaying Add/Remove file actions which are not used here.
-        DeltaSnapshotConfig {
-            require_files: false,
-            ..Default::default()
-        },
+        lakehouse_planning_context,
     )
     .await
     {
@@ -454,12 +761,54 @@ pub(crate) async fn plan_delta_write(
     .with_metadata_schema(extract_metadata_schema(Some(logical_schema)))
     .with_identity_columns(extract_identity_columns(Some(logical_schema)))
     .with_table_snapshot(table_snapshot)
-    .with_catalog_table(catalog_table);
+    .with_lakehouse_table(lakehouse_table);
     let planner_ctx = PlannerContext::new(ctx, table_config);
     let planner = DeltaPhysicalPlanner::new(planner_ctx);
     planner
         .create_plan(physical_input, mode, physical_sort)
         .await
+}
+
+async fn open_delta_write_planning_table(
+    ctx: &SessionState,
+    table_url: Url,
+    object_store: Arc<dyn object_store::ObjectStore>,
+    lakehouse_table: Option<&LakehouseExecutionContext>,
+) -> std::result::Result<DeltaTable, DeltaTableError> {
+    // Only partition columns and table existence are needed at planning time;
+    // skip replaying Add/Remove file actions unless a later physical plan needs them.
+    let mut table_config = DeltaSnapshotConfig {
+        require_files: false,
+        ..Default::default()
+    };
+
+    if let Some(lakehouse_table) = lakehouse_table {
+        let log_store = create_logstore_with_object_store(
+            Arc::clone(&object_store),
+            table_url.clone(),
+            StorageConfig,
+        )?;
+        table_config.catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
+            ctx,
+            lakehouse_table,
+            &table_url,
+            log_store.clone(),
+            None,
+        )
+        .await
+        .map_err(DeltaTableError::from)?;
+        let mut table = DeltaTable::new(log_store, table_config);
+        table.load().await?;
+        Ok(table)
+    } else {
+        open_table_with_object_store_and_table_config(
+            table_url,
+            object_store,
+            Default::default(),
+            table_config,
+        )
+        .await
+    }
 }
 
 impl DeltaTableFormat {
@@ -470,8 +819,8 @@ impl DeltaTableFormat {
         changes: Vec<(String, Option<String>)>,
         if_exists: bool,
     ) -> Result<()> {
-        use crate::kernel::transaction::CommitBuilder;
         use crate::schema::protocol_for_metadata;
+        use crate::transaction::CommitBuilder;
 
         if let Some((key, _)) = changes
             .iter()
@@ -612,8 +961,8 @@ impl DeltaTableFormat {
         name: &str,
         expression: &str,
     ) -> Result<()> {
-        use crate::kernel::transaction::CommitBuilder;
         use crate::schema::protocol_for_metadata;
+        use crate::transaction::CommitBuilder;
 
         let url = parse_location_to_url(path)?;
         let object_store = runtime_env
@@ -689,7 +1038,7 @@ impl DeltaTableFormat {
         column_path: Vec<String>,
         data_type: ArrowDataType,
     ) -> Result<()> {
-        use crate::kernel::transaction::CommitBuilder;
+        use crate::transaction::CommitBuilder;
 
         let url = parse_location_to_url(path)?;
         let object_store = runtime_env
@@ -794,8 +1143,8 @@ impl DeltaTableFormat {
         column_path: Vec<String>,
         default: Option<String>,
     ) -> Result<()> {
-        use crate::kernel::transaction::CommitBuilder;
         use crate::schema::protocol_for_metadata;
+        use crate::transaction::CommitBuilder;
 
         let url = parse_location_to_url(path)?;
         let object_store = runtime_env
@@ -1206,6 +1555,137 @@ impl DeltaTableFormat {
             _ => plan_err!("expected a single path for Delta table sink: {paths:?}"),
         }
     }
+}
+
+fn delta_create_table_arrow_schema(columns: &[TableFormatCreateTableColumn]) -> Result<SchemaRef> {
+    let fields = columns
+        .iter()
+        .map(|column| {
+            let mut metadata = HashMap::new();
+            if let Some(comment) = &column.comment {
+                metadata.insert("comment".to_string(), comment.clone());
+            }
+            let mut field = Field::new(
+                column.name.clone(),
+                column.data_type.clone(),
+                column.nullable,
+            );
+            if !metadata.is_empty() {
+                field = field.with_metadata(metadata);
+            }
+            field = with_variant_extension_if_marked_storage(field);
+            Ok(field)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Arc::new(Schema::new(fields)))
+}
+
+fn delta_create_table_generation_expressions(
+    columns: &[TableFormatCreateTableColumn],
+) -> HashMap<String, String> {
+    columns
+        .iter()
+        .filter_map(|column| {
+            column
+                .generated_always_as
+                .as_ref()
+                .map(|expr| (column.name.clone(), expr.clone()))
+        })
+        .collect()
+}
+
+fn delta_create_table_default_expressions(
+    columns: &[TableFormatCreateTableColumn],
+) -> HashMap<String, String> {
+    columns
+        .iter()
+        .filter_map(|column| {
+            column
+                .default
+                .as_ref()
+                .map(|expr| (column.name.clone(), expr.clone()))
+        })
+        .collect()
+}
+
+fn delta_create_table_identity_columns(
+    columns: &[TableFormatCreateTableColumn],
+) -> HashMap<String, CatalogTableColumnIdentity> {
+    columns
+        .iter()
+        .filter_map(|column| {
+            column
+                .identity
+                .as_ref()
+                .map(|identity| (column.name.clone(), identity.clone()))
+        })
+        .collect()
+}
+
+fn delta_create_table_metadata_configuration(
+    properties: Vec<(String, String)>,
+) -> crate::spec::DeltaResult<HashMap<String, String>> {
+    let table_properties = properties
+        .into_iter()
+        .filter(|(key, _)| !key.starts_with("option."))
+        .collect::<HashMap<_, _>>();
+    resolve_delta_metadata_configuration(&table_properties)
+}
+
+fn delta_catalog_managed_create_table_properties(
+    properties: Vec<(String, String)>,
+) -> Vec<(String, String)> {
+    properties
+        .into_iter()
+        .filter(|(key, _)| {
+            let lower = key.to_ascii_lowercase();
+            !matches!(
+                lower.as_str(),
+                "comment"
+                    | "created_at"
+                    | "created_by"
+                    | "owner"
+                    | "table_type"
+                    | "updated_at"
+                    | "updated_by"
+            ) && !key.eq_ignore_ascii_case(DELTA_UNITY_TABLE_ID_KEY)
+                && !key.eq_ignore_ascii_case(DELTA_UNITY_TABLE_ID_LEGACY_KEY)
+        })
+        .collect()
+}
+
+fn validate_existing_delta_create_table_schema(
+    existing: &Schema,
+    declared: &Schema,
+    path: &str,
+) -> Result<()> {
+    let existing_fields = existing.fields();
+    let declared_fields = declared.fields();
+    if existing_fields.len() != declared_fields.len() {
+        return plan_err!(
+            "Delta table already exists at {path} with a different schema: \
+             existing has {} fields, declared has {} fields",
+            existing_fields.len(),
+            declared_fields.len()
+        );
+    }
+    for (existing_field, declared_field) in existing_fields.iter().zip(declared_fields.iter()) {
+        if existing_field.name() != declared_field.name()
+            || existing_field.data_type() != declared_field.data_type()
+            || existing_field.is_nullable() != declared_field.is_nullable()
+        {
+            return plan_err!(
+                "Delta table already exists at {path} with a different schema for field '{}': \
+                 existing {:?} nullable={}, declared {:?} nullable={}",
+                declared_field.name(),
+                existing_field.data_type(),
+                existing_field.is_nullable(),
+                declared_field.data_type(),
+                declared_field.is_nullable()
+            );
+        }
+    }
+    Ok(())
 }
 
 fn extract_generation_expressions(logical_schema: Option<&DFSchema>) -> HashMap<String, String> {

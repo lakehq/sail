@@ -78,7 +78,7 @@ runs:
         echo "hash=${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}" >> "$GITHUB_OUTPUT"
       shell: bash
 
-    - uses: actions/cache@v4
+    - uses: actions/cache@v6
       id: cache
       if: ${{ github.event_name == 'push' }}
       with:
@@ -96,7 +96,7 @@ runs:
     # for the default branch and cache eviction is less likely to happen.
     # We always use caches of the default branch for pull request events. The cache is still useful
     # if the dependencies do not differ too much between the default branch and the feature branch.
-    - uses: actions/cache/restore@v4
+    - uses: actions/cache/restore@v6
       if: ${{ github.event_name != 'push' }}
       with:
         path: ${{ steps.config.outputs.path }}

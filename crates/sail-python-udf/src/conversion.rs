@@ -1,8 +1,8 @@
-use arrow_pyarrow::{FromPyArrow, ToPyArrow};
 use datafusion::arrow::array::{Array, ArrayRef, RecordBatch};
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::arrow::array::ArrayData;
 use pyo3::{Bound, BoundObject, IntoPyObject, Py, PyAny, PyErr, PyResult, Python};
+use sail_pyarrow::{FromPyArrow, ToPyArrow};
 
 /// A trait that defines the custom behavior of converting Rust data to a Python object.
 pub trait TryToPy<'py> {

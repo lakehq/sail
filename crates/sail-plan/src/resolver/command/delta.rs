@@ -121,7 +121,7 @@ impl PlanResolver<'_> {
         })?;
         let source_info = SourceInfo {
             paths: vec![path.clone()],
-            catalog_table: None,
+            lakehouse_table: None,
             schema: None,
             constraints: Default::default(),
             partition_by: vec![],
@@ -180,7 +180,7 @@ impl PlanResolver<'_> {
         }
 
         let info = TableInfo {
-            catalog_table: info.catalog_table.clone(),
+            lakehouse_table: info.lakehouse_table.clone(),
             columns,
             location: Some(path),
             format: format.to_string(),
@@ -522,7 +522,7 @@ impl PlanResolver<'_> {
         })?;
         let source = SourceInfo {
             paths: vec![location.clone()],
-            catalog_table: info.catalog_table.clone(),
+            lakehouse_table: info.lakehouse_table.clone(),
             schema: None,
             constraints: Default::default(),
             partition_by: vec![],

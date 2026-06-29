@@ -46,27 +46,26 @@ use datafusion::physical_plan::{
 use datafusion_common::{internal_err, DataFusionError, Result};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::stream::{once, StreamExt};
+use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::{
     PhysicalSinkMode, RowLevelOperationType, MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN,
 };
 use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
-use crate::kernel::transaction::OperationMetrics;
-use crate::kernel::DeltaOperation;
-use crate::operations::write::variant_shredding::{
-    variant_top_level_columns, VariantShreddingConfig,
-};
-use crate::operations::write::writer::{DeltaWriter, WriterConfig};
+use crate::delta_log::get_object_store_from_context;
 use crate::physical_plan::catalog_location::resolve_catalog_table_url;
 use crate::physical_plan::writer_options::DeltaWriterExecOptions;
 use crate::physical_plan::{
     delta_action_schema, encode_actions, DeltaWriteContext, ExecCommitMeta,
 };
 use crate::spec::{
-    Action, ColumnMappingMode, Metadata, Protocol, StructType, TableFeature, TableProperties,
+    Action, ColumnMappingMode, DeltaOperation, Metadata, Protocol, StructType, TableFeature,
+    TableProperties,
 };
-use crate::storage::get_object_store_from_context;
+use crate::transaction::OperationMetrics;
+use crate::writer::variant_shredding::{variant_top_level_columns, VariantShreddingConfig};
+use crate::writer::{DeltaWriter, WriterConfig};
 
 /// Counts internal row intent tags before they are stripped from writer input.
 ///
@@ -290,7 +289,7 @@ pub struct DeltaWriterExec {
     table_exists: bool,
     sink_schema: SchemaRef,
     write_context: DeltaWriteContext,
-    catalog_table: Option<Vec<String>>,
+    lakehouse_table: Option<LakehouseExecutionContext>,
     metrics: ExecutionPlanMetricsSet,
     cache: Arc<PlanProperties>,
 }
@@ -321,7 +320,7 @@ impl DeltaWriterExec {
         table_exists: bool,
         sink_schema: SchemaRef,
         write_context: DeltaWriteContext,
-        catalog_table: Option<Vec<String>>,
+        lakehouse_table: Option<LakehouseExecutionContext>,
     ) -> Result<Self> {
         let schema = delta_action_schema()?;
         let output_partitions = input.output_partitioning().partition_count().max(1);
@@ -336,7 +335,7 @@ impl DeltaWriterExec {
             table_exists,
             sink_schema,
             write_context,
-            catalog_table,
+            lakehouse_table,
             metrics: ExecutionPlanMetricsSet::new(),
             cache,
         })
@@ -388,7 +387,13 @@ impl DeltaWriterExec {
     }
 
     pub fn catalog_table(&self) -> Option<&[String]> {
-        self.catalog_table.as_deref()
+        self.lakehouse_table
+            .as_ref()
+            .map(LakehouseExecutionContext::catalog_table)
+    }
+
+    pub fn lakehouse_table(&self) -> Option<&LakehouseExecutionContext> {
+        self.lakehouse_table.as_ref()
     }
 
     fn effective_protocol_and_metadata(
@@ -572,7 +577,7 @@ impl ExecutionPlan for DeltaWriterExec {
             self.table_exists,
             self.sink_schema.clone(),
             self.write_context.clone(),
-            self.catalog_table.clone(),
+            self.lakehouse_table.clone(),
         )?))
     }
 
@@ -608,7 +613,7 @@ impl DeltaWriterExec {
         let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(partition);
 
         let table_url = self.table_url.clone();
-        let catalog_table = self.catalog_table.clone();
+        let catalog_table = self.catalog_table().map(<[String]>::to_vec);
         let options = self.options.clone();
         let partition_columns = self.partition_columns.clone();
         let sink_mode = self.sink_mode.clone();

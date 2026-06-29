@@ -2,18 +2,17 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use log::debug;
-use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use super::timestamps::version_uses_in_commit_timestamps;
 use super::{list_delta_log_entries_from, read_last_checkpoint_version_from_store};
-use crate::kernel::CatalogManagedCommitSet;
+use crate::delta_log::LogStore;
+use crate::snapshot::{catalog_managed_commit_path, CatalogManagedCommitSet};
 use crate::spec::{
     checksum_path, parse_checkpoint_version, parse_checksum_version, parse_commit_version,
     parse_compacted_json_versions, DeltaError, DeltaResult, DomainMetadata, Metadata, Protocol,
     Transaction, VersionChecksum,
 };
-use crate::storage::LogStore;
 
 const CHECKSUM_LOOKBACK_WINDOW: i64 = 100;
 
@@ -510,21 +509,6 @@ fn filter_compactions_for_range(
         .filter(|((s, e), _)| *s >= start_version && *e <= end_version)
         .cloned()
         .collect()
-}
-
-fn catalog_managed_commit_path(file_name: &str) -> Path {
-    let file_name = file_name.trim_start_matches('/');
-    if let Some(index) = file_name.find("_delta_log/") {
-        Path::from(&file_name[index..])
-    } else if let Some(index) = file_name.find("_staged_commits/") {
-        Path::from(format!("_delta_log/{}", &file_name[index..]))
-    } else if file_name.starts_with("_delta_log/") {
-        Path::from(file_name)
-    } else if file_name.starts_with("_staged_commits/") {
-        Path::from(format!("_delta_log/{file_name}"))
-    } else {
-        Path::from(format!("_delta_log/_staged_commits/{file_name}"))
-    }
 }
 
 fn merge_catalog_managed_commits(

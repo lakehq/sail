@@ -32,6 +32,7 @@ pub async fn create_row_level_write_physical_plan(
         path: node.target_location().to_string(),
         partition_by: node.target_partition_by().to_vec(),
         options: node.target_options().to_vec(),
+        lakehouse_table: node.target_lakehouse_table().cloned(),
     };
 
     match node.command() {
@@ -113,8 +114,7 @@ async fn create_delta_row_level_writer(
     } else {
         MergeStrategy::Eager
     };
-    let catalog_table =
-        (!info.target.table_name.is_empty()).then(|| info.target.table_name.clone());
+    let lakehouse_table = info.target.lakehouse_table.clone();
     let (target_options, _) =
         split_delta_write_options_and_table_properties(info.target.options.clone())?;
 
@@ -133,7 +133,7 @@ async fn create_delta_row_level_writer(
                 None,
                 true,
             )
-            .with_catalog_table(catalog_table.clone());
+            .with_lakehouse_table(lakehouse_table.clone());
             let delete_ctx = PlannerContext::new(ctx, delete_config);
             plan_delete_mor(&delete_ctx, condition).await
         }
@@ -149,7 +149,7 @@ async fn create_delta_row_level_writer(
                 None,
                 true,
             )
-            .with_catalog_table(catalog_table.clone());
+            .with_lakehouse_table(lakehouse_table.clone());
             let merge_ctx = PlannerContext::new(ctx, merge_config);
             plan_merge_mor(&merge_ctx, info).await
         }
@@ -170,7 +170,7 @@ async fn create_delta_row_level_writer(
                 None,
                 true,
             )
-            .with_catalog_table(catalog_table.clone());
+            .with_lakehouse_table(lakehouse_table.clone());
             let delete_ctx = PlannerContext::new(ctx, delete_config);
             plan_delete(&delete_ctx, condition).await
         }
@@ -186,7 +186,7 @@ async fn create_delta_row_level_writer(
                 None,
                 true,
             )
-            .with_catalog_table(catalog_table.clone());
+            .with_lakehouse_table(lakehouse_table.clone());
             let merge_ctx = PlannerContext::new(ctx, merge_config);
             plan_merge(&merge_ctx, info).await
         }

@@ -33,6 +33,7 @@ pub const SOURCE_PRESENT_COLUMN: &str = "__sail_merge_source_row_present";
 pub const TARGET_PRESENT_COLUMN: &str = "__sail_merge_target_row_present";
 pub const TARGET_ROW_ID_COLUMN: &str = "__sail_merge_target_row_id";
 
+use sail_common_datafusion::catalog::LakehouseExecutionContext;
 pub use sail_common_datafusion::datasource::{
     DeltaCheckConstraintExpr, MergeAssignment, MergeInfo, MergeIntoOptions, MergeMatchedAction,
     MergeMatchedClause, MergeNotMatchedBySourceAction, MergeNotMatchedBySourceClause,
@@ -161,6 +162,7 @@ pub struct RowLevelWriteNode {
     target_table_name: Vec<String>,
     target_partition_by: Vec<String>,
     target_options: Vec<OptionLayer>,
+    target_lakehouse_table: Option<LakehouseExecutionContext>,
     with_schema_evolution: bool,
     #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
@@ -185,6 +187,7 @@ impl RowLevelWriteNode {
             target_table_name: options.target.table_name.clone(),
             target_partition_by: options.target.partition_by.clone(),
             target_options: options.target.options.clone(),
+            target_lakehouse_table: options.target.lakehouse_table.clone(),
             with_schema_evolution: options.with_schema_evolution,
             raw_target,
             raw_source: Some(raw_source),
@@ -207,6 +210,7 @@ impl RowLevelWriteNode {
         location: String,
         table_name: Vec<String>,
         options: Vec<OptionLayer>,
+        lakehouse_table: Option<LakehouseExecutionContext>,
     ) -> Self {
         Self {
             command: RowLevelCommand::Delete,
@@ -223,6 +227,7 @@ impl RowLevelWriteNode {
             target_table_name: table_name,
             target_partition_by: Vec::new(),
             target_options: options,
+            target_lakehouse_table: lakehouse_table,
             with_schema_evolution: false,
             schema: Arc::new(DFSchema::empty()),
         }
@@ -282,6 +287,10 @@ impl RowLevelWriteNode {
 
     pub fn target_options(&self) -> &[OptionLayer] {
         &self.target_options
+    }
+
+    pub fn target_lakehouse_table(&self) -> Option<&LakehouseExecutionContext> {
+        self.target_lakehouse_table.as_ref()
     }
 
     pub fn with_schema_evolution(&self) -> bool {
@@ -396,6 +405,7 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
             target_table_name: self.target_table_name.clone(),
             target_partition_by: self.target_partition_by.clone(),
             target_options: self.target_options.clone(),
+            target_lakehouse_table: self.target_lakehouse_table.clone(),
             with_schema_evolution: self.with_schema_evolution,
             schema: self.schema.clone(),
         })
@@ -1445,7 +1455,7 @@ fn build_merge_projection(
     path_column: &str,
     row_index_column: Option<&str>,
 ) -> Result<Vec<Expr>> {
-    let mut cases: Vec<(String, Vec<(Expr, Expr)>)> = target_schema
+    let mut cases: HashMap<String, Vec<(Expr, Expr)>> = target_schema
         .fields()
         .iter()
         .filter(|f| {
@@ -1456,10 +1466,11 @@ fn build_merge_projection(
         .map(|f| (f.name().clone(), Vec::new()))
         .collect();
 
-    let mut target_exprs = Vec::new();
-    for field in target_schema.fields() {
-        target_exprs.push(Expr::Column(Column::from_name(field.name().clone())));
-    }
+    let target_exprs_by_name: HashMap<String, Expr> = target_schema
+        .fields()
+        .iter()
+        .map(|f| (f.name().clone(), Expr::Column(Column::from_name(f.name()))))
+        .collect();
 
     let source_exprs_by_name: HashMap<String, Expr> = source_schema
         .fields()
@@ -1496,8 +1507,8 @@ fn build_merge_projection(
             MergeMatchedAction::UpdateAll => {
                 for field in target_schema.fields().iter() {
                     let value = source_expr_for_target(field.name());
-                    if let Some(entry) = cases.iter_mut().find(|(name, _)| name == field.name()) {
-                        entry.1.push((pred.clone(), value));
+                    if let Some(v) = cases.get_mut(field.name()) {
+                        v.push((pred.clone(), value));
                     }
                 }
             }
@@ -1505,8 +1516,8 @@ fn build_merge_projection(
                 for assignment in assignments {
                     let resolved =
                         resolve_target_column(assignment.column.as_str(), target_schema)?;
-                    if let Some(entry) = cases.iter_mut().find(|(name, _)| name == &resolved) {
-                        entry.1.push((pred.clone(), assignment.value.clone()));
+                    if let Some(v) = cases.get_mut(&resolved) {
+                        v.push((pred.clone(), assignment.value.clone()));
                     }
                 }
             }
@@ -1526,8 +1537,8 @@ fn build_merge_projection(
                 for assignment in assignments {
                     let resolved =
                         resolve_target_column(assignment.column.as_str(), target_schema)?;
-                    if let Some(entry) = cases.iter_mut().find(|(name, _)| name == &resolved) {
-                        entry.1.push((pred.clone(), assignment.value.clone()));
+                    if let Some(v) = cases.get_mut(&resolved) {
+                        v.push((pred.clone(), assignment.value.clone()));
                     }
                 }
             }
@@ -1546,16 +1557,16 @@ fn build_merge_projection(
             MergeNotMatchedByTargetAction::InsertAll => {
                 for field in target_schema.fields().iter() {
                     let value = source_expr_for_target(field.name());
-                    if let Some(entry) = cases.iter_mut().find(|(name, _)| name == field.name()) {
-                        entry.1.push((pred.clone(), value));
+                    if let Some(v) = cases.get_mut(field.name()) {
+                        v.push((pred.clone(), value));
                     }
                 }
             }
             MergeNotMatchedByTargetAction::InsertColumns { columns, values } => {
                 for (col_name, value) in columns.iter().zip(values.iter()) {
                     let resolved = resolve_target_column(col_name, target_schema)?;
-                    if let Some(entry) = cases.iter_mut().find(|(name, _)| name == &resolved) {
-                        entry.1.push((pred.clone(), value.clone()));
+                    if let Some(v) = cases.get_mut(&resolved) {
+                        v.push((pred.clone(), value.clone()));
                     }
                 }
             }
@@ -1571,17 +1582,11 @@ fn build_merge_projection(
             continue;
         }
         let name = field.name();
-        let default_expr = target_exprs
-            .iter()
-            .find(|expr| matches!(expr, Expr::Column(col) if col.name == *name))
+        let default_expr = target_exprs_by_name
+            .get(name)
             .cloned()
             .unwrap_or_else(|| lit(ScalarValue::Null));
-
-        let case_branches = cases
-            .iter_mut()
-            .find(|(col, _)| col == name)
-            .map(|(_, branches)| branches.split_off(0))
-            .unwrap_or_default();
+        let case_branches = cases.remove(name).unwrap_or_default();
 
         let expr = if case_branches.is_empty() {
             default_expr

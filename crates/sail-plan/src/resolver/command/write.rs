@@ -13,14 +13,16 @@ use datafusion_expr::{
 };
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::error::CatalogError;
+use sail_catalog::lakehouse::LakehouseCreateRequest;
 use sail_catalog::manager::CatalogManager;
 use sail_catalog::provider::{
-    CatalogPartitionField, CreateTableColumnOptions, CreateTableOptions, PartitionTransform,
+    CatalogPartitionField, CreateTableColumnOptions, CreateTableMode, CreateTableOptions,
+    PartitionTransform,
 };
 use sail_common::spec::{self, DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID};
 use sail_common_datafusion::catalog::{
-    CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableSort, TableColumnStatus,
-    TableKind,
+    CatalogTableBucketBy, CatalogTableColumnIdentity, CatalogTableSort, LakehouseExecutionContext,
+    LakehouseOperation, TableColumnStatus, TableKind,
 };
 use sail_common_datafusion::column_features::{
     ColumnFeatures, ColumnFeaturesBuilder, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
@@ -244,7 +246,7 @@ impl PlanResolver<'_> {
                 .into_iter()
                 .map(|items| OptionLayer::OptionList { items })
                 .collect(),
-            catalog_table: None,
+            lakehouse_table: None,
         };
         let mut preconditions = vec![];
         match target {
@@ -331,12 +333,13 @@ impl PlanResolver<'_> {
                         ));
                     }
                     info.validate_write_info(&write_format, &sink_info)?;
-                    let delta_merge_schema = info.format.eq_ignore_ascii_case("delta")
+                    let table_format_merge_schema = (info.format.eq_ignore_ascii_case("delta")
+                        || info.format.eq_ignore_ascii_case("iceberg"))
                         && Self::has_truthy_option(
                             &sink_info.options,
                             &["mergeSchema", "merge_schema"],
                         );
-                    if !delta_merge_schema {
+                    if !table_format_merge_schema {
                         input = self
                             .rewrite_write_input(input, column_match, info, state)
                             .await?;
@@ -405,13 +408,16 @@ impl PlanResolver<'_> {
                         ));
                     }
                     let table_location = find_path_in_options(&sink_info.options);
-                    let (if_not_exists, replace) = if matches!(mode, WriteMode::Append { .. }) {
-                        (true, false)
-                    } else if matches!(mode, WriteMode::Replace { .. }) {
-                        (false, true)
-                    } else {
+                    let create_mode = match &mode {
+                        WriteMode::Append { .. } => CreateTableMode::CreateIfNotExists,
+                        WriteMode::Replace {
+                            error_if_absent: true,
+                        } => CreateTableMode::Replace,
+                        WriteMode::Replace {
+                            error_if_absent: false,
+                        } => CreateTableMode::CreateOrReplace,
                         // ErrorIfExists or IgnoreIfExists
-                        (false, false)
+                        _ => CreateTableMode::Create,
                     };
                     let columns = input
                         .schema()
@@ -452,34 +458,55 @@ impl PlanResolver<'_> {
                         .collect();
                     let sort_by = self.resolve_catalog_table_sort(sort_by)?;
                     let bucket_by = self.resolve_catalog_table_bucket_by(bucket_by)?;
+                    let catalog_table = table
+                        .parts()
+                        .iter()
+                        .map(|part| part.as_ref().to_string())
+                        .collect::<Vec<_>>();
+                    let create_options = CreateTableOptions {
+                        columns,
+                        comment: None,
+                        constraints: vec![],
+                        location: table_location,
+                        format: write_format.clone(),
+                        partition_by,
+                        sort_by,
+                        bucket_by,
+                        mode: create_mode,
+                        properties,
+                        is_external: table_is_external || write_options_had_location,
+                        is_write_precondition: true,
+                    };
+                    let create_plan = self
+                        .ctx
+                        .extension::<CatalogManager>()?
+                        .plan_lakehouse_create(
+                            &catalog_table,
+                            LakehouseCreateRequest {
+                                catalog_table: catalog_table.clone(),
+                                options: create_options.clone(),
+                            },
+                        )
+                        .await?;
+                    sink_info.lakehouse_table = Some(
+                        create_plan
+                            .table
+                            .execution
+                            .for_operation(LakehouseOperation::Write),
+                    );
                     let command = CatalogCommand::CreateTable {
                         table: table.clone().into(),
-                        options: CreateTableOptions {
-                            columns,
-                            comment: None,
-                            constraints: vec![],
-                            location: table_location,
-                            format: write_format.clone(),
-                            partition_by,
-                            sort_by,
-                            bucket_by,
-                            if_not_exists,
-                            replace,
-                            properties,
-                            is_external: table_is_external || write_options_had_location,
-                            is_write_precondition: true,
-                        },
+                        options: create_options,
                     };
                     preconditions.push(Arc::new(self.resolve_catalog_command(command)?));
                 }
 
-                sink_info.catalog_table = Some(
-                    table
-                        .parts()
-                        .iter()
-                        .map(|part| part.as_ref().to_string())
-                        .collect::<Vec<_>>(),
-                );
+                if sink_info.lakehouse_table.is_none() {
+                    sink_info.lakehouse_table = info
+                        .as_ref()
+                        .and_then(|info| info.lakehouse_table.as_ref())
+                        .map(|context| context.for_operation(LakehouseOperation::Write));
+                }
 
                 sink_info.mode = self
                     .resolve_write_mode(mode, schema_for_cond.as_ref(), state)
@@ -575,6 +602,21 @@ impl PlanResolver<'_> {
                 mut properties,
                 is_external: _,
             } => {
+                let catalog_table = table
+                    .parts()
+                    .iter()
+                    .map(|part| part.as_ref().to_string())
+                    .collect::<Vec<_>>();
+                let lakehouse_table = self
+                    .resolve_lakehouse_table_context(
+                        &catalog_table,
+                        LakehouseOperation::Read,
+                        Some(&format),
+                        vec![],
+                    )
+                    .await?;
+                let write_precondition_lakehouse_table =
+                    Some(lakehouse_table.for_operation(LakehouseOperation::WritePrecondition));
                 // When a table is created without column definitions
                 // (e.g. `CREATE TABLE t USING fmt`), the catalog stores an empty column list.
                 // Discover the schema from the table format so that write operations
@@ -592,7 +634,7 @@ impl PlanResolver<'_> {
                     })?;
                     let info = SourceInfo {
                         paths: location.iter().cloned().collect(),
-                        catalog_table: Some(table.clone().into()),
+                        lakehouse_table: write_precondition_lakehouse_table.clone(),
                         schema: None,
                         constraints: Default::default(),
                         partition_by: vec![],
@@ -630,7 +672,7 @@ impl PlanResolver<'_> {
                     })?;
                     let info = SourceInfo {
                         paths: location.iter().cloned().collect(),
-                        catalog_table: Some(table.clone().into()),
+                        lakehouse_table: write_precondition_lakehouse_table,
                         schema: None,
                         constraints: Default::default(),
                         partition_by: vec![],
@@ -658,7 +700,7 @@ impl PlanResolver<'_> {
                     }
                 }
                 Ok(Some(TableInfo {
-                    catalog_table: Some(table.clone().into()),
+                    lakehouse_table: Some(lakehouse_table),
                     columns,
                     location,
                     format,
@@ -1252,6 +1294,18 @@ impl PlanResolver<'_> {
                             "failed to analyze default expression `{default}`: {e}"
                         ))
                     })?;
+                // A column reference can never be a valid default value. Such text
+                // comes from metadata that stored a raw string value (e.g. the
+                // JSON-encoded string `"hello"` for an Iceberg column default)
+                // rather than SQL expression text, so it is interpreted as a
+                // string literal.
+                let spec_expr = if matches!(spec_expr, spec::Expr::UnresolvedAttribute { .. }) {
+                    spec::Expr::Literal(spec::Literal::Utf8 {
+                        value: Some(default.to_string()),
+                    })
+                } else {
+                    spec_expr
+                };
                 self.resolve_expression(spec_expr, &empty_schema, state)
                     .await?
             } else {
@@ -1685,7 +1739,7 @@ fn extract_partition_int_arg(
 }
 
 pub(super) struct TableInfo {
-    pub(super) catalog_table: Option<Vec<String>>,
+    pub(super) lakehouse_table: Option<LakehouseExecutionContext>,
     pub(super) columns: Vec<TableColumnStatus>,
     pub(super) location: Option<String>,
     pub(super) format: String,

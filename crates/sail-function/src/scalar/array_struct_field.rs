@@ -49,6 +49,16 @@ impl ArrayStructField {
         }
     }
 
+    fn list_item_field(field: &FieldRef, nullable: bool) -> FieldRef {
+        Arc::new(
+            field
+                .as_ref()
+                .clone()
+                .with_name(Field::LIST_FIELD_DEFAULT_NAME)
+                .with_nullable(nullable),
+        )
+    }
+
     fn return_type_for_list(&self, data_type: &DataType, field_name: &str) -> Result<DataType> {
         let list_field = Self::list_field(data_type)?;
         let DataType::Struct(fields) = list_field.data_type() else {
@@ -61,7 +71,7 @@ impl ArrayStructField {
             .find(field_name)
             .ok_or_else(|| exec_datafusion_err!("missing field: {field_name}"))?;
         let nullable = list_field.is_nullable() || child.is_nullable();
-        let field = Arc::new(Field::new_list_field(child.data_type().clone(), nullable));
+        let field = Self::list_item_field(child, nullable);
         match data_type {
             DataType::List(_) => Ok(DataType::List(field)),
             DataType::LargeList(_) => Ok(DataType::LargeList(field)),
@@ -70,7 +80,7 @@ impl ArrayStructField {
         }
     }
 
-    fn struct_values(values: &ArrayRef, field_name: &str) -> Result<(ArrayRef, bool)> {
+    fn struct_values(values: &ArrayRef, field_name: &str) -> Result<(ArrayRef, FieldRef)> {
         let Some(struct_array) = values.as_any().downcast_ref::<StructArray>() else {
             return exec_err!(
                 "array_struct_field requires list values to be structs, got {}",
@@ -84,7 +94,7 @@ impl ArrayStructField {
         let values = struct_array.column(index);
         let nulls = NullBuffer::union(struct_array.nulls(), values.nulls());
         let data = values.to_data().into_builder().nulls(nulls).build()?;
-        Ok((make_array(data), field.is_nullable()))
+        Ok((make_array(data), Arc::clone(field)))
     }
 
     fn project_list<O>(array: &GenericListArray<O>, field_name: &str) -> Result<ArrayRef>
@@ -92,12 +102,9 @@ impl ArrayStructField {
         O: OffsetSizeTrait,
     {
         let list_field = Self::list_field(array.data_type())?;
-        let (values, child_nullable) = Self::struct_values(array.values(), field_name)?;
+        let (values, child) = Self::struct_values(array.values(), field_name)?;
         Ok(Arc::new(GenericListArray::<O>::try_new(
-            Arc::new(Field::new_list_field(
-                values.data_type().clone(),
-                list_field.is_nullable() || child_nullable,
-            )),
+            Self::list_item_field(&child, list_field.is_nullable() || child.is_nullable()),
             array.offsets().clone(),
             values,
             array.nulls().cloned(),
@@ -110,12 +117,9 @@ impl ArrayStructField {
         field_name: &str,
     ) -> Result<ArrayRef> {
         let list_field = Self::list_field(array.data_type())?;
-        let (values, child_nullable) = Self::struct_values(array.values(), field_name)?;
+        let (values, child) = Self::struct_values(array.values(), field_name)?;
         Ok(Arc::new(FixedSizeListArray::try_new(
-            Arc::new(Field::new_list_field(
-                values.data_type().clone(),
-                list_field.is_nullable() || child_nullable,
-            )),
+            Self::list_item_field(&child, list_field.is_nullable() || child.is_nullable()),
             size,
             values,
             array.nulls().cloned(),

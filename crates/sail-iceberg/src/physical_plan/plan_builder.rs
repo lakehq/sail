@@ -155,6 +155,7 @@ impl<'a> IcebergPlanBuilder<'a> {
             crate::physical_plan::commit::commit_exec::IcebergCommitExec::new(
                 input,
                 self.table_config.table_url.clone(),
+                self.table_config.options.lakehouse_table.clone(),
             ),
         ))
     }

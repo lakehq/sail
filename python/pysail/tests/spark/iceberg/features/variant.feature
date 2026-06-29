@@ -1,4 +1,4 @@
-@sail-only @variant @spark-4
+@spark-4
 Feature: Iceberg Variant support
 
   Scenario: Write and read a Variant column
@@ -22,8 +22,8 @@ Feature: Iceberg Variant support
       SELECT 1, parse_json('{"a":2,"b":"iceberg"}')
       """
     Then iceberg metadata matches snapshot
-    Then iceberg latest metadata file is v1.metadata.json
-    Then iceberg version hint is 1
+    Then iceberg latest metadata file is v2.metadata.json
+    Then iceberg version hint is 2
     Then iceberg current manifest list matches snapshot
     When query
       """
@@ -150,6 +150,6 @@ Feature: Iceberg Variant support
       SELECT CAST(2 AS INT) AS id, parse_json('{"a":3,"b":"merge"}') AS payload
       """
     Then iceberg metadata matches snapshot
-    Then iceberg latest metadata file is v2.metadata.json
-    Then iceberg version hint is 2
+    Then iceberg latest metadata file is v3.metadata.json
+    Then iceberg version hint is 3
     Then iceberg current manifest list matches snapshot

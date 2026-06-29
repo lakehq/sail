@@ -1,4 +1,3 @@
-@table_identifier
 Feature: Table names with digit-leading identifiers
 
   # `1m` is a single identifier token in both engines: Spark lexes IDENTIFIER

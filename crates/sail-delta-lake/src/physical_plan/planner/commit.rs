@@ -28,6 +28,7 @@ use datafusion::physical_plan::union::UnionExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{JoinType, NullEquality};
 use datafusion_physical_expr::expressions::Column;
+use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
@@ -64,7 +65,7 @@ pub fn assemble_commit_plan(
     table_schema: SchemaRef,
     user_metadata: Option<String>,
     write_context: DeltaWriteContext,
-    catalog_table: Option<Vec<String>>,
+    lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaWriterExec::new(
         writer_input,
@@ -76,7 +77,7 @@ pub fn assemble_commit_plan(
         table_exists,
         table_schema.clone(),
         write_context.clone(),
-        catalog_table.clone(),
+        lakehouse_table.clone(),
     )?);
 
     let commit_input: Arc<dyn ExecutionPlan> = if let Some(remove_src) = remove_source {
@@ -98,7 +99,7 @@ pub fn assemble_commit_plan(
         PhysicalSinkMode::Append,
         user_metadata,
         write_context.commit_context.clone(),
-        catalog_table,
+        lakehouse_table,
     )))
 }
 
