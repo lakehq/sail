@@ -10,8 +10,13 @@ from pyspark.sql.functions import udf
 from pyspark.sql.types import IntegerType
 
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
+from pysail.testing.spark.utils.common import pyspark_version
 
 EXPECTED_ARTIFACT_VALUE = 42
+
+
+def _artifact_store_files(path):
+    return [entry for entry in path.rglob("*") if entry.is_file()]
 
 
 def _make_zip(path, module_name, code):
@@ -126,6 +131,10 @@ def test_large_artifact_requires_object_store_when_not_inline(tmp_path):
             session.addArtifact(str(module_path), pyfile=True)
 
 
+@pytest.mark.skipif(
+    pyspark_version() < (4,),
+    reason="PySpark 3.x Connect session.stop() does not release the server session",
+)
 def test_session_stop_cleans_object_store_artifacts(tmp_path):
     artifact_root = tmp_path / "artifact-root"
     artifact_store = tmp_path / "artifact-store"
@@ -144,8 +153,8 @@ def test_session_stop_cleans_object_store_artifacts(tmp_path):
     ):
         session = sessions.create()
         session.addArtifact(str(module_path), pyfile=True)
-        assert [path for path in artifact_store.rglob("*") if path.is_file()]
+        assert _artifact_store_files(artifact_store)
 
         session.stop()
 
-        assert not [path for path in artifact_store.rglob("*") if path.is_file()]
+        assert not _artifact_store_files(artifact_store)
