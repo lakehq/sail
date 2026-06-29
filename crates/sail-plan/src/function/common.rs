@@ -285,6 +285,18 @@ pub struct WinFunctionInput<'a> {
 
 pub(crate) type WinFunction = Arc<dyn Fn(WinFunctionInput) -> PlanResult<expr::Expr> + Send + Sync>;
 
+/// DataFusion returns some integral window results as `UInt64`, while Spark exposes them as `Int32`.
+pub(crate) fn spark_window_output_expr(
+    window_expr: expr::Expr,
+    schema: &DFSchemaRef,
+) -> PlanResult<expr::Expr> {
+    let data_type = window_expr.get_type(schema)?;
+    Ok(match data_type {
+        DataType::UInt64 => cast(window_expr, DataType::Int32),
+        _ => window_expr,
+    })
+}
+
 pub(crate) struct WinFunctionBuilder;
 
 impl WinFunctionBuilder {
@@ -345,10 +357,7 @@ impl WinFunctionBuilder {
                     distinct,
                 },
             }));
-            Ok(match win_func_expr.get_type(function_context.schema)? {
-                DataType::UInt64 => cast(win_func_expr.clone(), DataType::Int32),
-                _ => win_func_expr,
-            })
+            spark_window_output_expr(win_func_expr, function_context.schema)
         })
     }
 

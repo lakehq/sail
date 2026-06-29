@@ -44,7 +44,7 @@ use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
     count_min_sketch_args, get_arguments_and_null_treatment, get_null_treatment,
     hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
-    theta_args_with_default_lg, WinFunction, WinFunctionInput,
+    spark_window_output_expr, theta_args_with_default_lg, WinFunction, WinFunctionInput,
 };
 use crate::function::transform_count_star_wildcard_expr;
 
@@ -653,9 +653,9 @@ fn rank_like_udwf(
         window_frame,
         ignore_nulls,
         distinct,
-        function_context: _,
+        function_context,
     } = input;
-    Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
+    let window_expr = expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
         fun: WindowFunctionDefinition::WindowUDF(func()),
         params: WindowFunctionParams {
             args: vec![],
@@ -666,7 +666,8 @@ fn rank_like_udwf(
             null_treatment: get_null_treatment(ignore_nulls),
             distinct,
         },
-    })))
+    }));
+    spark_window_output_expr(window_expr, function_context.schema)
 }
 
 fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
