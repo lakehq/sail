@@ -135,6 +135,7 @@ use sail_function::scalar::csv::spark_to_csv::SparkToCsv;
 use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
+use sail_function::scalar::datetime::spark_current_time::SparkCurrentTime;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_interval::{
@@ -2291,6 +2292,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 ))));
             }
         };
+        if let Some(precision) = SparkCurrentTime::precision_from_name(name) {
+            return Ok(Arc::new(ScalarUDF::from(SparkCurrentTime::new(precision))));
+        }
         match name {
             "array_item_with_position" => {
                 Ok(Arc::new(ScalarUDF::from(ArrayItemWithPosition::new())))
@@ -2523,6 +2527,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkCalendarInterval>()
             || node_inner.is::<SparkCeil>()
             || node_inner.is::<SparkConcat>()
+            || node_inner.is::<SparkCurrentTime>()
             || node_inner.is::<SparkConv>()
             || node_inner.is::<SparkCrc32>()
             || node_inner.is::<SparkDateTrunc>()

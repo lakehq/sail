@@ -31,6 +31,11 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "current_time",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "current_timestamp",
     "status": "supported"
   },
@@ -303,7 +308,7 @@
   {
     "module": "pyspark.sql.functions",
     "function": "try_make_interval",
-    "status": "planned"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
@@ -318,6 +323,11 @@
   {
     "module": "pyspark.sql.functions",
     "function": "try_make_timestamp_ntz",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "try_to_date",
     "status": "supported"
   },
   {

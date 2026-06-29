@@ -12,6 +12,24 @@ Feature: current_time function
       | result |
       | true   |
 
+    Scenario: current_time preserves Spark precision in the schema
+      When query
+      """
+      SELECT
+        current_time(1) AS t1,
+        current_time(2) AS t2,
+        current_time(4) AS t4,
+        current_time(5) AS t5
+      """
+      Then query schema
+      """
+      root
+       |-- t1: time(1) (nullable = false)
+       |-- t2: time(2) (nullable = false)
+       |-- t4: time(4) (nullable = false)
+       |-- t5: time(5) (nullable = false)
+      """
+
     Scenario: current_time rejects out of range precision
       When query
       """

@@ -125,58 +125,6 @@ pub(crate) fn from_ast_function_arguments(
     Ok((arguments, named_arguments))
 }
 
-fn from_ast_encode_arguments(
-    args: impl IntoIterator<Item = FunctionArgument>,
-) -> SqlResult<Option<FunctionArgs>> {
-    let mut value = None;
-    let mut charset = None;
-    let mut positional_index = 0;
-    for arg in args {
-        match arg {
-            FunctionArgument::Named(name, _, expr) => {
-                let slot = match name.value.to_ascii_lowercase().as_str() {
-                    "value" => &mut value,
-                    "charset" => &mut charset,
-                    _ => return Ok(None),
-                };
-                if slot.is_some() {
-                    return Ok(None);
-                }
-                *slot = Some(from_ast_expression(expr)?);
-            }
-            FunctionArgument::Unnamed(expr) => {
-                let slot = match positional_index {
-                    0 => &mut value,
-                    1 => &mut charset,
-                    _ => return Ok(None),
-                };
-                if slot.is_some() {
-                    return Ok(None);
-                }
-                *slot = Some(from_ast_expression(expr)?);
-                positional_index += 1;
-            }
-        }
-    }
-    match (value, charset) {
-        (Some(value), Some(charset)) => Ok(Some((vec![value, charset], vec![]))),
-        _ => Ok(None),
-    }
-}
-
-fn from_ast_scalar_function_arguments(
-    name: &spec::ObjectName,
-    args: impl IntoIterator<Item = FunctionArgument>,
-) -> SqlResult<FunctionArgs> {
-    let args = args.into_iter().collect::<Vec<_>>();
-    if name.parts().len() == 1 && name.parts()[0].as_ref().eq_ignore_ascii_case("encode") {
-        if let Some(arguments) = from_ast_encode_arguments(args.clone())? {
-            return Ok(arguments);
-        }
-    }
-    from_ast_function_arguments(args)
-}
-
 pub fn from_ast_object_name(name: ObjectName) -> SqlResult<spec::ObjectName> {
     let ObjectName(parts) = name;
     Ok(parts
@@ -1068,7 +1016,7 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
             } = arguments;
             let function_name = from_ast_object_name(name)?;
             let (arguments, named_arguments) = arguments
-                .map(|x| from_ast_scalar_function_arguments(&function_name, x.into_items()))
+                .map(|x| from_ast_function_arguments(x.into_items()))
                 .transpose()?
                 .unwrap_or_default();
             let is_distinct = match duplicate_treatment {

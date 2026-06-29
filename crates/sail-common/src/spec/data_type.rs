@@ -24,6 +24,11 @@ pub const SPARK_METADATA_JSON_KEY: &str = "SPARK::metadata::json";
 /// This is internal to Sail and should not be exposed as Spark column metadata.
 pub const SAIL_SPARK_UDT_METADATA_KEY: &str = "SAIL::spark::udt";
 
+/// Sail metadata key for Spark TIME precision stored in Arrow field metadata.
+///
+/// This is internal to Sail and should not be exposed as Spark column metadata.
+pub const SAIL_SPARK_TIME_PRECISION_METADATA_KEY: &str = "SAIL::spark::timePrecision";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SparkUdtMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]

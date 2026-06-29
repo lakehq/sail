@@ -14,6 +14,7 @@ use sail_common::datetime::time_unit_to_multiplier;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
+use sail_function::scalar::datetime::spark_current_time::SparkCurrentTime;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
@@ -344,18 +345,22 @@ fn current_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
 }
 
 fn current_time(input: ScalarFunctionInput) -> PlanResult<Expr> {
-    let data_type = match input.arguments.len() {
-        0 => DataType::Time64(TimeUnit::Microsecond),
+    let precision = match input.arguments.len() {
+        0 => 6,
         1 => {
             let precision = input.arguments.one()?;
-            let precision = current_time_precision(&precision)?;
-            current_time_data_type(precision)?
+            current_time_precision(&precision)?
         }
         n => Err(PlanError::invalid(format!(
             "current_time requires 0 or 1 arguments, got {n}"
         )))?,
     };
-    Ok(cast(expr_fn::current_time(), data_type))
+    if !(0..=6).contains(&precision) {
+        return Err(PlanError::invalid(format!(
+            "current_time precision must be between 0 and 6, got {precision}"
+        )));
+    }
+    Ok(ScalarUDF::from(SparkCurrentTime::new(precision)).call(vec![]))
 }
 
 fn current_time_precision(expr: &Expr) -> PlanResult<i32> {
@@ -380,23 +385,6 @@ fn current_time_precision(expr: &Expr) -> PlanResult<i32> {
             "current_time precision must be an integer expression, got {other:?}"
         ))),
     }
-}
-
-fn current_time_data_type(precision: i32) -> PlanResult<DataType> {
-    if !(0..=6).contains(&precision) {
-        return Err(PlanError::invalid(format!(
-            "current_time precision must be between 0 and 6, got {precision}"
-        )));
-    }
-    // TODO: Preserve Spark's exact TIME(p) precision for p = 1, 2, 4, and 5.
-    // Arrow-backed Sail time types currently bucket precision into seconds,
-    // milliseconds, and microseconds.
-    Ok(match precision {
-        0 => DataType::Time32(TimeUnit::Second),
-        1..=3 => DataType::Time32(TimeUnit::Millisecond),
-        4..=6 => DataType::Time64(TimeUnit::Microsecond),
-        _ => unreachable!(),
-    })
 }
 
 fn to_chrono_fmt(format: Expr) -> Expr {

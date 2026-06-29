@@ -1,6 +1,6 @@
 use datafusion::arrow::datatypes as adt;
 use sail_common::geoarrow::extension::{GeoArrowMetadata, GeoArrowWkbType};
-use sail_common::spec;
+use sail_common::spec::{self, SAIL_SPARK_TIME_PRECISION_METADATA_KEY};
 use sail_common_datafusion::variant::is_variant_storage_field;
 
 use crate::error::{SparkError, SparkResult};
@@ -111,6 +111,8 @@ impl TryFrom<adt::Field> for sdt::StructField {
                     type_variation_reference: 0,
                 })),
             }
+        } else if let Some(data_type) = spark_time_from_field_metadata(&field)? {
+            data_type
         } else {
             field.data_type().clone().try_into()?
         };
@@ -121,6 +123,37 @@ impl TryFrom<adt::Field> for sdt::StructField {
             metadata: field.metadata().get(spec::SPARK_METADATA_JSON_KEY).cloned(),
         })
     }
+}
+
+fn spark_time_from_field_metadata(field: &adt::Field) -> SparkResult<Option<DataType>> {
+    let Some(precision) = field.metadata().get(SAIL_SPARK_TIME_PRECISION_METADATA_KEY) else {
+        return Ok(None);
+    };
+    if !matches!(
+        field.data_type(),
+        adt::DataType::Time32(_) | adt::DataType::Time64(_)
+    ) {
+        return Err(SparkError::invalid(format!(
+            "{SAIL_SPARK_TIME_PRECISION_METADATA_KEY} metadata is only valid for TIME fields, got {:?}",
+            field.data_type()
+        )));
+    }
+    let precision = precision.parse::<i32>().map_err(|e| {
+        SparkError::invalid(format!(
+            "invalid {SAIL_SPARK_TIME_PRECISION_METADATA_KEY} metadata value {precision:?}: {e}"
+        ))
+    })?;
+    if !(0..=6).contains(&precision) {
+        return Err(SparkError::invalid(format!(
+            "unsupported TIME precision: {precision}. Only 0 through 6 are supported"
+        )));
+    }
+    Ok(Some(DataType {
+        kind: Some(sdt::Kind::Time(sdt::Time {
+            precision: Some(precision),
+            type_variation_reference: 0,
+        })),
+    }))
 }
 
 /// Reference: https://github.com/apache/spark/blob/bb17665955ad536d8c81605da9a59fb94b6e0162/sql/api/src/main/scala/org/apache/spark/sql/util/ArrowUtils.scala
