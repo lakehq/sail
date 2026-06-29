@@ -16,6 +16,8 @@ use uuid::Uuid;
 
 use crate::artifact::SparkArtifactRegistry;
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
+use crate::session::SparkSession;
+use crate::spark::config::SPARK_SQL_ARTIFACT_COPY_FROM_LOCAL_TO_FS_ALLOW_DEST_LOCAL;
 use crate::spark::connect::add_artifacts_request::{ArtifactChunk, Payload};
 use crate::spark::connect::add_artifacts_response::ArtifactSummary;
 use crate::spark::connect::artifact_statuses_response::ArtifactStatus;
@@ -26,6 +28,8 @@ const ARCHIVES_PREFIX: &str = "archives/";
 const FORWARD_TO_FS_PREFIX: &str = "forward_to_fs/";
 const CACHE_PREFIX: &str = "cache/";
 const STAGING_DIR: &str = ".staging";
+const SPARK_CONNECT_COPY_FROM_LOCAL_TO_FS_ALLOW_DEST_LOCAL: &str =
+    "spark.connect.copyFromLocalToFs.allowDestLocal";
 
 fn validate_crc(data: &[u8], expected_crc: i64) -> bool {
     if !(0..=u32::MAX as i64).contains(&expected_crc) {
@@ -33,6 +37,35 @@ fn validate_crc(data: &[u8], expected_crc: i64) -> bool {
     }
     let computed = crc32fast::hash(data) as i64;
     computed == expected_crc
+}
+
+fn parse_bool_config(key: &str, value: Option<&str>) -> SparkResult<Option<bool>> {
+    value
+        .map(|value| {
+            value.trim().to_lowercase().parse::<bool>().map_err(|e| {
+                SparkError::invalid(format!("invalid boolean value for {key}: {value}: {e}"))
+            })
+        })
+        .transpose()
+}
+
+fn allow_local_fs_destination(ctx: &SessionContext) -> SparkResult<bool> {
+    let spark = ctx.extension::<SparkSession>()?;
+    let values = spark.get_config_option(vec![
+        SPARK_SQL_ARTIFACT_COPY_FROM_LOCAL_TO_FS_ALLOW_DEST_LOCAL.to_string(),
+        SPARK_CONNECT_COPY_FROM_LOCAL_TO_FS_ALLOW_DEST_LOCAL.to_string(),
+    ])?;
+    let sql_value = values.first().and_then(|x| x.value.as_deref());
+    let connect_value = values.get(1).and_then(|x| x.value.as_deref());
+    Ok(parse_bool_config(
+        SPARK_SQL_ARTIFACT_COPY_FROM_LOCAL_TO_FS_ALLOW_DEST_LOCAL,
+        sql_value,
+    )?
+    .or(parse_bool_config(
+        SPARK_CONNECT_COPY_FROM_LOCAL_TO_FS_ALLOW_DEST_LOCAL,
+        connect_value,
+    )?)
+    .unwrap_or(false))
 }
 
 fn normalize_artifact_name(name: &str) -> SparkResult<String> {
@@ -298,7 +331,7 @@ fn store_artifact(
     if let Some(dest_path) = normalized_name.strip_prefix(FORWARD_TO_FS_PREFIX) {
         if !allow_local_fs_destination {
             return Err(SparkError::unsupported(
-                "copyFromLocalToFs to the server local filesystem is disabled; set spark.artifact_allow_local_fs_destination=true only for trusted clients",
+                "copyFromLocalToFs to the server local filesystem is disabled; set spark.sql.artifact.copyFromLocalToFs.allowDestLocal=true only for trusted clients",
             ));
         }
         let relative_dest = validate_relative_path(dest_path, "forward_to_fs destination")?;
@@ -682,15 +715,11 @@ async fn add_artifact_summary(
     is_crc_successful: bool,
     artifact_dir: &Path,
     artifacts: &SparkArtifactRegistry,
+    allow_local_fs_destination: bool,
     summaries: &mut Vec<ArtifactSummary>,
 ) -> SparkResult<()> {
     if is_crc_successful {
-        let stored = store_artifact(
-            &name,
-            payload,
-            artifact_dir,
-            artifacts.options().allow_local_fs_destination,
-        )?;
+        let stored = store_artifact(&name, payload, artifact_dir, allow_local_fs_destination)?;
         if let Some(cache_hash) = stored.cache_hash {
             artifacts.add_cache_artifact(cache_hash)?;
         }
@@ -733,6 +762,7 @@ async fn add_single_chunk_artifact(
     chunk: ArtifactChunk,
     artifact_dir: &Path,
     artifacts: &SparkArtifactRegistry,
+    allow_local_fs_destination: bool,
     summaries: &mut Vec<ArtifactSummary>,
 ) -> SparkResult<()> {
     let chunk_ok = validate_crc(&chunk.data, chunk.crc);
@@ -747,6 +777,7 @@ async fn add_single_chunk_artifact(
         chunk_ok,
         artifact_dir,
         artifacts,
+        allow_local_fs_destination,
         summaries,
     )
     .await
@@ -756,6 +787,7 @@ async fn finalize_chunked_artifact(
     chunked: ChunkedArtifact,
     artifact_dir: &Path,
     artifacts: &SparkArtifactRegistry,
+    allow_local_fs_destination: bool,
     summaries: &mut Vec<ArtifactSummary>,
 ) -> SparkResult<()> {
     let completed = chunked.finish()?;
@@ -768,6 +800,7 @@ async fn finalize_chunked_artifact(
         completed.is_crc_successful,
         artifact_dir,
         artifacts,
+        allow_local_fs_destination,
         summaries,
     )
     .await
@@ -779,6 +812,7 @@ pub(crate) async fn handle_add_artifacts(
 ) -> SparkResult<Vec<ArtifactSummary>> {
     let artifacts = ctx.extension::<SparkArtifactRegistry>()?;
     let artifact_dir = artifacts.artifact_dir()?;
+    let allow_local_fs_destination = allow_local_fs_destination(ctx)?;
 
     let mut summaries: Vec<ArtifactSummary> = Vec::new();
     let mut current_chunked: Option<ChunkedArtifact> = None;
@@ -802,6 +836,7 @@ pub(crate) async fn handle_add_artifacts(
                         chunk,
                         &artifact_dir,
                         &artifacts,
+                        allow_local_fs_destination,
                         &mut summaries,
                     )
                     .await?;
@@ -822,8 +857,14 @@ pub(crate) async fn handle_add_artifacts(
                     &artifact_dir,
                 )?;
                 if chunked.is_complete() {
-                    finalize_chunked_artifact(chunked, &artifact_dir, &artifacts, &mut summaries)
-                        .await?;
+                    finalize_chunked_artifact(
+                        chunked,
+                        &artifact_dir,
+                        &artifacts,
+                        allow_local_fs_destination,
+                        &mut summaries,
+                    )
+                    .await?;
                 } else {
                     current_chunked = Some(chunked);
                 }
@@ -843,6 +884,7 @@ pub(crate) async fn handle_add_artifacts(
                             chunked,
                             &artifact_dir,
                             &artifacts,
+                            allow_local_fs_destination,
                             &mut summaries,
                         )
                         .await?;
@@ -854,7 +896,14 @@ pub(crate) async fn handle_add_artifacts(
 
     // Finalize any remaining chunked artifact
     if let Some(chunked) = current_chunked.take() {
-        finalize_chunked_artifact(chunked, &artifact_dir, &artifacts, &mut summaries).await?;
+        finalize_chunked_artifact(
+            chunked,
+            &artifact_dir,
+            &artifacts,
+            allow_local_fs_destination,
+            &mut summaries,
+        )
+        .await?;
     }
 
     Ok(summaries)

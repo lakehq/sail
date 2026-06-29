@@ -168,23 +168,31 @@ def test_copy_from_local_to_fs_rejects_local_destination_by_default(tmp_path):
         session = sessions.create()
         with pytest.raises(
             Exception,
-            match=r"local file(?:system| system)|artifact_allow_local_fs_destination|UNSUPPORTED",
+            match=r"local file(?:system| system)|copyFromLocalToFs.allowDestLocal|UNSUPPORTED",
         ):
             session.copyFromLocalToFs(str(source), str(destination))
 
     assert not destination.exists()
 
 
-def test_copy_from_local_to_fs_allows_local_destination_when_enabled(tmp_path):
+@pytest.mark.parametrize(
+    "config_key",
+    [
+        "spark.sql.artifact.copyFromLocalToFs.allowDestLocal",
+        "spark.connect.copyFromLocalToFs.allowDestLocal",
+    ],
+)
+def test_copy_from_local_to_fs_allows_local_destination_when_enabled(tmp_path, config_key):
     source = tmp_path / "source.txt"
     destination = tmp_path / "destination.txt"
     source.write_text("payload", encoding="utf-8")
 
     with (
-        spark_connect_server(envs={"SAIL_SPARK__ARTIFACT_ALLOW_LOCAL_FS_DESTINATION": "true"}) as server,
+        spark_connect_server() as server,
         spark_session_factory(server.remote) as sessions,
     ):
         session = sessions.create()
+        session.conf.set(config_key, "true")
         session.copyFromLocalToFs(str(source), str(destination))
 
     assert destination.read_text(encoding="utf-8") == "payload"

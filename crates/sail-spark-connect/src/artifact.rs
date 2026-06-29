@@ -17,7 +17,6 @@ pub(crate) struct SparkArtifactOptions {
     pub root: Option<PathBuf>,
     pub inline_max_bytes: usize,
     pub store_uri: Option<String>,
-    pub allow_local_fs_destination: bool,
 }
 
 pub(crate) struct SparkArtifactRegistry {

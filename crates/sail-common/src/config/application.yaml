@@ -801,15 +801,6 @@
     for local development or s3://bucket/prefix for Kubernetes deployments.
   experimental: true
 
-- key: spark.artifact_allow_local_fs_destination
-  type: boolean
-  default: "false"
-  description: |
-    Whether Spark Connect copyFromLocalToFs can write to the server's local filesystem.
-    Keep this disabled unless the client is trusted, since enabling it allows clients
-    to overwrite files that are writable by the Sail server process.
-  experimental: true
-
 - key: flight.session_timeout_secs
   type: number
   default: "3600"
