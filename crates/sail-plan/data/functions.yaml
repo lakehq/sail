@@ -5420,6 +5420,19 @@
     > SELECT try_to_number('12,454.8-', '99,999.9S');
      -12454.8
   since: "3.3.0"
+- name: try_to_time
+  class_name: "org.apache.spark.sql.catalyst.expressions.TryToTimeExpressionBuilder"
+  signatures:
+    - "try_to_time(str[, format])"
+  description: "Parses the str expression with the format expression to a time. If format is malformed or its application does not result in a well formed time, the function returns NULL. By default, it follows casting rules to a time if the format is omitted."
+  examples: |
+    > SELECT try_to_time('00:12:00.001');
+     00:12:00.001
+    > SELECT try_to_time('12.10.05.999999', 'HH.mm.ss.SSSSSS');
+     12:10:05.999999
+    > SELECT try_to_time('foo', 'HH:mm:ss');
+     NULL
+  since: "4.1.0"
 - name: try_to_timestamp
   class_name: "org.apache.spark.sql.catalyst.expressions.TryToTimestampExpressionBuilder"
   signatures:
