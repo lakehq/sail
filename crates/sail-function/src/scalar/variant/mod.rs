@@ -6,4 +6,5 @@ pub mod spark_to_variant_object;
 pub mod spark_variant_explode;
 pub mod spark_variant_get;
 pub mod spark_variant_to_json;
+pub mod spark_variant_to_string;
 pub mod utils;
