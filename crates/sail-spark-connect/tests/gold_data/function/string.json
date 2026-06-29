@@ -283,7 +283,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Internal error: Function 'btrim' failed to match any signature, errors: Error during planning: Function 'btrim' expects 2 arguments but received 1,Error during planning: Function 'btrim' requires String, but received Binary (DataType: Binary).\n\nHint: Binary types are not automatically coerced to String. Use CAST(column AS VARCHAR) to convert Binary data to String..\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues. No function matches the given name and argument types 'btrim(Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tbtrim(String, String)\n\tbtrim(String)"
+        "success": "ok"
       }
     },
     {
@@ -305,7 +305,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Internal error: Function 'btrim' failed to match any signature, errors: Error during planning: Function 'btrim' requires String, but received Binary (DataType: Binary).\n\nHint: Binary types are not automatically coerced to String. Use CAST(column AS VARCHAR) to convert Binary data to String.,Error during planning: Function 'btrim' expects 1 arguments but received 2.\nThis issue was likely caused by a bug in DataFusion's code. Please help us to resolve this by filing a bug report in our issue tracker: https://github.com/apache/datafusion/issues. No function matches the given name and argument types 'btrim(Binary, Binary)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tbtrim(String, String)\n\tbtrim(String)"
+        "success": "ok"
       }
     },
     {
@@ -677,7 +677,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Execution error: Function 'spark_decode' user-defined coercion failed with: Execution error: Spark `decode` function requires 2 arguments, got 10. No function matches the given name and argument types 'spark_decode(Int32, Int32, Utf8, Int32, Utf8, Int32, Utf8, Int32, Utf8, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tspark_decode(UserDefined)"
+        "success": "ok"
       }
     },
     {
@@ -699,7 +699,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Execution error: Function 'spark_decode' user-defined coercion failed with: Execution error: Spark `decode` function requires 2 arguments, got 9. No function matches the given name and argument types 'spark_decode(Int32, Int32, Utf8, Int32, Utf8, Int32, Utf8, Int32, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tspark_decode(UserDefined)"
+        "success": "ok"
       }
     },
     {
@@ -721,7 +721,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Execution error: Function 'spark_decode' user-defined coercion failed with: Execution error: Spark `decode` function requires 2 arguments, got 10. No function matches the given name and argument types 'spark_decode(Int32, Int32, Utf8, Int32, Utf8, Int32, Utf8, Int32, Utf8, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tspark_decode(UserDefined)"
+        "success": "ok"
       }
     },
     {
@@ -765,7 +765,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: Execution error: Function 'spark_decode' user-defined coercion failed with: Execution error: Spark `decode` function requires 2 arguments, got 7. No function matches the given name and argument types 'spark_decode(Null, Int32, Utf8, Null, Utf8, Int32, Utf8)'. You might need to add explicit type casts.\n\tCandidate functions:\n\tspark_decode(UserDefined)"
+        "success": "ok"
       }
     },
     {
@@ -1051,7 +1051,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
+        "success": "ok"
       }
     },
     {
@@ -1073,7 +1073,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
+        "success": "ok"
       }
     },
     {
@@ -1095,7 +1095,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
+        "success": "ok"
       }
     },
     {
@@ -1117,7 +1117,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Optimizer rule 'simplify_expressions' failed\ncaused by\nArrow error: Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 0"
+        "success": "ok"
       }
     },
     {

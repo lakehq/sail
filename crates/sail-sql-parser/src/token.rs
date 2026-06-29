@@ -30,7 +30,8 @@ pub enum Token<'a> {
     Space { count: usize },
     /// A single-line comment starting with `--`.
     /// The raw text includes the `--` prefix.
-    /// Any newline characters following the comment are not part of this token.
+    /// Any newline characters following the comment are not part of this token,
+    /// unless they are escaped by a line-continuation backslash.
     SingleLineComment { raw: &'a str },
     /// A multi-line comment starting with `/*` and ending with `*/`.
     /// The start and end delimiters can be nested.

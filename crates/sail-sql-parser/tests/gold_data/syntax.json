@@ -824,6 +824,16 @@
                   {
                     "sequence": [
                       {
+                        "nonTerminal": "Keyword(CurrentTime)"
+                      },
+                      {
+                        "nonTerminal": "Option(Tuple(Operator(LeftParenthesis), Option(Box(Expression)), Operator(RightParenthesis)))"
+                      }
+                    ]
+                  },
+                  {
+                    "sequence": [
+                      {
                         "nonTerminal": "Keyword(CurrentDate)"
                       },
                       {
@@ -2246,6 +2256,9 @@
                       },
                       {
                         "nonTerminal": "Option(Tuple(Operator(LeftParenthesis), IntegerLiteral, Operator(RightParenthesis)))"
+                      },
+                      {
+                        "nonTerminal": "Option(TimeWithoutTimeZone)"
                       }
                     ]
                   },
@@ -3420,6 +3433,9 @@
                     "nonTerminal": "Sequence(GroupingExpr, Operator(Comma))"
                   },
                   {
+                    "nonTerminal": "Option(GroupingSetsClause)"
+                  },
+                  {
                     "nonTerminal": "Option(GroupByModifier)"
                   }
                 ]
@@ -3514,6 +3530,28 @@
                   },
                   {
                     "nonTerminal": "Option(Sequence(Expression, Operator(Comma)))"
+                  },
+                  {
+                    "nonTerminal": "Operator(RightParenthesis)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "GroupingSetsClause",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Keyword(Grouping)"
+                  },
+                  {
+                    "nonTerminal": "Keyword(Sets)"
+                  },
+                  {
+                    "nonTerminal": "Operator(LeftParenthesis)"
+                  },
+                  {
+                    "nonTerminal": "Sequence(GroupingSet, Operator(Comma))"
                   },
                   {
                     "nonTerminal": "Operator(RightParenthesis)"
@@ -4447,6 +4485,14 @@
               "node": {
                 "terminal": {
                   "keyword": "CURRENT_DATE"
+                }
+              }
+            },
+            {
+              "name": "Keyword(CurrentTime)",
+              "node": {
+                "terminal": {
+                  "keyword": "CURRENT_TIME"
                 }
               }
             },
@@ -7284,6 +7330,14 @@
               }
             },
             {
+              "name": "Option(GroupingSetsClause)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "GroupingSetsClause"
+                }
+              }
+            },
+            {
               "name": "Option(HavingClause)",
               "node": {
                 "optional": {
@@ -7636,6 +7690,14 @@
               }
             },
             {
+              "name": "Option(TimeWithoutTimeZone)",
+              "node": {
+                "optional": {
+                  "nonTerminal": "TimeWithoutTimeZone"
+                }
+              }
+            },
+            {
               "name": "Option(TimezoneType)",
               "node": {
                 "optional": {
@@ -7840,6 +7902,14 @@
               "node": {
                 "optional": {
                   "nonTerminal": "Tuple(Operator(LeftParenthesis), Operator(RightParenthesis))"
+                }
+              }
+            },
+            {
+              "name": "Option(Tuple(Operator(LeftParenthesis), Option(Box(Expression)), Operator(RightParenthesis)))",
+              "node": {
+                "optional": {
+                  "nonTerminal": "Tuple(Operator(LeftParenthesis), Option(Box(Expression)), Operator(RightParenthesis))"
                 }
               }
             },
@@ -10517,6 +10587,22 @@
               }
             },
             {
+              "name": "TimeWithoutTimeZone",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Keyword(Without)"
+                  },
+                  {
+                    "nonTerminal": "Keyword(Time)"
+                  },
+                  {
+                    "nonTerminal": "Keyword(Zone)"
+                  }
+                ]
+              }
+            },
+            {
               "name": "TimezoneType",
               "node": {
                 "choice": [
@@ -11409,6 +11495,22 @@
                 "sequence": [
                   {
                     "nonTerminal": "Operator(LeftParenthesis)"
+                  },
+                  {
+                    "nonTerminal": "Operator(RightParenthesis)"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "Tuple(Operator(LeftParenthesis), Option(Box(Expression)), Operator(RightParenthesis))",
+              "node": {
+                "sequence": [
+                  {
+                    "nonTerminal": "Operator(LeftParenthesis)"
+                  },
+                  {
+                    "nonTerminal": "Option(Box(Expression))"
                   },
                   {
                     "nonTerminal": "Operator(RightParenthesis)"

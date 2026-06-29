@@ -222,6 +222,25 @@ fn create_hashes_dictionary<K: ArrowDictionaryKeyType>(
     Ok(())
 }
 
+fn create_hashes_list<A>(array: &A, hashes_buffer: &mut [u32]) -> Result<()>
+where
+    A: Array,
+    for<'a> &'a A: ArrayAccessor<Item = ArrayRef>,
+{
+    for (row, hash) in hashes_buffer.iter_mut().enumerate().take(array.len()) {
+        if array.is_null(row) {
+            continue;
+        }
+        let values = array.value(row);
+        let mut seed = *hash;
+        for i in 0..values.len() {
+            create_murmur3_hashes(&[values.slice(i, 1)], std::slice::from_mut(&mut seed))?;
+        }
+        *hash = seed;
+    }
+    Ok(())
+}
+
 /// Creates hash values for every row, based on the values in the
 /// columns.
 ///
@@ -326,6 +345,18 @@ macro_rules! create_hashes_internal {
                 }
                 DataType::FixedSizeBinary(_) => {
                     hash_array!(FixedSizeBinaryArray, col, $hashes_buffer, $hash_method);
+                }
+                DataType::List(_) => {
+                    let array = col.as_any().downcast_ref::<ListArray>().unwrap();
+                    create_hashes_list(array, $hashes_buffer)?;
+                }
+                DataType::LargeList(_) => {
+                    let array = col.as_any().downcast_ref::<LargeListArray>().unwrap();
+                    create_hashes_list(array, $hashes_buffer)?;
+                }
+                DataType::FixedSizeList(_, _) => {
+                    let array = col.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
+                    create_hashes_list(array, $hashes_buffer)?;
                 }
                 DataType::Decimal128(_, _) => {
                     hash_array_decimal!(Decimal128Array, col, $hashes_buffer, $hash_method);

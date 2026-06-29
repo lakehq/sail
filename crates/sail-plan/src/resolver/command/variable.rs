@@ -1,5 +1,6 @@
 #[expect(clippy::disallowed_types)]
-use datafusion_expr::{LogicalPlan, SetVariable, Statement};
+use datafusion_common::{DFSchema, DFSchemaRef};
+use datafusion_expr::{EmptyRelation, LogicalPlan, SetVariable, Statement};
 
 use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
@@ -10,6 +11,14 @@ impl PlanResolver<'_> {
         variable: String,
         value: String,
     ) -> PlanResult<LogicalPlan> {
+        if variable.eq_ignore_ascii_case("spark.sql.parser.escapedStringLiterals") {
+            // TODO: Thread this parser flag through SQL parsing once Sail supports
+            // config-sensitive string literal escaping.
+            return Ok(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: DFSchemaRef::new(DFSchema::empty()),
+            }));
+        }
         let variable = if variable.eq_ignore_ascii_case("timezone")
             || variable.eq_ignore_ascii_case("time.zone")
         {

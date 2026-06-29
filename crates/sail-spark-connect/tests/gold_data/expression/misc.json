@@ -3578,43 +3578,39 @@
                     "value": "abc"
                   }
                 }
-              }
-            ],
-            "namedArguments": [
-              [
-                "charset",
-                {
-                  "unresolvedFunction": {
-                    "functionName": [
-                      "concat"
-                    ],
-                    "arguments": [
-                      {
-                        "literal": {
-                          "utf8": {
-                            "value": "utf"
-                          }
-                        }
-                      },
-                      {
-                        "literal": {
-                          "utf8": {
-                            "value": "-8"
-                          }
+              },
+              {
+                "unresolvedFunction": {
+                  "functionName": [
+                    "concat"
+                  ],
+                  "arguments": [
+                    {
+                      "literal": {
+                        "utf8": {
+                          "value": "utf"
                         }
                       }
-                    ],
-                    "namedArguments": [],
-                    "isDistinct": false,
-                    "isUserDefinedFunction": false,
-                    "isInternal": null,
-                    "ignoreNulls": null,
-                    "filter": null,
-                    "orderBy": null
-                  }
+                    },
+                    {
+                      "literal": {
+                        "utf8": {
+                          "value": "-8"
+                        }
+                      }
+                    }
+                  ],
+                  "namedArguments": [],
+                  "isDistinct": false,
+                  "isUserDefinedFunction": false,
+                  "isInternal": null,
+                  "ignoreNulls": null,
+                  "filter": null,
+                  "orderBy": null
                 }
-              ]
+              }
             ],
+            "namedArguments": [],
             "isDistinct": false,
             "isUserDefinedFunction": false,
             "isInternal": null,
@@ -3640,20 +3636,16 @@
                     "value": "abc"
                   }
                 }
-              }
-            ],
-            "namedArguments": [
-              [
-                "charset",
-                {
-                  "literal": {
-                    "utf8": {
-                      "value": "utf-8"
-                    }
+              },
+              {
+                "literal": {
+                  "utf8": {
+                    "value": "utf-8"
                   }
                 }
-              ]
+              }
             ],
+            "namedArguments": [],
             "isDistinct": false,
             "isUserDefinedFunction": false,
             "isInternal": null,
@@ -3667,7 +3659,36 @@
     {
       "input": "encode(charset => 'utf-8', 'abc')",
       "output": {
-        "failure": "analysis error: [UNEXPECTED_POSITIONAL_ARGUMENT] Positional argument follows a named (keyword) argument."
+        "success": {
+          "unresolvedFunction": {
+            "functionName": [
+              "encode"
+            ],
+            "arguments": [
+              {
+                "literal": {
+                  "utf8": {
+                    "value": "abc"
+                  }
+                }
+              },
+              {
+                "literal": {
+                  "utf8": {
+                    "value": "utf-8"
+                  }
+                }
+              }
+            ],
+            "namedArguments": [],
+            "isDistinct": false,
+            "isUserDefinedFunction": false,
+            "isInternal": null,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
+          }
+        }
       }
     },
     {
@@ -3678,29 +3699,23 @@
             "functionName": [
               "encode"
             ],
-            "arguments": [],
-            "namedArguments": [
-              [
-                "value",
-                {
-                  "literal": {
-                    "utf8": {
-                      "value": "abc"
-                    }
+            "arguments": [
+              {
+                "literal": {
+                  "utf8": {
+                    "value": "abc"
                   }
                 }
-              ],
-              [
-                "charset",
-                {
-                  "literal": {
-                    "utf8": {
-                      "value": "utf-8"
-                    }
+              },
+              {
+                "literal": {
+                  "utf8": {
+                    "value": "utf-8"
                   }
                 }
-              ]
+              }
             ],
+            "namedArguments": [],
             "isDistinct": false,
             "isUserDefinedFunction": false,
             "isInternal": null,
@@ -3719,46 +3734,40 @@
             "functionName": [
               "encode"
             ],
-            "arguments": [],
-            "namedArguments": [
-              [
-                "value",
-                {
-                  "scalarSubquery": {
-                    "subquery": {
-                      "project": {
-                        "input": {
-                          "empty": {
-                            "produceOneRow": true
-                          },
-                          "planId": null
+            "arguments": [
+              {
+                "scalarSubquery": {
+                  "subquery": {
+                    "project": {
+                      "input": {
+                        "empty": {
+                          "produceOneRow": true
                         },
-                        "expressions": [
-                          {
-                            "literal": {
-                              "utf8": {
-                                "value": "1"
-                              }
+                        "planId": null
+                      },
+                      "expressions": [
+                        {
+                          "literal": {
+                            "utf8": {
+                              "value": "1"
                             }
                           }
-                        ]
-                      },
-                      "planId": null
-                    }
+                        }
+                      ]
+                    },
+                    "planId": null
                   }
                 }
-              ],
-              [
-                "charset",
-                {
-                  "literal": {
-                    "utf8": {
-                      "value": "utf-8"
-                    }
+              },
+              {
+                "literal": {
+                  "utf8": {
+                    "value": "utf-8"
                   }
                 }
-              ]
+              }
             ],
+            "namedArguments": [],
             "isDistinct": false,
             "isUserDefinedFunction": false,
             "isInternal": null,

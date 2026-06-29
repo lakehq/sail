@@ -202,6 +202,7 @@ use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
 use sail_function::scalar::string::randstr::Randstr;
 use sail_function::scalar::string::soundex::Soundex;
 use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
+use sail_function::scalar::string::spark_binary_string::{PadSide, SparkBinaryPad};
 use sail_function::scalar::string::spark_concat_ws::SparkConcatWs;
 use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_function::scalar::string::spark_mask::SparkMask;
@@ -2338,6 +2339,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkConcat::new())))
             }
             "spark_split" | "split" => Ok(Arc::new(ScalarUDF::from(SparkSplit::new()))),
+            "spark_binary_lpad" => Ok(Arc::new(ScalarUDF::from(SparkBinaryPad::new(
+                PadSide::Left,
+            )))),
+            "spark_binary_rpad" => Ok(Arc::new(ScalarUDF::from(SparkBinaryPad::new(
+                PadSide::Right,
+            )))),
             "regexp_extract" => Ok(Arc::new(ScalarUDF::from(SparkRegexpExtract::new()))),
             "regexp_extract_all" => Ok(Arc::new(ScalarUDF::from(SparkRegexpExtractAll::new()))),
             "sentences" => Ok(Arc::new(ScalarUDF::from(SparkSentences::new()))),
@@ -2512,6 +2519,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkBitGet>()
             || node_inner.is::<SparkBitwiseNot>()
             || node_inner.is::<SparkBRound>()
+            || node_inner.is::<SparkBinaryPad>()
             || node_inner.is::<SparkCalendarInterval>()
             || node_inner.is::<SparkCeil>()
             || node_inner.is::<SparkConcat>()

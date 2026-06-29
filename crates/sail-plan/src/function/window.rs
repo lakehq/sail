@@ -642,12 +642,42 @@ fn approx_count_distinct(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     ))
 }
 
+fn rank_like_udwf(
+    func: impl Fn() -> Arc<datafusion_expr::WindowUDF>,
+    input: WinFunctionInput,
+) -> PlanResult<expr::Expr> {
+    let WinFunctionInput {
+        arguments: _,
+        partition_by,
+        order_by,
+        window_frame,
+        ignore_nulls,
+        distinct,
+        function_context: _,
+    } = input;
+    Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
+        fun: WindowFunctionDefinition::WindowUDF(func()),
+        params: WindowFunctionParams {
+            args: vec![],
+            partition_by,
+            order_by,
+            window_frame,
+            filter: None,
+            null_treatment: get_null_treatment(ignore_nulls),
+            distinct,
+        },
+    })))
+}
+
 fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
     use crate::function::common::WinFunctionBuilder as F;
     vec![
         // Window
         ("cume_dist", F::window(cume_dist_udwf)),
-        ("dense_rank", F::window(dense_rank_udwf)),
+        (
+            "dense_rank",
+            F::custom(|input| rank_like_udwf(dense_rank_udwf, input)),
+        ),
         ("first", F::window(first_value_udwf)),
         ("first_value", F::window(first_value_udwf)),
         ("lag", F::window(lag_udwf)),
@@ -656,9 +686,12 @@ fn list_built_in_window_functions() -> Vec<(&'static str, WinFunction)> {
         ("lead", F::window(lead_udwf)),
         ("nth_value", F::custom(nth_value)),
         ("ntile", F::window(spark_ntile_udwf)),
-        ("rank", F::window(rank_udwf)),
+        ("rank", F::custom(|input| rank_like_udwf(rank_udwf, input))),
         ("row_number", F::window(row_number_udwf)),
-        ("percent_rank", F::window(percent_rank_udwf)),
+        (
+            "percent_rank",
+            F::custom(|input| rank_like_udwf(percent_rank_udwf, input)),
+        ),
         // Aggregate
         ("any", F::aggregate(bool_and_or::bool_or_udaf)),
         ("any_value", F::custom(first_value)),

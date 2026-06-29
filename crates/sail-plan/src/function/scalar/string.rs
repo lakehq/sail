@@ -4,7 +4,9 @@ use datafusion::functions::regex::expr_fn as regex_fn;
 use datafusion::functions::regex::regexpcount::RegexpCountFunc;
 use datafusion::functions::regex::regexpinstr::RegexpInstrFunc;
 use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::{cast, expr, lit, try_cast, when, ExprSchemable, ScalarUDF};
+use datafusion_expr::{
+    cast, expr, lit, try_cast, when, BinaryExpr, ExprSchemable, Operator, ScalarUDF,
+};
 use datafusion_functions_nested::expr_fn::array_element;
 use datafusion_spark::function::math::expr_fn as math_fn;
 use datafusion_spark::function::string::elt::SparkElt;
@@ -17,6 +19,7 @@ use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
 use sail_function::scalar::string::randstr::Randstr;
 use sail_function::scalar::string::soundex::Soundex;
 use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
+use sail_function::scalar::string::spark_binary_string::{PadSide, SparkBinaryPad};
 use sail_function::scalar::string::spark_concat_ws::SparkConcatWs;
 use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_function::scalar::string::spark_mask::SparkMask;
@@ -142,6 +145,136 @@ fn replace(mut args: Vec<expr::Expr>) -> PlanResult<expr::Expr> {
     Ok(expr_fn::replace(str, substr, replacement))
 }
 
+fn is_binary_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Binary
+            | DataType::LargeBinary
+            | DataType::BinaryView
+            | DataType::FixedSizeBinary(_)
+    )
+}
+
+fn is_binary_expr(arg: &expr::Expr, schema: &DFSchema) -> PlanResult<bool> {
+    Ok(is_binary_type(&arg.get_type(schema)?))
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TrimSide {
+    Left,
+    Right,
+    Both,
+}
+
+fn has_binary_expr(args: &[expr::Expr], schema: &DFSchema) -> PlanResult<bool> {
+    args.iter()
+        .map(|arg| is_binary_expr(arg, schema))
+        .try_fold(false, |acc, value| Ok(acc || value?))
+}
+
+fn use_binary_pad(args: &[expr::Expr], schema: &DFSchema) -> PlanResult<bool> {
+    let Some(value) = args.first() else {
+        return Ok(false);
+    };
+    if !is_binary_expr(value, schema)? {
+        return Ok(false);
+    }
+    match args.len() {
+        2 => Ok(true),
+        3 => is_binary_expr(&args[2], schema),
+        _ => Ok(false),
+    }
+}
+
+fn lpad(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    if use_binary_pad(&arguments, function_context.schema)? {
+        return Ok(ScalarUDF::from(SparkBinaryPad::new(PadSide::Left)).call(arguments));
+    }
+    Ok(expr_fn::lpad(cast_pad_binary_args_to_string(
+        arguments,
+        function_context.schema,
+    )?))
+}
+
+fn rpad(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    if use_binary_pad(&arguments, function_context.schema)? {
+        return Ok(ScalarUDF::from(SparkBinaryPad::new(PadSide::Right)).call(arguments));
+    }
+    Ok(expr_fn::rpad(cast_pad_binary_args_to_string(
+        arguments,
+        function_context.schema,
+    )?))
+}
+
+fn cast_pad_binary_args_to_string(
+    args: Vec<expr::Expr>,
+    schema: &DFSchema,
+) -> PlanResult<Vec<expr::Expr>> {
+    args.into_iter()
+        .enumerate()
+        .map(|(index, arg)| {
+            if matches!(index, 0 | 2) && is_binary_expr(&arg, schema)? {
+                cast_to_logical_string_or_try(arg, schema, false)
+            } else {
+                Ok(arg)
+            }
+        })
+        .collect()
+}
+
+fn cast_binary_args_to_string(
+    args: Vec<expr::Expr>,
+    schema: &DFSchema,
+) -> PlanResult<Vec<expr::Expr>> {
+    if has_binary_expr(&args, schema)? {
+        args.into_iter()
+            .map(|arg| cast_to_logical_string_or_try(arg, schema, false))
+            .collect()
+    } else {
+        Ok(args)
+    }
+}
+
+fn btrim(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let schema = input.function_context.schema;
+    let args = cast_binary_args_to_string(input.arguments, schema)?;
+    Ok(expr_fn::btrim(args))
+}
+
+fn trim_with_side(input: ScalarFunctionInput, side: TrimSide) -> PlanResult<expr::Expr> {
+    let schema = input.function_context.schema;
+    let args = cast_binary_args_to_string(input.arguments, schema)?
+        .into_iter()
+        .rev()
+        .collect();
+    let expr = match side {
+        TrimSide::Left => expr_fn::ltrim(args),
+        TrimSide::Right => expr_fn::rtrim(args),
+        TrimSide::Both => expr_fn::trim(args),
+    };
+    Ok(expr)
+}
+
+fn ltrim(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    trim_with_side(input, TrimSide::Left)
+}
+
+fn rtrim(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    trim_with_side(input, TrimSide::Right)
+}
+
+fn trim(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    trim_with_side(input, TrimSide::Both)
+}
+
 fn lower(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     Ok(expr_fn::lower(validate_utf8(input)?))
 }
@@ -231,10 +364,41 @@ fn in_str_out_i32(
     move |input: ScalarFunctionInput| Ok(cast(func(validate_utf8(input)?), DataType::Int32))
 }
 
-fn rev_args(
-    func: impl Fn(Vec<expr::Expr>) -> expr::Expr,
-) -> impl Fn(Vec<expr::Expr>) -> expr::Expr {
-    move |args: Vec<expr::Expr>| func(args.into_iter().rev().collect())
+fn decode(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
+    let args = input.arguments;
+    if args.len() == 2 {
+        return Ok(ScalarUDF::from(SparkDecode::new()).call(args));
+    }
+    if args.len() < 3 {
+        return Err(PlanError::invalid("decode requires at least 2 arguments"));
+    }
+
+    let mut args = args.into_iter();
+    let expr = args
+        .next()
+        .ok_or_else(|| PlanError::internal("decode missing expression"))?;
+    let mut rest = args.collect::<Vec<_>>();
+    let default = if rest.len() % 2 == 1 {
+        rest.pop().expect("decode default exists")
+    } else {
+        lit(ScalarValue::Utf8(None))
+    };
+    let mut when_then_expr = vec![];
+    for pair in rest.chunks_exact(2) {
+        let search = pair[0].clone();
+        let result = pair[1].clone();
+        let condition = expr::Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(expr.clone()),
+            op: Operator::IsNotDistinctFrom,
+            right: Box::new(search),
+        });
+        when_then_expr.push((Box::new(condition), Box::new(result)));
+    }
+    Ok(expr::Expr::Case(expr::Case {
+        expr: None,
+        when_then_expr,
+        else_expr: Some(Box::new(default)),
+    }))
 }
 
 /// Dispatch for `to_char(expr, format)` and its alias `to_varchar`, following Spark's
@@ -295,7 +459,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("ascii", F::custom(ascii)),
         ("base64", F::udf(SparkBase64::new())),
         ("bit_length", F::custom(bit_length)),
-        ("btrim", F::var_arg(expr_fn::btrim)),
+        ("btrim", F::custom(btrim)),
         ("char", F::unary(expr_fn::chr)),
         ("char_length", F::unary(expr_fn::char_length)),
         ("character_length", F::unary(expr_fn::char_length)),
@@ -304,7 +468,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("collation", F::unknown("collation")),
         ("concat_ws", F::udf(SparkConcatWs::new())),
         ("contains", F::custom(contains)),
-        ("decode", F::udf(SparkDecode::new())),
+        ("decode", F::custom(decode)),
         ("elt", F::udf(SparkElt::new())),
         ("encode", F::udf(SparkEncode::new())),
         ("endswith", F::custom(endswith)),
@@ -321,8 +485,8 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("levenshtein", F::udf(Levenshtein::new())),
         ("locate", F::custom(position)),
         ("lower", F::custom(lower)),
-        ("lpad", F::var_arg(expr_fn::lpad)),
-        ("ltrim", F::var_arg(rev_args(expr_fn::ltrim))),
+        ("lpad", F::custom(lpad)),
+        ("ltrim", F::custom(ltrim)),
         ("luhn_check", F::unary(string_fn::luhn_check)),
         ("make_valid_utf8", F::udf(MakeValidUtf8::new())),
         ("mask", F::udf(SparkMask::new())),
@@ -341,8 +505,8 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("repeat", F::binary(expr_fn::repeat)),
         ("replace", F::var_arg(replace)),
         ("right", F::binary(expr_fn::right)),
-        ("rpad", F::var_arg(expr_fn::rpad)),
-        ("rtrim", F::var_arg(rev_args(expr_fn::rtrim))),
+        ("rpad", F::custom(rpad)),
+        ("rtrim", F::custom(rtrim)),
         ("sentences", F::udf(SparkSentences::new())),
         ("soundex", F::udf(Soundex::new())),
         ("space", F::unary(space)),
@@ -357,7 +521,7 @@ pub(super) fn list_built_in_string_functions() -> Vec<(&'static str, ScalarFunct
         ("to_number", F::udf(SparkToNumber::new(false))),
         ("to_varchar", F::custom(to_char)),
         ("translate", F::ternary(expr_fn::translate)),
-        ("trim", F::var_arg(rev_args(expr_fn::trim))),
+        ("trim", F::custom(trim)),
         ("try_to_binary", F::udf(SparkTryToBinary::new())),
         ("try_to_number", F::udf(SparkToNumber::new(true))),
         ("try_validate_utf8", F::custom(try_validate_utf8)),
