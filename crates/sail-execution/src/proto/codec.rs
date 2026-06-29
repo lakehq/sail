@@ -150,7 +150,6 @@ use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
-use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
@@ -2212,8 +2211,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = TimestampNow::new(Arc::from(timezone), time_unit);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone, is_try }) => {
-                let udf = SparkTimestamp::try_new(timezone.map(Arc::from), is_try)?;
+            UdfKind::SparkTimestamp(gen::SparkTimestampUdf {
+                timezone,
+                is_try,
+                ansi_mode,
+            }) => {
+                let udf = SparkTimestamp::try_new(timezone.map(Arc::from), ansi_mode, is_try)?;
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::SparkDate(gen::SparkDateUdf { is_try }) => {
@@ -2432,9 +2435,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkCalendarInterval::new())))
             }
             "spark_to_chrono_fmt" => Ok(Arc::new(ScalarUDF::from(SparkToChronoFmt::new()))),
-            "spark_try_to_timestamp" | "try_to_timestamp" => {
-                Ok(Arc::new(ScalarUDF::from(SparkTryToTimestamp::new())))
-            }
             "spark_expm1" | "expm1" => Ok(Arc::new(ScalarUDF::from(SparkExpm1::new()))),
             "spark_ceil" | "ceil" => Ok(Arc::new(ScalarUDF::from(SparkCeil::new()))),
             "spark_floor" | "floor" => Ok(Arc::new(ScalarUDF::from(SparkFloor::new()))),
@@ -2568,7 +2568,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkTryParseUrl>()
             || node_inner.is::<SparkTrySubtract>()
             || node_inner.is::<SparkTryToBinary>()
-            || node_inner.is::<SparkTryToTimestamp>()
             || node_inner.is::<HllSketchEstimateFunction>()
             || node_inner.is::<HllUnionFunction>()
             || node_inner.is::<ThetaDifferenceFunction>()
@@ -2672,7 +2671,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkTimestamp>() {
             let timezone = func.timezone().map(|x| x.to_string());
             let is_try = func.is_try();
-            UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone, is_try })
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkTimestamp(gen::SparkTimestampUdf {
+                timezone,
+                is_try,
+                ansi_mode,
+            })
         } else if let Some(func) = node.inner().downcast_ref::<SparkDate>() {
             let is_try = func.is_try();
             UdfKind::SparkDate(gen::SparkDateUdf { is_try })
@@ -2765,7 +2769,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "min_by" => Ok(Arc::new(AggregateUDF::from(MinByFunction::new()))),
                 "mode" => Ok(Arc::new(AggregateUDF::from(ModeFunction::new()))),
                 "percentile" => Ok(Arc::new(AggregateUDF::from(PercentileFunction::new()))),
-                "percentile_disc" => Ok(Arc::new(AggregateUDF::from(PercentileDisc::new()))),
                 "product" => Ok(Arc::new(AggregateUDF::from(ProductFunction::new()))),
                 "regr_avgx" => Ok(Arc::new(AggregateUDF::from(Regr::new(
                     RegrType::AvgX,
@@ -2898,6 +2901,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udaf = PySparkBatchCollectorUDF::new(input_types, input_names);
                 Ok(Arc::new(AggregateUDF::from(udaf)))
             }
+            Some(UdafKind::PercentileDisc(gen::PercentileDiscUdaf { ansi_mode })) => {
+                Ok(Arc::new(AggregateUDF::from(PercentileDisc::new(ansi_mode))))
+            }
             None => plan_err!("ExtendedAggregateUdf: no UDF found for {name}"),
         }
     }
@@ -2916,7 +2922,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().is::<MinByFunction>()
             || node.inner().is::<ModeFunction>()
             || node.inner().is::<PercentileFunction>()
-            || node.inner().is::<PercentileDisc>()
             || node.inner().is::<ProductFunction>()
             || node.inner().is::<Regr>()
             || node.inner().is::<SchemaOfVariantAggFunction>()
@@ -2976,6 +2981,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdafKind::PySparkBatchCollector(gen::PySparkBatchCollectorUdaf {
                 input_types,
                 input_names: func.input_names().to_vec(),
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<PercentileDisc>() {
+            UdafKind::PercentileDisc(gen::PercentileDiscUdaf {
+                ansi_mode: func.ansi_mode(),
             })
         } else {
             return Ok(());

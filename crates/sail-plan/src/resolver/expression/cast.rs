@@ -166,7 +166,9 @@ impl PlanResolver<'_> {
                 DataType::Timestamp(TimeUnit::Microsecond, tz),
                 is_try,
             ) => Arc::new(ScalarUDF::new_from_impl(SparkTimestamp::try_new(
-                tz, is_try,
+                tz,
+                self.config.ansi_mode,
+                is_try,
             )?))
             .call(vec![expr]),
             (_, DataType::Utf8, _) if override_string_cast => {

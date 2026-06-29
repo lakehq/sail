@@ -5,16 +5,17 @@ use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{plan_datafusion_err, Column, DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::FieldMetadata;
-use datafusion_expr::{expr, lit, BinaryExpr, ExprSchemable, ScalarUDF};
-use datafusion_expr_common::operator::Operator;
+use datafusion_expr::{cast, expr, lit, when, ExprSchemable, ScalarUDF};
 use datafusion_functions::core::expr_ext::FieldAccessor;
-use datafusion_functions_nested::expr_fn::{array_element, map_extract};
+use datafusion_functions::expr_fn as datafusion_fn;
+use datafusion_functions_nested::expr_fn::{array_element, array_length, map_extract};
 use sail_common::spec::{self, DEFAULT_COLUMN_VALUE_PLACEHOLDER_ID};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::session::plan::PlanService;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::drop_struct_field::DropStructField;
+use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_function::scalar::table_input::TableInput;
 use sail_function::scalar::update_struct_field::UpdateStructField;
 
@@ -303,18 +304,44 @@ impl PlanResolver<'_> {
             }
         };
         let expr = match data_type {
-            DataType::List(_)
-            | DataType::LargeList(_)
-            | DataType::FixedSizeList(_, _)
-            | DataType::ListView(_)
-            | DataType::LargeListView(_) => array_element(
-                expr,
-                expr::Expr::BinaryExpr(BinaryExpr::new(
-                    Box::new(expr::Expr::Literal(extraction, None)),
-                    Operator::Plus,
-                    Box::new(lit(1i64)),
-                )),
-            ),
+            DataType::List(field)
+            | DataType::LargeList(field)
+            | DataType::FixedSizeList(field, _)
+            | DataType::ListView(field)
+            | DataType::LargeListView(field) => {
+                let ScalarValue::Int64(index) = extraction.cast_to(&DataType::Int64)? else {
+                    return Err(PlanError::AnalysisError(format!(
+                        "invalid extraction value for array: {extraction}"
+                    )));
+                };
+                let index_expr = lit(ScalarValue::Int64(index));
+                let element = array_element(
+                    expr.clone(),
+                    lit(ScalarValue::Int64(index.map(|x| x.saturating_add(1)))),
+                );
+                if self.config.ansi_mode {
+                    let length = cast(array_length(expr.clone()), DataType::Int64);
+                    let message = datafusion_fn::concat(vec![
+                        lit("[INVALID_ARRAY_INDEX] The index "),
+                        cast(index_expr, DataType::Utf8),
+                        lit(" is out of bounds. The array has "),
+                        cast(length.clone(), DataType::Utf8),
+                        lit(" elements. Use the SQL function `get()` to tolerate accessing element at invalid index and return NULL instead."),
+                    ]);
+                    let error = cast(
+                        ScalarUDF::from(RaiseError::new()).call(vec![message]),
+                        field.data_type().clone(),
+                    );
+                    let out_of_bounds = match index {
+                        Some(index) if index < 0 => expr.is_not_null(),
+                        Some(index) => expr.is_not_null().and(length.lt_eq(lit(index))),
+                        None => lit(false),
+                    };
+                    when(out_of_bounds, error).otherwise(element)?
+                } else {
+                    element
+                }
+            }
             DataType::Struct(fields) => {
                 let ScalarValue::Utf8(Some(name)) = extraction else {
                     return Err(PlanError::AnalysisError(format!(
@@ -364,15 +391,35 @@ impl PlanResolver<'_> {
             )));
         };
 
-        let new_expr = if let Some(value_expression) = value_expression {
-            let value_expr = self
-                .resolve_expression(value_expression, schema, state)
+        // Spark names the column after the `UpdateFields` expression tree, where
+        // each operation is rendered as `WithField(<value name>)` (the value
+        // expression's display name, not the target field name) or `dropfield()`.
+        let (op, new_expr) = if let Some(value_expression) = value_expression {
+            let NamedExpr {
+                name: value_name,
+                expr: value_expr,
+                ..
+            } = self
+                .resolve_named_expression(value_expression, schema, state)
                 .await?;
-            ScalarUDF::from(UpdateStructField::new(field_name)).call(vec![expr, value_expr])
+            (
+                format!("WithField({})", value_name.one()?),
+                ScalarUDF::from(UpdateStructField::new(field_name)).call(vec![expr, value_expr]),
+            )
         } else {
-            ScalarUDF::from(DropStructField::new(field_name)).call(vec![expr])
+            (
+                "dropfield()".to_string(),
+                ScalarUDF::from(DropStructField::new(field_name)).call(vec![expr]),
+            )
         };
-        Ok(NamedExpr::new(vec![name], new_expr))
+        // Spark collapses chained `withField`/`dropFields` into a single
+        // `update_fields(x, op1, op2, ...)`, so splice the new operation into an
+        // existing `update_fields(...)` name rather than nesting.
+        let result_name = match name.strip_suffix(')') {
+            Some(prefix) if prefix.starts_with("update_fields(") => format!("{prefix}, {op})"),
+            _ => format!("update_fields({name}, {op})"),
+        };
+        Ok(NamedExpr::new(vec![result_name], new_expr))
     }
 
     /// Rewrites the resolved expression to refer to columns in an external schema.

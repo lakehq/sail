@@ -13,7 +13,7 @@ use sail_sql_parser::parser::{
     create_named_expression_parser, create_object_name_parser, create_parser,
     create_qualified_wildcard_parser,
 };
-use sail_sql_parser::token::Token;
+use sail_sql_parser::token::{Punctuation, Token};
 
 use crate::error::{SqlError, SqlResult};
 use crate::literal::datetime::{
@@ -50,6 +50,27 @@ macro_rules! parse_simple {
         let parser = $parser::<chumsky::extra::Err<chumsky::error::Rich<_, _>>>();
         parser.parse($input).into_result().map_err(SqlError::parser)
     }};
+}
+
+pub fn rewrite_positional_parameter_markers(s: &str) -> SqlResult<(String, usize)> {
+    let options = ParserOptions::default();
+    let lexer = create_lexer::<_, chumsky::extra::Err<chumsky::error::Rich<_, _>>>(&options);
+    let tokens = lexer.parse(s).into_result().map_err(SqlError::parser)?;
+
+    let mut output = String::with_capacity(s.len());
+    let mut last = 0;
+    let mut count = 0;
+    for (token, span) in tokens {
+        if matches!(token, Token::Punctuation(Punctuation::QuestionMark)) {
+            count += 1;
+            output.push_str(&s[last..span.start]);
+            output.push('$');
+            output.push_str(&count.to_string());
+            last = span.end;
+        }
+    }
+    output.push_str(&s[last..]);
+    Ok((output, count))
 }
 
 pub fn parse_data_type(s: &str) -> SqlResult<DataType> {

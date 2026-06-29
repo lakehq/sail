@@ -14,7 +14,6 @@ pub mod spark_time_diff;
 pub mod spark_time_trunc;
 pub mod spark_timestamp;
 pub mod spark_to_chrono_fmt;
-pub mod spark_try_to_timestamp;
 pub mod spark_unix_timestamp;
 pub mod spark_window_buckets;
 pub mod spark_year;
