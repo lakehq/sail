@@ -73,7 +73,7 @@ def test_add_artifact_pyfile_status_and_duplicate_contract(spark, tmp_path):
             "pyfiles/sail_missing_module.py",
         ],
     ).statuses
-    assert statuses["pyfiles/sail_status_module.py"].exists
+    assert not statuses["pyfiles/sail_status_module.py"].exists
     assert not statuses["pyfiles/sail_missing_module.py"].exists
 
     module_b = tmp_path / "b" / "sail_status_module.py"
@@ -81,6 +81,24 @@ def test_add_artifact_pyfile_status_and_duplicate_contract(spark, tmp_path):
     module_b.write_text("VALUE = 8\n", encoding="utf-8")
     with pytest.raises(Exception, match=r"already exists|different content|ARTIFACT_ALREADY_EXISTS"):
         spark.addArtifact(str(module_b), pyfile=True)
+
+
+def test_cache_artifact_status_tracks_cache_namespace(spark):
+    payload = b"cache artifact payload"
+    artifact_hash = spark._client.cache_artifact(payload)
+
+    statuses = _artifact_statuses(
+        spark,
+        [
+            f"cache/{artifact_hash}",
+            "cache/missing",
+            "files/not-a-cache-artifact",
+        ],
+    ).statuses
+
+    assert statuses[f"cache/{artifact_hash}"].exists
+    assert not statuses["cache/missing"].exists
+    assert not statuses["files/not-a-cache-artifact"].exists
 
 
 def test_add_multiple_artifacts_as_pyfiles(spark, tmp_path):
@@ -116,6 +134,60 @@ def test_add_artifacts_crc_failure_is_reported_without_storing(spark):
     assert not response.artifacts[0].is_crc_successful
     statuses = _artifact_statuses(spark, ["files/sail_bad_crc.txt"]).statuses
     assert not statuses["files/sail_bad_crc.txt"].exists
+
+
+def test_chunked_artifact_rejects_incomplete_declared_size_without_large_allocation(spark):
+    from pyspark.sql.connect.proto import base_pb2 as proto
+
+    data = b"x"
+    manager = spark._client._artifact_manager
+    request = proto.AddArtifactsRequest(
+        session_id=manager._session_id,
+        user_context=manager._user_context,
+        begin_chunk=proto.AddArtifactsRequest.BeginChunkedArtifact(
+            name="files/sail_declared_huge.txt",
+            total_bytes=10_000_000_000,
+            num_chunks=1,
+            initial_chunk=proto.AddArtifactsRequest.ArtifactChunk(data=data, crc=zlib.crc32(data)),
+        ),
+    )
+
+    with pytest.raises(Exception, match=r"missing data chunks|expected 1 chunks|10000000000"):
+        manager._retrieve_responses(iter([request]))
+
+
+def test_copy_from_local_to_fs_rejects_local_destination_by_default(tmp_path):
+    source = tmp_path / "source.txt"
+    destination = tmp_path / "destination.txt"
+    source.write_text("payload", encoding="utf-8")
+
+    with (
+        spark_connect_server() as server,
+        spark_session_factory(server.remote) as sessions,
+    ):
+        session = sessions.create()
+        with pytest.raises(
+            Exception,
+            match=r"local file(?:system| system)|artifact_allow_local_fs_destination|UNSUPPORTED",
+        ):
+            session.copyFromLocalToFs(str(source), str(destination))
+
+    assert not destination.exists()
+
+
+def test_copy_from_local_to_fs_allows_local_destination_when_enabled(tmp_path):
+    source = tmp_path / "source.txt"
+    destination = tmp_path / "destination.txt"
+    source.write_text("payload", encoding="utf-8")
+
+    with (
+        spark_connect_server(envs={"SAIL_SPARK__ARTIFACT_ALLOW_LOCAL_FS_DESTINATION": "true"}) as server,
+        spark_session_factory(server.remote) as sessions,
+    ):
+        session = sessions.create()
+        session.copyFromLocalToFs(str(source), str(destination))
+
+    assert destination.read_text(encoding="utf-8") == "payload"
 
 
 def test_large_artifact_requires_object_store_when_not_inline(tmp_path):

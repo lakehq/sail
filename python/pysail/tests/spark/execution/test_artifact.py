@@ -216,7 +216,7 @@ def test_add_artifact_archive_uses_default_directory_without_fragment(spark, art
 
         path = os.path.join(
             SparkFiles.getRootDirectory(),
-            "sail_default_archive",
+            "sail_default_archive.zip",
             "default_archive_payload",
             "payload.txt",
         )

@@ -59,6 +59,7 @@ impl ServerSessionMutator for SparkSessionMutator {
                 } else {
                     Some(self.config.spark.artifact_store_uri.clone())
                 },
+                allow_local_fs_destination: self.config.spark.artifact_allow_local_fs_destination,
             },
         );
         Ok(config

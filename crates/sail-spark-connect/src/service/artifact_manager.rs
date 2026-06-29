@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::io::Write;
+use std::fs::File;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 
 use datafusion::prelude::SessionContext;
@@ -11,6 +12,7 @@ use sha2::{Digest, Sha256};
 use tonic::codegen::tokio_stream::Stream;
 use tonic::Status;
 use url::Url;
+use uuid::Uuid;
 
 use crate::artifact::SparkArtifactRegistry;
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
@@ -22,6 +24,8 @@ const PYFILES_PREFIX: &str = "pyfiles/";
 const FILES_PREFIX: &str = "files/";
 const ARCHIVES_PREFIX: &str = "archives/";
 const FORWARD_TO_FS_PREFIX: &str = "forward_to_fs/";
+const CACHE_PREFIX: &str = "cache/";
+const STAGING_DIR: &str = ".staging";
 
 fn validate_crc(data: &[u8], expected_crc: i64) -> bool {
     if !(0..=u32::MAX as i64).contains(&expected_crc) {
@@ -126,6 +130,14 @@ fn artifact_kind(normalized_name: &str) -> SparkResult<Option<PySparkArtifactKin
     Ok(None)
 }
 
+fn cache_artifact_hash(normalized_name: &str) -> SparkResult<Option<String>> {
+    let Some(hash) = normalized_name.strip_prefix(CACHE_PREFIX) else {
+        return Ok(None);
+    };
+    let relative = validate_relative_path(hash, "cache artifact name")?;
+    Ok(Some(relative.to_string_lossy().into_owned()))
+}
+
 fn is_supported_archive(path: &str) -> bool {
     path.ends_with(".zip")
         || path.ends_with(".jar")
@@ -137,13 +149,158 @@ fn is_supported_archive(path: &str) -> bool {
 struct StoredArtifact {
     normalized_name: String,
     local_path: Option<String>,
+    target_path: Option<PathBuf>,
     kind: Option<PySparkArtifactKind>,
+    cache_hash: Option<String>,
+}
+
+enum ArtifactPayload<'a> {
+    Bytes(&'a [u8]),
+    File(&'a Path),
+}
+
+impl ArtifactPayload<'_> {
+    fn read_all(&self) -> SparkResult<Vec<u8>> {
+        match self {
+            Self::Bytes(data) => Ok(data.to_vec()),
+            Self::File(path) => std::fs::read(path).map_err(|e| {
+                SparkError::internal(format!(
+                    "failed to read artifact file {}: {e}",
+                    path.display()
+                ))
+            }),
+        }
+    }
+
+    fn copy_to(&self, target: &Path) -> SparkResult<()> {
+        match self {
+            Self::Bytes(data) => {
+                let mut file = File::create(target).map_err(|e| {
+                    SparkError::internal(format!("failed to create file {}: {e}", target.display()))
+                })?;
+                file.write_all(data).map_err(|e| {
+                    SparkError::internal(format!("failed to write file {}: {e}", target.display()))
+                })
+            }
+            Self::File(source) => {
+                std::fs::copy(source, target).map_err(|e| {
+                    SparkError::internal(format!(
+                        "failed to copy artifact file {} to {}: {e}",
+                        source.display(),
+                        target.display()
+                    ))
+                })?;
+                Ok(())
+            }
+        }
+    }
+
+    fn content_equals(&self, target: &Path) -> SparkResult<bool> {
+        match self {
+            Self::Bytes(data) => file_content_equals_bytes(target, data),
+            Self::File(source) => file_content_equals_file(source, target),
+        }
+    }
+}
+
+fn file_content_equals_bytes(path: &Path, expected: &[u8]) -> SparkResult<bool> {
+    let metadata = std::fs::metadata(path).map_err(|e| {
+        SparkError::internal(format!(
+            "failed to inspect existing artifact file {}: {e}",
+            path.display()
+        ))
+    })?;
+    if metadata.len() != expected.len() as u64 {
+        return Ok(false);
+    }
+    let mut file = File::open(path).map_err(|e| {
+        SparkError::internal(format!(
+            "failed to open existing artifact file {}: {e}",
+            path.display()
+        ))
+    })?;
+    let mut offset = 0;
+    let mut buffer = [0_u8; 8192];
+    loop {
+        let read = file.read(&mut buffer).map_err(|e| {
+            SparkError::internal(format!(
+                "failed to read existing artifact file {}: {e}",
+                path.display()
+            ))
+        })?;
+        if read == 0 {
+            return Ok(true);
+        }
+        if buffer[..read] != expected[offset..offset + read] {
+            return Ok(false);
+        }
+        offset += read;
+    }
+}
+
+fn file_content_equals_file(left: &Path, right: &Path) -> SparkResult<bool> {
+    let left_metadata = std::fs::metadata(left).map_err(|e| {
+        SparkError::internal(format!(
+            "failed to inspect artifact file {}: {e}",
+            left.display()
+        ))
+    })?;
+    let right_metadata = std::fs::metadata(right).map_err(|e| {
+        SparkError::internal(format!(
+            "failed to inspect existing artifact file {}: {e}",
+            right.display()
+        ))
+    })?;
+    if left_metadata.len() != right_metadata.len() {
+        return Ok(false);
+    }
+    let mut left = File::open(left).map_err(|e| {
+        SparkError::internal(format!(
+            "failed to open artifact file {}: {e}",
+            left.display()
+        ))
+    })?;
+    let mut right = File::open(right).map_err(|e| {
+        SparkError::internal(format!(
+            "failed to open existing artifact file {}: {e}",
+            right.display()
+        ))
+    })?;
+    let mut left_buffer = [0_u8; 8192];
+    let mut right_buffer = [0_u8; 8192];
+    loop {
+        let left_read = left
+            .read(&mut left_buffer)
+            .map_err(|e| SparkError::internal(format!("failed to read artifact file: {e}")))?;
+        let right_read = right.read(&mut right_buffer).map_err(|e| {
+            SparkError::internal(format!("failed to read existing artifact file: {e}"))
+        })?;
+        if left_read != right_read {
+            return Ok(false);
+        }
+        if left_read == 0 {
+            return Ok(true);
+        }
+        if left_buffer[..left_read] != right_buffer[..right_read] {
+            return Ok(false);
+        }
+    }
 }
 
 /// Processes a complete artifact (name + assembled data) and stores it appropriately.
-fn store_artifact(name: &str, data: &[u8], artifact_dir: &Path) -> SparkResult<StoredArtifact> {
+fn store_artifact(
+    name: &str,
+    payload: &ArtifactPayload<'_>,
+    artifact_dir: &Path,
+    allow_local_fs_destination: bool,
+) -> SparkResult<StoredArtifact> {
     let normalized_name = normalize_artifact_name(name)?;
     if let Some(dest_path) = normalized_name.strip_prefix(FORWARD_TO_FS_PREFIX) {
+        if !allow_local_fs_destination {
+            return Err(SparkError::unsupported(
+                "copyFromLocalToFs to the server local filesystem is disabled; set spark.artifact_allow_local_fs_destination=true only for trusted clients",
+            ));
+        }
         let relative_dest = validate_relative_path(dest_path, "forward_to_fs destination")?;
         let dest = Path::new("/").join(relative_dest);
         if let Some(parent) = dest.parent() {
@@ -154,29 +311,21 @@ fn store_artifact(name: &str, data: &[u8], artifact_dir: &Path) -> SparkResult<S
                 ))
             })?;
         }
-        let mut file = std::fs::File::create(&dest).map_err(|e| {
-            SparkError::internal(format!("failed to create file {}: {e}", dest.display()))
-        })?;
-        file.write_all(data).map_err(|e| {
-            SparkError::internal(format!("failed to write file {}: {e}", dest.display()))
-        })?;
+        payload.copy_to(&dest)?;
         return Ok(StoredArtifact {
             normalized_name,
             local_path: None,
+            target_path: None,
             kind: None,
+            cache_hash: None,
         });
     }
 
     let target_path = artifact_target_path(name, artifact_dir)?;
     let kind = artifact_kind(&normalized_name)?;
+    let cache_hash = cache_artifact_hash(&normalized_name)?;
     if target_path.exists() {
-        let existing = std::fs::read(&target_path).map_err(|e| {
-            SparkError::internal(format!(
-                "failed to read existing artifact file {}: {e}",
-                target_path.display()
-            ))
-        })?;
-        if existing == data {
+        if payload.content_equals(&target_path)? {
             let python_path =
                 python_artifact_import_path(&normalized_name, &target_path, artifact_dir)?;
             if let Some(path) = &python_path {
@@ -185,7 +334,9 @@ fn store_artifact(name: &str, data: &[u8], artifact_dir: &Path) -> SparkResult<S
             return Ok(StoredArtifact {
                 normalized_name,
                 local_path: kind.map(|_| target_path.to_string_lossy().into_owned()),
+                target_path: Some(target_path),
                 kind,
+                cache_hash,
             });
         }
         return Err(SparkError::invalid(format!(
@@ -201,18 +352,7 @@ fn store_artifact(name: &str, data: &[u8], artifact_dir: &Path) -> SparkResult<S
             ))
         })?;
     }
-    let mut file = std::fs::File::create(&target_path).map_err(|e| {
-        SparkError::internal(format!(
-            "failed to create artifact file {}: {e}",
-            target_path.display()
-        ))
-    })?;
-    file.write_all(data).map_err(|e| {
-        SparkError::internal(format!(
-            "failed to write artifact file {}: {e}",
-            target_path.display()
-        ))
-    })?;
+    payload.copy_to(&target_path)?;
 
     let python_path = python_artifact_import_path(&normalized_name, &target_path, artifact_dir)?;
     if let Some(path) = &python_path {
@@ -221,7 +361,9 @@ fn store_artifact(name: &str, data: &[u8], artifact_dir: &Path) -> SparkResult<S
     Ok(StoredArtifact {
         normalized_name,
         local_path: kind.map(|_| target_path.to_string_lossy().into_owned()),
+        target_path: Some(target_path),
         kind,
+        cache_hash,
     })
 }
 
@@ -263,7 +405,10 @@ fn add_to_sys_path(path: &str) -> SparkResult<()> {
         if !contains {
             path_list.call_method1("insert", (0, &path))?;
         }
-        PyModule::import(py, "importlib")?.call_method0("invalidate_caches")?;
+        let importlib = PyModule::import(py, "importlib")?;
+        if let Err(error) = importlib.call_method0("invalidate_caches") {
+            log::debug!("failed to invalidate Python import caches: {error}");
+        }
         Ok::<(), pyo3::PyErr>(())
     })
     .map_err(|e: pyo3::PyErr| SparkError::internal(format!("failed to add to sys.path: {e}")))
@@ -273,21 +418,22 @@ async fn artifact_transport(
     artifacts: &SparkArtifactRegistry,
     name: &str,
     sha256: &str,
-    data: &[u8],
+    size: usize,
+    payload: &ArtifactPayload<'_>,
 ) -> SparkResult<(Option<Vec<u8>>, Option<String>)> {
     let options = artifacts.options();
-    if data.len() <= options.inline_max_bytes {
-        return Ok((Some(data.to_vec()), None));
+    if size <= options.inline_max_bytes {
+        return Ok((Some(payload.read_all()?), None));
     }
 
     let Some(base_uri) = &options.store_uri else {
         return Err(SparkError::invalid(format!(
             "artifact {name} is {} bytes, exceeding spark.artifact_inline_max_bytes={}, and spark.artifact_store_uri is not configured",
-            data.len(),
+            size,
             options.inline_max_bytes
         )));
     };
-    let uri = upload_artifact(base_uri, artifacts.session_id(), sha256, data).await?;
+    let uri = upload_artifact(base_uri, artifacts.session_id(), sha256, payload).await?;
     Ok((None, Some(uri)))
 }
 
@@ -295,7 +441,7 @@ async fn upload_artifact(
     base_uri: &str,
     session_id: &str,
     sha256: &str,
-    data: &[u8],
+    payload: &ArtifactPayload<'_>,
 ) -> SparkResult<String> {
     let uri = artifact_object_uri(base_uri, session_id, sha256)?;
     let url = Url::parse(&uri).map_err(|e| {
@@ -307,8 +453,9 @@ async fn upload_artifact(
     let store = sail_object_store::get_dynamic_object_store(&url).map_err(|e| {
         SparkError::internal(format!("failed to create artifact object store {uri}: {e}"))
     })?;
+    let data = payload.read_all()?;
     store
-        .put(&path, PutPayload::from(data.to_vec()))
+        .put(&path, PutPayload::from(data))
         .await
         .map_err(|e| SparkError::internal(format!("failed to write artifact {uri}: {e}")))?;
     Ok(uri)
@@ -353,9 +500,12 @@ fn sha256_hex(data: &[u8]) -> String {
 
 struct ChunkedArtifact {
     name: String,
-    data: Vec<u8>,
+    path: Option<PathBuf>,
+    file: File,
+    sha256: Sha256,
     expected_chunks: usize,
     total_bytes: usize,
+    bytes_seen: usize,
     chunks_seen: usize,
     is_crc_successful: bool,
 }
@@ -366,6 +516,7 @@ impl ChunkedArtifact {
         total_bytes: i64,
         num_chunks: i64,
         initial_chunk: Option<ArtifactChunk>,
+        artifact_dir: &Path,
     ) -> SparkResult<Self> {
         let total_bytes = usize::try_from(total_bytes).map_err(|_| {
             SparkError::invalid(format!("artifact {name} has invalid total byte count"))
@@ -377,11 +528,21 @@ impl ChunkedArtifact {
                 "artifact {name} must have at least one chunk"
             )));
         }
+        let path = create_staging_artifact_path(artifact_dir)?;
+        let file = File::create(&path).map_err(|e| {
+            SparkError::internal(format!(
+                "failed to create staging artifact file {}: {e}",
+                path.display()
+            ))
+        })?;
         let mut out = Self {
             name,
-            data: Vec::with_capacity(total_bytes),
+            path: Some(path),
+            file,
+            sha256: Sha256::new(),
             expected_chunks,
             total_bytes,
+            bytes_seen: 0,
             chunks_seen: 0,
             is_crc_successful: true,
         };
@@ -397,7 +558,7 @@ impl ChunkedArtifact {
                 self.name
             )));
         }
-        if self.data.len() + chunk.data.len() > self.total_bytes {
+        if self.bytes_seen + chunk.data.len() > self.total_bytes {
             return Err(SparkError::invalid(format!(
                 "artifact {} exceeded expected byte count",
                 self.name
@@ -407,7 +568,14 @@ impl ChunkedArtifact {
         if !chunk_ok {
             self.is_crc_successful = false;
         }
-        self.data.extend_from_slice(&chunk.data);
+        self.file.write_all(&chunk.data).map_err(|e| {
+            SparkError::internal(format!(
+                "failed to write chunked artifact {}: {e}",
+                self.name
+            ))
+        })?;
+        self.sha256.update(&chunk.data);
+        self.bytes_seen += chunk.data.len();
         self.chunks_seen += 1;
         Ok(())
     }
@@ -417,18 +585,89 @@ impl ChunkedArtifact {
     }
 
     fn validate_complete(&self) -> SparkResult<()> {
-        if self.chunks_seen != self.expected_chunks || self.data.len() != self.total_bytes {
+        if self.chunks_seen != self.expected_chunks || self.bytes_seen != self.total_bytes {
             return Err(SparkError::invalid(format!(
                 "missing data chunks for artifact: {}; expected {} chunks and {} bytes, received {} chunks and {} bytes",
                 self.name,
                 self.expected_chunks,
                 self.total_bytes,
                 self.chunks_seen,
-                self.data.len()
+                self.bytes_seen
             )));
         }
         Ok(())
     }
+
+    fn finish(mut self) -> SparkResult<CompletedChunkedArtifact> {
+        self.validate_complete()?;
+        self.file.flush().map_err(|e| {
+            SparkError::internal(format!(
+                "failed to flush chunked artifact {}: {e}",
+                self.name
+            ))
+        })?;
+        let path = self
+            .path
+            .take()
+            .ok_or_else(|| SparkError::internal("chunked artifact staging path was missing"))?;
+        let sha256 = self
+            .sha256
+            .clone()
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        Ok(CompletedChunkedArtifact {
+            name: std::mem::take(&mut self.name),
+            path,
+            sha256,
+            size: self.bytes_seen,
+            is_crc_successful: self.is_crc_successful,
+        })
+    }
+}
+
+impl Drop for ChunkedArtifact {
+    fn drop(&mut self) {
+        if let Some(path) = &self.path {
+            if let Err(error) = std::fs::remove_file(path) {
+                log::debug!(
+                    "failed to remove staging artifact file {}: {error}",
+                    path.display()
+                );
+            }
+        }
+    }
+}
+
+struct CompletedChunkedArtifact {
+    name: String,
+    path: PathBuf,
+    sha256: String,
+    size: usize,
+    is_crc_successful: bool,
+}
+
+impl Drop for CompletedChunkedArtifact {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_file(&self.path) {
+            log::debug!(
+                "failed to remove staging artifact file {}: {error}",
+                self.path.display()
+            );
+        }
+    }
+}
+
+fn create_staging_artifact_path(artifact_dir: &Path) -> SparkResult<PathBuf> {
+    let staging_dir = artifact_dir.join(STAGING_DIR);
+    std::fs::create_dir_all(&staging_dir).map_err(|e| {
+        SparkError::internal(format!(
+            "failed to create staging artifact directory {}: {e}",
+            staging_dir.display()
+        ))
+    })?;
+    Ok(staging_dir.join(Uuid::new_v4().to_string()))
 }
 
 fn process_chunk(artifact: &mut ChunkedArtifact, chunk: &ArtifactChunk) -> SparkResult<()> {
@@ -437,26 +676,47 @@ fn process_chunk(artifact: &mut ChunkedArtifact, chunk: &ArtifactChunk) -> Spark
 
 async fn add_artifact_summary(
     name: String,
-    data: &[u8],
+    payload: &ArtifactPayload<'_>,
+    sha256: &str,
+    size: usize,
     is_crc_successful: bool,
     artifact_dir: &Path,
     artifacts: &SparkArtifactRegistry,
     summaries: &mut Vec<ArtifactSummary>,
 ) -> SparkResult<()> {
     if is_crc_successful {
-        let stored = store_artifact(&name, data, artifact_dir)?;
+        let stored = store_artifact(
+            &name,
+            payload,
+            artifact_dir,
+            artifacts.options().allow_local_fs_destination,
+        )?;
+        if let Some(cache_hash) = stored.cache_hash {
+            artifacts.add_cache_artifact(cache_hash)?;
+        }
         if let Some(kind) = stored.kind {
-            let sha256 = sha256_hex(data);
-            let size = data.len() as u64;
-            let (data, uri) =
-                artifact_transport(artifacts, &stored.normalized_name, &sha256, data).await?;
+            let target_path = stored.target_path.as_deref().ok_or_else(|| {
+                SparkError::internal(format!(
+                    "stored Python artifact {} did not have a target path",
+                    stored.normalized_name
+                ))
+            })?;
+            let transport_payload = ArtifactPayload::File(target_path);
+            let (data, uri) = artifact_transport(
+                artifacts,
+                &stored.normalized_name,
+                sha256,
+                size,
+                &transport_payload,
+            )
+            .await?;
             artifacts.add_artifact(PySparkPythonArtifact {
                 name: stored.normalized_name,
                 python_path: stored.local_path.unwrap_or_default(),
                 data,
                 uri,
-                sha256,
-                size,
+                sha256: sha256.to_string(),
+                size: size as u64,
                 kind,
             })?;
         }
@@ -476,9 +736,14 @@ async fn add_single_chunk_artifact(
     summaries: &mut Vec<ArtifactSummary>,
 ) -> SparkResult<()> {
     let chunk_ok = validate_crc(&chunk.data, chunk.crc);
+    let sha256 = sha256_hex(&chunk.data);
+    let size = chunk.data.len();
+    let payload = ArtifactPayload::Bytes(&chunk.data);
     add_artifact_summary(
         name,
-        &chunk.data,
+        &payload,
+        &sha256,
+        size,
         chunk_ok,
         artifact_dir,
         artifacts,
@@ -493,11 +758,14 @@ async fn finalize_chunked_artifact(
     artifacts: &SparkArtifactRegistry,
     summaries: &mut Vec<ArtifactSummary>,
 ) -> SparkResult<()> {
-    chunked.validate_complete()?;
+    let completed = chunked.finish()?;
+    let payload = ArtifactPayload::File(&completed.path);
     add_artifact_summary(
-        chunked.name,
-        &chunked.data,
-        chunked.is_crc_successful,
+        completed.name.clone(),
+        &payload,
+        &completed.sha256,
+        completed.size,
+        completed.is_crc_successful,
         artifact_dir,
         artifacts,
         summaries,
@@ -551,6 +819,7 @@ pub(crate) async fn handle_add_artifacts(
                     begin.total_bytes,
                     begin.num_chunks,
                     begin.initial_chunk,
+                    &artifact_dir,
                 )?;
                 if chunked.is_complete() {
                     finalize_chunked_artifact(chunked, &artifact_dir, &artifacts, &mut summaries)
@@ -599,7 +868,11 @@ pub(crate) async fn handle_artifact_statuses(
     let mut statuses = HashMap::new();
     for name in names {
         let normalized = normalize_artifact_name(&name)?;
-        let exists = artifacts.has_artifact(&normalized)?;
+        let exists = if let Some(hash) = cache_artifact_hash(&normalized)? {
+            artifacts.has_cache_artifact(&hash)?
+        } else {
+            false
+        };
         statuses.insert(name, ArtifactStatus { exists });
     }
     Ok(statuses)

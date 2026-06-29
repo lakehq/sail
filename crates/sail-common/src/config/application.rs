@@ -611,6 +611,7 @@ pub struct SparkConfig {
     pub artifact_root: String,
     pub artifact_inline_max_bytes: usize,
     pub artifact_store_uri: String,
+    pub artifact_allow_local_fs_destination: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

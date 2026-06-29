@@ -191,7 +191,7 @@ impl PySparkUdfConfig {
                 path_list.call_method1("insert", (0, path.as_str()))?;
             }
         }
-        PyModule::import(py, "importlib")?.call_method0("invalidate_caches")?;
+        invalidate_import_caches(py)?;
         Ok(())
     }
 
@@ -309,6 +309,14 @@ fn spark_files_root(artifacts: &[PySparkPythonArtifact]) -> PyUdfResult<PathBuf>
         .join("spark-files")
         .join(artifact_process_namespace())
         .join(hash))
+}
+
+fn invalidate_import_caches(py: Python) -> PyUdfResult<()> {
+    let importlib = PyModule::import(py, "importlib")?;
+    if let Err(error) = importlib.call_method0("invalidate_caches") {
+        log::debug!("failed to invalidate Python import caches: {error}");
+    }
+    Ok(())
 }
 
 fn artifact_process_namespace() -> &'static str {
@@ -710,18 +718,8 @@ fn archive_name_and_fragment(rest: &str) -> PyUdfResult<(&str, &str)> {
 }
 
 fn default_archive_directory(path: &str) -> PyUdfResult<String> {
-    let file_name = Path::new(path)
+    Path::new(path)
         .file_name()
-        .and_then(|x| x.to_str())
-        .ok_or_else(|| PyUdfError::invalid(format!("invalid archive artifact path: {path}")))?;
-    if let Some(stem) = file_name.strip_suffix(".tar.gz") {
-        return Ok(stem.to_string());
-    }
-    if let Some(stem) = file_name.strip_suffix(".tgz") {
-        return Ok(stem.to_string());
-    }
-    Path::new(file_name)
-        .file_stem()
         .and_then(|x| x.to_str())
         .map(ToString::to_string)
         .ok_or_else(|| PyUdfError::invalid(format!("invalid archive artifact path: {path}")))

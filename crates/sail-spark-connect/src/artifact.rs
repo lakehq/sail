@@ -17,6 +17,7 @@ pub(crate) struct SparkArtifactOptions {
     pub root: Option<PathBuf>,
     pub inline_max_bytes: usize,
     pub store_uri: Option<String>,
+    pub allow_local_fs_destination: bool,
 }
 
 pub(crate) struct SparkArtifactRegistry {
@@ -105,9 +106,15 @@ impl SparkArtifactRegistry {
         Ok(())
     }
 
-    pub(crate) fn has_artifact(&self, name: &str) -> SparkResult<bool> {
+    pub(crate) fn add_cache_artifact(&self, hash: String) -> SparkResult<()> {
+        let mut state = self.state.lock()?;
+        state.cache_artifacts.insert(hash);
+        Ok(())
+    }
+
+    pub(crate) fn has_cache_artifact(&self, hash: &str) -> SparkResult<bool> {
         let state = self.state.lock()?;
-        Ok(state.artifacts.iter().any(|artifact| artifact.name == name))
+        Ok(state.cache_artifacts.contains(hash))
     }
 
     pub(crate) fn artifacts(&self) -> SparkResult<Vec<PySparkPythonArtifact>> {
@@ -118,6 +125,7 @@ impl SparkArtifactRegistry {
 
 struct SparkArtifactState {
     artifacts: Vec<PySparkPythonArtifact>,
+    cache_artifacts: HashSet<String>,
     artifact_dir: Option<PathBuf>,
 }
 
@@ -125,6 +133,7 @@ impl SparkArtifactState {
     fn new() -> Self {
         Self {
             artifacts: vec![],
+            cache_artifacts: HashSet::new(),
             artifact_dir: None,
         }
     }
