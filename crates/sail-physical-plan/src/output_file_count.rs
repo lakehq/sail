@@ -1,39 +1,33 @@
 use std::sync::Arc;
 
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties,
-};
+use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
 use datafusion_common::{internal_err, Result};
 
 /// A wrapper around a `DataSinkExec` that overrides `minimum_parallel_output_files`
-/// in the `TaskContext` session config to match the number of upstream partitions.
+/// in the `TaskContext` session config to match the number of output partitions.
 ///
-/// This ensures the demuxer in `row_count_demuxer()` creates one output file per
-/// upstream partition, matching Apache Spark's behavior of "one file per output partition."
-///
-/// **Architecture:**
-/// - The desired file count is captured at **planning time** from
-///   `physical_input.output_partitioning().partition_count()`.
-/// - It is injected into the `SessionConfig` at **execution time** by cloning the
-///   `TaskContext`, modifying the config, and delegating to the inner plan.
-/// - The downstream `row_count_demuxer()` reads the modified config value and creates
-///   the corresponding number of parallel output streams.
+/// The output partition count is captured at **planning time** from
+/// `physical_input.output_partitioning().partition_count()`. It is injected into
+/// the `SessionConfig` at **execution time** by cloning the `TaskContext`, modifying
+/// the config, and delegating to the inner plan. The downstream `row_count_demuxer()`
+/// then reads the modified config value and creates the corresponding number of
+/// parallel output streams.
 
 #[derive(Debug, Clone)]
 pub struct OutputFileCountExec {
     input: Arc<dyn ExecutionPlan>,
-    num_output_files:  usize,
-    properties: Arc<PlanProperties>
+    num_output_partitions: usize,
+    properties: Arc<PlanProperties>,
 }
 
 impl OutputFileCountExec {
-    pub fn new(input: Arc<dyn ExecutionPlan>, num_output_files: usize) -> Self {
+    pub fn new(input: Arc<dyn ExecutionPlan>, num_output_partitions: usize) -> Self {
         let properties = Arc::new(input.properties().as_ref().clone());
         Self {
             input,
-            num_output_files,
-            properties
+            num_output_partitions,
+            properties,
         }
     }
 
@@ -41,14 +35,18 @@ impl OutputFileCountExec {
         &self.input
     }
 
-    pub fn num_output_files(&self) -> usize {
-        self.num_output_files
+    pub fn num_output_partitions(&self) -> usize {
+        self.num_output_partitions
     }
 }
 
 impl DisplayAs for OutputFileCountExec {
     fn fmt_as(&self, _t: DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "OutputFileCountExec: files={}", self.num_output_files)
+        write!(
+            f,
+            "OutputFileCountExec: partitions={}",
+            self.num_output_partitions
+        )
     }
 }
 
@@ -72,26 +70,23 @@ impl ExecutionPlan for OutputFileCountExec {
     fn with_new_children(
         self: Arc<Self>,
         mut children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> Result<Arc<dyn ExecutionPlan>>
-    {
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         let (Some(child), true) = (children.pop(), children.is_empty()) else {
             return internal_err!("{} expects exactly one child", self.name());
         };
-        Ok(Arc::new(Self::new(child, self.num_output_files)))
+        Ok(Arc::new(Self::new(child, self.num_output_partitions)))
     }
 
     fn execute(
         &self,
         partition: usize,
         context: Arc<TaskContext>,
-    ) -> Result<SendableRecordBatchStream>
-    {
-
+    ) -> Result<SendableRecordBatchStream> {
         let mut session_config = context.session_config().clone();
         session_config
             .options_mut()
             .execution
-            .minimum_parallel_output_files = self.num_output_files;
+            .minimum_parallel_output_files = std::cmp::max(1, self.num_output_partitions);
 
         let new_context = Arc::new(TaskContext::new(
             context.task_id(),
@@ -107,5 +102,3 @@ impl ExecutionPlan for OutputFileCountExec {
         self.input.execute(partition, new_context)
     }
 }
-
-

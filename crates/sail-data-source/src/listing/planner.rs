@@ -18,7 +18,7 @@ use datafusion::logical_expr::{Expr, LogicalPlan, TableScan, UserDefinedLogicalN
 use datafusion::physical_expr::create_lex_ordering;
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
 use datafusion::physical_plan::empty::EmptyExec;
-use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::stats::Precision;
 use datafusion_common::{internal_err, plan_err, project_schema, Statistics};
@@ -31,6 +31,7 @@ use object_store::ObjectStore;
 use sail_common_datafusion::datasource::create_sort_order;
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_physical_plan::barrier::BarrierExec;
+use sail_physical_plan::output_file_count::OutputFileCountExec;
 
 use crate::listing::delete::FileDeleteExec;
 use crate::listing::source::{ListingScanInput, ListingSinkInput};
@@ -230,6 +231,7 @@ async fn plan_file_write(
         file_output_mode: FileOutputMode::Automatic,
     };
     let sort_order = create_sort_order(session_state, sort_by.clone(), logical_input.schema())?;
+    let num_output_partitions = physical_input.output_partitioning().partition_count();
     let plan = format
         .sink(
             session_state,
@@ -240,6 +242,7 @@ async fn plan_file_write(
             },
         )
         .await?;
+    let plan = Arc::new(OutputFileCountExec::new(plan, num_output_partitions));
     if *overwrite {
         let delete = Arc::new(FileDeleteExec::new(
             object_store_url,
