@@ -438,7 +438,6 @@ Feature: variant_explode and variant_explode_outer
         | 1   | true        | 20    |
         | 2   | true        | 30    |
 
-    @sail-bug
     Scenario: typeof pos is int and typeof key and value are string and variant
       When query
         """
@@ -528,7 +527,6 @@ Feature: variant_explode and variant_explode_outer
 
   Rule: variant_explode_outer column types
 
-    @sail-bug
     Scenario: typeof pos key value from outer explode of null input
       When query
         """
@@ -539,7 +537,6 @@ Feature: variant_explode and variant_explode_outer
         | pos_type | key_type | val_type |
         | int      | string   | variant  |
 
-    @sail-bug
     Scenario: typeof pos key value from outer explode of non-empty input
       When query
         """
@@ -659,3 +656,55 @@ Feature: variant_explode and variant_explode_outer
         | 4  | NULL | NULL | NULL  |
         | 5  | 0    | NULL | 1     |
         | 5  | 1    | NULL | 2     |
+
+  Rule: variant_explode_outer value rendering and edge cases
+
+    # Landmine: a JSON `null` element is a non-null VOID variant, NOT SQL NULL — the
+    # row IS emitted and `value IS NULL` is false (existing tests only check CAST, so a
+    # regression to a true SQL-null variant would slip through here).
+    Scenario: a JSON null element is a non-null VOID variant
+      When query
+        """
+        SELECT pos, key, value IS NULL AS is_null
+        FROM variant_explode_outer(parse_json('[null]'))
+        """
+      Then query result
+        | pos | key  | is_null |
+        | 0   | NULL | false   |
+
+    Scenario: decimal and signed-zero values are normalized
+      When query
+        """
+        SELECT pos, CAST(value AS STRING) AS value
+        FROM variant_explode_outer(parse_json('[1.50, -0.0, 0.0]'))
+        """
+      Then query result
+        | pos | value |
+        | 0   | 1.5   |
+        | 1   | 0     |
+        | 2   | 0     |
+
+    # Numeric-looking keys sort by codepoint, not numeric value: "10" before "2".
+    Scenario: numeric-looking object keys sort lexicographically
+      When query
+        """
+        SELECT pos, key
+        FROM variant_explode_outer(parse_json('{"10": 1, "2": 2}'))
+        """
+      Then query result
+        | pos | key |
+        | 0   | 10  |
+        | 1   | 2   |
+
+    # @sail-bug: Sail renders a large double as a full integer expansion instead of
+    # Spark's scientific notation.
+    @sail-bug
+    Scenario: a large double value casts to scientific notation
+      When query
+        """
+        SELECT pos, CAST(value AS STRING) AS value
+        FROM variant_explode_outer(parse_json('[1e308]'))
+        """
+      Then query result
+        | pos | value   |
+        | 0   | 1.0E308 |
