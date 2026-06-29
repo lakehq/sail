@@ -3,7 +3,6 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Int32Builder, ListArray, StringBuilder, StructArray};
 use arrow::buffer::OffsetBuffer;
 use arrow_schema::{DataType, Field, Fields};
-use datafusion::common::exec_datafusion_err;
 use datafusion::error::Result;
 use datafusion::logical_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -141,10 +140,9 @@ impl ScalarUDFImpl for SparkVariantExplodeUdf {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let variant_field = args
-            .arg_fields
-            .first()
-            .ok_or_else(|| exec_datafusion_err!("expected 1 argument"))?;
+        let variant_field = args.arg_fields.first().ok_or_else(|| {
+            invalid_arg_count_exec_err(self.name(), (1, 1), args.arg_fields.len())
+        })?;
 
         try_field_as_variant_array(variant_field.as_ref())?;
 
@@ -187,9 +185,11 @@ impl SparkVariantExplodeUdf {
         let variant_array = VariantArray::try_new(arr.as_ref())?;
         let num_rows = variant_array.len();
 
-        let mut pos_builder = Int32Builder::new();
-        let mut key_builder = StringBuilder::new();
-        let mut value_builder = VariantArrayBuilder::new(0);
+        // `num_rows` is a lower bound on the exploded element count (objects/arrays
+        // expand to >= 1 element each), so it's a cheap capacity hint vs default 0.
+        let mut pos_builder = Int32Builder::with_capacity(num_rows);
+        let mut key_builder = StringBuilder::with_capacity(num_rows, num_rows * 8);
+        let mut value_builder = VariantArrayBuilder::new(num_rows);
         let mut lengths = Vec::with_capacity(num_rows);
 
         for v in variant_array.iter() {
@@ -226,11 +226,10 @@ fn build_list_array(
     let value_struct = convert_variant_binaryview_to_binary(value_struct)?;
     let value_arr: ArrayRef = Arc::new(value_struct);
 
-    let struct_arr = StructArray::try_new(
-        variant_explode_fields(),
-        vec![pos_arr, key_arr, value_arr],
-        None,
-    )?;
+    // Built once and reused for both the struct schema and the list item field
+    // (`Fields` clone is a cheap Arc bump).
+    let fields = variant_explode_fields();
+    let struct_arr = StructArray::try_new(fields.clone(), vec![pos_arr, key_arr, value_arr], None)?;
 
     // Build offsets from lengths.
     let mut offsets = Vec::with_capacity(lengths.len() + 1);
@@ -242,7 +241,7 @@ fn build_list_array(
     }
 
     Ok(ListArray::new(
-        variant_explode_item_field(),
+        Arc::new(Field::new_struct("item", fields, true)),
         OffsetBuffer::new(offsets.into()),
         Arc::new(struct_arr),
         None,

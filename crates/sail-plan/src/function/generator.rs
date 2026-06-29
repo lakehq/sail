@@ -64,6 +64,13 @@ fn variant_explode(input: ScalarFunctionInput) -> PlanResult<Expr> {
     Ok(ScalarUDF::from(Explode::new(ExplodeKind::Inline)).call(vec![explode_arr]))
 }
 
+fn variant_explode_outer(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let ScalarFunctionInput { arguments, .. } = input;
+    let arg = arguments.one()?;
+    let explode_arr = ScalarUDF::from(SparkVariantExplodeUdf::new()).call(vec![arg]);
+    Ok(ScalarUDF::from(Explode::new(ExplodeKind::InlineOuter)).call(vec![explode_arr]))
+}
+
 pub(super) fn list_built_in_generator_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -85,7 +92,7 @@ pub(super) fn list_built_in_generator_functions() -> Vec<(&'static str, ScalarFu
         ),
         ("stack", F::custom(stack)),
         ("variant_explode", F::custom(variant_explode)),
-        ("variant_explode_outer", F::custom(variant_explode)),
+        ("variant_explode_outer", F::custom(variant_explode_outer)),
     ]
 }
 
