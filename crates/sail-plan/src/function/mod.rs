@@ -133,5 +133,10 @@ mod tests {
             .as_deref()
             .is_some_and(|examples| examples.contains("SELECT to_date")));
         assert_eq!(status.since.as_deref(), Some("1.5.0"));
+        assert_eq!(
+            status.class_name,
+            "org.apache.spark.sql.catalyst.expressions.ParseToDate"
+        );
+        assert!(status.is_temporary);
     }
 }

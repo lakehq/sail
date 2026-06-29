@@ -50,7 +50,7 @@ fn from_ast_show_functions_clause(
     match clause {
         ShowFunctionsClause::NamespacePattern(_, database, _, pattern) => Ok((
             Some(from_ast_object_name(database)?),
-            Some(from_ast_show_functions_pattern(pattern)?),
+            Some(from_ast_string(pattern)?),
         )),
         ShowFunctionsClause::Namespace(_, database) => {
             Ok((Some(from_ast_object_name(database)?), None))
@@ -63,22 +63,7 @@ fn from_ast_show_functions_clause(
             let Some(pattern) = parts.pop() else {
                 return Err(SqlError::invalid("SHOW FUNCTIONS with empty pattern"));
             };
-            let database = if parts.is_empty() {
-                None
-            } else {
-                Some(parts.into())
-            };
-            Ok((database, Some(pattern)))
-        }
-    }
-}
-
-fn from_ast_show_functions_pattern(pattern: ShowFunctionsPattern) -> SqlResult<String> {
-    match pattern {
-        ShowFunctionsPattern::String(pattern) => from_ast_string(pattern),
-        ShowFunctionsPattern::Name(pattern) => {
-            let parts: Vec<String> = from_ast_object_name(pattern)?.into();
-            Ok(parts.join("."))
+            Ok((None, Some(pattern)))
         }
     }
 }

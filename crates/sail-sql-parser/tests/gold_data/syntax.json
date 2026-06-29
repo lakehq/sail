@@ -9473,7 +9473,7 @@
                         "nonTerminal": "Keyword(Like)"
                       },
                       {
-                        "nonTerminal": "ShowFunctionsPattern"
+                        "nonTerminal": "StringLiteral"
                       }
                     ]
                   },

@@ -60,7 +60,7 @@ impl FunctionStatus {
             note: None,
             since: None,
             class_name: String::new(),
-            is_temporary: false,
+            is_temporary: true,
         }
     }
 

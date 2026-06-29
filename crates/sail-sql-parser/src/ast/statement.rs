@@ -585,7 +585,7 @@ pub enum ShowFunctionScope {
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 pub enum ShowFunctionsClause {
-    NamespacePattern(Either<From, In>, ObjectName, Like, ShowFunctionsPattern),
+    NamespacePattern(Either<From, In>, ObjectName, Like, StringLiteral),
     Namespace(Either<From, In>, ObjectName),
     Pattern(Option<Like>, ShowFunctionsPattern),
 }

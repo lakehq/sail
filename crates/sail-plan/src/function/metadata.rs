@@ -45,7 +45,7 @@ pub(crate) fn built_in_function_status(name: &str) -> FunctionStatus {
         note: metadata.note.map(|note| note.to_string()),
         since: metadata.since.map(|since| since.to_string()),
         class_name: metadata.class_name.to_string(),
-        is_temporary: false,
+        is_temporary: true,
     }
 }
 

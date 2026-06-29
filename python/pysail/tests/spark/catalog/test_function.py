@@ -22,6 +22,8 @@ def test_list_functions_returns_spark_function_fields(spark):
     )
     assert "Signatures: to_date(date_str[, fmt])" in function.description
     assert "Parses" in function.description
+    assert function.className == "org.apache.spark.sql.catalyst.expressions.ParseToDate"
+    assert function.isTemporary is True
 
 
 def test_list_functions_includes_built_ins(spark):
@@ -38,9 +40,16 @@ def test_list_functions_includes_built_ins(spark):
 
 
 def test_list_functions_has_metadata_for_built_ins(spark):
-    functions = spark.catalog.listFunctions()
-    missing = sorted(f.name for f in functions if not f.isTemporary and not f.description)
-    assert missing == []
+    functions = {f.name: f for f in spark.catalog.listFunctions()}
+    expected = {
+        "+": "org.apache.spark.sql.catalyst.expressions.Add",
+        "concat": "org.apache.spark.sql.catalyst.expressions.Concat",
+        "to_date": "org.apache.spark.sql.catalyst.expressions.ParseToDate",
+    }
+    for name, class_name in expected.items():
+        assert functions[name].isTemporary is True
+        assert functions[name].className == class_name
+        assert functions[name].description
 
 
 def test_list_functions_respects_database_and_pattern(spark):
@@ -71,6 +80,7 @@ def test_describe_function_returns_signature_and_description(spark):
     )
     assert rows == [
         "Function: to_date",
+        "Class: org.apache.spark.sql.catalyst.expressions.ParseToDate",
         expected_usage,
     ]
 
@@ -85,18 +95,22 @@ def test_describe_function_extended_adds_extended_usage(spark):
 def test_describe_function_supports_string_literal_name(spark):
     rows = [row.function_desc for row in spark.sql("DESC FUNCTION 'concat'").collect()]
     assert rows[0] == "Function: concat"
-    assert rows[1].startswith("Usage: concat(col1, col2, ..., colN) - ")
+    assert rows[1] == "Class: org.apache.spark.sql.catalyst.expressions.Concat"
+    assert rows[2].startswith("Usage: concat(col1, col2, ..., colN) - ")
 
 
 def test_describe_function_supports_operator_name(spark):
     rows = [row.function_desc for row in spark.sql("DESCRIBE FUNCTION +").collect()]
     assert rows[0] == "Function: +"
-    assert rows[1].startswith("Usage: expr1 + expr2 - ")
+    assert rows[1] == "Class: org.apache.spark.sql.catalyst.expressions.Add"
+    assert rows[2].startswith("Usage: expr1 + expr2 - ")
 
 
 def test_describe_function_reports_unknown_function(spark):
     with pytest.raises(Exception, match=r"(?i)(not found|function)"):
         spark.sql("DESCRIBE FUNCTION no_such_function").collect()
+    with pytest.raises(Exception, match=r"(?i)(not found|function)"):
+        spark.sql("DESCRIBE FUNCTION default.to_date").collect()
 
 
 def test_show_functions_respects_scope(spark):
@@ -115,8 +129,11 @@ def test_show_functions_supports_legacy_identifier_pattern(spark):
     assert _show_function_names(spark, "SHOW SYSTEM FUNCTIONS to_date") == {"to_date"}
     assert _show_function_names(spark, "SHOW FUNCTIONS LIKE to_date") == {"to_date"}
     assert _show_function_names(spark, "SHOW FUNCTIONS default.to_date") == {"to_date"}
+    assert _show_function_names(spark, "SHOW FUNCTIONS no_such_db.to_date") == {"to_date"}
 
 
 def test_show_functions_requires_like_after_namespace(spark):
     with pytest.raises(Exception, match=r"(?i)(expected|parse|syntax|extra input)"):
         spark.sql("SHOW FUNCTIONS IN default to_date").collect()
+    with pytest.raises(Exception, match=r"(?i)(expected|parse|syntax|extra input)"):
+        spark.sql("SHOW FUNCTIONS IN default LIKE to_date").collect()

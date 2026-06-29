@@ -70,6 +70,14 @@ impl CatalogManager {
             .ok_or_else(|| CatalogError::InvalidArgument("empty function name".to_string()))?;
         if !database.is_empty() {
             let _ = self.get_database_by_qualifier(database).await?;
+            return Err(CatalogError::NotFound(
+                CatalogObject::Function,
+                function
+                    .iter()
+                    .map(|part| part.as_ref())
+                    .collect::<Vec<_>>()
+                    .join("."),
+            ));
         }
         let name = Self::canonical_function_name(name.as_ref());
         let state = self.state()?;
