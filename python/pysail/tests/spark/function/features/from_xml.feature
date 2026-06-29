@@ -336,7 +336,16 @@ Feature: from_xml parses an XML string into a struct value
         | result |
         | NULL   |
 
-    Rule: Decimal type
+    Scenario: Explicit PERMISSIVE mode returns NULL field for bad cast
+      When query
+        """
+        SELECT from_xml('<p><a>not_a_number</a></p>', 'a INT', map('mode', 'PERMISSIVE')).a AS result
+        """
+      Then query result
+        | result |
+        | NULL   |
+
+  Rule: Decimal type
 
     Scenario: Parse DECIMAL field
       When query

@@ -86,6 +86,12 @@ impl SparkFromXmlOptions {
             .unwrap_or_else(|| Self::ATTRIBUTE_PREFIX_DEFAULT.to_string());
         let value_tag = find_key_value(map, Self::VALUE_TAG_OPTION)
             .unwrap_or_else(|| Self::VALUE_TAG_DEFAULT.to_string());
+        if value_tag.is_empty() {
+            return plan_err!("`valueTag` must not be empty");
+        }
+        if value_tag == attribute_prefix {
+            return plan_err!("`valueTag` and `attributePrefix` must not be equal");
+        }
         let timestamp_ltz_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
             .map(spark_datetime_format_to_chrono_strftime)
@@ -106,8 +112,11 @@ impl SparkFromXmlOptions {
             .map(|s| s.to_ascii_uppercase())
             .as_deref()
         {
+            None | Some("PERMISSIVE") => ParseMode::Permissive,
             Some("FAILFAST") => ParseMode::FailFast,
-            _ => ParseMode::Permissive,
+            Some(other) => {
+                return plan_err!("`mode` must be PERMISSIVE or FAILFAST, got '{other}'");
+            }
         };
         Ok(Self {
             null_value,
@@ -173,7 +182,7 @@ impl ScalarUDFImpl for SparkFromXml {
             | DataType::Utf8View
             | DataType::LargeUtf8, DataType::Utf8
             | DataType::Utf8View
-            | DataType::LargeUtf8] => Ok(vec![DataType::Utf8, arg_types[1].clone()]),
+            | DataType::LargeUtf8] => Ok(vec![DataType::Utf8, DataType::Utf8]),
             [DataType::Null
             | DataType::Utf8
             | DataType::Utf8View
@@ -181,7 +190,7 @@ impl ScalarUDFImpl for SparkFromXml {
             | DataType::Utf8View
             | DataType::LargeUtf8, DataType::Map(_, _)] => Ok(vec![
                 DataType::Utf8,
-                arg_types[1].clone(),
+                DataType::Utf8,
                 arg_types[2].clone(),
             ]),
             _ => plan_err!(
@@ -710,7 +719,7 @@ fn append_xml_field(
             } else {
                 nulls.push(true);
                 let node = matches[0];
-                for (f, child) in fields.clone().iter().zip(children.iter_mut()) {
+                for (f, child) in fields.iter().zip(children.iter_mut()) {
                     append_xml_field(xot, node, f.name(), child, options, session_timezone)?;
                 }
             }
@@ -742,7 +751,7 @@ fn append_element_to_field(
             nulls,
         } => {
             nulls.push(true);
-            for (f, child) in fields.clone().iter().zip(children.iter_mut()) {
+            for (f, child) in fields.iter().zip(children.iter_mut()) {
                 append_xml_field(xot, node, f.name(), child, options, session_timezone)?;
             }
         }

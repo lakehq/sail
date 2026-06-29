@@ -45,6 +45,13 @@ fn from_xml(
     if arguments.len() >= 2 && !matches!(&arguments[1], expr::Expr::Literal(_, _)) {
         let evaluator = LiteralEvaluator::new();
         if let Ok(scalar) = evaluator.evaluate(&arguments[1]) {
+            let scalar = match scalar {
+                datafusion_common::ScalarValue::Utf8View(v)
+                | datafusion_common::ScalarValue::LargeUtf8(v) => {
+                    datafusion_common::ScalarValue::Utf8(v)
+                }
+                other => other,
+            };
             arguments[1] = expr::Expr::Literal(scalar, None);
         }
     }
