@@ -80,7 +80,7 @@ Feature: Catalog function queries
       | function_desc                              |
       | Function: +                                |
       | Class: org.apache.spark.sql.catalyst.expressions.Add |
-      | Usage: expr1 + expr2 - Returns expr1+expr2. |
+      | Usage: expr1 + expr2 - Returns `expr1`+`expr2`. |
 
   Scenario: DESCRIBE FUNCTION does not resolve qualified built-in names
     When query

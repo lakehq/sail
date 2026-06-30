@@ -1,85 +1,151 @@
-- name: map
+- name: "map"
+  scope: "sql_builtin"
+  group: "map_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.CreateMap"
   signatures:
     - "map(key0, value0, key1, value1, ...)"
-  description: "Creates a map with the given key/value pairs."
-  examples: |
-    > SELECT map(1.0, '2', 3.0, '4');
-     {1.0:"2",3.0:"4"}
+  usage: "map(key0, value0, key1, value1, ...) - Creates a map with the given key/value pairs."
+  examples: |2-
+    
+        Examples:
+          > SELECT map(1.0, '2', 3.0, '4');
+           {1.0:"2",3.0:"4"}
+      
   since: "2.0.0"
-- name: map_concat
+
+- name: "map_concat"
+  scope: "sql_builtin"
+  group: "map_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.MapConcat"
   signatures:
     - "map_concat(map, ...)"
-  description: "Returns the union of all the given maps"
-  examples: |
-    > SELECT map_concat(map(1, 'a', 2, 'b'), map(3, 'c'));
-     {1:"a",2:"b",3:"c"}
+  usage: "map_concat(map, ...) - Returns the union of all the given maps"
+  examples: |2-
+    
+        Examples:
+          > SELECT map_concat(map(1, 'a', 2, 'b'), map(3, 'c'));
+           {1:"a",2:"b",3:"c"}
+      
   since: "2.4.0"
-- name: map_contains_key
+
+- name: "map_contains_key"
+  scope: "sql_builtin"
+  group: "map_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.MapContainsKey"
   signatures:
     - "map_contains_key(map, key)"
-  description: "Returns true if the map contains the key."
-  examples: |
-    > SELECT map_contains_key(map(1, 'a', 2, 'b'), 1);
-     true
-    > SELECT map_contains_key(map(1, 'a', 2, 'b'), 3);
-     false
+  usage: "map_contains_key(map, key) - Returns true if the map contains the key."
+  examples: |2-
+    
+        Examples:
+          > SELECT map_contains_key(map(1, 'a', 2, 'b'), 1);
+           true
+          > SELECT map_contains_key(map(1, 'a', 2, 'b'), 3);
+           false
+      
   since: "3.3.0"
-- name: map_entries
+
+- name: "map_entries"
+  scope: "sql_builtin"
+  group: "map_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.MapEntries"
   signatures:
     - "map_entries(map)"
-  description: "Returns an unordered array of all entries in the given map."
-  examples: |
-    > SELECT map_entries(map(1, 'a', 2, 'b'));
-     [{"key":1,"value":"a"},{"key":2,"value":"b"}]
+  usage: "map_entries(map) - Returns an unordered array of all entries in the given map."
+  examples: |2-
+    
+        Examples:
+          > SELECT map_entries(map(1, 'a', 2, 'b'));
+           [{"key":1,"value":"a"},{"key":2,"value":"b"}]
+      
   since: "3.0.0"
-- name: map_from_arrays
+
+- name: "map_from_arrays"
+  scope: "sql_builtin"
+  group: "map_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.MapFromArrays"
   signatures:
     - "map_from_arrays(keys, values)"
-  description: "Creates a map with a pair of the given key/value arrays. All elements in keys should not be null"
-  examples: |
-    > SELECT map_from_arrays(array(1.0, 3.0), array('2', '4'));
-     {1.0:"2",3.0:"4"}
+  usage: |2-
+    
+        map_from_arrays(keys, values) - Creates a map with a pair of the given key/value arrays. All elements
+          in keys should not be null
+  examples: |2-
+    
+        Examples:
+          > SELECT map_from_arrays(array(1.0, 3.0), array('2', '4'));
+           {1.0:"2",3.0:"4"}
+      
   since: "2.4.0"
-- name: map_from_entries
+
+- name: "map_from_entries"
+  scope: "sql_builtin"
+  group: "map_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.MapFromEntries"
   signatures:
     - "map_from_entries(arrayOfEntries)"
-  description: "Returns a map created from the given array of entries."
-  examples: |
-    > SELECT map_from_entries(array(struct(1, 'a'), struct(2, 'b')));
-     {1:"a",2:"b"}
+  usage: "map_from_entries(arrayOfEntries) - Returns a map created from the given array of entries."
+  examples: |2-
+    
+        Examples:
+          > SELECT map_from_entries(array(struct(1, 'a'), struct(2, 'b')));
+           {1:"a",2:"b"}
+      
   since: "2.4.0"
-- name: map_keys
+
+- name: "map_keys"
+  scope: "sql_builtin"
+  group: "map_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.MapKeys"
   signatures:
     - "map_keys(map)"
-  description: "Returns an unordered array containing the keys of the map."
-  examples: |
-    > SELECT map_keys(map(1, 'a', 2, 'b'));
-     [1,2]
+  usage: "map_keys(map) - Returns an unordered array containing the keys of the map."
+  examples: |2-
+    
+        Examples:
+          > SELECT map_keys(map(1, 'a', 2, 'b'));
+           [1,2]
+      
   since: "2.0.0"
-- name: map_values
+
+- name: "map_values"
+  scope: "sql_builtin"
+  group: "map_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.MapValues"
   signatures:
     - "map_values(map)"
-  description: "Returns an unordered array containing the values of the map."
-  examples: |
-    > SELECT map_values(map(1, 'a', 2, 'b'));
-     ["a","b"]
+  usage: "map_values(map) - Returns an unordered array containing the values of the map."
+  examples: |2-
+    
+        Examples:
+          > SELECT map_values(map(1, 'a', 2, 'b'));
+           ["a","b"]
+      
   since: "2.0.0"
-- name: str_to_map
+
+- name: "str_to_map"
+  scope: "sql_builtin"
+  group: "map_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.StringToMap"
   signatures:
     - "str_to_map(text[, pairDelim[, keyValueDelim]])"
-  description: "Creates a map after splitting the text into key/value pairs using delimiters. Default delimiters are ',' for pairDelim and ':' for keyValueDelim. Both pairDelim and keyValueDelim are treated as regular expressions."
-  examples: |
-    > SELECT str_to_map('a:1,b:2,c:3', ',', ':');
-     {"a":"1","b":"2","c":"3"}
-    > SELECT str_to_map('a');
-     {"a":null}
+  usage: "str_to_map(text[, pairDelim[, keyValueDelim]]) - Creates a map after splitting the text into key/value pairs using delimiters. Default delimiters are ',' for `pairDelim` and ':' for `keyValueDelim`. Both `pairDelim` and `keyValueDelim` are treated as regular expressions."
+  examples: |2-
+    
+        Examples:
+          > SELECT str_to_map('a:1,b:2,c:3', ',', ':');
+           {"a":"1","b":"2","c":"3"}
+          > SELECT str_to_map('a');
+           {"a":null}
+      
   since: "2.0.1"
+

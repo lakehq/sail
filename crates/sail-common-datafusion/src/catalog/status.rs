@@ -40,10 +40,12 @@ pub struct FunctionStatus {
     pub catalog: Option<String>,
     pub namespace: Option<Vec<String>>,
     pub signatures: Vec<String>,
-    pub description: Option<String>,
+    pub usage: Option<String>,
+    pub arguments: Option<String>,
     pub examples: Option<String>,
     pub note: Option<String>,
     pub since: Option<String>,
+    pub deprecated: Option<String>,
     pub class_name: String,
     pub is_temporary: bool,
 }
@@ -55,10 +57,12 @@ impl FunctionStatus {
             catalog: None,
             namespace: None,
             signatures: vec![],
-            description: None,
+            usage: None,
+            arguments: None,
             examples: None,
             note: None,
             since: None,
+            deprecated: None,
             class_name: String::new(),
             is_temporary: true,
         }
@@ -70,63 +74,57 @@ impl FunctionStatus {
             catalog: None,
             namespace: None,
             signatures: vec![],
-            description: None,
+            usage: None,
+            arguments: None,
             examples: None,
             note: None,
             since: None,
+            deprecated: None,
             class_name: String::new(),
             is_temporary: true,
         }
     }
 
     pub fn list_description(&self) -> Option<String> {
-        match (self.signatures.is_empty(), self.description.as_deref()) {
-            (true, None) => None,
-            (true, Some(description)) => Some(description.to_string()),
-            (false, None) => Some(format!("Signatures: {}", self.signatures.join(", "))),
-            (false, Some(description)) => Some(format!(
-                "Signatures: {}\n{}",
-                self.signatures.join(", "),
-                description
-            )),
-        }
+        self.usage.clone()
     }
 
     pub fn usage(&self) -> String {
-        match (self.signatures.is_empty(), self.description.as_deref()) {
-            (true, None) => "N/A.".to_string(),
-            (true, Some(description)) => description.to_string(),
-            (false, None) => self.signatures.join(", "),
-            (false, Some(description)) => {
-                format!("{} - {description}", self.signatures.join(", "))
-            }
-        }
+        self.usage.clone().unwrap_or_else(|| "N/A.".to_string())
     }
 
     pub fn extended_usage(&self) -> String {
         let mut output = String::new();
+        if let Some(arguments) = self.arguments.as_deref().filter(|value| !value.is_empty()) {
+            output.push_str(arguments);
+        }
         if let Some(examples) = self.examples.as_deref().filter(|value| !value.is_empty()) {
+            output.push_str(examples);
+        }
+        if output.is_empty() {
             output.push('\n');
-            output.push_str("    Examples:\n");
-            for line in examples.trim_end().lines() {
-                output.push_str("      ");
-                output.push_str(line);
-                output.push('\n');
-            }
+            output.push_str("    No example/argument for ");
+            output.push_str(&self.name);
+            output.push_str(".\n");
         }
         if let Some(note) = self.note.as_deref().filter(|value| !value.is_empty()) {
             output.push('\n');
             output.push_str("    Note:\n");
-            for line in note.trim_end().lines() {
-                output.push_str("      ");
-                output.push_str(line);
-                output.push('\n');
-            }
+            output.push_str("      ");
+            output.push_str(note.trim());
+            output.push('\n');
         }
         if let Some(since) = self.since.as_deref().filter(|value| !value.is_empty()) {
             output.push('\n');
             output.push_str("    Since: ");
             output.push_str(since);
+            output.push('\n');
+        }
+        if let Some(deprecated) = self.deprecated.as_deref().filter(|value| !value.is_empty()) {
+            output.push('\n');
+            output.push_str("    Deprecated:\n");
+            output.push_str("      ");
+            output.push_str(deprecated.trim());
             output.push('\n');
         }
         output

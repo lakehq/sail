@@ -1,380 +1,730 @@
-- name: aes_decrypt
+- name: "aes_decrypt"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.AesDecrypt"
   signatures:
     - "aes_decrypt(expr, key[, mode[, padding[, aad]]])"
-  description: "Returns a decrypted value of expr using AES in mode with padding. Key lengths of 16, 24 and 32 bits are supported. Supported combinations of (mode, padding) are ('ECB', 'PKCS'), ('GCM', 'NONE') and ('CBC', 'PKCS'). Optional additional authenticated data (AAD) is only supported for GCM. If provided for encryption, the identical AAD value must be provided for decryption. The default mode is GCM."
-  examples: |
-    > SELECT aes_decrypt(unhex('83F16B2AA704794132802D248E6BFD4E380078182D1544813898AC97E709B28A94'), '0000111122223333');
-     Spark
-    > SELECT aes_decrypt(unhex('6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), '0000111122223333', 'GCM');
-     Spark SQL
-    > SELECT aes_decrypt(unbase64('3lmwu+Mw0H3fi5NDvcu9lg=='), '1234567890abcdef', 'ECB', 'PKCS');
-     Spark SQL
-    > SELECT aes_decrypt(unbase64('2NYmDCjgXTbbxGA3/SnJEfFC/JQ7olk2VQWReIAAFKo='), '1234567890abcdef', 'CBC');
-     Apache Spark
-    > SELECT aes_decrypt(unbase64('AAAAAAAAAAAAAAAAAAAAAPSd4mWyMZ5mhvjiAPQJnfg='), 'abcdefghijklmnop12345678ABCDEFGH', 'CBC', 'DEFAULT');
-     Spark
-    > SELECT aes_decrypt(unbase64('AAAAAAAAAAAAAAAAQiYi+sTLm7KD9UcZ2nlRdYDe/PX4'), 'abcdefghijklmnop12345678ABCDEFGH', 'GCM', 'DEFAULT', 'This is an AAD mixed into the input');
-     Spark
+  usage: |2-
+    
+        aes_decrypt(expr, key[, mode[, padding[, aad]]]) - Returns a decrypted value of `expr` using AES in `mode` with `padding`.
+          Key lengths of 16, 24 and 32 bits are supported. Supported combinations of (`mode`, `padding`) are ('ECB', 'PKCS'), ('GCM', 'NONE') and ('CBC', 'PKCS').
+          Optional additional authenticated data (AAD) is only supported for GCM. If provided for encryption, the identical AAD value must be provided for decryption.
+          The default mode is GCM.
+      
+  arguments: |2-
+    
+        Arguments:
+          * expr - The binary value to decrypt.
+          * key - The passphrase to use to decrypt the data.
+          * mode - Specifies which block cipher mode should be used to decrypt messages.
+                   Valid modes: ECB, GCM, CBC.
+          * padding - Specifies how to pad messages whose length is not a multiple of the block size.
+                      Valid values: PKCS, NONE, DEFAULT. The DEFAULT padding means PKCS for ECB, NONE for GCM and PKCS for CBC.
+          * aad - Optional additional authenticated data. Only supported for GCM mode. This can be any free-form input and
+                  must be provided for both encryption and decryption.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT aes_decrypt(unhex('83F16B2AA704794132802D248E6BFD4E380078182D1544813898AC97E709B28A94'), '0000111122223333');
+           Spark
+          > SELECT aes_decrypt(unhex('6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), '0000111122223333', 'GCM');
+           Spark SQL
+          > SELECT aes_decrypt(unbase64('3lmwu+Mw0H3fi5NDvcu9lg=='), '1234567890abcdef', 'ECB', 'PKCS');
+           Spark SQL
+          > SELECT aes_decrypt(unbase64('2NYmDCjgXTbbxGA3/SnJEfFC/JQ7olk2VQWReIAAFKo='), '1234567890abcdef', 'CBC');
+           Apache Spark
+          > SELECT aes_decrypt(unbase64('AAAAAAAAAAAAAAAAAAAAAPSd4mWyMZ5mhvjiAPQJnfg='), 'abcdefghijklmnop12345678ABCDEFGH', 'CBC', 'DEFAULT');
+           Spark
+          > SELECT aes_decrypt(unbase64('AAAAAAAAAAAAAAAAQiYi+sTLm7KD9UcZ2nlRdYDe/PX4'), 'abcdefghijklmnop12345678ABCDEFGH', 'GCM', 'DEFAULT', 'This is an AAD mixed into the input');
+           Spark
+      
   since: "3.3.0"
-- name: aes_encrypt
+
+- name: "aes_encrypt"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.AesEncrypt"
   signatures:
     - "aes_encrypt(expr, key[, mode[, padding[, iv[, aad]]]])"
-  description: "Returns an encrypted value of expr using AES in given mode with the specified padding. Key lengths of 16, 24 and 32 bits are supported. Supported combinations of (mode, padding) are ('ECB', 'PKCS'), ('GCM', 'NONE') and ('CBC', 'PKCS'). Optional initialization vectors (IVs) are only supported for CBC and GCM modes. These must be 16 bytes for CBC and 12 bytes for GCM. If not provided, a random vector will be generated and prepended to the output. Optional additional authenticated data (AAD) is only supported for GCM. If provided for encryption, the identical AAD value must be provided for decryption. The default mode is GCM."
-  examples: |
-    > SELECT hex(aes_encrypt('Spark', '0000111122223333'));
-     83F16B2AA704794132802D248E6BFD4E380078182D1544813898AC97E709B28A94
-    > SELECT hex(aes_encrypt('Spark SQL', '0000111122223333', 'GCM'));
-     6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210
-    > SELECT base64(aes_encrypt('Spark SQL', '1234567890abcdef', 'ECB', 'PKCS'));
-     3lmwu+Mw0H3fi5NDvcu9lg==
-    > SELECT base64(aes_encrypt('Apache Spark', '1234567890abcdef', 'CBC', 'DEFAULT'));
-     2NYmDCjgXTbbxGA3/SnJEfFC/JQ7olk2VQWReIAAFKo=
-    > SELECT base64(aes_encrypt('Spark', 'abcdefghijklmnop12345678ABCDEFGH', 'CBC', 'DEFAULT', unhex('00000000000000000000000000000000')));
-     AAAAAAAAAAAAAAAAAAAAAPSd4mWyMZ5mhvjiAPQJnfg=
-    > SELECT base64(aes_encrypt('Spark', 'abcdefghijklmnop12345678ABCDEFGH', 'GCM', 'DEFAULT', unhex('000000000000000000000000'), 'This is an AAD mixed into the input'));
-     AAAAAAAAAAAAAAAAQiYi+sTLm7KD9UcZ2nlRdYDe/PX4
+  usage: |2-
+    
+        aes_encrypt(expr, key[, mode[, padding[, iv[, aad]]]]) - Returns an encrypted value of `expr` using AES in given `mode` with the specified `padding`.
+          Key lengths of 16, 24 and 32 bits are supported. Supported combinations of (`mode`, `padding`) are ('ECB', 'PKCS'), ('GCM', 'NONE') and ('CBC', 'PKCS').
+          Optional initialization vectors (IVs) are only supported for CBC and GCM modes. These must be 16 bytes for CBC and 12 bytes for GCM. If not provided, a random vector will be generated and prepended to the output.
+          Optional additional authenticated data (AAD) is only supported for GCM. If provided for encryption, the identical AAD value must be provided for decryption.
+          The default mode is GCM.
+      
+  arguments: |2-
+    
+        Arguments:
+          * expr - The binary value to encrypt.
+          * key - The passphrase to use to encrypt the data.
+          * mode - Specifies which block cipher mode should be used to encrypt messages.
+                   Valid modes: ECB, GCM, CBC.
+          * padding - Specifies how to pad messages whose length is not a multiple of the block size.
+                      Valid values: PKCS, NONE, DEFAULT. The DEFAULT padding means PKCS for ECB, NONE for GCM and PKCS for CBC.
+          * iv - Optional initialization vector. Only supported for CBC and GCM modes.
+                 Valid values: None or ''. 16-byte array for CBC mode. 12-byte array for GCM mode.
+          * aad - Optional additional authenticated data. Only supported for GCM mode. This can be any free-form input and
+                  must be provided for both encryption and decryption.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT hex(aes_encrypt('Spark', '0000111122223333'));
+           83F16B2AA704794132802D248E6BFD4E380078182D1544813898AC97E709B28A94
+          > SELECT hex(aes_encrypt('Spark SQL', '0000111122223333', 'GCM'));
+           6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210
+          > SELECT base64(aes_encrypt('Spark SQL', '1234567890abcdef', 'ECB', 'PKCS'));
+           3lmwu+Mw0H3fi5NDvcu9lg==
+          > SELECT base64(aes_encrypt('Apache Spark', '1234567890abcdef', 'CBC', 'DEFAULT'));
+           2NYmDCjgXTbbxGA3/SnJEfFC/JQ7olk2VQWReIAAFKo=
+          > SELECT base64(aes_encrypt('Spark', 'abcdefghijklmnop12345678ABCDEFGH', 'CBC', 'DEFAULT', unhex('00000000000000000000000000000000')));
+           AAAAAAAAAAAAAAAAAAAAAPSd4mWyMZ5mhvjiAPQJnfg=
+          > SELECT base64(aes_encrypt('Spark', 'abcdefghijklmnop12345678ABCDEFGH', 'GCM', 'DEFAULT', unhex('000000000000000000000000'), 'This is an AAD mixed into the input'));
+           AAAAAAAAAAAAAAAAQiYi+sTLm7KD9UcZ2nlRdYDe/PX4
+      
   since: "3.3.0"
-- name: assert_true
+
+- name: "assert_true"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.AssertTrue"
   signatures:
     - "assert_true(expr [, message])"
-  description: "Throws an exception if expr is not true."
-  examples: |
-    > SELECT assert_true(0 < 1);
-     NULL
+  usage: "assert_true(expr [, message]) - Throws an exception if `expr` is not true."
+  examples: |2-
+    
+        Examples:
+          > SELECT assert_true(0 < 1);
+           NULL
+      
   since: "2.0.0"
-- name: bitmap_bit_position
+
+- name: "bitmap_bit_position"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.BitmapBitPosition"
   signatures:
     - "bitmap_bit_position(child)"
-  description: "Returns the bit position for the given input child expression."
-  examples: |
-    > SELECT bitmap_bit_position(1);
-     0
-    > SELECT bitmap_bit_position(123);
-     122
+  usage: "bitmap_bit_position(child) - Returns the bit position for the given input child expression."
+  examples: |2-
+    
+        Examples:
+          > SELECT bitmap_bit_position(1);
+           0
+          > SELECT bitmap_bit_position(123);
+           122
+      
   since: "3.5.0"
-- name: bitmap_bucket_number
+
+- name: "bitmap_bucket_number"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.BitmapBucketNumber"
   signatures:
     - "bitmap_bucket_number(child)"
-  description: "Returns the bucket number for the given input child expression."
-  examples: |
-    > SELECT bitmap_bucket_number(123);
-     1
-    > SELECT bitmap_bucket_number(0);
-     0
+  usage: "bitmap_bucket_number(child) - Returns the bucket number for the given input child expression."
+  examples: |2-
+    
+        Examples:
+          > SELECT bitmap_bucket_number(123);
+           1
+          > SELECT bitmap_bucket_number(0);
+           0
+      
   since: "3.5.0"
-- name: bitmap_count
+
+- name: "bitmap_count"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.BitmapCount"
   signatures:
     - "bitmap_count(child)"
-  description: "Returns the number of set bits in the child bitmap."
-  examples: |
-    > SELECT bitmap_count(X '1010');
-     2
-    > SELECT bitmap_count(X 'FFFF');
-     16
-    > SELECT bitmap_count(X '0');
-     0
+  usage: "bitmap_count(child) - Returns the number of set bits in the child bitmap."
+  examples: |2-
+    
+        Examples:
+          > SELECT bitmap_count(X '1010');
+           2
+          > SELECT bitmap_count(X 'FFFF');
+           16
+          > SELECT bitmap_count(X '0');
+           0
+      
   since: "3.5.0"
-- name: current_catalog
+
+- name: "current_catalog"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.CurrentCatalog"
   signatures:
     - "current_catalog()"
-  description: "Returns the current catalog."
-  examples: |
-    > SELECT current_catalog();
-     spark_catalog
+  usage: "current_catalog() - Returns the current catalog."
+  examples: |2-
+    
+        Examples:
+          > SELECT current_catalog();
+           spark_catalog
+      
   since: "3.1.0"
-- name: current_database
+
+- name: "current_database"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.CurrentDatabase"
   signatures:
     - "current_database()"
-  description: "Returns the current database."
-  examples: |
-    > SELECT current_database();
-     default
+  usage: "current_database() - Returns the current database."
+  examples: |2-
+    
+        Examples:
+          > SELECT current_database();
+           default
+      
   since: "1.6.0"
-- name: current_schema
+
+- name: "current_schema"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.CurrentDatabase"
   signatures:
     - "current_schema()"
-  description: "Returns the current database."
-  examples: |
-    > SELECT current_schema();
-     default
+  usage: "current_schema() - Returns the current database."
+  examples: |2-
+    
+        Examples:
+          > SELECT current_schema();
+           default
+      
   since: "3.4.0"
-- name: current_user
+
+- name: "current_user"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.CurrentUser"
   signatures:
     - "current_user()"
-  description: "user name of current execution context."
-  examples: |
-    > SELECT current_user();
-     mockingjay
+  usage: "current_user() - user name of current execution context."
+  examples: |2-
+    
+        Examples:
+          > SELECT current_user();
+           mockingjay
+      
   since: "3.2.0"
-- name: from_avro
+
+- name: "from_avro"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.FromAvro"
   signatures:
     - "from_avro(child, jsonFormatSchema, options)"
-  description: "Converts a binary Avro value into a Catalyst value."
-  examples: |
-    > SELECT from_avro(s, '{"type": "record", "name": "struct", "fields": [{ "name": "u", "type": ["int","string"] }]}', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1));
-     [false]
-  note: |
-    The specified schema must match actual schema of the read data, otherwise the behavior
-    is undefined: it may fail or return arbitrary result.
-    To deserialize the data with a compatible and evolved schema, the expected Avro schema can be
-    set via the corresponding option.
+  usage: |2-
+    
+        from_avro(child, jsonFormatSchema, options) - Converts a binary Avro value into a Catalyst value.
+        
+  examples: |2-
+    
+        Examples:
+          > SELECT from_avro(s, '{"type": "record", "name": "struct", "fields": [{ "name": "u", "type": ["int","string"] }]}', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('u', NAMED_STRUCT('member0', member0, 'member1', member1)) AS s FROM VALUES (1, NULL), (NULL,  'a') tab(member0, member1));
+           [false]
+      
+  note: |2-
+    
+        The specified schema must match actual schema of the read data, otherwise the behavior
+        is undefined: it may fail or return arbitrary result.
+        To deserialize the data with a compatible and evolved schema, the expected Avro schema can be
+        set via the corresponding option.
+      
   since: "4.0.0"
-- name: from_protobuf
+
+- name: "from_protobuf"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.FromProtobuf"
   signatures:
     - "from_protobuf(data, messageName, descFilePath, options)"
-  description: "Converts a binary Protobuf value into a Catalyst value."
-  examples: |
-    > SELECT from_protobuf(s, 'Person', '/path/to/descriptor.desc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id));
-     [false]
-  note: |
-    The specified Protobuf schema must match actual schema of the read data, otherwise the behavior
-    is undefined: it may fail or return arbitrary result.
-    To deserialize the data with a compatible and evolved schema, the expected Protobuf schema can be
-    set via the corresponding option.
+  usage: |2-
+    
+        from_protobuf(data, messageName, descFilePath, options) - Converts a binary Protobuf value into a Catalyst value.
+        
+  examples: |2-
+    
+        Examples:
+          > SELECT from_protobuf(s, 'Person', '/path/to/descriptor.desc', map()) IS NULL AS result FROM (SELECT NAMED_STRUCT('name', name, 'id', id) AS s FROM VALUES ('John Doe', 1), (NULL,  2) tab(name, id));
+           [false]
+      
+  note: |2-
+    
+        The specified Protobuf schema must match actual schema of the read data, otherwise the behavior
+        is undefined: it may fail or return arbitrary result.
+        To deserialize the data with a compatible and evolved schema, the expected Protobuf schema can be
+        set via the corresponding option.
+      
   since: "4.0.0"
-- name: hll_sketch_estimate
+
+- name: "hll_sketch_estimate"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.HllSketchEstimate"
   signatures:
     - "hll_sketch_estimate(expr)"
-  description: "Returns the estimated number of unique values given the binary representation of a Datasketches HllSketch."
-  examples: |
-    > SELECT hll_sketch_estimate(hll_sketch_agg(col)) FROM VALUES (1), (1), (2), (2), (3) tab(col);
-     3
+  usage: |2-
+    
+        hll_sketch_estimate(expr) - Returns the estimated number of unique values given the binary representation
+        of a Datasketches HllSketch. 
+  examples: |2-
+    
+        Examples:
+          > SELECT hll_sketch_estimate(hll_sketch_agg(col)) FROM VALUES (1), (1), (2), (2), (3) tab(col);
+           3
+      
   since: "3.5.0"
-- name: hll_union
+
+- name: "hll_union"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.HllUnion"
   signatures:
     - "hll_union(first, second, allowDifferentLgConfigK)"
-  description: "Merges two binary representations of Datasketches HllSketch objects, using a Datasketches Union object. Set allowDifferentLgConfigK to true to allow unions of sketches with different lgConfigK values (defaults to false)."
-  examples: |
-    > SELECT hll_sketch_estimate(hll_union(hll_sketch_agg(col1), hll_sketch_agg(col2))) FROM VALUES (1, 4), (1, 4), (2, 5), (2, 5), (3, 6) tab(col1, col2);
-     6
+  usage: |2-
+    
+        hll_union(first, second, allowDifferentLgConfigK) - Merges two binary representations of
+        Datasketches HllSketch objects, using a Datasketches Union object. Set
+        allowDifferentLgConfigK to true to allow unions of sketches with different
+        lgConfigK values (defaults to false). 
+  examples: |2-
+    
+        Examples:
+          > SELECT hll_sketch_estimate(hll_union(hll_sketch_agg(col1), hll_sketch_agg(col2))) FROM VALUES (1, 4), (1, 4), (2, 5), (2, 5), (3, 6) tab(col1, col2);
+           6
+      
   since: "3.5.0"
-- name: input_file_block_length
+
+- name: "input_file_block_length"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.InputFileBlockLength"
   signatures:
     - "input_file_block_length()"
-  description: "Returns the length of the block being read, or -1 if not available."
-  examples: |
-    > SELECT input_file_block_length();
-     -1
+  usage: "input_file_block_length() - Returns the length of the block being read, or -1 if not available."
+  examples: |2-
+    
+        Examples:
+          > SELECT input_file_block_length();
+           -1
+      
   since: "2.2.0"
-- name: input_file_block_start
+
+- name: "input_file_block_start"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.InputFileBlockStart"
   signatures:
     - "input_file_block_start()"
-  description: "Returns the start offset of the block being read, or -1 if not available."
-  examples: |
-    > SELECT input_file_block_start();
-     -1
+  usage: "input_file_block_start() - Returns the start offset of the block being read, or -1 if not available."
+  examples: |2-
+    
+        Examples:
+          > SELECT input_file_block_start();
+           -1
+      
   since: "2.2.0"
-- name: input_file_name
+
+- name: "input_file_name"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.InputFileName"
   signatures:
     - "input_file_name()"
-  description: "Returns the name of the file being read, or empty string if not available."
-  examples: |
-    > SELECT input_file_name();
+  usage: "input_file_name() - Returns the name of the file being read, or empty string if not available."
+  examples: |2-
+    
+        Examples:
+          > SELECT input_file_name();
+    
+      
   since: "1.5.0"
-- name: java_method
+
+- name: "java_method"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.CallMethodViaReflection"
   signatures:
     - "java_method(class, method[, arg1[, arg2 ..]])"
-  description: "Calls a method with reflection."
-  examples: |
-    > SELECT java_method('java.util.UUID', 'randomUUID');
-     c33fb387-8500-4bfa-81d2-6e0e3e930df2
-    > SELECT java_method('java.util.UUID', 'fromString', 'a5cf6c42-0c85-418f-af6c-3e4e5b1328f2');
-     a5cf6c42-0c85-418f-af6c-3e4e5b1328f2
+  usage: "java_method(class, method[, arg1[, arg2 ..]]) - Calls a method with reflection."
+  examples: |2-
+    
+        Examples:
+          > SELECT java_method('java.util.UUID', 'randomUUID');
+           c33fb387-8500-4bfa-81d2-6e0e3e930df2
+          > SELECT java_method('java.util.UUID', 'fromString', 'a5cf6c42-0c85-418f-af6c-3e4e5b1328f2');
+           a5cf6c42-0c85-418f-af6c-3e4e5b1328f2
+      
   since: "2.0.0"
-- name: monotonically_increasing_id
+
+- name: "monotonically_increasing_id"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.MonotonicallyIncreasingID"
   signatures:
     - "monotonically_increasing_id()"
-  description: "Returns monotonically increasing 64-bit integers. The generated ID is guaranteed to be monotonically increasing and unique, but not consecutive. The current implementation puts the partition ID in the upper 31 bits, and the lower 33 bits represent the record number within each partition. The assumption is that the data frame has less than 1 billion partitions, and each partition has less than 8 billion records. The function is non-deterministic because its result depends on partition IDs."
-  examples: |
-    > SELECT monotonically_increasing_id();
-     0
+  usage: |2-
+    
+        monotonically_increasing_id() - Returns monotonically increasing 64-bit integers. The generated ID is guaranteed
+          to be monotonically increasing and unique, but not consecutive. The current implementation
+          puts the partition ID in the upper 31 bits, and the lower 33 bits represent the record number
+          within each partition. The assumption is that the data frame has less than 1 billion
+          partitions, and each partition has less than 8 billion records.
+          The function is non-deterministic because its result depends on partition IDs.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT monotonically_increasing_id();
+           0
+      
   since: "1.4.0"
-- name: raise_error
+
+- name: "raise_error"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.RaiseErrorExpressionBuilder"
   signatures:
     - "raise_error( expr )"
-  description: "Throws a USER_RAISED_EXCEPTION with expr as message."
-  examples: |
-    > SELECT raise_error('custom error message');
-     [USER_RAISED_EXCEPTION] custom error message
+  usage: "raise_error( expr ) - Throws a USER_RAISED_EXCEPTION with `expr` as message."
+  examples: |2-
+    
+        Examples:
+          > SELECT raise_error('custom error message');
+           [USER_RAISED_EXCEPTION] custom error message
+      
   since: "3.1.0"
-- name: reflect
+
+- name: "reflect"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.CallMethodViaReflection"
   signatures:
     - "reflect(class, method[, arg1[, arg2 ..]])"
-  description: "Calls a method with reflection."
-  examples: |
-    > SELECT reflect('java.util.UUID', 'randomUUID');
-     c33fb387-8500-4bfa-81d2-6e0e3e930df2
-    > SELECT reflect('java.util.UUID', 'fromString', 'a5cf6c42-0c85-418f-af6c-3e4e5b1328f2');
-     a5cf6c42-0c85-418f-af6c-3e4e5b1328f2
+  usage: "reflect(class, method[, arg1[, arg2 ..]]) - Calls a method with reflection."
+  examples: |2-
+    
+        Examples:
+          > SELECT reflect('java.util.UUID', 'randomUUID');
+           c33fb387-8500-4bfa-81d2-6e0e3e930df2
+          > SELECT reflect('java.util.UUID', 'fromString', 'a5cf6c42-0c85-418f-af6c-3e4e5b1328f2');
+           a5cf6c42-0c85-418f-af6c-3e4e5b1328f2
+      
   since: "2.0.0"
-- name: schema_of_avro
+
+- name: "schema_of_avro"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.SchemaOfAvro"
   signatures:
     - "schema_of_avro(jsonFormatSchema, options)"
-  description: "Returns schema in the DDL format of the avro schema in JSON string format."
-  examples: |
-    > SELECT schema_of_avro('{"type": "record", "name": "struct", "fields": [{"name": "u", "type": ["int", "string"]}]}', map());
-     STRUCT<u: STRUCT<member0: INT, member1: STRING> NOT NULL>
+  usage: |2-
+    
+        schema_of_avro(jsonFormatSchema, options) - Returns schema in the DDL format of the avro schema in JSON string format.
+        
+  examples: |2-
+    
+        Examples:
+          > SELECT schema_of_avro('{"type": "record", "name": "struct", "fields": [{"name": "u", "type": ["int", "string"]}]}', map());
+           STRUCT<u: STRUCT<member0: INT, member1: STRING> NOT NULL>
+      
   since: "4.0.0"
-- name: session_user
+
+- name: "session_user"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.CurrentUser"
   signatures:
     - "session_user()"
-  description: "user name of current execution context."
-  examples: |
-    > SELECT session_user();
-     mockingjay
+  usage: "session_user() - user name of current execution context."
+  examples: |2-
+    
+        Examples:
+          > SELECT session_user();
+           mockingjay
+      
   since: "4.0.0"
-- name: spark_partition_id
+
+- name: "spark_partition_id"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.SparkPartitionID"
   signatures:
     - "spark_partition_id()"
-  description: "Returns the current partition id."
-  examples: |
-    > SELECT spark_partition_id();
-     0
+  usage: "spark_partition_id() - Returns the current partition id."
+  examples: |2-
+    
+        Examples:
+          > SELECT spark_partition_id();
+           0
+      
   since: "1.4.0"
-- name: theta_difference
+
+- name: "theta_difference"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ThetaDifference"
   signatures:
     - "theta_difference(first, second)"
-  description: "Subtracts two binary representations of Datasketches ThetaSketch objects from two input columns using a ThetaSketch AnotB object."
-  examples: |
-    > SELECT theta_sketch_estimate(theta_difference(theta_sketch_agg(col1), theta_sketch_agg(col2))) FROM VALUES (5, 4), (1, 4), (2, 5), (2, 5), (3, 1) tab(col1, col2);
-     2
+  usage: |2-
+    
+        theta_difference(first, second) - Subtracts two binary representations of
+        Datasketches ThetaSketch objects from two input columns using a
+        ThetaSketch AnotB object. 
+  examples: |2-
+    
+        Examples:
+          > SELECT theta_sketch_estimate(theta_difference(theta_sketch_agg(col1), theta_sketch_agg(col2))) FROM VALUES (5, 4), (1, 4), (2, 5), (2, 5), (3, 1) tab(col1, col2);
+           2
+      
   since: "4.1.0"
-- name: theta_intersection
+
+- name: "theta_intersection"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ThetaIntersection"
   signatures:
     - "theta_intersection(first, second)"
-  description: "Intersects two binary representations of Datasketches ThetaSketch objects from two input columns using a ThetaSketch Intersect object."
-  examples: |
-    > SELECT theta_sketch_estimate(theta_intersection(theta_sketch_agg(col1), theta_sketch_agg(col2))) FROM VALUES (5, 4), (1, 4), (2, 5), (2, 5), (3, 1) tab(col1, col2);
-     2
+  usage: |2-
+    
+        theta_intersection(first, second) - Intersects two binary representations of
+        Datasketches ThetaSketch objects from two input columns using a
+        ThetaSketch Intersect object. 
+  examples: |2-
+    
+        Examples:
+          > SELECT theta_sketch_estimate(theta_intersection(theta_sketch_agg(col1), theta_sketch_agg(col2))) FROM VALUES (5, 4), (1, 4), (2, 5), (2, 5), (3, 1) tab(col1, col2);
+           2
+      
   since: "4.1.0"
-- name: theta_sketch_estimate
+
+- name: "theta_sketch_estimate"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ThetaSketchEstimate"
   signatures:
     - "theta_sketch_estimate(expr)"
-  description: "Returns the estimated number of unique values given the binary representation of a Datasketches ThetaSketch."
-  examples: |
-    > SELECT theta_sketch_estimate(theta_sketch_agg(col)) FROM VALUES (1), (1), (2), (2), (3) tab(col);
-     3
+  usage: |2-
+    
+        theta_sketch_estimate(expr) - Returns the estimated number of unique values
+        given the binary representation of a Datasketches ThetaSketch. 
+  examples: |2-
+    
+        Examples:
+          > SELECT theta_sketch_estimate(theta_sketch_agg(col)) FROM VALUES (1), (1), (2), (2), (3) tab(col);
+           3
+      
   since: "4.1.0"
-- name: theta_union
+
+- name: "theta_union"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ThetaUnion"
   signatures:
     - "theta_union(first, second, lgNomEntries)"
-  description: "Merges two binary representations of Datasketches ThetaSketch objects using a ThetaSketch Union object. Users can set lgNomEntries to a value between 4 and 26 to find the union of sketches with different union buffer size values (defaults to 12)."
-  examples: |
-    > SELECT theta_sketch_estimate(theta_union(theta_sketch_agg(col1), theta_sketch_agg(col2))) FROM VALUES (1, 4), (1, 4), (2, 5), (2, 5), (3, 6) tab(col1, col2);
-     6
+  usage: |2-
+    
+        theta_union(first, second, lgNomEntries) - Merges two binary representations of
+        Datasketches ThetaSketch objects using a ThetaSketch Union object. Users can set
+        lgNomEntries to a value between 4 and 26 to find the union of sketches with different
+        union buffer size values (defaults to 12). 
+  examples: |2-
+    
+        Examples:
+          > SELECT theta_sketch_estimate(theta_union(theta_sketch_agg(col1), theta_sketch_agg(col2))) FROM VALUES (1, 4), (1, 4), (2, 5), (2, 5), (3, 6) tab(col1, col2);
+           6
+      
   since: "4.1.0"
-- name: to_avro
+
+- name: "to_avro"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ToAvro"
   signatures:
     - "to_avro(child[, jsonFormatSchema])"
-  description: "Converts a Catalyst binary input value into its corresponding Avro format result."
-  examples: |
-    > SELECT to_avro(s, '{"type": "record", "name": "struct", "fields": [{ "name": "u", "type": ["int","string"] }]}') IS NULL FROM (SELECT NULL AS s);
-     [true]
-    > SELECT to_avro(s) IS NULL FROM (SELECT NULL AS s);
-     [true]
+  usage: |2-
+    
+        to_avro(child[, jsonFormatSchema]) - Converts a Catalyst binary input value into its
+          corresponding Avro format result.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT to_avro(s, '{"type": "record", "name": "struct", "fields": [{ "name": "u", "type": ["int","string"] }]}') IS NULL FROM (SELECT NULL AS s);
+           [true]
+          > SELECT to_avro(s) IS NULL FROM (SELECT NULL AS s);
+           [true]
+      
   since: "4.0.0"
-- name: to_protobuf
+
+- name: "to_protobuf"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ToProtobuf"
   signatures:
     - "to_protobuf(child, messageName, descFilePath, options)"
-  description: "Converts a Catalyst binary input value into its corresponding Protobuf format result."
-  examples: |
-    > SELECT to_protobuf(s, 'Person', '/path/to/descriptor.desc', map('emitDefaultValues', 'true')) IS NULL FROM (SELECT NULL AS s);
-     [true]
+  usage: |2-
+    
+        to_protobuf(child, messageName, descFilePath, options) - Converts a Catalyst binary input value into its corresponding
+          Protobuf format result.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT to_protobuf(s, 'Person', '/path/to/descriptor.desc', map('emitDefaultValues', 'true')) IS NULL FROM (SELECT NULL AS s);
+           [true]
+      
   since: "4.0.0"
-- name: try_aes_decrypt
+
+- name: "try_aes_decrypt"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.TryAesDecrypt"
   signatures:
     - "try_aes_decrypt(expr, key[, mode[, padding[, aad]]])"
-  description: "This is a special version of aes_decrypt that performs the same operation, but returns a NULL value instead of raising an error if the decryption cannot be performed."
-  examples: |
-    > SELECT try_aes_decrypt(unhex('6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), '0000111122223333', 'GCM');
-     Spark SQL
-    > SELECT try_aes_decrypt(unhex('----------468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), '0000111122223333', 'GCM');
-     NULL
+  usage: "try_aes_decrypt(expr, key[, mode[, padding[, aad]]]) - This is a special version of `aes_decrypt` that performs the same operation, but returns a NULL value instead of raising an error if the decryption cannot be performed."
+  examples: |2-
+    
+        Examples:
+          > SELECT try_aes_decrypt(unhex('6E7CA17BBB468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), '0000111122223333', 'GCM');
+           Spark SQL
+          > SELECT try_aes_decrypt(unhex('----------468D3084B5744BCA729FB7B2B7BCB8E4472847D02670489D95FA97DBBA7D3210'), '0000111122223333', 'GCM');
+           NULL
+      
   since: "3.5.0"
-- name: try_aes_encrypt
+
+- name: "try_aes_encrypt"
+  scope: "sail_extension"
   signatures:
     - "try_aes_encrypt(expr, key[, mode[, padding[, iv[, aad]]]])"
-  description: "This is a special version of aes_encrypt that performs the same operation, but returns a NULL value instead of raising an error if encryption cannot be performed."
-- name: try_reflect
+  usage: "try_aes_encrypt(expr, key[, mode[, padding[, iv[, aad]]]]) - This is a special version of aes_encrypt that performs the same operation, but returns a NULL value instead of raising an error if encryption cannot be performed."
+
+- name: "try_reflect"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.TryReflect"
   signatures:
     - "try_reflect(class, method[, arg1[, arg2 ..]])"
-  description: "This is a special version of reflect that performs the same operation, but returns a NULL value instead of raising an error if the invoke method thrown exception."
-  examples: |
-    > SELECT try_reflect('java.util.UUID', 'randomUUID');
-     c33fb387-8500-4bfa-81d2-6e0e3e930df2
-    > SELECT try_reflect('java.util.UUID', 'fromString', 'a5cf6c42-0c85-418f-af6c-3e4e5b1328f2');
-     a5cf6c42-0c85-418f-af6c-3e4e5b1328f2
-    > SELECT try_reflect('java.net.URLDecoder', 'decode', '%');
-     NULL
+  usage: "try_reflect(class, method[, arg1[, arg2 ..]]) - This is a special version of `reflect` that performs the same operation, but returns a NULL value instead of raising an error if the invoke method thrown exception."
+  examples: |2-
+    
+        Examples:
+          > SELECT try_reflect('java.util.UUID', 'randomUUID');
+           c33fb387-8500-4bfa-81d2-6e0e3e930df2
+          > SELECT try_reflect('java.util.UUID', 'fromString', 'a5cf6c42-0c85-418f-af6c-3e4e5b1328f2');
+           a5cf6c42-0c85-418f-af6c-3e4e5b1328f2
+          > SELECT try_reflect('java.net.URLDecoder', 'decode', '%');
+           NULL
+      
   since: "4.0.0"
-- name: typeof
+
+- name: "typeof"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.TypeOf"
   signatures:
     - "typeof(expr)"
-  description: "Return DDL-formatted type string for the data type of the input."
-  examples: |
-    > SELECT typeof(1);
-     int
-    > SELECT typeof(array(1));
-     array<int>
+  usage: "typeof(expr) - Return DDL-formatted type string for the data type of the input."
+  examples: |2-
+    
+        Examples:
+          > SELECT typeof(1);
+           int
+          > SELECT typeof(array(1));
+           array<int>
+      
   since: "3.0.0"
-- name: user
+
+- name: "user"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.CurrentUser"
   signatures:
     - "user()"
-  description: "user name of current execution context."
-  examples: |
-    > SELECT user();
-     mockingjay
+  usage: "user() - user name of current execution context."
+  examples: |2-
+    
+        Examples:
+          > SELECT user();
+           mockingjay
+      
   since: "3.4.0"
-- name: uuid
+
+- name: "uuid"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Uuid"
   signatures:
     - "uuid()"
-  description: "Returns an universally unique identifier (UUID) string. The value is returned as a canonical UUID 36-character string."
-  examples: |
-    > SELECT uuid();
-     46707d92-02f4-4817-8116-a4c3b23e6266
-  note: "The function is non-deterministic."
+  usage: "uuid() - Returns an universally unique identifier (UUID) string. The value is returned as a canonical UUID 36-character string."
+  examples: |2-
+    
+        Examples:
+          > SELECT uuid();
+           46707d92-02f4-4817-8116-a4c3b23e6266
+      
+  note: |2-
+    
+        The function is non-deterministic.
+      
   since: "2.3.0"
-- name: version
+
+- name: "version"
+  scope: "sql_builtin"
+  group: "misc_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.SparkVersion"
   signatures:
     - "version()"
-  description: "Returns the Spark version. The string contains 2 fields, the first being a release version and the second being a git revision."
-  examples: |
-    > SELECT version();
-     3.1.0 a6d6ea3efedbad14d99c24143834cd4e2e52fb40
+  usage: "version() - Returns the Spark version. The string contains 2 fields, the first being a release version and the second being a git revision."
+  examples: |2-
+    
+        Examples:
+          > SELECT version();
+           3.1.0 a6d6ea3efedbad14d99c24143834cd4e2e52fb40
+      
   since: "3.0.0"
+

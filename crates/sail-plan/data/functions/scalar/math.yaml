@@ -1,736 +1,1349 @@
 - name: "%"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Remainder"
   signatures:
     - "expr1 % expr2, or mod(expr1, expr2)"
-  description: "Returns the remainder after expr1/expr2."
-  examples: |
-    > SELECT 2 % 1.8;
-     0.2
-    > SELECT MOD(2, 1.8);
-     0.2
+  usage: "expr1 % expr2, or mod(expr1, expr2) - Returns the remainder after `expr1`/`expr2`."
+  examples: |2-
+    
+        Examples:
+          > SELECT 2 % 1.8;
+           0.2
+          > SELECT MOD(2, 1.8);
+           0.2
+      
   since: "1.0.0"
+
 - name: "*"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Multiply"
   signatures:
     - "expr1 * expr2"
-  description: "Returns expr1*expr2."
-  examples: |
-    > SELECT 2 * 3;
-     6
+  usage: "expr1 * expr2 - Returns `expr1`*`expr2`."
+  examples: |2-
+    
+        Examples:
+          > SELECT 2 * 3;
+           6
+      
   since: "1.0.0"
+
 - name: "+"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Add"
   signatures:
     - "expr1 + expr2"
-  description: "Returns expr1+expr2."
-  examples: |
-    > SELECT 1 + 2;
-     3
+  usage: "expr1 + expr2 - Returns `expr1`+`expr2`."
+  examples: |2-
+    
+        Examples:
+          > SELECT 1 + 2;
+           3
+      
   since: "1.0.0"
+
 - name: "-"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Subtract"
   signatures:
     - "expr1 - expr2"
-  description: "Returns expr1-expr2."
-  examples: |
-    > SELECT 2 - 1;
-     1
+  usage: "expr1 - expr2 - Returns `expr1`-`expr2`."
+  examples: |2-
+    
+        Examples:
+          > SELECT 2 - 1;
+           1
+      
   since: "1.0.0"
+
 - name: "/"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Divide"
   signatures:
     - "expr1 / expr2"
-  description: "Returns expr1/expr2. It always performs floating point division."
-  examples: |
-    > SELECT 3 / 2;
-     1.5
-    > SELECT 2L / 2L;
-     1.0
+  usage: "expr1 / expr2 - Returns `expr1`/`expr2`. It always performs floating point division."
+  examples: |2-
+    
+        Examples:
+          > SELECT 3 / 2;
+           1.5
+          > SELECT 2L / 2L;
+           1.0
+      
   since: "1.0.0"
-- name: abs
+
+- name: "abs"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Abs"
   signatures:
     - "abs(expr)"
-  description: "Returns the absolute value of the numeric or interval value."
-  examples: |
-    > SELECT abs(-1);
-     1
-    > SELECT abs(INTERVAL -'1-1' YEAR TO MONTH);
-     1-1
+  usage: "abs(expr) - Returns the absolute value of the numeric or interval value."
+  examples: |2-
+    
+        Examples:
+          > SELECT abs(-1);
+           1
+          > SELECT abs(INTERVAL -'1-1' YEAR TO MONTH);
+           1-1
+      
   since: "1.2.0"
-- name: acos
+
+- name: "acos"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Acos"
   signatures:
     - "acos(expr)"
-  description: "Returns the inverse cosine (a.k.a. arc cosine) of expr, as if computed by java.lang.Math.acos."
-  examples: |
-    > SELECT acos(1);
-     0.0
-    > SELECT acos(2);
-     NaN
+  usage: |2-
+    
+        acos(expr) - Returns the inverse cosine (a.k.a. arc cosine) of `expr`, as if computed by
+          `java.lang.Math.acos`.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT acos(1);
+           0.0
+          > SELECT acos(2);
+           NaN
+      
   since: "1.4.0"
-- name: acosh
+
+- name: "acosh"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Acosh"
   signatures:
     - "acosh(expr)"
-  description: "Returns inverse hyperbolic cosine of expr."
-  examples: |
-    > SELECT acosh(1);
-     0.0
-    > SELECT acosh(0);
-     NaN
+  usage: |2-
+    
+        acosh(expr) - Returns inverse hyperbolic cosine of `expr`.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT acosh(1);
+           0.0
+          > SELECT acosh(0);
+           NaN
+      
   since: "3.0.0"
-- name: asin
+
+- name: "asin"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Asin"
   signatures:
     - "asin(expr)"
-  description: "Returns the inverse sine (a.k.a. arc sine) the arc sin of expr, as if computed by java.lang.Math.asin."
-  examples: |
-    > SELECT asin(0);
-     0.0
-    > SELECT asin(2);
-     NaN
+  usage: |2-
+    
+        asin(expr) - Returns the inverse sine (a.k.a. arc sine) the arc sin of `expr`,
+          as if computed by `java.lang.Math.asin`.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT asin(0);
+           0.0
+          > SELECT asin(2);
+           NaN
+      
   since: "1.4.0"
-- name: asinh
+
+- name: "asinh"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Asinh"
   signatures:
     - "asinh(expr)"
-  description: "Returns inverse hyperbolic sine of expr."
-  examples: |
-    > SELECT asinh(0);
-     0.0
+  usage: |2-
+    
+        asinh(expr) - Returns inverse hyperbolic sine of `expr`.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT asinh(0);
+           0.0
+      
   since: "3.0.0"
-- name: atan
+
+- name: "atan"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Atan"
   signatures:
     - "atan(expr)"
-  description: "Returns the inverse tangent (a.k.a. arc tangent) of expr, as if computed by java.lang.Math.atan"
-  examples: |
-    > SELECT atan(0);
-     0.0
+  usage: |2-
+    
+        atan(expr) - Returns the inverse tangent (a.k.a. arc tangent) of `expr`, as if computed by
+          `java.lang.Math.atan`
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT atan(0);
+           0.0
+      
   since: "1.4.0"
-- name: atan2
+
+- name: "atan2"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Atan2"
   signatures:
     - "atan2(exprY, exprX)"
-  description: "Returns the angle in radians between the positive x-axis of a plane and the point given by the coordinates (exprX, exprY), as if computed by java.lang.Math.atan2."
-  examples: |
-    > SELECT atan2(0, 0);
-     0.0
+  usage: |2-
+    
+        atan2(exprY, exprX) - Returns the angle in radians between the positive x-axis of a plane
+          and the point given by the coordinates (`exprX`, `exprY`), as if computed by
+          `java.lang.Math.atan2`.
+      
+  arguments: |2-
+    
+        Arguments:
+          * exprY - coordinate on y-axis
+          * exprX - coordinate on x-axis
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT atan2(0, 0);
+           0.0
+      
   since: "1.4.0"
-- name: atanh
+
+- name: "atanh"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Atanh"
   signatures:
     - "atanh(expr)"
-  description: "Returns inverse hyperbolic tangent of expr."
-  examples: |
-    > SELECT atanh(0);
-     0.0
-    > SELECT atanh(2);
-     NaN
+  usage: |2-
+    
+        atanh(expr) - Returns inverse hyperbolic tangent of `expr`.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT atanh(0);
+           0.0
+          > SELECT atanh(2);
+           NaN
+      
   since: "3.0.0"
-- name: bin
+
+- name: "bin"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Bin"
   signatures:
     - "bin(expr)"
-  description: "Returns the string representation of the long value expr represented in binary."
-  examples: |
-    > SELECT bin(13);
-     1101
-    > SELECT bin(-13);
-     1111111111111111111111111111111111111111111111111111111111110011
-    > SELECT bin(13.3);
-     1101
+  usage: "bin(expr) - Returns the string representation of the long value `expr` represented in binary."
+  examples: |2-
+    
+        Examples:
+          > SELECT bin(13);
+           1101
+          > SELECT bin(-13);
+           1111111111111111111111111111111111111111111111111111111111110011
+          > SELECT bin(13.3);
+           1101
+      
   since: "1.5.0"
-- name: bround
+
+- name: "bround"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.BRound"
   signatures:
     - "bround(expr, d)"
-  description: "Returns expr rounded to d decimal places using HALF_EVEN rounding mode."
-  examples: |
-    > SELECT bround(2.5, 0);
-     2
-    > SELECT bround(25, -1);
-     20
+  usage: "bround(expr, d) - Returns `expr` rounded to `d` decimal places using HALF_EVEN rounding mode."
+  examples: |2-
+    
+        Examples:
+          > SELECT bround(2.5, 0);
+           2
+          > SELECT bround(25, -1);
+           20
+      
   since: "2.0.0"
-- name: cbrt
+
+- name: "cbrt"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Cbrt"
   signatures:
     - "cbrt(expr)"
-  description: "Returns the cube root of expr."
-  examples: |
-    > SELECT cbrt(27.0);
-     3.0
+  usage: "cbrt(expr) - Returns the cube root of `expr`."
+  examples: |2-
+    
+        Examples:
+          > SELECT cbrt(27.0);
+           3.0
+      
   since: "1.4.0"
-- name: ceil
+
+- name: "ceil"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.CeilExpressionBuilder"
   signatures:
     - "ceil(expr[, scale])"
-  description: "Returns the smallest number after rounding up that is not smaller than expr. An optional scale parameter can be specified to control the rounding behavior."
-  examples: |
-    > SELECT ceil(-0.1);
-     0
-    > SELECT ceil(5);
-     5
-    > SELECT ceil(3.1411, 3);
-     3.142
-    > SELECT ceil(3.1411, -3);
-     1000
+  usage: "ceil(expr[, scale]) - Returns the smallest number after rounding up that is not smaller than `expr`. An optional `scale` parameter can be specified to control the rounding behavior."
+  examples: |2-
+    
+        Examples:
+          > SELECT ceil(-0.1);
+           0
+          > SELECT ceil(5);
+           5
+          > SELECT ceil(3.1411, 3);
+           3.142
+          > SELECT ceil(3.1411, -3);
+           1000
+      
   since: "3.3.0"
-- name: ceiling
+
+- name: "ceiling"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.CeilExpressionBuilder"
   signatures:
     - "ceiling(expr[, scale])"
-  description: "Returns the smallest number after rounding up that is not smaller than expr. An optional scale parameter can be specified to control the rounding behavior."
-  examples: |
-    > SELECT ceiling(-0.1);
-     0
-    > SELECT ceiling(5);
-     5
-    > SELECT ceiling(3.1411, 3);
-     3.142
-    > SELECT ceiling(3.1411, -3);
-     1000
+  usage: "ceiling(expr[, scale]) - Returns the smallest number after rounding up that is not smaller than `expr`. An optional `scale` parameter can be specified to control the rounding behavior."
+  examples: |2-
+    
+        Examples:
+          > SELECT ceiling(-0.1);
+           0
+          > SELECT ceiling(5);
+           5
+          > SELECT ceiling(3.1411, 3);
+           3.142
+          > SELECT ceiling(3.1411, -3);
+           1000
+      
   since: "3.3.0"
-- name: conv
+
+- name: "conv"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Conv"
   signatures:
     - "conv(num, from_base, to_base)"
-  description: "Convert num from from_base to to_base."
-  examples: |
-    > SELECT conv('100', 2, 10);
-     4
-    > SELECT conv(-10, 16, -10);
-     -16
+  usage: "conv(num, from_base, to_base) - Convert `num` from `from_base` to `to_base`."
+  examples: |2-
+    
+        Examples:
+          > SELECT conv('100', 2, 10);
+           4
+          > SELECT conv(-10, 16, -10);
+           -16
+      
   since: "1.5.0"
-- name: cos
+
+- name: "cos"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Cos"
   signatures:
     - "cos(expr)"
-  description: "Returns the cosine of expr, as if computed by java.lang.Math.cos."
-  examples: |
-    > SELECT cos(0);
-     1.0
+  usage: |2-
+    
+        cos(expr) - Returns the cosine of `expr`, as if computed by
+          `java.lang.Math.cos`.
+      
+  arguments: |2-
+    
+        Arguments:
+          * expr - angle in radians
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT cos(0);
+           1.0
+      
   since: "1.4.0"
-- name: cosh
+
+- name: "cosh"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Cosh"
   signatures:
     - "cosh(expr)"
-  description: "Returns the hyperbolic cosine of expr, as if computed by java.lang.Math.cosh."
-  examples: |
-    > SELECT cosh(0);
-     1.0
+  usage: |2-
+    
+          cosh(expr) - Returns the hyperbolic cosine of `expr`, as if computed by
+            `java.lang.Math.cosh`.
+      
+  arguments: |2-
+    
+        Arguments:
+          * expr - hyperbolic angle
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT cosh(0);
+           1.0
+      
   since: "1.4.0"
-- name: cot
+
+- name: "cot"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Cot"
   signatures:
     - "cot(expr)"
-  description: "Returns the cotangent of expr, as if computed by 1/java.lang.Math.tan."
-  examples: |
-    > SELECT cot(1);
-     0.6420926159343306
+  usage: |2-
+    
+        cot(expr) - Returns the cotangent of `expr`, as if computed by `1/java.lang.Math.tan`.
+      
+  arguments: |2-
+    
+        Arguments:
+          * expr - angle in radians
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT cot(1);
+           0.6420926159343306
+      
   since: "2.3.0"
-- name: csc
+
+- name: "csc"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Csc"
   signatures:
     - "csc(expr)"
-  description: "Returns the cosecant of expr, as if computed by 1/java.lang.Math.sin."
-  examples: |
-    > SELECT csc(1);
-     1.1883951057781212
+  usage: |2-
+    
+        csc(expr) - Returns the cosecant of `expr`, as if computed by `1/java.lang.Math.sin`.
+      
+  arguments: |2-
+    
+        Arguments:
+          * expr - angle in radians
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT csc(1);
+           1.1883951057781212
+      
   since: "3.3.0"
-- name: degrees
+
+- name: "degrees"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ToDegrees"
   signatures:
     - "degrees(expr)"
-  description: "Converts radians to degrees."
-  examples: |
-    > SELECT degrees(3.141592653589793);
-     180.0
+  usage: "degrees(expr) - Converts radians to degrees."
+  arguments: |2-
+    
+        Arguments:
+          * expr - angle in radians
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT degrees(3.141592653589793);
+           180.0
+      
   since: "1.4.0"
-- name: div
+
+- name: "div"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.IntegralDivide"
   signatures:
     - "expr1 div expr2"
-  description: "Divide expr1 by expr2. It returns NULL if an operand is NULL or expr2 is 0. The result is casted to long."
-  examples: |
-    > SELECT 3 div 2;
-     1
-    > SELECT INTERVAL '1-1' YEAR TO MONTH div INTERVAL '-1' MONTH;
-     -13
+  usage: "expr1 div expr2 - Divide `expr1` by `expr2`. It returns NULL if an operand is NULL or `expr2` is 0. The result is casted to long."
+  examples: |2-
+    
+        Examples:
+          > SELECT 3 div 2;
+           1
+          > SELECT INTERVAL '1-1' YEAR TO MONTH div INTERVAL '-1' MONTH;
+           -13
+      
   since: "3.0.0"
-- name: e
+
+- name: "e"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.EulerNumber"
   signatures:
     - "e()"
-  description: "Returns Euler's number, e."
-  examples: |
-    > SELECT e();
-     2.718281828459045
+  usage: "e() - Returns Euler's number, e."
+  examples: |2-
+    
+        Examples:
+          > SELECT e();
+           2.718281828459045
+      
   since: "1.5.0"
-- name: exp
+
+- name: "exp"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Exp"
   signatures:
     - "exp(expr)"
-  description: "Returns e to the power of expr."
-  examples: |
-    > SELECT exp(0);
-     1.0
+  usage: "exp(expr) - Returns e to the power of `expr`."
+  examples: |2-
+    
+        Examples:
+          > SELECT exp(0);
+           1.0
+      
   since: "1.4.0"
-- name: expm1
+
+- name: "expm1"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Expm1"
   signatures:
     - "expm1(expr)"
-  description: "Returns exp(expr) - 1."
-  examples: |
-    > SELECT expm1(0);
-     0.0
+  usage: "expm1(expr) - Returns exp(`expr`) - 1."
+  examples: |2-
+    
+        Examples:
+          > SELECT expm1(0);
+           0.0
+      
   since: "1.4.0"
-- name: factorial
+
+- name: "factorial"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Factorial"
   signatures:
     - "factorial(expr)"
-  description: "Returns the factorial of expr. expr is [0..20]. Otherwise, null."
-  examples: |
-    > SELECT factorial(5);
-     120
+  usage: "factorial(expr) - Returns the factorial of `expr`. `expr` is [0..20]. Otherwise, null."
+  examples: |2-
+    
+        Examples:
+          > SELECT factorial(5);
+           120
+      
   since: "1.5.0"
-- name: floor
+
+- name: "floor"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.FloorExpressionBuilder"
   signatures:
     - "floor(expr[, scale])"
-  description: "Returns the largest number after rounding down that is not greater than expr. An optional scale parameter can be specified to control the rounding behavior."
-  examples: |
-    > SELECT floor(-0.1);
-     -1
-    > SELECT floor(5);
-     5
-    > SELECT floor(3.1411, 3);
-     3.141
-    > SELECT floor(3.1411, -3);
-     0
+  usage: " floor(expr[, scale]) - Returns the largest number after rounding down that is not greater than `expr`. An optional `scale` parameter can be specified to control the rounding behavior."
+  examples: |2-
+    
+        Examples:
+          > SELECT floor(-0.1);
+           -1
+          > SELECT floor(5);
+           5
+          > SELECT floor(3.1411, 3);
+           3.141
+          > SELECT floor(3.1411, -3);
+           0
+      
   since: "3.3.0"
-- name: greatest
+
+- name: "greatest"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Greatest"
   signatures:
     - "greatest(expr, ...)"
-  description: "Returns the greatest value of all parameters, skipping null values."
-  examples: |
-    > SELECT greatest(10, 9, 2, 4, 3);
-     10
+  usage: "greatest(expr, ...) - Returns the greatest value of all parameters, skipping null values."
+  examples: |2-
+    
+        Examples:
+          > SELECT greatest(10, 9, 2, 4, 3);
+           10
+      
   since: "1.5.0"
-- name: hex
+
+- name: "hex"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Hex"
   signatures:
     - "hex(expr)"
-  description: "Converts expr to hexadecimal."
-  examples: |
-    > SELECT hex(17);
-     11
-    > SELECT hex('Spark SQL');
-     537061726B2053514C
+  usage: "hex(expr) - Converts `expr` to hexadecimal."
+  examples: |2-
+    
+        Examples:
+          > SELECT hex(17);
+           11
+          > SELECT hex('Spark SQL');
+           537061726B2053514C
+      
   since: "1.5.0"
-- name: hypot
+
+- name: "hypot"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Hypot"
   signatures:
     - "hypot(expr1, expr2)"
-  description: "Returns sqrt(expr1\u00b2 + expr2\u00b2)."
-  examples: |
-    > SELECT hypot(3, 4);
-     5.0
+  usage: "hypot(expr1, expr2) - Returns sqrt(`expr1`² + `expr2`²)."
+  examples: |2-
+    
+        Examples:
+          > SELECT hypot(3, 4);
+           5.0
+      
   since: "1.4.0"
-- name: least
+
+- name: "least"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Least"
   signatures:
     - "least(expr, ...)"
-  description: "Returns the least value of all parameters, skipping null values."
-  examples: |
-    > SELECT least(10, 9, 2, 4, 3);
-     2
+  usage: "least(expr, ...) - Returns the least value of all parameters, skipping null values."
+  examples: |2-
+    
+        Examples:
+          > SELECT least(10, 9, 2, 4, 3);
+           2
+      
   since: "1.5.0"
-- name: ln
+
+- name: "ln"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Log"
   signatures:
     - "ln(expr)"
-  description: "Returns the natural logarithm (base e) of expr."
-  examples: |
-    > SELECT ln(1);
-     0.0
+  usage: "ln(expr) - Returns the natural logarithm (base e) of `expr`."
+  examples: |2-
+    
+        Examples:
+          > SELECT ln(1);
+           0.0
+      
   since: "1.4.0"
-- name: log
+
+- name: "log"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Logarithm"
   signatures:
     - "log(base, expr)"
-  description: "Returns the logarithm of expr with base."
-  examples: |
-    > SELECT log(10, 100);
-     2.0
+  usage: "log(base, expr) - Returns the logarithm of `expr` with `base`."
+  examples: |2-
+    
+        Examples:
+          > SELECT log(10, 100);
+           2.0
+      
   since: "1.5.0"
-- name: log10
+
+- name: "log10"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Log10"
   signatures:
     - "log10(expr)"
-  description: "Returns the logarithm of expr with base 10."
-  examples: |
-    > SELECT log10(10);
-     1.0
+  usage: "log10(expr) - Returns the logarithm of `expr` with base 10."
+  examples: |2-
+    
+        Examples:
+          > SELECT log10(10);
+           1.0
+      
   since: "1.4.0"
-- name: log1p
+
+- name: "log1p"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Log1p"
   signatures:
     - "log1p(expr)"
-  description: "Returns log(1 + expr)."
-  examples: |
-    > SELECT log1p(0);
-     0.0
+  usage: "log1p(expr) - Returns log(1 + `expr`)."
+  examples: |2-
+    
+        Examples:
+          > SELECT log1p(0);
+           0.0
+      
   since: "1.4.0"
-- name: log2
+
+- name: "log2"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Log2"
   signatures:
     - "log2(expr)"
-  description: "Returns the logarithm of expr with base 2."
-  examples: |
-    > SELECT log2(2);
-     1.0
+  usage: "log2(expr) - Returns the logarithm of `expr` with base 2."
+  examples: |2-
+    
+        Examples:
+          > SELECT log2(2);
+           1.0
+      
   since: "1.4.0"
-- name: mod
+
+- name: "mod"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Remainder"
   signatures:
     - "expr1 % expr2, or mod(expr1, expr2)"
-  description: "Returns the remainder after expr1/expr2."
-  examples: |
-    > SELECT 2 % 1.8;
-     0.2
-    > SELECT MOD(2, 1.8);
-     0.2
+  usage: "expr1 % expr2, or mod(expr1, expr2) - Returns the remainder after `expr1`/`expr2`."
+  examples: |2-
+    
+        Examples:
+          > SELECT 2 % 1.8;
+           0.2
+          > SELECT MOD(2, 1.8);
+           0.2
+      
   since: "2.3.0"
-- name: negative
+
+- name: "negative"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.UnaryMinus"
   signatures:
     - "negative(expr)"
-  description: "Returns the negated value of expr."
-  examples: |
-    > SELECT negative(1);
-     -1
+  usage: "negative(expr) - Returns the negated value of `expr`."
+  examples: |2-
+    
+        Examples:
+          > SELECT negative(1);
+           -1
+      
   since: "1.0.0"
-- name: pi
+
+- name: "pi"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Pi"
   signatures:
     - "pi()"
-  description: "Returns pi."
-  examples: |
-    > SELECT pi();
-     3.141592653589793
+  usage: "pi() - Returns pi."
+  examples: |2-
+    
+        Examples:
+          > SELECT pi();
+           3.141592653589793
+      
   since: "1.5.0"
-- name: pmod
+
+- name: "pmod"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Pmod"
   signatures:
     - "pmod(expr1, expr2)"
-  description: "Returns the positive value of expr1 mod expr2."
-  examples: |
-    > SELECT pmod(10, 3);
-     1
-    > SELECT pmod(-10, 3);
-     2
+  usage: "pmod(expr1, expr2) - Returns the positive value of `expr1` mod `expr2`."
+  examples: |2-
+    
+        Examples:
+          > SELECT pmod(10, 3);
+           1
+          > SELECT pmod(-10, 3);
+           2
+      
   since: "1.5.0"
-- name: positive
+
+- name: "positive"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.UnaryPositive"
   signatures:
     - "positive(expr)"
-  description: "Returns the value of expr."
-  examples: |
-    > SELECT positive(1);
-     1
+  usage: "positive(expr) - Returns the value of `expr`."
+  examples: |2-
+    
+        Examples:
+          > SELECT positive(1);
+           1
+      
   since: "1.5.0"
-- name: pow
+
+- name: "pow"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Pow"
   signatures:
     - "pow(expr1, expr2)"
-  description: "Raises expr1 to the power of expr2."
-  examples: |
-    > SELECT pow(2, 3);
-     8.0
+  usage: "pow(expr1, expr2) - Raises `expr1` to the power of `expr2`."
+  examples: |2-
+    
+        Examples:
+          > SELECT pow(2, 3);
+           8.0
+      
   since: "1.4.0"
-- name: power
+
+- name: "power"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Pow"
   signatures:
     - "power(expr1, expr2)"
-  description: "Raises expr1 to the power of expr2."
-  examples: |
-    > SELECT power(2, 3);
-     8.0
+  usage: "power(expr1, expr2) - Raises `expr1` to the power of `expr2`."
+  examples: |2-
+    
+        Examples:
+          > SELECT power(2, 3);
+           8.0
+      
   since: "1.4.0"
-- name: radians
+
+- name: "radians"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ToRadians"
   signatures:
     - "radians(expr)"
-  description: "Converts degrees to radians."
-  examples: |
-    > SELECT radians(180);
-     3.141592653589793
+  usage: "radians(expr) - Converts degrees to radians."
+  arguments: |2-
+    
+        Arguments:
+          * expr - angle in degrees
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT radians(180);
+           3.141592653589793
+      
   since: "1.4.0"
-- name: rand
+
+- name: "rand"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Rand"
   signatures:
     - "rand([seed])"
-  description: "Returns a random value with independent and identically distributed (i.i.d.) uniformly distributed values in [0, 1)."
-  examples: |
-    > SELECT rand();
-     0.9629742951434543
-    > SELECT rand(0);
-     0.7604953758285915
-    > SELECT rand(null);
-     0.7604953758285915
-  note: "The function is non-deterministic in general case."
+  usage: "rand([seed]) - Returns a random value with independent and identically distributed (i.i.d.) uniformly distributed values in [0, 1)."
+  examples: |2-
+    
+        Examples:
+          > SELECT rand();
+           0.9629742951434543
+          > SELECT rand(0);
+           0.7604953758285915
+          > SELECT rand(null);
+           0.7604953758285915
+      
+  note: |2-
+    
+        The function is non-deterministic in general case.
+      
   since: "1.5.0"
-- name: randn
+
+- name: "randn"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Randn"
   signatures:
     - "randn([seed])"
-  description: "Returns a random value with independent and identically distributed (i.i.d.) values drawn from the standard normal distribution."
-  examples: |
-    > SELECT randn();
-     -0.3254147983080288
-    > SELECT randn(0);
-     1.6034991609278433
-    > SELECT randn(null);
-     1.6034991609278433
-  note: "The function is non-deterministic in general case."
+  usage: "randn([seed]) - Returns a random value with independent and identically distributed (i.i.d.) values drawn from the standard normal distribution."
+  examples: |2-
+    
+        Examples:
+          > SELECT randn();
+           -0.3254147983080288
+          > SELECT randn(0);
+           1.6034991609278433
+          > SELECT randn(null);
+           1.6034991609278433
+      
+  note: |2-
+    
+        The function is non-deterministic in general case.
+      
   since: "1.5.0"
-- name: random
+
+- name: "random"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Rand"
   signatures:
     - "random([seed])"
-  description: "Returns a random value with independent and identically distributed (i.i.d.) uniformly distributed values in [0, 1)."
-  examples: |
-    > SELECT random();
-     0.9629742951434543
-    > SELECT random(0);
-     0.7604953758285915
-    > SELECT random(null);
-     0.7604953758285915
-  note: "The function is non-deterministic in general case."
+  usage: "random([seed]) - Returns a random value with independent and identically distributed (i.i.d.) uniformly distributed values in [0, 1)."
+  examples: |2-
+    
+        Examples:
+          > SELECT random();
+           0.9629742951434543
+          > SELECT random(0);
+           0.7604953758285915
+          > SELECT random(null);
+           0.7604953758285915
+      
+  note: |2-
+    
+        The function is non-deterministic in general case.
+      
   since: "3.0.0"
-- name: random_poisson
+
+- name: "random_poisson"
+  scope: "sail_extension"
   signatures:
-    - "random_poisson(lambda)"
-    - "random_poisson(lambda, seed)"
-  description: "Returns random values drawn from a Poisson distribution with rate lambda. If seed is provided, the generated sequence is deterministic."
-- name: rint
+    - "random_poisson(lambda), random_poisson(lambda, seed)"
+  usage: "random_poisson(lambda), random_poisson(lambda, seed) - Returns random values drawn from a Poisson distribution with rate lambda. If seed is provided, the generated sequence is deterministic."
+
+- name: "rint"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Rint"
   signatures:
     - "rint(expr)"
-  description: "Returns the double value that is closest in value to the argument and is equal to a mathematical integer."
-  examples: |
-    > SELECT rint(12.3456);
-     12.0
+  usage: "rint(expr) - Returns the double value that is closest in value to the argument and is equal to a mathematical integer."
+  examples: |2-
+    
+        Examples:
+          > SELECT rint(12.3456);
+           12.0
+      
   since: "1.4.0"
-- name: round
+
+- name: "round"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Round"
   signatures:
     - "round(expr, d)"
-  description: "Returns expr rounded to d decimal places using HALF_UP rounding mode."
-  examples: |
-    > SELECT round(2.5, 0);
-     3
+  usage: "round(expr, d) - Returns `expr` rounded to `d` decimal places using HALF_UP rounding mode."
+  examples: |2-
+    
+        Examples:
+          > SELECT round(2.5, 0);
+           3
+      
   since: "1.5.0"
-- name: sec
+
+- name: "sec"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Sec"
   signatures:
     - "sec(expr)"
-  description: "Returns the secant of expr, as if computed by 1/java.lang.Math.cos."
-  examples: |
-    > SELECT sec(0);
-     1.0
+  usage: |2-
+    
+        sec(expr) - Returns the secant of `expr`, as if computed by `1/java.lang.Math.cos`.
+      
+  arguments: |2-
+    
+        Arguments:
+          * expr - angle in radians
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT sec(0);
+           1.0
+      
   since: "3.3.0"
-- name: sign
+
+- name: "sign"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Signum"
   signatures:
     - "sign(expr)"
-  description: "Returns -1.0, 0.0 or 1.0 as expr is negative, 0 or positive."
-  examples: |
-    > SELECT sign(40);
-     1.0
-    > SELECT sign(INTERVAL -'100' YEAR);
-     -1.0
+  usage: "sign(expr) - Returns -1.0, 0.0 or 1.0 as `expr` is negative, 0 or positive."
+  examples: |2-
+    
+        Examples:
+          > SELECT sign(40);
+           1.0
+          > SELECT sign(INTERVAL -'100' YEAR);
+           -1.0
+      
   since: "1.4.0"
-- name: signum
+
+- name: "signum"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Signum"
   signatures:
     - "signum(expr)"
-  description: "Returns -1.0, 0.0 or 1.0 as expr is negative, 0 or positive."
-  examples: |
-    > SELECT signum(40);
-     1.0
-    > SELECT signum(INTERVAL -'100' YEAR);
-     -1.0
+  usage: "signum(expr) - Returns -1.0, 0.0 or 1.0 as `expr` is negative, 0 or positive."
+  examples: |2-
+    
+        Examples:
+          > SELECT signum(40);
+           1.0
+          > SELECT signum(INTERVAL -'100' YEAR);
+           -1.0
+      
   since: "1.4.0"
-- name: sin
+
+- name: "sin"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Sin"
   signatures:
     - "sin(expr)"
-  description: "Returns the sine of expr, as if computed by java.lang.Math.sin."
-  examples: |
-    > SELECT sin(0);
-     0.0
+  usage: "sin(expr) - Returns the sine of `expr`, as if computed by `java.lang.Math.sin`."
+  arguments: |2-
+    
+        Arguments:
+          * expr - angle in radians
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT sin(0);
+           0.0
+      
   since: "1.4.0"
-- name: sinh
+
+- name: "sinh"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Sinh"
   signatures:
     - "sinh(expr)"
-  description: "Returns hyperbolic sine of expr, as if computed by java.lang.Math.sinh."
-  examples: |
-    > SELECT sinh(0);
-     0.0
+  usage: |2-
+    
+        sinh(expr) - Returns hyperbolic sine of `expr`, as if computed by `java.lang.Math.sinh`.
+      
+  arguments: |2-
+    
+        Arguments:
+          * expr - hyperbolic angle
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT sinh(0);
+           0.0
+      
   since: "1.4.0"
-- name: sqrt
+
+- name: "sqrt"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Sqrt"
   signatures:
     - "sqrt(expr)"
-  description: "Returns the square root of expr."
-  examples: |
-    > SELECT sqrt(4);
-     2.0
+  usage: "sqrt(expr) - Returns the square root of `expr`."
+  examples: |2-
+    
+        Examples:
+          > SELECT sqrt(4);
+           2.0
+      
   since: "1.1.1"
-- name: tan
+
+- name: "tan"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Tan"
   signatures:
     - "tan(expr)"
-  description: "Returns the tangent of expr, as if computed by java.lang.Math.tan."
-  examples: |
-    > SELECT tan(0);
-     0.0
+  usage: |2-
+    
+        tan(expr) - Returns the tangent of `expr`, as if computed by `java.lang.Math.tan`.
+      
+  arguments: |2-
+    
+        Arguments:
+          * expr - angle in radians
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT tan(0);
+           0.0
+      
   since: "1.4.0"
-- name: tanh
+
+- name: "tanh"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Tanh"
   signatures:
     - "tanh(expr)"
-  description: "Returns the hyperbolic tangent of expr, as if computed by java.lang.Math.tanh."
-  examples: |
-    > SELECT tanh(0);
-     0.0
+  usage: |2-
+    
+        tanh(expr) - Returns the hyperbolic tangent of `expr`, as if computed by
+          `java.lang.Math.tanh`.
+      
+  arguments: |2-
+    
+        Arguments:
+          * expr - hyperbolic angle
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT tanh(0);
+           0.0
+      
   since: "1.4.0"
-- name: try_add
+
+- name: "try_add"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.TryAdd"
   signatures:
     - "try_add(expr1, expr2)"
-  description: "Returns the sum of expr1and expr2 and the result is null on overflow. The acceptable input types are the same with the + operator."
-  examples: |
-    > SELECT try_add(1, 2);
-     3
-    > SELECT try_add(2147483647, 1);
-     NULL
-    > SELECT try_add(date'2021-01-01', 1);
-     2021-01-02
-    > SELECT try_add(date'2021-01-01', interval 1 year);
-     2022-01-01
-    > SELECT try_add(timestamp'2021-01-01 00:00:00', interval 1 day);
-     2021-01-02 00:00:00
-    > SELECT try_add(interval 1 year, interval 2 year);
-     3-0
+  usage: "try_add(expr1, expr2) - Returns the sum of `expr1`and `expr2` and the result is null on overflow. The acceptable input types are the same with the `+` operator."
+  examples: |2-
+    
+        Examples:
+          > SELECT try_add(1, 2);
+           3
+          > SELECT try_add(2147483647, 1);
+           NULL
+          > SELECT try_add(date'2021-01-01', 1);
+           2021-01-02
+          > SELECT try_add(date'2021-01-01', interval 1 year);
+           2022-01-01
+          > SELECT try_add(timestamp'2021-01-01 00:00:00', interval 1 day);
+           2021-01-02 00:00:00
+          > SELECT try_add(interval 1 year, interval 2 year);
+           3-0
+      
   since: "3.2.0"
-- name: try_divide
+
+- name: "try_divide"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.TryDivide"
   signatures:
     - "try_divide(dividend, divisor)"
-  description: "Returns dividend/divisor. It always performs floating point division. Its result is always null if expr2 is 0. dividend must be a numeric or an interval. divisor must be a numeric."
-  examples: |
-    > SELECT try_divide(3, 2);
-     1.5
-    > SELECT try_divide(2L, 2L);
-     1.0
-    > SELECT try_divide(1, 0);
-     NULL
-    > SELECT try_divide(interval 2 month, 2);
-     0-1
-    > SELECT try_divide(interval 2 month, 0);
-     NULL
+  usage: "try_divide(dividend, divisor) - Returns `dividend`/`divisor`. It always performs floating point division. Its result is always null if `expr2` is 0. `dividend` must be a numeric or an interval. `divisor` must be a numeric."
+  examples: |2-
+    
+        Examples:
+          > SELECT try_divide(3, 2);
+           1.5
+          > SELECT try_divide(2L, 2L);
+           1.0
+          > SELECT try_divide(1, 0);
+           NULL
+          > SELECT try_divide(interval 2 month, 2);
+           0-1
+          > SELECT try_divide(interval 2 month, 0);
+           NULL
+      
   since: "3.2.0"
-- name: try_mod
+
+- name: "try_mod"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.TryMod"
   signatures:
     - "try_mod(dividend, divisor)"
-  description: "Returns the remainder after expr1/expr2. dividend must be a numeric. divisor must be a numeric."
-  examples: |
-    > SELECT try_mod(3, 2);
-     1
-    > SELECT try_mod(2L, 2L);
-     0
-    > SELECT try_mod(3.0, 2.0);
-     1.0
-    > SELECT try_mod(1, 0);
-     NULL
+  usage: "try_mod(dividend, divisor) - Returns the remainder after `expr1`/`expr2`. `dividend` must be a numeric. `divisor` must be a numeric."
+  examples: |2-
+    
+        Examples:
+          > SELECT try_mod(3, 2);
+           1
+          > SELECT try_mod(2L, 2L);
+           0
+          > SELECT try_mod(3.0, 2.0);
+           1.0
+          > SELECT try_mod(1, 0);
+           NULL
+      
   since: "4.0.0"
-- name: try_multiply
+
+- name: "try_multiply"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.TryMultiply"
   signatures:
     - "try_multiply(expr1, expr2)"
-  description: "Returns expr1*expr2 and the result is null on overflow. The acceptable input types are the same with the * operator."
-  examples: |
-    > SELECT try_multiply(2, 3);
-     6
-    > SELECT try_multiply(-2147483648, 10);
-     NULL
-    > SELECT try_multiply(interval 2 year, 3);
-     6-0
+  usage: "try_multiply(expr1, expr2) - Returns `expr1`*`expr2` and the result is null on overflow. The acceptable input types are the same with the `*` operator."
+  examples: |2-
+    
+        Examples:
+          > SELECT try_multiply(2, 3);
+           6
+          > SELECT try_multiply(-2147483648, 10);
+           NULL
+          > SELECT try_multiply(interval 2 year, 3);
+           6-0
+      
   since: "3.3.0"
-- name: try_subtract
+
+- name: "try_subtract"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.TrySubtract"
   signatures:
     - "try_subtract(expr1, expr2)"
-  description: "Returns expr1-expr2 and the result is null on overflow. The acceptable input types are the same with the - operator."
-  examples: |
-    > SELECT try_subtract(2, 1);
-     1
-    > SELECT try_subtract(-2147483648, 1);
-     NULL
-    > SELECT try_subtract(date'2021-01-02', 1);
-     2021-01-01
-    > SELECT try_subtract(date'2021-01-01', interval 1 year);
-     2020-01-01
-    > SELECT try_subtract(timestamp'2021-01-02 00:00:00', interval 1 day);
-     2021-01-01 00:00:00
-    > SELECT try_subtract(interval 2 year, interval 1 year);
-     1-0
+  usage: "try_subtract(expr1, expr2) - Returns `expr1`-`expr2` and the result is null on overflow. The acceptable input types are the same with the `-` operator."
+  examples: |2-
+    
+        Examples:
+          > SELECT try_subtract(2, 1);
+           1
+          > SELECT try_subtract(-2147483648, 1);
+           NULL
+          > SELECT try_subtract(date'2021-01-02', 1);
+           2021-01-01
+          > SELECT try_subtract(date'2021-01-01', interval 1 year);
+           2020-01-01
+          > SELECT try_subtract(timestamp'2021-01-02 00:00:00', interval 1 day);
+           2021-01-01 00:00:00
+          > SELECT try_subtract(interval 2 year, interval 1 year);
+           1-0
+      
   since: "3.3.0"
-- name: unhex
+
+- name: "unhex"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Unhex"
   signatures:
     - "unhex(expr)"
-  description: "Converts hexadecimal expr to binary."
-  examples: |
-    > SELECT decode(unhex('537061726B2053514C'), 'UTF-8');
-     Spark SQL
+  usage: "unhex(expr) - Converts hexadecimal `expr` to binary."
+  examples: |2-
+    
+        Examples:
+          > SELECT decode(unhex('537061726B2053514C'), 'UTF-8');
+           Spark SQL
+      
   since: "1.5.0"
-- name: uniform
+
+- name: "uniform"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Uniform"
   signatures:
     - "uniform(min, max[, seed])"
-  description: "Returns a random value with independent and identically distributed (i.i.d.) values with the specified range of numbers. The random seed is optional. The provided numbers specifying the minimum and maximum values of the range must be constant. If both of these numbers are integers, then the result will also be an integer. Otherwise if one or both of these are floating-point numbers, then the result will also be a floating-point number."
-  examples: |
-    > SELECT uniform(10, 20, 0) > 0 AS result;
-    true
+  usage: |2-
+    
+        uniform(min, max[, seed]) - Returns a random value with independent and identically
+          distributed (i.i.d.) values with the specified range of numbers. The random seed is optional.
+          The provided numbers specifying the minimum and maximum values of the range must be constant.
+          If both of these numbers are integers, then the result will also be an integer. Otherwise if
+          one or both of these are floating-point numbers, then the result will also be a floating-point
+          number.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT uniform(10, 20, 0) > 0 AS result;
+          true
+      
   since: "4.0.0"
-- name: width_bucket
+
+- name: "width_bucket"
+  scope: "sql_builtin"
+  group: "math_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.WidthBucket"
   signatures:
     - "width_bucket(value, min_value, max_value, num_bucket)"
-  description: "Returns the bucket number to which value would be assigned in an equiwidth histogram with num_bucket buckets, in the range min_value to max_value.\""
-  examples: |
-    > SELECT width_bucket(5.3, 0.2, 10.6, 5);
-     3
-    > SELECT width_bucket(-2.1, 1.3, 3.4, 3);
-     0
-    > SELECT width_bucket(8.1, 0.0, 5.7, 4);
-     5
-    > SELECT width_bucket(-0.9, 5.2, 0.5, 2);
-     3
-    > SELECT width_bucket(INTERVAL '0' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10);
-     1
-    > SELECT width_bucket(INTERVAL '1' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10);
-     2
-    > SELECT width_bucket(INTERVAL '0' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10);
-     1
-    > SELECT width_bucket(INTERVAL '1' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10);
-     2
+  usage: |2-
+    
+        width_bucket(value, min_value, max_value, num_bucket) - Returns the bucket number to which
+          `value` would be assigned in an equiwidth histogram with `num_bucket` buckets,
+          in the range `min_value` to `max_value`."
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT width_bucket(5.3, 0.2, 10.6, 5);
+           3
+          > SELECT width_bucket(-2.1, 1.3, 3.4, 3);
+           0
+          > SELECT width_bucket(8.1, 0.0, 5.7, 4);
+           5
+          > SELECT width_bucket(-0.9, 5.2, 0.5, 2);
+           3
+          > SELECT width_bucket(INTERVAL '0' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10);
+           1
+          > SELECT width_bucket(INTERVAL '1' YEAR, INTERVAL '0' YEAR, INTERVAL '10' YEAR, 10);
+           2
+          > SELECT width_bucket(INTERVAL '0' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10);
+           1
+          > SELECT width_bucket(INTERVAL '1' DAY, INTERVAL '0' DAY, INTERVAL '10' DAY, 10);
+           2
+      
   since: "3.1.0"
+

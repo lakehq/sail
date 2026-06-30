@@ -8,9 +8,15 @@ use serde::Deserialize;
 struct FunctionMetadataEntry {
     name: String,
     #[serde(default)]
-    signatures: Vec<String>,
+    scope: Option<String>,
     #[serde(default)]
-    description: Option<String>,
+    group: Option<String>,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default)]
+    usage: Option<String>,
+    #[serde(default)]
+    arguments: Option<String>,
     #[serde(default)]
     examples: Option<String>,
     #[serde(default)]
@@ -18,7 +24,11 @@ struct FunctionMetadataEntry {
     #[serde(default)]
     since: Option<String>,
     #[serde(default)]
+    deprecated: Option<String>,
+    #[serde(default)]
     class_name: Option<String>,
+    #[serde(default)]
+    signatures: Vec<String>,
 }
 
 impl FunctionMetadataEntry {
@@ -29,8 +39,30 @@ impl FunctionMetadataEntry {
         if self.name != self.name.to_ascii_lowercase() {
             return Err(format!("function metadata name must be lowercase: {}", self.name).into());
         }
-        if self.signatures.iter().any(|signature| signature.is_empty()) {
-            return Err(format!("function metadata has an empty signature: {}", self.name).into());
+        let Some(scope) = self.scope.as_deref() else {
+            return Err(format!("function metadata is missing scope: {}", self.name).into());
+        };
+        if !matches!(
+            scope,
+            "sql_builtin" | "spark_internal" | "pyspark_only" | "sail_extension"
+        ) {
+            return Err(format!(
+                "function metadata has an unknown scope for {}: {}",
+                self.name, scope
+            )
+            .into());
+        }
+        if self.group.as_deref().is_some_and(str::is_empty) {
+            return Err(format!("function metadata has an empty group: {}", self.name).into());
+        }
+        if self.source.as_deref().is_some_and(str::is_empty) {
+            return Err(format!("function metadata has an empty source: {}", self.name).into());
+        }
+        if self.usage.as_deref().is_some_and(str::is_empty) {
+            return Err(format!("function metadata has empty usage: {}", self.name).into());
+        }
+        if self.arguments.as_deref().is_some_and(str::is_empty) {
+            return Err(format!("function metadata has empty arguments: {}", self.name).into());
         }
         if self.examples.as_deref().is_some_and(str::is_empty) {
             return Err(format!("function metadata has empty examples: {}", self.name).into());
@@ -42,6 +74,35 @@ impl FunctionMetadataEntry {
             return Err(
                 format!("function metadata has an empty since value: {}", self.name).into(),
             );
+        }
+        if self.deprecated.as_deref().is_some_and(str::is_empty) {
+            return Err(format!("function metadata has empty deprecated: {}", self.name).into());
+        }
+        if self.signatures.iter().any(|signature| signature.is_empty()) {
+            return Err(format!("function metadata has an empty signature: {}", self.name).into());
+        }
+        if self.usage.as_deref().is_some_and(|usage| !usage.is_empty())
+            && self.signatures.is_empty()
+        {
+            return Err(format!(
+                "function metadata has usage but no signature: {}",
+                self.name
+            )
+            .into());
+        }
+        if scope == "sql_builtin" {
+            if self.group.is_none() {
+                return Err(
+                    format!("built-in function metadata is missing group: {}", self.name).into(),
+                );
+            }
+            if self.source.is_none() {
+                return Err(format!(
+                    "built-in function metadata is missing source: {}",
+                    self.name
+                )
+                .into());
+            }
         }
         Ok(())
     }
@@ -143,19 +204,22 @@ fn build_function_metadata(
         .push_str("pub(crate) const BUILT_IN_FUNCTION_METADATA: &[BuiltInFunctionMetadata] = &[\n");
     for entry in entries {
         let name = rust_string(&entry.name);
+        let is_public = entry.scope.as_deref() == Some("sql_builtin");
         let signatures = entry
             .signatures
             .iter()
             .map(|signature| rust_string(signature))
             .collect::<Vec<_>>()
             .join(", ");
-        let description = rust_option_string(entry.description.as_deref());
+        let usage = rust_option_string(entry.usage.as_deref());
+        let arguments = rust_option_string(entry.arguments.as_deref());
         let examples = rust_option_string(entry.examples.as_deref());
         let note = rust_option_string(entry.note.as_deref());
         let since = rust_option_string(entry.since.as_deref());
+        let deprecated = rust_option_string(entry.deprecated.as_deref());
         let class_name = rust_string(entry.class_name.as_deref().unwrap_or(""));
         output.push_str(&format!(
-            "    BuiltInFunctionMetadata {{ name: {name}, signatures: &[{signatures}], description: {description}, examples: {examples}, note: {note}, since: {since}, class_name: {class_name} }},\n"
+            "    BuiltInFunctionMetadata {{ name: {name}, signatures: &[{signatures}], usage: {usage}, arguments: {arguments}, examples: {examples}, note: {note}, since: {since}, deprecated: {deprecated}, class_name: {class_name}, is_public: {is_public} }},\n"
         ));
     }
     output.push_str("];\n");

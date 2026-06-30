@@ -1,123 +1,207 @@
-- name: from_xml
+- name: "from_xml"
+  scope: "sql_builtin"
+  group: "xml_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.XmlToStructs"
   signatures:
     - "from_xml(xmlStr, schema[, options])"
-  description: "Returns a struct value with the given xmlStr and schema."
-  examples: |
-    > SELECT from_xml('<p><a>1</a><b>0.8</b></p>', 'a INT, b DOUBLE');
-     {"a":1,"b":0.8}
-    > SELECT from_xml('<p><time>26/08/2015</time></p>', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy'));
-     {"time":2015-08-26 00:00:00}
-    > SELECT from_xml('<p><teacher>Alice</teacher><student><name>Bob</name><rank>1</rank></student><student><name>Charlie</name><rank>2</rank></student></p>', 'STRUCT<teacher: STRING, student: ARRAY<STRUCT<name: STRING, rank: INT>>>');
-     {"teacher":"Alice","student":[{"name":"Bob","rank":1},{"name":"Charlie","rank":2}]}
+  usage: "from_xml(xmlStr, schema[, options]) - Returns a struct value with the given `xmlStr` and `schema`."
+  examples: |2-
+    
+        Examples:
+          > SELECT from_xml('<p><a>1</a><b>0.8</b></p>', 'a INT, b DOUBLE');
+           {"a":1,"b":0.8}
+          > SELECT from_xml('<p><time>26/08/2015</time></p>', 'time Timestamp', map('timestampFormat', 'dd/MM/yyyy'));
+           {"time":2015-08-26 00:00:00}
+          > SELECT from_xml('<p><teacher>Alice</teacher><student><name>Bob</name><rank>1</rank></student><student><name>Charlie</name><rank>2</rank></student></p>', 'STRUCT<teacher: STRING, student: ARRAY<STRUCT<name: STRING, rank: INT>>>');
+           {"teacher":"Alice","student":[{"name":"Bob","rank":1},{"name":"Charlie","rank":2}]}
+      
   since: "4.0.0"
-- name: schema_of_xml
+
+- name: "schema_of_xml"
+  scope: "sql_builtin"
+  group: "xml_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.SchemaOfXml"
   signatures:
     - "schema_of_xml(xml[, options])"
-  description: "Returns schema in the DDL format of XML string."
-  examples: |
-    > SELECT schema_of_xml('<p><a>1</a></p>');
-     STRUCT<a: BIGINT>
-    > SELECT schema_of_xml('<p><a attr="2">1</a><a>3</a></p>', map('excludeAttribute', 'true'));
-     STRUCT<a: ARRAY<BIGINT>>
+  usage: "schema_of_xml(xml[, options]) - Returns schema in the DDL format of XML string."
+  examples: |2-
+    
+        Examples:
+          > SELECT schema_of_xml('<p><a>1</a></p>');
+           STRUCT<a: BIGINT>
+          > SELECT schema_of_xml('<p><a attr="2">1</a><a>3</a></p>', map('excludeAttribute', 'true'));
+           STRUCT<a: ARRAY<BIGINT>>
+      
   since: "4.0.0"
-- name: to_xml
+
+- name: "to_xml"
+  scope: "sql_builtin"
+  group: "xml_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.StructsToXml"
   signatures:
     - "to_xml(expr[, options])"
-  description: "Returns a XML string with a given struct value"
-  examples: |
-    > SELECT to_xml(named_struct('a', 1, 'b', 2));
-     <ROW>
-         <a>1</a>
-         <b>2</b>
-     </ROW>
-    > SELECT to_xml(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), map('timestampFormat', 'dd/MM/yyyy'));
-     <ROW>
-         <time>26/08/2015</time>
-     </ROW>
+  usage: "to_xml(expr[, options]) - Returns a XML string with a given struct value"
+  examples: |2-
+    
+        Examples:
+          > SELECT to_xml(named_struct('a', 1, 'b', 2));
+           <ROW>
+               <a>1</a>
+               <b>2</b>
+           </ROW>
+          > SELECT to_xml(named_struct('time', to_timestamp('2015-08-26', 'yyyy-MM-dd')), map('timestampFormat', 'dd/MM/yyyy'));
+           <ROW>
+               <time>26/08/2015</time>
+           </ROW>
+      
   since: "4.0.0"
-- name: xpath
+
+- name: "xpath"
+  scope: "sql_builtin"
+  group: "xml_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.xml.XPathList"
   signatures:
     - "xpath(xml, xpath)"
-  description: "Returns a string array of values within the nodes of xml that match the XPath expression."
-  examples: |
-    > SELECT xpath('<a><b>b1</b><b>b2</b><b>b3</b><c>c1</c><c>c2</c></a>','a/b/text()');
-     ["b1","b2","b3"]
-    > SELECT xpath('<a><b>b1</b><b>b2</b><b>b3</b><c>c1</c><c>c2</c></a>','a/b');
-     [null,null,null]
+  usage: "xpath(xml, xpath) - Returns a string array of values within the nodes of xml that match the XPath expression."
+  examples: |2-
+    
+        Examples:
+          > SELECT xpath('<a><b>b1</b><b>b2</b><b>b3</b><c>c1</c><c>c2</c></a>','a/b/text()');
+           ["b1","b2","b3"]
+          > SELECT xpath('<a><b>b1</b><b>b2</b><b>b3</b><c>c1</c><c>c2</c></a>','a/b');
+           [null,null,null]
+      
   since: "2.0.0"
-- name: xpath_boolean
+
+- name: "xpath_boolean"
+  scope: "sql_builtin"
+  group: "xml_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.xml.XPathBoolean"
   signatures:
     - "xpath_boolean(xml, xpath)"
-  description: "Returns true if the XPath expression evaluates to true, or if a matching node is found."
-  examples: |
-    > SELECT xpath_boolean('<a><b>1</b></a>','a/b');
-     true
+  usage: "xpath_boolean(xml, xpath) - Returns true if the XPath expression evaluates to true, or if a matching node is found."
+  examples: |2-
+    
+        Examples:
+          > SELECT xpath_boolean('<a><b>1</b></a>','a/b');
+           true
+      
   since: "2.0.0"
-- name: xpath_double
+
+- name: "xpath_double"
+  scope: "sql_builtin"
+  group: "xml_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.xml.XPathDouble"
   signatures:
     - "xpath_double(xml, xpath)"
-  description: "Returns a double value, the value zero if no match is found, or NaN if a match is found but the value is non-numeric."
-  examples: |
-    > SELECT xpath_double('<a><b>1</b><b>2</b></a>', 'sum(a/b)');
-     3.0
+  usage: "xpath_double(xml, xpath) - Returns a double value, the value zero if no match is found, or NaN if a match is found but the value is non-numeric."
+  examples: |2-
+    
+        Examples:
+          > SELECT xpath_double('<a><b>1</b><b>2</b></a>', 'sum(a/b)');
+           3.0
+      
   since: "2.0.0"
-- name: xpath_float
+
+- name: "xpath_float"
+  scope: "sql_builtin"
+  group: "xml_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.xml.XPathFloat"
   signatures:
     - "xpath_float(xml, xpath)"
-  description: "Returns a float value, the value zero if no match is found, or NaN if a match is found but the value is non-numeric."
-  examples: |
-    > SELECT xpath_float('<a><b>1</b><b>2</b></a>', 'sum(a/b)');
-     3.0
+  usage: "xpath_float(xml, xpath) - Returns a float value, the value zero if no match is found, or NaN if a match is found but the value is non-numeric."
+  examples: |2-
+    
+        Examples:
+          > SELECT xpath_float('<a><b>1</b><b>2</b></a>', 'sum(a/b)');
+           3.0
+      
   since: "2.0.0"
-- name: xpath_int
+
+- name: "xpath_int"
+  scope: "sql_builtin"
+  group: "xml_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.xml.XPathInt"
   signatures:
     - "xpath_int(xml, xpath)"
-  description: "Returns an integer value, or the value zero if no match is found, or a match is found but the value is non-numeric."
-  examples: |
-    > SELECT xpath_int('<a><b>1</b><b>2</b></a>', 'sum(a/b)');
-     3
+  usage: "xpath_int(xml, xpath) - Returns an integer value, or the value zero if no match is found, or a match is found but the value is non-numeric."
+  examples: |2-
+    
+        Examples:
+          > SELECT xpath_int('<a><b>1</b><b>2</b></a>', 'sum(a/b)');
+           3
+      
   since: "2.0.0"
-- name: xpath_long
+
+- name: "xpath_long"
+  scope: "sql_builtin"
+  group: "xml_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.xml.XPathLong"
   signatures:
     - "xpath_long(xml, xpath)"
-  description: "Returns a long integer value, or the value zero if no match is found, or a match is found but the value is non-numeric."
-  examples: |
-    > SELECT xpath_long('<a><b>1</b><b>2</b></a>', 'sum(a/b)');
-     3
+  usage: "xpath_long(xml, xpath) - Returns a long integer value, or the value zero if no match is found, or a match is found but the value is non-numeric."
+  examples: |2-
+    
+        Examples:
+          > SELECT xpath_long('<a><b>1</b><b>2</b></a>', 'sum(a/b)');
+           3
+      
   since: "2.0.0"
-- name: xpath_number
+
+- name: "xpath_number"
+  scope: "sql_builtin"
+  group: "xml_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.xml.XPathDouble"
   signatures:
     - "xpath_number(xml, xpath)"
-  description: "Returns a double value, the value zero if no match is found, or NaN if a match is found but the value is non-numeric."
-  examples: |
-    > SELECT xpath_number('<a><b>1</b><b>2</b></a>', 'sum(a/b)');
-     3.0
+  usage: "xpath_number(xml, xpath) - Returns a double value, the value zero if no match is found, or NaN if a match is found but the value is non-numeric."
+  examples: |2-
+    
+        Examples:
+          > SELECT xpath_number('<a><b>1</b><b>2</b></a>', 'sum(a/b)');
+           3.0
+      
   since: "2.0.0"
-- name: xpath_short
+
+- name: "xpath_short"
+  scope: "sql_builtin"
+  group: "xml_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.xml.XPathShort"
   signatures:
     - "xpath_short(xml, xpath)"
-  description: "Returns a short integer value, or the value zero if no match is found, or a match is found but the value is non-numeric."
-  examples: |
-    > SELECT xpath_short('<a><b>1</b><b>2</b></a>', 'sum(a/b)');
-     3
+  usage: "xpath_short(xml, xpath) - Returns a short integer value, or the value zero if no match is found, or a match is found but the value is non-numeric."
+  examples: |2-
+    
+        Examples:
+          > SELECT xpath_short('<a><b>1</b><b>2</b></a>', 'sum(a/b)');
+           3
+      
   since: "2.0.0"
-- name: xpath_string
+
+- name: "xpath_string"
+  scope: "sql_builtin"
+  group: "xml_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.xml.XPathString"
   signatures:
     - "xpath_string(xml, xpath)"
-  description: "Returns the text contents of the first xml node that matches the XPath expression."
-  examples: |
-    > SELECT xpath_string('<a><b>b</b><c>cc</c></a>','a/c');
-     cc
+  usage: "xpath_string(xml, xpath) - Returns the text contents of the first xml node that matches the XPath expression."
+  examples: |2-
+    
+        Examples:
+          > SELECT xpath_string('<a><b>b</b><c>cc</c></a>','a/c');
+           cc
+      
   since: "2.0.0"
+

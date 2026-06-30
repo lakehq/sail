@@ -70,7 +70,7 @@ fn list_built_in_function_names_raw() -> Vec<&'static str> {
 pub(crate) fn list_built_in_function_statuses() -> Vec<FunctionStatus> {
     list_built_in_function_names_raw()
         .into_iter()
-        .map(metadata::built_in_function_status)
+        .filter_map(metadata::built_in_public_function_status)
         .collect()
 }
 
@@ -125,9 +125,13 @@ mod tests {
         assert_eq!(status.name, "to_date");
         assert_eq!(status.signatures, vec!["to_date(date_str[, fmt])"]);
         assert!(status
-            .description
+            .usage
             .as_deref()
-            .is_some_and(|description| { description.contains("Parses") }));
+            .is_some_and(|usage| usage.contains("to_date(date_str[, fmt]) - Parses")));
+        assert!(status
+            .arguments
+            .as_deref()
+            .is_some_and(|arguments| arguments.contains("Arguments:")));
         assert!(status
             .examples
             .as_deref()

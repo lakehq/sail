@@ -20,8 +20,8 @@ def test_list_functions_returns_spark_function_fields(spark):
         "className",
         "isTemporary",
     )
-    assert "Signatures: to_date(date_str[, fmt])" in function.description
-    assert "Parses" in function.description
+    assert function.description.startswith("\n    to_date(date_str[, fmt]) - ")
+    assert "`date_str`" in function.description
     assert function.className == "org.apache.spark.sql.catalyst.expressions.ParseToDate"
     assert function.isTemporary is True
 
@@ -74,9 +74,11 @@ def test_describe_function_returns_signature_and_description(spark):
 
     rows = [row.function_desc for row in result.collect()]
     expected_usage = (
-        "Usage: to_date(date_str[, fmt]) - Parses the date_str expression with the "
-        "fmt expression to a date. Returns null with invalid input. By default, it "
-        "follows casting rules to a date if the fmt is omitted."
+        "Usage: \n"
+        "    to_date(date_str[, fmt]) - Parses the `date_str` expression with the `fmt` expression to\n"
+        "      a date. Returns null with invalid input. By default, it follows casting rules to a date if\n"
+        "      the `fmt` is omitted.\n"
+        "  "
     )
     assert rows == [
         "Function: to_date",
@@ -87,7 +89,9 @@ def test_describe_function_returns_signature_and_description(spark):
 
 def test_describe_function_extended_adds_extended_usage(spark):
     rows = [row.function_desc for row in spark.sql("DESC FUNCTION EXTENDED to_date").collect()]
-    assert rows[-1].startswith("Extended Usage:\n    Examples:\n")
+    assert rows[-1].startswith("Extended Usage:\n    Arguments:\n")
+    assert "* date_str - A string to be parsed to date." in rows[-1]
+    assert "\n    Examples:\n" in rows[-1]
     assert "> SELECT to_date('2009-07-30 04:17:52');" in rows[-1]
     assert "    Since: 1.5.0" in rows[-1]
 

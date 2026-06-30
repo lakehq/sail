@@ -1,272 +1,535 @@
-- name: array
+- name: "array"
+  scope: "sql_builtin"
+  group: "array_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.CreateArray"
   signatures:
     - "array(expr, ...)"
-  description: "Returns an array with the given elements."
-  examples: |
-    > SELECT array(1, 2, 3);
-     [1,2,3]
+  usage: "array(expr, ...) - Returns an array with the given elements."
+  examples: |2-
+    
+        Examples:
+          > SELECT array(1, 2, 3);
+           [1,2,3]
+      
   since: "1.1.0"
-- name: array_append
+
+- name: "array_append"
+  scope: "sql_builtin"
+  group: "array_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ArrayAppend"
   signatures:
     - "array_append(array, element)"
-  description: "Add the element at the end of the array passed as first argument. Type of element should be similar to type of the elements of the array. Null element is also appended into the array. But if the array passed, is NULL output is NULL"
-  examples: |
-    > SELECT array_append(array('b', 'd', 'c', 'a'), 'd');
-     ["b","d","c","a","d"]
-    > SELECT array_append(array(1, 2, 3, null), null);
-     [1,2,3,null,null]
-    > SELECT array_append(CAST(null as Array<Int>), 2);
-     NULL
+  usage: |2-
+    
+          array_append(array, element) - Add the element at the end of the array passed as first
+          argument. Type of element should be similar to type of the elements of the array.
+          Null element is also appended into the array. But if the array passed, is NULL
+          output is NULL
+          
+  examples: |2-
+    
+        Examples:
+          > SELECT array_append(array('b', 'd', 'c', 'a'), 'd');
+           ["b","d","c","a","d"]
+          > SELECT array_append(array(1, 2, 3, null), null);
+           [1,2,3,null,null]
+          > SELECT array_append(CAST(null as Array<Int>), 2);
+           NULL
+      
   since: "3.4.0"
-- name: array_compact
+
+- name: "array_compact"
+  scope: "sql_builtin"
+  group: "array_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ArrayCompact"
   signatures:
     - "array_compact(array)"
-  description: "Removes null values from the array."
-  examples: |
-    > SELECT array_compact(array(1, 2, 3, null));
-     [1,2,3]
-    > SELECT array_compact(array("a", "b", "c"));
-     ["a","b","c"]
+  usage: "array_compact(array) - Removes null values from the array."
+  examples: |2-
+    
+        Examples:
+          > SELECT array_compact(array(1, 2, 3, null));
+           [1,2,3]
+          > SELECT array_compact(array("a", "b", "c"));
+           ["a","b","c"]
+      
   since: "3.4.0"
-- name: array_concat
+
+- name: "array_concat"
+  scope: "sail_extension"
   signatures:
     - "array_concat(array, ...)"
-  description: "Concatenates input arrays and returns the resulting array."
-- name: array_contains
+  usage: "array_concat(array, ...) - Concatenates input arrays and returns the resulting array."
+
+- name: "array_contains"
+  scope: "sql_builtin"
+  group: "array_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ArrayContains"
   signatures:
     - "array_contains(array, value)"
-  description: "Returns true if the array contains the value."
-  examples: |
-    > SELECT array_contains(array(1, 2, 3), 2);
-     true
+  usage: "array_contains(array, value) - Returns true if the array contains the value."
+  examples: |2-
+    
+        Examples:
+          > SELECT array_contains(array(1, 2, 3), 2);
+           true
+      
   since: "1.5.0"
-- name: array_contains_all
+
+- name: "array_contains_all"
+  scope: "sail_extension"
   signatures:
     - "array_contains_all(array, values)"
-  description: "Returns true if array contains every element in values."
-- name: array_distinct
+  usage: "array_contains_all(array, values) - Returns true if array contains every element in values."
+
+- name: "array_distinct"
+  scope: "sql_builtin"
+  group: "array_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ArrayDistinct"
   signatures:
     - "array_distinct(array)"
-  description: "Removes duplicate values from the array."
-  examples: |
-    > SELECT array_distinct(array(1, 2, 3, null, 3));
-     [1,2,3,null]
+  usage: "array_distinct(array) - Removes duplicate values from the array."
+  examples: |2-
+    
+        Examples:
+          > SELECT array_distinct(array(1, 2, 3, null, 3));
+           [1,2,3,null]
+      
   since: "2.4.0"
-- name: array_except
+
+- name: "array_except"
+  scope: "sql_builtin"
+  group: "array_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ArrayExcept"
   signatures:
     - "array_except(array1, array2)"
-  description: "Returns an array of the elements in array1 but not in array2, without duplicates."
-  examples: |
-    > SELECT array_except(array(1, 2, 3), array(1, 3, 5));
-     [2]
+  usage: |2-
+    
+      array_except(array1, array2) - Returns an array of the elements in array1 but not in array2,
+        without duplicates.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT array_except(array(1, 2, 3), array(1, 3, 5));
+           [2]
+      
   since: "2.4.0"
-- name: array_insert
+
+- name: "array_insert"
+  scope: "sql_builtin"
+  group: "array_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ArrayInsert"
   signatures:
     - "array_insert(x, pos, val)"
-  description: "Places val into index pos of array x. Array indices start at 1. The maximum negative index is -1 for which the function inserts new element after the current last element. Index above array size appends the array, or prepends the array if index is negative, with 'null' elements."
-  examples: |
-    > SELECT array_insert(array(1, 2, 3, 4), 5, 5);
-     [1,2,3,4,5]
-    > SELECT array_insert(array(5, 4, 3, 2), -1, 1);
-     [5,4,3,2,1]
-    > SELECT array_insert(array(5, 3, 2, 1), -4, 4);
-     [5,4,3,2,1]
+  usage: |2-
+    
+        array_insert(x, pos, val) - Places val into index pos of array x.
+          Array indices start at 1. The maximum negative index is -1 for which the function inserts
+          new element after the current last element.
+          Index above array size appends the array, or prepends the array if index is negative,
+          with 'null' elements.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT array_insert(array(1, 2, 3, 4), 5, 5);
+           [1,2,3,4,5]
+          > SELECT array_insert(array(5, 4, 3, 2), -1, 1);
+           [5,4,3,2,1]
+          > SELECT array_insert(array(5, 3, 2, 1), -4, 4);
+           [5,4,3,2,1]
+      
   since: "3.4.0"
-- name: array_intersect
+
+- name: "array_intersect"
+  scope: "sql_builtin"
+  group: "array_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ArrayIntersect"
   signatures:
     - "array_intersect(array1, array2)"
-  description: "Returns an array of the elements in the intersection of array1 and array2, without duplicates."
-  examples: |
-    > SELECT array_intersect(array(1, 2, 3), array(1, 3, 5));
-     [1,3]
+  usage: |2-
+    
+      array_intersect(array1, array2) - Returns an array of the elements in the intersection of array1 and
+        array2, without duplicates.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT array_intersect(array(1, 2, 3), array(1, 3, 5));
+           [1,3]
+      
   since: "2.4.0"
-- name: array_join
+
+- name: "array_join"
+  scope: "sql_builtin"
+  group: "array_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ArrayJoin"
   signatures:
     - "array_join(array, delimiter[, nullReplacement])"
-  description: "Concatenates the elements of the given array using the delimiter and an optional string to replace nulls. If no value is set for nullReplacement, any null value is filtered."
-  examples: |
-    > SELECT array_join(array('hello', 'world'), ' ');
-     hello world
-    > SELECT array_join(array('hello', null ,'world'), ' ');
-     hello world
-    > SELECT array_join(array('hello', null ,'world'), ' ', ',');
-     hello , world
+  usage: |2-
+    
+        array_join(array, delimiter[, nullReplacement]) - Concatenates the elements of the given array
+          using the delimiter and an optional string to replace nulls. If no value is set for
+          nullReplacement, any null value is filtered.
+  examples: |2-
+    
+        Examples:
+          > SELECT array_join(array('hello', 'world'), ' ');
+           hello world
+          > SELECT array_join(array('hello', null ,'world'), ' ');
+           hello world
+          > SELECT array_join(array('hello', null ,'world'), ' ', ',');
+           hello , world
+      
   since: "2.4.0"
-- name: array_max
+
+- name: "array_max"
+  scope: "sql_builtin"
+  group: "array_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ArrayMax"
   signatures:
     - "array_max(array)"
-  description: "Returns the maximum value in the array. NaN is greater than any non-NaN elements for double/float type. NULL elements are skipped."
-  examples: |
-    > SELECT array_max(array(1, 20, null, 3));
-     20
+  usage: |2-
+    
+        array_max(array) - Returns the maximum value in the array. NaN is greater than
+        any non-NaN elements for double/float type. NULL elements are skipped.
+  examples: |2-
+    
+        Examples:
+          > SELECT array_max(array(1, 20, null, 3));
+           20
+      
   since: "2.4.0"
-- name: array_min
+
+- name: "array_min"
+  scope: "sql_builtin"
+  group: "array_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ArrayMin"
   signatures:
     - "array_min(array)"
-  description: "Returns the minimum value in the array. NaN is greater than any non-NaN elements for double/float type. NULL elements are skipped."
-  examples: |
-    > SELECT array_min(array(1, 20, null, 3));
-     1
+  usage: |2-
+    
+        array_min(array) - Returns the minimum value in the array. NaN is greater than
+        any non-NaN elements for double/float type. NULL elements are skipped.
+  examples: |2-
+    
+        Examples:
+          > SELECT array_min(array(1, 20, null, 3));
+           1
+      
   since: "2.4.0"
-- name: array_position
+
+- name: "array_position"
+  scope: "sql_builtin"
+  group: "array_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ArrayPosition"
   signatures:
     - "array_position(array, element)"
-  description: "Returns the (1-based) index of the first matching element of the array as long, or 0 if no match is found."
-  examples: |
-    > SELECT array_position(array(312, 773, 708, 708), 708);
-     3
-    > SELECT array_position(array(312, 773, 708, 708), 414);
-     0
+  usage: |2-
+    
+        array_position(array, element) - Returns the (1-based) index of the first matching element of
+          the array as long, or 0 if no match is found.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT array_position(array(312, 773, 708, 708), 708);
+           3
+          > SELECT array_position(array(312, 773, 708, 708), 414);
+           0
+      
   since: "2.4.0"
-- name: array_prepend
+
+- name: "array_prepend"
+  scope: "sql_builtin"
+  group: "array_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ArrayPrepend"
   signatures:
     - "array_prepend(array, element)"
-  description: "Add the element at the beginning of the array passed as first argument. Type of element should be the same as the type of the elements of the array. Null element is also prepended to the array. But if the array passed is NULL output is NULL"
-  examples: |
-    > SELECT array_prepend(array('b', 'd', 'c', 'a'), 'd');
-     ["d","b","d","c","a"]
-    > SELECT array_prepend(array(1, 2, 3, null), null);
-     [null,1,2,3,null]
-    > SELECT array_prepend(CAST(null as Array<Int>), 2);
-     NULL
+  usage: |2-
+    
+          array_prepend(array, element) - Add the element at the beginning of the array passed as first
+          argument. Type of element should be the same as the type of the elements of the array.
+          Null element is also prepended to the array. But if the array passed is NULL
+          output is NULL
+        
+  examples: |2-
+    
+        Examples:
+          > SELECT array_prepend(array('b', 'd', 'c', 'a'), 'd');
+           ["d","b","d","c","a"]
+          > SELECT array_prepend(array(1, 2, 3, null), null);
+           [null,1,2,3,null]
+          > SELECT array_prepend(CAST(null as Array<Int>), 2);
+           NULL
+      
   since: "3.5.0"
-- name: array_remove
+
+- name: "array_remove"
+  scope: "sql_builtin"
+  group: "array_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ArrayRemove"
   signatures:
     - "array_remove(array, element)"
-  description: "Remove all elements that equal to element from array."
-  examples: |
-    > SELECT array_remove(array(1, 2, 3, null, 3), 3);
-     [1,2,null]
+  usage: "array_remove(array, element) - Remove all elements that equal to element from array."
+  examples: |2-
+    
+        Examples:
+          > SELECT array_remove(array(1, 2, 3, null, 3), 3);
+           [1,2,null]
+      
   since: "2.4.0"
-- name: array_repeat
+
+- name: "array_repeat"
+  scope: "sql_builtin"
+  group: "array_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ArrayRepeat"
   signatures:
     - "array_repeat(element, count)"
-  description: "Returns the array containing element count times."
-  examples: |
-    > SELECT array_repeat('123', 2);
-     ["123","123"]
+  usage: "array_repeat(element, count) - Returns the array containing element count times."
+  examples: |2-
+    
+        Examples:
+          > SELECT array_repeat('123', 2);
+           ["123","123"]
+      
   since: "2.4.0"
-- name: array_size
+
+- name: "array_size"
+  scope: "sql_builtin"
+  group: "array_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ArraySize"
   signatures:
     - "array_size(expr)"
-  description: "Returns the size of an array. The function returns null for null input."
-  examples: |
-    > SELECT array_size(array('b', 'd', 'c', 'a'));
-     4
+  usage: "array_size(expr) - Returns the size of an array. The function returns null for null input."
+  examples: |2-
+    
+        Examples:
+          > SELECT array_size(array('b', 'd', 'c', 'a'));
+           4
+      
   since: "3.3.0"
-- name: array_union
+
+- name: "array_union"
+  scope: "sql_builtin"
+  group: "array_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ArrayUnion"
   signatures:
     - "array_union(array1, array2)"
-  description: "Returns an array of the elements in the union of array1 and array2, without duplicates."
-  examples: |
-    > SELECT array_union(array(1, 2, 3), array(1, 3, 5));
-     [1,2,3,5]
+  usage: |2-
+    
+        array_union(array1, array2) - Returns an array of the elements in the union of array1 and array2,
+          without duplicates.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT array_union(array(1, 2, 3), array(1, 3, 5));
+           [1,2,3,5]
+      
   since: "2.4.0"
-- name: arrays_overlap
+
+- name: "arrays_overlap"
+  scope: "sql_builtin"
+  group: "array_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ArraysOverlap"
   signatures:
     - "arrays_overlap(a1, a2)"
-  description: "Returns true if a1 contains at least a non-null element present also in a2. If the arrays have no common element and they are both non-empty and either of them contains a null element null is returned, false otherwise."
-  examples: |
-    > SELECT arrays_overlap(array(1, 2, 3), array(3, 4, 5));
-     true
+  usage: "arrays_overlap(a1, a2) - Returns true if a1 contains at least a non-null element present also in a2. If the arrays have no common element and they are both non-empty and either of them contains a null element null is returned, false otherwise."
+  examples: |2-
+    
+        Examples:
+          > SELECT arrays_overlap(array(1, 2, 3), array(3, 4, 5));
+           true
+      
   since: "2.4.0"
-- name: arrays_zip
+
+- name: "arrays_zip"
+  scope: "sql_builtin"
+  group: "array_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.ArraysZip"
   signatures:
     - "arrays_zip(a1, a2, ...)"
-  description: "Returns a merged array of structs in which the N-th struct contains all N-th values of input arrays."
-  examples: |
-    > SELECT arrays_zip(array(1, 2, 3), array(2, 3, 4));
-     [{"0":1,"1":2},{"0":2,"1":3},{"0":3,"1":4}]
-    > SELECT arrays_zip(array(1, 2), array(2, 3), array(3, 4));
-     [{"0":1,"1":2,"2":3},{"0":2,"1":3,"2":4}]
+  usage: |2-
+    
+        arrays_zip(a1, a2, ...) - Returns a merged array of structs in which the N-th struct contains all
+        N-th values of input arrays.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT arrays_zip(array(1, 2, 3), array(2, 3, 4));
+           [{"0":1,"1":2},{"0":2,"1":3},{"0":3,"1":4}]
+          > SELECT arrays_zip(array(1, 2), array(2, 3), array(3, 4));
+           [{"0":1,"1":2,"2":3},{"0":2,"1":3,"2":4}]
+      
   since: "2.4.0"
-- name: flatten
+
+- name: "flatten"
+  scope: "sql_builtin"
+  group: "array_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Flatten"
   signatures:
     - "flatten(arrayOfArrays)"
-  description: "Transforms an array of arrays into a single array."
-  examples: |
-    > SELECT flatten(array(array(1, 2), array(3, 4)));
-     [1,2,3,4]
+  usage: "flatten(arrayOfArrays) - Transforms an array of arrays into a single array."
+  examples: |2-
+    
+        Examples:
+          > SELECT flatten(array(array(1, 2), array(3, 4)));
+           [1,2,3,4]
+      
   since: "2.4.0"
-- name: get
+
+- name: "get"
+  scope: "sql_builtin"
+  group: "array_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Get"
   signatures:
     - "get(array, index)"
-  description: "Returns element of array at given (0-based) index. If the index points outside of the array boundaries, then this function returns NULL."
-  examples: |
-    > SELECT get(array(1, 2, 3), 0);
-     1
-    > SELECT get(array(1, 2, 3), 3);
-     NULL
-    > SELECT get(array(1, 2, 3), -1);
-     NULL
+  usage: |2-
+    
+        get(array, index) - Returns element of array at given (0-based) index. If the index points
+         outside of the array boundaries, then this function returns NULL.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT get(array(1, 2, 3), 0);
+           1
+          > SELECT get(array(1, 2, 3), 3);
+           NULL
+          > SELECT get(array(1, 2, 3), -1);
+           NULL
+      
   since: "3.4.0"
-- name: sequence
+
+- name: "sequence"
+  scope: "sql_builtin"
+  group: "array_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Sequence"
   signatures:
     - "sequence(start, stop, step)"
-  description: "Generates an array of elements from start to stop (inclusive), incrementing by step. The type of the returned elements is the same as the type of argument expressions."
-  examples: |
-    > SELECT sequence(1, 5);
-     [1,2,3,4,5]
-    > SELECT sequence(5, 1);
-     [5,4,3,2,1]
-    > SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), interval 1 month);
-     [2018-01-01,2018-02-01,2018-03-01]
-    > SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), interval '0-1' year to month);
-     [2018-01-01,2018-02-01,2018-03-01]
+  usage: |2-
+    
+        sequence(start, stop, step) - Generates an array of elements from start to stop (inclusive),
+          incrementing by step. The type of the returned elements is the same as the type of argument
+          expressions.
+    
+          Supported types are: byte, short, integer, long, date, timestamp.
+    
+          The start and stop expressions must resolve to the same type.
+          If start and stop expressions resolve to the 'date' or 'timestamp' type
+          then the step expression must resolve to the 'interval' or 'year-month interval' or
+          'day-time interval' type, otherwise to the same type as the start and stop expressions.
+      
+  arguments: |2-
+    
+        Arguments:
+          * start - an expression. The start of the range.
+          * stop - an expression. The end the range (inclusive).
+          * step - an optional expression. The step of the range.
+              By default step is 1 if start is less than or equal to stop, otherwise -1.
+              For the temporal sequences it's 1 day and -1 day respectively.
+              If start is greater than stop then the step must be negative, and vice versa.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT sequence(1, 5);
+           [1,2,3,4,5]
+          > SELECT sequence(5, 1);
+           [5,4,3,2,1]
+          > SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), interval 1 month);
+           [2018-01-01,2018-02-01,2018-03-01]
+          > SELECT sequence(to_date('2018-01-01'), to_date('2018-03-01'), interval '0-1' year to month);
+           [2018-01-01,2018-02-01,2018-03-01]
+      
   since: "2.4.0"
-- name: shuffle
+
+- name: "shuffle"
+  scope: "sql_builtin"
+  group: "array_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Shuffle"
   signatures:
     - "shuffle(array)"
-  description: "Returns a random permutation of the given array."
-  examples: |
-    > SELECT shuffle(array(1, 20, 3, 5));
-     [3,1,5,20]
-    > SELECT shuffle(array(1, 20, null, 3));
-     [20,null,3,1]
-  note: "The function is non-deterministic."
+  usage: "shuffle(array) - Returns a random permutation of the given array."
+  examples: |2-
+    
+        Examples:
+          > SELECT shuffle(array(1, 20, 3, 5));
+           [3,1,5,20]
+          > SELECT shuffle(array(1, 20, null, 3));
+           [20,null,3,1]
+      
+  note: |2-
+    
+        The function is non-deterministic.
+      
   since: "2.4.0"
-- name: slice
+
+- name: "slice"
+  scope: "sql_builtin"
+  group: "array_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Slice"
   signatures:
     - "slice(x, start, length)"
-  description: "Subsets array x starting from index start (array indices start at 1, or starting from the end if start is negative) with the specified length."
-  examples: |
-    > SELECT slice(array(1, 2, 3, 4), 2, 2);
-     [2,3]
-    > SELECT slice(array(1, 2, 3, 4), -2, 2);
-     [3,4]
+  usage: "slice(x, start, length) - Subsets array x starting from index start (array indices start at 1, or starting from the end if start is negative) with the specified length."
+  examples: |2-
+    
+        Examples:
+          > SELECT slice(array(1, 2, 3, 4), 2, 2);
+           [2,3]
+          > SELECT slice(array(1, 2, 3, 4), -2, 2);
+           [3,4]
+      
   since: "2.4.0"
-- name: sort_array
+
+- name: "sort_array"
+  scope: "sql_builtin"
+  group: "array_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.SortArray"
   signatures:
     - "sort_array(array[, ascendingOrder])"
-  description: "Sorts the input array in ascending or descending order according to the natural ordering of the array elements. NaN is greater than any non-NaN elements for double/float type. Null elements will be placed at the beginning of the returned array in ascending order or at the end of the returned array in descending order."
-  examples: |
-    > SELECT sort_array(array('b', 'd', null, 'c', 'a'), true);
-     [null,"a","b","c","d"]
-    > SELECT sort_array(array('b', 'd', null, 'c', 'a'), false);
-     ["d","c","b","a",null]
+  usage: |2-
+    
+        sort_array(array[, ascendingOrder]) - Sorts the input array in ascending or descending order
+          according to the natural ordering of the array elements. NaN is greater than any non-NaN
+          elements for double/float type. Null elements will be placed at the beginning of the returned
+          array in ascending order or at the end of the returned array in descending order.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT sort_array(array('b', 'd', null, 'c', 'a'), true);
+           [null,"a","b","c","d"]
+          > SELECT sort_array(array('b', 'd', null, 'c', 'a'), false);
+           ["d","c","b","a",null]
+      
   since: "1.5.0"
+

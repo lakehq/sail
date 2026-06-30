@@ -1,27 +1,45 @@
-- name: range
+- name: "range"
+  scope: "sql_builtin"
+  group: "table_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.plans.logical.Range"
   signatures:
     - "range(start[, end[, step[, numSlices]]]) / range(end)"
-  description: "Returns a table of values within a specified range."
-  examples: |
-    > SELECT * FROM range(1);
-      +---+
-      | id|
-      +---+
-      |  0|
-      +---+
-    > SELECT * FROM range(0, 2);
-      +---+
-      |id |
-      +---+
-      |0  |
-      |1  |
-      +---+
-    > SELECT * FROM range(0, 4, 2);
-      +---+
-      |id |
-      +---+
-      |0  |
-      |2  |
-      +---+
+  usage: |2-
+    
+        range(start[, end[, step[, numSlices]]]) / range(end) - Returns a table of values within a specified range.
+      
+  arguments: |2-
+    
+        Arguments:
+          * start - An optional BIGINT literal defaulted to 0, marking the first value generated.
+          * end - A BIGINT literal marking endpoint (exclusive) of the number generation.
+          * step - An optional BIGINT literal defaulted to 1, specifying the increment used when generating values.
+          * numParts - An optional INTEGER literal specifying how the production of rows is spread across partitions.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT * FROM range(1);
+            +---+
+            | id|
+            +---+
+            |  0|
+            +---+
+          > SELECT * FROM range(0, 2);
+            +---+
+            |id |
+            +---+
+            |0  |
+            |1  |
+            +---+
+          > SELECT * FROM range(0, 4, 2);
+            +---+
+            |id |
+            +---+
+            |0  |
+            |2  |
+            +---+
+      
   since: "2.0.0"
+

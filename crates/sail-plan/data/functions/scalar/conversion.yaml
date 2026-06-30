@@ -1,89 +1,148 @@
-- name: bigint
+- name: "bigint"
+  scope: "sql_builtin"
+  group: "conversion_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
   signatures:
     - "bigint(expr)"
-  description: "Casts the value expr to the target data type bigint."
+  usage: "bigint(expr) - Casts the value `expr` to the target data type `bigint`."
   since: "2.0.1"
-- name: binary
+
+- name: "binary"
+  scope: "sql_builtin"
+  group: "conversion_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
   signatures:
     - "binary(expr)"
-  description: "Casts the value expr to the target data type binary."
+  usage: "binary(expr) - Casts the value `expr` to the target data type `binary`."
   since: "2.0.1"
-- name: boolean
+
+- name: "boolean"
+  scope: "sql_builtin"
+  group: "conversion_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
   signatures:
     - "boolean(expr)"
-  description: "Casts the value expr to the target data type boolean."
+  usage: "boolean(expr) - Casts the value `expr` to the target data type `boolean`."
   since: "2.0.1"
-- name: cast
+
+- name: "cast"
+  scope: "sql_builtin"
+  group: "conversion_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
   signatures:
     - "cast(expr AS type)"
-  description: "Casts the value expr to the target data type type. expr :: type alternative casting syntax is also supported."
-  examples: |
-    > SELECT cast('10' as int);
-     10
-    > SELECT '10' :: int;
-     10
+  usage: "cast(expr AS type) - Casts the value `expr` to the target data type `type`. `expr` :: `type` alternative casting syntax is also supported."
+  examples: |2-
+    
+        Examples:
+          > SELECT cast('10' as int);
+           10
+          > SELECT '10' :: int;
+           10
+      
   since: "1.0.0"
-- name: date
+
+- name: "date"
+  scope: "sql_builtin"
+  group: "conversion_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
   signatures:
     - "date(expr)"
-  description: "Casts the value expr to the target data type date."
+  usage: "date(expr) - Casts the value `expr` to the target data type `date`."
   since: "2.0.1"
-- name: decimal
+
+- name: "decimal"
+  scope: "sql_builtin"
+  group: "conversion_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
   signatures:
     - "decimal(expr)"
-  description: "Casts the value expr to the target data type decimal."
+  usage: "decimal(expr) - Casts the value `expr` to the target data type `decimal`."
   since: "2.0.1"
-- name: double
+
+- name: "double"
+  scope: "sql_builtin"
+  group: "conversion_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
   signatures:
     - "double(expr)"
-  description: "Casts the value expr to the target data type double."
+  usage: "double(expr) - Casts the value `expr` to the target data type `double`."
   since: "2.0.1"
-- name: float
+
+- name: "float"
+  scope: "sql_builtin"
+  group: "conversion_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
   signatures:
     - "float(expr)"
-  description: "Casts the value expr to the target data type float."
+  usage: "float(expr) - Casts the value `expr` to the target data type `float`."
   since: "2.0.1"
-- name: int
+
+- name: "int"
+  scope: "sql_builtin"
+  group: "conversion_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
   signatures:
     - "int(expr)"
-  description: "Casts the value expr to the target data type int."
+  usage: "int(expr) - Casts the value `expr` to the target data type `int`."
   since: "2.0.1"
-- name: smallint
+
+- name: "smallint"
+  scope: "sql_builtin"
+  group: "conversion_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
   signatures:
     - "smallint(expr)"
-  description: "Casts the value expr to the target data type smallint."
+  usage: "smallint(expr) - Casts the value `expr` to the target data type `smallint`."
   since: "2.0.1"
-- name: string
+
+- name: "string"
+  scope: "sql_builtin"
+  group: "conversion_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
   signatures:
     - "string(expr)"
-  description: "Casts the value expr to the target data type string."
+  usage: "string(expr) - Casts the value `expr` to the target data type `string`."
   since: "2.0.1"
-- name: time
+
+- name: "time"
+  scope: "sql_builtin"
+  group: "conversion_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
   signatures:
     - "time(expr)"
-  description: "Casts the value expr to the target data type time."
+  usage: "time(expr) - Casts the value `expr` to the target data type `time`."
   since: "2.0.1"
-- name: timestamp
+
+- name: "timestamp"
+  scope: "sql_builtin"
+  group: "conversion_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
   signatures:
     - "timestamp(expr)"
-  description: "Casts the value expr to the target data type timestamp."
+  usage: "timestamp(expr) - Casts the value `expr` to the target data type `timestamp`."
   since: "2.0.1"
-- name: tinyint
+
+- name: "tinyint"
+  scope: "sql_builtin"
+  group: "conversion_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
   signatures:
     - "tinyint(expr)"
-  description: "Casts the value expr to the target data type tinyint."
+  usage: "tinyint(expr) - Casts the value `expr` to the target data type `tinyint`."
   since: "2.0.1"
+

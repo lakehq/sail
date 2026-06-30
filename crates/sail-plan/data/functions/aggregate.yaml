@@ -1,890 +1,1567 @@
-- name: any
+- name: "any"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.BoolOr"
   signatures:
     - "any(expr)"
-  description: "Returns true if at least one value of expr is true."
-  examples: |
-    > SELECT any(col) FROM VALUES (true), (false), (false) AS tab(col);
-     true
-    > SELECT any(col) FROM VALUES (NULL), (true), (false) AS tab(col);
-     true
-    > SELECT any(col) FROM VALUES (false), (false), (NULL) AS tab(col);
-     false
+  usage: "any(expr) - Returns true if at least one value of `expr` is true."
+  examples: |2-
+    
+        Examples:
+          > SELECT any(col) FROM VALUES (true), (false), (false) AS tab(col);
+           true
+          > SELECT any(col) FROM VALUES (NULL), (true), (false) AS tab(col);
+           true
+          > SELECT any(col) FROM VALUES (false), (false), (NULL) AS tab(col);
+           false
+      
   since: "3.0.0"
-- name: any_value
+
+- name: "any_value"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.AnyValue"
   signatures:
     - "any_value(expr[, isIgnoreNull])"
-  description: "Returns some value of expr for a group of rows. If isIgnoreNull is true, returns only non-null values."
-  examples: |
-    > SELECT any_value(col) FROM VALUES (10), (5), (20) AS tab(col);
-     10
-    > SELECT any_value(col) FROM VALUES (NULL), (5), (20) AS tab(col);
-     NULL
-    > SELECT any_value(col, true) FROM VALUES (NULL), (5), (20) AS tab(col);
-     5
-  note: "The function is non-deterministic."
+  usage: |2-
+    
+        any_value(expr[, isIgnoreNull]) - Returns some value of `expr` for a group of rows.
+          If `isIgnoreNull` is true, returns only non-null values.
+  examples: |2-
+    
+        Examples:
+          > SELECT any_value(col) FROM VALUES (10), (5), (20) AS tab(col);
+           10
+          > SELECT any_value(col) FROM VALUES (NULL), (5), (20) AS tab(col);
+           NULL
+          > SELECT any_value(col, true) FROM VALUES (NULL), (5), (20) AS tab(col);
+           5
+      
+  note: |2-
+    
+        The function is non-deterministic.
+      
   since: "3.4.0"
-- name: approx_count_distinct
+
+- name: "approx_count_distinct"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.HyperLogLogPlusPlus"
   signatures:
     - "approx_count_distinct(expr[, relativeSD])"
-  description: "Returns the estimated cardinality by HyperLogLog++. relativeSD defines the maximum relative standard deviation allowed."
-  examples: |
-    > SELECT approx_count_distinct(col1) FROM VALUES (1), (1), (2), (2), (3) tab(col1);
-     3
+  usage: |2-
+    
+        approx_count_distinct(expr[, relativeSD]) - Returns the estimated cardinality by HyperLogLog++.
+          `relativeSD` defines the maximum relative standard deviation allowed.
+  examples: |2-
+    
+        Examples:
+          > SELECT approx_count_distinct(col1) FROM VALUES (1), (1), (2), (2), (3) tab(col1);
+           3
+      
   since: "1.6.0"
-- name: approx_percentile
+
+- name: "approx_percentile"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.ApproximatePercentile"
   signatures:
     - "approx_percentile(col, percentage [, accuracy])"
-  description: "Returns the approximate percentile of the numeric or ansi interval column col which is the smallest value in the ordered col values (sorted from least to greatest) such that no more than percentage of col values is less than the value or equal to that value. The value of percentage must be between 0.0 and 1.0. The accuracy parameter (default: 10000) is a positive numeric literal which controls approximation accuracy at the cost of memory. Higher value of accuracy yields better accuracy, 1.0/accuracy is the relative error of the approximation. When percentage is an array, each value of the percentage array must be between 0.0 and 1.0. In this case, returns the approximate percentile array of column col at the given percentage array."
-  examples: |
-    > SELECT approx_percentile(col, array(0.5, 0.4, 0.1), 100) FROM VALUES (0), (1), (2), (10) AS tab(col);
-     [1,1,0]
-    > SELECT approx_percentile(col, 0.5, 100) FROM VALUES (0), (6), (7), (9), (10) AS tab(col);
-     7
-    > SELECT approx_percentile(col, 0.5, 100) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '1' MONTH), (INTERVAL '2' MONTH), (INTERVAL '10' MONTH) AS tab(col);
-     0-1
-    > SELECT approx_percentile(col, array(0.5, 0.7), 100) FROM VALUES (INTERVAL '0' SECOND), (INTERVAL '1' SECOND), (INTERVAL '2' SECOND), (INTERVAL '10' SECOND) AS tab(col);
-     [0 00:00:01.000000000,0 00:00:02.000000000]
+  usage: |2-
+    
+        approx_percentile(col, percentage [, accuracy]) - Returns the approximate `percentile` of the numeric or
+          ansi interval column `col` which is the smallest value in the ordered `col` values (sorted
+          from least to greatest) such that no more than `percentage` of `col` values is less than
+          the value or equal to that value. The value of percentage must be between 0.0 and 1.0.
+          The `accuracy` parameter (default: 10000) is a positive numeric literal which controls
+          approximation accuracy at the cost of memory. Higher value of `accuracy` yields better
+          accuracy, `1.0/accuracy` is the relative error of the approximation.
+          When `percentage` is an array, each value of the percentage array must be between 0.0 and 1.0.
+          In this case, returns the approximate percentile array of column `col` at the given
+          percentage array.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT approx_percentile(col, array(0.5, 0.4, 0.1), 100) FROM VALUES (0), (1), (2), (10) AS tab(col);
+           [1,1,0]
+          > SELECT approx_percentile(col, 0.5, 100) FROM VALUES (0), (6), (7), (9), (10) AS tab(col);
+           7
+          > SELECT approx_percentile(col, 0.5, 100) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '1' MONTH), (INTERVAL '2' MONTH), (INTERVAL '10' MONTH) AS tab(col);
+           0-1
+          > SELECT approx_percentile(col, array(0.5, 0.7), 100) FROM VALUES (INTERVAL '0' SECOND), (INTERVAL '1' SECOND), (INTERVAL '2' SECOND), (INTERVAL '10' SECOND) AS tab(col);
+           [0 00:00:01.000000000,0 00:00:02.000000000]
+      
   since: "2.1.0"
-- name: array_agg
+
+- name: "array_agg"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.CollectList"
   signatures:
     - "array_agg(expr)"
-  description: "Collects and returns a list of non-unique elements."
-  examples: |
-    > SELECT array_agg(col) FROM VALUES (1), (2), (1) AS tab(col);
-     [1,2,1]
-  note: |
-    The function is non-deterministic because the order of collected results depends
-    on the order of the rows which may be non-deterministic after a shuffle.
+  usage: "array_agg(expr) - Collects and returns a list of non-unique elements."
+  examples: |2-
+    
+        Examples:
+          > SELECT array_agg(col) FROM VALUES (1), (2), (1) AS tab(col);
+           [1,2,1]
+      
+  note: |2-
+    
+        The function is non-deterministic because the order of collected results depends
+        on the order of the rows which may be non-deterministic after a shuffle.
+      
   since: "3.3.0"
-- name: avg
+
+- name: "avg"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.Average"
   signatures:
     - "avg(expr)"
-  description: "Returns the mean calculated from values of a group."
-  examples: |
-    > SELECT avg(col) FROM VALUES (1), (2), (3) AS tab(col);
-     2.0
-    > SELECT avg(col) FROM VALUES (1), (2), (NULL) AS tab(col);
-     1.5
+  usage: "avg(expr) - Returns the mean calculated from values of a group."
+  examples: |2-
+    
+        Examples:
+          > SELECT avg(col) FROM VALUES (1), (2), (3) AS tab(col);
+           2.0
+          > SELECT avg(col) FROM VALUES (1), (2), (NULL) AS tab(col);
+           1.5
+      
   since: "1.0.0"
-- name: bit_and
+
+- name: "bit_and"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.BitAndAgg"
   signatures:
     - "bit_and(expr)"
-  description: "Returns the bitwise AND of all non-null input values, or null if none."
-  examples: |
-    > SELECT bit_and(col) FROM VALUES (3), (5) AS tab(col);
-     1
+  usage: "bit_and(expr) - Returns the bitwise AND of all non-null input values, or null if none."
+  examples: |2-
+    
+        Examples:
+          > SELECT bit_and(col) FROM VALUES (3), (5) AS tab(col);
+           1
+      
   since: "3.0.0"
-- name: bit_or
+
+- name: "bit_or"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.BitOrAgg"
   signatures:
     - "bit_or(expr)"
-  description: "Returns the bitwise OR of all non-null input values, or null if none."
-  examples: |
-    > SELECT bit_or(col) FROM VALUES (3), (5) AS tab(col);
-     7
+  usage: "bit_or(expr) - Returns the bitwise OR of all non-null input values, or null if none."
+  examples: |2-
+    
+        Examples:
+          > SELECT bit_or(col) FROM VALUES (3), (5) AS tab(col);
+           7
+      
   since: "3.0.0"
-- name: bit_xor
+
+- name: "bit_xor"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.BitXorAgg"
   signatures:
     - "bit_xor(expr)"
-  description: "Returns the bitwise XOR of all non-null input values, or null if none."
-  examples: |
-    > SELECT bit_xor(col) FROM VALUES (3), (5) AS tab(col);
-     6
+  usage: "bit_xor(expr) - Returns the bitwise XOR of all non-null input values, or null if none."
+  examples: |2-
+    
+        Examples:
+          > SELECT bit_xor(col) FROM VALUES (3), (5) AS tab(col);
+           6
+      
   since: "3.0.0"
-- name: bitmap_and_agg
+
+- name: "bitmap_and_agg"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.BitmapAndAgg"
   signatures:
     - "bitmap_and_agg(child)"
-  description: "Returns a bitmap that is the bitwise AND of all of the bitmaps from the child expression. The input should be bitmaps created from bitmap_construct_agg()."
-  examples: |
-    > SELECT substring(hex(bitmap_and_agg(col)), 0, 6) FROM VALUES (X 'F0'), (X '70'), (X '30') AS tab(col);
-     300000
-    > SELECT substring(hex(bitmap_and_agg(col)), 0, 6) FROM VALUES (X 'FF'), (X 'FF'), (X 'FF') AS tab(col);
-     FF0000
+  usage: |2-
+    
+        bitmap_and_agg(child) - Returns a bitmap that is the bitwise AND of all of the bitmaps from the child
+        expression. The input should be bitmaps created from bitmap_construct_agg().
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT substring(hex(bitmap_and_agg(col)), 0, 6) FROM VALUES (X 'F0'), (X '70'), (X '30') AS tab(col);
+           300000
+          > SELECT substring(hex(bitmap_and_agg(col)), 0, 6) FROM VALUES (X 'FF'), (X 'FF'), (X 'FF') AS tab(col);
+           FF0000
+      
   since: "4.1.0"
-- name: bitmap_construct_agg
+
+- name: "bitmap_construct_agg"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.BitmapConstructAgg"
   signatures:
     - "bitmap_construct_agg(child)"
-  description: "Returns a bitmap with the positions of the bits set from all the values from the child expression. The child expression will most likely be bitmap_bit_position()."
-  examples: |
-    > SELECT substring(hex(bitmap_construct_agg(bitmap_bit_position(col))), 0, 6) FROM VALUES (1), (2), (3) AS tab(col);
-     070000
-    > SELECT substring(hex(bitmap_construct_agg(bitmap_bit_position(col))), 0, 6) FROM VALUES (1), (1), (1) AS tab(col);
-     010000
+  usage: |2-
+    
+        bitmap_construct_agg(child) - Returns a bitmap with the positions of the bits set from all the values from
+        the child expression. The child expression will most likely be bitmap_bit_position().
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT substring(hex(bitmap_construct_agg(bitmap_bit_position(col))), 0, 6) FROM VALUES (1), (2), (3) AS tab(col);
+           070000
+          > SELECT substring(hex(bitmap_construct_agg(bitmap_bit_position(col))), 0, 6) FROM VALUES (1), (1), (1) AS tab(col);
+           010000
+      
   since: "3.5.0"
-- name: bitmap_or_agg
+
+- name: "bitmap_or_agg"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.BitmapOrAgg"
   signatures:
     - "bitmap_or_agg(child)"
-  description: "Returns a bitmap that is the bitwise OR of all of the bitmaps from the child expression. The input should be bitmaps created from bitmap_construct_agg()."
-  examples: |
-    > SELECT substring(hex(bitmap_or_agg(col)), 0, 6) FROM VALUES (X '10'), (X '20'), (X '40') AS tab(col);
-     700000
-    > SELECT substring(hex(bitmap_or_agg(col)), 0, 6) FROM VALUES (X '10'), (X '10'), (X '10') AS tab(col);
-     100000
+  usage: |2-
+    
+        bitmap_or_agg(child) - Returns a bitmap that is the bitwise OR of all of the bitmaps from the child
+        expression. The input should be bitmaps created from bitmap_construct_agg().
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT substring(hex(bitmap_or_agg(col)), 0, 6) FROM VALUES (X '10'), (X '20'), (X '40') AS tab(col);
+           700000
+          > SELECT substring(hex(bitmap_or_agg(col)), 0, 6) FROM VALUES (X '10'), (X '10'), (X '10') AS tab(col);
+           100000
+      
   since: "3.5.0"
-- name: bool_and
+
+- name: "bool_and"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.BoolAnd"
   signatures:
     - "bool_and(expr)"
-  description: "Returns true if all values of expr are true."
-  examples: |
-    > SELECT bool_and(col) FROM VALUES (true), (true), (true) AS tab(col);
-     true
-    > SELECT bool_and(col) FROM VALUES (NULL), (true), (true) AS tab(col);
-     true
-    > SELECT bool_and(col) FROM VALUES (true), (false), (true) AS tab(col);
-     false
+  usage: "bool_and(expr) - Returns true if all values of `expr` are true."
+  examples: |2-
+    
+        Examples:
+          > SELECT bool_and(col) FROM VALUES (true), (true), (true) AS tab(col);
+           true
+          > SELECT bool_and(col) FROM VALUES (NULL), (true), (true) AS tab(col);
+           true
+          > SELECT bool_and(col) FROM VALUES (true), (false), (true) AS tab(col);
+           false
+      
   since: "3.0.0"
-- name: bool_or
+
+- name: "bool_or"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.BoolOr"
   signatures:
     - "bool_or(expr)"
-  description: "Returns true if at least one value of expr is true."
-  examples: |
-    > SELECT bool_or(col) FROM VALUES (true), (false), (false) AS tab(col);
-     true
-    > SELECT bool_or(col) FROM VALUES (NULL), (true), (false) AS tab(col);
-     true
-    > SELECT bool_or(col) FROM VALUES (false), (false), (NULL) AS tab(col);
-     false
+  usage: "bool_or(expr) - Returns true if at least one value of `expr` is true."
+  examples: |2-
+    
+        Examples:
+          > SELECT bool_or(col) FROM VALUES (true), (false), (false) AS tab(col);
+           true
+          > SELECT bool_or(col) FROM VALUES (NULL), (true), (false) AS tab(col);
+           true
+          > SELECT bool_or(col) FROM VALUES (false), (false), (NULL) AS tab(col);
+           false
+      
   since: "3.0.0"
-- name: collect_list
+
+- name: "collect_list"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.CollectList"
   signatures:
     - "collect_list(expr)"
-  description: "Collects and returns a list of non-unique elements."
-  examples: |
-    > SELECT collect_list(col) FROM VALUES (1), (2), (1) AS tab(col);
-     [1,2,1]
-  note: |
-    The function is non-deterministic because the order of collected results depends
-    on the order of the rows which may be non-deterministic after a shuffle.
+  usage: "collect_list(expr) - Collects and returns a list of non-unique elements."
+  examples: |2-
+    
+        Examples:
+          > SELECT collect_list(col) FROM VALUES (1), (2), (1) AS tab(col);
+           [1,2,1]
+      
+  note: |2-
+    
+        The function is non-deterministic because the order of collected results depends
+        on the order of the rows which may be non-deterministic after a shuffle.
+      
   since: "2.0.0"
-- name: collect_set
+
+- name: "collect_set"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.CollectSet"
   signatures:
     - "collect_set(expr)"
-  description: "Collects and returns a set of unique elements."
-  examples: |
-    > SELECT collect_set(col) FROM VALUES (1), (2), (1) AS tab(col);
-     [1,2]
-  note: |
-    The function is non-deterministic because the order of collected results depends
-    on the order of the rows which may be non-deterministic after a shuffle.
+  usage: "collect_set(expr) - Collects and returns a set of unique elements."
+  examples: |2-
+    
+        Examples:
+          > SELECT collect_set(col) FROM VALUES (1), (2), (1) AS tab(col);
+           [1,2]
+      
+  note: |2-
+    
+        The function is non-deterministic because the order of collected results depends
+        on the order of the rows which may be non-deterministic after a shuffle.
+      
   since: "2.0.0"
-- name: corr
+
+- name: "corr"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.Corr"
   signatures:
     - "corr(expr1, expr2)"
-  description: "Returns Pearson coefficient of correlation between a set of number pairs."
-  examples: |
-    > SELECT corr(c1, c2) FROM VALUES (3, 2), (3, 3), (6, 4) as tab(c1, c2);
-     0.8660254037844387
+  usage: "corr(expr1, expr2) - Returns Pearson coefficient of correlation between a set of number pairs."
+  examples: |2-
+    
+        Examples:
+          > SELECT corr(c1, c2) FROM VALUES (3, 2), (3, 3), (6, 4) as tab(c1, c2);
+           0.8660254037844387
+      
   since: "1.6.0"
-- name: count
+
+- name: "count"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.Count"
   signatures:
     - "count(*)"
-  description: "Returns the total number of retrieved rows, including rows containing null."
-  examples: |
-    > SELECT count(*) FROM VALUES (NULL), (5), (5), (20) AS tab(col);
-     4
-    > SELECT count(col) FROM VALUES (NULL), (5), (5), (20) AS tab(col);
-     3
-    > SELECT count(DISTINCT col) FROM VALUES (NULL), (5), (5), (10) AS tab(col);
-     2
+    - "count(expr[, expr...])"
+    - "count(DISTINCT expr[, expr...])"
+  usage: |2-
+    
+        count(*) - Returns the total number of retrieved rows, including rows containing null.
+    
+        count(expr[, expr...]) - Returns the number of rows for which the supplied expression(s) are all non-null.
+    
+        count(DISTINCT expr[, expr...]) - Returns the number of rows for which the supplied expression(s) are unique and non-null.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT count(*) FROM VALUES (NULL), (5), (5), (20) AS tab(col);
+           4
+          > SELECT count(col) FROM VALUES (NULL), (5), (5), (20) AS tab(col);
+           3
+          > SELECT count(DISTINCT col) FROM VALUES (NULL), (5), (5), (10) AS tab(col);
+           2
+      
   since: "1.0.0"
-- name: count_if
+
+- name: "count_if"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.CountIf"
   signatures:
     - "count_if(expr)"
-  description: "Returns the number of TRUE values for the expression."
-  examples: |
-    > SELECT count_if(col % 2 = 0) FROM VALUES (NULL), (0), (1), (2), (3) AS tab(col);
-     2
-    > SELECT count_if(col IS NULL) FROM VALUES (NULL), (0), (1), (2), (3) AS tab(col);
-     1
+  usage: |2-
+    
+        count_if(expr) - Returns the number of `TRUE` values for the expression.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT count_if(col % 2 = 0) FROM VALUES (NULL), (0), (1), (2), (3) AS tab(col);
+           2
+          > SELECT count_if(col IS NULL) FROM VALUES (NULL), (0), (1), (2), (3) AS tab(col);
+           1
+      
   since: "3.0.0"
-- name: count_min_sketch
+
+- name: "count_min_sketch"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.CountMinSketchAggExpressionBuilder"
   signatures:
     - "count_min_sketch(col, eps, confidence, seed)"
-  description: "Returns a count-min sketch of a column with the given esp, confidence and seed. The result is an array of bytes, which can be deserialized to a CountMinSketch before usage. Count-min sketch is a probabilistic data structure used for cardinality estimation using sub-linear space."
-  examples: |
-    > SELECT hex(count_min_sketch(col, 0.5d, 0.5d, 1)) FROM VALUES (1), (2), (1) AS tab(col);
-     0000000100000000000000030000000100000004000000005D8D6AB90000000000000000000000000000000200000000000000010000000000000000
+  usage: |2-
+    
+        count_min_sketch(col, eps, confidence, seed) - Returns a count-min sketch of a column with the given esp,
+          confidence and seed. The result is an array of bytes, which can be deserialized to a
+          `CountMinSketch` before usage. Count-min sketch is a probabilistic data structure used for
+          cardinality estimation using sub-linear space.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT hex(count_min_sketch(col, 0.5d, 0.5d, 1)) FROM VALUES (1), (2), (1) AS tab(col);
+           0000000100000000000000030000000100000004000000005D8D6AB90000000000000000000000000000000200000000000000010000000000000000
+      
   since: "2.2.0"
-- name: covar_pop
+
+- name: "covar_pop"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.CovPopulation"
   signatures:
     - "covar_pop(expr1, expr2)"
-  description: "Returns the population covariance of a set of number pairs."
-  examples: |
-    > SELECT covar_pop(c1, c2) FROM VALUES (1,1), (2,2), (3,3) AS tab(c1, c2);
-     0.6666666666666666
+  usage: "covar_pop(expr1, expr2) - Returns the population covariance of a set of number pairs."
+  examples: |2-
+    
+        Examples:
+          > SELECT covar_pop(c1, c2) FROM VALUES (1,1), (2,2), (3,3) AS tab(c1, c2);
+           0.6666666666666666
+      
   since: "2.0.0"
-- name: covar_samp
+
+- name: "covar_samp"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.CovSample"
   signatures:
     - "covar_samp(expr1, expr2)"
-  description: "Returns the sample covariance of a set of number pairs."
-  examples: |
-    > SELECT covar_samp(c1, c2) FROM VALUES (1,1), (2,2), (3,3) AS tab(c1, c2);
-     1.0
+  usage: "covar_samp(expr1, expr2) - Returns the sample covariance of a set of number pairs."
+  examples: |2-
+    
+        Examples:
+          > SELECT covar_samp(c1, c2) FROM VALUES (1,1), (2,2), (3,3) AS tab(c1, c2);
+           1.0
+      
   since: "2.0.0"
-- name: every
+
+- name: "every"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.BoolAnd"
   signatures:
     - "every(expr)"
-  description: "Returns true if all values of expr are true."
-  examples: |
-    > SELECT every(col) FROM VALUES (true), (true), (true) AS tab(col);
-     true
-    > SELECT every(col) FROM VALUES (NULL), (true), (true) AS tab(col);
-     true
-    > SELECT every(col) FROM VALUES (true), (false), (true) AS tab(col);
-     false
+  usage: "every(expr) - Returns true if all values of `expr` are true."
+  examples: |2-
+    
+        Examples:
+          > SELECT every(col) FROM VALUES (true), (true), (true) AS tab(col);
+           true
+          > SELECT every(col) FROM VALUES (NULL), (true), (true) AS tab(col);
+           true
+          > SELECT every(col) FROM VALUES (true), (false), (true) AS tab(col);
+           false
+      
   since: "3.0.0"
-- name: first
+
+- name: "first"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.First"
   signatures:
     - "first(expr[, isIgnoreNull])"
-  description: "Returns the first value of expr for a group of rows. If isIgnoreNull is true, returns only non-null values."
-  examples: |
-    > SELECT first(col) FROM VALUES (10), (5), (20) AS tab(col);
-     10
-    > SELECT first(col) FROM VALUES (NULL), (5), (20) AS tab(col);
-     NULL
-    > SELECT first(col, true) FROM VALUES (NULL), (5), (20) AS tab(col);
-     5
-  note: |
-    The function is non-deterministic because its results depends on the order of the rows
-    which may be non-deterministic after a shuffle.
+  usage: |2-
+    
+        first(expr[, isIgnoreNull]) - Returns the first value of `expr` for a group of rows.
+          If `isIgnoreNull` is true, returns only non-null values.
+  examples: |2-
+    
+        Examples:
+          > SELECT first(col) FROM VALUES (10), (5), (20) AS tab(col);
+           10
+          > SELECT first(col) FROM VALUES (NULL), (5), (20) AS tab(col);
+           NULL
+          > SELECT first(col, true) FROM VALUES (NULL), (5), (20) AS tab(col);
+           5
+      
+  note: |2-
+    
+        The function is non-deterministic because its results depends on the order of the rows
+        which may be non-deterministic after a shuffle.
+      
   since: "2.0.0"
-- name: first_value
+
+- name: "first_value"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.First"
   signatures:
     - "first_value(expr[, isIgnoreNull])"
-  description: "Returns the first value of expr for a group of rows. If isIgnoreNull is true, returns only non-null values."
-  examples: |
-    > SELECT first_value(col) FROM VALUES (10), (5), (20) AS tab(col);
-     10
-    > SELECT first_value(col) FROM VALUES (NULL), (5), (20) AS tab(col);
-     NULL
-    > SELECT first_value(col, true) FROM VALUES (NULL), (5), (20) AS tab(col);
-     5
-  note: |
-    The function is non-deterministic because its results depends on the order of the rows
-    which may be non-deterministic after a shuffle.
+  usage: |2-
+    
+        first_value(expr[, isIgnoreNull]) - Returns the first value of `expr` for a group of rows.
+          If `isIgnoreNull` is true, returns only non-null values.
+  examples: |2-
+    
+        Examples:
+          > SELECT first_value(col) FROM VALUES (10), (5), (20) AS tab(col);
+           10
+          > SELECT first_value(col) FROM VALUES (NULL), (5), (20) AS tab(col);
+           NULL
+          > SELECT first_value(col, true) FROM VALUES (NULL), (5), (20) AS tab(col);
+           5
+      
+  note: |2-
+    
+        The function is non-deterministic because its results depends on the order of the rows
+        which may be non-deterministic after a shuffle.
+      
   since: "2.0.0"
-- name: grouping
+
+- name: "grouping"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.Grouping"
   signatures:
     - "grouping(col)"
-  description: "indicates whether a specified column in a GROUP BY is aggregated or not, returns 1 for aggregated or 0 for not aggregated in the result set.\","
-  examples: |
-    > SELECT name, grouping(name), sum(age) FROM VALUES (2, 'Alice'), (5, 'Bob') people(age, name) GROUP BY cube(name);
-      Alice 0   2
-      Bob   0   5
-      NULL  1   7
+  usage: |2-
+    
+        grouping(col) - indicates whether a specified column in a GROUP BY is aggregated or
+          not, returns 1 for aggregated or 0 for not aggregated in the result set.",
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT name, grouping(name), sum(age) FROM VALUES (2, 'Alice'), (5, 'Bob') people(age, name) GROUP BY cube(name);
+            Alice	0	2
+            Bob	0	5
+            NULL	1	7
+      
   since: "2.0.0"
-- name: grouping_id
+
+- name: "grouping_id"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.GroupingID"
   signatures:
     - "grouping_id([col1[, col2 ..]])"
-  description: "returns the level of grouping, equals to (grouping(c1) << (n-1)) + (grouping(c2) << (n-2)) + ... + grouping(cn)"
-  examples: |
-    > SELECT name, grouping_id(), sum(age), avg(height) FROM VALUES (2, 'Alice', 165), (5, 'Bob', 180) people(age, name, height) GROUP BY cube(name, height);
-      Alice 0   2   165.0
-      Alice 1   2   165.0
-      NULL  3   7   172.5
-      Bob   0   5   180.0
-      Bob   1   5   180.0
-      NULL  2   2   165.0
-      NULL  2   5   180.0
-  note: |
-    Input columns should match with grouping columns exactly, or empty (means all the grouping
-    columns).
+  usage: |2-
+    
+        grouping_id([col1[, col2 ..]]) - returns the level of grouping, equals to
+          `(grouping(c1) << (n-1)) + (grouping(c2) << (n-2)) + ... + grouping(cn)`
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT name, grouping_id(), sum(age), avg(height) FROM VALUES (2, 'Alice', 165), (5, 'Bob', 180) people(age, name, height) GROUP BY cube(name, height);
+            Alice	0	2	165.0
+            Alice	1	2	165.0
+            NULL	3	7	172.5
+            Bob	0	5	180.0
+            Bob	1	5	180.0
+            NULL	2	2	165.0
+            NULL	2	5	180.0
+      
+  note: |2-
+    
+        Input columns should match with grouping columns exactly, or empty (means all the grouping
+        columns).
+      
   since: "2.0.0"
-- name: histogram_numeric
+
+- name: "histogram_numeric"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.HistogramNumeric"
   signatures:
     - "histogram_numeric(expr, nb)"
-  description: "Computes a histogram on numeric 'expr' using nb bins. The return value is an array of (x,y) pairs representing the centers of the histogram's bins. As the value of 'nb' is increased, the histogram approximation gets finer-grained, but may yield artifacts around outliers. In practice, 20-40 histogram bins appear to work well, with more bins being required for skewed or smaller datasets. Note that this function creates a histogram with non-uniform bin widths. It offers no guarantees in terms of the mean-squared-error of the histogram, but in practice is comparable to the histograms produced by the R/S-Plus statistical computing packages. Note: the output type of the 'x' field in the return value is propagated from the input value consumed in the aggregate function."
-  examples: |
-    > SELECT histogram_numeric(col, 5) FROM VALUES (0), (1), (2), (10) AS tab(col);
-     [{"x":0,"y":1.0},{"x":1,"y":1.0},{"x":2,"y":1.0},{"x":10,"y":1.0}]
+  usage: |2-
+    
+        histogram_numeric(expr, nb) - Computes a histogram on numeric 'expr' using nb bins.
+          The return value is an array of (x,y) pairs representing the centers of the
+          histogram's bins. As the value of 'nb' is increased, the histogram approximation
+          gets finer-grained, but may yield artifacts around outliers. In practice, 20-40
+          histogram bins appear to work well, with more bins being required for skewed or
+          smaller datasets. Note that this function creates a histogram with non-uniform
+          bin widths. It offers no guarantees in terms of the mean-squared-error of the
+          histogram, but in practice is comparable to the histograms produced by the R/S-Plus
+          statistical computing packages. Note: the output type of the 'x' field in the return value is
+          propagated from the input value consumed in the aggregate function.
+        
+  examples: |2-
+    
+        Examples:
+          > SELECT histogram_numeric(col, 5) FROM VALUES (0), (1), (2), (10) AS tab(col);
+           [{"x":0,"y":1.0},{"x":1,"y":1.0},{"x":2,"y":1.0},{"x":10,"y":1.0}]
+      
   since: "3.3.0"
-- name: hll_sketch_agg
+
+- name: "hll_sketch_agg"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.HllSketchAgg"
   signatures:
     - "hll_sketch_agg(expr, lgConfigK)"
-  description: "Returns the HllSketch's updatable binary representation. lgConfigK (optional) the log-base-2 of K, with K is the number of buckets or slots for the HllSketch."
-  examples: |
-    > SELECT hll_sketch_estimate(hll_sketch_agg(col, 12)) FROM VALUES (1), (1), (2), (2), (3) tab(col);
-     3
+  usage: |2-
+    
+        hll_sketch_agg(expr, lgConfigK) - Returns the HllSketch's updatable binary representation.
+          `lgConfigK` (optional) the log-base-2 of K, with K is the number of buckets or
+          slots for the HllSketch. 
+  examples: |2-
+    
+        Examples:
+          > SELECT hll_sketch_estimate(hll_sketch_agg(col, 12)) FROM VALUES (1), (1), (2), (2), (3) tab(col);
+           3
+      
   since: "3.5.0"
-- name: hll_union_agg
+
+- name: "hll_union_agg"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.HllUnionAgg"
   signatures:
     - "hll_union_agg(expr, allowDifferentLgConfigK)"
-  description: "Returns the estimated number of unique values. allowDifferentLgConfigK (optional) Allow sketches with different lgConfigK values to be unioned (defaults to false)."
-  examples: |
-    > SELECT hll_sketch_estimate(hll_union_agg(sketch, true)) FROM (SELECT hll_sketch_agg(col) as sketch FROM VALUES (1) tab(col) UNION ALL SELECT hll_sketch_agg(col, 20) as sketch FROM VALUES (1) tab(col));
-     1
+  usage: |2-
+    
+        hll_union_agg(expr, allowDifferentLgConfigK) - Returns the estimated number of unique values.
+          `allowDifferentLgConfigK` (optional) Allow sketches with different lgConfigK values
+           to be unioned (defaults to false).
+  examples: |2-
+    
+        Examples:
+          > SELECT hll_sketch_estimate(hll_union_agg(sketch, true)) FROM (SELECT hll_sketch_agg(col) as sketch FROM VALUES (1) tab(col) UNION ALL SELECT hll_sketch_agg(col, 20) as sketch FROM VALUES (1) tab(col));
+           1
+      
   since: "3.5.0"
-- name: kurtosis
+
+- name: "kurtosis"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.Kurtosis"
   signatures:
     - "kurtosis(expr)"
-  description: "Returns the kurtosis value calculated from values of a group."
-  examples: |
-    > SELECT kurtosis(col) FROM VALUES (-10), (-20), (100), (1000) AS tab(col);
-     -0.7014368047529627
-    > SELECT kurtosis(col) FROM VALUES (1), (10), (100), (10), (1) as tab(col);
-     0.19432323191699075
+  usage: "kurtosis(expr) - Returns the kurtosis value calculated from values of a group."
+  examples: |2-
+    
+        Examples:
+          > SELECT kurtosis(col) FROM VALUES (-10), (-20), (100), (1000) AS tab(col);
+           -0.7014368047529627
+          > SELECT kurtosis(col) FROM VALUES (1), (10), (100), (10), (1) as tab(col);
+           0.19432323191699075
+      
   since: "1.6.0"
-- name: last
+
+- name: "last"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.Last"
   signatures:
     - "last(expr[, isIgnoreNull])"
-  description: "Returns the last value of expr for a group of rows. If isIgnoreNull is true, returns only non-null values"
-  examples: |
-    > SELECT last(col) FROM VALUES (10), (5), (20) AS tab(col);
-     20
-    > SELECT last(col) FROM VALUES (10), (5), (NULL) AS tab(col);
-     NULL
-    > SELECT last(col, true) FROM VALUES (10), (5), (NULL) AS tab(col);
-     5
-  note: |
-    The function is non-deterministic because its results depends on the order of the rows
-    which may be non-deterministic after a shuffle.
+  usage: |2-
+    
+        last(expr[, isIgnoreNull]) - Returns the last value of `expr` for a group of rows.
+          If `isIgnoreNull` is true, returns only non-null values
+  examples: |2-
+    
+        Examples:
+          > SELECT last(col) FROM VALUES (10), (5), (20) AS tab(col);
+           20
+          > SELECT last(col) FROM VALUES (10), (5), (NULL) AS tab(col);
+           NULL
+          > SELECT last(col, true) FROM VALUES (10), (5), (NULL) AS tab(col);
+           5
+      
+  note: |2-
+    
+        The function is non-deterministic because its results depends on the order of the rows
+        which may be non-deterministic after a shuffle.
+      
   since: "2.0.0"
-- name: last_value
+
+- name: "last_value"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.Last"
   signatures:
     - "last_value(expr[, isIgnoreNull])"
-  description: "Returns the last value of expr for a group of rows. If isIgnoreNull is true, returns only non-null values"
-  examples: |
-    > SELECT last_value(col) FROM VALUES (10), (5), (20) AS tab(col);
-     20
-    > SELECT last_value(col) FROM VALUES (10), (5), (NULL) AS tab(col);
-     NULL
-    > SELECT last_value(col, true) FROM VALUES (10), (5), (NULL) AS tab(col);
-     5
-  note: |
-    The function is non-deterministic because its results depends on the order of the rows
-    which may be non-deterministic after a shuffle.
+  usage: |2-
+    
+        last_value(expr[, isIgnoreNull]) - Returns the last value of `expr` for a group of rows.
+          If `isIgnoreNull` is true, returns only non-null values
+  examples: |2-
+    
+        Examples:
+          > SELECT last_value(col) FROM VALUES (10), (5), (20) AS tab(col);
+           20
+          > SELECT last_value(col) FROM VALUES (10), (5), (NULL) AS tab(col);
+           NULL
+          > SELECT last_value(col, true) FROM VALUES (10), (5), (NULL) AS tab(col);
+           5
+      
+  note: |2-
+    
+        The function is non-deterministic because its results depends on the order of the rows
+        which may be non-deterministic after a shuffle.
+      
   since: "2.0.0"
-- name: listagg
+
+- name: "listagg"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.ListAgg"
   signatures:
     - "listagg(expr[, delimiter])[ WITHIN GROUP (ORDER BY key [ASC | DESC] [,...])]"
-  description: "Returns the concatenation of non-NULL input values, separated by the delimiter ordered by key. If all values are NULL, NULL is returned."
-  examples: |
-    > SELECT listagg(col) FROM VALUES ('a'), ('b'), ('c') AS tab(col);
-     abc
-    > SELECT listagg(col) WITHIN GROUP (ORDER BY col DESC) FROM VALUES ('a'), ('b'), ('c') AS tab(col);
-     cba
-    > SELECT listagg(col) FROM VALUES ('a'), (NULL), ('b') AS tab(col);
-     ab
-    > SELECT listagg(col) FROM VALUES ('a'), ('a') AS tab(col);
-     aa
-    > SELECT listagg(DISTINCT col) FROM VALUES ('a'), ('a'), ('b') AS tab(col);
-     ab
-    > SELECT listagg(col, ', ') FROM VALUES ('a'), ('b'), ('c') AS tab(col);
-     a, b, c
-    > SELECT listagg(col) FROM VALUES (NULL), (NULL) AS tab(col);
-     NULL
-  note: |
-    If the order is not specified, the function is non-deterministic because
-    the order of the rows may be non-deterministic after a shuffle.
-    If DISTINCT is specified, then expr and key must be the same expression.
+  usage: |2-
+    
+        listagg(expr[, delimiter])[ WITHIN GROUP (ORDER BY key [ASC | DESC] [,...])] - Returns
+        the concatenation of non-NULL input values, separated by the delimiter ordered by key.
+        If all values are NULL, NULL is returned.
+        
+  arguments: |2-
+    
+        Arguments:
+          * expr - a string or binary expression to be concatenated.
+          * delimiter - an optional string or binary foldable expression used to separate the input values.
+            If NULL, the concatenation will be performed without a delimiter. Default is NULL.
+          * key - an optional expression for ordering the input values. Multiple keys can be specified.
+            If none are specified, the order of the rows in the result is non-deterministic.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT listagg(col) FROM VALUES ('a'), ('b'), ('c') AS tab(col);
+           abc
+          > SELECT listagg(col) WITHIN GROUP (ORDER BY col DESC) FROM VALUES ('a'), ('b'), ('c') AS tab(col);
+           cba
+          > SELECT listagg(col) FROM VALUES ('a'), (NULL), ('b') AS tab(col);
+           ab
+          > SELECT listagg(col) FROM VALUES ('a'), ('a') AS tab(col);
+           aa
+          > SELECT listagg(DISTINCT col) FROM VALUES ('a'), ('a'), ('b') AS tab(col);
+           ab
+          > SELECT listagg(col, ', ') FROM VALUES ('a'), ('b'), ('c') AS tab(col);
+           a, b, c
+          > SELECT listagg(col) FROM VALUES (NULL), (NULL) AS tab(col);
+           NULL
+      
+  note: |2-
+    
+        * If the order is not specified, the function is non-deterministic because
+        the order of the rows may be non-deterministic after a shuffle.
+        * If DISTINCT is specified, then expr and key must be the same expression.
+      
   since: "4.0.0"
-- name: max
+
+- name: "max"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.Max"
   signatures:
     - "max(expr)"
-  description: "Returns the maximum value of expr."
-  examples: |
-    > SELECT max(col) FROM VALUES (10), (50), (20) AS tab(col);
-     50
+  usage: "max(expr) - Returns the maximum value of `expr`."
+  examples: |2-
+    
+        Examples:
+          > SELECT max(col) FROM VALUES (10), (50), (20) AS tab(col);
+           50
+      
   since: "1.0.0"
-- name: max_by
+
+- name: "max_by"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.MaxBy"
   signatures:
     - "max_by(x, y)"
-  description: "Returns the value of x associated with the maximum value of y."
-  examples: |
-    > SELECT max_by(x, y) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y);
-     b
-  note: |
-    The function is non-deterministic so the output order can be different for
-    those associated the same values of x.
+  usage: "max_by(x, y) - Returns the value of `x` associated with the maximum value of `y`."
+  examples: |2-
+    
+        Examples:
+          > SELECT max_by(x, y) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y);
+           b
+      
+  note: |2-
+    
+        The function is non-deterministic so the output order can be different for
+        those associated the same values of `x`.
+      
   since: "3.0.0"
-- name: mean
+
+- name: "mean"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.Average"
   signatures:
     - "mean(expr)"
-  description: "Returns the mean calculated from values of a group."
-  examples: |
-    > SELECT mean(col) FROM VALUES (1), (2), (3) AS tab(col);
-     2.0
-    > SELECT mean(col) FROM VALUES (1), (2), (NULL) AS tab(col);
-     1.5
+  usage: "mean(expr) - Returns the mean calculated from values of a group."
+  examples: |2-
+    
+        Examples:
+          > SELECT mean(col) FROM VALUES (1), (2), (3) AS tab(col);
+           2.0
+          > SELECT mean(col) FROM VALUES (1), (2), (NULL) AS tab(col);
+           1.5
+      
   since: "1.0.0"
-- name: median
+
+- name: "median"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.Median"
   signatures:
     - "median(col)"
-  description: "Returns the median of numeric or ANSI interval column col."
-  examples: |
-    > SELECT median(col) FROM VALUES (0), (10) AS tab(col);
-     5.0
-    > SELECT median(col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col);
-     0-5
+  usage: "median(col) - Returns the median of numeric or ANSI interval column `col`."
+  examples: |2-
+    
+        Examples:
+          > SELECT median(col) FROM VALUES (0), (10) AS tab(col);
+           5.0
+          > SELECT median(col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col);
+           0-5
+      
   since: "3.4.0"
-- name: min
+
+- name: "min"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.Min"
   signatures:
     - "min(expr)"
-  description: "Returns the minimum value of expr."
-  examples: |
-    > SELECT min(col) FROM VALUES (10), (-1), (20) AS tab(col);
-     -1
+  usage: "min(expr) - Returns the minimum value of `expr`."
+  examples: |2-
+    
+        Examples:
+          > SELECT min(col) FROM VALUES (10), (-1), (20) AS tab(col);
+           -1
+      
   since: "1.0.0"
-- name: min_by
+
+- name: "min_by"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.MinBy"
   signatures:
     - "min_by(x, y)"
-  description: "Returns the value of x associated with the minimum value of y."
-  examples: |
-    > SELECT min_by(x, y) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y);
-     a
-  note: |
-    The function is non-deterministic so the output order can be different for
-    those associated the same values of x.
+  usage: "min_by(x, y) - Returns the value of `x` associated with the minimum value of `y`."
+  examples: |2-
+    
+        Examples:
+          > SELECT min_by(x, y) FROM VALUES ('a', 10), ('b', 50), ('c', 20) AS tab(x, y);
+           a
+      
+  note: |2-
+    
+        The function is non-deterministic so the output order can be different for
+        those associated the same values of `x`.
+      
   since: "3.0.0"
-- name: mode
+
+- name: "mode"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.ModeBuilder"
   signatures:
     - "mode(col[, deterministic])"
-  description: "Returns the most frequent value for the values within col. NULL values are ignored. If all the values are NULL, or there are 0 rows, returns NULL. When multiple values have the same greatest frequency then either any of values is returned if deterministic is false or is not defined, or the lowest value is returned if deterministic is true. mode() WITHIN GROUP (ORDER BY col) - Returns the most frequent value for the values within col (specified in ORDER BY clause). NULL values are ignored. If all the values are NULL, or there are 0 rows, returns NULL. When multiple values have the same greatest frequency only one value will be returned. The value will be chosen based on sort direction. Return the smallest value if sort direction is asc or the largest value if sort direction is desc from multiple values with the same frequency."
-  examples: |
-    > SELECT mode(col) FROM VALUES (0), (10), (10) AS tab(col);
-     10
-    > SELECT mode(col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH), (INTERVAL '10' MONTH) AS tab(col);
-     0-10
-    > SELECT mode(col) FROM VALUES (0), (10), (10), (null), (null), (null) AS tab(col);
-     10
-    > SELECT mode(col, false) FROM VALUES (-10), (0), (10) AS tab(col);
-     0
-    > SELECT mode(col, true) FROM VALUES (-10), (0), (10) AS tab(col);
-     -10
-    > SELECT mode() WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10), (10) AS tab(col);
-     10
-    > SELECT mode() WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10), (10), (20), (20) AS tab(col);
-     10
-    > SELECT mode() WITHIN GROUP (ORDER BY col DESC) FROM VALUES (0), (10), (10), (20), (20) AS tab(col);
-     20
+    - "mode() WITHIN GROUP (ORDER BY col)"
+  usage: |2-
+    
+        mode(col[, deterministic]) - Returns the most frequent value for the values within `col`. NULL values are ignored. If all the values are NULL, or there are 0 rows, returns NULL.
+          When multiple values have the same greatest frequency then either any of values is returned if `deterministic` is false or is not defined, or the lowest value is returned if `deterministic` is true.
+        mode() WITHIN GROUP (ORDER BY col) - Returns the most frequent value for the values within `col` (specified in ORDER BY clause). NULL values are ignored.
+          If all the values are NULL, or there are 0 rows, returns NULL. When multiple values have the same greatest frequency only one value will be returned.
+          The value will be chosen based on sort direction. Return the smallest value if sort direction is asc or the largest value if sort direction is desc from multiple values with the same frequency.
+  examples: |2-
+    
+        Examples:
+          > SELECT mode(col) FROM VALUES (0), (10), (10) AS tab(col);
+           10
+          > SELECT mode(col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH), (INTERVAL '10' MONTH) AS tab(col);
+           0-10
+          > SELECT mode(col) FROM VALUES (0), (10), (10), (null), (null), (null) AS tab(col);
+           10
+          > SELECT mode(col, false) FROM VALUES (-10), (0), (10) AS tab(col);
+           0
+          > SELECT mode(col, true) FROM VALUES (-10), (0), (10) AS tab(col);
+           -10
+          > SELECT mode() WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10), (10) AS tab(col);
+           10
+          > SELECT mode() WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10), (10), (20), (20) AS tab(col);
+           10
+          > SELECT mode() WITHIN GROUP (ORDER BY col DESC) FROM VALUES (0), (10), (10), (20), (20) AS tab(col);
+           20
+      
   since: "3.4.0"
-- name: percentile
+
+- name: "percentile"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.Percentile"
   signatures:
     - "percentile(col, percentage [, frequency])"
-  description: "Returns the exact percentile value of numeric or ANSI interval column col at the given percentage. The value of percentage must be between 0.0 and 1.0. The value of frequency should be positive integral"
-  examples: |
-    > SELECT percentile(col, 0.3) FROM VALUES (0), (10) AS tab(col);
-     3.0
-    > SELECT percentile(col, array(0.25, 0.75)) FROM VALUES (0), (10) AS tab(col);
-     [2.5,7.5]
-    > SELECT percentile(col, 0.5) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col);
-     0-5
-    > SELECT percentile(col, array(0.2, 0.5)) FROM VALUES (INTERVAL '0' SECOND), (INTERVAL '10' SECOND) AS tab(col);
-     [0 00:00:02.000000000,0 00:00:05.000000000]
+    - "percentile(col, array(percentage1 [, percentage2]...) [, frequency])"
+  usage: |2-
+    
+          percentile(col, percentage [, frequency]) - Returns the exact percentile value of numeric
+           or ANSI interval column `col` at the given percentage. The value of percentage must be
+           between 0.0 and 1.0. The value of frequency should be positive integral
+    
+          percentile(col, array(percentage1 [, percentage2]...) [, frequency]) - Returns the exact
+          percentile value array of numeric column `col` at the given percentage(s). Each value
+          of the percentage array must be between 0.0 and 1.0. The value of frequency should be
+          positive integral
+    
+          
+  examples: |2-
+    
+        Examples:
+          > SELECT percentile(col, 0.3) FROM VALUES (0), (10) AS tab(col);
+           3.0
+          > SELECT percentile(col, array(0.25, 0.75)) FROM VALUES (0), (10) AS tab(col);
+           [2.5,7.5]
+          > SELECT percentile(col, 0.5) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col);
+           0-5
+          > SELECT percentile(col, array(0.2, 0.5)) FROM VALUES (INTERVAL '0' SECOND), (INTERVAL '10' SECOND) AS tab(col);
+           [0 00:00:02.000000000,0 00:00:05.000000000]
+      
   since: "2.1.0"
-- name: percentile_approx
+
+- name: "percentile_approx"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.ApproximatePercentile"
   signatures:
     - "percentile_approx(col, percentage [, accuracy])"
-  description: "Returns the approximate percentile of the numeric or ansi interval column col which is the smallest value in the ordered col values (sorted from least to greatest) such that no more than percentage of col values is less than the value or equal to that value. The value of percentage must be between 0.0 and 1.0. The accuracy parameter (default: 10000) is a positive numeric literal which controls approximation accuracy at the cost of memory. Higher value of accuracy yields better accuracy, 1.0/accuracy is the relative error of the approximation. When percentage is an array, each value of the percentage array must be between 0.0 and 1.0. In this case, returns the approximate percentile array of column col at the given percentage array."
-  examples: |
-    > SELECT percentile_approx(col, array(0.5, 0.4, 0.1), 100) FROM VALUES (0), (1), (2), (10) AS tab(col);
-     [1,1,0]
-    > SELECT percentile_approx(col, 0.5, 100) FROM VALUES (0), (6), (7), (9), (10) AS tab(col);
-     7
-    > SELECT percentile_approx(col, 0.5, 100) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '1' MONTH), (INTERVAL '2' MONTH), (INTERVAL '10' MONTH) AS tab(col);
-     0-1
-    > SELECT percentile_approx(col, array(0.5, 0.7), 100) FROM VALUES (INTERVAL '0' SECOND), (INTERVAL '1' SECOND), (INTERVAL '2' SECOND), (INTERVAL '10' SECOND) AS tab(col);
-     [0 00:00:01.000000000,0 00:00:02.000000000]
+  usage: |2-
+    
+        percentile_approx(col, percentage [, accuracy]) - Returns the approximate `percentile` of the numeric or
+          ansi interval column `col` which is the smallest value in the ordered `col` values (sorted
+          from least to greatest) such that no more than `percentage` of `col` values is less than
+          the value or equal to that value. The value of percentage must be between 0.0 and 1.0.
+          The `accuracy` parameter (default: 10000) is a positive numeric literal which controls
+          approximation accuracy at the cost of memory. Higher value of `accuracy` yields better
+          accuracy, `1.0/accuracy` is the relative error of the approximation.
+          When `percentage` is an array, each value of the percentage array must be between 0.0 and 1.0.
+          In this case, returns the approximate percentile array of column `col` at the given
+          percentage array.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT percentile_approx(col, array(0.5, 0.4, 0.1), 100) FROM VALUES (0), (1), (2), (10) AS tab(col);
+           [1,1,0]
+          > SELECT percentile_approx(col, 0.5, 100) FROM VALUES (0), (6), (7), (9), (10) AS tab(col);
+           7
+          > SELECT percentile_approx(col, 0.5, 100) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '1' MONTH), (INTERVAL '2' MONTH), (INTERVAL '10' MONTH) AS tab(col);
+           0-1
+          > SELECT percentile_approx(col, array(0.5, 0.7), 100) FROM VALUES (INTERVAL '0' SECOND), (INTERVAL '1' SECOND), (INTERVAL '2' SECOND), (INTERVAL '10' SECOND) AS tab(col);
+           [0 00:00:01.000000000,0 00:00:02.000000000]
+      
   since: "2.1.0"
-- name: percentile_cont
+
+- name: "percentile_cont"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.PercentileContBuilder"
   signatures:
     - "percentile_cont(percentage) WITHIN GROUP (ORDER BY col)"
-  description: "Return a percentile value based on a continuous distribution of numeric or ANSI interval column col at the given percentage (specified in ORDER BY clause)."
-  examples: |
-    > SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10) AS tab(col);
-     2.5
-    > SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col);
-     0-2
+  usage: "percentile_cont(percentage) WITHIN GROUP (ORDER BY col) - Return a percentile value based on a continuous distribution of numeric or ANSI interval column `col` at the given `percentage` (specified in ORDER BY clause)."
+  examples: |2-
+    
+        Examples:
+          > SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10) AS tab(col);
+           2.5
+          > SELECT percentile_cont(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col);
+           0-2
+      
   since: "4.0.0"
-- name: percentile_disc
+
+- name: "percentile_disc"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.PercentileDiscBuilder"
   signatures:
     - "percentile_disc(percentage) WITHIN GROUP (ORDER BY col)"
-  description: "Return a percentile value based on a discrete distribution of numeric or ANSI interval column col at the given percentage (specified in ORDER BY clause)."
-  examples: |
-    > SELECT percentile_disc(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10) AS tab(col);
-     0.0
-    > SELECT percentile_disc(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col);
-     0-0
+  usage: "percentile_disc(percentage) WITHIN GROUP (ORDER BY col) - Return a percentile value based on a discrete distribution of numeric or ANSI interval column `col` at the given `percentage` (specified in ORDER BY clause)."
+  examples: |2-
+    
+        Examples:
+          > SELECT percentile_disc(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (0), (10) AS tab(col);
+           0.0
+          > SELECT percentile_disc(0.25) WITHIN GROUP (ORDER BY col) FROM VALUES (INTERVAL '0' MONTH), (INTERVAL '10' MONTH) AS tab(col);
+           0-0
+      
   since: "4.0.0"
-- name: product
+
+- name: "product"
+  scope: "spark_internal"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.Product"
   signatures:
     - "product(expr)"
-  description: "Returns the product of non-null numeric values in a group."
-- name: regr_avgx
+  usage: "product(expr) - Returns the product of non-null numeric values in a group."
+
+- name: "regr_avgx"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.RegrAvgX"
   signatures:
     - "regr_avgx(y, x)"
-  description: "Returns the average of the independent variable for non-null pairs in a group, where y is the dependent variable and x is the independent variable."
-  examples: |
-    > SELECT regr_avgx(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);
-     2.75
-    > SELECT regr_avgx(y, x) FROM VALUES (1, null) AS tab(y, x);
-     NULL
-    > SELECT regr_avgx(y, x) FROM VALUES (null, 1) AS tab(y, x);
-     NULL
-    > SELECT regr_avgx(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);
-     3.0
-    > SELECT regr_avgx(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);
-     3.0
+  usage: "regr_avgx(y, x) - Returns the average of the independent variable for non-null pairs in a group, where `y` is the dependent variable and `x` is the independent variable."
+  examples: |2-
+    
+        Examples:
+          > SELECT regr_avgx(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);
+           2.75
+          > SELECT regr_avgx(y, x) FROM VALUES (1, null) AS tab(y, x);
+           NULL
+          > SELECT regr_avgx(y, x) FROM VALUES (null, 1) AS tab(y, x);
+           NULL
+          > SELECT regr_avgx(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);
+           3.0
+          > SELECT regr_avgx(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);
+           3.0
+      
   since: "3.3.0"
-- name: regr_avgy
+
+- name: "regr_avgy"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.RegrAvgY"
   signatures:
     - "regr_avgy(y, x)"
-  description: "Returns the average of the dependent variable for non-null pairs in a group, where y is the dependent variable and x is the independent variable."
-  examples: |
-    > SELECT regr_avgy(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);
-     1.75
-    > SELECT regr_avgy(y, x) FROM VALUES (1, null) AS tab(y, x);
-     NULL
-    > SELECT regr_avgy(y, x) FROM VALUES (null, 1) AS tab(y, x);
-     NULL
-    > SELECT regr_avgy(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);
-     1.6666666666666667
-    > SELECT regr_avgy(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);
-     1.5
+  usage: "regr_avgy(y, x) - Returns the average of the dependent variable for non-null pairs in a group, where `y` is the dependent variable and `x` is the independent variable."
+  examples: |2-
+    
+        Examples:
+          > SELECT regr_avgy(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);
+           1.75
+          > SELECT regr_avgy(y, x) FROM VALUES (1, null) AS tab(y, x);
+           NULL
+          > SELECT regr_avgy(y, x) FROM VALUES (null, 1) AS tab(y, x);
+           NULL
+          > SELECT regr_avgy(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);
+           1.6666666666666667
+          > SELECT regr_avgy(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);
+           1.5
+      
   since: "3.3.0"
-- name: regr_count
+
+- name: "regr_count"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.RegrCount"
   signatures:
     - "regr_count(y, x)"
-  description: "Returns the number of non-null number pairs in a group, where y is the dependent variable and x is the independent variable."
-  examples: |
-    > SELECT regr_count(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);
-     4
-    > SELECT regr_count(y, x) FROM VALUES (1, null) AS tab(y, x);
-     0
-    > SELECT regr_count(y, x) FROM VALUES (null, 1) AS tab(y, x);
-     0
-    > SELECT regr_count(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);
-     3
-    > SELECT regr_count(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);
-     2
+  usage: "regr_count(y, x) - Returns the number of non-null number pairs in a group, where `y` is the dependent variable and `x` is the independent variable."
+  examples: |2-
+    
+        Examples:
+          > SELECT regr_count(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);
+           4
+          > SELECT regr_count(y, x) FROM VALUES (1, null) AS tab(y, x);
+           0
+          > SELECT regr_count(y, x) FROM VALUES (null, 1) AS tab(y, x);
+           0
+          > SELECT regr_count(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);
+           3
+          > SELECT regr_count(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);
+           2
+      
   since: "3.3.0"
-- name: regr_intercept
+
+- name: "regr_intercept"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.RegrIntercept"
   signatures:
     - "regr_intercept(y, x)"
-  description: "Returns the intercept of the univariate linear regression line for non-null pairs in a group, where y is the dependent variable and x is the independent variable."
-  examples: |
-    > SELECT regr_intercept(y, x) FROM VALUES (1, 1), (2, 2), (3, 3), (4, 4) AS tab(y, x);
-     0.0
-    > SELECT regr_intercept(y, x) FROM VALUES (1, null) AS tab(y, x);
-     NULL
-    > SELECT regr_intercept(y, x) FROM VALUES (null, 1) AS tab(y, x);
-     NULL
-    > SELECT regr_intercept(y, x) FROM VALUES (1, 1), (2, null), (3, 3), (4, 4) AS tab(y, x);
-     0.0
-    > SELECT regr_intercept(y, x) FROM VALUES (1, 1), (2, null), (null, 3), (4, 4) AS tab(y, x);
-     0.0
+  usage: "regr_intercept(y, x) - Returns the intercept of the univariate linear regression line for non-null pairs in a group, where `y` is the dependent variable and `x` is the independent variable."
+  examples: |2-
+    
+        Examples:
+          > SELECT regr_intercept(y, x) FROM VALUES (1, 1), (2, 2), (3, 3), (4, 4) AS tab(y, x);
+           0.0
+          > SELECT regr_intercept(y, x) FROM VALUES (1, null) AS tab(y, x);
+           NULL
+          > SELECT regr_intercept(y, x) FROM VALUES (null, 1) AS tab(y, x);
+           NULL
+          > SELECT regr_intercept(y, x) FROM VALUES (1, 1), (2, null), (3, 3), (4, 4) AS tab(y, x);
+           0.0
+          > SELECT regr_intercept(y, x) FROM VALUES (1, 1), (2, null), (null, 3), (4, 4) AS tab(y, x);
+           0.0
+      
   since: "3.4.0"
-- name: regr_r2
+
+- name: "regr_r2"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.RegrR2"
   signatures:
     - "regr_r2(y, x)"
-  description: "Returns the coefficient of determination for non-null pairs in a group, where y is the dependent variable and x is the independent variable."
-  examples: |
-    > SELECT regr_r2(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);
-     0.2727272727272727
-    > SELECT regr_r2(y, x) FROM VALUES (1, null) AS tab(y, x);
-     NULL
-    > SELECT regr_r2(y, x) FROM VALUES (null, 1) AS tab(y, x);
-     NULL
-    > SELECT regr_r2(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);
-     0.7500000000000001
-    > SELECT regr_r2(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);
-     1.0
+  usage: "regr_r2(y, x) - Returns the coefficient of determination for non-null pairs in a group, where `y` is the dependent variable and `x` is the independent variable."
+  examples: |2-
+    
+        Examples:
+          > SELECT regr_r2(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);
+           0.2727272727272727
+          > SELECT regr_r2(y, x) FROM VALUES (1, null) AS tab(y, x);
+           NULL
+          > SELECT regr_r2(y, x) FROM VALUES (null, 1) AS tab(y, x);
+           NULL
+          > SELECT regr_r2(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);
+           0.7500000000000001
+          > SELECT regr_r2(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);
+           1.0
+      
   since: "3.3.0"
-- name: regr_slope
+
+- name: "regr_slope"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.RegrSlope"
   signatures:
     - "regr_slope(y, x)"
-  description: "Returns the slope of the linear regression line for non-null pairs in a group, where y is the dependent variable and x is the independent variable."
-  examples: |
-    > SELECT regr_slope(y, x) FROM VALUES (1, 1), (2, 2), (3, 3), (4, 4) AS tab(y, x);
-     1.0
-    > SELECT regr_slope(y, x) FROM VALUES (1, null) AS tab(y, x);
-     NULL
-    > SELECT regr_slope(y, x) FROM VALUES (null, 1) AS tab(y, x);
-     NULL
-    > SELECT regr_slope(y, x) FROM VALUES (1, 1), (2, null), (3, 3), (4, 4) AS tab(y, x);
-     1.0
-    > SELECT regr_slope(y, x) FROM VALUES (1, 1), (2, null), (null, 3), (4, 4) AS tab(y, x);
-     1.0
+  usage: "regr_slope(y, x) - Returns the slope of the linear regression line for non-null pairs in a group, where `y` is the dependent variable and `x` is the independent variable."
+  examples: |2-
+    
+        Examples:
+          > SELECT regr_slope(y, x) FROM VALUES (1, 1), (2, 2), (3, 3), (4, 4) AS tab(y, x);
+           1.0
+          > SELECT regr_slope(y, x) FROM VALUES (1, null) AS tab(y, x);
+           NULL
+          > SELECT regr_slope(y, x) FROM VALUES (null, 1) AS tab(y, x);
+           NULL
+          > SELECT regr_slope(y, x) FROM VALUES (1, 1), (2, null), (3, 3), (4, 4) AS tab(y, x);
+           1.0
+          > SELECT regr_slope(y, x) FROM VALUES (1, 1), (2, null), (null, 3), (4, 4) AS tab(y, x);
+           1.0
+      
   since: "3.4.0"
-- name: regr_sxx
+
+- name: "regr_sxx"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.RegrSXX"
   signatures:
     - "regr_sxx(y, x)"
-  description: "Returns REGR_COUNT(y, x) * VAR_POP(x) for non-null pairs in a group, where y is the dependent variable and x is the independent variable."
-  examples: |
-    > SELECT regr_sxx(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);
-     2.75
-    > SELECT regr_sxx(y, x) FROM VALUES (1, null) AS tab(y, x);
-     NULL
-    > SELECT regr_sxx(y, x) FROM VALUES (null, 1) AS tab(y, x);
-     NULL
-    > SELECT regr_sxx(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);
-     2.0
-    > SELECT regr_sxx(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);
-     2.0
+  usage: "regr_sxx(y, x) - Returns REGR_COUNT(y, x) * VAR_POP(x) for non-null pairs in a group, where `y` is the dependent variable and `x` is the independent variable."
+  examples: |2-
+    
+        Examples:
+          > SELECT regr_sxx(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);
+           2.75
+          > SELECT regr_sxx(y, x) FROM VALUES (1, null) AS tab(y, x);
+           NULL
+          > SELECT regr_sxx(y, x) FROM VALUES (null, 1) AS tab(y, x);
+           NULL
+          > SELECT regr_sxx(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);
+           2.0
+          > SELECT regr_sxx(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);
+           2.0
+      
   since: "3.4.0"
-- name: regr_sxy
+
+- name: "regr_sxy"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.RegrSXY"
   signatures:
     - "regr_sxy(y, x)"
-  description: "Returns REGR_COUNT(y, x) * COVAR_POP(y, x) for non-null pairs in a group, where y is the dependent variable and x is the independent variable."
-  examples: |
-    > SELECT regr_sxy(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);
-     0.75
-    > SELECT regr_sxy(y, x) FROM VALUES (1, null) AS tab(y, x);
-     NULL
-    > SELECT regr_sxy(y, x) FROM VALUES (null, 1) AS tab(y, x);
-     NULL
-    > SELECT regr_sxy(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);
-     1.0
-    > SELECT regr_sxy(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);
-     1.0
+  usage: "regr_sxy(y, x) - Returns REGR_COUNT(y, x) * COVAR_POP(y, x) for non-null pairs in a group, where `y` is the dependent variable and `x` is the independent variable."
+  examples: |2-
+    
+        Examples:
+          > SELECT regr_sxy(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);
+           0.75
+          > SELECT regr_sxy(y, x) FROM VALUES (1, null) AS tab(y, x);
+           NULL
+          > SELECT regr_sxy(y, x) FROM VALUES (null, 1) AS tab(y, x);
+           NULL
+          > SELECT regr_sxy(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);
+           1.0
+          > SELECT regr_sxy(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);
+           1.0
+      
   since: "3.4.0"
-- name: regr_syy
+
+- name: "regr_syy"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.RegrSYY"
   signatures:
     - "regr_syy(y, x)"
-  description: "Returns REGR_COUNT(y, x) * VAR_POP(y) for non-null pairs in a group, where y is the dependent variable and x is the independent variable."
-  examples: |
-    > SELECT regr_syy(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);
-     0.75
-    > SELECT regr_syy(y, x) FROM VALUES (1, null) AS tab(y, x);
-     NULL
-    > SELECT regr_syy(y, x) FROM VALUES (null, 1) AS tab(y, x);
-     NULL
-    > SELECT regr_syy(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);
-     0.6666666666666666
-    > SELECT regr_syy(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);
-     0.5
+  usage: "regr_syy(y, x) - Returns REGR_COUNT(y, x) * VAR_POP(y) for non-null pairs in a group, where `y` is the dependent variable and `x` is the independent variable."
+  examples: |2-
+    
+        Examples:
+          > SELECT regr_syy(y, x) FROM VALUES (1, 2), (2, 2), (2, 3), (2, 4) AS tab(y, x);
+           0.75
+          > SELECT regr_syy(y, x) FROM VALUES (1, null) AS tab(y, x);
+           NULL
+          > SELECT regr_syy(y, x) FROM VALUES (null, 1) AS tab(y, x);
+           NULL
+          > SELECT regr_syy(y, x) FROM VALUES (1, 2), (2, null), (2, 3), (2, 4) AS tab(y, x);
+           0.6666666666666666
+          > SELECT regr_syy(y, x) FROM VALUES (1, 2), (2, null), (null, 3), (2, 4) AS tab(y, x);
+           0.5
+      
   since: "3.4.0"
-- name: skewness
+
+- name: "skewness"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.Skewness"
   signatures:
     - "skewness(expr)"
-  description: "Returns the skewness value calculated from values of a group."
-  examples: |
-    > SELECT skewness(col) FROM VALUES (-10), (-20), (100), (1000) AS tab(col);
-     1.1135657469022011
-    > SELECT skewness(col) FROM VALUES (-1000), (-100), (10), (20) AS tab(col);
-     -1.1135657469022011
+  usage: "skewness(expr) - Returns the skewness value calculated from values of a group."
+  examples: |2-
+    
+        Examples:
+          > SELECT skewness(col) FROM VALUES (-10), (-20), (100), (1000) AS tab(col);
+           1.1135657469022011
+          > SELECT skewness(col) FROM VALUES (-1000), (-100), (10), (20) AS tab(col);
+           -1.1135657469022011
+      
   since: "1.6.0"
-- name: some
+
+- name: "some"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.BoolOr"
   signatures:
     - "some(expr)"
-  description: "Returns true if at least one value of expr is true."
-  examples: |
-    > SELECT some(col) FROM VALUES (true), (false), (false) AS tab(col);
-     true
-    > SELECT some(col) FROM VALUES (NULL), (true), (false) AS tab(col);
-     true
-    > SELECT some(col) FROM VALUES (false), (false), (NULL) AS tab(col);
-     false
+  usage: "some(expr) - Returns true if at least one value of `expr` is true."
+  examples: |2-
+    
+        Examples:
+          > SELECT some(col) FROM VALUES (true), (false), (false) AS tab(col);
+           true
+          > SELECT some(col) FROM VALUES (NULL), (true), (false) AS tab(col);
+           true
+          > SELECT some(col) FROM VALUES (false), (false), (NULL) AS tab(col);
+           false
+      
   since: "3.0.0"
-- name: std
+
+- name: "std"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.StddevSamp"
   signatures:
     - "std(expr)"
-  description: "Returns the sample standard deviation calculated from values of a group."
-  examples: |
-    > SELECT std(col) FROM VALUES (1), (2), (3) AS tab(col);
-     1.0
+  usage: "std(expr) - Returns the sample standard deviation calculated from values of a group."
+  examples: |2-
+    
+        Examples:
+          > SELECT std(col) FROM VALUES (1), (2), (3) AS tab(col);
+           1.0
+      
   since: "1.6.0"
-- name: stddev
+
+- name: "stddev"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.StddevSamp"
   signatures:
     - "stddev(expr)"
-  description: "Returns the sample standard deviation calculated from values of a group."
-  examples: |
-    > SELECT stddev(col) FROM VALUES (1), (2), (3) AS tab(col);
-     1.0
+  usage: "stddev(expr) - Returns the sample standard deviation calculated from values of a group."
+  examples: |2-
+    
+        Examples:
+          > SELECT stddev(col) FROM VALUES (1), (2), (3) AS tab(col);
+           1.0
+      
   since: "1.6.0"
-- name: stddev_pop
+
+- name: "stddev_pop"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.StddevPop"
   signatures:
     - "stddev_pop(expr)"
-  description: "Returns the population standard deviation calculated from values of a group."
-  examples: |
-    > SELECT stddev_pop(col) FROM VALUES (1), (2), (3) AS tab(col);
-     0.816496580927726
+  usage: "stddev_pop(expr) - Returns the population standard deviation calculated from values of a group."
+  examples: |2-
+    
+        Examples:
+          > SELECT stddev_pop(col) FROM VALUES (1), (2), (3) AS tab(col);
+           0.816496580927726
+      
   since: "1.6.0"
-- name: stddev_samp
+
+- name: "stddev_samp"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.StddevSamp"
   signatures:
     - "stddev_samp(expr)"
-  description: "Returns the sample standard deviation calculated from values of a group."
-  examples: |
-    > SELECT stddev_samp(col) FROM VALUES (1), (2), (3) AS tab(col);
-     1.0
+  usage: "stddev_samp(expr) - Returns the sample standard deviation calculated from values of a group."
+  examples: |2-
+    
+        Examples:
+          > SELECT stddev_samp(col) FROM VALUES (1), (2), (3) AS tab(col);
+           1.0
+      
   since: "1.6.0"
-- name: string_agg
+
+- name: "string_agg"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.ListAgg"
   signatures:
     - "string_agg(expr[, delimiter])[ WITHIN GROUP (ORDER BY key [ASC | DESC] [,...])]"
-  description: "Returns the concatenation of non-NULL input values, separated by the delimiter ordered by key. If all values are NULL, NULL is returned."
-  examples: |
-    > SELECT string_agg(col) FROM VALUES ('a'), ('b'), ('c') AS tab(col);
-     abc
-    > SELECT string_agg(col) WITHIN GROUP (ORDER BY col DESC) FROM VALUES ('a'), ('b'), ('c') AS tab(col);
-     cba
-    > SELECT string_agg(col) FROM VALUES ('a'), (NULL), ('b') AS tab(col);
-     ab
-    > SELECT string_agg(col) FROM VALUES ('a'), ('a') AS tab(col);
-     aa
-    > SELECT string_agg(DISTINCT col) FROM VALUES ('a'), ('a'), ('b') AS tab(col);
-     ab
-    > SELECT string_agg(col, ', ') FROM VALUES ('a'), ('b'), ('c') AS tab(col);
-     a, b, c
-    > SELECT string_agg(col) FROM VALUES (NULL), (NULL) AS tab(col);
-     NULL
-  note: |
-    If the order is not specified, the function is non-deterministic because
-    the order of the rows may be non-deterministic after a shuffle.
-    If DISTINCT is specified, then expr and key must be the same expression.
+  usage: |2-
+    
+        string_agg(expr[, delimiter])[ WITHIN GROUP (ORDER BY key [ASC | DESC] [,...])] - Returns
+        the concatenation of non-NULL input values, separated by the delimiter ordered by key.
+        If all values are NULL, NULL is returned.
+        
+  arguments: |2-
+    
+        Arguments:
+          * expr - a string or binary expression to be concatenated.
+          * delimiter - an optional string or binary foldable expression used to separate the input values.
+            If NULL, the concatenation will be performed without a delimiter. Default is NULL.
+          * key - an optional expression for ordering the input values. Multiple keys can be specified.
+            If none are specified, the order of the rows in the result is non-deterministic.
+      
+  examples: |2-
+    
+        Examples:
+          > SELECT string_agg(col) FROM VALUES ('a'), ('b'), ('c') AS tab(col);
+           abc
+          > SELECT string_agg(col) WITHIN GROUP (ORDER BY col DESC) FROM VALUES ('a'), ('b'), ('c') AS tab(col);
+           cba
+          > SELECT string_agg(col) FROM VALUES ('a'), (NULL), ('b') AS tab(col);
+           ab
+          > SELECT string_agg(col) FROM VALUES ('a'), ('a') AS tab(col);
+           aa
+          > SELECT string_agg(DISTINCT col) FROM VALUES ('a'), ('a'), ('b') AS tab(col);
+           ab
+          > SELECT string_agg(col, ', ') FROM VALUES ('a'), ('b'), ('c') AS tab(col);
+           a, b, c
+          > SELECT string_agg(col) FROM VALUES (NULL), (NULL) AS tab(col);
+           NULL
+      
+  note: |2-
+    
+        * If the order is not specified, the function is non-deterministic because
+        the order of the rows may be non-deterministic after a shuffle.
+        * If DISTINCT is specified, then expr and key must be the same expression.
+      
   since: "4.0.0"
-- name: sum
+
+- name: "sum"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.Sum"
   signatures:
     - "sum(expr)"
-  description: "Returns the sum calculated from values of a group."
-  examples: |
-    > SELECT sum(col) FROM VALUES (5), (10), (15) AS tab(col);
-     30
-    > SELECT sum(col) FROM VALUES (NULL), (10), (15) AS tab(col);
-     25
-    > SELECT sum(col) FROM VALUES (NULL), (NULL) AS tab(col);
-     NULL
+  usage: "sum(expr) - Returns the sum calculated from values of a group."
+  examples: |2-
+    
+        Examples:
+          > SELECT sum(col) FROM VALUES (5), (10), (15) AS tab(col);
+           30
+          > SELECT sum(col) FROM VALUES (NULL), (10), (15) AS tab(col);
+           25
+          > SELECT sum(col) FROM VALUES (NULL), (NULL) AS tab(col);
+           NULL
+      
   since: "1.0.0"
-- name: theta_intersection_agg
+
+- name: "theta_intersection_agg"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.ThetaIntersectionAgg"
   signatures:
     - "theta_intersection_agg(expr)"
-  description: "Returns the ThetaSketch's Compact binary representation by intersecting all the Theta sketches in the input column."
-  examples: |
-    > SELECT theta_sketch_estimate(theta_intersection_agg(sketch)) FROM (SELECT theta_sketch_agg(col) as sketch FROM VALUES (1) tab(col) UNION ALL SELECT theta_sketch_agg(col, 20) as sketch FROM VALUES (1) tab(col));
-     1
+  usage: |2-
+    
+        theta_intersection_agg(expr) - Returns the ThetaSketch's Compact binary representation
+          by intersecting all the Theta sketches in the input column.
+  examples: |2-
+    
+        Examples:
+          > SELECT theta_sketch_estimate(theta_intersection_agg(sketch)) FROM (SELECT theta_sketch_agg(col) as sketch FROM VALUES (1) tab(col) UNION ALL SELECT theta_sketch_agg(col, 20) as sketch FROM VALUES (1) tab(col));
+           1
+      
   since: "4.1.0"
-- name: theta_sketch_agg
+
+- name: "theta_sketch_agg"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.ThetaSketchAgg"
   signatures:
     - "theta_sketch_agg(expr, lgNomEntries)"
-  description: "Returns the ThetaSketch compact binary representation. lgNomEntries (optional) is the log-base-2 of nominal entries, with nominal entries deciding the number buckets or slots for the ThetaSketch."
-  examples: |
-    > SELECT theta_sketch_estimate(theta_sketch_agg(col, 12)) FROM VALUES (1), (1), (2), (2), (3) tab(col);
-     3
+  usage: |2-
+    
+        theta_sketch_agg(expr, lgNomEntries) - Returns the ThetaSketch compact binary representation.
+          `lgNomEntries` (optional) is the log-base-2 of nominal entries, with nominal entries deciding
+          the number buckets or slots for the ThetaSketch. 
+  examples: |2-
+    
+        Examples:
+          > SELECT theta_sketch_estimate(theta_sketch_agg(col, 12)) FROM VALUES (1), (1), (2), (2), (3) tab(col);
+           3
+      
   since: "4.1.0"
-- name: theta_union_agg
+
+- name: "theta_union_agg"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.ThetaUnionAgg"
   signatures:
     - "theta_union_agg(expr, lgNomEntries)"
-  description: "Returns the ThetaSketch's Compact binary representation. lgNomEntries (optional) the log-base-2 of Nominal Entries, with Nominal Entries deciding the number buckets or slots for the ThetaSketch."
-  examples: |
-    > SELECT theta_sketch_estimate(theta_union_agg(sketch)) FROM (SELECT theta_sketch_agg(col) as sketch FROM VALUES (1) tab(col) UNION ALL SELECT theta_sketch_agg(col, 20) as sketch FROM VALUES (1) tab(col));
-     1
+  usage: |2-
+    
+        theta_union_agg(expr, lgNomEntries) - Returns the ThetaSketch's Compact binary representation.
+          `lgNomEntries` (optional) the log-base-2 of Nominal Entries, with Nominal Entries deciding
+          the number buckets or slots for the ThetaSketch.
+  examples: |2-
+    
+        Examples:
+          > SELECT theta_sketch_estimate(theta_union_agg(sketch)) FROM (SELECT theta_sketch_agg(col) as sketch FROM VALUES (1) tab(col) UNION ALL SELECT theta_sketch_agg(col, 20) as sketch FROM VALUES (1) tab(col));
+           1
+      
   since: "4.1.0"
-- name: try_avg
+
+- name: "try_avg"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.TryAverageExpressionBuilder"
   signatures:
     - "try_avg(expr)"
-  description: "Returns the mean calculated from values of a group and the result is null on overflow."
-  examples: |
-    > SELECT try_avg(col) FROM VALUES (1), (2), (3) AS tab(col);
-     2.0
-    > SELECT try_avg(col) FROM VALUES (1), (2), (NULL) AS tab(col);
-     1.5
-    > SELECT try_avg(col) FROM VALUES (interval '2147483647 months'), (interval '1 months') AS tab(col);
-     NULL
+  usage: "try_avg(expr) - Returns the mean calculated from values of a group and the result is null on overflow."
+  examples: |2-
+    
+        Examples:
+          > SELECT try_avg(col) FROM VALUES (1), (2), (3) AS tab(col);
+           2.0
+          > SELECT try_avg(col) FROM VALUES (1), (2), (NULL) AS tab(col);
+           1.5
+          > SELECT try_avg(col) FROM VALUES (interval '2147483647 months'), (interval '1 months') AS tab(col);
+           NULL
+      
   since: "3.3.0"
-- name: try_sum
+
+- name: "try_sum"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.TrySumExpressionBuilder"
   signatures:
     - "try_sum(expr)"
-  description: "Returns the sum calculated from values of a group and the result is null on overflow."
-  examples: |
-    > SELECT try_sum(col) FROM VALUES (5), (10), (15) AS tab(col);
-     30
-    > SELECT try_sum(col) FROM VALUES (NULL), (10), (15) AS tab(col);
-     25
-    > SELECT try_sum(col) FROM VALUES (NULL), (NULL) AS tab(col);
-     NULL
-    > SELECT try_sum(col) FROM VALUES (9223372036854775807L), (1L) AS tab(col);
-     NULL
+  usage: "try_sum(expr) - Returns the sum calculated from values of a group and the result is null on overflow."
+  examples: |2-
+    
+        Examples:
+          > SELECT try_sum(col) FROM VALUES (5), (10), (15) AS tab(col);
+           30
+          > SELECT try_sum(col) FROM VALUES (NULL), (10), (15) AS tab(col);
+           25
+          > SELECT try_sum(col) FROM VALUES (NULL), (NULL) AS tab(col);
+           NULL
+          > SELECT try_sum(col) FROM VALUES (9223372036854775807L), (1L) AS tab(col);
+           NULL
+      
   since: "3.3.0"
-- name: var_pop
+
+- name: "var_pop"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.VariancePop"
   signatures:
     - "var_pop(expr)"
-  description: "Returns the population variance calculated from values of a group."
-  examples: |
-    > SELECT var_pop(col) FROM VALUES (1), (2), (3) AS tab(col);
-     0.6666666666666666
+  usage: "var_pop(expr) - Returns the population variance calculated from values of a group."
+  examples: |2-
+    
+        Examples:
+          > SELECT var_pop(col) FROM VALUES (1), (2), (3) AS tab(col);
+           0.6666666666666666
+      
   since: "1.6.0"
-- name: var_samp
+
+- name: "var_samp"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.VarianceSamp"
   signatures:
     - "var_samp(expr)"
-  description: "Returns the sample variance calculated from values of a group."
-  examples: |
-    > SELECT var_samp(col) FROM VALUES (1), (2), (3) AS tab(col);
-     1.0
+  usage: "var_samp(expr) - Returns the sample variance calculated from values of a group."
+  examples: |2-
+    
+        Examples:
+          > SELECT var_samp(col) FROM VALUES (1), (2), (3) AS tab(col);
+           1.0
+      
   since: "1.6.0"
-- name: variance
+
+- name: "variance"
+  scope: "sql_builtin"
+  group: "agg_funcs"
+  source: "built-in"
   class_name: "org.apache.spark.sql.catalyst.expressions.aggregate.VarianceSamp"
   signatures:
     - "variance(expr)"
-  description: "Returns the sample variance calculated from values of a group."
-  examples: |
-    > SELECT variance(col) FROM VALUES (1), (2), (3) AS tab(col);
-     1.0
+  usage: "variance(expr) - Returns the sample variance calculated from values of a group."
+  examples: |2-
+    
+        Examples:
+          > SELECT variance(col) FROM VALUES (1), (2), (3) AS tab(col);
+           1.0
+      
   since: "1.6.0"
+
