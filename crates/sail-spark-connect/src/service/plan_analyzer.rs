@@ -255,7 +255,8 @@ fn analyze_is_local(plan: sc::Plan) -> SparkResult<bool> {
                 spec::Plan::Command(_)
                     | spec::Plan::Query(spec::QueryPlan {
                         node: spec::QueryNode::LocalRelation { .. }
-                            | spec::QueryNode::CachedLocalRelation { .. },
+                            | spec::QueryNode::CachedLocalRelation { .. }
+                            | spec::QueryNode::ChunkedCachedLocalRelation { .. },
                         ..
                     })
             ))
@@ -293,6 +294,7 @@ fn is_streaming_query_node(node: &spec::QueryNode) -> bool {
         // leaf nodes with no query plan inputs
         spec::QueryNode::LocalRelation { .. }
         | spec::QueryNode::CachedLocalRelation { .. }
+        | spec::QueryNode::ChunkedCachedLocalRelation { .. }
         | spec::QueryNode::CachedRemoteRelation { .. }
         | spec::QueryNode::Range(_)
         | spec::QueryNode::Empty { .. }

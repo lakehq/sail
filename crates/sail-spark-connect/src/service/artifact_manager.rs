@@ -168,7 +168,26 @@ fn cache_artifact_hash(normalized_name: &str) -> SparkResult<Option<String>> {
         return Ok(None);
     };
     let relative = validate_relative_path(hash, "cache artifact name")?;
-    Ok(Some(relative.to_string_lossy().into_owned()))
+    let hash = relative.to_string_lossy().into_owned();
+    if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(SparkError::invalid(format!(
+            "cache artifact name must be a SHA-256 hex digest: {hash}"
+        )));
+    }
+    Ok(Some(hash))
+}
+
+fn cache_artifact_status_hash(normalized_name: &str) -> SparkResult<Option<String>> {
+    let Some(hash) = normalized_name.strip_prefix(CACHE_PREFIX) else {
+        return Ok(None);
+    };
+    let relative = validate_relative_path(hash, "cache artifact name")?;
+    let hash = relative.to_string_lossy().into_owned();
+    if hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Ok(Some(hash))
+    } else {
+        Ok(None)
+    }
 }
 
 fn is_supported_archive(path: &str) -> bool {
@@ -806,6 +825,14 @@ async fn add_artifact_summary(
 ) -> SparkResult<Option<PendingArtifactUpdate>> {
     let mut pending_update = None;
     if is_crc_successful {
+        let normalized_name = normalize_artifact_name(&name)?;
+        if let Some(cache_hash) = cache_artifact_hash(&normalized_name)? {
+            if cache_hash != sha256 {
+                return Err(SparkError::invalid(format!(
+                    "cache artifact {normalized_name} content hash does not match its name"
+                )));
+            }
+        }
         let stored = store_artifact(&name, payload, artifact_dir, allow_local_fs_destination)?;
         let mut update = PendingArtifactUpdate {
             cache_hash: stored.cache_hash.clone(),
@@ -1040,7 +1067,7 @@ pub(crate) async fn handle_artifact_statuses(
     let mut statuses = HashMap::new();
     for name in names {
         let normalized = normalize_artifact_name(&name)?;
-        let exists = if let Some(hash) = cache_artifact_hash(&normalized)? {
+        let exists = if let Some(hash) = cache_artifact_status_hash(&normalized)? {
             artifacts.has_cache_artifact(&hash)?
         } else {
             false

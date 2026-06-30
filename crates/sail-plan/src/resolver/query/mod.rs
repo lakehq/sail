@@ -224,8 +224,16 @@ impl PlanResolver<'_> {
                 self.resolve_query_apply_in_pandas_with_state(apply, state)
                     .await?
             }
-            QueryNode::CachedLocalRelation { .. } => {
-                return Err(PlanError::todo("cached local relation"));
+            QueryNode::CachedLocalRelation { hash } => {
+                self.resolve_query_cached_local_relation(hash, state)
+                    .await?
+            }
+            QueryNode::ChunkedCachedLocalRelation {
+                data_hashes,
+                schema_hash,
+            } => {
+                self.resolve_query_chunked_cached_local_relation(data_hashes, schema_hash, state)
+                    .await?
             }
             QueryNode::CachedRemoteRelation { .. } => {
                 return Err(PlanError::todo("cached remote relation"));

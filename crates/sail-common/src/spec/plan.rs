@@ -175,6 +175,10 @@ pub enum QueryNode {
     CachedLocalRelation {
         hash: String,
     },
+    ChunkedCachedLocalRelation {
+        data_hashes: Vec<String>,
+        schema_hash: Option<String>,
+    },
     CachedRemoteRelation {
         relation_id: String,
     },

@@ -1,17 +1,23 @@
 use std::collections::HashSet;
+use std::fmt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use datafusion::prelude::SessionContext;
 use object_store::{ObjectStoreExt, ObjectStoreScheme};
+use prost::Message;
+use sail_common::spec;
 use sail_common_datafusion::extension::{SessionExtension, SessionExtensionAccessor};
-use sail_plan::config::PlanConfig;
+use sail_plan::config::{CachedLocalRelationData, LocalRelationCache, PlanConfig};
+use sail_plan::error::{PlanError, PlanResult};
 use sail_python_udf::config::PySparkPythonArtifact;
 use sha2::{Digest, Sha256};
 use url::Url;
 
 use crate::error::{SparkError, SparkResult};
+use crate::proto::data_type::{parse_spark_data_type, DEFAULT_FIELD_NAME};
 use crate::session::SparkSession;
+use crate::spark::connect::LocalRelation;
 
 #[derive(Debug, Clone)]
 pub(crate) struct SparkArtifactOptions {
@@ -117,17 +123,136 @@ impl SparkArtifactRegistry {
         Ok(state.cache_artifacts.contains(hash))
     }
 
+    pub(crate) fn read_cache_artifact(&self, hash: &str) -> SparkResult<Vec<u8>> {
+        validate_cache_hash(hash)?;
+        let path = {
+            let state = self.state.lock()?;
+            if !state.cache_artifacts.contains(hash) {
+                return Err(SparkError::invalid(format!(
+                    "cached local relation block not found: {hash}"
+                )));
+            }
+            state
+                .artifact_dir
+                .clone()
+                .ok_or_else(|| SparkError::internal("artifact directory was not initialized"))?
+                .join("cache")
+                .join(hash)
+        };
+        let data = std::fs::read(&path).map_err(|e| {
+            SparkError::internal(format!(
+                "failed to read cached local relation block {}: {e}",
+                path.display()
+            ))
+        })?;
+        let actual = sha256_hex(&data);
+        if actual != hash {
+            return Err(SparkError::invalid(format!(
+                "cached local relation block hash mismatch: expected {hash}, got {actual}"
+            )));
+        }
+        Ok(data)
+    }
+
     pub(crate) fn artifacts(&self) -> SparkResult<Vec<PySparkPythonArtifact>> {
         let state = self.state.lock()?;
         Ok(state.artifacts.clone())
     }
 }
 
+fn validate_cache_hash(hash: &str) -> SparkResult<()> {
+    if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(SparkError::invalid(format!(
+            "cached local relation hash must be a SHA-256 hex digest: {hash}"
+        )));
+    }
+    Ok(())
+}
+
 fn session_artifact_dir_name(session_id: &str) -> String {
-    Sha256::digest(session_id.as_bytes())
+    sha256_hex(session_id.as_bytes())
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    Sha256::digest(data)
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+struct SparkLocalRelationCache {
+    artifacts: Arc<SparkArtifactRegistry>,
+}
+
+impl fmt::Debug for SparkLocalRelationCache {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SparkLocalRelationCache")
+            .finish_non_exhaustive()
+    }
+}
+
+impl SparkLocalRelationCache {
+    fn read_block(&self, hash: &str) -> PlanResult<Vec<u8>> {
+        self.artifacts
+            .read_cache_artifact(hash)
+            .map_err(spark_error_to_plan_error)
+    }
+}
+
+impl LocalRelationCache for SparkLocalRelationCache {
+    fn read_cached_local_relation(&self, hash: &str) -> PlanResult<CachedLocalRelationData> {
+        let data = self.read_block(hash)?;
+        let relation = LocalRelation::decode(data.as_slice()).map_err(|e| {
+            PlanError::invalid(format!("invalid cached local relation proto {hash}: {e}"))
+        })?;
+        let LocalRelation { data, schema } = relation;
+        let schema = parse_local_relation_schema(schema.as_deref())?;
+        Ok(CachedLocalRelationData { data, schema })
+    }
+
+    fn read_chunked_cached_local_relation_data(&self, hash: &str) -> PlanResult<Vec<u8>> {
+        self.read_block(hash)
+    }
+
+    fn read_chunked_cached_local_relation_schema(&self, hash: &str) -> PlanResult<spec::Schema> {
+        let data = self.read_block(hash)?;
+        let schema = std::str::from_utf8(&data).map_err(|e| {
+            PlanError::invalid(format!(
+                "invalid chunked cached local relation schema block {hash}: {e}"
+            ))
+        })?;
+        parse_required_local_relation_schema(schema)
+    }
+}
+
+fn parse_local_relation_schema(schema: Option<&str>) -> PlanResult<Option<spec::Schema>> {
+    schema
+        .filter(|s| !s.is_empty())
+        .map(parse_required_local_relation_schema)
+        .transpose()
+}
+
+fn parse_required_local_relation_schema(schema: &str) -> PlanResult<spec::Schema> {
+    parse_spark_data_type(schema)
+        .map(|dt| dt.into_schema(DEFAULT_FIELD_NAME, true))
+        .map_err(spark_error_to_plan_error)
+}
+
+fn spark_error_to_plan_error(error: SparkError) -> PlanError {
+    match error {
+        SparkError::DataFusionError(e) => PlanError::DataFusionError(e),
+        SparkError::IoError(e) => {
+            PlanError::DataFusionError(datafusion::error::DataFusionError::IoError(e))
+        }
+        SparkError::ArrowError(e) => PlanError::ArrowError(e),
+        SparkError::MissingArgument(message) => PlanError::MissingArgument(message),
+        SparkError::InvalidArgument(message) => PlanError::InvalidArgument(message),
+        SparkError::NotImplemented(message) => PlanError::NotImplemented(message),
+        SparkError::NotSupported(message) => PlanError::NotSupported(message),
+        SparkError::InternalError(message) => PlanError::InternalError(message),
+        SparkError::AnalysisError(message) => PlanError::AnalysisError(message),
+        error => PlanError::InternalError(error.to_string()),
+    }
 }
 
 struct SparkArtifactState {
@@ -149,10 +274,14 @@ impl SparkArtifactState {
 pub(crate) fn resolve_plan_config(ctx: &SessionContext) -> SparkResult<Arc<PlanConfig>> {
     let spark = ctx.extension::<SparkSession>()?;
     let mut config = (*spark.plan_config()?).clone();
-    let artifacts = ctx.extension::<SparkArtifactRegistry>()?.artifacts()?;
+    let artifact_registry = ctx.extension::<SparkArtifactRegistry>()?;
+    let artifacts = artifact_registry.artifacts()?;
     let mut pyspark_udf_config = (*config.pyspark_udf_config).clone();
     pyspark_udf_config.python_artifacts = artifacts;
     config.pyspark_udf_config = Arc::new(pyspark_udf_config);
+    config.local_relation_cache = Arc::new(SparkLocalRelationCache {
+        artifacts: artifact_registry,
+    });
     Ok(Arc::new(config))
 }
 

@@ -101,6 +101,48 @@ def test_cache_artifact_status_tracks_cache_namespace(spark):
     assert not statuses["files/not-a-cache-artifact"].exists
 
 
+def test_cache_artifact_rejects_name_that_does_not_match_content_hash(spark):
+    from pyspark.sql.connect.proto import base_pb2 as proto
+
+    data = b"cached local relation payload"
+    wrong_hash = "0" * 64
+    manager = spark._client._artifact_manager
+    request = proto.AddArtifactsRequest(
+        session_id=manager._session_id,
+        user_context=manager._user_context,
+        batch=proto.AddArtifactsRequest.Batch(
+            artifacts=[
+                proto.AddArtifactsRequest.SingleChunkArtifact(
+                    name=f"cache/{wrong_hash}",
+                    data=proto.AddArtifactsRequest.ArtifactChunk(
+                        data=data, crc=zlib.crc32(data)
+                    ),
+                )
+            ]
+        ),
+    )
+
+    with pytest.raises(Exception, match="content hash|SHA-256|INVALID"):
+        manager._retrieve_responses(iter([request]))
+
+    statuses = _artifact_statuses(spark, [f"cache/{wrong_hash}"]).statuses
+    assert not statuses[f"cache/{wrong_hash}"].exists
+
+
+def test_create_dataframe_uses_chunked_cached_local_relation_when_threshold_is_low(spark):
+    spark.conf.set("spark.sql.session.localRelationCacheThreshold", "1")
+
+    df = spark.createDataFrame(
+        [(1, "a"), (2, "b")],
+        schema="id long, value string",
+    )
+    plan = df._plan.to_proto(spark._client)
+    assert plan.root.HasField("chunked_cached_local_relation")
+
+    rows = df.orderBy("id").collect()
+    assert [(row.id, row.value) for row in rows] == [(1, "a"), (2, "b")]
+
+
 def test_add_multiple_artifacts_as_pyfiles(spark, tmp_path):
     """Multiple zip artifacts can be added and used as pyfiles."""
     for i in range(3):

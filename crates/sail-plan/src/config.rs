@@ -1,10 +1,10 @@
 use std::fmt::Debug;
-use std::hash::Hash;
 use std::sync::Arc;
 
+use sail_common::spec;
 use sail_python_udf::config::PySparkUdfConfig;
 
-use crate::error::PlanResult;
+use crate::error::{PlanError, PlanResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd)]
 pub enum DefaultTimestampType {
@@ -12,7 +12,44 @@ pub enum DefaultTimestampType {
     TimestampNtz,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
+#[derive(Debug, Clone)]
+pub struct CachedLocalRelationData {
+    pub data: Option<Vec<u8>>,
+    pub schema: Option<spec::Schema>,
+}
+
+pub trait LocalRelationCache: Debug + Send + Sync {
+    fn read_cached_local_relation(&self, hash: &str) -> PlanResult<CachedLocalRelationData>;
+
+    fn read_chunked_cached_local_relation_data(&self, hash: &str) -> PlanResult<Vec<u8>>;
+
+    fn read_chunked_cached_local_relation_schema(&self, hash: &str) -> PlanResult<spec::Schema>;
+}
+
+#[derive(Debug)]
+struct EmptyLocalRelationCache;
+
+impl LocalRelationCache for EmptyLocalRelationCache {
+    fn read_cached_local_relation(&self, hash: &str) -> PlanResult<CachedLocalRelationData> {
+        Err(PlanError::invalid(format!(
+            "cached local relation not found: {hash}"
+        )))
+    }
+
+    fn read_chunked_cached_local_relation_data(&self, hash: &str) -> PlanResult<Vec<u8>> {
+        Err(PlanError::invalid(format!(
+            "chunked cached local relation data block not found: {hash}"
+        )))
+    }
+
+    fn read_chunked_cached_local_relation_schema(&self, hash: &str) -> PlanResult<spec::Schema> {
+        Err(PlanError::invalid(format!(
+            "chunked cached local relation schema block not found: {hash}"
+        )))
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct PlanConfig {
     /// The time zone of the session.
     pub session_timezone: Arc<str>,
@@ -22,6 +59,8 @@ pub struct PlanConfig {
     pub arrow_use_large_var_types: bool,
     /// The Spark UDF configuration.
     pub pyspark_udf_config: Arc<PySparkUdfConfig>,
+    /// Session-local cache for Spark Connect local relation artifacts.
+    pub local_relation_cache: Arc<dyn LocalRelationCache>,
     /// The default table file format.
     pub default_table_file_format: String,
     /// The default location for managed databases and tables.
@@ -54,6 +93,7 @@ impl Default for PlanConfig {
             default_timestamp_type: DefaultTimestampType::TimestampLtz,
             arrow_use_large_var_types: false,
             pyspark_udf_config: Arc::new(PySparkUdfConfig::default()),
+            local_relation_cache: Arc::new(EmptyLocalRelationCache),
             default_table_file_format: "PARQUET".to_string(),
             default_warehouse_directory: "spark-warehouse".to_string(),
             session_user_id: "".to_string(),

@@ -118,6 +118,57 @@ impl PlanResolver<'_> {
         } else {
             vec![]
         };
+        self.resolve_local_relation_batches(batches, schema, state)
+    }
+
+    pub(super) async fn resolve_query_cached_local_relation(
+        &self,
+        hash: String,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let relation = self
+            .config
+            .local_relation_cache
+            .read_cached_local_relation(&hash)?;
+        self.resolve_query_local_relation(relation.data, relation.schema, state)
+            .await
+    }
+
+    pub(super) async fn resolve_query_chunked_cached_local_relation(
+        &self,
+        data_hashes: Vec<String>,
+        schema_hash: Option<String>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        if data_hashes.is_empty() {
+            return Err(PlanError::invalid(
+                "chunked cached local relation must contain data",
+            ));
+        }
+        let mut batches = vec![];
+        for hash in data_hashes {
+            let data = self
+                .config
+                .local_relation_cache
+                .read_chunked_cached_local_relation_data(&hash)?;
+            batches.extend(read_record_batches(&data)?);
+        }
+        let schema = schema_hash
+            .map(|hash| {
+                self.config
+                    .local_relation_cache
+                    .read_chunked_cached_local_relation_schema(&hash)
+            })
+            .transpose()?;
+        self.resolve_local_relation_batches(batches, schema, state)
+    }
+
+    fn resolve_local_relation_batches(
+        &self,
+        batches: Vec<datafusion::arrow::array::RecordBatch>,
+        schema: Option<spec::Schema>,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
         let (schema, batches) = if let Some(schema) = schema {
             let schema = Arc::new(self.resolve_schema(schema, state)?);
             let batches = batches
