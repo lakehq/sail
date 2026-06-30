@@ -12,6 +12,50 @@ use datafusion::logical_expr::ColumnarValue;
 use datafusion::physical_expr::PhysicalExpr;
 use sail_common_datafusion::literal::LiteralValue;
 
+use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
+
+/// Spark-compatible single-argument coercion shared by the floating-point
+/// aggregates (`product`, `skewness`, `kurtosis`): numeric, decimal and
+/// numeric-string inputs are coerced to DOUBLE, while other types such as
+/// BOOLEAN are rejected like Spark (which raises `DATATYPE_MISMATCH`).
+pub fn coerce_single_arg_to_float64(
+    function_name: &str,
+    arg_types: &[DataType],
+) -> Result<Vec<DataType>> {
+    use DataType::*;
+    if arg_types.len() != 1 {
+        return Err(invalid_arg_count_exec_err(
+            function_name,
+            (1, 1),
+            arg_types.len(),
+        ));
+    }
+    match &arg_types[0] {
+        Null
+        | Int8
+        | Int16
+        | Int32
+        | Int64
+        | UInt8
+        | UInt16
+        | UInt32
+        | UInt64
+        | Float16
+        | Float32
+        | Float64
+        | Decimal128(_, _)
+        | Decimal256(_, _)
+        | Utf8
+        | LargeUtf8
+        | Utf8View => Ok(vec![Float64]),
+        other => Err(unsupported_data_type_exec_err(
+            function_name,
+            "a numeric type",
+            other,
+        )),
+    }
+}
+
 ///
 /// This is part of the shared contract for bitmap aggregate functions that
 /// interoperate on the same binary bitmap representation.
@@ -269,4 +313,69 @@ pub fn calculate_percentile_disc<T: ArrowNumericType>(
     // select_nth_unstable_by is O(n) partial sort - finds the value at index
     let (_, value, _) = values.select_nth_unstable_by(index, cmp);
     Some(*value)
+}
+
+#[cfg(test)]
+mod tests {
+    use datafusion::arrow::datatypes::DataType;
+
+    use super::coerce_single_arg_to_float64;
+
+    #[test]
+    fn coerces_numeric_decimal_and_string_inputs_to_float64() {
+        // Covers every whitelisted variant, including `LargeUtf8` / `Utf8View`
+        // and `Decimal*` which plain Spark SQL literals never produce, so the
+        // `.feature` string scenarios (which only yield `Utf8`) cannot reach them.
+        let accepted = [
+            DataType::Null,
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Float16,
+            DataType::Float32,
+            DataType::Float64,
+            DataType::Decimal128(10, 2),
+            DataType::Decimal256(40, 2),
+            DataType::Utf8,
+            DataType::LargeUtf8,
+            DataType::Utf8View,
+        ];
+        for dt in accepted {
+            assert_eq!(
+                coerce_single_arg_to_float64("product", std::slice::from_ref(&dt)).ok(),
+                Some(vec![DataType::Float64]),
+                "expected {dt:?} to coerce to Float64",
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_boolean_and_other_non_numeric_inputs() {
+        // Spark rejects these with DATATYPE_MISMATCH; the helper must too.
+        for dt in [
+            DataType::Boolean,
+            DataType::Date32,
+            DataType::Binary,
+            DataType::Timestamp(datafusion::arrow::datatypes::TimeUnit::Microsecond, None),
+        ] {
+            assert!(
+                coerce_single_arg_to_float64("kurtosis", std::slice::from_ref(&dt)).is_err(),
+                "expected {dt:?} to be rejected",
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_wrong_argument_count() {
+        assert!(coerce_single_arg_to_float64("skewness", &[]).is_err());
+        assert!(
+            coerce_single_arg_to_float64("skewness", &[DataType::Float64, DataType::Float64])
+                .is_err()
+        );
+    }
 }

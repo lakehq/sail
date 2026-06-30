@@ -8,13 +8,9 @@ use datafusion::error::Result;
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use datafusion::scalar::ScalarValue;
-use datafusion_common::types::{
-    logical_float16, logical_float32, logical_float64, logical_int16, logical_int32, logical_int64,
-    logical_int8, logical_uint16, logical_uint32, logical_uint64, logical_uint8, NativeType,
-};
-use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 
 use crate::aggregate::skewness::SkewnessAccumulator;
+use crate::aggregate::utils::coerce_single_arg_to_float64;
 
 #[derive(PartialEq, Eq, Hash)]
 pub struct KurtosisFunction {
@@ -38,26 +34,7 @@ impl Default for KurtosisFunction {
 impl KurtosisFunction {
     pub fn new() -> Self {
         Self {
-            signature: Signature::coercible(
-                vec![Coercion::new_implicit(
-                    TypeSignatureClass::Native(logical_float64()),
-                    vec![
-                        TypeSignatureClass::Native(logical_int8()),
-                        TypeSignatureClass::Native(logical_int16()),
-                        TypeSignatureClass::Native(logical_int32()),
-                        TypeSignatureClass::Native(logical_int64()),
-                        TypeSignatureClass::Native(logical_uint8()),
-                        TypeSignatureClass::Native(logical_uint16()),
-                        TypeSignatureClass::Native(logical_uint32()),
-                        TypeSignatureClass::Native(logical_uint64()),
-                        TypeSignatureClass::Native(logical_float16()),
-                        TypeSignatureClass::Native(logical_float32()),
-                        TypeSignatureClass::Native(logical_float64()),
-                    ],
-                    NativeType::Float64,
-                )],
-                Volatility::Immutable,
-            ),
+            signature: Signature::user_defined(Volatility::Immutable),
         }
     }
 }
@@ -69,6 +46,10 @@ impl AggregateUDFImpl for KurtosisFunction {
 
     fn signature(&self) -> &Signature {
         &self.signature
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        coerce_single_arg_to_float64("kurtosis", arg_types)
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {

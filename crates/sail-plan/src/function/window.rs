@@ -184,16 +184,14 @@ fn kurtosis(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         distinct,
         function_context: _,
     } = input;
-    let args = arguments
-        .into_iter()
-        .map(|arg| expr::Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Float64)))
-        .collect();
+    // Do not pre-cast the argument here: `KurtosisFunction::coerce_types` governs
+    // the accepted input types (e.g. BOOLEAN is rejected like Spark).
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
         fun: WindowFunctionDefinition::AggregateUDF(Arc::new(AggregateUDF::from(
             KurtosisFunction::new(),
         ))),
         params: WindowFunctionParams {
-            args,
+            args: arguments,
             partition_by,
             order_by,
             window_frame,
@@ -237,13 +235,12 @@ fn product(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         distinct,
         function_context: _,
     } = input;
-    let args = arguments
-        .into_iter()
-        .map(|arg| expr::Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Float64)))
-        .collect();
+    // Do not pre-cast the argument here: `ProductFunction::coerce_types` governs
+    // the accepted input types (numeric, decimal and numeric strings are coerced
+    // to DOUBLE, while e.g. BOOLEAN is rejected like Spark).
     Ok(aggregate_udf_window_expr(
         Arc::new(AggregateUDF::from(ProductFunction::new())),
-        args,
+        arguments,
         partition_by,
         order_by,
         window_frame,
@@ -262,16 +259,14 @@ fn skewness(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         distinct,
         function_context: _,
     } = input;
-    let args = arguments
-        .into_iter()
-        .map(|arg| expr::Expr::Cast(expr::Cast::new(Box::new(arg), DataType::Float64)))
-        .collect();
+    // Do not pre-cast the argument here: `SkewnessFunc::coerce_types` governs the
+    // accepted input types (e.g. BOOLEAN is rejected like Spark).
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
         fun: WindowFunctionDefinition::AggregateUDF(Arc::new(AggregateUDF::from(
             SkewnessFunc::new(),
         ))),
         params: WindowFunctionParams {
-            args,
+            args: arguments,
             partition_by,
             order_by,
             window_frame,
