@@ -1,9 +1,4 @@
-use std::collections::BTreeSet;
-
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::SessionContext;
-use datafusion_datasource::file_scan_config::FileScanConfig;
-use datafusion_datasource::source::DataSourceExec;
 use log::warn;
 use sail_common::spec;
 use sail_common_datafusion::rename::schema::rename_schema;
@@ -116,56 +111,10 @@ pub(crate) async fn handle_analyze_is_streaming(
 }
 
 pub(crate) async fn handle_analyze_input_files(
-    ctx: &SessionContext,
-    request: InputFilesRequest,
+    _ctx: &SessionContext,
+    _request: InputFilesRequest,
 ) -> SparkResult<InputFilesResponse> {
-    let InputFilesRequest { plan } = request;
-    let plan = plan.required("plan")?;
-    let resolver = PlanResolver::new(ctx, resolve_plan_config(ctx)?);
-    let NamedPlan { plan, .. } = resolver
-        .resolve_named_plan(spec::Plan::Query(plan.try_into()?))
-        .await?;
-    let df = sail_plan::execute_logical_plan(ctx, plan).await?;
-    let (session_state, logical_plan) = df.into_parts();
-    let logical_plan = session_state.optimize(&logical_plan)?;
-    let physical_plan = session_state
-        .query_planner()
-        .create_physical_plan(&logical_plan, &session_state)
-        .await?;
-
-    let mut files = BTreeSet::new();
-    collect_input_files(physical_plan.as_ref(), &mut files);
-
-    Ok(InputFilesResponse {
-        files: files.into_iter().collect(),
-    })
-}
-
-fn collect_input_files(plan: &dyn ExecutionPlan, files: &mut BTreeSet<String>) {
-    if let Some(ds_exec) = plan.downcast_ref::<DataSourceExec>() {
-        if let Some(file_scan_config) = ds_exec.data_source().downcast_ref::<FileScanConfig>() {
-            let base_url = file_scan_config.object_store_url.as_str();
-            for file_group in &file_scan_config.file_groups {
-                for file in file_group.iter() {
-                    let location = file.object_meta.location.as_ref();
-                    files.insert(format_input_file_url(base_url, location));
-                }
-            }
-        }
-    }
-    for child in plan.children() {
-        collect_input_files(child.as_ref(), files);
-    }
-}
-
-fn format_input_file_url(base_url: &str, location: &str) -> String {
-    let base_url = base_url.trim_end_matches('/');
-    let location = location.trim_start_matches('/');
-    if base_url == "file:" {
-        format!("file:///{location}")
-    } else {
-        format!("{base_url}/{location}")
-    }
+    Err(SparkError::todo("handle analyze input files"))
 }
 
 pub(crate) async fn handle_analyze_spark_version(

@@ -205,7 +205,8 @@
   {
     "module": "pyspark.sql.DataFrame",
     "function": "inputFiles",
-    "status": "supported"
+    "status": "planned",
+    "ref": "https://github.com/lakehq/sail/issues/481"
   },
   {
     "module": "pyspark.sql.DataFrame",
