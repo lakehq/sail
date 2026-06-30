@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package sail.worker;
 
+import "sail/task/common.proto";
+
 message WorkerLocation {
   uint64 worker_id = 1;
   string host = 2;
@@ -22,6 +24,7 @@ message RunTaskRequest {
   // of peer information to the driver so that duplicate peer
   // information does not need to be sent again in the future.
   repeated WorkerLocation peers = 6;
+  sail.task.TaskLaunchContext launch_context = 7;
 }
 
 message RunTaskResponse {

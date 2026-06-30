@@ -541,7 +541,7 @@ impl DriverActor {
         self.task_assigner.track_streams(&assignments);
         for assignment in assignments {
             for entry in assignment.set.entries {
-                let (definition, context) = match self
+                let (definition, launch_context, context) = match self
                     .job_scheduler
                     .get_task_definition(&entry.key, &self.task_assigner)
                 {
@@ -562,12 +562,20 @@ impl DriverActor {
                 self.job_scheduler
                     .update_task(&entry.key, TaskState::Scheduled, None, None);
                 match assignment.assignment {
-                    TaskAssignment::Driver => self
-                        .task_runner
-                        .run_task(ctx, entry.key, definition, context),
-                    TaskAssignment::Worker { worker_id, slot: _ } => self
-                        .worker_pool
-                        .run_task(ctx, worker_id, entry.key, definition),
+                    TaskAssignment::Driver => self.task_runner.run_task(
+                        ctx,
+                        entry.key,
+                        definition,
+                        launch_context,
+                        context,
+                    ),
+                    TaskAssignment::Worker { worker_id, slot: _ } => self.worker_pool.run_task(
+                        ctx,
+                        worker_id,
+                        entry.key,
+                        definition,
+                        launch_context,
+                    ),
                 }
             }
         }

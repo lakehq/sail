@@ -18,6 +18,15 @@ pub struct TaskDefinition {
     pub plan: Arc<[u8]>,
     pub inputs: Vec<TaskInput>,
     pub output: TaskOutput,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TaskLaunchContext {
+    pub resources: TaskResources,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TaskResources {
     pub python_artifacts: Vec<PySparkPythonArtifact>,
 }
 
@@ -82,13 +91,11 @@ impl From<TaskDefinition> for gen::TaskDefinition {
             plan,
             inputs,
             output,
-            python_artifacts,
         } = value;
         gen::TaskDefinition {
             plan: plan.to_vec(),
             inputs: inputs.into_iter().map(|x| x.into()).collect(),
             output: Some(output.into()),
-            python_artifacts: python_artifacts.into_iter().map(|x| x.into()).collect(),
         }
     }
 }
@@ -114,6 +121,47 @@ impl TryFrom<gen::TaskDefinition> for TaskDefinition {
             plan: Arc::from(value.plan),
             inputs,
             output,
+        })
+    }
+}
+
+impl From<TaskLaunchContext> for gen::TaskLaunchContext {
+    fn from(value: TaskLaunchContext) -> Self {
+        let TaskLaunchContext { resources } = value;
+        gen::TaskLaunchContext {
+            resources: Some(resources.into()),
+        }
+    }
+}
+
+impl TryFrom<gen::TaskLaunchContext> for TaskLaunchContext {
+    type Error = ExecutionError;
+
+    fn try_from(value: gen::TaskLaunchContext) -> Result<Self, Self::Error> {
+        Ok(TaskLaunchContext {
+            resources: value
+                .resources
+                .map(TaskResources::try_from)
+                .transpose()?
+                .unwrap_or_default(),
+        })
+    }
+}
+
+impl From<TaskResources> for gen::TaskResources {
+    fn from(value: TaskResources) -> Self {
+        let TaskResources { python_artifacts } = value;
+        gen::TaskResources {
+            python_artifacts: python_artifacts.into_iter().map(|x| x.into()).collect(),
+        }
+    }
+}
+
+impl TryFrom<gen::TaskResources> for TaskResources {
+    type Error = ExecutionError;
+
+    fn try_from(value: gen::TaskResources) -> Result<Self, Self::Error> {
+        Ok(TaskResources {
             python_artifacts: value
                 .python_artifacts
                 .into_iter()

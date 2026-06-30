@@ -66,8 +66,9 @@ impl Actor for WorkerActor {
             WorkerEvent::RunTask {
                 key,
                 definition,
+                launch_context,
                 peers,
-            } => self.handle_run_task(ctx, key, definition, peers),
+            } => self.handle_run_task(ctx, key, definition, launch_context, peers),
             WorkerEvent::StopTask { key } => self.handle_stop_task(ctx, key),
             WorkerEvent::ReportTaskStatus {
                 key,

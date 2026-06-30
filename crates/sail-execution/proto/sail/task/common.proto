@@ -6,7 +6,14 @@ message TaskDefinition {
   bytes plan = 1;
   repeated TaskInput inputs = 2;
   TaskOutput output = 3;
-  repeated PySparkPythonArtifact python_artifacts = 4;
+}
+
+message TaskLaunchContext {
+  TaskResources resources = 1;
+}
+
+message TaskResources {
+  repeated PySparkPythonArtifact python_artifacts = 1;
 }
 
 message PySparkPythonArtifact {

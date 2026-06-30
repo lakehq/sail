@@ -5,7 +5,7 @@ use tonic::{Request, Response, Status};
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::TaskKey;
-use crate::task::definition::TaskDefinition;
+use crate::task::definition::{TaskDefinition, TaskLaunchContext};
 use crate::worker::actor::WorkerActor;
 use crate::worker::gen::worker_service_server::WorkerService;
 use crate::worker::gen::{
@@ -39,6 +39,7 @@ impl WorkerService for WorkerServer {
             attempt,
             definition,
             peers,
+            launch_context,
         } = request;
         let peers = peers
             .into_iter()
@@ -54,6 +55,10 @@ impl WorkerService for WorkerServer {
                 attempt: attempt as usize,
             },
             definition: TaskDefinition::try_from(definition)?,
+            launch_context: launch_context
+                .map(TaskLaunchContext::try_from)
+                .transpose()?
+                .unwrap_or_default(),
             peers,
         };
         self.handle

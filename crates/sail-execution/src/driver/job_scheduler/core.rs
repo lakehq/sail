@@ -25,8 +25,8 @@ use crate::job_graph::{
 };
 use crate::proto::encode::{try_encode_physical_expr, try_encode_physical_plan};
 use crate::task::definition::{
-    TaskDefinition, TaskInput, TaskInputKey, TaskInputLocator, TaskOutput, TaskOutputDistribution,
-    TaskOutputLocator,
+    TaskDefinition, TaskInput, TaskInputKey, TaskInputLocator, TaskLaunchContext, TaskOutput,
+    TaskOutputDistribution, TaskOutputLocator, TaskResources,
 };
 use crate::task::scheduling::{
     TaskAssignment, TaskAssignmentGetter, TaskOutputKind, TaskRegion, TaskSet, TaskSetEntry,
@@ -505,7 +505,7 @@ impl JobScheduler {
         &self,
         key: &TaskKey,
         assignments: &dyn TaskAssignmentGetter,
-    ) -> ExecutionResult<(TaskDefinition, Arc<TaskContext>)> {
+    ) -> ExecutionResult<(TaskDefinition, TaskLaunchContext, Arc<TaskContext>)> {
         let Some(job) = self.jobs.get(&key.job_id) else {
             return Err(ExecutionError::InvalidArgument(format!(
                 "job {} not found",
@@ -538,9 +538,11 @@ impl JobScheduler {
             plan: Arc::from(plan),
             inputs,
             output,
-            python_artifacts,
         };
-        Ok((definition, context.clone()))
+        let launch_context = TaskLaunchContext {
+            resources: TaskResources { python_artifacts },
+        };
+        Ok((definition, launch_context, context.clone()))
     }
 
     pub fn stop(&mut self) {

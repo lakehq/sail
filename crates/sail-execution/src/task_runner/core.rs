@@ -26,7 +26,9 @@ use crate::plan::{ShuffleReadExec, ShuffleWriteExec, StageInputExec};
 use crate::proto::codec::RemoteExecutionCodec;
 use crate::proto::decode::try_decode_physical_plan;
 use crate::stream_accessor::{StreamAccessor, StreamAccessorMessage};
-use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
+use crate::task::definition::{
+    TaskDefinition, TaskInput, TaskLaunchContext, TaskOutput, TaskResources,
+};
 use crate::task_runner::monitor::TaskMonitor;
 use crate::task_runner::{TaskRunner, TaskRunnerMessage};
 
@@ -42,11 +44,12 @@ impl TaskRunner {
         ctx: &mut ActorContext<T>,
         key: TaskKey,
         definition: TaskDefinition,
+        launch_context: TaskLaunchContext,
         context: Arc<TaskContext>,
     ) where
         T::Message: TaskRunnerMessage + StreamAccessorMessage,
     {
-        let stream = match self.execute_plan(ctx, &key, definition, context) {
+        let stream = match self.execute_plan(ctx, &key, definition, launch_context, context) {
             Ok(x) => x,
             Err(e) => {
                 let event = T::Message::report_task_status(
@@ -78,6 +81,7 @@ impl TaskRunner {
         ctx: &mut ActorContext<T>,
         key: &TaskKey,
         definition: TaskDefinition,
+        launch_context: TaskLaunchContext,
         context: Arc<TaskContext>,
     ) -> ExecutionResult<SendableRecordBatchStream>
     where
@@ -87,8 +91,10 @@ impl TaskRunner {
             plan,
             inputs,
             output,
-            python_artifacts,
         } = definition;
+        let TaskLaunchContext {
+            resources: TaskResources { python_artifacts },
+        } = launch_context;
         let codec = RemoteExecutionCodec::for_task(python_artifacts);
         let plan = try_decode_physical_plan(&context, &codec, plan.as_ref())?;
         let plan = self.rewrite_parquet_adapters(plan)?;
