@@ -109,22 +109,46 @@ impl<'a> SnapshotProducer<'a> {
                 );
         }
         if !self.added_delete_files.is_empty() {
-            let added_position_deletes = self
-                .added_delete_files
-                .iter()
-                .map(|df| df.record_count)
-                .sum::<u64>();
+            let mut added_position_delete_files = 0usize;
+            let mut added_position_deletes = 0u64;
+            let mut added_equality_delete_files = 0usize;
+            let mut added_equality_deletes = 0u64;
+            for df in &self.added_delete_files {
+                match df.content {
+                    crate::spec::DataContentType::PositionDeletes => {
+                        added_position_delete_files += 1;
+                        added_position_deletes += df.record_count;
+                    }
+                    crate::spec::DataContentType::EqualityDeletes => {
+                        added_equality_delete_files += 1;
+                        added_equality_deletes += df.record_count;
+                    }
+                    crate::spec::DataContentType::Data => {}
+                }
+            }
+            let deleted_records = added_position_deletes + added_equality_deletes;
             summary = summary
                 .with_property(
                     "added-delete-files",
                     self.added_delete_files.len().to_string(),
                 )
-                .with_property(
-                    "added-position-delete-files",
-                    self.added_delete_files.len().to_string(),
-                )
-                .with_property("added-position-deletes", added_position_deletes.to_string())
-                .with_property("deleted-records", added_position_deletes.to_string());
+                .with_property("deleted-records", deleted_records.to_string());
+            if added_position_delete_files > 0 {
+                summary = summary
+                    .with_property(
+                        "added-position-delete-files",
+                        added_position_delete_files.to_string(),
+                    )
+                    .with_property("added-position-deletes", added_position_deletes.to_string());
+            }
+            if added_equality_delete_files > 0 {
+                summary = summary
+                    .with_property(
+                        "added-equality-delete-files",
+                        added_equality_delete_files.to_string(),
+                    )
+                    .with_property("added-equality-deletes", added_equality_deletes.to_string());
+            }
         }
 
         // Build manifest metadata: prefer caller-provided metadata derived from table schema/spec

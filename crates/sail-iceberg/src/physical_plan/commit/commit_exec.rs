@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use datafusion::arrow::array::UInt64Array;
-use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::arrow::array::Int64Array;
+use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::{Distribution, EquivalenceProperties};
@@ -59,6 +59,15 @@ use crate::utils::get_object_store_from_context;
 use crate::utils::metadata::metadata_files_for_version;
 const MAX_COMMIT_RETRIES: usize = 5;
 
+fn commit_count_batch(schema: SchemaRef, row_count: u64) -> Result<RecordBatch> {
+    let row_count = i64::try_from(row_count).map_err(|e| {
+        DataFusionError::Execution(format!("Iceberg commit row count overflow: {e}"))
+    })?;
+    let array = Arc::new(Int64Array::from(vec![row_count]));
+    RecordBatch::try_new(schema, vec![array])
+        .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
+}
+
 #[derive(Debug)]
 pub struct IcebergCommitExec {
     input: Arc<dyn ExecutionPlan>,
@@ -75,7 +84,7 @@ impl IcebergCommitExec {
     ) -> Self {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "count",
-            DataType::UInt64,
+            DataType::Int64,
             true,
         )]));
         let cache = Arc::new(PlanProperties::new(
@@ -420,9 +429,7 @@ impl ExecutionPlan for IcebergCommitExec {
             // No-op path (e.g. IgnoreIfExists on existing table): no rows, no meta.
             if commit_meta.is_none() && added_data_files.is_empty() && added_delete_files.is_empty()
             {
-                let array = Arc::new(UInt64Array::from(vec![0u64]));
-                let batch = RecordBatch::try_new(schema, vec![array])?;
-                return Ok(batch);
+                return commit_count_batch(schema, 0);
             }
 
             let commit_meta = commit_meta.ok_or_else(|| {
@@ -566,9 +573,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     }
                 }
 
-                let array = Arc::new(UInt64Array::from(vec![commit_info.row_count]));
-                let batch = RecordBatch::try_new(schema, vec![array])?;
-                return Ok(batch);
+                return commit_count_batch(schema, commit_info.row_count);
             }
 
             let initial_latest_meta = latest_meta_res?;
@@ -706,10 +711,7 @@ impl ExecutionPlan for IcebergCommitExec {
                                 if committed.payload().is_some() {
                                     log::trace!("Iceberg catalog commit returned a payload");
                                 }
-                                let array =
-                                    Arc::new(UInt64Array::from(vec![commit_info.row_count]));
-                                let batch = RecordBatch::try_new(schema, vec![array])?;
-                                return Ok(batch);
+                                return commit_count_batch(schema, commit_info.row_count);
                             }
                             CatalogCommitOutcome::NotSupported => {
                                 if matches!(
@@ -782,9 +784,7 @@ impl ExecutionPlan for IcebergCommitExec {
                         .await?;
                     }
 
-                    let array = Arc::new(UInt64Array::from(vec![commit_info.row_count]));
-                    let batch = RecordBatch::try_new(schema, vec![array])?;
-                    return Ok(batch);
+                    return commit_count_batch(schema, commit_info.row_count);
                 }
 
                 let snapshot = maybe_snapshot.ok_or_else(|| {
@@ -912,9 +912,7 @@ impl ExecutionPlan for IcebergCommitExec {
                             if committed.payload().is_some() {
                                 log::trace!("Iceberg catalog commit returned a payload");
                             }
-                            let array = Arc::new(UInt64Array::from(vec![commit_info.row_count]));
-                            let batch = RecordBatch::try_new(schema, vec![array])?;
-                            return Ok(batch);
+                            return commit_count_batch(schema, commit_info.row_count);
                         }
                         CatalogCommitOutcome::NotSupported
                             if matches!(
@@ -1093,9 +1091,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     .await?;
                 }
 
-                let array = Arc::new(UInt64Array::from(vec![commit_info.row_count]));
-                let batch = RecordBatch::try_new(schema, vec![array])?;
-                return Ok(batch);
+                return commit_count_batch(schema, commit_info.row_count);
             }
         };
 

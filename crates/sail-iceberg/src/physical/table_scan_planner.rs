@@ -5,6 +5,7 @@ use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
 use datafusion::datasource::TableProvider;
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
+use datafusion::logical_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion::logical_expr::{LogicalPlan, TableScan, UserDefinedLogicalNode};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::union::UnionExec;
@@ -20,8 +21,8 @@ use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use crate::logical::IcebergTableSource;
 use crate::options::gen::IcebergWriteOptions;
 use crate::physical_plan::{
-    IcebergCommitExec, IcebergMergeDataRowsExec, IcebergPositionDeleteWriterExec,
-    IcebergWriterExec, IcebergWriterExecOptions,
+    IcebergCommitExec, IcebergEqualityDeleteWriterExec, IcebergMergeDataRowsExec,
+    IcebergPositionDeleteWriterExec, IcebergWriterExec, IcebergWriterExecOptions,
 };
 use crate::table::Table;
 use crate::table_format::{
@@ -35,7 +36,7 @@ pub struct IcebergPhysicalPlanner;
 impl ExtensionPlanner for IcebergPhysicalPlanner {
     async fn plan_extension(
         &self,
-        _planner: &dyn PhysicalPlanner,
+        planner: &dyn PhysicalPlanner,
         node: &dyn UserDefinedLogicalNode,
         logical_inputs: &[&LogicalPlan],
         physical_inputs: &[Arc<dyn ExecutionPlan>],
@@ -76,7 +77,7 @@ impl ExtensionPlanner for IcebergPhysicalPlanner {
             if !node.target_format().eq_ignore_ascii_case("iceberg") {
                 return Ok(None);
             }
-            return plan_iceberg_row_level_write(session_state, node, physical_inputs)
+            return plan_iceberg_row_level_write(session_state, planner, node, physical_inputs)
                 .await
                 .map(Some);
         }
@@ -109,9 +110,13 @@ impl ExtensionPlanner for IcebergPhysicalPlanner {
 
 async fn plan_iceberg_row_level_write(
     session_state: &SessionState,
+    planner: &dyn PhysicalPlanner,
     node: &RowLevelWriteNode,
     physical_inputs: &[Arc<dyn ExecutionPlan>],
 ) -> Result<Arc<dyn ExecutionPlan>> {
+    if node.command() == RowLevelCommand::Delete {
+        return plan_iceberg_delete(session_state, planner, node).await;
+    }
     if node.command() != RowLevelCommand::Merge {
         return not_impl_err!("Iceberg row-level {:?} operations", node.command());
     }
@@ -184,6 +189,49 @@ async fn plan_iceberg_row_level_write(
 
     Ok(Arc::new(IcebergCommitExec::new(
         Arc::new(CoalescePartitionsExec::new(commit_input)),
+        table_url,
+        writer_options.lakehouse_table.clone(),
+    )))
+}
+
+async fn plan_iceberg_delete(
+    session_state: &SessionState,
+    planner: &dyn PhysicalPlanner,
+    node: &RowLevelWriteNode,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    // TODO: Support conditionless DELETE by scanning all rows into equality deletes.
+    let condition = node.condition().ok_or_else(|| {
+        DataFusionError::Plan(
+            "Iceberg equality-delete MOR DELETE requires a WHERE condition".to_string(),
+        )
+    })?;
+    let delete_plan = LogicalPlanBuilder::from(node.raw_target().as_ref().clone())
+        .filter(condition.expr.clone())?
+        .build()?;
+    let physical_delete = planner
+        .create_physical_plan(&delete_plan, session_state)
+        .await?;
+
+    let table_url =
+        IcebergTableFormat::parse_table_url(vec![node.target_location().to_string()]).await?;
+    let (clean_options, table_properties) =
+        split_iceberg_write_options_and_table_properties(node.target_options().to_vec())?;
+    let iceberg_options = IcebergWriteOptions::resolve(session_state, clean_options)?;
+    let mut writer_options = IcebergWriterExecOptions::from(iceberg_options);
+    writer_options.table_properties = table_properties;
+    writer_options.lakehouse_table = node.target_lakehouse_table().cloned();
+
+    let delete_input: Arc<dyn ExecutionPlan> =
+        Arc::new(CoalescePartitionsExec::new(physical_delete));
+    let delete_writer: Arc<dyn ExecutionPlan> = Arc::new(IcebergEqualityDeleteWriterExec::new(
+        delete_input,
+        table_url.clone(),
+        writer_options.table_properties.clone(),
+        writer_options.lakehouse_table.clone(),
+    ));
+
+    Ok(Arc::new(IcebergCommitExec::new(
+        Arc::new(CoalescePartitionsExec::new(delete_writer)),
         table_url,
         writer_options.lakehouse_table.clone(),
     )))
