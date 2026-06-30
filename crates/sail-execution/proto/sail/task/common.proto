@@ -8,31 +8,6 @@ message TaskDefinition {
   TaskOutput output = 3;
 }
 
-message TaskLaunchContext {
-  TaskResources resources = 1;
-}
-
-message TaskResources {
-  repeated PySparkPythonArtifact python_artifacts = 1;
-}
-
-message PySparkPythonArtifact {
-  string name = 1;
-  string python_path = 2;
-  optional bytes data = 3;
-  optional string uri = 4;
-  string sha256 = 5;
-  uint64 size = 6;
-  PySparkArtifactKind kind = 7;
-}
-
-enum PySparkArtifactKind {
-  PY_SPARK_ARTIFACT_KIND_UNSPECIFIED = 0;
-  PY_SPARK_ARTIFACT_KIND_PY_FILE = 1;
-  PY_SPARK_ARTIFACT_KIND_FILE = 2;
-  PY_SPARK_ARTIFACT_KIND_ARCHIVE = 3;
-}
-
 message TaskInput {
   TaskInputLocator locator = 1;
 }

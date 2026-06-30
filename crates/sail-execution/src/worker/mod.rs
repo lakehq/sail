@@ -3,6 +3,7 @@ mod client;
 mod debug;
 pub(crate) mod entrypoint;
 mod event;
+mod launch_context;
 mod options;
 mod peer_tracker;
 mod server;

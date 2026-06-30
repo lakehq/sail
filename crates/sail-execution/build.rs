@@ -7,7 +7,6 @@ struct ProtoBuilder<'a> {
     files: &'a [&'a str],
     skip_debug: Option<&'a [&'a str]>,
     boxed_fields: &'a [&'a str],
-    extern_paths: &'a [(&'a str, &'a str)],
     with_service: bool,
 }
 
@@ -18,7 +17,6 @@ impl<'a> ProtoBuilder<'a> {
             files,
             skip_debug: None,
             boxed_fields: &[],
-            extern_paths: &[],
             with_service: false,
         }
     }
@@ -30,11 +28,6 @@ impl<'a> ProtoBuilder<'a> {
 
     fn boxed_fields(mut self, boxed_fields: &'a [&'a str]) -> Self {
         self.boxed_fields = boxed_fields;
-        self
-    }
-
-    fn extern_paths(mut self, extern_paths: &'a [(&'a str, &'a str)]) -> Self {
-        self.extern_paths = extern_paths;
         self
     }
 
@@ -76,10 +69,6 @@ impl<'a> ProtoBuilder<'a> {
         for field in self.boxed_fields {
             config.boxed(field);
         }
-        for &(proto_path, rust_path) in self.extern_paths {
-            config.extern_path(proto_path, rust_path);
-        }
-
         builder
             .protoc_arg("--experimental_allow_proto3_optional")
             .compile_well_known_types(true)
@@ -101,7 +90,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
     ProtoBuilder::new("worker", &["service.proto"])
         .skip_debug(&["sail.worker.RunTaskRequest"])
-        .extern_paths(&[(".sail.task", "crate::task::gen")])
         .with_service()
         .build()?;
     Ok(())
