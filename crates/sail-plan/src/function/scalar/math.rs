@@ -20,7 +20,7 @@ use sail_function::scalar::math::spark_bin::SparkBin;
 use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
-use sail_function::scalar::math::spark_div::SparkIntervalDiv;
+use sail_function::scalar::math::spark_div::{SparkIntegerDiv, SparkIntervalDiv};
 use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
@@ -362,6 +362,16 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
 
+    // Spark's `div` (IntegralDivide) rejects FLOAT and DOUBLE at analysis time.
+    // Mirror that here so Sail doesn't silently accept them.
+    for t in [&dividend_type, &divisor_type] {
+        if let Ok(DataType::Float32 | DataType::Float64) = t {
+            return Err(PlanError::unsupported(
+                "div requires integral or decimal operands (FLOAT/DOUBLE not allowed)",
+            ));
+        }
+    }
+
     // Apply runtime zero-divisor guard to the divisor before building the division expression.
     let effective_divisor_type = divisor_type.as_ref().cloned().unwrap_or(DataType::Int32);
     let divisor = make_safe_divisor(
@@ -376,13 +386,27 @@ fn spark_div(input: ScalarFunctionInput) -> PlanResult<Expr> {
         //  Seems to be a bug in DataFusion.
         (Ok(DataType::Duration(_)), Ok(DataType::Duration(_))) => {
             // Match duration because we cast Spark's DayTime interval to Duration.
-            cast(dividend, DataType::Int64) / cast(divisor, DataType::Int64)
+            // `make_safe_divisor` skips Duration types (can't compare to lit(0)),
+            // so wrap the Int64-cast divisor here instead to honour ANSI mode.
+            let divisor_int = cast(divisor, DataType::Int64);
+            let safe_divisor =
+                make_safe_divisor(divisor_int, &DataType::Int64, ansi_mode, "Division by zero");
+            cast(dividend, DataType::Int64) / safe_divisor
         }
         // Handle Interval / Interval division using custom UDF
         (Ok(DataType::Interval(_)), Ok(DataType::Interval(_))) => {
-            let interval_div = Arc::new(ScalarUDF::from(SparkIntervalDiv::new()));
+            let interval_div = Arc::new(ScalarUDF::from(SparkIntervalDiv::new(ansi_mode)));
             Expr::ScalarFunction(expr::ScalarFunction {
                 func: interval_div,
+                args: vec![dividend, divisor],
+            })
+        }
+        // Integer operands: delegate to SparkIntegerDiv which handles the
+        // LONG_MIN / -1 overflow edge according to ANSI mode.
+        (Ok(d), Ok(s)) if d.is_integer() && s.is_integer() => {
+            let integer_div = Arc::new(ScalarUDF::from(SparkIntegerDiv::new(ansi_mode)));
+            Expr::ScalarFunction(expr::ScalarFunction {
+                func: integer_div,
                 args: vec![dividend, divisor],
             })
         }
