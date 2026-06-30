@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
+use datafusion::arrow::datatypes::Schema as ArrowSchema;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::Session;
 use datafusion::common::scalar::ScalarValue;
@@ -55,6 +55,7 @@ use crate::physical_plan::delete_apply_exec::IcebergDeleteApplyExec;
 use crate::physical_plan::discovery_exec::IcebergDiscoveryExec;
 use crate::physical_plan::manifest_scan_exec::IcebergManifestScanExec;
 use crate::physical_plan::merge_metadata_exec::IcebergMergeMetadataExec;
+use crate::row_level_metadata::RowLevelMetadataColumns;
 use crate::spec::delete_index::{DeleteFileIndex, DeleteFileRef};
 use crate::spec::transform::Transform;
 use crate::spec::types::values::Literal;
@@ -182,39 +183,27 @@ impl IcebergTableProvider {
         self.row_index_column_name.as_deref()
     }
 
-    pub fn with_file_column(mut self, name: &str) -> Self {
+    pub fn with_file_column(mut self, name: &str) -> Result<Self> {
         self.file_column_name = Some(name.to_string());
-        self.rebuild_output_schema();
-        self
+        self.rebuild_output_schema()?;
+        Ok(self)
     }
 
-    pub fn with_row_index_column(mut self, name: &str) -> Self {
+    pub fn with_row_index_column(mut self, name: &str) -> Result<Self> {
         self.row_index_column_name = Some(name.to_string());
-        self.rebuild_output_schema();
-        self
+        self.rebuild_output_schema()?;
+        Ok(self)
     }
 
-    fn rebuild_output_schema(&mut self) {
-        self.output_schema = Arc::new(Self::build_output_schema(
-            self.arrow_schema.as_ref(),
-            self.file_column_name.as_deref(),
-            self.row_index_column_name.as_deref(),
-        ));
-    }
-
-    fn build_output_schema(
-        data_schema: &ArrowSchema,
-        file_column_name: Option<&str>,
-        row_index_column_name: Option<&str>,
-    ) -> ArrowSchema {
-        let mut fields = data_schema.fields().iter().cloned().collect::<Vec<_>>();
-        if let Some(name) = file_column_name {
-            fields.push(Arc::new(Field::new(name, DataType::Utf8, true)));
-        }
-        if let Some(name) = row_index_column_name {
-            fields.push(Arc::new(Field::new(name, DataType::Int64, true)));
-        }
-        ArrowSchema::new(fields)
+    fn rebuild_output_schema(&mut self) -> Result<()> {
+        self.output_schema = Arc::new(
+            RowLevelMetadataColumns::new(
+                self.file_column_name.as_deref(),
+                self.row_index_column_name.as_deref(),
+            )
+            .append_to_schema(self.arrow_schema.as_ref())?,
+        );
+        Ok(())
     }
 
     fn reorder_arrow_schema_for_identity_partitions(
@@ -1096,12 +1085,13 @@ impl IcebergTableProvider {
                     .build();
             let data_scan: Arc<dyn ExecutionPlan> =
                 DataSourceExec::from_data_source(file_scan_config);
-            let with_metadata: Arc<dyn ExecutionPlan> = Arc::new(IcebergMergeMetadataExec::new(
-                data_scan,
-                df.file_path.clone(),
-                self.file_column_name.clone(),
-                self.row_index_column_name.clone(),
-            ));
+            let with_metadata: Arc<dyn ExecutionPlan> =
+                Arc::new(IcebergMergeMetadataExec::try_new(
+                    data_scan,
+                    df.file_path.clone(),
+                    self.file_column_name.clone(),
+                    self.row_index_column_name.clone(),
+                )?);
 
             let matched = delete_index.for_data_file(&df, seq);
             if matched.is_empty() {

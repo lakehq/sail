@@ -52,13 +52,13 @@ impl MergeCapableSource for IcebergTableSource {
 
     fn with_file_column(&self, name: &str) -> Result<Arc<dyn TableSource>> {
         Ok(Arc::new(Self::new(Arc::new(
-            self.provider.as_ref().clone().with_file_column(name),
+            self.provider.as_ref().clone().with_file_column(name)?,
         ))))
     }
 
     fn with_row_index_column(&self, name: &str) -> Result<Arc<dyn TableSource>> {
         Ok(Arc::new(Self::new(Arc::new(
-            self.provider.as_ref().clone().with_row_index_column(name),
+            self.provider.as_ref().clone().with_row_index_column(name)?,
         ))))
     }
 }

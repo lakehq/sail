@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_stream::try_stream;
 use async_trait::async_trait;
 use datafusion::arrow::array::{ArrayRef, Int64Array, RecordBatch, StringArray};
-use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::execution::context::TaskContext;
 use datafusion::physical_expr::EquivalenceProperties;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
@@ -14,6 +14,8 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::{DataFusionError, Result};
 use futures::stream::TryStreamExt;
+
+use crate::row_level_metadata::RowLevelMetadataColumns;
 
 #[derive(Debug, Clone)]
 pub struct IcebergMergeMetadataExec {
@@ -26,46 +28,33 @@ pub struct IcebergMergeMetadataExec {
 }
 
 impl IcebergMergeMetadataExec {
-    pub fn new(
+    pub fn try_new(
         input: Arc<dyn ExecutionPlan>,
         data_file_path: String,
         file_column_name: Option<String>,
         row_index_column_name: Option<String>,
-    ) -> Self {
-        let output_schema = Arc::new(Self::build_output_schema(
-            input.schema().as_ref(),
-            file_column_name.as_deref(),
-            row_index_column_name.as_deref(),
-        ));
+    ) -> Result<Self> {
+        let output_schema = Arc::new(
+            RowLevelMetadataColumns::new(
+                file_column_name.as_deref(),
+                row_index_column_name.as_deref(),
+            )
+            .append_to_schema(input.schema().as_ref())?,
+        );
         let cache = Arc::new(PlanProperties::new(
             EquivalenceProperties::new(output_schema.clone()),
             Partitioning::UnknownPartitioning(1),
             EmissionType::Incremental,
             Boundedness::Bounded,
         ));
-        Self {
+        Ok(Self {
             input,
             data_file_path,
             file_column_name,
             row_index_column_name,
             output_schema,
             cache,
-        }
-    }
-
-    fn build_output_schema(
-        input_schema: &Schema,
-        file_column_name: Option<&str>,
-        row_index_column_name: Option<&str>,
-    ) -> Schema {
-        let mut fields = input_schema.fields().iter().cloned().collect::<Vec<_>>();
-        if let Some(name) = file_column_name {
-            fields.push(Arc::new(Field::new(name, DataType::Utf8, true)));
-        }
-        if let Some(name) = row_index_column_name {
-            fields.push(Arc::new(Field::new(name, DataType::Int64, true)));
-        }
-        Schema::new_with_metadata(fields, input_schema.metadata().clone())
+        })
     }
 }
 
@@ -92,12 +81,12 @@ impl ExecutionPlan for IcebergMergeMetadataExec {
                 "IcebergMergeMetadataExec requires exactly one child".to_string(),
             ));
         }
-        Ok(Arc::new(Self::new(
+        Ok(Arc::new(Self::try_new(
             Arc::clone(&children[0]),
             self.data_file_path.clone(),
             self.file_column_name.clone(),
             self.row_index_column_name.clone(),
-        )))
+        )?))
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

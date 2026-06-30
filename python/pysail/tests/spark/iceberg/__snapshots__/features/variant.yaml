@@ -40,6 +40,8 @@ data:
     sequence-number: 1
     snapshot-id: <snapshot-id>
     summary:
+      added-data-files: '1'
+      added-records: '1'
       operation: append
     timestamp-ms: <timestamp>
   sort-orders:
@@ -103,6 +105,8 @@ data:
     sequence-number: 1
     snapshot-id: <snapshot-id>
     summary:
+      added-data-files: '1'
+      added-records: '1'
       operation: append
     timestamp-ms: <timestamp>
   - added-rows: 2
@@ -113,6 +117,8 @@ data:
     sequence-number: 2
     snapshot-id: <snapshot-id>
     summary:
+      added-data-files: '1'
+      added-records: '1'
       operation: append
     timestamp-ms: <timestamp>
   sort-orders:
@@ -203,6 +209,8 @@ data:
     sequence-number: 1
     snapshot-id: <snapshot-id>
     summary:
+      added-data-files: '1'
+      added-records: '1'
       operation: append
     timestamp-ms: <timestamp>
   sort-orders:

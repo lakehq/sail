@@ -52,6 +52,8 @@ data:
     sequence-number: 1
     snapshot-id: <snapshot-id>
     summary:
+      added-data-files: '3'
+      added-records: '4'
       operation: append
     timestamp-ms: <timestamp>
   sort-orders:
@@ -119,6 +121,8 @@ data:
     sequence-number: 1
     snapshot-id: <snapshot-id>
     summary:
+      added-data-files: '4'
+      added-records: '4'
       operation: append
     timestamp-ms: <timestamp>
   sort-orders:
@@ -193,6 +197,8 @@ data:
     sequence-number: 1
     snapshot-id: <snapshot-id>
     summary:
+      added-data-files: '3'
+      added-records: '4'
       operation: append
     timestamp-ms: <timestamp>
   sort-orders:
@@ -252,6 +258,8 @@ data:
     sequence-number: 1
     snapshot-id: <snapshot-id>
     summary:
+      added-data-files: '3'
+      added-records: '4'
       operation: append
     timestamp-ms: <timestamp>
   sort-orders:
@@ -311,6 +319,8 @@ data:
     sequence-number: 1
     snapshot-id: <snapshot-id>
     summary:
+      added-data-files: '3'
+      added-records: '4'
       operation: append
     timestamp-ms: <timestamp>
   sort-orders:
@@ -320,6 +330,8 @@ data:
 ---
 name: "test_month_transform_partitions_by_year_and_month.1"
 data:
+  added-data-files: '3'
+  added-records: '4'
   operation: append
 ---
 name: "test_truncate_on_string_column_groups_similar_values"
@@ -374,6 +386,8 @@ data:
     sequence-number: 1
     snapshot-id: <snapshot-id>
     summary:
+      added-data-files: '2'
+      added-records: '4'
       operation: append
     timestamp-ms: <timestamp>
   sort-orders:
@@ -444,6 +458,8 @@ data:
     sequence-number: 1
     snapshot-id: <snapshot-id>
     summary:
+      added-data-files: '2'
+      added-records: '4'
       operation: append
     timestamp-ms: <timestamp>
   sort-orders:

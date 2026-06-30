@@ -160,17 +160,7 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
             );
 
             // TODO: Prefer identifier/configured equality fields over full-row keys.
-            let delete_fields = equality_delete_fields(current_schema, &input_schema)?;
-            let delete_schema = Arc::new(Schema::new(
-                delete_fields
-                    .iter()
-                    .map(|field| field.arrow_field.clone())
-                    .collect::<Vec<_>>(),
-            ));
-            let equality_ids = delete_fields
-                .iter()
-                .map(|field| field.field_id)
-                .collect::<Vec<_>>();
+            let delete_spec = EqualityDeleteSpec::full_row(current_schema, &input_schema)?;
 
             let mut stream = input;
             let mut writer: Option<ArrowParquetWriter> = None;
@@ -194,8 +184,7 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
                     ));
                 }
 
-                let delete_batch =
-                    project_delete_batch(&batch, &delete_fields, delete_schema.clone())?;
+                let delete_batch = delete_spec.project_batch(&batch)?;
                 let row_count = delete_batch.num_rows();
                 total_rows = total_rows
                     .checked_add(u64::try_from(row_count).map_err(|e| {
@@ -208,7 +197,7 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
                     None => {
                         writer = Some(
                             ArrowParquetWriter::try_new(
-                                delete_schema.as_ref(),
+                                delete_spec.arrow_schema.as_ref(),
                                 WriterProperties::default(),
                             )
                             .map_err(DataFusionError::Execution)?,
@@ -233,7 +222,7 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
                 writer,
                 default_spec.spec_id(),
                 total_rows,
-                equality_ids,
+                delete_spec.equality_ids.clone(),
             )
             .await?;
             let requirements = commit_requirements(&table_meta);
@@ -285,6 +274,35 @@ struct EqualityDeleteField {
     field_id: i32,
     name: String,
     arrow_field: FieldRef,
+}
+
+#[derive(Debug, Clone)]
+struct EqualityDeleteSpec {
+    fields: Vec<EqualityDeleteField>,
+    arrow_schema: SchemaRef,
+    equality_ids: Vec<i32>,
+}
+
+impl EqualityDeleteSpec {
+    fn full_row(iceberg_schema: &crate::spec::Schema, input_schema: &SchemaRef) -> Result<Self> {
+        let fields = equality_delete_fields(iceberg_schema, input_schema)?;
+        let arrow_schema = Arc::new(Schema::new(
+            fields
+                .iter()
+                .map(|field| field.arrow_field.clone())
+                .collect::<Vec<_>>(),
+        ));
+        let equality_ids = fields.iter().map(|field| field.field_id).collect();
+        Ok(Self {
+            fields,
+            arrow_schema,
+            equality_ids,
+        })
+    }
+
+    fn project_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
+        project_delete_batch(batch, &self.fields, self.arrow_schema.clone())
+    }
 }
 
 fn equality_delete_fields(
