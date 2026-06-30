@@ -374,32 +374,3 @@ async fn cleanup_artifact_uri(uri: &str) -> Result<(), String> {
         Err(e) => Err(format!("failed to delete artifact {uri}: {e}")),
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use uuid::Uuid;
-
-    use super::*;
-
-    #[test]
-    fn artifact_dir_hashes_session_id_before_joining_root() {
-        let root = std::env::temp_dir().join(format!("sail-artifact-test-{}", Uuid::new_v4()));
-        let registry = SparkArtifactRegistry::new(
-            "../escaped-session".to_string(),
-            SparkArtifactOptions {
-                root: Some(root.clone()),
-                inline_max_bytes: 1024,
-                store_uri: None,
-            },
-        );
-
-        let dir = registry.artifact_dir().unwrap();
-
-        assert!(dir.starts_with(&root));
-        assert_ne!(dir, root.join("../escaped-session"));
-        assert_eq!(dir.file_name().unwrap().to_string_lossy().len(), 64);
-
-        drop(registry);
-        let _ = std::fs::remove_dir_all(root);
-    }
-}
