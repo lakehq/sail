@@ -402,21 +402,24 @@ impl ExecutionPlan for IcebergCommitExec {
             // Read writer result as Arrow-native action batches (may be empty for IgnoreIfExists).
             let mut data = input_stream;
             let mut added_data_files = Vec::new();
+            let mut added_delete_files = Vec::new();
             let mut commit_meta = None;
             while let Some(batch_result) = data.next().await {
                 let batch = batch_result?;
                 if batch.num_rows() == 0 {
                     continue;
                 }
-                let (adds, _deletes, meta) = decode_actions_and_meta_from_batch(&batch)?;
+                let (adds, deletes, meta) = decode_actions_and_meta_from_batch(&batch)?;
                 added_data_files.extend(adds);
+                added_delete_files.extend(deletes);
                 if meta.is_some() {
                     commit_meta = meta;
                 }
             }
 
             // No-op path (e.g. IgnoreIfExists on existing table): no rows, no meta.
-            if commit_meta.is_none() && added_data_files.is_empty() {
+            if commit_meta.is_none() && added_data_files.is_empty() && added_delete_files.is_empty()
+            {
                 let array = Arc::new(UInt64Array::from(vec![0u64]));
                 let batch = RecordBatch::try_new(schema, vec![array])?;
                 return Ok(batch);
@@ -428,17 +431,28 @@ impl ExecutionPlan for IcebergCommitExec {
                 )
             })?;
 
+            let effective_operation = if !added_delete_files.is_empty() {
+                if added_data_files.is_empty() {
+                    crate::spec::Operation::Delete
+                } else {
+                    crate::spec::Operation::Overwrite
+                }
+            } else {
+                commit_meta.operation
+            };
+
             let commit_info = IcebergCommitInfo {
                 table_uri: commit_meta.table_uri,
                 row_count: commit_meta.row_count,
                 data_files: added_data_files,
+                delete_files: added_delete_files,
                 manifest_path: String::new(),
                 manifest_list_path: String::new(),
                 updates: vec![],
                 requirements: commit_meta.requirements,
                 table_properties: commit_meta.table_properties,
                 lakehouse_table: commit_meta.lakehouse_table.or(lakehouse_table),
-                operation: commit_meta.operation,
+                operation: effective_operation,
                 schema: commit_meta.schema,
                 partition_spec: commit_meta.partition_spec,
             };
@@ -501,7 +515,8 @@ impl ExecutionPlan for IcebergCommitExec {
 
             if latest_meta_res.is_err()
                 && (matches!(commit_info.operation, crate::spec::Operation::Overwrite)
-                    || matches!(commit_info.operation, crate::spec::Operation::Append))
+                    || matches!(commit_info.operation, crate::spec::Operation::Append)
+                    || matches!(commit_info.operation, crate::spec::Operation::Delete))
             {
                 Self::validate_requirements(None, &commit_info.requirements)?;
                 if let Some(catalog_table) = catalog_metadata_update_table {
@@ -647,7 +662,8 @@ impl ExecutionPlan for IcebergCommitExec {
                 // bootstrap the first snapshot as a normal metadata version.
                 if maybe_snapshot.is_none()
                     && (matches!(commit_info.operation, crate::spec::Operation::Overwrite)
-                        || matches!(commit_info.operation, crate::spec::Operation::Append))
+                        || matches!(commit_info.operation, crate::spec::Operation::Append)
+                        || matches!(commit_info.operation, crate::spec::Operation::Delete))
                 {
                     let mut catalog_fallback_table = catalog_metadata_update_table;
                     if let Some(catalog_table) = catalog_commit_table {
@@ -822,6 +838,7 @@ impl ExecutionPlan for IcebergCommitExec {
                             Some(store_ctx.clone()),
                             Some(manifest_meta),
                         )
+                        .with_added_delete_files(commit_info.delete_files.clone())
                         .with_row_lineage_start_row_id(row_lineage_start_row_id);
                         struct LocalOverwriteOperation;
                         impl SnapshotProduceOperation for LocalOverwriteOperation {
@@ -831,6 +848,26 @@ impl ExecutionPlan for IcebergCommitExec {
                         }
                         producer
                             .commit(LocalOverwriteOperation)
+                            .await
+                            .map_err(DataFusionError::Execution)?
+                    }
+                    crate::spec::Operation::Delete => {
+                        let producer = crate::operations::SnapshotProducer::new(
+                            &tx,
+                            commit_info.data_files.clone(),
+                            Some(store_ctx.clone()),
+                            Some(manifest_meta),
+                        )
+                        .with_added_delete_files(commit_info.delete_files.clone())
+                        .with_row_lineage_start_row_id(row_lineage_start_row_id);
+                        struct LocalDeleteOperation;
+                        impl SnapshotProduceOperation for LocalDeleteOperation {
+                            fn operation(&self) -> &'static str {
+                                "delete"
+                            }
+                        }
+                        producer
+                            .commit(LocalDeleteOperation)
                             .await
                             .map_err(DataFusionError::Execution)?
                     }

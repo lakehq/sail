@@ -22,6 +22,7 @@ pub struct IcebergCommitInfo {
     pub table_uri: String,
     pub row_count: u64,
     pub data_files: Vec<DataFile>,
+    pub delete_files: Vec<DataFile>,
     pub manifest_path: String,
     pub manifest_list_path: String,
     pub updates: Vec<TableUpdate>,

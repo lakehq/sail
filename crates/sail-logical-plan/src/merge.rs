@@ -847,7 +847,7 @@ fn build_default_merge_expansion(
     let not_matched_by_source_pred = target_present.clone().and(not(source_present.clone()));
     let not_matched_by_target_pred = not(target_present.clone()).and(source_present.clone());
 
-    let mut delete_pred: Option<Expr> = None;
+    let mut row_delete_pred: Option<Expr> = None;
     let mut insert_pred: Option<Expr> = None;
 
     for clause in &options.matched_clauses {
@@ -856,10 +856,11 @@ fn build_default_merge_expansion(
             pred = pred.and(cond.expr.clone());
         }
         match clause.action {
-            MergeMatchedAction::Delete => {
-                delete_pred = or_pred(delete_pred, pred);
+            MergeMatchedAction::Delete
+            | MergeMatchedAction::UpdateAll
+            | MergeMatchedAction::UpdateSet(_) => {
+                row_delete_pred = or_pred(row_delete_pred, pred);
             }
-            MergeMatchedAction::UpdateAll | MergeMatchedAction::UpdateSet(_) => {}
         }
     }
 
@@ -869,10 +870,9 @@ fn build_default_merge_expansion(
             pred = pred.and(cond.expr.clone());
         }
         match clause.action {
-            MergeNotMatchedBySourceAction::Delete => {
-                delete_pred = or_pred(delete_pred, pred);
+            MergeNotMatchedBySourceAction::Delete | MergeNotMatchedBySourceAction::UpdateSet(_) => {
+                row_delete_pred = or_pred(row_delete_pred, pred);
             }
-            MergeNotMatchedBySourceAction::UpdateSet(_) => {}
         }
     }
 
@@ -889,7 +889,7 @@ fn build_default_merge_expansion(
         }
     }
 
-    let delete_expr = delete_pred.unwrap_or_else(|| lit(false));
+    let row_delete_expr = row_delete_pred.unwrap_or_else(|| lit(false));
     let insert_expr = insert_pred.unwrap_or_else(|| lit(false));
     let active_expr = target_present.or(insert_expr);
 
@@ -941,7 +941,7 @@ fn build_default_merge_expansion(
     let deletion_vector_plan = if let Some(row_index_column) = row_index_column {
         Some(
             LogicalPlanBuilder::from(join.as_ref().clone())
-                .filter(delete_expr)?
+                .filter(row_delete_expr)?
                 .project(vec![
                     col(path_column).alias(path_column.to_string()),
                     col(row_index_column).alias(row_index_column.to_string()),

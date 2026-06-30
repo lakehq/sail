@@ -144,6 +144,14 @@ impl TableFormat for IcebergTableFormat {
         }))
     }
 
+    async fn create_merger(
+        &self,
+        _ctx: &dyn Session,
+        info: sail_common_datafusion::datasource::MergeInfo,
+    ) -> Result<LogicalPlan> {
+        crate::logical::merge::expand_merge_node(info)
+    }
+
     async fn create_table_metadata(
         &self,
         runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
@@ -769,7 +777,9 @@ impl IcebergTableFormat {
         Ok(table_url)
     }
 
-    fn partition_columns_from_metadata(table: &Table) -> Result<Vec<CatalogPartitionField>> {
+    pub(crate) fn partition_columns_from_metadata(
+        table: &Table,
+    ) -> Result<Vec<CatalogPartitionField>> {
         partition_columns_from_table_metadata(table.metadata())
     }
 }

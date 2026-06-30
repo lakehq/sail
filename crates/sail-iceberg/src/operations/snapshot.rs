@@ -31,6 +31,7 @@ pub trait SnapshotProduceOperation: Send + Sync {
 pub struct SnapshotProducer<'a> {
     pub tx: &'a Transaction,
     pub added_data_files: Vec<DataFile>,
+    pub added_delete_files: Vec<DataFile>,
     pub store_ctx: Option<StoreContext>,
     pub manifest_metadata: Option<crate::spec::manifest::ManifestMetadata>,
     pub write_path_mode: crate::utils::WritePathMode,
@@ -49,6 +50,7 @@ impl<'a> SnapshotProducer<'a> {
         Self {
             tx,
             added_data_files,
+            added_delete_files: Vec::new(),
             store_ctx,
             manifest_metadata,
             write_path_mode: crate::utils::WritePathMode::Absolute,
@@ -74,6 +76,11 @@ impl<'a> SnapshotProducer<'a> {
         self
     }
 
+    pub fn with_added_delete_files(mut self, delete_files: Vec<DataFile>) -> Self {
+        self.added_delete_files = delete_files;
+        self
+    }
+
     pub fn validate_added_data_files(&self, _files: &[DataFile]) -> Result<(), String> {
         // TODO: Implement this function to validate the added data files
         Ok(())
@@ -82,11 +89,43 @@ impl<'a> SnapshotProducer<'a> {
     pub async fn commit(self, op: impl SnapshotProduceOperation) -> Result<ActionCommit, String> {
         let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
         let is_overwrite = op.operation() == Operation::Overwrite.as_str();
-        let summary = if is_overwrite {
-            crate::spec::snapshots::Summary::new(Operation::Overwrite)
-        } else {
-            crate::spec::snapshots::Summary::new(Operation::Append)
+        let is_row_delta = !self.added_delete_files.is_empty();
+        let operation = match op.operation() {
+            "overwrite" => Operation::Overwrite,
+            "delete" => Operation::Delete,
+            _ => Operation::Append,
         };
+        let mut summary = crate::spec::snapshots::Summary::new(operation.clone());
+        if !self.added_data_files.is_empty() {
+            summary = summary
+                .with_property("added-data-files", self.added_data_files.len().to_string())
+                .with_property(
+                    "added-records",
+                    self.added_data_files
+                        .iter()
+                        .map(|df| df.record_count)
+                        .sum::<u64>()
+                        .to_string(),
+                );
+        }
+        if !self.added_delete_files.is_empty() {
+            let added_position_deletes = self
+                .added_delete_files
+                .iter()
+                .map(|df| df.record_count)
+                .sum::<u64>();
+            summary = summary
+                .with_property(
+                    "added-delete-files",
+                    self.added_delete_files.len().to_string(),
+                )
+                .with_property(
+                    "added-position-delete-files",
+                    self.added_delete_files.len().to_string(),
+                )
+                .with_property("added-position-deletes", added_position_deletes.to_string())
+                .with_property("deleted-records", added_position_deletes.to_string());
+        }
 
         // Build manifest metadata: prefer caller-provided metadata derived from table schema/spec
         // Fall back to deriving from the current transaction snapshot if not provided
@@ -127,7 +166,10 @@ impl<'a> SnapshotProducer<'a> {
         let parent_manifest_list_path_str = parent_snapshot.manifest_list();
         let mut parent_manifest_entries = Vec::new();
 
-        if !self.is_bootstrap && !is_overwrite && !parent_manifest_list_path_str.is_empty() {
+        if !self.is_bootstrap
+            && (!is_overwrite || is_row_delta)
+            && !parent_manifest_list_path_str.is_empty()
+        {
             let (store_ref, manifest_list_path) = store_ctx
                 .resolve(parent_manifest_list_path_str)
                 .map_err(|e| format!("{}", e))?;
@@ -179,44 +221,92 @@ impl<'a> SnapshotProducer<'a> {
             snapshot_added_rows += new_added_rows;
         }
 
-        let mut writer = ManifestWriterBuilder::new(None, None, metadata.clone()).build();
+        let mut new_manifest_files = Vec::new();
         let added_data_files = self.added_data_files.clone();
-        for df in &added_data_files {
-            writer.add(df.clone());
-        }
-        let manifest = writer.finish();
-        let manifest_bytes = manifest.to_avro_bytes_v2()?;
+        if !added_data_files.is_empty() || self.added_delete_files.is_empty() {
+            let mut writer = ManifestWriterBuilder::new(None, None, metadata.clone()).build();
+            for df in &added_data_files {
+                writer.add(df.clone());
+            }
+            let manifest = writer.finish();
+            let manifest_bytes = manifest.to_avro_bytes_v2()?;
 
-        let manifest_len = manifest_bytes.len() as i64;
-        let manifest_rel = format!("metadata/manifest-{}.avro", uuid::Uuid::new_v4());
-        let manifest_path = object_store::path::Path::from(manifest_rel.as_str());
-        store_ctx
-            .prefixed
-            .put(
-                &manifest_path,
-                object_store::PutPayload::from(Bytes::from(manifest_bytes)),
-            )
-            .await
-            .map_err(|e| format!("{}", e))?;
+            let manifest_len = manifest_bytes.len() as i64;
+            let manifest_rel = format!("metadata/manifest-{}.avro", uuid::Uuid::new_v4());
+            let manifest_path = object_store::path::Path::from(manifest_rel.as_str());
+            store_ctx
+                .prefixed
+                .put(
+                    &manifest_path,
+                    object_store::PutPayload::from(Bytes::from(manifest_bytes)),
+                )
+                .await
+                .map_err(|e| format!("{}", e))?;
 
-        let mut manifest_file_builder = crate::spec::manifest_list::ManifestFile::builder()
-            .with_manifest_path(join_table_uri(
-                self.tx.table_uri(),
-                &manifest_rel,
-                &self.write_path_mode,
-            ))
-            .with_manifest_length(manifest_len)
-            .with_partition_spec_id(metadata.partition_spec.spec_id())
-            .with_content(ManifestContentType::Data)
-            .with_sequence_number(new_sequence_number)
-            .with_min_sequence_number(new_sequence_number)
-            .with_added_snapshot_id(new_snapshot_id)
-            .with_file_counts(added_data_files.len() as i32, 0, 0)
-            .with_row_counts(new_added_rows, 0, 0);
-        if let Some(first_row_id) = new_manifest_first_row_id {
-            manifest_file_builder = manifest_file_builder.with_first_row_id(first_row_id);
+            let mut manifest_file_builder = crate::spec::manifest_list::ManifestFile::builder()
+                .with_manifest_path(join_table_uri(
+                    self.tx.table_uri(),
+                    &manifest_rel,
+                    &self.write_path_mode,
+                ))
+                .with_manifest_length(manifest_len)
+                .with_partition_spec_id(metadata.partition_spec.spec_id())
+                .with_content(ManifestContentType::Data)
+                .with_sequence_number(new_sequence_number)
+                .with_min_sequence_number(new_sequence_number)
+                .with_added_snapshot_id(new_snapshot_id)
+                .with_file_counts(added_data_files.len() as i32, 0, 0)
+                .with_row_counts(new_added_rows, 0, 0);
+            if let Some(first_row_id) = new_manifest_first_row_id {
+                manifest_file_builder = manifest_file_builder.with_first_row_id(first_row_id);
+            }
+            new_manifest_files.push(manifest_file_builder.build()?);
         }
-        let manifest_file = manifest_file_builder.build()?;
+
+        let added_delete_files = self.added_delete_files.clone();
+        if !added_delete_files.is_empty() {
+            let mut delete_metadata = metadata.clone();
+            delete_metadata.content = ManifestContentType::Deletes;
+            let mut writer =
+                ManifestWriterBuilder::new(None, None, delete_metadata.clone()).build();
+            for df in &added_delete_files {
+                writer.add(df.clone());
+            }
+            let manifest = writer.finish();
+            let manifest_bytes = manifest.to_avro_bytes_v2()?;
+            let manifest_len = manifest_bytes.len() as i64;
+            let manifest_rel = format!("metadata/manifest-{}.avro", uuid::Uuid::new_v4());
+            let manifest_path = object_store::path::Path::from(manifest_rel.as_str());
+            store_ctx
+                .prefixed
+                .put(
+                    &manifest_path,
+                    object_store::PutPayload::from(Bytes::from(manifest_bytes)),
+                )
+                .await
+                .map_err(|e| format!("{}", e))?;
+            let added_delete_rows = added_delete_files
+                .iter()
+                .map(|df| df.record_count as i64)
+                .sum::<i64>();
+            new_manifest_files.push(
+                crate::spec::manifest_list::ManifestFile::builder()
+                    .with_manifest_path(join_table_uri(
+                        self.tx.table_uri(),
+                        &manifest_rel,
+                        &self.write_path_mode,
+                    ))
+                    .with_manifest_length(manifest_len)
+                    .with_partition_spec_id(delete_metadata.partition_spec.spec_id())
+                    .with_content(ManifestContentType::Deletes)
+                    .with_sequence_number(new_sequence_number)
+                    .with_min_sequence_number(new_sequence_number)
+                    .with_added_snapshot_id(new_snapshot_id)
+                    .with_file_counts(added_delete_files.len() as i32, 0, 0)
+                    .with_row_counts(added_delete_rows, 0, 0)
+                    .build()?,
+            );
+        }
 
         let mut list_writer = ManifestListWriter::new();
         let mut total_manifest_count = 0;
@@ -233,8 +323,10 @@ impl<'a> SnapshotProducer<'a> {
             self.tx.snapshot().snapshot_id()
         );
 
-        list_writer.append(manifest_file);
-        total_manifest_count += 1;
+        for manifest_file in new_manifest_files {
+            list_writer.append(manifest_file);
+            total_manifest_count += 1;
+        }
         log::trace!(
             "snapshot producer: new manifest list will have files: {}",
             total_manifest_count

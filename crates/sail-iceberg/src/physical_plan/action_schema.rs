@@ -85,12 +85,18 @@ pub struct AddFileAction {
     pub value_counts: BTreeMap<i32, u64>,
     pub null_value_counts: BTreeMap<i32, u64>,
     pub split_offsets: Vec<i64>,
+    pub equality_ids: Vec<i32>,
+    pub sort_order_id: Option<i32>,
+    pub first_row_id: Option<i64>,
     pub partition_spec_id: i32,
+    pub referenced_data_file: Option<String>,
+    pub content_offset: Option<i64>,
+    pub content_size_in_bytes: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeleteFileAction {
-    pub file_path: String,
+    pub data_file: AddFileAction,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -183,6 +189,14 @@ fn iceberg_action_tracing_options(
                 Arc::new(Field::new("element", partition_value_union_type(), false));
             opts.overwrite(
                 "action.add.partition",
+                Field::new("partition", DataType::List(partition_item), false),
+            )
+        })
+        .and_then(|opts| {
+            let partition_item =
+                Arc::new(Field::new("element", partition_value_union_type(), false));
+            opts.overwrite(
+                "action.delete.data_file.partition",
                 Field::new("partition", DataType::List(partition_item), false),
             )
         })
@@ -295,7 +309,13 @@ impl TryFrom<DataFile> for AddFileAction {
             value_counts: df.value_counts.into_iter().collect(),
             null_value_counts: df.null_value_counts.into_iter().collect(),
             split_offsets: df.split_offsets,
+            equality_ids: df.equality_ids,
+            sort_order_id: df.sort_order_id,
+            first_row_id: df.first_row_id,
             partition_spec_id: df.partition_spec_id,
+            referenced_data_file: df.referenced_data_file,
+            content_offset: df.content_offset,
+            content_size_in_bytes: df.content_size_in_bytes,
         })
     }
 }
@@ -351,13 +371,13 @@ impl TryFrom<AddFileAction> for DataFile {
             block_size_in_bytes: None,
             key_metadata: None,
             split_offsets: a.split_offsets,
-            equality_ids: Vec::new(),
-            sort_order_id: None,
-            first_row_id: None,
+            equality_ids: a.equality_ids,
+            sort_order_id: a.sort_order_id,
+            first_row_id: a.first_row_id,
             partition_spec_id: a.partition_spec_id,
-            referenced_data_file: None,
-            content_offset: None,
-            content_size_in_bytes: None,
+            referenced_data_file: a.referenced_data_file,
+            content_offset: a.content_offset,
+            content_size_in_bytes: a.content_size_in_bytes,
         })
     }
 }
@@ -380,6 +400,23 @@ pub fn encode_add_data_files(data_files: Vec<DataFile>) -> Result<RecordBatch> {
         .map(|df| {
             Ok(ActionRow {
                 action: ExecAction::Add(df.try_into()?),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    encode_actions(rows)
+}
+
+pub fn encode_delete_data_files(data_files: Vec<DataFile>) -> Result<RecordBatch> {
+    if data_files.is_empty() {
+        return Ok(RecordBatch::new_empty(iceberg_action_schema()?));
+    }
+    let rows = data_files
+        .into_iter()
+        .map(|df| {
+            Ok(ActionRow {
+                action: ExecAction::Delete(DeleteFileAction {
+                    data_file: df.try_into()?,
+                }),
             })
         })
         .collect::<Result<Vec<_>>>()?;
@@ -432,18 +469,13 @@ pub fn decode_actions_and_meta_from_batch(
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
 
     let mut adds: Vec<DataFile> = Vec::new();
-    let deletes: Vec<DataFile> = Vec::new();
+    let mut deletes: Vec<DataFile> = Vec::new();
     let mut meta: Option<CommitMeta> = None;
 
     for row in rows {
         match row.action {
             ExecAction::Add(a) => adds.push(a.try_into()?),
-            ExecAction::Delete(_d) => {
-                // Delete files are not implemented in local commits yet; plumb through later.
-                return Err(DataFusionError::NotImplemented(
-                    "Iceberg delete file actions are not implemented".to_string(),
-                ));
-            }
+            ExecAction::Delete(d) => deletes.push(d.data_file.try_into()?),
             ExecAction::CommitMeta(m) => {
                 let requirements: Vec<TableRequirement> =
                     serde_json::from_str(&m.requirements_json)
@@ -535,15 +567,26 @@ mod tests {
         let schema = iceberg_action_schema()?;
         let batches = vec![
             encode_add_data_files(vec![df.clone()])?,
+            encode_delete_data_files(vec![DataFile {
+                content: DataContentType::PositionDeletes,
+                referenced_data_file: Some(df.file_path.clone()),
+                ..df.clone()
+            }])?,
             encode_commit_meta(meta)?,
         ];
         let merged = concat_batches(&schema, &batches)
             .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))?;
 
-        let (adds, _deletes, meta) = decode_actions_and_meta_from_batch(&merged)?;
+        let (adds, deletes, meta) = decode_actions_and_meta_from_batch(&merged)?;
         assert_eq!(adds.len(), 1);
+        assert_eq!(deletes.len(), 1);
         assert_eq!(adds[0].file_path, df.file_path);
         assert_eq!(adds[0].record_count, df.record_count);
+        assert_eq!(deletes[0].content, DataContentType::PositionDeletes);
+        assert_eq!(
+            deletes[0].referenced_data_file.as_deref(),
+            Some(df.file_path.as_str())
+        );
         assert!(meta.is_some());
         Ok(())
     }

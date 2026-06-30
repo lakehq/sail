@@ -118,6 +118,7 @@ pub(crate) async fn bootstrap_snapshot_action_commit(
         Some(manifest_meta),
     )
     .with_bootstrap(true)
+    .with_added_delete_files(commit_info.delete_files.clone())
     .with_row_lineage_start_row_id(row_lineage_start_row_id)
     .with_write_path_mode(WritePathMode::Absolute);
 
@@ -200,6 +201,7 @@ pub async fn bootstrap_new_table_with_style(
         Some(manifest_meta),
     )
     .with_bootstrap(true)
+    .with_added_delete_files(commit_info.delete_files.clone())
     .with_row_lineage_start_row_id(row_lineage_start_row_id)
     .with_write_path_mode(WritePathMode::Absolute);
 

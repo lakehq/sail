@@ -4,6 +4,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::Result;
 use datafusion::datasource::TableProvider;
 use datafusion::logical_expr::{Expr, TableProviderFilterPushDown, TableSource};
+use sail_common_datafusion::datasource::MergeCapableSource;
 
 use crate::datasource::provider::IcebergTableProvider;
 
@@ -37,6 +38,28 @@ impl IcebergTableSource {
 
     pub fn provider(&self) -> &Arc<IcebergTableProvider> {
         &self.provider
+    }
+}
+
+impl MergeCapableSource for IcebergTableSource {
+    fn file_column_name(&self) -> Option<&str> {
+        self.provider.file_column_name()
+    }
+
+    fn row_index_column_name(&self) -> Option<&str> {
+        self.provider.row_index_column_name()
+    }
+
+    fn with_file_column(&self, name: &str) -> Result<Arc<dyn TableSource>> {
+        Ok(Arc::new(Self::new(Arc::new(
+            self.provider.as_ref().clone().with_file_column(name),
+        ))))
+    }
+
+    fn with_row_index_column(&self, name: &str) -> Result<Arc<dyn TableSource>> {
+        Ok(Arc::new(Self::new(Arc::new(
+            self.provider.as_ref().clone().with_row_index_column(name),
+        ))))
     }
 }
 
