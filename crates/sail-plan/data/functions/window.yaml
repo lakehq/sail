@@ -1,0 +1,108 @@
+- name: cume_dist
+  class_name: "org.apache.spark.sql.catalyst.expressions.CumeDist"
+  signatures:
+    - "cume_dist()"
+  description: "Computes the position of a value relative to all values in the partition."
+  examples: |
+    > SELECT a, b, cume_dist() OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);
+     A1 1   0.6666666666666666
+     A1 1   0.6666666666666666
+     A1 2   1.0
+     A2 3   1.0
+  since: "2.0.0"
+- name: dense_rank
+  class_name: "org.apache.spark.sql.catalyst.expressions.DenseRank"
+  signatures:
+    - "dense_rank()"
+  description: "Computes the rank of a value in a group of values. The result is one plus the previously assigned rank value. Unlike the function rank, dense_rank will not produce gaps in the ranking sequence."
+  examples: |
+    > SELECT a, b, dense_rank(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);
+     A1 1   1
+     A1 1   1
+     A1 2   2
+     A2 3   1
+  since: "2.0.0"
+- name: lag
+  class_name: "org.apache.spark.sql.catalyst.expressions.Lag"
+  signatures:
+    - "lag(input[, offset[, default]])"
+  description: "Returns the value of input at the offsetth row before the current row in the window. The default value of offset is 1 and the default value of default is null. If the value of input at the offsetth row is null, null is returned. If there is no such offset row (e.g., when the offset is 1, the first row of the window does not have any previous row), default is returned."
+  examples: |
+    > SELECT a, b, lag(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);
+     A1 1   NULL
+     A1 1   1
+     A1 2   1
+     A2 3   NULL
+  since: "2.0.0"
+- name: lead
+  class_name: "org.apache.spark.sql.catalyst.expressions.Lead"
+  signatures:
+    - "lead(input[, offset[, default]])"
+  description: "Returns the value of input at the offsetth row after the current row in the window. The default value of offset is 1 and the default value of default is null. If the value of input at the offsetth row is null, null is returned. If there is no such an offset row (e.g., when the offset is 1, the last row of the window does not have any subsequent row), default is returned."
+  examples: |
+    > SELECT a, b, lead(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);
+     A1 1   1
+     A1 1   2
+     A1 2   NULL
+     A2 3   NULL
+  since: "2.0.0"
+- name: nth_value
+  class_name: "org.apache.spark.sql.catalyst.expressions.NthValue"
+  signatures:
+    - "nth_value(input[, offset])"
+  description: "Returns the value of input at the row that is the offsetth row from beginning of the window frame. Offset starts at 1. If ignoreNulls=true, we will skip nulls when finding the offsetth row. Otherwise, every row counts for the offset. If there is no such an offsetth row (e.g., when the offset is 10, size of the window frame is less than 10), null is returned."
+  examples: |
+    > SELECT a, b, nth_value(b, 2) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);
+     A1 1   1
+     A1 1   1
+     A1 2   1
+     A2 3   NULL
+  since: "3.1.0"
+- name: ntile
+  class_name: "org.apache.spark.sql.catalyst.expressions.NTile"
+  signatures:
+    - "ntile(n)"
+  description: "Divides the rows for each window partition into n buckets ranging from 1 to at most n."
+  examples: |
+    > SELECT a, b, ntile(2) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);
+     A1 1   1
+     A1 1   1
+     A1 2   2
+     A2 3   1
+  since: "2.0.0"
+- name: percent_rank
+  class_name: "org.apache.spark.sql.catalyst.expressions.PercentRank"
+  signatures:
+    - "percent_rank()"
+  description: "Computes the percentage ranking of a value in a group of values."
+  examples: |
+    > SELECT a, b, percent_rank(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);
+     A1 1   0.0
+     A1 1   0.0
+     A1 2   1.0
+     A2 3   0.0
+  since: "2.0.0"
+- name: rank
+  class_name: "org.apache.spark.sql.catalyst.expressions.Rank"
+  signatures:
+    - "rank()"
+  description: "Computes the rank of a value in a group of values. The result is one plus the number of rows preceding or equal to the current row in the ordering of the partition. The values will produce gaps in the sequence."
+  examples: |
+    > SELECT a, b, rank(b) OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);
+     A1 1   1
+     A1 1   1
+     A1 2   3
+     A2 3   1
+  since: "2.0.0"
+- name: row_number
+  class_name: "org.apache.spark.sql.catalyst.expressions.RowNumber"
+  signatures:
+    - "row_number()"
+  description: "Assigns a unique, sequential number to each row, starting with one, according to the ordering of rows within the window partition."
+  examples: |
+    > SELECT a, b, row_number() OVER (PARTITION BY a ORDER BY b) FROM VALUES ('A1', 2), ('A1', 1), ('A2', 3), ('A1', 1) tab(a, b);
+     A1 1   1
+     A1 1   2
+     A1 2   3
+     A2 3   1
+  since: "2.0.0"

@@ -1,0 +1,924 @@
+- name: add_days
+  signatures:
+    - "add_days(start_date, num_days)"
+  description: "Returns the date that is num_days after start_date."
+- name: add_months
+  class_name: "org.apache.spark.sql.catalyst.expressions.AddMonths"
+  signatures:
+    - "add_months(start_date, num_months)"
+  description: "Returns the date that is num_months after start_date."
+  examples: |
+    > SELECT add_months('2016-08-31', 1);
+     2016-09-30
+  since: "1.5.0"
+- name: add_years
+  signatures:
+    - "add_years(start_date, num_years)"
+  description: "Returns the date that is num_years after start_date."
+- name: convert_timezone
+  class_name: "org.apache.spark.sql.catalyst.expressions.ConvertTimezone"
+  signatures:
+    - "convert_timezone([sourceTz, ]targetTz, sourceTs)"
+  description: "Converts the timestamp without time zone sourceTs from the sourceTz time zone to targetTz."
+  examples: |
+    > SELECT convert_timezone('Europe/Brussels', 'America/Los_Angeles', timestamp_ntz'2021-12-06 00:00:00');
+     2021-12-05 15:00:00
+    > SELECT convert_timezone('Europe/Brussels', timestamp_ntz'2021-12-05 15:00:00');
+     2021-12-06 00:00:00
+  since: "3.4.0"
+- name: curdate
+  class_name: "org.apache.spark.sql.catalyst.expressions.CurDateExpressionBuilder"
+  signatures:
+    - "curdate()"
+  description: "Returns the current date at the start of query evaluation. All calls of curdate within the same query return the same value."
+  examples: |
+    > SELECT curdate();
+     2022-09-06
+  since: "3.4.0"
+- name: current_date
+  class_name: "org.apache.spark.sql.catalyst.expressions.CurrentDate"
+  signatures:
+    - "current_date()"
+  description: "Returns the current date at the start of query evaluation. All calls of current_date within the same query return the same value."
+  examples: |
+    > SELECT current_date();
+     2020-04-25
+    > SELECT current_date;
+     2020-04-25
+  note: "The syntax without braces has been supported since 2.0.1."
+  since: "1.5.0"
+- name: current_time
+  class_name: "org.apache.spark.sql.catalyst.expressions.CurrentTime"
+  signatures:
+    - "current_time([precision])"
+  description: "Returns the current time at the start of query evaluation. All calls of current_time within the same query return the same value."
+  examples: |
+    > SELECT current_time();
+     15:49:11.914120
+    > SELECT current_time;
+     15:49:11.914120
+    > SELECT current_time(0);
+     15:49:11
+    > SELECT current_time(3);
+     15:49:11.914
+    > SELECT current_time(1+1);
+     15:49:11.91
+  since: "4.1.0"
+- name: current_timestamp
+  class_name: "org.apache.spark.sql.catalyst.expressions.CurrentTimestamp"
+  signatures:
+    - "current_timestamp()"
+  description: "Returns the current timestamp at the start of query evaluation. All calls of current_timestamp within the same query return the same value."
+  examples: |
+    > SELECT current_timestamp();
+     2020-04-25 15:49:11.914
+    > SELECT current_timestamp;
+     2020-04-25 15:49:11.914
+  note: "The syntax without braces has been supported since 2.0.1."
+  since: "1.5.0"
+- name: current_timezone
+  class_name: "org.apache.spark.sql.catalyst.expressions.CurrentTimeZone"
+  signatures:
+    - "current_timezone()"
+  description: "Returns the current session local timezone."
+  examples: |
+    > SELECT current_timezone();
+     Asia/Shanghai
+  since: "3.1.0"
+- name: date_add
+  class_name: "org.apache.spark.sql.catalyst.expressions.DateAdd"
+  signatures:
+    - "date_add(start_date, num_days)"
+  description: "Returns the date that is num_days after start_date."
+  examples: |
+    > SELECT date_add('2016-07-30', 1);
+     2016-07-31
+  since: "1.5.0"
+- name: date_diff
+  class_name: "org.apache.spark.sql.catalyst.expressions.DateDiff"
+  signatures:
+    - "date_diff(endDate, startDate)"
+  description: "Returns the number of days from startDate to endDate."
+  examples: |
+    > SELECT date_diff('2009-07-31', '2009-07-30');
+     1
+
+    > SELECT date_diff('2009-07-30', '2009-07-31');
+     -1
+  since: "3.4.0"
+- name: date_format
+  class_name: "org.apache.spark.sql.catalyst.expressions.DateFormatClass"
+  signatures:
+    - "date_format(timestamp, fmt)"
+  description: "Converts timestamp to a value of string in the format specified by the date format fmt."
+  examples: |
+    > SELECT date_format('2016-04-08', 'y');
+     2016
+  since: "1.5.0"
+- name: date_from_unix_date
+  class_name: "org.apache.spark.sql.catalyst.expressions.DateFromUnixDate"
+  signatures:
+    - "date_from_unix_date(days)"
+  description: "Create date from the number of days since 1970-01-01."
+  examples: |
+    > SELECT date_from_unix_date(1);
+     1970-01-02
+  since: "3.1.0"
+- name: date_part
+  class_name: "org.apache.spark.sql.catalyst.expressions.DatePartExpressionBuilder"
+  signatures:
+    - "date_part(field, source)"
+  description: "Extracts a part of the date/timestamp or interval source."
+  examples: |
+    > SELECT date_part('YEAR', TIMESTAMP '2019-08-12 01:00:00.123456');
+     2019
+    > SELECT date_part('week', timestamp'2019-08-12 01:00:00.123456');
+     33
+    > SELECT date_part('doy', DATE'2019-08-12');
+     224
+    > SELECT date_part('SECONDS', timestamp'2019-10-01 00:00:01.000001');
+     1.000001
+    > SELECT date_part('days', interval 5 days 3 hours 7 minutes);
+     5
+    > SELECT date_part('seconds', interval 5 hours 30 seconds 1 milliseconds 1 microseconds);
+     30.001001
+    > SELECT date_part('MONTH', INTERVAL '2021-11' YEAR TO MONTH);
+     11
+    > SELECT date_part('MINUTE', INTERVAL '123 23:55:59.002001' DAY TO SECOND);
+     55
+  note: "The date_part function is equivalent to the SQL-standard function EXTRACT(field FROM source)"
+  since: "3.0.0"
+- name: date_sub
+  class_name: "org.apache.spark.sql.catalyst.expressions.DateSub"
+  signatures:
+    - "date_sub(start_date, num_days)"
+  description: "Returns the date that is num_days before start_date."
+  examples: |
+    > SELECT date_sub('2016-07-30', 1);
+     2016-07-29
+  since: "1.5.0"
+- name: date_trunc
+  class_name: "org.apache.spark.sql.catalyst.expressions.TruncTimestamp"
+  signatures:
+    - "date_trunc(fmt, ts)"
+  description: "Returns timestamp ts truncated to the unit specified by the format model fmt."
+  examples: |
+    > SELECT date_trunc('YEAR', '2015-03-05T09:32:05.359');
+     2015-01-01 00:00:00
+    > SELECT date_trunc('MM', '2015-03-05T09:32:05.359');
+     2015-03-01 00:00:00
+    > SELECT date_trunc('DD', '2015-03-05T09:32:05.359');
+     2015-03-05 00:00:00
+    > SELECT date_trunc('HOUR', '2015-03-05T09:32:05.359');
+     2015-03-05 09:00:00
+    > SELECT date_trunc('MILLISECOND', '2015-03-05T09:32:05.123456');
+     2015-03-05 09:32:05.123
+  since: "2.3.0"
+- name: dateadd
+  class_name: "org.apache.spark.sql.catalyst.expressions.DateAdd"
+  signatures:
+    - "dateadd(start_date, num_days)"
+  description: "Returns the date that is num_days after start_date."
+  examples: |
+    > SELECT dateadd('2016-07-30', 1);
+     2016-07-31
+  since: "3.4.0"
+- name: datediff
+  class_name: "org.apache.spark.sql.catalyst.expressions.DateDiff"
+  signatures:
+    - "datediff(endDate, startDate)"
+  description: "Returns the number of days from startDate to endDate."
+  examples: |
+    > SELECT datediff('2009-07-31', '2009-07-30');
+     1
+
+    > SELECT datediff('2009-07-30', '2009-07-31');
+     -1
+  since: "1.5.0"
+- name: datepart
+  class_name: "org.apache.spark.sql.catalyst.expressions.DatePartExpressionBuilder"
+  signatures:
+    - "datepart(field, source)"
+  description: "Extracts a part of the date/timestamp or interval source."
+  examples: |
+    > SELECT datepart('YEAR', TIMESTAMP '2019-08-12 01:00:00.123456');
+     2019
+    > SELECT datepart('week', timestamp'2019-08-12 01:00:00.123456');
+     33
+    > SELECT datepart('doy', DATE'2019-08-12');
+     224
+    > SELECT datepart('SECONDS', timestamp'2019-10-01 00:00:01.000001');
+     1.000001
+    > SELECT datepart('days', interval 5 days 3 hours 7 minutes);
+     5
+    > SELECT datepart('seconds', interval 5 hours 30 seconds 1 milliseconds 1 microseconds);
+     30.001001
+    > SELECT datepart('MONTH', INTERVAL '2021-11' YEAR TO MONTH);
+     11
+    > SELECT datepart('MINUTE', INTERVAL '123 23:55:59.002001' DAY TO SECOND);
+     55
+  note: "The datepart function is equivalent to the SQL-standard function EXTRACT(field FROM source)"
+  since: "3.4.0"
+- name: day
+  class_name: "org.apache.spark.sql.catalyst.expressions.DayOfMonth"
+  signatures:
+    - "day(date)"
+  description: "Returns the day of month of the date/timestamp."
+  examples: |
+    > SELECT day('2009-07-30');
+     30
+  since: "1.5.0"
+- name: dayname
+  class_name: "org.apache.spark.sql.catalyst.expressions.DayName"
+  signatures:
+    - "dayname(date)"
+  description: "Returns the three-letter abbreviated day name from the given date."
+  examples: |
+    > SELECT dayname(DATE('2008-02-20'));
+     Wed
+  since: "4.0.0"
+- name: dayofmonth
+  class_name: "org.apache.spark.sql.catalyst.expressions.DayOfMonth"
+  signatures:
+    - "dayofmonth(date)"
+  description: "Returns the day of month of the date/timestamp."
+  examples: |
+    > SELECT dayofmonth('2009-07-30');
+     30
+  since: "1.5.0"
+- name: dayofweek
+  class_name: "org.apache.spark.sql.catalyst.expressions.DayOfWeek"
+  signatures:
+    - "dayofweek(date)"
+  description: "Returns the day of the week for date/timestamp (1 = Sunday, 2 = Monday, ..., 7 = Saturday)."
+  examples: |
+    > SELECT dayofweek('2009-07-30');
+     5
+  since: "2.3.0"
+- name: dayofyear
+  class_name: "org.apache.spark.sql.catalyst.expressions.DayOfYear"
+  signatures:
+    - "dayofyear(date)"
+  description: "Returns the day of year of the date/timestamp."
+  examples: |
+    > SELECT dayofyear('2016-04-09');
+     100
+  since: "1.5.0"
+- name: extract
+  class_name: "org.apache.spark.sql.catalyst.expressions.Extract"
+  signatures:
+    - "extract(field FROM source)"
+  description: "Extracts a part of the date or timestamp or time or interval source."
+  examples: |
+    > SELECT extract(YEAR FROM TIMESTAMP '2019-08-12 01:00:00.123456');
+     2019
+    > SELECT extract(week FROM timestamp'2019-08-12 01:00:00.123456');
+     33
+    > SELECT extract(doy FROM DATE'2019-08-12');
+     224
+    > SELECT extract(SECONDS FROM timestamp'2019-10-01 00:00:01.000001');
+     1.000001
+    > SELECT extract(days FROM interval 5 days 3 hours 7 minutes);
+     5
+    > SELECT extract(seconds FROM interval 5 hours 30 seconds 1 milliseconds 1 microseconds);
+     30.001001
+    > SELECT extract(MONTH FROM INTERVAL '2021-11' YEAR TO MONTH);
+     11
+    > SELECT extract(MINUTE FROM INTERVAL '123 23:55:59.002001' DAY TO SECOND);
+     55
+    > SELECT extract(HOUR FROM time '09:08:01.000001');
+     9
+    > SELECT extract(MINUTE FROM time '09:08:01.000001');
+     8
+    > SELECT extract(SECOND FROM time '09:08:01.000001');
+     1.000001
+  note: "The extract function is equivalent to date_part(field, source)."
+  since: "3.0.0"
+- name: from_unixtime
+  class_name: "org.apache.spark.sql.catalyst.expressions.FromUnixTime"
+  signatures:
+    - "from_unixtime(unix_time[, fmt])"
+  description: "Returns unix_time in the specified fmt."
+  examples: |
+    > SELECT from_unixtime(0, 'yyyy-MM-dd HH:mm:ss');
+     1969-12-31 16:00:00
+
+    > SELECT from_unixtime(0);
+     1969-12-31 16:00:00
+  since: "1.5.0"
+- name: from_utc_timestamp
+  class_name: "org.apache.spark.sql.catalyst.expressions.FromUTCTimestamp"
+  signatures:
+    - "from_utc_timestamp(timestamp, timezone)"
+  description: "Given a timestamp like '2017-07-14 02:40:00.0', interprets it as a time in UTC, and renders that time as a timestamp in the given time zone. For example, 'GMT+1' would yield '2017-07-14 03:40:00.0'."
+  examples: |
+    > SELECT from_utc_timestamp('2016-08-31', 'Asia/Seoul');
+     2016-08-31 09:00:00
+  since: "1.5.0"
+- name: hour
+  class_name: "org.apache.spark.sql.catalyst.expressions.HourExpressionBuilder"
+  signatures:
+    - "hour(expr)"
+  description: "Returns the hour component of the given expression."
+  examples: |
+    > SELECT hour('2018-02-14 12:58:59');
+     12
+    > SELECT hour(TIME'13:59:59.999999');
+     13
+  since: "1.5.0"
+- name: last_day
+  class_name: "org.apache.spark.sql.catalyst.expressions.LastDay"
+  signatures:
+    - "last_day(date)"
+  description: "Returns the last day of the month which the date belongs to."
+  examples: |
+    > SELECT last_day('2009-01-12');
+     2009-01-31
+  since: "1.5.0"
+- name: localtimestamp
+  class_name: "org.apache.spark.sql.catalyst.expressions.LocalTimestamp"
+  signatures:
+    - "localtimestamp()"
+  description: "Returns the current timestamp without time zone at the start of query evaluation. All calls of localtimestamp within the same query return the same value."
+  examples: |
+    > SELECT localtimestamp();
+     2020-04-25 15:49:11.914
+  since: "3.4.0"
+- name: make_date
+  class_name: "org.apache.spark.sql.catalyst.expressions.MakeDate"
+  signatures:
+    - "make_date(year, month, day)"
+  description: "Create date from year, month and day fields. If the configuration spark.sql.ansi.enabled is false, the function returns NULL on invalid inputs. Otherwise, it will throw an error instead."
+  examples: |
+    > SELECT make_date(2013, 7, 15);
+     2013-07-15
+    > SELECT make_date(2019, 7, NULL);
+     NULL
+  since: "3.0.0"
+- name: make_dt_interval
+  class_name: "org.apache.spark.sql.catalyst.expressions.MakeDTInterval"
+  signatures:
+    - "make_dt_interval([days[, hours[, mins[, secs]]]])"
+  description: "Make DayTimeIntervalType duration from days, hours, mins and secs."
+  examples: |
+    > SELECT make_dt_interval(1, 12, 30, 01.001001);
+     1 12:30:01.001001000
+    > SELECT make_dt_interval(2);
+     2 00:00:00.000000000
+    > SELECT make_dt_interval(100, null, 3);
+     NULL
+  since: "3.2.0"
+- name: make_interval
+  class_name: "org.apache.spark.sql.catalyst.expressions.MakeInterval"
+  signatures:
+    - "make_interval([years[, months[, weeks[, days[, hours[, mins[, secs]]]]]]])"
+  description: "Make interval from years, months, weeks, days, hours, mins and secs."
+  examples: |
+    > SELECT make_interval(100, 11, 1, 1, 12, 30, 01.001001);
+     100 years 11 months 8 days 12 hours 30 minutes 1.001001 seconds
+    > SELECT make_interval(100, null, 3);
+     NULL
+    > SELECT make_interval(0, 1, 0, 1, 0, 0, 100.000001);
+     1 months 1 days 1 minutes 40.000001 seconds
+  since: "3.0.0"
+- name: make_time
+  class_name: "org.apache.spark.sql.catalyst.expressions.MakeTime"
+  signatures:
+    - "make_time(hour, minute, second)"
+  description: "Create time from hour, minute and second fields. For invalid inputs it will throw an error."
+  examples: |
+    > SELECT make_time(6, 30, 45.887);
+     06:30:45.887
+    > SELECT make_time(NULL, 30, 0);
+     NULL
+  since: "4.1.0"
+- name: make_timestamp
+  class_name: "org.apache.spark.sql.catalyst.expressions.MakeTimestampExpressionBuilder"
+  signatures:
+    - "make_timestamp(year, month, day, hour, min, sec[, timezone])"
+  description: "Create the current timestamp with local time zone from year, month, day, hour, min, sec and timezone fields. If the configuration spark.sql.ansi.enabled is false, the function returns NULL on invalid inputs. Otherwise, it will throw an error instead."
+  examples: |
+    > SELECT make_timestamp(2014, 12, 28, 6, 30, 45.887);
+     2014-12-28 06:30:45.887
+    > SELECT make_timestamp(2014, 12, 28, 6, 30, 45.887, 'CET');
+     2014-12-27 21:30:45.887
+    > SELECT make_timestamp(DATE'2014-12-28');
+     2014-12-28 00:00:00
+    > SELECT make_timestamp(DATE'2014-12-28', TIME'6:30:45.887');
+     2014-12-28 06:30:45.887
+    > SELECT make_timestamp(DATE'2014-12-28', TIME'6:30:45.887', 'CET');
+     2014-12-27 21:30:45.887
+  since: "3.0.0"
+- name: make_timestamp_ltz
+  class_name: "org.apache.spark.sql.catalyst.expressions.MakeTimestampLTZExpressionBuilder"
+  signatures:
+    - "make_timestamp_ltz(year, month, day, hour, min, sec[, timezone])"
+  description: "Create the current timestamp with local time zone from year, month, day, hour, min, sec and (optional) timezone fields. If the configuration spark.sql.ansi.enabled is false, the function returns NULL on invalid inputs. Otherwise, it will throw an error instead."
+  examples: |
+    > SELECT make_timestamp_ltz(2014, 12, 28, 6, 30, 45.887);
+     2014-12-28 06:30:45.887
+    > SELECT make_timestamp_ltz(2014, 12, 28, 6, 30, 45.887, 'CET');
+     2014-12-27 21:30:45.887
+    > SELECT make_timestamp_ltz(2019, 6, 30, 23, 59, 60);
+     2019-07-01 00:00:00
+    > SELECT make_timestamp_ltz(null, 7, 22, 15, 30, 0);
+     NULL
+    > SELECT make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887');
+     2014-12-28 06:30:45.887
+    > SELECT make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887', 'CET');
+     2014-12-27 21:30:45.887
+  since: "3.4.0"
+- name: make_timestamp_ntz
+  class_name: "org.apache.spark.sql.catalyst.expressions.MakeTimestampNTZExpressionBuilder"
+  signatures:
+    - "make_timestamp_ntz(year, month, day, hour, min, sec)"
+  description: "Create local date-time from year, month, day, hour, min, sec fields. If the configuration spark.sql.ansi.enabled is false, the function returns NULL on invalid inputs. Otherwise, it will throw an error instead."
+  examples: |
+    > SELECT make_timestamp_ntz(2014, 12, 28, 6, 30, 45.887);
+     2014-12-28 06:30:45.887
+    > SELECT make_timestamp_ntz(2019, 6, 30, 23, 59, 60);
+     2019-07-01 00:00:00
+    > SELECT make_timestamp_ntz(null, 7, 22, 15, 30, 0);
+     NULL
+    > SELECT make_timestamp_ntz(DATE'2014-12-28', TIME'6:30:45.887');
+     2014-12-28 06:30:45.887
+  since: "3.4.0"
+- name: make_ym_interval
+  class_name: "org.apache.spark.sql.catalyst.expressions.MakeYMInterval"
+  signatures:
+    - "make_ym_interval([years[, months]])"
+  description: "Make year-month interval from years, months."
+  examples: |
+    > SELECT make_ym_interval(1, 2);
+     1-2
+    > SELECT make_ym_interval(1, 0);
+     1-0
+    > SELECT make_ym_interval(-1, 1);
+     -0-11
+    > SELECT make_ym_interval(2);
+     2-0
+  since: "3.2.0"
+- name: minute
+  class_name: "org.apache.spark.sql.catalyst.expressions.MinuteExpressionBuilder"
+  signatures:
+    - "minute(expr)"
+  description: "Returns the minute component of the given expression."
+  examples: |
+    > SELECT minute('2009-07-30 12:58:59');
+     58
+    > SELECT minute(TIME'23:59:59.999999');
+     59
+  since: "1.5.0"
+- name: month
+  class_name: "org.apache.spark.sql.catalyst.expressions.Month"
+  signatures:
+    - "month(date)"
+  description: "Returns the month component of the date/timestamp."
+  examples: |
+    > SELECT month('2016-07-30');
+     7
+  since: "1.5.0"
+- name: monthname
+  class_name: "org.apache.spark.sql.catalyst.expressions.MonthName"
+  signatures:
+    - "monthname(date)"
+  description: "Returns the three-letter abbreviated month name from the given date."
+  examples: |
+    > SELECT monthname('2008-02-20');
+     Feb
+  since: "4.0.0"
+- name: months_between
+  class_name: "org.apache.spark.sql.catalyst.expressions.MonthsBetween"
+  signatures:
+    - "months_between(timestamp1, timestamp2[, roundOff])"
+  description: "If timestamp1 is later than timestamp2, then the result is positive. If timestamp1 and timestamp2 are on the same day of month, or both are the last day of month, time of day will be ignored. Otherwise, the difference is calculated based on 31 days per month, and rounded to 8 digits unless roundOff=false."
+  examples: |
+    > SELECT months_between('1997-02-28 10:30:00', '1996-10-30');
+     3.94959677
+    > SELECT months_between('1997-02-28 10:30:00', '1996-10-30', false);
+     3.9495967741935485
+  since: "1.5.0"
+- name: next_day
+  class_name: "org.apache.spark.sql.catalyst.expressions.NextDay"
+  signatures:
+    - "next_day(start_date, day_of_week)"
+  description: "Returns the first date which is later than start_date and named as indicated. The function returns NULL if at least one of the input parameters is NULL. When both of the input parameters are not NULL and day_of_week is an invalid input, the function throws SparkIllegalArgumentException if spark.sql.ansi.enabled is set to true, otherwise NULL."
+  examples: |
+    > SELECT next_day('2015-01-14', 'TU');
+     2015-01-20
+  since: "1.5.0"
+- name: now
+  class_name: "org.apache.spark.sql.catalyst.expressions.Now"
+  signatures:
+    - "now()"
+  description: "Returns the current timestamp at the start of query evaluation."
+  examples: |
+    > SELECT now();
+     2020-04-25 15:49:11.914
+  since: "1.6.0"
+- name: quarter
+  class_name: "org.apache.spark.sql.catalyst.expressions.Quarter"
+  signatures:
+    - "quarter(date)"
+  description: "Returns the quarter of the year for date, in the range 1 to 4."
+  examples: |
+    > SELECT quarter('2016-08-31');
+     3
+  since: "1.5.0"
+- name: second
+  class_name: "org.apache.spark.sql.catalyst.expressions.SecondExpressionBuilder"
+  signatures:
+    - "second(expr)"
+  description: "Returns the second component of the given expression."
+  examples: |
+    > SELECT second('2018-02-14 12:58:59');
+     59
+    > SELECT second(TIME'13:25:59.999999');
+     59
+  since: "1.5.0"
+- name: session_window
+  class_name: "org.apache.spark.sql.catalyst.expressions.SessionWindow"
+  signatures:
+    - "session_window(time_column, gap_duration)"
+  description: "Generates session window given a timestamp specifying column and gap duration. See 'Types of time windows' in Structured Streaming guide doc for detailed explanation and examples."
+  examples: |
+    > SELECT a, session_window.start, session_window.end, count(*) as cnt FROM VALUES ('A1', '2021-01-01 00:00:00'), ('A1', '2021-01-01 00:04:30'), ('A1', '2021-01-01 00:10:00'), ('A2', '2021-01-01 00:01:00') AS tab(a, b) GROUP by a, session_window(b, '5 minutes') ORDER BY a, start;
+      A1    2021-01-01 00:00:00 2021-01-01 00:09:30 2
+      A1    2021-01-01 00:10:00 2021-01-01 00:15:00 1
+      A2    2021-01-01 00:01:00 2021-01-01 00:06:00 1
+    > SELECT a, session_window.start, session_window.end, count(*) as cnt FROM VALUES ('A1', '2021-01-01 00:00:00'), ('A1', '2021-01-01 00:04:30'), ('A1', '2021-01-01 00:10:00'), ('A2', '2021-01-01 00:01:00'), ('A2', '2021-01-01 00:04:30') AS tab(a, b) GROUP by a, session_window(b, CASE WHEN a = 'A1' THEN '5 minutes' WHEN a = 'A2' THEN '1 minute' ELSE '10 minutes' END) ORDER BY a, start;
+      A1    2021-01-01 00:00:00 2021-01-01 00:09:30 2
+      A1    2021-01-01 00:10:00 2021-01-01 00:15:00 1
+      A2    2021-01-01 00:01:00 2021-01-01 00:02:00 1
+      A2    2021-01-01 00:04:30 2021-01-01 00:05:30 1
+  since: "3.2.0"
+- name: time_diff
+  class_name: "org.apache.spark.sql.catalyst.expressions.TimeDiff"
+  signatures:
+    - "time_diff(unit, start, end)"
+  description: "Gets the difference between the times in the specified units."
+  examples: |
+    > SELECT time_diff('HOUR', TIME'20:30:29', TIME'21:30:28');
+     0
+    > SELECT time_diff('HOUR', TIME'20:30:29', TIME'21:30:29');
+     1
+    > SELECT time_diff('HOUR', TIME'20:30:29', TIME'12:00:00');
+     -8
+  since: "4.1.0"
+- name: time_trunc
+  class_name: "org.apache.spark.sql.catalyst.expressions.TimeTrunc"
+  signatures:
+    - "time_trunc(unit, time)"
+  description: "Returns time truncated to the unit."
+  examples: |
+    > SELECT time_trunc('HOUR', TIME'09:32:05.359');
+     09:00:00
+    > SELECT time_trunc('MILLISECOND', TIME'09:32:05.123456');
+     09:32:05.123
+  since: "4.1.0"
+- name: timestamp_add
+  signatures:
+    - "timestamp_add(unit, quantity, timestamp)"
+  description: "Adds quantity units to timestamp."
+- name: timestamp_diff
+  signatures:
+    - "timestamp_diff(unit, start_timestamp, end_timestamp)"
+  description: "Returns the difference between start_timestamp and end_timestamp in unit."
+- name: timestamp_micros
+  class_name: "org.apache.spark.sql.catalyst.expressions.MicrosToTimestamp"
+  signatures:
+    - "timestamp_micros(microseconds)"
+  description: "Creates timestamp from the number of microseconds since UTC epoch."
+  examples: |
+    > SELECT timestamp_micros(1230219000123123);
+     2008-12-25 07:30:00.123123
+  since: "3.1.0"
+- name: timestamp_millis
+  class_name: "org.apache.spark.sql.catalyst.expressions.MillisToTimestamp"
+  signatures:
+    - "timestamp_millis(milliseconds)"
+  description: "Creates timestamp from the number of milliseconds since UTC epoch."
+  examples: |
+    > SELECT timestamp_millis(1230219000123);
+     2008-12-25 07:30:00.123
+  since: "3.1.0"
+- name: timestamp_seconds
+  class_name: "org.apache.spark.sql.catalyst.expressions.SecondsToTimestamp"
+  signatures:
+    - "timestamp_seconds(seconds)"
+  description: "Creates timestamp from the number of seconds (can be fractional) since UTC epoch."
+  examples: |
+    > SELECT timestamp_seconds(1230219000);
+     2008-12-25 07:30:00
+    > SELECT timestamp_seconds(1230219000.123);
+     2008-12-25 07:30:00.123
+  since: "3.1.0"
+- name: timestampadd
+  class_name: "org.apache.spark.sql.catalyst.expressions.TimestampAdd"
+  signatures:
+    - "timestampadd(unit, quantity, timestamp)"
+  description: "Adds quantity units to timestamp."
+- name: timestampdiff
+  class_name: "org.apache.spark.sql.catalyst.expressions.TimestampDiff"
+  signatures:
+    - "timestampdiff(unit, start_timestamp, end_timestamp)"
+  description: "Returns the difference between start_timestamp and end_timestamp in unit."
+- name: to_date
+  class_name: "org.apache.spark.sql.catalyst.expressions.ParseToDate"
+  signatures:
+    - "to_date(date_str[, fmt])"
+  description: "Parses the date_str expression with the fmt expression to a date. Returns null with invalid input. By default, it follows casting rules to a date if the fmt is omitted."
+  examples: |
+    > SELECT to_date('2009-07-30 04:17:52');
+     2009-07-30
+    > SELECT to_date('2016-12-31', 'yyyy-MM-dd');
+     2016-12-31
+  since: "1.5.0"
+- name: to_time
+  class_name: "org.apache.spark.sql.catalyst.expressions.ToTime"
+  signatures:
+    - "to_time(str[, format])"
+  description: "Parses the str expression with the format expression to a time. If format is malformed or its application does not result in a well formed time, the function raises an error. By default, it follows casting rules to a time if the format is omitted."
+  examples: |
+    > SELECT to_time('00:12:00');
+     00:12:00
+    > SELECT to_time('12.10.05', 'HH.mm.ss');
+     12:10:05
+  since: "4.1.0"
+- name: to_timestamp
+  class_name: "org.apache.spark.sql.catalyst.expressions.ParseToTimestamp"
+  signatures:
+    - "to_timestamp(timestamp_str[, fmt])"
+  description: "Parses the timestamp_str expression with the fmt expression to a timestamp. Returns null with invalid input. By default, it follows casting rules to a timestamp if the fmt is omitted. The result data type is consistent with the value of configuration spark.sql.timestampType."
+  examples: |
+    > SELECT to_timestamp('2016-12-31 00:12:00');
+     2016-12-31 00:12:00
+    > SELECT to_timestamp('2016-12-31', 'yyyy-MM-dd');
+     2016-12-31 00:00:00
+  since: "2.2.0"
+- name: to_timestamp_ltz
+  class_name: "org.apache.spark.sql.catalyst.expressions.ParseToTimestampLTZExpressionBuilder"
+  signatures:
+    - "to_timestamp_ltz(timestamp_str[, fmt])"
+  description: "Parses the timestamp_str expression with the fmt expression to a timestamp with local time zone. Returns null with invalid input. By default, it follows casting rules to a timestamp if the fmt is omitted."
+  examples: |
+    > SELECT to_timestamp_ltz('2016-12-31 00:12:00');
+     2016-12-31 00:12:00
+    > SELECT to_timestamp_ltz('2016-12-31', 'yyyy-MM-dd');
+     2016-12-31 00:00:00
+  since: "3.4.0"
+- name: to_timestamp_ntz
+  class_name: "org.apache.spark.sql.catalyst.expressions.ParseToTimestampNTZExpressionBuilder"
+  signatures:
+    - "to_timestamp_ntz(timestamp_str[, fmt])"
+  description: "Parses the timestamp_str expression with the fmt expression to a timestamp without time zone. Returns null with invalid input. By default, it follows casting rules to a timestamp if the fmt is omitted."
+  examples: |
+    > SELECT to_timestamp_ntz('2016-12-31 00:12:00');
+     2016-12-31 00:12:00
+    > SELECT to_timestamp_ntz('2016-12-31', 'yyyy-MM-dd');
+     2016-12-31 00:00:00
+  since: "3.4.0"
+- name: to_unix_timestamp
+  class_name: "org.apache.spark.sql.catalyst.expressions.ToUnixTimestamp"
+  signatures:
+    - "to_unix_timestamp(timeExp[, fmt])"
+  description: "Returns the UNIX timestamp of the given time."
+  examples: |
+    > SELECT to_unix_timestamp('2016-04-08', 'yyyy-MM-dd');
+     1460098800
+  since: "1.6.0"
+- name: to_utc_timestamp
+  class_name: "org.apache.spark.sql.catalyst.expressions.ToUTCTimestamp"
+  signatures:
+    - "to_utc_timestamp(timestamp, timezone)"
+  description: "Given a timestamp like '2017-07-14 02:40:00.0', interprets it as a time in the given time zone, and renders that time as a timestamp in UTC. For example, 'GMT+1' would yield '2017-07-14 01:40:00.0'."
+  examples: |
+    > SELECT to_utc_timestamp('2016-08-31', 'Asia/Seoul');
+     2016-08-30 15:00:00
+  since: "1.5.0"
+- name: trunc
+  class_name: "org.apache.spark.sql.catalyst.expressions.TruncDate"
+  signatures:
+    - "trunc(date, fmt)"
+  description: "Returns date with the time portion of the day truncated to the unit specified by the format model fmt."
+  examples: |
+    > SELECT trunc('2019-08-04', 'week');
+     2019-07-29
+    > SELECT trunc('2019-08-04', 'quarter');
+     2019-07-01
+    > SELECT trunc('2009-02-12', 'MM');
+     2009-02-01
+    > SELECT trunc('2015-10-27', 'YEAR');
+     2015-01-01
+  since: "1.5.0"
+- name: try_make_interval
+  class_name: "org.apache.spark.sql.catalyst.expressions.TryMakeInterval"
+  signatures:
+    - "try_make_interval([years[, months[, weeks[, days[, hours[, mins[, secs]]]]]]])"
+  description: "This is a special version of make_interval that performs the same operation, but returns NULL when an overflow occurs."
+  examples: |
+    > SELECT try_make_interval(100, 11, 1, 1, 12, 30, 01.001001);
+     100 years 11 months 8 days 12 hours 30 minutes 1.001001 seconds
+    > SELECT try_make_interval(100, null, 3);
+     NULL
+    > SELECT try_make_interval(0, 1, 0, 1, 0, 0, 100.000001);
+     1 months 1 days 1 minutes 40.000001 seconds
+    > SELECT try_make_interval(2147483647);
+     NULL
+  since: "4.0.0"
+- name: try_make_timestamp
+  class_name: "org.apache.spark.sql.catalyst.expressions.TryMakeTimestampExpressionBuilder"
+  signatures:
+    - "try_make_timestamp(year, month, day, hour, min, sec[, timezone])"
+  description: "Try to create a timestamp from year, month, day, hour, min, sec and timezone fields. The result data type is consistent with the value of configuration spark.sql.timestampType. The function returns NULL on invalid inputs."
+  examples: |
+    > SELECT try_make_timestamp(2014, 12, 28, 6, 30, 45.887);
+     2014-12-28 06:30:45.887
+    > SELECT try_make_timestamp(2014, 12, 28, 6, 30, 45.887, 'CET');
+     2014-12-27 21:30:45.887
+    > SELECT try_make_timestamp(DATE'2014-12-28');
+     2014-12-28 00:00:00
+    > SELECT try_make_timestamp(DATE'2014-12-28', TIME'6:30:45.887');
+     2014-12-28 06:30:45.887
+    > SELECT try_make_timestamp(DATE'2014-12-28', TIME'6:30:45.887', 'CET');
+     2014-12-27 21:30:45.887
+    > SELECT try_make_timestamp(2019, 6, 30, 23, 59, 60);
+     2019-07-01 00:00:00
+    > SELECT try_make_timestamp(2019, 6, 30, 23, 59, 1);
+     2019-06-30 23:59:01
+    > SELECT try_make_timestamp(null, 7, 22, 15, 30, 0);
+     NULL
+    > SELECT try_make_timestamp(2024, 13, 22, 15, 30, 0);
+     NULL
+  since: "4.0.0"
+- name: try_make_timestamp_ltz
+  class_name: "org.apache.spark.sql.catalyst.expressions.TryMakeTimestampLTZExpressionBuilder"
+  signatures:
+    - "try_make_timestamp_ltz(year, month, day, hour, min, sec[, timezone])"
+  description: "Try to create the current timestamp with local time zone from year, month, day, hour, min, sec and (optional) timezone fields. The function returns NULL on invalid inputs."
+  examples: |
+    > SELECT try_make_timestamp_ltz(2014, 12, 28, 6, 30, 45.887);
+     2014-12-28 06:30:45.887
+    > SELECT try_make_timestamp_ltz(2014, 12, 28, 6, 30, 45.887, 'CET');
+     2014-12-27 21:30:45.887
+    > SELECT try_make_timestamp_ltz(2019, 6, 30, 23, 59, 60);
+     2019-07-01 00:00:00
+    > SELECT try_make_timestamp_ltz(null, 7, 22, 15, 30, 0);
+     NULL
+    > SELECT try_make_timestamp_ltz(2024, 13, 22, 15, 30, 0);
+     NULL
+    > SELECT try_make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887');
+     2014-12-28 06:30:45.887
+    > SELECT try_make_timestamp_ltz(DATE'2014-12-28', TIME'6:30:45.887', 'CET');
+     2014-12-27 21:30:45.887
+  since: "4.0.0"
+- name: try_make_timestamp_ntz
+  class_name: "org.apache.spark.sql.catalyst.expressions.TryMakeTimestampNTZExpressionBuilder"
+  signatures:
+    - "try_make_timestamp_ntz(year, month, day, hour, min, sec)"
+  description: "Try to create local date-time from year, month, day, hour, min, sec fields. The function returns NULL on invalid inputs."
+  examples: |
+    > SELECT try_make_timestamp_ntz(2014, 12, 28, 6, 30, 45.887);
+     2014-12-28 06:30:45.887
+    > SELECT try_make_timestamp_ntz(2019, 6, 30, 23, 59, 60);
+     2019-07-01 00:00:00
+    > SELECT try_make_timestamp_ntz(null, 7, 22, 15, 30, 0);
+     NULL
+    > SELECT try_make_timestamp_ntz(2024, 13, 22, 15, 30, 0);
+     NULL
+    > SELECT try_make_timestamp_ntz(DATE'2014-12-28', TIME'6:30:45.887');
+     2014-12-28 06:30:45.887
+  since: "4.0.0"
+- name: try_to_time
+  class_name: "org.apache.spark.sql.catalyst.expressions.TryToTimeExpressionBuilder"
+  signatures:
+    - "try_to_time(str[, format])"
+  description: "Parses the str expression with the format expression to a time. If format is malformed or its application does not result in a well formed time, the function returns NULL. By default, it follows casting rules to a time if the format is omitted."
+  examples: |
+    > SELECT try_to_time('00:12:00.001');
+     00:12:00.001
+    > SELECT try_to_time('12.10.05.999999', 'HH.mm.ss.SSSSSS');
+     12:10:05.999999
+    > SELECT try_to_time('foo', 'HH:mm:ss');
+     NULL
+  since: "4.1.0"
+- name: try_to_timestamp
+  class_name: "org.apache.spark.sql.catalyst.expressions.TryToTimestampExpressionBuilder"
+  signatures:
+    - "try_to_timestamp(timestamp_str[, fmt])"
+  description: "Parses the timestamp_str expression with the fmt expression to a timestamp. The function always returns null on an invalid input with/without ANSI SQL mode enabled. By default, it follows casting rules to a timestamp if the fmt is omitted. The result data type is consistent with the value of configuration spark.sql.timestampType."
+  examples: |
+    > SELECT try_to_timestamp('2016-12-31 00:12:00');
+     2016-12-31 00:12:00
+    > SELECT try_to_timestamp('2016-12-31', 'yyyy-MM-dd');
+     2016-12-31 00:00:00
+    > SELECT try_to_timestamp('foo', 'yyyy-MM-dd');
+     NULL
+  since: "3.4.0"
+- name: unix_date
+  class_name: "org.apache.spark.sql.catalyst.expressions.UnixDate"
+  signatures:
+    - "unix_date(date)"
+  description: "Returns the number of days since 1970-01-01."
+  examples: |
+    > SELECT unix_date(DATE("1970-01-02"));
+     1
+  since: "3.1.0"
+- name: unix_micros
+  class_name: "org.apache.spark.sql.catalyst.expressions.UnixMicros"
+  signatures:
+    - "unix_micros(timestamp)"
+  description: "Returns the number of microseconds since 1970-01-01 00:00:00 UTC."
+  examples: |
+    > SELECT unix_micros(TIMESTAMP('1970-01-01 00:00:01Z'));
+     1000000
+  since: "3.1.0"
+- name: unix_millis
+  class_name: "org.apache.spark.sql.catalyst.expressions.UnixMillis"
+  signatures:
+    - "unix_millis(timestamp)"
+  description: "Returns the number of milliseconds since 1970-01-01 00:00:00 UTC. Truncates higher levels of precision."
+  examples: |
+    > SELECT unix_millis(TIMESTAMP('1970-01-01 00:00:01Z'));
+     1000
+  since: "3.1.0"
+- name: unix_seconds
+  class_name: "org.apache.spark.sql.catalyst.expressions.UnixSeconds"
+  signatures:
+    - "unix_seconds(timestamp)"
+  description: "Returns the number of seconds since 1970-01-01 00:00:00 UTC. Truncates higher levels of precision."
+  examples: |
+    > SELECT unix_seconds(TIMESTAMP('1970-01-01 00:00:01Z'));
+     1
+  since: "3.1.0"
+- name: unix_timestamp
+  class_name: "org.apache.spark.sql.catalyst.expressions.UnixTimestamp"
+  signatures:
+    - "unix_timestamp([timeExp[, fmt]])"
+  description: "Returns the UNIX timestamp of current or specified time."
+  examples: |
+    > SELECT unix_timestamp();
+     1476884637
+    > SELECT unix_timestamp('2016-04-08', 'yyyy-MM-dd');
+     1460041200
+  since: "1.5.0"
+- name: weekday
+  class_name: "org.apache.spark.sql.catalyst.expressions.WeekDay"
+  signatures:
+    - "weekday(date)"
+  description: "Returns the day of the week for date/timestamp (0 = Monday, 1 = Tuesday, ..., 6 = Sunday)."
+  examples: |
+    > SELECT weekday('2009-07-30');
+     3
+  since: "2.4.0"
+- name: weekofyear
+  class_name: "org.apache.spark.sql.catalyst.expressions.WeekOfYear"
+  signatures:
+    - "weekofyear(date)"
+  description: "Returns the week of the year of the given date. A week is considered to start on a Monday and week 1 is the first week with >3 days."
+  examples: |
+    > SELECT weekofyear('2008-02-20');
+     8
+  since: "1.5.0"
+- name: window
+  class_name: "org.apache.spark.sql.catalyst.expressions.TimeWindow"
+  signatures:
+    - "window(time_column, window_duration[, slide_duration[, start_time]])"
+  description: "Bucketize rows into one or more time windows given a timestamp specifying column. Window starts are inclusive but the window ends are exclusive, e.g. 12:05 will be in the window [12:05,12:10) but not in [12:00,12:05). Windows can support microsecond precision. Windows in the order of months are not supported. See 'Window Operations on Event Time' in Structured Streaming guide doc for detailed explanation and examples."
+  examples: |
+    > SELECT a, window.start, window.end, count(*) as cnt FROM VALUES ('A1', '2021-01-01 00:00:00'), ('A1', '2021-01-01 00:04:30'), ('A1', '2021-01-01 00:06:00'), ('A2', '2021-01-01 00:01:00') AS tab(a, b) GROUP by a, window(b, '5 minutes') ORDER BY a, start;
+      A1    2021-01-01 00:00:00 2021-01-01 00:05:00 2
+      A1    2021-01-01 00:05:00 2021-01-01 00:10:00 1
+      A2    2021-01-01 00:00:00 2021-01-01 00:05:00 1
+    > SELECT a, window.start, window.end, count(*) as cnt FROM VALUES ('A1', '2021-01-01 00:00:00'), ('A1', '2021-01-01 00:04:30'), ('A1', '2021-01-01 00:06:00'), ('A2', '2021-01-01 00:01:00') AS tab(a, b) GROUP by a, window(b, '10 minutes', '5 minutes') ORDER BY a, start;
+      A1    2020-12-31 23:55:00 2021-01-01 00:05:00 2
+      A1    2021-01-01 00:00:00 2021-01-01 00:10:00 3
+      A1    2021-01-01 00:05:00 2021-01-01 00:15:00 1
+      A2    2020-12-31 23:55:00 2021-01-01 00:05:00 1
+      A2    2021-01-01 00:00:00 2021-01-01 00:10:00 1
+  since: "2.0.0"
+- name: window_time
+  class_name: "org.apache.spark.sql.catalyst.expressions.WindowTime"
+  signatures:
+    - "window_time(window_column)"
+  description: "Extract the time value from time/session window column which can be used for event time value of window. The extracted time is (window.end - 1) which reflects the fact that the aggregating windows have exclusive upper bound - [start, end) See 'Window Operations on Event Time' in Structured Streaming guide doc for detailed explanation and examples."
+  examples: |
+    > SELECT a, window.start as start, window.end as end, window_time(window), cnt FROM (SELECT a, window, count(*) as cnt FROM VALUES ('A1', '2021-01-01 00:00:00'), ('A1', '2021-01-01 00:04:30'), ('A1', '2021-01-01 00:06:00'), ('A2', '2021-01-01 00:01:00') AS tab(a, b) GROUP by a, window(b, '5 minutes') ORDER BY a, window.start);
+      A1    2021-01-01 00:00:00 2021-01-01 00:05:00 2021-01-01 00:04:59.999999  2
+      A1    2021-01-01 00:05:00 2021-01-01 00:10:00 2021-01-01 00:09:59.999999  1
+      A2    2021-01-01 00:00:00 2021-01-01 00:05:00 2021-01-01 00:04:59.999999  1
+  since: "3.4.0"
+- name: year
+  class_name: "org.apache.spark.sql.catalyst.expressions.Year"
+  signatures:
+    - "year(date)"
+  description: "Returns the year component of the date/timestamp."
+  examples: |
+    > SELECT year('2016-07-30');
+     2016
+  since: "1.5.0"
+- name: years
+  class_name: "org.apache.spark.sql.catalyst.expressions.Years"
+  signatures:
+    - "years(date)"
+  description: "Returns the year component of the date/timestamp."

@@ -1,0 +1,112 @@
+- name: explode
+  class_name: "org.apache.spark.sql.catalyst.expressions.ExplodeExpressionBuilder"
+  signatures:
+    - "explode(expr)"
+  description: "Separates the elements of array expr into multiple rows, or the elements of map expr into multiple rows and columns. Unless specified otherwise, uses the default column name col for elements of the array or key and value for the elements of the map."
+  examples: |
+    > SELECT * FROM explode(array(10, 20));
+     10
+     20
+    > SELECT * FROM explode(collection => array(10, 20));
+     10
+     20
+  since: "3.4.0"
+- name: explode_outer
+  class_name: "org.apache.spark.sql.catalyst.expressions.ExplodeExpressionBuilder"
+  signatures:
+    - "explode_outer(expr)"
+  description: "Separates the elements of array expr into multiple rows, or the elements of map expr into multiple rows and columns. Unless specified otherwise, uses the default column name col for elements of the array or key and value for the elements of the map."
+  examples: |
+    > SELECT * FROM explode_outer(array(10, 20));
+     10
+     20
+    > SELECT * FROM explode_outer(collection => array(10, 20));
+     10
+     20
+  since: "3.4.0"
+- name: inline
+  class_name: "org.apache.spark.sql.catalyst.expressions.InlineExpressionBuilder"
+  signatures:
+    - "inline(expr)"
+  description: "Explodes an array of structs into a table. Uses column names col1, col2, etc. by default unless specified otherwise."
+  examples: |
+    > SELECT inline(array(struct(1, 'a'), struct(2, 'b')));
+     1  a
+     2  b
+    > SELECT inline(input => array(struct(1, 'a'), struct(2, 'b')));
+     1  a
+     2  b
+  since: "2.0.0"
+- name: inline_outer
+  class_name: "org.apache.spark.sql.catalyst.expressions.InlineExpressionBuilder"
+  signatures:
+    - "inline_outer(expr)"
+  description: "Explodes an array of structs into a table. Uses column names col1, col2, etc. by default unless specified otherwise."
+  examples: |
+    > SELECT * FROM inline_outer(array(struct(1, 'a'), struct(2, 'b')));
+     1  a
+     2  b
+    > SELECT * FROM inline_outer(input => array(struct(1, 'a'), struct(2, 'b')));
+     1  a
+     2  b
+  since: "3.4.0"
+- name: posexplode
+  class_name: "org.apache.spark.sql.catalyst.expressions.PosExplodeExpressionBuilder"
+  signatures:
+    - "posexplode(expr)"
+  description: "Separates the elements of array expr into multiple rows with positions, or the elements of map expr into multiple rows and columns with positions. Unless specified otherwise, uses the column name pos for position, col for elements of the array or key and value for elements of the map."
+  examples: |
+    > SELECT * FROM posexplode(array(10,20));
+     0  10
+     1  20
+    > SELECT * FROM posexplode(collection => array(10,20));
+     0  10
+     1  20
+  since: "3.5.0"
+- name: posexplode_outer
+  class_name: "org.apache.spark.sql.catalyst.expressions.PosExplodeExpressionBuilder"
+  signatures:
+    - "posexplode_outer(expr)"
+  description: "Separates the elements of array expr into multiple rows with positions, or the elements of map expr into multiple rows and columns with positions. Unless specified otherwise, uses the column name pos for position, col for elements of the array or key and value for elements of the map."
+  examples: |
+    > SELECT posexplode_outer(array(10,20));
+     0  10
+     1  20
+    > SELECT posexplode_outer(collection => array(10,20));
+     0  10
+     1  20
+  since: "2.0.0"
+- name: stack
+  class_name: "org.apache.spark.sql.catalyst.expressions.Stack"
+  signatures:
+    - "stack(n, expr1, ..., exprk)"
+  description: "Separates expr1, ..., exprk into n rows. Uses column names col0, col1, etc. by default unless specified otherwise."
+  examples: |
+    > SELECT stack(2, 1, 2, 3);
+     1  2
+     3  NULL
+  since: "2.0.0"
+- name: variant_explode
+  signatures:
+    - "variant_explode(expr)"
+  description: "It separates a variant object/array into multiple rows containing its fields/elements. Its result schema is struct<pos int, key string, value variant>. pos is the position of the field/element in its parent object/array, and value is the field/element value. key is the field name when exploding a variant object, or is NULL when exploding a variant array. It ignores any input that is not a variant array/object, including SQL NULL, variant null, and any other variant values."
+  examples: |
+    > SELECT * from variant_explode(parse_json('["hello", "world"]'));
+     0  NULL    "hello"
+     1  NULL    "world"
+    > SELECT * from variant_explode(input => parse_json('{"a": true, "b": 3.14}'));
+     0  a   true
+     1  b   3.14
+  since: "4.0.0"
+- name: variant_explode_outer
+  signatures:
+    - "variant_explode_outer(expr)"
+  description: "It separates a variant object/array into multiple rows containing its fields/elements. Its result schema is struct<pos int, key string, value variant>. pos is the position of the field/element in its parent object/array, and value is the field/element value. key is the field name when exploding a variant object, or is NULL when exploding a variant array. It ignores any input that is not a variant array/object, including SQL NULL, variant null, and any other variant values."
+  examples: |
+    > SELECT * from variant_explode_outer(parse_json('["hello", "world"]'));
+     0  NULL    "hello"
+     1  NULL    "world"
+    > SELECT * from variant_explode_outer(input => parse_json('{"a": true, "b": 3.14}'));
+     0  a   true
+     1  b   3.14
+  since: "4.0.0"

@@ -1,0 +1,17 @@
+- name: named_struct
+  class_name: "org.apache.spark.sql.catalyst.expressions.CreateNamedStruct"
+  signatures:
+    - "named_struct(name1, val1, name2, val2, ...)"
+  description: "Creates a struct with the given field names and values."
+  examples: |
+    > SELECT named_struct("a", 1, "b", 2, "c", 3);
+     {"a":1,"b":2,"c":3}
+  since: "1.5.0"
+- name: struct
+  signatures:
+    - "struct(col1, col2, col3, ...)"
+  description: "Creates a struct with the given field values."
+  examples: |
+    > SELECT struct(1, 2, 3);
+     {"col1":1,"col2":2,"col3":3}
+  since: "1.4.0"

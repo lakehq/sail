@@ -1,0 +1,27 @@
+- name: range
+  class_name: "org.apache.spark.sql.catalyst.plans.logical.Range"
+  signatures:
+    - "range(start[, end[, step[, numSlices]]]) / range(end)"
+  description: "Returns a table of values within a specified range."
+  examples: |
+    > SELECT * FROM range(1);
+      +---+
+      | id|
+      +---+
+      |  0|
+      +---+
+    > SELECT * FROM range(0, 2);
+      +---+
+      |id |
+      +---+
+      |0  |
+      |1  |
+      +---+
+    > SELECT * FROM range(0, 4, 2);
+      +---+
+      |id |
+      +---+
+      |0  |
+      |2  |
+      +---+
+  since: "2.0.0"

@@ -1,0 +1,89 @@
+- name: bigint
+  class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
+  signatures:
+    - "bigint(expr)"
+  description: "Casts the value expr to the target data type bigint."
+  since: "2.0.1"
+- name: binary
+  class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
+  signatures:
+    - "binary(expr)"
+  description: "Casts the value expr to the target data type binary."
+  since: "2.0.1"
+- name: boolean
+  class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
+  signatures:
+    - "boolean(expr)"
+  description: "Casts the value expr to the target data type boolean."
+  since: "2.0.1"
+- name: cast
+  class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
+  signatures:
+    - "cast(expr AS type)"
+  description: "Casts the value expr to the target data type type. expr :: type alternative casting syntax is also supported."
+  examples: |
+    > SELECT cast('10' as int);
+     10
+    > SELECT '10' :: int;
+     10
+  since: "1.0.0"
+- name: date
+  class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
+  signatures:
+    - "date(expr)"
+  description: "Casts the value expr to the target data type date."
+  since: "2.0.1"
+- name: decimal
+  class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
+  signatures:
+    - "decimal(expr)"
+  description: "Casts the value expr to the target data type decimal."
+  since: "2.0.1"
+- name: double
+  class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
+  signatures:
+    - "double(expr)"
+  description: "Casts the value expr to the target data type double."
+  since: "2.0.1"
+- name: float
+  class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
+  signatures:
+    - "float(expr)"
+  description: "Casts the value expr to the target data type float."
+  since: "2.0.1"
+- name: int
+  class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
+  signatures:
+    - "int(expr)"
+  description: "Casts the value expr to the target data type int."
+  since: "2.0.1"
+- name: smallint
+  class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
+  signatures:
+    - "smallint(expr)"
+  description: "Casts the value expr to the target data type smallint."
+  since: "2.0.1"
+- name: string
+  class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
+  signatures:
+    - "string(expr)"
+  description: "Casts the value expr to the target data type string."
+  since: "2.0.1"
+- name: time
+  class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
+  signatures:
+    - "time(expr)"
+  description: "Casts the value expr to the target data type time."
+  since: "2.0.1"
+- name: timestamp
+  class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
+  signatures:
+    - "timestamp(expr)"
+  description: "Casts the value expr to the target data type timestamp."
+  since: "2.0.1"
+- name: tinyint
+  class_name: "org.apache.spark.sql.catalyst.expressions.Cast"
+  signatures:
+    - "tinyint(expr)"
+  description: "Casts the value expr to the target data type tinyint."
+  since: "2.0.1"

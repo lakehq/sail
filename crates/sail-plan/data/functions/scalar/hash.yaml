@@ -1,0 +1,63 @@
+- name: crc32
+  class_name: "org.apache.spark.sql.catalyst.expressions.Crc32"
+  signatures:
+    - "crc32(expr)"
+  description: "Returns a cyclic redundancy check value of the expr as a bigint."
+  examples: |
+    > SELECT crc32('Spark');
+     1557323817
+  since: "1.5.0"
+- name: hash
+  class_name: "org.apache.spark.sql.catalyst.expressions.Murmur3Hash"
+  signatures:
+    - "hash(expr1, expr2, ...)"
+  description: "Returns a hash value of the arguments."
+  examples: |
+    > SELECT hash('Spark', array(123), 2);
+     -1321691492
+  since: "2.0.0"
+- name: md5
+  class_name: "org.apache.spark.sql.catalyst.expressions.Md5"
+  signatures:
+    - "md5(expr)"
+  description: "Returns an MD5 128-bit checksum as a hex string of expr."
+  examples: |
+    > SELECT md5('Spark');
+     8cde774d6f7333752ed72cacddb05126
+  since: "1.5.0"
+- name: sha
+  class_name: "org.apache.spark.sql.catalyst.expressions.Sha1"
+  signatures:
+    - "sha(expr)"
+  description: "Returns a sha1 hash value as a hex string of the expr."
+  examples: |
+    > SELECT sha('Spark');
+     85f5955f4b27a9a4c2aab6ffe5d7189fc298b92c
+  since: "1.5.0"
+- name: sha1
+  class_name: "org.apache.spark.sql.catalyst.expressions.Sha1"
+  signatures:
+    - "sha1(expr)"
+  description: "Returns a sha1 hash value as a hex string of the expr."
+  examples: |
+    > SELECT sha1('Spark');
+     85f5955f4b27a9a4c2aab6ffe5d7189fc298b92c
+  since: "1.5.0"
+- name: sha2
+  class_name: "org.apache.spark.sql.catalyst.expressions.Sha2"
+  signatures:
+    - "sha2(expr, bitLength)"
+  description: "Returns a checksum of SHA-2 family as a hex string of expr. SHA-224, SHA-256, SHA-384, and SHA-512 are supported. Bit length of 0 is equivalent to 256."
+  examples: |
+    > SELECT sha2('Spark', 256);
+     529bc3b07127ecb7e53a4dcf1991d9152c24537d919178022b2c42657f79a26b
+  since: "1.5.0"
+- name: xxhash64
+  class_name: "org.apache.spark.sql.catalyst.expressions.XxHash64"
+  signatures:
+    - "xxhash64(expr1, expr2, ...)"
+  description: "Returns a 64-bit hash value of the arguments. Hash seed is 42."
+  examples: |
+    > SELECT xxhash64('Spark', array(123), 2);
+     5602566077635097486
+  since: "3.0.0"

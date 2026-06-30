@@ -1,0 +1,112 @@
+- name: case
+  signatures:
+    - "CASE expr1 WHEN expr2 THEN expr3 [WHEN expr4 THEN expr5]* [ELSE expr6] END"
+  description: "When expr1 = expr2, returns expr3; when expr1 = expr4, return expr5; else return expr6."
+  examples: |
+    > SELECT CASE col1 WHEN 1 THEN 'one' WHEN 2 THEN 'two' ELSE '?' END FROM VALUES 1, 2, 3;
+     one
+     two
+     ?
+    > SELECT CASE col1 WHEN 1 THEN 'one' WHEN 2 THEN 'two' END FROM VALUES 1, 2, 3;
+     one
+     two
+     NULL
+  since: "1.0.1"
+- name: coalesce
+  class_name: "org.apache.spark.sql.catalyst.expressions.Coalesce"
+  signatures:
+    - "coalesce(expr1, expr2, ...)"
+  description: "Returns the first non-null argument if exists. Otherwise, null."
+  examples: |
+    > SELECT coalesce(NULL, 1, NULL);
+     1
+  since: "1.0.0"
+- name: if
+  class_name: "org.apache.spark.sql.catalyst.expressions.If"
+  signatures:
+    - "if(expr1, expr2, expr3)"
+  description: "If expr1 evaluates to true, then returns expr2; otherwise returns expr3."
+  examples: |
+    > SELECT if(1 < 2, 'a', 'b');
+     a
+  since: "1.0.0"
+- name: ifnull
+  class_name: "org.apache.spark.sql.catalyst.expressions.Nvl"
+  signatures:
+    - "ifnull(expr1, expr2)"
+  description: "Returns expr2 if expr1 is null, or expr1 otherwise."
+  examples: |
+    > SELECT ifnull(NULL, array('2'));
+     ["2"]
+  since: "2.0.0"
+- name: nanvl
+  class_name: "org.apache.spark.sql.catalyst.expressions.NaNvl"
+  signatures:
+    - "nanvl(expr1, expr2)"
+  description: "Returns expr1 if it's not NaN, or expr2 otherwise."
+  examples: |
+    > SELECT nanvl(cast('NaN' as double), 123);
+     123.0
+  since: "1.5.0"
+- name: nullif
+  class_name: "org.apache.spark.sql.catalyst.expressions.NullIf"
+  signatures:
+    - "nullif(expr1, expr2)"
+  description: "Returns null if expr1 equals to expr2, or expr1 otherwise."
+  examples: |
+    > SELECT nullif(2, 2);
+     NULL
+  since: "2.0.0"
+- name: nullifzero
+  class_name: "org.apache.spark.sql.catalyst.expressions.NullIfZero"
+  signatures:
+    - "nullifzero(expr)"
+  description: "Returns null if expr is equal to zero, or expr otherwise."
+  examples: |
+    > SELECT nullifzero(0);
+     NULL
+    > SELECT nullifzero(2);
+     2
+  since: "4.0.0"
+- name: nvl
+  class_name: "org.apache.spark.sql.catalyst.expressions.Nvl"
+  signatures:
+    - "nvl(expr1, expr2)"
+  description: "Returns expr2 if expr1 is null, or expr1 otherwise."
+  examples: |
+    > SELECT nvl(NULL, array('2'));
+     ["2"]
+  since: "2.0.0"
+- name: nvl2
+  class_name: "org.apache.spark.sql.catalyst.expressions.Nvl2"
+  signatures:
+    - "nvl2(expr1, expr2, expr3)"
+  description: "Returns expr2 if expr1 is not null, or expr3 otherwise."
+  examples: |
+    > SELECT nvl2(NULL, 2, 1);
+     1
+  since: "2.0.0"
+- name: when
+  class_name: "org.apache.spark.sql.catalyst.expressions.CaseWhen"
+  signatures:
+    - "CASE WHEN expr1 THEN expr2 [WHEN expr3 THEN expr4]* [ELSE expr5] END"
+  description: "When expr1 = true, returns expr2; else when expr3 = true, returns expr4; else returns expr5."
+  examples: |
+    > SELECT CASE WHEN 1 > 0 THEN 1 WHEN 2 > 0 THEN 2.0 ELSE 1.2 END;
+     1.0
+    > SELECT CASE WHEN 1 < 0 THEN 1 WHEN 2 > 0 THEN 2.0 ELSE 1.2 END;
+     2.0
+    > SELECT CASE WHEN 1 < 0 THEN 1 WHEN 2 < 0 THEN 2.0 END;
+     NULL
+  since: "1.0.1"
+- name: zeroifnull
+  class_name: "org.apache.spark.sql.catalyst.expressions.ZeroIfNull"
+  signatures:
+    - "zeroifnull(expr)"
+  description: "Returns zero if expr is equal to null, or expr otherwise."
+  examples: |
+    > SELECT zeroifnull(NULL);
+     0
+    > SELECT zeroifnull(2);
+     2
+  since: "4.0.0"

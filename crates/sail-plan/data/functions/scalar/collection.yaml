@@ -1,0 +1,230 @@
+- name: aggregate
+  class_name: "org.apache.spark.sql.catalyst.expressions.ArrayAggregate"
+  signatures:
+    - "aggregate(expr, start, merge, finish)"
+  description: "Applies a binary operator to an initial state and all elements in the array, and reduces this to a single state. The final state is converted into the final result by applying a finish function."
+  examples: |
+    > SELECT aggregate(array(1, 2, 3), 0, (acc, x) -> acc + x);
+     6
+    > SELECT aggregate(array(1, 2, 3), 0, (acc, x) -> acc + x, acc -> acc * 10);
+     60
+  since: "2.4.0"
+- name: array_sort
+  class_name: "org.apache.spark.sql.catalyst.expressions.ArraySort"
+  signatures:
+    - "array_sort(expr, func)"
+  description: "Sorts the input array. If func is omitted, sort in ascending order. The elements of the input array must be orderable. NaN is greater than any non-NaN elements for double/float type. Null elements will be placed at the end of the returned array. Since 3.0.0 this function also sorts and returns the array based on the given comparator function. The comparator will take two arguments representing two elements of the array. It returns a negative integer, 0, or a positive integer as the first element is less than, equal to, or greater than the second element. If the comparator function returns null, the function will fail and raise an error."
+  examples: |
+    > SELECT array_sort(array(5, 6, 1), (left, right) -> case when left < right then -1 when left > right then 1 else 0 end);
+     [1,5,6]
+    > SELECT array_sort(array('bc', 'ab', 'dc'), (left, right) -> case when left is null and right is null then 0 when left is null then -1 when right is null then 1 when left < right then 1 when left > right then -1 else 0 end);
+     ["dc","bc","ab"]
+    > SELECT array_sort(array('b', 'd', null, 'c', 'a'));
+     ["a","b","c","d",null]
+  since: "2.4.0"
+- name: cardinality
+  class_name: "org.apache.spark.sql.catalyst.expressions.Size"
+  signatures:
+    - "cardinality(expr)"
+  description: "Returns the size of an array or a map. This function returns -1 for null input only if spark.sql.ansi.enabled is false and spark.sql.legacy.sizeOfNull is true. Otherwise, it returns null for null input. With the default settings, the function returns null for null input."
+  examples: |
+    > SELECT cardinality(array('b', 'd', 'c', 'a'));
+     4
+    > SELECT cardinality(map('a', 1, 'b', 2));
+     2
+  since: "2.4.0"
+- name: concat
+  class_name: "org.apache.spark.sql.catalyst.expressions.Concat"
+  signatures:
+    - "concat(col1, col2, ..., colN)"
+  description: "Returns the concatenation of col1, col2, ..., colN."
+  examples: |
+    > SELECT concat('Spark', 'SQL');
+     SparkSQL
+    > SELECT concat(array(1, 2, 3), array(4, 5), array(6));
+     [1,2,3,4,5,6]
+  note: "Concat logic for arrays is available since 2.4.0."
+  since: "1.5.0"
+- name: deep_size
+  signatures:
+    - "deep_size(expr)"
+  description: "Returns the number of elements in an array or map."
+- name: element_at
+  class_name: "org.apache.spark.sql.catalyst.expressions.ElementAt"
+  signatures:
+    - "element_at(array, index)"
+  description: "Returns element of array at given (1-based) index. If Index is 0, Spark will throw an error. If index < 0, accesses elements from the last to the first. The function returns NULL if the index exceeds the length of the array and spark.sql.ansi.enabled is set to false. If spark.sql.ansi.enabled is set to true, it throws ArrayIndexOutOfBoundsException for invalid indices."
+  examples: |
+    > SELECT element_at(array(1, 2, 3), 2);
+     2
+    > SELECT element_at(map(1, 'a', 2, 'b'), 2);
+     b
+  since: "2.4.0"
+- name: exists
+  class_name: "org.apache.spark.sql.catalyst.expressions.ArrayExists"
+  signatures:
+    - "exists(expr, pred)"
+  description: "Tests whether a predicate holds for one or more elements in the array."
+  examples: |
+    > SELECT exists(array(1, 2, 3), x -> x % 2 == 0);
+     true
+    > SELECT exists(array(1, 2, 3), x -> x % 2 == 10);
+     false
+    > SELECT exists(array(1, null, 3), x -> x % 2 == 0);
+     NULL
+    > SELECT exists(array(0, null, 2, 3, null), x -> x IS NULL);
+     true
+    > SELECT exists(array(1, 2, 3), x -> x IS NULL);
+     false
+  since: "2.4.0"
+- name: filter
+  class_name: "org.apache.spark.sql.catalyst.expressions.ArrayFilter"
+  signatures:
+    - "filter(expr, func)"
+  description: "Filters the input array using the given predicate."
+  examples: |
+    > SELECT filter(array(1, 2, 3), x -> x % 2 == 1);
+     [1,3]
+    > SELECT filter(array(0, 2, 3), (x, i) -> x > i);
+     [2,3]
+    > SELECT filter(array(0, null, 2, 3, null), x -> x IS NOT NULL);
+     [0,2,3]
+  note: "The inner function may use the index argument since 3.0.0."
+  since: "2.4.0"
+- name: forall
+  class_name: "org.apache.spark.sql.catalyst.expressions.ArrayForAll"
+  signatures:
+    - "forall(expr, pred)"
+  description: "Tests whether a predicate holds for all elements in the array."
+  examples: |
+    > SELECT forall(array(1, 2, 3), x -> x % 2 == 0);
+     false
+    > SELECT forall(array(2, 4, 8), x -> x % 2 == 0);
+     true
+    > SELECT forall(array(1, null, 3), x -> x % 2 == 0);
+     false
+    > SELECT forall(array(2, null, 8), x -> x % 2 == 0);
+     NULL
+  since: "3.0.0"
+- name: map_filter
+  class_name: "org.apache.spark.sql.catalyst.expressions.MapFilter"
+  signatures:
+    - "map_filter(expr, func)"
+  description: "Filters entries in a map using the function."
+  examples: |
+    > SELECT map_filter(map(1, 0, 2, 2, 3, -1), (k, v) -> k > v);
+     {1:0,3:-1}
+  since: "3.0.0"
+- name: map_zip_with
+  class_name: "org.apache.spark.sql.catalyst.expressions.MapZipWith"
+  signatures:
+    - "map_zip_with(map1, map2, function)"
+  description: "Merges two given maps into a single map by applying function to the pair of values with the same key. For keys only presented in one map, NULL will be passed as the value for the missing key. If an input map contains duplicated keys, only the first entry of the duplicated key is passed into the lambda function."
+  examples: |
+    > SELECT map_zip_with(map(1, 'a', 2, 'b'), map(1, 'x', 2, 'y'), (k, v1, v2) -> concat(v1, v2));
+     {1:"ax",2:"by"}
+    > SELECT map_zip_with(map('a', 1, 'b', 2), map('b', 3, 'c', 4), (k, v1, v2) -> coalesce(v1, 0) + coalesce(v2, 0));
+     {"a":1,"b":5,"c":4}
+  since: "3.0.0"
+- name: reduce
+  class_name: "org.apache.spark.sql.catalyst.expressions.ArrayAggregate"
+  signatures:
+    - "reduce(expr, start, merge, finish)"
+  description: "Applies a binary operator to an initial state and all elements in the array, and reduces this to a single state. The final state is converted into the final result by applying a finish function."
+  examples: |
+    > SELECT reduce(array(1, 2, 3), 0, (acc, x) -> acc + x);
+     6
+    > SELECT reduce(array(1, 2, 3), 0, (acc, x) -> acc + x, acc -> acc * 10);
+     60
+  since: "3.4.0"
+- name: reverse
+  class_name: "org.apache.spark.sql.catalyst.expressions.Reverse"
+  signatures:
+    - "reverse(array)"
+  description: "Returns a reversed string or an array with reverse order of elements."
+  examples: |
+    > SELECT reverse('Spark SQL');
+     LQS krapS
+    > SELECT reverse(array(2, 1, 4, 3));
+     [3,4,1,2]
+  note: "Reverse logic for arrays is available since 2.4.0."
+  since: "1.5.0"
+- name: size
+  class_name: "org.apache.spark.sql.catalyst.expressions.Size"
+  signatures:
+    - "size(expr)"
+  description: "Returns the size of an array or a map. This function returns -1 for null input only if spark.sql.ansi.enabled is false and spark.sql.legacy.sizeOfNull is true. Otherwise, it returns null for null input. With the default settings, the function returns null for null input."
+  examples: |
+    > SELECT size(array('b', 'd', 'c', 'a'));
+     4
+    > SELECT size(map('a', 1, 'b', 2));
+     2
+  since: "1.5.0"
+- name: transform
+  class_name: "org.apache.spark.sql.catalyst.expressions.ArrayTransform"
+  signatures:
+    - "transform(expr, func)"
+  description: "Transforms elements in an array using the function."
+  examples: |
+    > SELECT transform(array(1, 2, 3), x -> x + 1);
+     [2,3,4]
+    > SELECT transform(array(1, 2, 3), (x, i) -> x + i);
+     [1,3,5]
+  since: "2.4.0"
+- name: transform_keys
+  class_name: "org.apache.spark.sql.catalyst.expressions.TransformKeys"
+  signatures:
+    - "transform_keys(expr, func)"
+  description: "Transforms elements in a map using the function."
+  examples: |
+    > SELECT transform_keys(map_from_arrays(array(1, 2, 3), array(1, 2, 3)), (k, v) -> k + 1);
+     {2:1,3:2,4:3}
+    > SELECT transform_keys(map_from_arrays(array(1, 2, 3), array(1, 2, 3)), (k, v) -> k + v);
+     {2:1,4:2,6:3}
+  since: "3.0.0"
+- name: transform_values
+  class_name: "org.apache.spark.sql.catalyst.expressions.TransformValues"
+  signatures:
+    - "transform_values(expr, func)"
+  description: "Transforms values in the map using the function."
+  examples: |
+    > SELECT transform_values(map_from_arrays(array(1, 2, 3), array(1, 2, 3)), (k, v) -> v + 1);
+     {1:2,2:3,3:4}
+    > SELECT transform_values(map_from_arrays(array(1, 2, 3), array(1, 2, 3)), (k, v) -> k + v);
+     {1:2,2:4,3:6}
+  since: "3.0.0"
+- name: try_element_at
+  class_name: "org.apache.spark.sql.catalyst.expressions.TryElementAt"
+  signatures:
+    - "try_element_at(array, index)"
+  description: "Returns element of array at given (1-based) index. If Index is 0, Spark will throw an error. If index < 0, accesses elements from the last to the first. The function always returns NULL if the index exceeds the length of the array."
+  examples: |
+    > SELECT try_element_at(array(1, 2, 3), 2);
+     2
+    > SELECT try_element_at(map(1, 'a', 2, 'b'), 2);
+     b
+  since: "3.3.0"
+- name: zip_with
+  class_name: "org.apache.spark.sql.catalyst.expressions.ZipWith"
+  signatures:
+    - "zip_with(left, right, func)"
+  description: "Merges the two given arrays, element-wise, into a single array using function. If one array is shorter, nulls are appended at the end to match the length of the longer array, before applying function."
+  examples: |
+    > SELECT zip_with(array(1, 2, 3), array('a', 'b', 'c'), (x, y) -> (y, x));
+     [{"y":"a","x":1},{"y":"b","x":2},{"y":"c","x":3}]
+    > SELECT zip_with(array(1, 2), array(3, 4), (x, y) -> x + y);
+     [4,6]
+    > SELECT zip_with(array('a', 'b', 'c'), array('d', 'e', 'f'), (x, y) -> concat(x, y));
+     ["ad","be","cf"]
+  since: "2.4.0"
+- name: "||"
+  signatures:
+    - "expr1 || expr2"
+  description: "Returns the concatenation of expr1 and expr2."
+  examples: |
+    > SELECT 'Spark' || 'SQL';
+     SparkSQL
+    > SELECT array(1, 2, 3) || array(4, 5) || array(6);
+     [1,2,3,4,5,6]
+  note: "|| for arrays is available since 2.4.0."
+  since: "2.3.0"

@@ -1,0 +1,55 @@
+- name: parse_url
+  class_name: "org.apache.spark.sql.catalyst.expressions.ParseUrl"
+  signatures:
+    - "parse_url(url, partToExtract[, key])"
+  description: "Extracts a part from a URL."
+  examples: |
+    > SELECT parse_url('http://spark.apache.org/path?query=1', 'HOST');
+     spark.apache.org
+    > SELECT parse_url('http://spark.apache.org/path?query=1', 'QUERY');
+     query=1
+    > SELECT parse_url('http://spark.apache.org/path?query=1', 'QUERY', 'query');
+     1
+  since: "2.0.0"
+- name: try_parse_url
+  class_name: "org.apache.spark.sql.catalyst.expressions.TryParseUrl"
+  signatures:
+    - "try_parse_url(url, partToExtract[, key])"
+  description: "This is a special version of parse_url that performs the same operation, but returns a NULL value instead of raising an error if the parsing cannot be performed."
+  examples: |
+    > SELECT try_parse_url('http://spark.apache.org/path?query=1', 'HOST');
+     spark.apache.org
+    > SELECT try_parse_url('http://spark.apache.org/path?query=1', 'QUERY');
+     query=1
+    > SELECT try_parse_url('inva lid://spark.apache.org/path?query=1', 'QUERY');
+     NULL
+    > SELECT try_parse_url('http://spark.apache.org/path?query=1', 'QUERY', 'query');
+     1
+  since: "4.0.0"
+- name: try_url_decode
+  class_name: "org.apache.spark.sql.catalyst.expressions.TryUrlDecode"
+  signatures:
+    - "try_url_decode(str)"
+  description: "This is a special version of url_decode that performs the same operation, but returns a NULL value instead of raising an error if the decoding cannot be performed."
+  examples: |
+    > SELECT try_url_decode('https%3A%2F%2Fspark.apache.org');
+     https://spark.apache.org
+  since: "4.0.0"
+- name: url_decode
+  class_name: "org.apache.spark.sql.catalyst.expressions.UrlDecode"
+  signatures:
+    - "url_decode(str)"
+  description: "Decodes a str in 'application/x-www-form-urlencoded' format using a specific encoding scheme."
+  examples: |
+    > SELECT url_decode('https%3A%2F%2Fspark.apache.org');
+     https://spark.apache.org
+  since: "3.4.0"
+- name: url_encode
+  class_name: "org.apache.spark.sql.catalyst.expressions.UrlEncode"
+  signatures:
+    - "url_encode(str)"
+  description: "Translates a string into 'application/x-www-form-urlencoded' format using a specific encoding scheme."
+  examples: |
+    > SELECT url_encode('https://spark.apache.org');
+     https%3A%2F%2Fspark.apache.org
+  since: "3.4.0"
