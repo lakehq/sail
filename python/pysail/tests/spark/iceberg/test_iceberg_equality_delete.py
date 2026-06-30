@@ -193,7 +193,8 @@ def test_iceberg_sql_delete_writes_equality_delete_file_and_filters_rows(spark, 
             USING iceberg
             LOCATION '{_uri_sql(table_path)}'
             TBLPROPERTIES (
-              'format-version' = '2'
+              'format-version' = '2',
+              'write.data.path' = 'custom_data'
             )
             """
         )
@@ -234,6 +235,9 @@ def test_iceberg_sql_delete_writes_equality_delete_file_and_filters_rows(spark, 
         assert delete_file.content == DataFileContent.EQUALITY_DELETES
         assert delete_file.equality_ids == [1, 2, 3]
         assert getattr(delete_file, "referenced_data_file", None) is None
+        assert delete_file.file_path.startswith(
+            f"{(table_path / 'custom_data').as_uri()}/equality-delete-"
+        )
 
         delete_rows = pq.read_table(_local_table_path(delete_file.file_path)).to_pylist()
         assert delete_rows == [{"id": 2, "name": "drop-2", "flag": "drop"}]

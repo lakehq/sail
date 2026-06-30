@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use bytes::Bytes;
 use datafusion::arrow::array::ArrayRef;
 use datafusion::arrow::compute::concat_batches;
 use datafusion::arrow::datatypes::{FieldRef, Schema, SchemaRef};
@@ -17,28 +16,19 @@ use datafusion::physical_plan::{
 use datafusion_common::{internal_err, DataFusionError, Result};
 use futures::stream::once;
 use futures::StreamExt;
-use object_store::path::Path as ObjectPath;
-use object_store::ObjectStoreExt;
 use parquet::file::properties::WriterProperties;
 use url::Url;
 
 use crate::datasource::type_converter::iceberg_field_to_arrow;
-use crate::io::StoreContext;
 use crate::operations::write::arrow_parquet::ArrowParquetWriter;
-use crate::operations::write::base_writer::DataFileWriter;
 use crate::physical_plan::action_schema::{
     encode_commit_meta, encode_delete_data_files, iceberg_action_schema, CommitMeta,
 };
+use crate::physical_plan::{delete_writer_common, write_location};
 use crate::spec::types::{PrimitiveType, Type};
 use crate::spec::{
     DataContentType, DataFile, FormatVersion, Operation, TableMetadata, TableRequirement,
     MAIN_BRANCH,
-};
-use crate::table::metadata_loader::{
-    load_metadata_file_bytes, metadata_location_to_object_path_string,
-};
-use crate::table_format::{
-    catalog_managed_iceberg_from_properties, metadata_location_from_properties,
 };
 
 #[derive(Debug, Clone)]
@@ -46,6 +36,8 @@ pub struct IcebergEqualityDeleteWriterExec {
     input: Arc<dyn ExecutionPlan>,
     table_url: Url,
     table_properties: Vec<(String, String)>,
+    write_data_path: Option<String>,
+    write_folder_storage_path: Option<String>,
     lakehouse_table: Option<sail_common_datafusion::catalog::LakehouseExecutionContext>,
     cache: Arc<PlanProperties>,
 }
@@ -55,6 +47,8 @@ impl IcebergEqualityDeleteWriterExec {
         input: Arc<dyn ExecutionPlan>,
         table_url: Url,
         table_properties: Vec<(String, String)>,
+        write_data_path: Option<String>,
+        write_folder_storage_path: Option<String>,
         lakehouse_table: Option<sail_common_datafusion::catalog::LakehouseExecutionContext>,
     ) -> Self {
         let schema = iceberg_action_schema().unwrap_or_else(|e| {
@@ -71,6 +65,8 @@ impl IcebergEqualityDeleteWriterExec {
             input,
             table_url,
             table_properties,
+            write_data_path,
+            write_folder_storage_path,
             lakehouse_table,
             cache,
         }
@@ -106,6 +102,8 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
             Arc::clone(&children[0]),
             self.table_url.clone(),
             self.table_properties.clone(),
+            self.write_data_path.clone(),
+            self.write_folder_storage_path.clone(),
             self.lakehouse_table.clone(),
         )))
     }
@@ -131,19 +129,20 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
         let input_schema = self.input.schema();
         let table_url = self.table_url.clone();
         let table_properties = self.table_properties.clone();
+        let write_data_path = self.write_data_path.clone();
+        let write_folder_storage_path = self.write_folder_storage_path.clone();
         let lakehouse_table = self.lakehouse_table.clone();
         let output_schema = self.schema();
         let schema_for_adapter = output_schema.clone();
 
         let future = async move {
-            let object_store = context
-                .runtime_env()
-                .object_store_registry
-                .get_store(&table_url)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let store_ctx = StoreContext::new(object_store.clone(), &table_url)?;
-            let table_meta =
-                load_current_table_metadata(&store_ctx, &table_url, &table_properties).await?;
+            let store_ctx = delete_writer_common::store_context(&context, &table_url)?;
+            let table_meta = delete_writer_common::load_current_table_metadata(
+                &store_ctx,
+                &table_url,
+                &table_properties,
+            )
+            .await?;
             let current_schema = table_meta.current_schema().ok_or_else(|| {
                 DataFusionError::Plan(
                     "Iceberg table metadata is missing current schema".to_string(),
@@ -153,6 +152,12 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
                 .default_partition_spec()
                 .cloned()
                 .unwrap_or_else(crate::spec::PartitionSpec::unpartitioned_spec);
+            let data_dir = write_location::resolve_data_dir_from_options_and_properties(
+                write_data_path.as_deref(),
+                write_folder_storage_path.as_deref(),
+                &table_meta.properties,
+                &table_url,
+            );
 
             // TODO: Prefer identifier/configured equality fields over full-row keys.
             let delete_fields = equality_delete_fields(current_schema, &input_schema)?;
@@ -224,6 +229,7 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
             let delete_file = write_equality_delete_file(
                 &store_ctx,
                 &table_url,
+                &data_dir,
                 writer,
                 default_spec.spec_id(),
                 total_rows,
@@ -360,51 +366,25 @@ fn project_delete_batch(
         .map_err(|e| DataFusionError::ArrowError(Box::new(e), None))
 }
 
-async fn load_current_table_metadata(
-    store_ctx: &StoreContext,
-    table_url: &Url,
-    table_properties: &[(String, String)],
-) -> Result<TableMetadata> {
-    let metadata_file = if catalog_managed_iceberg_from_properties(table_properties) {
-        match metadata_location_from_properties(table_properties) {
-            Some(location) => metadata_location_to_object_path_string(&location)?,
-            None => crate::table::find_latest_metadata_file(&store_ctx.base, table_url).await?,
-        }
-    } else {
-        crate::table::find_latest_metadata_file(&store_ctx.base, table_url).await?
-    };
-    let bytes = load_metadata_file_bytes(&store_ctx.base, &metadata_file).await?;
-    TableMetadata::from_json(&bytes).map_err(|e| DataFusionError::External(Box::new(e)))
-}
-
 async fn write_equality_delete_file(
-    store_ctx: &StoreContext,
+    store_ctx: &crate::io::StoreContext,
     table_url: &Url,
+    data_dir: &str,
     writer: ArrowParquetWriter,
     partition_spec_id: i32,
     total_rows: u64,
     equality_ids: Vec<i32>,
 ) -> Result<DataFile> {
-    let (bytes, meta) = writer.close().await.map_err(DataFusionError::Execution)?;
-
-    // TODO: Respect write_data_path/write_folder_storage_path for delete files.
-    let rel = format!("data/equality-delete-{}.parquet", uuid::Uuid::new_v4());
-    let path = ObjectPath::from(rel.as_str());
-    store_ctx
-        .prefixed
-        .put(&path, object_store::PutPayload::from(Bytes::from(bytes)))
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let delete_file_path = crate::utils::join_table_uri(
-        table_url.as_str(),
-        &rel,
-        &crate::utils::WritePathMode::Absolute,
-    );
-
-    let mut delete_file = DataFileWriter::new(partition_spec_id, delete_file_path, Vec::new())
-        .finish(meta)
-        .map_err(DataFusionError::Execution)?
-        .data_file;
+    let mut delete_file = delete_writer_common::write_delete_parquet_file(
+        store_ctx,
+        table_url,
+        data_dir,
+        "equality-delete",
+        writer,
+        partition_spec_id,
+        Vec::new(),
+    )
+    .await?;
     delete_file.content = DataContentType::EqualityDeletes;
     delete_file.record_count = total_rows;
     delete_file.referenced_data_file = None;

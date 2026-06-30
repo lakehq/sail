@@ -2,7 +2,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use bytes::Bytes;
 use datafusion::arrow::array::{Array, Int64Array, RecordBatch, StringArray};
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::arrow::record_batch::RecordBatch as ArrowRecordBatch;
@@ -17,8 +16,6 @@ use datafusion::physical_plan::{
 use datafusion_common::{internal_err, DataFusionError, Result};
 use futures::stream::once;
 use futures::StreamExt;
-use object_store::path::Path as ObjectPath;
-use object_store::ObjectStoreExt;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::properties::WriterProperties;
 use url::Url;
@@ -27,17 +24,11 @@ use crate::io::{
     load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list, StoreContext,
 };
 use crate::operations::write::arrow_parquet::ArrowParquetWriter;
-use crate::operations::write::base_writer::DataFileWriter;
 use crate::physical_plan::action_schema::{encode_delete_data_files, iceberg_action_schema};
+use crate::physical_plan::{delete_writer_common, write_location};
 use crate::spec::{
     DataContentType, DataFile, FormatVersion, ManifestContentType, ManifestList, ManifestStatus,
     TableMetadata,
-};
-use crate::table::metadata_loader::{
-    load_metadata_file_bytes, metadata_location_to_object_path_string,
-};
-use crate::table_format::{
-    catalog_managed_iceberg_from_properties, metadata_location_from_properties,
 };
 
 const POSITION_DELETE_FILE_PATH_COL: &str = "file_path";
@@ -50,6 +41,8 @@ pub struct IcebergPositionDeleteWriterExec {
     input: Arc<dyn ExecutionPlan>,
     table_url: Url,
     table_properties: Vec<(String, String)>,
+    write_data_path: Option<String>,
+    write_folder_storage_path: Option<String>,
     file_column_name: String,
     row_index_column_name: String,
     cache: Arc<PlanProperties>,
@@ -60,6 +53,8 @@ impl IcebergPositionDeleteWriterExec {
         input: Arc<dyn ExecutionPlan>,
         table_url: Url,
         table_properties: Vec<(String, String)>,
+        write_data_path: Option<String>,
+        write_folder_storage_path: Option<String>,
         file_column_name: impl Into<String>,
         row_index_column_name: impl Into<String>,
     ) -> Self {
@@ -77,6 +72,8 @@ impl IcebergPositionDeleteWriterExec {
             input,
             table_url,
             table_properties,
+            write_data_path,
+            write_folder_storage_path,
             file_column_name: file_column_name.into(),
             row_index_column_name: row_index_column_name.into(),
             cache,
@@ -113,6 +110,8 @@ impl ExecutionPlan for IcebergPositionDeleteWriterExec {
             Arc::clone(&children[0]),
             self.table_url.clone(),
             self.table_properties.clone(),
+            self.write_data_path.clone(),
+            self.write_folder_storage_path.clone(),
             self.file_column_name.clone(),
             self.row_index_column_name.clone(),
         )))
@@ -138,18 +137,15 @@ impl ExecutionPlan for IcebergPositionDeleteWriterExec {
         let input = self.input.execute(0, Arc::clone(&context))?;
         let table_url = self.table_url.clone();
         let table_properties = self.table_properties.clone();
+        let write_data_path = self.write_data_path.clone();
+        let write_folder_storage_path = self.write_folder_storage_path.clone();
         let file_column_name = self.file_column_name.clone();
         let row_index_column_name = self.row_index_column_name.clone();
         let output_schema = self.schema();
         let schema_for_adapter = output_schema.clone();
 
         let future = async move {
-            let object_store = context
-                .runtime_env()
-                .object_store_registry
-                .get_store(&table_url)
-                .map_err(|e| DataFusionError::External(Box::new(e)))?;
-            let store_ctx = StoreContext::new(object_store.clone(), &table_url)?;
+            let store_ctx = delete_writer_common::store_context(&context, &table_url)?;
 
             let mut positions_by_file: BTreeMap<String, BTreeSet<i64>> = BTreeMap::new();
             let mut stream = input;
@@ -167,13 +163,23 @@ impl ExecutionPlan for IcebergPositionDeleteWriterExec {
                 return encode_delete_data_files(vec![]);
             }
 
-            let table_meta =
-                load_current_table_metadata(&store_ctx, &table_url, &table_properties).await?;
+            let table_meta = delete_writer_common::load_current_table_metadata(
+                &store_ctx,
+                &table_url,
+                &table_properties,
+            )
+            .await?;
             if table_meta.format_version >= FormatVersion::V3 {
                 return Err(DataFusionError::NotImplemented(
                     "Iceberg v3 MERGE MOR position delete writes are not supported; v3 requires deletion vectors".to_string(),
                 ));
             }
+            let data_dir = write_location::resolve_data_dir_from_options_and_properties(
+                write_data_path.as_deref(),
+                write_folder_storage_path.as_deref(),
+                &table_meta.properties,
+                &table_url,
+            );
             let data_files = load_current_data_files(&store_ctx, &table_meta).await?;
             let data_file_by_path = data_files
                 .into_iter()
@@ -187,9 +193,14 @@ impl ExecutionPlan for IcebergPositionDeleteWriterExec {
                         "MERGE attempted to delete rows from unknown Iceberg data file: {data_file_path}"
                     ))
                 })?;
-                let delete_file =
-                    write_position_delete_file(&store_ctx, &table_url, target_file, &positions)
-                        .await?;
+                let delete_file = write_position_delete_file(
+                    &store_ctx,
+                    &table_url,
+                    &data_dir,
+                    target_file,
+                    &positions,
+                )
+                .await?;
                 delete_files.push(delete_file);
             }
 
@@ -256,23 +267,6 @@ fn collect_positions(
     Ok(())
 }
 
-async fn load_current_table_metadata(
-    store_ctx: &StoreContext,
-    table_url: &Url,
-    table_properties: &[(String, String)],
-) -> Result<TableMetadata> {
-    let metadata_file = if catalog_managed_iceberg_from_properties(table_properties) {
-        match metadata_location_from_properties(table_properties) {
-            Some(location) => metadata_location_to_object_path_string(&location)?,
-            None => crate::table::find_latest_metadata_file(&store_ctx.base, table_url).await?,
-        }
-    } else {
-        crate::table::find_latest_metadata_file(&store_ctx.base, table_url).await?
-    };
-    let bytes = load_metadata_file_bytes(&store_ctx.base, &metadata_file).await?;
-    TableMetadata::from_json(&bytes).map_err(|e| DataFusionError::External(Box::new(e)))
-}
-
 async fn load_current_data_files(
     store_ctx: &StoreContext,
     table_meta: &TableMetadata,
@@ -314,6 +308,7 @@ async fn data_files_from_manifest_list(
 async fn write_position_delete_file(
     store_ctx: &StoreContext,
     table_url: &Url,
+    data_dir: &str,
     target_file: &DataFile,
     positions: &BTreeSet<i64>,
 ) -> Result<DataFile> {
@@ -336,29 +331,16 @@ async fn write_position_delete_file(
         .write_batch(&batch)
         .await
         .map_err(DataFusionError::Execution)?;
-    let (bytes, meta) = writer.close().await.map_err(DataFusionError::Execution)?;
-
-    let rel = format!("data/delete-{}.parquet", uuid::Uuid::new_v4());
-    let path = ObjectPath::from(rel.as_str());
-    store_ctx
-        .prefixed
-        .put(&path, object_store::PutPayload::from(Bytes::from(bytes)))
-        .await
-        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let delete_file_path = crate::utils::join_table_uri(
-        table_url.as_str(),
-        &rel,
-        &crate::utils::WritePathMode::Absolute,
-    );
-
-    let mut delete_file = DataFileWriter::new(
+    let mut delete_file = delete_writer_common::write_delete_parquet_file(
+        store_ctx,
+        table_url,
+        data_dir,
+        "delete",
+        writer,
         target_file.partition_spec_id,
-        delete_file_path,
         target_file.partition.clone(),
     )
-    .finish(meta)
-    .map_err(DataFusionError::Execution)?
-    .data_file;
+    .await?;
     delete_file.content = DataContentType::PositionDeletes;
     delete_file.referenced_data_file = Some(target_file.file_path.clone());
     delete_file.sort_order_id = None;

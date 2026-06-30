@@ -38,6 +38,7 @@ use crate::operations::write::table_writer::IcebergTableWriter;
 use crate::physical_plan::action_schema::{
     encode_add_data_files, encode_commit_meta, iceberg_action_schema, CommitMeta,
 };
+use crate::physical_plan::write_location;
 use crate::physical_plan::writer_options::IcebergWriterExecOptions;
 use crate::schema_evolution::{SchemaEvolver, SchemaMode};
 use crate::spec::partition::{
@@ -215,76 +216,6 @@ impl IcebergWriterExec {
             (false, false) => Ok(None),
         }
     }
-
-    fn resolve_data_dir(table_meta: &TableMetadata, table_url: &Url) -> String {
-        Self::resolve_data_dir_from_properties(&table_meta.properties, table_url)
-    }
-
-    fn resolve_data_dir_from_property_value(
-        value: Option<&str>,
-        table_url: &Url,
-    ) -> Option<String> {
-        let raw = value?.trim();
-        if raw.is_empty() {
-            return None;
-        }
-
-        let base_path = crate::utils::url_to_object_path(table_url).ok();
-        if let Some(prop_url) = crate::utils::parse_absolute_url(raw) {
-            if prop_url.scheme() == table_url.scheme()
-                && prop_url.host_str() == table_url.host_str()
-            {
-                if let (Ok(prop_path), Some(base_path)) = (
-                    crate::utils::url_to_object_path(&prop_url),
-                    base_path.as_ref(),
-                ) {
-                    let prop_str = prop_path.as_ref();
-                    let base_str = base_path.as_ref();
-                    if let Some(stripped) = prop_str.strip_prefix(base_str) {
-                        let rel = stripped.trim_start_matches('/').trim_matches('/');
-                        if !rel.is_empty() {
-                            return Some(rel.to_string());
-                        }
-                    }
-                }
-            }
-        } else {
-            let prop_path = raw.replace('\\', "/");
-            if prop_path.starts_with('/') {
-                if let Some(base_path) = base_path.as_ref() {
-                    let base_str = base_path.as_ref();
-                    let prop_no_leading = prop_path.trim_start_matches('/');
-                    if let Some(stripped) = prop_no_leading.strip_prefix(base_str) {
-                        let rel = stripped.trim_start_matches('/').trim_matches('/');
-                        if !rel.is_empty() {
-                            return Some(rel.to_string());
-                        }
-                    }
-                }
-            } else {
-                let rel = prop_path.trim_matches('/');
-                if !rel.is_empty() {
-                    return Some(rel.to_string());
-                }
-            }
-        }
-
-        None
-    }
-
-    fn resolve_data_dir_from_properties(
-        properties: &std::collections::HashMap<String, String>,
-        table_url: &Url,
-    ) -> String {
-        Self::resolve_data_dir_from_property_value(
-            properties
-                .get("write.data.path")
-                .or_else(|| properties.get("write.folder-storage.path"))
-                .map(String::as_str),
-            table_url,
-        )
-        .unwrap_or_else(|| "data".to_string())
-    }
 }
 
 #[async_trait]
@@ -406,7 +337,12 @@ impl ExecutionPlan for IcebergWriterExec {
                 .await?;
                 let table_meta = TableMetadata::from_json(&bytes)
                     .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                let data_dir = Self::resolve_data_dir(&table_meta, &table_url);
+                let data_dir = write_location::resolve_data_dir_from_options_and_properties(
+                    options.write_data_path.as_deref(),
+                    options.write_folder_storage_path.as_deref(),
+                    &table_meta.properties,
+                    &table_url,
+                );
                 let variant_shredding = options.variant_shredding_config(&table_meta.properties)?;
                 // FIXME: Concurrency Issue with Schema Evolution.
                 // This requires a mechanism to reserve Field IDs or restart the Writer task upon conflict.
@@ -520,16 +456,12 @@ impl ExecutionPlan for IcebergWriterExec {
                     iceberg_schema.clone(),
                     Arc::new(iceberg_schema_to_arrow(&iceberg_schema)?),
                     Some(spec),
-                    Self::resolve_data_dir_from_property_value(
-                        options
-                            .write_data_path
-                            .as_deref()
-                            .or(options.write_folder_storage_path.as_deref()),
+                    write_location::resolve_data_dir_from_options_and_properties(
+                        options.write_data_path.as_deref(),
+                        options.write_folder_storage_path.as_deref(),
+                        &metadata_properties,
                         &table_url,
-                    )
-                    .unwrap_or_else(|| {
-                        Self::resolve_data_dir_from_properties(&metadata_properties, &table_url)
-                    }),
+                    ),
                     sid,
                     Some(iceberg_schema),
                     Vec::new(),

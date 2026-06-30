@@ -91,7 +91,7 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         raw_input_schema,
         Arc::new(expansion.write_plan),
         Arc::new(expansion.touched_files_plan),
-        expansion.deletion_vector_plan.map(Arc::new),
+        expansion.row_index_delete_plan.map(Arc::new),
         expansion.options,
         expansion.output_schema,
     );

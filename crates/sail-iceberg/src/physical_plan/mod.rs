@@ -13,6 +13,7 @@
 pub mod action_schema;
 pub mod commit;
 pub mod delete_apply_exec;
+mod delete_writer_common;
 pub mod discovery_exec;
 pub mod equality_delete_writer_exec;
 pub mod manifest_scan_exec;
@@ -21,6 +22,7 @@ pub mod merge_metadata_exec;
 pub mod plan_builder;
 pub mod position_delete_writer_exec;
 pub mod scan_by_data_files_exec;
+mod write_location;
 mod writer_exec;
 mod writer_options;
 

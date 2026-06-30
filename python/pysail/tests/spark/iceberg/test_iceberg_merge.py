@@ -1,8 +1,15 @@
 from pathlib import Path
 
 import pytest
+from pyiceberg.io.pyarrow import PyArrowFileIO
+from pyiceberg.manifest import ManifestContent, read_manifest_list
 
-from pysail.testing.spark.steps.iceberg import _current_manifest_list, _current_snapshot, _find_latest_metadata
+from pysail.testing.spark.steps.iceberg import (
+    _current_manifest_list,
+    _current_snapshot,
+    _find_latest_metadata,
+    _pyarrow_input_file,
+)
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 
@@ -23,6 +30,17 @@ def _manifest_count(manifests: list[dict], *, content: str, key: str) -> int:
     return sum(manifest.get(key) or 0 for manifest in manifests if manifest.get("content") == content)
 
 
+def _current_manifest_entries(table_path: Path, content: ManifestContent):
+    metadata = _find_latest_metadata(table_path)
+    snapshot = _current_snapshot(metadata)
+    io = PyArrowFileIO()
+    entries = []
+    for manifest in read_manifest_list(_pyarrow_input_file(io, snapshot["manifest-list"])):
+        if manifest.content == content:
+            entries.extend(manifest.fetch_manifest_entry(io))
+    return entries
+
+
 def test_iceberg_merge_mor_update_delete_insert_writes_delete_manifest_and_reads_rows(spark, tmp_path):
     table_name = "iceberg_merge_mor_rows"
     table_path = tmp_path / table_name
@@ -40,7 +58,8 @@ def test_iceberg_merge_mor_update_delete_insert_writes_delete_manifest_and_reads
             LOCATION '{_uri_sql(table_path)}'
             TBLPROPERTIES (
               'format-version' = '2',
-              'write.merge.mode' = 'merge-on-read'
+              'write.merge.mode' = 'merge-on-read',
+              'write.data.path' = 'custom_data'
             )
             """
         )
@@ -98,6 +117,17 @@ def test_iceberg_merge_mor_update_delete_insert_writes_delete_manifest_and_reads
         assert _manifest_count(manifests, content="deletes", key="added-rows-count") >= 2
         assert _manifest_count(manifests, content="data", key="deleted-files-count") == 0
         assert _manifest_count(manifests, content="data", key="deleted-rows-count") == 0
+
+        custom_prefix = f"{(table_path / 'custom_data').as_uri()}/"
+        data_entries = _current_manifest_entries(table_path, ManifestContent.DATA)
+        delete_entries = _current_manifest_entries(table_path, ManifestContent.DELETES)
+        assert data_entries
+        assert delete_entries
+        assert all(entry.data_file.file_path.startswith(custom_prefix) for entry in data_entries)
+        assert all(
+            entry.data_file.file_path.startswith(f"{custom_prefix}delete-")
+            for entry in delete_entries
+        )
     finally:
         _drop_table(spark, table_name)
 

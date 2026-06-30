@@ -150,8 +150,8 @@ pub struct RowLevelWriteNode {
     write_plan: Option<Arc<LogicalPlan>>,
     /// Plan yielding touched file paths (MERGE targeted rewrite).
     touched_files_plan: Option<Arc<LogicalPlan>>,
-    /// Plan yielding file path and file-local row index for MERGE rows deleted via DVs.
-    deletion_vector_plan: Option<Arc<LogicalPlan>>,
+    /// Plan yielding file path and file-local row index for MERGE target rows to delete.
+    row_index_delete_plan: Option<Arc<LogicalPlan>>,
     /// Condition for DELETE/UPDATE (passed through to physical planner).
     #[educe(PartialOrd(ignore))]
     condition: Option<ExprWithSource>,
@@ -176,7 +176,7 @@ impl RowLevelWriteNode {
         raw_input_schema: DFSchemaRef,
         write_plan: Arc<LogicalPlan>,
         touched_files_plan: Arc<LogicalPlan>,
-        deletion_vector_plan: Option<Arc<LogicalPlan>>,
+        row_index_delete_plan: Option<Arc<LogicalPlan>>,
         options: MergeIntoOptions,
         schema: DFSchemaRef,
     ) -> Self {
@@ -194,7 +194,7 @@ impl RowLevelWriteNode {
             raw_input_schema,
             write_plan: Some(write_plan),
             touched_files_plan: Some(touched_files_plan),
-            deletion_vector_plan,
+            row_index_delete_plan,
             condition: None,
             merge_options: Some(options),
             schema,
@@ -219,7 +219,7 @@ impl RowLevelWriteNode {
             raw_input_schema,
             write_plan: None,
             touched_files_plan: None,
-            deletion_vector_plan: None,
+            row_index_delete_plan: None,
             condition,
             merge_options: None,
             target_format: format,
@@ -261,8 +261,8 @@ impl RowLevelWriteNode {
         self.touched_files_plan.as_ref()
     }
 
-    pub fn deletion_vector_plan(&self) -> Option<&Arc<LogicalPlan>> {
-        self.deletion_vector_plan.as_ref()
+    pub fn row_index_delete_plan(&self) -> Option<&Arc<LogicalPlan>> {
+        self.row_index_delete_plan.as_ref()
     }
 
     pub fn condition(&self) -> Option<&ExprWithSource> {
@@ -311,8 +311,8 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
         if let Some(tp) = &self.touched_files_plan {
             inputs.push(tp.as_ref());
         }
-        if let Some(dvp) = &self.deletion_vector_plan {
-            inputs.push(dvp.as_ref());
+        if let Some(plan) = &self.row_index_delete_plan {
+            inputs.push(plan.as_ref());
         }
         inputs
     }
@@ -381,10 +381,10 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
         } else {
             None
         };
-        let deletion_vector_plan = if self.deletion_vector_plan.is_some() {
+        let row_index_delete_plan = if self.row_index_delete_plan.is_some() {
             Some(Arc::new(iter.next().ok_or_else(|| {
                 DataFusionError::Internal(
-                    "RowLevelWriteNode: missing deletion_vector_plan input".into(),
+                    "RowLevelWriteNode: missing row_index_delete_plan input".into(),
                 )
             })?))
         } else {
@@ -397,7 +397,7 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
             raw_input_schema: self.raw_input_schema.clone(),
             write_plan,
             touched_files_plan,
-            deletion_vector_plan,
+            row_index_delete_plan,
             condition: self.condition.clone(),
             merge_options: self.merge_options.clone(),
             target_format: self.target_format.clone(),
@@ -420,7 +420,7 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
 pub struct MergeExpansion {
     pub write_plan: LogicalPlan,
     pub touched_files_plan: LogicalPlan,
-    pub deletion_vector_plan: Option<LogicalPlan>,
+    pub row_index_delete_plan: Option<LogicalPlan>,
     pub output_schema: DFSchemaRef,
     pub options: MergeIntoOptions,
 }
@@ -768,7 +768,7 @@ pub fn expand_merge(
         return Ok(MergeExpansion {
             write_plan: projected,
             touched_files_plan: touched_plan,
-            deletion_vector_plan: None,
+            row_index_delete_plan: None,
             output_schema: command_schema,
             options,
         });
@@ -938,7 +938,7 @@ fn build_default_merge_expansion(
         .project(vec![col(path_column).alias(path_column.to_string())])?
         .build()?;
 
-    let deletion_vector_plan = if let Some(row_index_column) = row_index_column {
+    let row_index_delete_plan = if let Some(row_index_column) = row_index_column {
         Some(
             LogicalPlanBuilder::from(join.as_ref().clone())
                 .filter(row_delete_expr)?
@@ -957,7 +957,7 @@ fn build_default_merge_expansion(
     Ok(MergeExpansion {
         write_plan: projected.clone(),
         touched_files_plan: touched_plan,
-        deletion_vector_plan,
+        row_index_delete_plan,
         output_schema: command_schema,
         options,
     })
