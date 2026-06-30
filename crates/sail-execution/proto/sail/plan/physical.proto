@@ -446,25 +446,6 @@ message PySparkUdfConfig {
   bool python_udtf_pandas_conversion_enabled = 7;
   bool python_udf_pandas_int_to_decimal_coercion_enabled = 8;
   bool binary_as_bytes = 9;
-  repeated string python_artifact_paths = 10;
-  repeated PySparkPythonArtifact python_artifacts = 11;
-}
-
-message PySparkPythonArtifact {
-  string name = 1;
-  string python_path = 2;
-  optional bytes data = 3;
-  optional string uri = 4;
-  string sha256 = 5;
-  uint64 size = 6;
-  PySparkArtifactKind kind = 7;
-}
-
-enum PySparkArtifactKind {
-  PY_SPARK_ARTIFACT_KIND_UNSPECIFIED = 0;
-  PY_SPARK_ARTIFACT_KIND_PY_FILE = 1;
-  PY_SPARK_ARTIFACT_KIND_FILE = 2;
-  PY_SPARK_ARTIFACT_KIND_ARCHIVE = 3;
 }
 
 message EquivalenceProperties {

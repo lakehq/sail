@@ -525,17 +525,20 @@ impl JobScheduler {
             )));
         };
 
-        let plan = try_encode_physical_plan(self.codec.as_ref(), stage.plan.clone())?;
+        self.codec.clear_python_artifacts()?;
+        let plan = try_encode_physical_plan(&self.codec, stage.plan.clone())?;
         let inputs = stage
             .inputs
             .iter()
             .map(|input| self.get_task_input(job, key, input, assignments))
             .collect::<ExecutionResult<Vec<_>>>()?;
         let output = self.get_task_output(job, key, stage)?;
+        let python_artifacts = self.codec.take_python_artifacts()?;
         let definition = TaskDefinition {
             plan: Arc::from(plan),
             inputs,
             output,
+            python_artifacts,
         };
         Ok((definition, context.clone()))
     }
@@ -677,7 +680,7 @@ impl JobScheduler {
                 let keys = keys
                     .iter()
                     .map(|expr| {
-                        let expr = try_encode_physical_expr(self.codec.as_ref(), expr)?;
+                        let expr = try_encode_physical_expr(&self.codec, expr)?;
                         Ok(Arc::from(expr))
                     })
                     .collect::<ExecutionResult<Vec<Arc<[u8]>>>>()?;

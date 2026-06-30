@@ -787,7 +787,7 @@
   type: number
   default: "1048576"
   description: |
-    The maximum artifact size, in bytes, that Sail embeds directly into physical plans.
+    The maximum artifact size, in bytes, that Sail sends directly in task control messages.
     Larger Python, file, and archive artifacts require spark.artifact_store_uri so that
     cluster workers can fetch them without depending on the driver's local filesystem.
   experimental: true

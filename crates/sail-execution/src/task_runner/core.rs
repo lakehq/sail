@@ -9,6 +9,7 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use log::debug;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
@@ -33,7 +34,6 @@ impl TaskRunner {
     pub fn new() -> Self {
         Self {
             signals: HashMap::new(),
-            codec: Box::new(RemoteExecutionCodec),
         }
     }
 
@@ -83,17 +83,16 @@ impl TaskRunner {
     where
         T::Message: TaskRunnerMessage + StreamAccessorMessage,
     {
-        let plan =
-            try_decode_physical_plan(&context, self.codec.as_ref(), definition.plan.as_ref())?;
-        let plan = self.rewrite_parquet_adapters(plan)?;
-        let plan = self.rewrite_shuffle(
-            ctx,
-            key,
-            &definition.inputs,
-            &definition.output,
+        let TaskDefinition {
             plan,
-            &context,
-        )?;
+            inputs,
+            output,
+            python_artifacts,
+        } = definition;
+        let codec = RemoteExecutionCodec::for_task(python_artifacts);
+        let plan = try_decode_physical_plan(&context, &codec, plan.as_ref())?;
+        let plan = self.rewrite_parquet_adapters(plan)?;
+        let plan = self.rewrite_shuffle(ctx, key, &inputs, &output, plan, &context, &codec)?;
         debug!(
             "{} execution plan\n{}",
             TaskKeyDisplay(key),
@@ -140,6 +139,7 @@ impl TaskRunner {
         output: &TaskOutput,
         plan: Arc<dyn ExecutionPlan>,
         context: &TaskContext,
+        codec: &dyn PhysicalExtensionCodec,
     ) -> ExecutionResult<Arc<dyn ExecutionPlan>>
     where
         T::Message: TaskRunnerMessage + StreamAccessorMessage,
@@ -179,7 +179,7 @@ impl TaskRunner {
                 )));
             }
         };
-        let partitioning = output.partitioning(context, &schema, self.codec.as_ref())?;
+        let partitioning = output.partitioning(context, &schema, codec)?;
         let row_based = output.row_based();
         let shuffle =
             ShuffleWriteExec::new(plan, locations, Arc::new(accessor), partitioning, row_based);

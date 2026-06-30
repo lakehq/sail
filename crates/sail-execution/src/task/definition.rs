@@ -4,6 +4,7 @@ use datafusion::arrow::datatypes::Schema;
 use datafusion::execution::TaskContext;
 use datafusion::physical_expr::Partitioning;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use sail_python_udf::config::{PySparkArtifactKind, PySparkPythonArtifact};
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
@@ -17,6 +18,7 @@ pub struct TaskDefinition {
     pub plan: Arc<[u8]>,
     pub inputs: Vec<TaskInput>,
     pub output: TaskOutput,
+    pub python_artifacts: Vec<PySparkPythonArtifact>,
 }
 
 #[derive(Debug, Clone)]
@@ -80,11 +82,13 @@ impl From<TaskDefinition> for gen::TaskDefinition {
             plan,
             inputs,
             output,
+            python_artifacts,
         } = value;
         gen::TaskDefinition {
             plan: plan.to_vec(),
             inputs: inputs.into_iter().map(|x| x.into()).collect(),
             output: Some(output.into()),
+            python_artifacts: python_artifacts.into_iter().map(|x| x.into()).collect(),
         }
     }
 }
@@ -110,7 +114,73 @@ impl TryFrom<gen::TaskDefinition> for TaskDefinition {
             plan: Arc::from(value.plan),
             inputs,
             output,
+            python_artifacts: value
+                .python_artifacts
+                .into_iter()
+                .map(|x| x.try_into())
+                .collect::<ExecutionResult<Vec<_>>>()?,
         })
+    }
+}
+
+impl From<PySparkPythonArtifact> for gen::PySparkPythonArtifact {
+    fn from(value: PySparkPythonArtifact) -> Self {
+        let PySparkPythonArtifact {
+            name,
+            python_path,
+            data,
+            uri,
+            sha256,
+            size,
+            kind,
+        } = value;
+        gen::PySparkPythonArtifact {
+            name,
+            python_path,
+            data,
+            uri,
+            sha256,
+            size,
+            kind: encode_pyspark_artifact_kind(kind) as i32,
+        }
+    }
+}
+
+impl TryFrom<gen::PySparkPythonArtifact> for PySparkPythonArtifact {
+    type Error = ExecutionError;
+
+    fn try_from(value: gen::PySparkPythonArtifact) -> Result<Self, Self::Error> {
+        Ok(Self {
+            name: value.name,
+            python_path: value.python_path,
+            data: value.data,
+            uri: value.uri,
+            sha256: value.sha256,
+            size: value.size,
+            kind: decode_pyspark_artifact_kind(value.kind)?,
+        })
+    }
+}
+
+fn decode_pyspark_artifact_kind(kind: i32) -> ExecutionResult<PySparkArtifactKind> {
+    let kind = gen::PySparkArtifactKind::try_from(kind).map_err(|e| {
+        ExecutionError::InvalidArgument(format!("invalid PySpark artifact kind: {e}"))
+    })?;
+    match kind {
+        gen::PySparkArtifactKind::Unspecified => Err(ExecutionError::InvalidArgument(
+            "PySpark artifact kind must not be unspecified".to_string(),
+        )),
+        gen::PySparkArtifactKind::PyFile => Ok(PySparkArtifactKind::PyFile),
+        gen::PySparkArtifactKind::File => Ok(PySparkArtifactKind::File),
+        gen::PySparkArtifactKind::Archive => Ok(PySparkArtifactKind::Archive),
+    }
+}
+
+fn encode_pyspark_artifact_kind(kind: PySparkArtifactKind) -> gen::PySparkArtifactKind {
+    match kind {
+        PySparkArtifactKind::PyFile => gen::PySparkArtifactKind::PyFile,
+        PySparkArtifactKind::File => gen::PySparkArtifactKind::File,
+        PySparkArtifactKind::Archive => gen::PySparkArtifactKind::Archive,
     }
 }
 
