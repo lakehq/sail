@@ -21,7 +21,7 @@ use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey, WorkerId};
 use crate::rpc::ClientOptions;
 use crate::stream::error::TaskStreamError;
 use crate::stream::reader::TaskStreamSource;
-use crate::task::definition::TaskDefinition;
+use crate::task::definition::{TaskDefinition, TaskLaunchContext};
 use crate::worker::{WorkerClientSet, WorkerLocation};
 use crate::worker_manager::WorkerLaunchOptions;
 
@@ -276,6 +276,7 @@ impl WorkerPool {
         worker_id: WorkerId,
         key: TaskKey,
         definition: TaskDefinition,
+        launch_context: TaskLaunchContext,
     ) {
         let running_workers = self.list_running_workers();
         let Some(worker) = self.workers.get_mut(&worker_id) else {
@@ -331,7 +332,10 @@ impl WorkerPool {
             .collect();
         let handle = ctx.handle().clone();
         ctx.spawn(async move {
-            if let Err(e) = client.run_task(key.clone(), definition, peers).await {
+            if let Err(e) = client
+                .run_task(key.clone(), definition, launch_context, peers)
+                .await
+            {
                 let _ = handle
                     .send(DriverEvent::UpdateTask {
                         key,

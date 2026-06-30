@@ -9,6 +9,7 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use log::debug;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
@@ -25,7 +26,9 @@ use crate::plan::{ShuffleReadExec, ShuffleWriteExec, StageInputExec};
 use crate::proto::codec::RemoteExecutionCodec;
 use crate::proto::decode::try_decode_physical_plan;
 use crate::stream_accessor::{StreamAccessor, StreamAccessorMessage};
-use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
+use crate::task::definition::{
+    TaskDefinition, TaskInput, TaskLaunchContext, TaskOutput, TaskResources,
+};
 use crate::task_runner::monitor::TaskMonitor;
 use crate::task_runner::{TaskRunner, TaskRunnerMessage};
 
@@ -33,7 +36,6 @@ impl TaskRunner {
     pub fn new() -> Self {
         Self {
             signals: HashMap::new(),
-            codec: Box::new(RemoteExecutionCodec),
         }
     }
 
@@ -42,11 +44,12 @@ impl TaskRunner {
         ctx: &mut ActorContext<T>,
         key: TaskKey,
         definition: TaskDefinition,
+        launch_context: TaskLaunchContext,
         context: Arc<TaskContext>,
     ) where
         T::Message: TaskRunnerMessage + StreamAccessorMessage,
     {
-        let stream = match self.execute_plan(ctx, &key, definition, context) {
+        let stream = match self.execute_plan(ctx, &key, definition, launch_context, context) {
             Ok(x) => x,
             Err(e) => {
                 let event = T::Message::report_task_status(
@@ -78,22 +81,24 @@ impl TaskRunner {
         ctx: &mut ActorContext<T>,
         key: &TaskKey,
         definition: TaskDefinition,
+        launch_context: TaskLaunchContext,
         context: Arc<TaskContext>,
     ) -> ExecutionResult<SendableRecordBatchStream>
     where
         T::Message: TaskRunnerMessage + StreamAccessorMessage,
     {
-        let plan =
-            try_decode_physical_plan(&context, self.codec.as_ref(), definition.plan.as_ref())?;
-        let plan = self.rewrite_parquet_adapters(plan)?;
-        let plan = self.rewrite_shuffle(
-            ctx,
-            key,
-            &definition.inputs,
-            &definition.output,
+        let TaskDefinition {
             plan,
-            &context,
-        )?;
+            inputs,
+            output,
+        } = definition;
+        let TaskLaunchContext {
+            resources: TaskResources { python_artifacts },
+        } = launch_context;
+        let codec = RemoteExecutionCodec::for_task(python_artifacts);
+        let plan = try_decode_physical_plan(&context, &codec, plan.as_ref())?;
+        let plan = self.rewrite_parquet_adapters(plan)?;
+        let plan = self.rewrite_shuffle(ctx, key, &inputs, &output, plan, &context, &codec)?;
         debug!(
             "{} execution plan\n{}",
             TaskKeyDisplay(key),
@@ -140,6 +145,7 @@ impl TaskRunner {
         output: &TaskOutput,
         plan: Arc<dyn ExecutionPlan>,
         context: &TaskContext,
+        codec: &dyn PhysicalExtensionCodec,
     ) -> ExecutionResult<Arc<dyn ExecutionPlan>>
     where
         T::Message: TaskRunnerMessage + StreamAccessorMessage,
@@ -179,7 +185,7 @@ impl TaskRunner {
                 )));
             }
         };
-        let partitioning = output.partitioning(context, &schema, self.codec.as_ref())?;
+        let partitioning = output.partitioning(context, &schema, codec)?;
         let row_based = output.row_based();
         let shuffle =
             ShuffleWriteExec::new(plan, locations, Arc::new(accessor), partitioning, row_based);

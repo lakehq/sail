@@ -5,7 +5,6 @@ mod state;
 mod topology;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use indexmap::IndexMap;
 pub use options::JobSchedulerOptions;
 use sail_common_datafusion::error::CommonErrorCause;
@@ -21,7 +20,7 @@ pub struct JobScheduler {
     options: JobSchedulerOptions,
     jobs: IndexMap<JobId, JobDescriptor>,
     job_id_generator: IdGenerator<JobId>,
-    codec: Box<dyn PhysicalExtensionCodec>,
+    codec: RemoteExecutionCodec,
 }
 
 impl JobScheduler {
@@ -30,7 +29,7 @@ impl JobScheduler {
             options,
             jobs: IndexMap::new(),
             job_id_generator: IdGenerator::new(),
-            codec: Box::new(RemoteExecutionCodec),
+            codec: RemoteExecutionCodec::default(),
         }
     }
 }

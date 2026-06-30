@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::convert::TryInto;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
@@ -251,7 +251,7 @@ use sail_physical_plan::streaming::collector::StreamCollectorExec;
 use sail_physical_plan::streaming::filter::StreamFilterExec;
 use sail_physical_plan::streaming::limit::StreamLimitExec;
 use sail_physical_plan::streaming::source_adapter::StreamSourceAdapterExec;
-use sail_python_udf::config::PySparkUdfConfig;
+use sail_python_udf::config::{PySparkPythonArtifact, PySparkUdfConfig};
 use sail_python_udf::udf::pyspark_batch_collector::PySparkBatchCollectorUDF;
 use sail_python_udf::udf::pyspark_cogroup_map_udf::PySparkCoGroupMapUDF;
 use sail_python_udf::udf::pyspark_group_map_udf::{PySparkGroupMapMode, PySparkGroupMapUDF};
@@ -285,11 +285,67 @@ use crate::proto::encode::{
     try_encode_physical_plan, try_encode_schema,
 };
 
-pub struct RemoteExecutionCodec;
+pub struct RemoteExecutionCodec {
+    decode_python_artifacts: Arc<[PySparkPythonArtifact]>,
+    encode_python_artifacts: Mutex<Vec<PySparkPythonArtifact>>,
+}
+
+impl Default for RemoteExecutionCodec {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Debug for RemoteExecutionCodec {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "RemoteExecutionCodec")
+    }
+}
+
+impl RemoteExecutionCodec {
+    pub fn new() -> Self {
+        Self {
+            decode_python_artifacts: Arc::from(Vec::new()),
+            encode_python_artifacts: Mutex::new(vec![]),
+        }
+    }
+
+    pub fn for_task(python_artifacts: Vec<PySparkPythonArtifact>) -> Self {
+        Self {
+            decode_python_artifacts: Arc::from(python_artifacts),
+            encode_python_artifacts: Mutex::new(vec![]),
+        }
+    }
+
+    pub fn clear_python_artifacts(&self) -> Result<()> {
+        self.encode_python_artifacts
+            .lock()
+            .map_err(|e| plan_datafusion_err!("failed to lock Python artifact collector: {e}"))?
+            .clear();
+        Ok(())
+    }
+
+    pub fn take_python_artifacts(&self) -> Result<Vec<PySparkPythonArtifact>> {
+        Ok(std::mem::take(
+            &mut *self.encode_python_artifacts.lock().map_err(|e| {
+                plan_datafusion_err!("failed to lock Python artifact collector: {e}")
+            })?,
+        ))
+    }
+
+    fn collect_python_artifacts(&self, artifacts: &[PySparkPythonArtifact]) -> Result<()> {
+        let mut collected = self
+            .encode_python_artifacts
+            .lock()
+            .map_err(|e| plan_datafusion_err!("failed to lock Python artifact collector: {e}"))?;
+        for artifact in artifacts {
+            if !collected.iter().any(|existing| {
+                existing.name == artifact.name && existing.sha256 == artifact.sha256
+            }) {
+                collected.push(artifact.clone());
+            }
+        }
+        Ok(())
     }
 }
 
@@ -3984,6 +4040,7 @@ impl RemoteExecutionCodec {
             python_udf_pandas_int_to_decimal_coercion_enabled: config
                 .python_udf_pandas_int_to_decimal_coercion_enabled,
             binary_as_bytes: config.binary_as_bytes,
+            python_artifacts: self.decode_python_artifacts.to_vec(),
         };
         Ok(config)
     }
@@ -3992,6 +4049,7 @@ impl RemoteExecutionCodec {
         &self,
         config: &PySparkUdfConfig,
     ) -> Result<gen::PySparkUdfConfig> {
+        self.collect_python_artifacts(&config.python_artifacts)?;
         let config = gen::PySparkUdfConfig {
             session_timezone: config.session_timezone.clone(),
             pandas_window_bound_types: config.pandas_window_bound_types.clone(),
@@ -4104,7 +4162,7 @@ mod tests {
     use super::*;
 
     fn round_trip_udf(udf: ScalarUDF) -> Result<Arc<ScalarUDF>> {
-        let codec = RemoteExecutionCodec;
+        let codec = RemoteExecutionCodec::default();
         let name = udf.name().to_string();
         let mut buf = vec![];
         codec.try_encode_udf(&udf, &mut buf)?;
@@ -4128,7 +4186,7 @@ mod tests {
         expr: &Arc<dyn PhysicalExpr>,
         schema: &Schema,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        let codec = RemoteExecutionCodec;
+        let codec = RemoteExecutionCodec::default();
         let bytes = try_encode_physical_expr(&codec, expr)?;
         let ctx = TaskContext::default();
         try_decode_physical_expr(&ctx, &codec, &bytes, schema)
@@ -4462,7 +4520,7 @@ mod tests {
             input,
         )?;
 
-        let codec = RemoteExecutionCodec;
+        let codec = RemoteExecutionCodec::default();
         let bytes = try_encode_physical_plan(&codec, Arc::new(projection))?;
         let ctx = TaskContext::default();
         let decoded = try_decode_physical_plan(&ctx, &codec, &bytes)?;
@@ -4481,7 +4539,7 @@ mod tests {
         use crate::task::definition::{TaskOutput, TaskOutputDistribution, TaskOutputLocator};
 
         let (physical, schema_ref, list) = build_filter()?;
-        let codec = RemoteExecutionCodec;
+        let codec = RemoteExecutionCodec::default();
         let key = try_encode_physical_expr(&codec, &physical)?;
         let output = TaskOutput {
             distribution: TaskOutputDistribution::Hash {

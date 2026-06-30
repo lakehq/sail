@@ -4,7 +4,7 @@ use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey};
 use crate::rpc::{ClientHandle, ClientOptions, ClientService};
 use crate::stream_service::TaskStreamFlightClient;
-use crate::task::definition::TaskDefinition;
+use crate::task::definition::{TaskDefinition, TaskLaunchContext};
 use crate::worker::event::WorkerLocation;
 use crate::worker::gen::worker_service_client::WorkerServiceClient;
 use crate::worker::gen::{
@@ -46,6 +46,7 @@ impl WorkerClient {
         &self,
         key: TaskKey,
         definition: TaskDefinition,
+        launch_context: TaskLaunchContext,
         peers: Vec<WorkerLocation>,
     ) -> ExecutionResult<()> {
         let definition = crate::task::gen::TaskDefinition::from(definition).encode_to_vec();
@@ -56,6 +57,7 @@ impl WorkerClient {
             partition: key.partition as u64,
             definition,
             peers: peers.into_iter().map(|x| x.into()).collect(),
+            launch_context: Some(launch_context.into()),
         };
         let response = self.inner.get().await?.run_task(request).await?;
         let RunTaskResponse {} = response.into_inner();

@@ -69,7 +69,6 @@ impl<'a> ProtoBuilder<'a> {
         for field in self.boxed_fields {
             config.boxed(field);
         }
-
         builder
             .protoc_arg("--experimental_allow_proto3_optional")
             .compile_well_known_types(true)

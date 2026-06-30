@@ -3,7 +3,6 @@ mod monitor;
 
 use std::collections::HashMap;
 
-use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use sail_common_datafusion::error::CommonErrorCause;
 use tokio::sync::oneshot;
 
@@ -13,7 +12,6 @@ use crate::worker::WorkerEvent;
 
 pub struct TaskRunner {
     signals: HashMap<TaskKey, oneshot::Sender<()>>,
-    codec: Box<dyn PhysicalExtensionCodec>,
 }
 
 pub trait TaskRunnerMessage {

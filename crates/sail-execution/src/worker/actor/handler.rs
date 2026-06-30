@@ -11,7 +11,7 @@ use crate::error::ExecutionResult;
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
-use crate::task::definition::TaskDefinition;
+use crate::task::definition::{TaskDefinition, TaskLaunchContext};
 use crate::worker::actor::WorkerActor;
 use crate::worker::event::{WorkerLocation, WorkerStreamOwner};
 use crate::worker::WorkerEvent;
@@ -102,11 +102,17 @@ impl WorkerActor {
         ctx: &mut ActorContext<Self>,
         key: TaskKey,
         definition: TaskDefinition,
+        launch_context: TaskLaunchContext,
         peers: Vec<WorkerLocation>,
     ) -> ActorAction {
         self.peer_tracker.track(ctx, peers);
-        self.task_runner
-            .run_task(ctx, key, definition, self.options.session.task_ctx());
+        self.task_runner.run_task(
+            ctx,
+            key,
+            definition,
+            launch_context,
+            self.options.session.task_ctx(),
+        );
         ActorAction::Continue
     }
 

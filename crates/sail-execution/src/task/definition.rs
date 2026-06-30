@@ -4,6 +4,7 @@ use datafusion::arrow::datatypes::Schema;
 use datafusion::execution::TaskContext;
 use datafusion::physical_expr::Partitioning;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
+use sail_python_udf::config::PySparkPythonArtifact;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
@@ -17,6 +18,16 @@ pub struct TaskDefinition {
     pub plan: Arc<[u8]>,
     pub inputs: Vec<TaskInput>,
     pub output: TaskOutput,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TaskLaunchContext {
+    pub resources: TaskResources,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TaskResources {
+    pub python_artifacts: Vec<PySparkPythonArtifact>,
 }
 
 #[derive(Debug, Clone)]

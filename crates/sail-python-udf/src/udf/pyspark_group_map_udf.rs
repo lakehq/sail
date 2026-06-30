@@ -107,6 +107,7 @@ impl PySparkGroupMapUDF {
 
     fn udf(&self, py: Python) -> Result<Py<PyAny>> {
         let udf = self.udf.get_or_try_init(py, || {
+            let _artifact_context = self.config.enter_python_artifact_context(py)?;
             let udf = PySparkUdfPayload::load(py, &self.payload)?;
             Ok(PySpark::group_map_udf(
                 py,
@@ -138,7 +139,11 @@ impl AggregateUDFImpl for PySparkGroupMapUDF {
     fn accumulator(&self, _acc_args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
         let field = get_list_field(&self.output_type)?;
         let udf = Python::attach(|py| self.udf(py))?;
-        let aggregator = Box::new(PySparkGroupMapper { udf, field });
+        let aggregator = Box::new(PySparkGroupMapper {
+            udf,
+            config: Arc::clone(&self.config),
+            field,
+        });
         Ok(Box::new(BatchAggregateAccumulator::new(
             self.input_types.clone(),
             self.output_type.clone(),
@@ -154,12 +159,14 @@ impl AggregateUDFImpl for PySparkGroupMapUDF {
 
 struct PySparkGroupMapper {
     udf: Py<PyAny>,
+    config: Arc<PySparkUdfConfig>,
     field: FieldRef,
 }
 
 impl BatchAggregator for PySparkGroupMapper {
     fn call(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
         let data = Python::attach(|py| -> PyUdfResult<_> {
+            let _artifact_context = self.config.enter_python_artifact_context(py)?;
             let output = self.udf.call1(py, (args.try_to_py(py)?,))?;
             Ok(ArrayData::try_from_py(py, &output)?)
         })?;

@@ -17,6 +17,7 @@ use sail_session::session_factory::{
 };
 use sail_session::session_manager::{SessionManager, SessionManagerOptions};
 
+use crate::artifact::{SparkArtifactOptions, SparkArtifactRegistry};
 use crate::error::{SparkError, SparkResult};
 use crate::session::{SparkSession, SparkSessionOptions};
 
@@ -44,8 +45,25 @@ impl ServerSessionMutator for SparkSessionMutator {
             },
         )
         .map_err(|e| internal_datafusion_err!("{e}"))?;
+        let artifacts = SparkArtifactRegistry::new(
+            info.session_id.clone(),
+            SparkArtifactOptions {
+                root: if self.config.spark.artifact_root.is_empty() {
+                    None
+                } else {
+                    Some(self.config.spark.artifact_root.clone().into())
+                },
+                inline_max_bytes: self.config.spark.artifact_inline_max_bytes,
+                store_uri: if self.config.spark.artifact_store_uri.is_empty() {
+                    None
+                } else {
+                    Some(self.config.spark.artifact_store_uri.clone())
+                },
+            },
+        );
         Ok(config
             .with_extension(Arc::new(plan_service))
+            .with_extension(Arc::new(artifacts))
             .with_extension(Arc::new(spark)))
     }
 

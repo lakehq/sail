@@ -1141,8 +1141,17 @@ impl TryFrom<RelType> for RelationNode {
                     join_type,
                 }))
             }
-            RelType::ChunkedCachedLocalRelation(_) => {
-                Err(SparkError::todo("chunked cached local relation"))
+            RelType::ChunkedCachedLocalRelation(local_relation) => {
+                let sc::ChunkedCachedLocalRelation {
+                    data_hashes,
+                    schema_hash,
+                } = local_relation;
+                Ok(RelationNode::Query(
+                    spec::QueryNode::ChunkedCachedLocalRelation {
+                        data_hashes,
+                        schema_hash,
+                    },
+                ))
             }
             RelType::FillNa(fill_na) => {
                 let sc::NaFill {

@@ -10,7 +10,7 @@ use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
 use crate::stream::reader::TaskStreamSource;
 use crate::stream::writer::{LocalStreamStorage, TaskStreamSink};
-use crate::task::definition::TaskDefinition;
+use crate::task::definition::{TaskDefinition, TaskLaunchContext};
 use crate::worker::gen;
 
 pub enum WorkerEvent {
@@ -27,6 +27,7 @@ pub enum WorkerEvent {
     RunTask {
         key: TaskKey,
         definition: TaskDefinition,
+        launch_context: TaskLaunchContext,
         peers: Vec<WorkerLocation>,
     },
     StopTask {
@@ -122,6 +123,7 @@ impl SpanAssociation for WorkerEvent {
                         attempt,
                     },
                 definition: _,
+                launch_context: _,
                 peers: _,
             } => {
                 p.push((SpanAttribute::EXECUTION_JOB_ID, job_id.to_string()));
