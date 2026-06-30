@@ -151,15 +151,24 @@ impl PyMapStream {
         sender: mpsc::Sender<Result<RecordBatch>>,
         handle: Handle,
     ) -> PyUdfResult<()> {
-        let _artifact_context = artifact_config.enter_python_artifact_context(py)?;
         // Create a Python iterator from the input record batch stream and call the function.
         // We could have wrap each record batch in a single-element list and call the function
         // for each record batch, but that does not work if the user wants to maintain state
         // across record batches.
         let input = PyInputStream::new(input, signal, handle);
         let input = input.into_pyobject(py)?;
-        let output = function.call1(py, (input,))?.into_bound(py);
-        for batch in output.try_iter()? {
+        let output = {
+            let _artifact_context = artifact_config.enter_python_artifact_context(py)?;
+            function.call1(py, (input,))?.into_bound(py)
+        };
+        let mut iterator = output.try_iter()?;
+        loop {
+            let Some(batch) = ({
+                let _artifact_context = artifact_config.enter_python_artifact_context(py)?;
+                iterator.next()
+            }) else {
+                break;
+            };
             // Ignore empty record batches since the PySpark unit tests expect them to be ignored
             // even if they have incompatible schemas.
             if batch.as_ref().is_ok_and(|x| x.is_empty().unwrap_or(false)) {

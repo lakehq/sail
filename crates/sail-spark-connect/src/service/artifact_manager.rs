@@ -30,6 +30,7 @@ const CLASSES_PREFIX: &str = "classes/";
 const FORWARD_TO_FS_PREFIX: &str = "forward_to_fs/";
 const CACHE_PREFIX: &str = "cache/";
 const STAGING_DIR: &str = ".staging";
+const ARTIFACT_MULTIPART_CHUNK_SIZE: usize = 8 * 1024 * 1024;
 const SPARK_CONNECT_COPY_FROM_LOCAL_TO_FS_ALLOW_DEST_LOCAL: &str =
     "spark.connect.copyFromLocalToFs.allowDestLocal";
 
@@ -549,11 +550,96 @@ async fn upload_artifact(uri: &str, payload: &ArtifactPayload<'_>) -> SparkResul
     let store = sail_object_store::get_dynamic_object_store(&url).map_err(|e| {
         SparkError::internal(format!("failed to create artifact object store {uri}: {e}"))
     })?;
-    let data = payload.read_all()?;
-    store
-        .put(&path, PutPayload::from(data))
+    match payload {
+        ArtifactPayload::Bytes(data) => {
+            store
+                .put(&path, PutPayload::from(data.to_vec()))
+                .await
+                .map_err(|e| {
+                    SparkError::internal(format!("failed to write artifact {uri}: {e}"))
+                })?;
+        }
+        ArtifactPayload::File(source) => {
+            let size = std::fs::metadata(source)
+                .map_err(|e| {
+                    SparkError::internal(format!(
+                        "failed to read artifact file metadata {}: {e}",
+                        source.display()
+                    ))
+                })?
+                .len();
+            if size <= ARTIFACT_MULTIPART_CHUNK_SIZE as u64 {
+                let data = std::fs::read(source).map_err(|e| {
+                    SparkError::internal(format!(
+                        "failed to read artifact file {}: {e}",
+                        source.display()
+                    ))
+                })?;
+                store
+                    .put(&path, PutPayload::from(data))
+                    .await
+                    .map_err(|e| {
+                        SparkError::internal(format!("failed to write artifact {uri}: {e}"))
+                    })?;
+            } else {
+                upload_artifact_file_multipart(&store, &path, source, uri).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn upload_artifact_file_multipart(
+    store: &std::sync::Arc<dyn object_store::ObjectStore>,
+    path: &object_store::path::Path,
+    source: &Path,
+    uri: &str,
+) -> SparkResult<()> {
+    let mut file = File::open(source).map_err(|e| {
+        SparkError::internal(format!(
+            "failed to open artifact file {}: {e}",
+            source.display()
+        ))
+    })?;
+    let mut upload = store
+        .put_multipart(path)
         .await
-        .map_err(|e| SparkError::internal(format!("failed to write artifact {uri}: {e}")))?;
+        .map_err(|e| SparkError::internal(format!("failed to start artifact upload {uri}: {e}")))?;
+    let mut buffer = vec![0; ARTIFACT_MULTIPART_CHUNK_SIZE];
+    loop {
+        let mut size = 0;
+        while size < buffer.len() {
+            let n = file.read(&mut buffer[size..]).map_err(|e| {
+                SparkError::internal(format!(
+                    "failed to read artifact file {}: {e}",
+                    source.display()
+                ))
+            })?;
+            if n == 0 {
+                break;
+            }
+            size += n;
+        }
+        if size == 0 {
+            break;
+        }
+        let chunk = if size == buffer.len() {
+            std::mem::replace(&mut buffer, vec![0; ARTIFACT_MULTIPART_CHUNK_SIZE])
+        } else {
+            buffer[..size].to_vec()
+        };
+        if let Err(error) = upload.put_part(PutPayload::from(chunk)).await {
+            if let Err(abort_error) = upload.abort().await {
+                log::debug!("failed to abort artifact upload {uri}: {abort_error}");
+            }
+            return Err(SparkError::internal(format!(
+                "failed to upload artifact part {uri}: {error}"
+            )));
+        }
+    }
+    upload.complete().await.map_err(|e| {
+        SparkError::internal(format!("failed to complete artifact upload {uri}: {e}"))
+    })?;
     Ok(())
 }
 

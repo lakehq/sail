@@ -1,9 +1,12 @@
 use std::ffi::CString;
+use std::fs::File;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use futures::StreamExt;
 use num_bigint::BigUint;
 use object_store::ObjectStoreExt;
 use pyo3::prelude::PyAnyMethods;
@@ -158,48 +161,70 @@ pub struct PySparkUdfConfig {
 }
 
 struct PythonArtifactContextLock {
-    locked: Mutex<bool>,
+    state: Mutex<PythonArtifactContextState>,
     available: Condvar,
+}
+
+struct PythonArtifactContextState {
+    active_key: Option<String>,
+    holders: usize,
 }
 
 pub struct PythonArtifactContextGuard {
     lock: Arc<PythonArtifactContextLock>,
+    key: String,
 }
 
 impl PythonArtifactContextLock {
     fn new() -> Self {
         Self {
-            locked: Mutex::new(false),
+            state: Mutex::new(PythonArtifactContextState {
+                active_key: None,
+                holders: 0,
+            }),
             available: Condvar::new(),
         }
     }
 
-    fn acquire() -> PyUdfResult<PythonArtifactContextGuard> {
+    fn acquire(key: String) -> PyUdfResult<PythonArtifactContextGuard> {
         let lock = Arc::clone(
-            PYTHON_ARTIFACT_CONTEXT_LOCK
-                .get_or_init(|| Arc::new(PythonArtifactContextLock::new())),
+            PYTHON_ARTIFACT_CONTEXT_LOCK.get_or_init(|| Arc::new(PythonArtifactContextLock::new())),
         );
         {
-            let mut locked = lock.locked.lock().map_err(|e| {
+            let mut state = lock.state.lock().map_err(|e| {
                 PyUdfError::internal(format!("failed to lock Python artifact context: {e}"))
             })?;
-            while *locked {
-                locked = lock.available.wait(locked).map_err(|e| {
+            while state
+                .active_key
+                .as_ref()
+                .is_some_and(|active| active != &key)
+            {
+                state = lock.available.wait(state).map_err(|e| {
                     PyUdfError::internal(format!("failed to wait for Python artifact context: {e}"))
                 })?;
             }
-            *locked = true;
+            if state.active_key.is_none() {
+                state.active_key = Some(key.clone());
+            }
+            state.holders += 1;
         }
-        Ok(PythonArtifactContextGuard { lock })
+        Ok(PythonArtifactContextGuard { lock, key })
     }
 }
 
 impl Drop for PythonArtifactContextGuard {
     fn drop(&mut self) {
-        match self.lock.locked.lock() {
-            Ok(mut locked) => {
-                *locked = false;
-                self.lock.available.notify_one();
+        match self.lock.state.lock() {
+            Ok(mut state) => {
+                if state.active_key.as_ref() != Some(&self.key) || state.holders == 0 {
+                    log::error!("inconsistent Python artifact context lock state");
+                    return;
+                }
+                state.holders -= 1;
+                if state.holders == 0 {
+                    state.active_key = None;
+                    self.lock.available.notify_all();
+                }
             }
             Err(error) => {
                 log::error!("failed to unlock Python artifact context: {error}");
@@ -230,7 +255,8 @@ impl PySparkUdfConfig {
         &self,
         py: Python,
     ) -> PyUdfResult<PythonArtifactContextGuard> {
-        let guard = py.detach(PythonArtifactContextLock::acquire)?;
+        let key = python_artifact_context_key(&self.python_artifacts);
+        let guard = py.detach(move || PythonArtifactContextLock::acquire(key))?;
         self.install_python_artifacts(py)?;
         Ok(guard)
     }
@@ -327,6 +353,23 @@ impl PySparkUdfConfig {
 
 struct InstalledArtifacts {
     python_paths: Vec<String>,
+}
+
+fn python_artifact_context_key(artifacts: &[PySparkPythonArtifact]) -> String {
+    let mut hasher = Sha256::new();
+    for artifact in artifacts {
+        hasher.update((artifact.kind as u8).to_be_bytes());
+        hasher.update(artifact.name.as_bytes());
+        hasher.update([0]);
+        hasher.update(artifact.sha256.as_bytes());
+        hasher.update(artifact.size.to_be_bytes());
+        hasher.update([0]);
+    }
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn spark_files_root(artifacts: &[PySparkPythonArtifact]) -> PyUdfResult<PathBuf> {
@@ -477,13 +520,14 @@ fn materialize_artifact_file(
     if file_matches_artifact(target_path, artifact)? {
         return Ok(());
     }
-    let data = read_artifact_payload(artifact)?;
-    verify_artifact_data(artifact, &data)?;
     if let Some(parent) = target_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let tmp_path = artifact_temp_path(target_path);
-    std::fs::write(&tmp_path, data)?;
+    if let Err(error) = materialize_artifact_payload(artifact, &tmp_path) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(error);
+    }
     match std::fs::rename(&tmp_path, target_path) {
         Ok(()) => Ok(()),
         Err(error) => {
@@ -498,6 +542,29 @@ fn materialize_artifact_file(
     }
 }
 
+fn materialize_artifact_payload(
+    artifact: &PySparkPythonArtifact,
+    target_path: &Path,
+) -> PyUdfResult<()> {
+    let source = Path::new(&artifact.python_path);
+    if source.exists() && file_matches_artifact(source, artifact)? {
+        std::fs::copy(source, target_path)?;
+        return Ok(());
+    }
+    if let Some(data) = &artifact.data {
+        verify_artifact_data(artifact, data)?;
+        std::fs::write(target_path, data)?;
+        return Ok(());
+    }
+    if let Some(uri) = &artifact.uri {
+        return download_artifact_uri_to_file(uri, target_path, artifact);
+    }
+    Err(PyUdfError::invalid(format!(
+        "artifact {} has no accessible local path, inline data, or object-store URI",
+        artifact.name
+    )))
+}
+
 fn file_matches_artifact(path: &Path, artifact: &PySparkPythonArtifact) -> PyUdfResult<bool> {
     if !path.exists() {
         return Ok(false);
@@ -506,34 +573,40 @@ fn file_matches_artifact(path: &Path, artifact: &PySparkPythonArtifact) -> PyUdf
     if metadata.len() != artifact.size {
         return Ok(false);
     }
-    let data = std::fs::read(path)?;
-    Ok(sha256_hex(&data) == artifact.sha256)
+    Ok(file_sha256(path)? == artifact.sha256)
 }
 
-fn read_artifact_payload(artifact: &PySparkPythonArtifact) -> PyUdfResult<Vec<u8>> {
-    if Path::new(&artifact.python_path).exists() {
-        let data = std::fs::read(&artifact.python_path)?;
-        if sha256_hex(&data) == artifact.sha256 && data.len() as u64 == artifact.size {
-            return Ok(data);
+fn file_sha256(path: &Path) -> PyUdfResult<String> {
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0; 64 * 1024];
+    loop {
+        let n = file.read(&mut buffer)?;
+        if n == 0 {
+            break;
         }
+        hasher.update(&buffer[..n]);
     }
-    if let Some(data) = &artifact.data {
-        return Ok(data.clone());
-    }
-    if let Some(uri) = &artifact.uri {
-        return download_artifact_uri(uri);
-    }
-    Err(PyUdfError::invalid(format!(
-        "artifact {} has no accessible local path, inline data, or object-store URI",
-        artifact.name
-    )))
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect())
 }
 
-fn download_artifact_uri(uri: &str) -> PyUdfResult<Vec<u8>> {
+fn download_artifact_uri_to_file(
+    uri: &str,
+    target_path: &Path,
+    artifact: &PySparkPythonArtifact,
+) -> PyUdfResult<()> {
     let uri = uri.to_string();
+    let target_path = target_path.to_path_buf();
+    let artifact_name = artifact.name.clone();
+    let expected_sha256 = artifact.sha256.clone();
+    let expected_size = artifact.size;
     let handle = std::thread::Builder::new()
         .name("sail-artifact-download".to_string())
-        .spawn(move || -> Result<Vec<u8>, String> {
+        .spawn(move || -> Result<(), String> {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -549,16 +622,39 @@ fn download_artifact_uri(uri: &str) -> PyUdfResult<Vec<u8>> {
                     .get(&path)
                     .await
                     .map_err(|e| format!("failed to read artifact {uri}: {e}"))?;
-                let bytes = result
-                    .bytes()
-                    .await
-                    .map_err(|e| format!("failed to collect artifact bytes {uri}: {e}"))?;
-                Ok(bytes.to_vec())
+                let mut file = File::create(&target_path)
+                    .map_err(|e| format!("failed to create artifact file {}: {e}", target_path.display()))?;
+                let mut hasher = Sha256::new();
+                let mut size = 0_u64;
+                let mut stream = result.into_stream();
+                while let Some(chunk) = stream.next().await {
+                    let chunk = chunk.map_err(|e| format!("failed to read artifact bytes {uri}: {e}"))?;
+                    size += chunk.len() as u64;
+                    hasher.update(&chunk);
+                    file.write_all(&chunk)
+                        .map_err(|e| format!("failed to write artifact file {}: {e}", target_path.display()))?;
+                }
+                if size != expected_size {
+                    return Err(format!(
+                        "artifact {artifact_name} size mismatch: expected {expected_size}, got {size}"
+                    ));
+                }
+                let actual: String = hasher
+                    .finalize()
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect();
+                if actual != expected_sha256 {
+                    return Err(format!(
+                        "artifact {artifact_name} SHA-256 mismatch: expected {expected_sha256}, got {actual}"
+                    ));
+                }
+                Ok(())
             })
         })
         .map_err(|e| PyUdfError::internal(format!("failed to spawn artifact download: {e}")))?;
     match handle.join() {
-        Ok(Ok(data)) => Ok(data),
+        Ok(Ok(())) => Ok(()),
         Ok(Err(error)) => Err(PyUdfError::internal(error)),
         Err(_) => Err(PyUdfError::internal("artifact download thread panicked")),
     }

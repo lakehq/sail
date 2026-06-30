@@ -12,7 +12,7 @@ from pyspark.sql.functions import udf
 from pyspark.sql.types import IntegerType, StringType
 
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
-from pysail.testing.spark.utils.common import is_jvm_spark
+from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
 pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
 
@@ -158,6 +158,52 @@ def test_add_artifact_file_is_available_via_spark_files(spark, artifact_root, tm
             return file.read()
 
     rows = spark.range(8).repartition(4).select(read_file_artifact("id").alias("value")).collect()
+    assert {row.value for row in rows} == {payload}
+
+
+def test_map_in_pandas_keeps_artifact_context_for_iterator(spark, artifact_root, tmp_path):
+    file_path = tmp_path / "sail_map_iter_artifact.txt"
+    payload = "map iterator artifact payload"
+    file_path.write_text(payload, encoding="utf-8")
+
+    spark.addArtifact(str(file_path), file=True)
+    shutil.rmtree(artifact_root, ignore_errors=True)
+
+    def read_file_artifact(iterator):
+        from pyspark.core.files import SparkFiles
+
+        for pdf in iterator:
+            with open(SparkFiles.get("sail_map_iter_artifact.txt"), encoding="utf-8") as file:
+                pdf["value"] = file.read()
+            yield pdf[["value"]]
+
+    rows = spark.range(8).repartition(4).mapInPandas(read_file_artifact, "value string").collect()
+    assert {row.value for row in rows} == {payload}
+
+
+@pytest.mark.skipif(
+    pyspark_version() < (4,),
+    reason="Python UDTF artifact test requires PySpark 4+",
+)
+def test_udtf_keeps_artifact_context_for_iterator(spark, artifact_root, tmp_path):
+    from pyspark.sql.functions import lit, udtf
+
+    file_path = tmp_path / "sail_udtf_artifact.txt"
+    payload = "udtf artifact payload"
+    file_path.write_text(payload, encoding="utf-8")
+
+    spark.addArtifact(str(file_path), file=True)
+    shutil.rmtree(artifact_root, ignore_errors=True)
+
+    @udtf(returnType="value: string")
+    class ReadArtifactUDTF:
+        def eval(self, _):
+            from pyspark.core.files import SparkFiles
+
+            with open(SparkFiles.get("sail_udtf_artifact.txt"), encoding="utf-8") as file:
+                yield (file.read(),)
+
+    rows = ReadArtifactUDTF(lit(1)).collect()
     assert {row.value for row in rows} == {payload}
 
 

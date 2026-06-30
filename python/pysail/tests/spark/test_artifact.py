@@ -22,6 +22,8 @@ EXPECTED_CHUNKED_ARTIFACT_VALUE = 123
 EXPECTED_COMMITTED_OBJECT_STORE_VALUE = 314
 EXPECTED_CONTEXT_FILE_VALUE = 37
 EXPECTED_CONTEXT_PLAIN_VALUE = 11
+EXPECTED_MULTIPART_OBJECT_STORE_VALUE = 509
+MULTIPART_ARTIFACT_PADDING_SIZE = 9 * 1024 * 1024
 
 
 def _artifact_store_files(path):
@@ -590,6 +592,47 @@ def test_duplicate_object_store_artifact_reuses_committed_object(tmp_path):
         stat_after_duplicate = object_path.stat()
         assert stat_after_duplicate.st_size == object_stat.st_size
         assert stat_after_duplicate.st_mtime_ns == object_stat.st_mtime_ns
+
+
+def test_large_object_store_artifact_can_be_materialized_without_local_source(tmp_path):
+    artifact_root = tmp_path / "artifact-root"
+    artifact_store = tmp_path / "artifact-store"
+    module_path = tmp_path / "sail_large_store_module.py"
+    module_path.write_text(
+        f"VALUE = {EXPECTED_MULTIPART_OBJECT_STORE_VALUE}\nPADDING = {('x' * MULTIPART_ARTIFACT_PADDING_SIZE)!r}\n",
+        encoding="utf-8",
+    )
+
+    with (
+        spark_connect_server(
+            envs={
+                "SAIL_SPARK__ARTIFACT_ROOT": str(artifact_root),
+                "SAIL_SPARK__ARTIFACT_INLINE_MAX_BYTES": "0",
+                "SAIL_SPARK__ARTIFACT_STORE_URI": Path(artifact_store).as_uri(),
+            }
+        ) as server,
+        spark_session_factory(server.remote) as sessions,
+    ):
+        session = sessions.create()
+        session.addArtifact(str(module_path), pyfile=True)
+
+        files = _artifact_store_files(artifact_store)
+        assert len(files) == 1
+        assert files[0].stat().st_size > MULTIPART_ARTIFACT_PADDING_SIZE
+
+        local_sources = list(artifact_root.rglob(f"pyfiles/{module_path.name}"))
+        assert len(local_sources) == 1
+        local_source = local_sources[0]
+        local_source.unlink()
+
+        @udf(IntegerType())
+        def read_large_store_value(_):
+            import sail_large_store_module
+
+            return sail_large_store_module.VALUE
+
+        rows = session.range(1).select(read_large_store_value("id").alias("value")).collect()
+        assert rows[0].value == EXPECTED_MULTIPART_OBJECT_STORE_VALUE
 
 
 @pytest.mark.skipif(
