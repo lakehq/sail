@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryInto;
 use std::fmt::{Debug, Formatter};
 use std::sync::{Arc, Mutex};
@@ -70,6 +71,8 @@ use datafusion_spark::function::string::luhn_check::SparkLuhnCheck;
 use datafusion_spark::function::url::try_url_decode::TryUrlDecode;
 use datafusion_spark::function::url::url_decode::UrlDecode;
 use datafusion_spark::function::url::url_encode::UrlEncode;
+use futures::StreamExt;
+use object_store::{ObjectStoreExt, ObjectStoreScheme, PutPayload};
 use prost::Message;
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::array::record_batch::{read_record_batches, write_record_batches};
@@ -261,6 +264,7 @@ use sail_python_udf::udf::pyspark_udf::{PySparkUDF, PySparkUdfKind};
 use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use url::Url;
 
 use crate::plan::gen::extended_aggregate_udf::UdafKind;
@@ -284,10 +288,31 @@ use crate::proto::encode::{
     physical_expr_to_proto, try_encode_field_ref, try_encode_message, try_encode_physical_expr,
     try_encode_physical_plan, try_encode_schema,
 };
+use crate::task::definition::LocalRelationResource;
+
+#[derive(Debug, Clone)]
+pub struct RemoteExecutionCodecConfig {
+    pub local_relation_inline_max_bytes: usize,
+    pub local_relation_store_uri: Option<String>,
+}
+
+impl Default for RemoteExecutionCodecConfig {
+    fn default() -> Self {
+        Self {
+            local_relation_inline_max_bytes: usize::MAX,
+            local_relation_store_uri: None,
+        }
+    }
+}
 
 pub struct RemoteExecutionCodec {
+    config: RemoteExecutionCodecConfig,
+    local_relation_resource_namespace: String,
     decode_python_artifacts: Arc<[PySparkPythonArtifact]>,
+    decode_local_relation_resources: Arc<HashMap<String, LocalRelationResource>>,
     encode_python_artifacts: Mutex<Vec<PySparkPythonArtifact>>,
+    encode_local_relation_resources: Mutex<Vec<LocalRelationResource>>,
+    uploaded_local_relation_resource_uris: Mutex<HashSet<String>>,
 }
 
 impl Default for RemoteExecutionCodec {
@@ -305,22 +330,58 @@ impl Debug for RemoteExecutionCodec {
 impl RemoteExecutionCodec {
     pub fn new() -> Self {
         Self {
+            config: RemoteExecutionCodecConfig::default(),
+            local_relation_resource_namespace: local_relation_resource_namespace(),
             decode_python_artifacts: Arc::from(Vec::new()),
+            decode_local_relation_resources: Arc::new(HashMap::new()),
             encode_python_artifacts: Mutex::new(vec![]),
+            encode_local_relation_resources: Mutex::new(vec![]),
+            uploaded_local_relation_resource_uris: Mutex::new(HashSet::new()),
         }
     }
 
-    pub fn for_task(python_artifacts: Vec<PySparkPythonArtifact>) -> Self {
+    pub fn for_driver(config: RemoteExecutionCodecConfig) -> Self {
         Self {
-            decode_python_artifacts: Arc::from(python_artifacts),
+            config,
+            local_relation_resource_namespace: local_relation_resource_namespace(),
+            decode_python_artifacts: Arc::from(Vec::new()),
+            decode_local_relation_resources: Arc::new(HashMap::new()),
             encode_python_artifacts: Mutex::new(vec![]),
+            encode_local_relation_resources: Mutex::new(vec![]),
+            uploaded_local_relation_resource_uris: Mutex::new(HashSet::new()),
         }
     }
 
-    pub fn clear_python_artifacts(&self) -> Result<()> {
+    pub fn for_task(
+        python_artifacts: Vec<PySparkPythonArtifact>,
+        local_relation_resources: Vec<LocalRelationResource>,
+    ) -> Self {
+        Self {
+            config: RemoteExecutionCodecConfig::default(),
+            local_relation_resource_namespace: String::new(),
+            decode_python_artifacts: Arc::from(python_artifacts),
+            decode_local_relation_resources: Arc::new(
+                local_relation_resources
+                    .into_iter()
+                    .map(|resource| (resource.key.clone(), resource))
+                    .collect(),
+            ),
+            encode_python_artifacts: Mutex::new(vec![]),
+            encode_local_relation_resources: Mutex::new(vec![]),
+            uploaded_local_relation_resource_uris: Mutex::new(HashSet::new()),
+        }
+    }
+
+    pub fn clear_task_resources(&self) -> Result<()> {
         self.encode_python_artifacts
             .lock()
             .map_err(|e| plan_datafusion_err!("failed to lock Python artifact collector: {e}"))?
+            .clear();
+        self.encode_local_relation_resources
+            .lock()
+            .map_err(|e| {
+                plan_datafusion_err!("failed to lock LocalRelation resource collector: {e}")
+            })?
             .clear();
         Ok(())
     }
@@ -329,6 +390,14 @@ impl RemoteExecutionCodec {
         Ok(std::mem::take(
             &mut *self.encode_python_artifacts.lock().map_err(|e| {
                 plan_datafusion_err!("failed to lock Python artifact collector: {e}")
+            })?,
+        ))
+    }
+
+    pub fn take_local_relation_resources(&self) -> Result<Vec<LocalRelationResource>> {
+        Ok(std::mem::take(
+            &mut *self.encode_local_relation_resources.lock().map_err(|e| {
+                plan_datafusion_err!("failed to lock LocalRelation resource collector: {e}")
             })?,
         ))
     }
@@ -347,6 +416,305 @@ impl RemoteExecutionCodec {
         }
         Ok(())
     }
+
+    fn collect_local_relation_resource(&self, data: Vec<u8>) -> Result<String> {
+        let sha256 = sha256_hex(&data);
+        let key = sha256.clone();
+        let size = data.len() as u64;
+        let mut collected = self.encode_local_relation_resources.lock().map_err(|e| {
+            plan_datafusion_err!("failed to lock LocalRelation resource collector: {e}")
+        })?;
+        if !collected.iter().any(|resource| resource.key == key) {
+            let resource = self.build_local_relation_resource(key.clone(), sha256, size, data)?;
+            collected.push(resource);
+        }
+        Ok(key)
+    }
+
+    fn build_local_relation_resource(
+        &self,
+        key: String,
+        sha256: String,
+        size: u64,
+        data: Vec<u8>,
+    ) -> Result<LocalRelationResource> {
+        if data.len() <= self.config.local_relation_inline_max_bytes {
+            return Ok(LocalRelationResource {
+                key,
+                data: Some(data),
+                uri: None,
+                sha256,
+                size,
+            });
+        }
+        let Some(base_uri) = self.config.local_relation_store_uri.as_deref() else {
+            return plan_err!(
+                "LocalRelation resource {key} is {size} bytes, exceeding spark.artifact_inline_max_bytes={}, and spark.artifact_store_uri is not configured",
+                self.config.local_relation_inline_max_bytes
+            );
+        };
+        let uri = local_relation_resource_object_uri(
+            base_uri,
+            &self.local_relation_resource_namespace,
+            &sha256,
+        )?;
+        self.upload_local_relation_resource(&uri, data)?;
+        Ok(LocalRelationResource {
+            key,
+            data: None,
+            uri: Some(uri),
+            sha256,
+            size,
+        })
+    }
+
+    fn read_local_relation_resource(&self, key: &str) -> Result<Vec<u8>> {
+        let Some(resource) = self.decode_local_relation_resources.get(key) else {
+            return plan_err!("LocalRelation resource not found: {key}");
+        };
+        let data = if let Some(data) = &resource.data {
+            data.clone()
+        } else if let Some(uri) = &resource.uri {
+            download_local_relation_resource(uri, resource)?
+        } else {
+            return plan_err!("LocalRelation resource {key} has no inline data or URI");
+        };
+        validate_local_relation_resource_data(resource, &data)?;
+        Ok(data)
+    }
+
+    fn upload_local_relation_resource(&self, uri: &str, data: Vec<u8>) -> Result<()> {
+        if self
+            .uploaded_local_relation_resource_uris
+            .lock()
+            .map_err(|e| plan_datafusion_err!("failed to lock LocalRelation upload registry: {e}"))?
+            .contains(uri)
+        {
+            return Ok(());
+        }
+        upload_local_relation_resource(uri, data)?;
+        self.uploaded_local_relation_resource_uris
+            .lock()
+            .map_err(|e| plan_datafusion_err!("failed to lock LocalRelation upload registry: {e}"))?
+            .insert(uri.to_string());
+        Ok(())
+    }
+}
+
+impl Drop for RemoteExecutionCodec {
+    fn drop(&mut self) {
+        let uris = match self.uploaded_local_relation_resource_uris.get_mut() {
+            Ok(uris) => std::mem::take(uris),
+            Err(error) => std::mem::take(error.into_inner()),
+        };
+        cleanup_local_relation_resource_uris(uris);
+    }
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    Sha256::digest(data)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn local_relation_resource_namespace() -> String {
+    let nanos = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(duration) => duration.as_nanos(),
+        Err(_) => 0,
+    };
+    format!("{}-{nanos}", std::process::id())
+}
+
+fn local_relation_resource_object_uri(
+    base_uri: &str,
+    namespace: &str,
+    sha256: &str,
+) -> Result<String> {
+    let mut url = Url::parse(base_uri)
+        .map_err(|e| plan_datafusion_err!("invalid spark.artifact_store_uri {base_uri}: {e}"))?;
+    if sha256.len() < 2 {
+        return plan_err!("LocalRelation resource SHA-256 is unexpectedly short: {sha256}");
+    }
+    let prefix = url.path().trim_end_matches('/');
+    let path = if prefix.is_empty() || prefix == "/" {
+        format!(
+            "/sail-artifacts/execution/{namespace}/local-relations/{}/{sha256}",
+            &sha256[..2]
+        )
+    } else {
+        format!(
+            "{prefix}/sail-artifacts/execution/{namespace}/local-relations/{}/{sha256}",
+            &sha256[..2]
+        )
+    };
+    url.set_path(&path);
+    Ok(url.to_string())
+}
+
+fn upload_local_relation_resource(uri: &str, data: Vec<u8>) -> Result<()> {
+    let uri = uri.to_string();
+    let handle = std::thread::Builder::new()
+        .name("sail-local-relation-upload".to_string())
+        .spawn(move || -> std::result::Result<(), String> {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("failed to create LocalRelation upload runtime: {e}"))?;
+            runtime.block_on(async move {
+                let url = Url::parse(&uri)
+                    .map_err(|e| format!("invalid LocalRelation object-store URI {uri}: {e}"))?;
+                let (_scheme, path) = ObjectStoreScheme::parse(&url)
+                    .map_err(|e| format!("invalid LocalRelation object-store path {uri}: {e}"))?;
+                let store = sail_object_store::get_dynamic_object_store(&url).map_err(|e| {
+                    format!("failed to create LocalRelation object store {uri}: {e}")
+                })?;
+                store
+                    .put(&path, PutPayload::from(data))
+                    .await
+                    .map_err(|e| format!("failed to write LocalRelation resource {uri}: {e}"))?;
+                Ok(())
+            })
+        })
+        .map_err(|e| plan_datafusion_err!("failed to spawn LocalRelation upload: {e}"))?;
+    match handle.join() {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => plan_err!("{error}"),
+        Err(_) => plan_err!("LocalRelation upload thread panicked"),
+    }
+}
+
+fn cleanup_local_relation_resource_uris(uris: HashSet<String>) {
+    if uris.is_empty() {
+        return;
+    }
+    let handle = std::thread::Builder::new()
+        .name("sail-local-relation-cleanup".to_string())
+        .spawn(move || -> std::result::Result<(), String> {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("failed to create LocalRelation cleanup runtime: {e}"))?;
+            runtime.block_on(async move {
+                for uri in uris {
+                    if let Err(error) = cleanup_local_relation_resource_uri(&uri).await {
+                        log::debug!("{error}");
+                    }
+                }
+                Ok(())
+            })
+        });
+    match handle {
+        Ok(handle) => match handle.join() {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => log::debug!("failed to clean up LocalRelation resources: {error}"),
+            Err(_) => log::debug!("LocalRelation resource cleanup thread panicked"),
+        },
+        Err(error) => log::debug!("failed to spawn LocalRelation resource cleanup: {error}"),
+    }
+}
+
+async fn cleanup_local_relation_resource_uri(uri: &str) -> std::result::Result<(), String> {
+    let url = Url::parse(uri)
+        .map_err(|e| format!("invalid LocalRelation object-store URI {uri}: {e}"))?;
+    let (_scheme, path) = ObjectStoreScheme::parse(&url)
+        .map_err(|e| format!("invalid LocalRelation object-store path {uri}: {e}"))?;
+    let store = sail_object_store::get_dynamic_object_store(&url)
+        .map_err(|e| format!("failed to create LocalRelation object store {uri}: {e}"))?;
+    match store.delete(&path).await {
+        Ok(()) | Err(object_store::Error::NotFound { .. }) => Ok(()),
+        Err(e) => Err(format!(
+            "failed to delete LocalRelation resource {uri}: {e}"
+        )),
+    }
+}
+
+fn download_local_relation_resource(
+    uri: &str,
+    resource: &LocalRelationResource,
+) -> Result<Vec<u8>> {
+    let uri = uri.to_string();
+    let key = resource.key.clone();
+    let expected_size = resource.size;
+    let expected_sha256 = resource.sha256.clone();
+    let handle = std::thread::Builder::new()
+        .name("sail-local-relation-download".to_string())
+        .spawn(move || -> std::result::Result<Vec<u8>, String> {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|e| format!("failed to create LocalRelation download runtime: {e}"))?;
+            runtime.block_on(async move {
+                let url = Url::parse(&uri)
+                    .map_err(|e| format!("invalid LocalRelation object-store URI {uri}: {e}"))?;
+                let (_scheme, path) = ObjectStoreScheme::parse(&url)
+                    .map_err(|e| format!("invalid LocalRelation object-store path {uri}: {e}"))?;
+                let store = sail_object_store::get_dynamic_object_store(&url)
+                    .map_err(|e| format!("failed to create LocalRelation object store {uri}: {e}"))?;
+                let result = store
+                    .get(&path)
+                    .await
+                    .map_err(|e| format!("failed to read LocalRelation resource {uri}: {e}"))?;
+                let mut data = Vec::new();
+                let mut hasher = Sha256::new();
+                let mut size = 0_u64;
+                let mut stream = result.into_stream();
+                while let Some(chunk) = stream.next().await {
+                    let chunk = chunk.map_err(|e| {
+                        format!("failed to read LocalRelation resource bytes {uri}: {e}")
+                    })?;
+                    size += chunk.len() as u64;
+                    hasher.update(&chunk);
+                    data.extend_from_slice(&chunk);
+                }
+                if size != expected_size {
+                    return Err(format!(
+                        "LocalRelation resource {key} size mismatch: expected {expected_size}, got {size}"
+                    ));
+                }
+                let actual = hasher
+                    .finalize()
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect::<String>();
+                if actual != expected_sha256 {
+                    return Err(format!(
+                        "LocalRelation resource {key} SHA-256 mismatch: expected {expected_sha256}, got {actual}"
+                    ));
+                }
+                Ok(data)
+            })
+        })
+        .map_err(|e| plan_datafusion_err!("failed to spawn LocalRelation download: {e}"))?;
+    match handle.join() {
+        Ok(Ok(data)) => Ok(data),
+        Ok(Err(error)) => plan_err!("{error}"),
+        Err(_) => plan_err!("LocalRelation download thread panicked"),
+    }
+}
+
+fn validate_local_relation_resource_data(
+    resource: &LocalRelationResource,
+    data: &[u8],
+) -> Result<()> {
+    if data.len() as u64 != resource.size {
+        return plan_err!(
+            "LocalRelation resource {} size mismatch: expected {}, got {}",
+            resource.key,
+            resource.size,
+            data.len()
+        );
+    }
+    let actual = sha256_hex(data);
+    if actual != resource.sha256 {
+        return plan_err!(
+            "LocalRelation resource {} SHA-256 mismatch: expected {}, got {}",
+            resource.key,
+            resource.sha256,
+            actual
+        );
+    }
+    Ok(())
 }
 
 impl PhysicalExtensionCodec for RemoteExecutionCodec {
@@ -478,12 +846,28 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 show_sizes,
                 sort_information,
                 limit,
+                partition_resource_keys,
             }) => {
                 let schema = try_decode_schema(&schema)?;
-                let partitions = partitions
-                    .into_iter()
-                    .map(|x| read_record_batches(&x))
-                    .collect::<Result<Vec<_>>>()?;
+                let partitions = if partition_resource_keys.is_empty() {
+                    partitions
+                        .into_iter()
+                        .map(|x| read_record_batches(&x))
+                        .collect::<Result<Vec<_>>>()?
+                } else {
+                    if !partitions.is_empty() {
+                        return plan_err!(
+                            "MemoryExecNode cannot contain both inline partitions and resource keys"
+                        );
+                    }
+                    partition_resource_keys
+                        .into_iter()
+                        .map(|key| {
+                            let data = self.read_local_relation_resource(&key)?;
+                            read_record_batches(&data)
+                        })
+                        .collect::<Result<Vec<_>>>()?
+                };
                 let projection =
                     projection.map(|x| x.columns.into_iter().map(|c| c as usize).collect());
                 let sort_information =
@@ -1621,10 +2005,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 // `memory.schema()` is the schema after projection.
                 // We must use the original schema here.
                 let schema = memory.original_schema();
-                let partitions = memory
+                let partition_resource_keys = memory
                     .partitions()
                     .iter()
-                    .map(|x| write_record_batches(x, schema.as_ref()))
+                    .map(|x| {
+                        let data = write_record_batches(x, schema.as_ref())?;
+                        self.collect_local_relation_resource(data)
+                    })
                     .collect::<Result<_>>()?;
                 let projection = memory
                     .projection()
@@ -1635,12 +2022,13 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let schema = try_encode_schema(schema.as_ref())?;
                 let sort_information = self.try_encode_lex_orderings(memory.sort_information())?;
                 NodeKind::Memory(gen::MemoryExecNode {
-                    partitions,
+                    partitions: vec![],
                     schema,
                     projection,
                     show_sizes: memory.show_sizes(),
                     sort_information,
                     limit: memory.fetch().map(|x| x as u64),
+                    partition_resource_keys,
                 })
             } else {
                 return plan_err!("unsupported data source node: {data_source:?}");
@@ -4532,6 +4920,124 @@ mod tests {
         as_hof(decoded_expr)?;
 
         assert_same_result(&physical, decoded_expr, schema_ref, vec![Arc::new(list)])
+    }
+
+    fn build_memory_plan() -> Result<Arc<dyn ExecutionPlan>> {
+        use datafusion::arrow::array::Int32Array;
+        use datafusion::arrow::datatypes::{DataType, Field};
+
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?;
+        let partitions = vec![vec![batch]];
+        let source = MemorySourceConfig::try_new(&partitions, schema, None)?;
+        Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+    }
+
+    fn memory_row_count(plan: Arc<dyn ExecutionPlan>) -> Result<usize> {
+        let data_source = plan
+            .downcast_ref::<DataSourceExec>()
+            .ok_or_else(|| plan_datafusion_err!("plan is not DataSourceExec"))?;
+        let memory = data_source
+            .data_source()
+            .downcast_ref::<MemorySourceConfig>()
+            .ok_or_else(|| plan_datafusion_err!("data source is not MemorySourceConfig"))?;
+        Ok(memory
+            .partitions()
+            .iter()
+            .flat_map(|partition| partition.iter())
+            .map(|batch| batch.num_rows())
+            .sum())
+    }
+
+    #[test]
+    fn test_memory_exec_uses_local_relation_resources() -> Result<()> {
+        let encoder = RemoteExecutionCodec::default();
+        let bytes = try_encode_physical_plan(&encoder, build_memory_plan()?)?;
+        let resources = encoder.take_local_relation_resources()?;
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0].key, resources[0].sha256);
+        assert_eq!(
+            resources[0].data.as_ref().map(|data| data.len() as u64),
+            Some(resources[0].size)
+        );
+        assert!(resources[0].uri.is_none());
+
+        let decoder = RemoteExecutionCodec::for_task(vec![], resources);
+        let ctx = TaskContext::default();
+        let decoded = try_decode_physical_plan(&ctx, &decoder, &bytes)?;
+        assert_eq!(memory_row_count(decoded)?, 3);
+
+        let missing_decoder = RemoteExecutionCodec::for_task(vec![], vec![]);
+        let error = try_decode_physical_plan(&ctx, &missing_decoder, &bytes)
+            .expect_err("decode should fail without LocalRelation resources");
+        assert!(error
+            .to_string()
+            .contains("LocalRelation resource not found"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_memory_exec_local_relation_resource_requires_store_for_large_payloads() -> Result<()> {
+        let encoder = RemoteExecutionCodec::for_driver(RemoteExecutionCodecConfig {
+            local_relation_inline_max_bytes: 0,
+            local_relation_store_uri: None,
+        });
+        let error = try_encode_physical_plan(&encoder, build_memory_plan()?)
+            .expect_err("large LocalRelation resource should require object store");
+        assert!(error.to_string().contains("spark.artifact_store_uri"));
+        Ok(())
+    }
+
+    struct TestTempDir(std::path::PathBuf);
+
+    impl TestTempDir {
+        fn new() -> Result<Self> {
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| plan_datafusion_err!("system time error: {e}"))?
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "sail-local-relation-resource-test-{}-{nanos}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&path)?;
+            Ok(Self(path))
+        }
+
+        fn uri(&self) -> Result<String> {
+            Url::from_directory_path(&self.0)
+                .map(|url| url.to_string())
+                .map_err(|_| plan_datafusion_err!("failed to build file URI for test temp dir"))
+        }
+    }
+
+    impl Drop for TestTempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn test_memory_exec_local_relation_resource_object_store_round_trip() -> Result<()> {
+        let temp_dir = TestTempDir::new()?;
+        let encoder = RemoteExecutionCodec::for_driver(RemoteExecutionCodecConfig {
+            local_relation_inline_max_bytes: 0,
+            local_relation_store_uri: Some(temp_dir.uri()?),
+        });
+        let bytes = try_encode_physical_plan(&encoder, build_memory_plan()?)?;
+        let resources = encoder.take_local_relation_resources()?;
+        assert_eq!(resources.len(), 1);
+        assert!(resources[0].data.is_none());
+        assert!(resources[0].uri.is_some());
+
+        let decoder = RemoteExecutionCodec::for_task(vec![], resources);
+        let ctx = TaskContext::default();
+        let decoded = try_decode_physical_plan(&ctx, &decoder, &bytes)?;
+        assert_eq!(memory_row_count(decoded)?, 3);
+        Ok(())
     }
 
     #[test]

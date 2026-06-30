@@ -17,6 +17,7 @@ sail-delta-lake = { path = "../sail-delta-lake" }
 sail-iceberg = { path = "../sail-iceberg" }
 sail-function = { path = "../sail-function" }
 sail-logical-plan = { path = "../sail-logical-plan" }
+sail-object-store = { path = "../sail-object-store" }
 sail-physical-plan = { path = "../sail-physical-plan" }
 sail-telemetry = { path = "../sail-telemetry" }
 sail-catalog-system = { path = "../sail-catalog-system" }
@@ -41,6 +42,7 @@ serde_json = { workspace = true }
 kube = { workspace = true }
 k8s-openapi = { workspace = true }
 rand = { workspace = true }
+sha2 = { workspace = true }
 url = { workspace = true }
 readonly = { workspace = true }
 indexmap = { workspace = true }

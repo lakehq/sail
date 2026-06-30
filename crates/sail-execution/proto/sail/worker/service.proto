@@ -14,6 +14,7 @@ message TaskLaunchContext {
 
 message TaskResources {
   repeated PySparkPythonArtifact python_artifacts = 1;
+  repeated LocalRelationResource local_relation_resources = 2;
 }
 
 message PySparkPythonArtifact {
@@ -24,6 +25,14 @@ message PySparkPythonArtifact {
   string sha256 = 5;
   uint64 size = 6;
   PySparkArtifactKind kind = 7;
+}
+
+message LocalRelationResource {
+  string key = 1;
+  optional bytes data = 2;
+  optional string uri = 3;
+  string sha256 = 4;
+  uint64 size = 5;
 }
 
 enum PySparkArtifactKind {

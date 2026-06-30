@@ -25,6 +25,8 @@ pub struct DriverOptions {
     pub task_stream_buffer: usize,
     pub task_stream_creation_timeout: Duration,
     pub task_max_attempts: usize,
+    pub artifact_inline_max_bytes: usize,
+    pub artifact_store_uri: Option<String>,
     pub rpc_retry_strategy: RetryStrategy,
     pub runtime: RuntimeHandle,
     pub worker_manager: Arc<dyn WorkerManager>,
@@ -60,6 +62,12 @@ impl DriverOptions {
                 config.cluster.task_stream_creation_timeout_secs,
             ),
             task_max_attempts: config.cluster.task_max_attempts,
+            artifact_inline_max_bytes: config.spark.artifact_inline_max_bytes,
+            artifact_store_uri: if config.spark.artifact_store_uri.is_empty() {
+                None
+            } else {
+                Some(config.spark.artifact_store_uri.clone())
+            },
             runtime,
             worker_manager,
         }

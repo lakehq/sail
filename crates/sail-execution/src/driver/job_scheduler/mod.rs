@@ -13,7 +13,7 @@ pub use state::TaskState;
 use crate::driver::job_scheduler::state::JobDescriptor;
 use crate::driver::output::JobOutputHandle;
 use crate::id::{IdGenerator, JobId, TaskKey, TaskStreamKey};
-use crate::proto::codec::RemoteExecutionCodec;
+use crate::proto::codec::{RemoteExecutionCodec, RemoteExecutionCodecConfig};
 use crate::task::scheduling::TaskRegion;
 
 pub struct JobScheduler {
@@ -25,11 +25,15 @@ pub struct JobScheduler {
 
 impl JobScheduler {
     pub fn new(options: JobSchedulerOptions) -> Self {
+        let codec = RemoteExecutionCodec::for_driver(RemoteExecutionCodecConfig {
+            local_relation_inline_max_bytes: options.artifact_inline_max_bytes,
+            local_relation_store_uri: options.artifact_store_uri.clone(),
+        });
         Self {
             options,
             jobs: IndexMap::new(),
             job_id_generator: IdGenerator::new(),
-            codec: RemoteExecutionCodec::default(),
+            codec,
         }
     }
 }

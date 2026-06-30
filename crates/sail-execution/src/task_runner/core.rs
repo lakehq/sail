@@ -93,9 +93,13 @@ impl TaskRunner {
             output,
         } = definition;
         let TaskLaunchContext {
-            resources: TaskResources { python_artifacts },
+            resources:
+                TaskResources {
+                    python_artifacts,
+                    local_relation_resources,
+                },
         } = launch_context;
-        let codec = RemoteExecutionCodec::for_task(python_artifacts);
+        let codec = RemoteExecutionCodec::for_task(python_artifacts, local_relation_resources);
         let plan = try_decode_physical_plan(&context, &codec, plan.as_ref())?;
         let plan = self.rewrite_parquet_adapters(plan)?;
         let plan = self.rewrite_shuffle(ctx, key, &inputs, &output, plan, &context, &codec)?;

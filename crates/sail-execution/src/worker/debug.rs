@@ -16,13 +16,27 @@ impl Debug for DebugTaskLaunchContext<'_> {
             .as_ref()
             .map(|resources| resources.python_artifacts.as_slice())
             .unwrap_or_default();
-        let inline_bytes: usize = artifacts
+        let local_relations = context
+            .resources
+            .as_ref()
+            .map(|resources| resources.local_relation_resources.as_slice())
+            .unwrap_or_default();
+        let artifact_inline_bytes: usize = artifacts
             .iter()
             .map(|artifact| artifact.data.as_ref().map(|x| x.len()).unwrap_or_default())
             .sum();
+        let local_relation_inline_bytes: usize = local_relations
+            .iter()
+            .map(|resource| resource.data.as_ref().map(|x| x.len()).unwrap_or_default())
+            .sum();
         f.debug_struct("TaskLaunchContext")
             .field("python_artifact_count", &artifacts.len())
-            .field("python_artifact_inline_bytes", &inline_bytes)
+            .field("python_artifact_inline_bytes", &artifact_inline_bytes)
+            .field("local_relation_resource_count", &local_relations.len())
+            .field(
+                "local_relation_resource_inline_bytes",
+                &local_relation_inline_bytes,
+            )
             .finish()
     }
 }

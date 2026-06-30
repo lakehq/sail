@@ -28,6 +28,16 @@ pub struct TaskLaunchContext {
 #[derive(Debug, Clone, Default)]
 pub struct TaskResources {
     pub python_artifacts: Vec<PySparkPythonArtifact>,
+    pub local_relation_resources: Vec<LocalRelationResource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalRelationResource {
+    pub key: String,
+    pub data: Option<Vec<u8>>,
+    pub uri: Option<String>,
+    pub sha256: String,
+    pub size: u64,
 }
 
 #[derive(Debug, Clone)]

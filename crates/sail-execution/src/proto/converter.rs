@@ -3,6 +3,8 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{FieldRef, Schema};
 use datafusion::common::{plan_datafusion_err, plan_err, Result};
+use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::{LambdaParametersProgress, ValueOrLambda};
 use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable};
 use datafusion::physical_expr::{HigherOrderFunctionExpr, PhysicalExpr};
@@ -12,7 +14,8 @@ use datafusion_proto::physical_plan::{
     PhysicalExtensionCodec, PhysicalPlanDecodeContext, PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf::{
-    physical_expr_node, PhysicalExprNode, PhysicalExtensionExprNode, PhysicalPlanNode,
+    physical_expr_node, physical_plan_node, PhysicalExprNode, PhysicalExtensionExprNode,
+    PhysicalExtensionNode, PhysicalPlanNode,
 };
 use prost::Message;
 
@@ -45,6 +48,15 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
         plan: &Arc<dyn ExecutionPlan>,
         codec: &dyn PhysicalExtensionCodec,
     ) -> Result<PhysicalPlanNode> {
+        if let Some(data_source) = plan.downcast_ref::<DataSourceExec>() {
+            if data_source
+                .data_source()
+                .downcast_ref::<MemorySourceConfig>()
+                .is_some()
+            {
+                return self.execution_plan_to_extension_proto(plan, codec);
+            }
+        }
         PhysicalPlanNode::try_from_physical_plan_with_converter(Arc::clone(plan), codec, self)
     }
 
@@ -117,6 +129,26 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
 }
 
 impl RemotePhysicalProtoConverter {
+    fn execution_plan_to_extension_proto(
+        &self,
+        plan: &Arc<dyn ExecutionPlan>,
+        codec: &dyn PhysicalExtensionCodec,
+    ) -> Result<PhysicalPlanNode> {
+        let mut node = vec![];
+        codec.try_encode(Arc::clone(plan), &mut node)?;
+        let inputs = plan
+            .children()
+            .into_iter()
+            .cloned()
+            .map(|input| self.execution_plan_to_proto(&input, codec))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(PhysicalPlanNode {
+            physical_plan_type: Some(physical_plan_node::PhysicalPlanType::Extension(
+                PhysicalExtensionNode { node, inputs },
+            )),
+        })
+    }
+
     fn higher_order_expr_to_proto(
         &self,
         expr: &Arc<dyn PhysicalExpr>,

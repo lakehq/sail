@@ -1,7 +1,7 @@
 use sail_python_udf::config::{PySparkArtifactKind, PySparkPythonArtifact};
 
 use crate::error::{ExecutionError, ExecutionResult};
-use crate::task::definition::{TaskLaunchContext, TaskResources};
+use crate::task::definition::{LocalRelationResource, TaskLaunchContext, TaskResources};
 use crate::worker::gen;
 
 impl From<TaskLaunchContext> for gen::TaskLaunchContext {
@@ -29,9 +29,16 @@ impl TryFrom<gen::TaskLaunchContext> for TaskLaunchContext {
 
 impl From<TaskResources> for gen::TaskResources {
     fn from(value: TaskResources) -> Self {
-        let TaskResources { python_artifacts } = value;
+        let TaskResources {
+            python_artifacts,
+            local_relation_resources,
+        } = value;
         gen::TaskResources {
             python_artifacts: python_artifacts.into_iter().map(|x| x.into()).collect(),
+            local_relation_resources: local_relation_resources
+                .into_iter()
+                .map(|x| x.into())
+                .collect(),
         }
     }
 }
@@ -46,6 +53,45 @@ impl TryFrom<gen::TaskResources> for TaskResources {
                 .into_iter()
                 .map(|x| x.try_into())
                 .collect::<ExecutionResult<Vec<_>>>()?,
+            local_relation_resources: value
+                .local_relation_resources
+                .into_iter()
+                .map(|x| x.try_into())
+                .collect::<ExecutionResult<Vec<_>>>()?,
+        })
+    }
+}
+
+impl From<LocalRelationResource> for gen::LocalRelationResource {
+    fn from(value: LocalRelationResource) -> Self {
+        let LocalRelationResource {
+            key,
+            data,
+            uri,
+            sha256,
+            size,
+        } = value;
+        gen::LocalRelationResource {
+            key,
+            data,
+            uri,
+            sha256,
+            size,
+        }
+    }
+}
+
+impl TryFrom<gen::LocalRelationResource> for LocalRelationResource {
+    type Error = ExecutionError;
+
+    fn try_from(value: gen::LocalRelationResource) -> Result<Self, Self::Error> {
+        validate_local_relation_resource(&value)?;
+        Ok(Self {
+            key: value.key,
+            data: value.data,
+            uri: value.uri,
+            sha256: value.sha256,
+            size: value.size,
         })
     }
 }
@@ -127,6 +173,47 @@ fn validate_pyspark_artifact(value: &gen::PySparkPythonArtifact) -> ExecutionRes
         (_, Some("")) => Err(ExecutionError::InvalidArgument(format!(
             "PySpark artifact {} must not have an empty object-store URI",
             value.name
+        ))),
+        _ => Ok(()),
+    }
+}
+
+fn validate_local_relation_resource(value: &gen::LocalRelationResource) -> ExecutionResult<()> {
+    if value.key.is_empty() {
+        return Err(ExecutionError::InvalidArgument(
+            "LocalRelation resource key must not be empty".to_string(),
+        ));
+    }
+    if value.sha256.len() != 64 || !value.sha256.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(ExecutionError::InvalidArgument(format!(
+            "LocalRelation resource {} must have a SHA-256 hex digest",
+            value.key
+        )));
+    }
+    if value.key != value.sha256 {
+        return Err(ExecutionError::InvalidArgument(format!(
+            "LocalRelation resource key {} must match its SHA-256 digest",
+            value.key
+        )));
+    }
+    match (&value.data, value.uri.as_deref()) {
+        (Some(_), Some(_)) => Err(ExecutionError::InvalidArgument(format!(
+            "LocalRelation resource {} must not have both inline data and an object-store URI",
+            value.key
+        ))),
+        (None, None) => Err(ExecutionError::InvalidArgument(format!(
+            "LocalRelation resource {} must have inline data or an object-store URI",
+            value.key
+        ))),
+        (Some(data), None) if data.len() as u64 != value.size => {
+            Err(ExecutionError::InvalidArgument(format!(
+                "LocalRelation resource {} inline data size does not match declared size",
+                value.key
+            )))
+        }
+        (_, Some("")) => Err(ExecutionError::InvalidArgument(format!(
+            "LocalRelation resource {} must not have an empty object-store URI",
+            value.key
         ))),
         _ => Ok(()),
     }

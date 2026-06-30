@@ -525,7 +525,7 @@ impl JobScheduler {
             )));
         };
 
-        self.codec.clear_python_artifacts()?;
+        self.codec.clear_task_resources()?;
         let plan = try_encode_physical_plan(&self.codec, stage.plan.clone())?;
         let inputs = stage
             .inputs
@@ -534,13 +534,17 @@ impl JobScheduler {
             .collect::<ExecutionResult<Vec<_>>>()?;
         let output = self.get_task_output(job, key, stage)?;
         let python_artifacts = self.codec.take_python_artifacts()?;
+        let local_relation_resources = self.codec.take_local_relation_resources()?;
         let definition = TaskDefinition {
             plan: Arc::from(plan),
             inputs,
             output,
         };
         let launch_context = TaskLaunchContext {
-            resources: TaskResources { python_artifacts },
+            resources: TaskResources {
+                python_artifacts,
+                local_relation_resources,
+            },
         };
         Ok((definition, launch_context, context.clone()))
     }
