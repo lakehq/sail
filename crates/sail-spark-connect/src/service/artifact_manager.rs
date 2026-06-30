@@ -540,7 +540,7 @@ struct ArtifactTransport {
 }
 
 async fn upload_artifact(uri: &str, payload: &ArtifactPayload<'_>) -> SparkResult<()> {
-    let url = Url::parse(&uri).map_err(|e| {
+    let url = Url::parse(uri).map_err(|e| {
         SparkError::invalid(format!("invalid artifact object-store URI {uri}: {e}"))
     })?;
     let (_scheme, path) = ObjectStoreScheme::parse(&url).map_err(|e| {
