@@ -3,6 +3,8 @@
 
 import hashlib
 import tempfile
+import threading
+import time
 import zipfile
 import zlib
 from pathlib import Path
@@ -18,6 +20,8 @@ EXPECTED_ARTIFACT_VALUE = 42
 EXPECTED_MULTI_ARTIFACT_VALUE = 3
 EXPECTED_CHUNKED_ARTIFACT_VALUE = 123
 EXPECTED_COMMITTED_OBJECT_STORE_VALUE = 314
+EXPECTED_CONTEXT_FILE_VALUE = 37
+EXPECTED_CONTEXT_PLAIN_VALUE = 11
 
 
 def _artifact_store_files(path):
@@ -198,6 +202,69 @@ def test_add_multiple_artifacts_as_pyfiles(spark, tmp_path):
 
     rows = spark.range(1).select(read_multi_artifact_values("id").alias("value")).collect()
     assert rows[0].value == EXPECTED_MULTI_ARTIFACT_VALUE
+
+
+def test_python_artifact_context_is_held_during_udf_execution(tmp_path):
+    artifact_root = tmp_path / "artifact-root"
+    file_path = tmp_path / "sail_context_file.txt"
+    ready_path = tmp_path / "artifact-udf-ready"
+    file_path.write_text(str(EXPECTED_CONTEXT_FILE_VALUE), encoding="utf-8")
+
+    with (
+        spark_connect_server(envs={"SAIL_SPARK__ARTIFACT_ROOT": str(artifact_root)}) as server,
+        spark_session_factory(server.remote) as sessions,
+    ):
+        artifact_session = sessions.create()
+        plain_session = sessions.create()
+        artifact_session.addArtifact(str(file_path), file=True)
+
+        @udf(IntegerType())
+        def read_file_after_delay(_):
+            import time
+            from pathlib import Path
+
+            from pyspark import SparkFiles
+
+            Path(str(ready_path)).write_text("ready", encoding="utf-8")
+            time.sleep(0.2)
+            with open(SparkFiles.get("sail_context_file.txt"), encoding="utf-8") as file:
+                return int(file.read())
+
+        @udf(IntegerType())
+        def read_plain_value(_):
+            return EXPECTED_CONTEXT_PLAIN_VALUE
+
+        artifact_values = []
+        artifact_errors = []
+
+        def collect_artifact_values():
+            try:
+                rows = artifact_session.range(1).select(read_file_after_delay("id").alias("value")).collect()
+                artifact_values.append(rows[0].value)
+            except BaseException as error:  # noqa: BLE001
+                artifact_errors.append(error)
+
+        thread = threading.Thread(target=collect_artifact_values)
+        thread.start()
+
+        deadline = time.monotonic() + 10
+        while not ready_path.exists() and thread.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        if not ready_path.exists():
+            thread.join(timeout=1)
+            if artifact_errors:
+                raise artifact_errors[0]
+            pytest.fail("artifact UDF did not start before timeout")
+
+        rows = plain_session.range(1).select(read_plain_value("id").alias("value")).collect()
+        assert rows[0].value == EXPECTED_CONTEXT_PLAIN_VALUE
+
+        thread.join(timeout=10)
+        if thread.is_alive():
+            pytest.fail("artifact UDF did not finish before timeout")
+        if artifact_errors:
+            raise artifact_errors[0]
+        assert artifact_values == [EXPECTED_CONTEXT_FILE_VALUE]
 
 
 def test_add_artifacts_crc_failure_is_reported_without_storing(spark):
@@ -487,6 +554,42 @@ def test_failed_batch_does_not_delete_committed_object_store_artifact(tmp_path):
 
         rows = session.range(1).select(read_committed_value("id").alias("value")).collect()
         assert rows[0].value == EXPECTED_COMMITTED_OBJECT_STORE_VALUE
+
+
+def test_duplicate_object_store_artifact_reuses_committed_object(tmp_path):
+    artifact_root = tmp_path / "artifact-root"
+    artifact_store = tmp_path / "artifact-store"
+    module_a = tmp_path / "sail_duplicate_store_a.py"
+    module_b = tmp_path / "sail_duplicate_store_b.py"
+    module_data = b"VALUE = 271\n"
+    module_a.write_bytes(module_data)
+    module_b.write_bytes(module_data)
+
+    with (
+        spark_connect_server(
+            envs={
+                "SAIL_SPARK__ARTIFACT_ROOT": str(artifact_root),
+                "SAIL_SPARK__ARTIFACT_INLINE_MAX_BYTES": "0",
+                "SAIL_SPARK__ARTIFACT_STORE_URI": Path(artifact_store).as_uri(),
+            }
+        ) as server,
+        spark_session_factory(server.remote) as sessions,
+    ):
+        session = sessions.create()
+        session.addArtifact(str(module_a), pyfile=True)
+
+        files = _artifact_store_files(artifact_store)
+        assert len(files) == 1
+        object_path = files[0]
+        object_stat = object_path.stat()
+
+        time.sleep(0.01)
+        session.addArtifact(str(module_b), pyfile=True)
+
+        assert _artifact_store_files(artifact_store) == [object_path]
+        stat_after_duplicate = object_path.stat()
+        assert stat_after_duplicate.st_size == object_stat.st_size
+        assert stat_after_duplicate.st_mtime_ns == object_stat.st_mtime_ns
 
 
 @pytest.mark.skipif(

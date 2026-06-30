@@ -1,7 +1,7 @@
 use std::ffi::CString;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use num_bigint::BigUint;
@@ -20,6 +20,7 @@ const ARCHIVES_PREFIX: &str = "archives/";
 static ARTIFACT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 static ARTIFACT_PROCESS_NAMESPACE: OnceLock<String> = OnceLock::new();
 static INSTALLED_ARTIFACT_PYTHON_PATHS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+static PYTHON_ARTIFACT_CONTEXT_LOCK: OnceLock<Arc<PythonArtifactContextLock>> = OnceLock::new();
 const SPARK_FILES_SHIM_SOURCE: &str = r#"
 import os
 
@@ -156,6 +157,57 @@ pub struct PySparkUdfConfig {
     pub python_artifacts: Vec<PySparkPythonArtifact>,
 }
 
+struct PythonArtifactContextLock {
+    locked: Mutex<bool>,
+    available: Condvar,
+}
+
+pub struct PythonArtifactContextGuard {
+    lock: Arc<PythonArtifactContextLock>,
+}
+
+impl PythonArtifactContextLock {
+    fn new() -> Self {
+        Self {
+            locked: Mutex::new(false),
+            available: Condvar::new(),
+        }
+    }
+
+    fn acquire() -> PyUdfResult<PythonArtifactContextGuard> {
+        let lock = Arc::clone(
+            PYTHON_ARTIFACT_CONTEXT_LOCK
+                .get_or_init(|| Arc::new(PythonArtifactContextLock::new())),
+        );
+        {
+            let mut locked = lock.locked.lock().map_err(|e| {
+                PyUdfError::internal(format!("failed to lock Python artifact context: {e}"))
+            })?;
+            while *locked {
+                locked = lock.available.wait(locked).map_err(|e| {
+                    PyUdfError::internal(format!("failed to wait for Python artifact context: {e}"))
+                })?;
+            }
+            *locked = true;
+        }
+        Ok(PythonArtifactContextGuard { lock })
+    }
+}
+
+impl Drop for PythonArtifactContextGuard {
+    fn drop(&mut self) {
+        match self.lock.locked.lock() {
+            Ok(mut locked) => {
+                *locked = false;
+                self.lock.available.notify_one();
+            }
+            Err(error) => {
+                log::error!("failed to unlock Python artifact context: {error}");
+            }
+        }
+    }
+}
+
 impl Default for PySparkUdfConfig {
     fn default() -> Self {
         Self {
@@ -174,6 +226,15 @@ impl Default for PySparkUdfConfig {
 }
 
 impl PySparkUdfConfig {
+    pub fn enter_python_artifact_context(
+        &self,
+        py: Python,
+    ) -> PyUdfResult<PythonArtifactContextGuard> {
+        let guard = py.detach(PythonArtifactContextLock::acquire)?;
+        self.install_python_artifacts(py)?;
+        Ok(guard)
+    }
+
     pub fn install_python_artifacts(&self, py: Python) -> PyUdfResult<()> {
         if self.python_artifacts.is_empty() {
             clear_python_artifacts(py)?;

@@ -94,7 +94,7 @@ impl PySparkUDF {
 
     fn udf(&self, py: Python) -> Result<Py<PyAny>> {
         let udf = self.udf.get_or_try_init(py, || {
-            self.config.install_python_artifacts(py)?;
+            let _artifact_context = self.config.enter_python_artifact_context(py)?;
             let udf = PySparkUdfPayload::load(py, &self.payload)?;
             let udf = match self.kind {
                 PySparkUdfKind::Batch => {
@@ -137,6 +137,7 @@ impl ScalarUDFImpl for PySparkUDF {
         let args: Vec<ArrayRef> = ColumnarValue::values_to_arrays(&args)?;
         let udf = Python::attach(|py| self.udf(py))?;
         let data = Python::attach(|py| -> PyUdfResult<_> {
+            let _artifact_context = self.config.enter_python_artifact_context(py)?;
             let output = udf.call1(py, (args.try_to_py(py)?, number_rows))?;
             Ok(ArrayData::try_from_py(py, &output)?)
         })?;

@@ -79,7 +79,7 @@ impl StreamUDF for PySparkMapIterUDF {
 
     fn invoke(&self, input: SendableRecordBatchStream) -> Result<SendableRecordBatchStream> {
         let function = Python::attach(|py| -> PyUdfResult<_> {
-            self.config.install_python_artifacts(py)?;
+            let _artifact_context = self.config.enter_python_artifact_context(py)?;
             let udf = PySparkUdfPayload::load(py, &self.payload)?;
             let udf = match self.kind {
                 PySparkMapIterKind::Pandas => PySpark::map_pandas_iter_udf(py, udf, &self.config)?,
@@ -90,6 +90,7 @@ impl StreamUDF for PySparkMapIterUDF {
         Ok(Box::pin(PyMapStream::new(
             rename_record_batch_stream(input, &self.input_names)?,
             function,
+            Arc::clone(&self.config),
             self.output_schema.clone(),
         )))
     }

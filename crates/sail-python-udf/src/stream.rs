@@ -18,6 +18,7 @@ use tokio::select;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::wrappers::ReceiverStream;
 
+use crate::config::PySparkUdfConfig;
 use crate::error::PyUdfResult;
 
 struct PyInputStreamState {
@@ -100,6 +101,7 @@ impl PyMapStream {
     pub fn new(
         input: SendableRecordBatchStream,
         function: Py<PyAny>,
+        artifact_config: Arc<PySparkUdfConfig>,
         output_schema: SchemaRef,
     ) -> Self {
         let (output_tx, output_rx) = mpsc::channel(Self::OUTPUT_CHANNEL_BUFFER);
@@ -114,6 +116,7 @@ impl PyMapStream {
                     py,
                     function,
                     input,
+                    artifact_config,
                     python_output_schema,
                     signal_rx,
                     output_tx.clone(),
@@ -142,11 +145,13 @@ impl PyMapStream {
         py: Python,
         function: Py<PyAny>,
         input: SendableRecordBatchStream,
+        artifact_config: Arc<PySparkUdfConfig>,
         output_schema: SchemaRef,
         signal: oneshot::Receiver<()>,
         sender: mpsc::Sender<Result<RecordBatch>>,
         handle: Handle,
     ) -> PyUdfResult<()> {
+        let _artifact_context = artifact_config.enter_python_artifact_context(py)?;
         // Create a Python iterator from the input record batch stream and call the function.
         // We could have wrap each record batch in a single-element list and call the function
         // for each record batch, but that does not work if the user wants to maintain state

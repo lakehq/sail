@@ -112,7 +112,7 @@ impl PySparkGroupAggregateUDF {
 
     fn udf(&self, py: Python) -> Result<Py<PyAny>> {
         let udf = self.udf.get_or_try_init(py, || {
-            self.config.install_python_artifacts(py)?;
+            let _artifact_context = self.config.enter_python_artifact_context(py)?;
             let loaded = PySparkUdfPayload::load(py, &self.payload)?;
             let wrapped = match self.kind {
                 // Pandas path: wraps Arrow → named Pandas Series → user func → Arrow
@@ -147,6 +147,7 @@ impl AggregateUDFImpl for PySparkGroupAggregateUDF {
         let udf = Python::attach(|py| self.udf(py))?;
         let aggregator = Box::new(PySparkGroupAggregator {
             udf,
+            config: Arc::clone(&self.config),
             output_type: self.output_type.clone(),
         });
         Ok(Box::new(BatchAggregateAccumulator::new(
@@ -164,12 +165,14 @@ impl AggregateUDFImpl for PySparkGroupAggregateUDF {
 
 struct PySparkGroupAggregator {
     udf: Py<PyAny>,
+    config: Arc<PySparkUdfConfig>,
     output_type: DataType,
 }
 
 impl BatchAggregator for PySparkGroupAggregator {
     fn call(&self, args: &[ArrayRef]) -> Result<ArrayRef> {
         let data = Python::attach(|py| -> PyUdfResult<_> {
+            let _artifact_context = self.config.enter_python_artifact_context(py)?;
             let output = self.udf.call1(py, (args.try_to_py(py)?,))?;
             Ok(ArrayData::try_from_py(py, &output)?)
         })?;

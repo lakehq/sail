@@ -523,9 +523,9 @@ async fn artifact_transport(
     let created_uri = if artifacts.has_artifact_uri(&uri)? {
         None
     } else {
+        upload_artifact(&uri, payload).await?;
         Some(uri.clone())
     };
-    upload_artifact(&uri, payload).await?;
     Ok(ArtifactTransport {
         data: None,
         uri: Some(uri),
