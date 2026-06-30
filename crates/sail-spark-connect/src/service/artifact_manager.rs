@@ -707,6 +707,7 @@ fn process_chunk(artifact: &mut ChunkedArtifact, chunk: &ArtifactChunk) -> Spark
     artifact.process_chunk(chunk)
 }
 
+#[expect(clippy::too_many_arguments)]
 async fn add_artifact_summary(
     name: String,
     payload: &ArtifactPayload<'_>,
