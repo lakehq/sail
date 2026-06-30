@@ -3,6 +3,7 @@ pub mod datetime;
 pub mod debug;
 pub mod error;
 pub mod geoarrow;
+pub mod http;
 pub mod object;
 pub mod runtime;
 pub mod spec;

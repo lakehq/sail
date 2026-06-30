@@ -97,8 +97,21 @@ message HigherOrderUdfExprNode {
 message HigherOrderUdf {
   oneof HigherOrderUdfKind {
     SparkArrayFilterUdf filter = 1;
+    SparkArrayTransformUdf transform = 2;
+    SparkArrayExistsUdf exists = 3;
+    SparkArrayForallUdf forall = 4;
+    SparkArrayAggregateUdf aggregate = 5;
+    SparkArraySortUdf sort = 6;
   }
 }
+
+message SparkArrayAggregateUdf {
+  bool element_first = 1;
+}
+
+message SparkArrayExistsUdf {}
+
+message SparkArrayForallUdf {}
 
 message SparkArrayFilterUdf {
   // True when the lambda parameters are `[index, element]` (an index-only
@@ -115,6 +128,21 @@ message SparkArrayFilterUdf {
   // dedicated upstream issue exists yet (worth filing). Once fixed upstream, the
   // `index_first` rewrite and this field can be removed.
   bool index_first = 1;
+}
+
+message SparkArrayTransformUdf {
+  // True when the lambda parameters are `[index, element]` (an index-only
+  // lambda rewritten by the planner) instead of `[element, index]`. See the
+  // identical workaround documented on `SparkArrayFilterUdf.index_first`.
+  bool index_first = 1;
+}
+
+message SparkArraySortUdf {
+  // True when the comparator columns are fed in `[right, left]` order (a
+  // right-only comparator `(l, r) -> f(r)` rewritten by the planner to a
+  // single-parameter lambda). See the identical workaround documented on
+  // `SparkArrayFilterUdf.index_first`.
+  bool swapped = 1;
 }
 
 message ExtendedScalarUdf {
@@ -168,7 +196,12 @@ message ExtendedAggregateUdf {
     PySparkGroupAggUdaf py_spark_group_agg = 2;
     PySparkGroupMapUdaf py_spark_group_map = 3;
     PySparkBatchCollectorUdaf py_spark_batch_collector = 4;
+    PercentileDiscUdaf percentile_disc = 5;
   }
+}
+
+message PercentileDiscUdaf {
+  bool ansi_mode = 1;
 }
 
 message StandardUdf {}
@@ -236,6 +269,7 @@ message TimestampNowUdf {
 message SparkTimestampUdf {
   optional string timezone = 1;
   bool is_try = 2;
+  bool ansi_mode = 3;
 }
 
 message SparkDateUdf {

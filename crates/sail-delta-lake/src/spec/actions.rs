@@ -105,6 +105,24 @@ impl DeletionVectorDescriptor {
     }
 }
 
+/// Primary key for a logical file in the Delta log: `(path, deletion_vector_unique_id)`.
+///
+/// The Delta protocol identifies a logical file by the data-file path combined
+/// with the `uniqueId` of its deletion vector, when one is present.
+pub(crate) type LogicalFileKey = (String, Option<String>);
+
+/// Compute the logical file key for an `Add` or `Remove` action.
+#[inline]
+pub(crate) fn logical_file_key(
+    path: &str,
+    deletion_vector: Option<&DeletionVectorDescriptor>,
+) -> LogicalFileKey {
+    (
+        path.to_string(),
+        deletion_vector.map(DeletionVectorDescriptor::unique_id),
+    )
+}
+
 /// Delta Lake action envelope.
 #[derive(Debug, PartialEq, Eq, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]

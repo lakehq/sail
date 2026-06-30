@@ -1,3 +1,5 @@
+mod credentials;
 mod provider;
 
-pub use provider::OneLakeCatalogProvider;
+pub use credentials::OneLakeCredentials;
+pub use provider::{OneLakeApiKind, OneLakeCatalogProvider};

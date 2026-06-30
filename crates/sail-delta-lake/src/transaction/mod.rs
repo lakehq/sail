@@ -31,20 +31,22 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::delta_log::cleanup::cleanup_expired_delta_log_files;
-use crate::delta_log::{resolve_effective_protocol_and_metadata, resolve_version_timestamp};
-use crate::kernel::checkpoints::{
+use crate::checkpoint::{
     create_checkpoint_for, create_log_compaction_for, should_create_compaction,
 };
-use crate::kernel::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
-use crate::kernel::{DeltaOperation, DeltaSnapshotConfig};
+use crate::delta_log::cleanup::cleanup_expired_delta_log_files;
+use crate::delta_log::{
+    resolve_effective_protocol_and_metadata, resolve_version_timestamp, CommitOrBytes, LogStoreRef,
+    ObjectStoreRef,
+};
+use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
     checksum_path, staged_commit_path, temp_commit_path, Action, CommitAction, DeltaError,
-    DeltaResult, Metadata, TableFeature, Transaction, VersionChecksum,
+    DeltaOperation, DeltaResult, Metadata, TableFeature, Transaction, VersionChecksum,
 };
 pub use crate::spec::{CommitConflictError, TransactionError};
-use crate::storage::{CommitOrBytes, LogStoreRef, ObjectStoreRef};
 use crate::table::DeltaSnapshot;
+use crate::transaction::conflict_checker::{TransactionInfo, WinningCommitSummary};
 
 mod conflict_checker;
 mod protocol;
@@ -337,8 +339,8 @@ impl OperationMetrics {
     }
 
     /// Derive operation-specific metrics from generic counters. Call once at commit time.
-    pub fn finalize_for(&mut self, operation: &crate::kernel::DeltaOperation) {
-        use crate::kernel::DeltaOperation;
+    pub fn finalize_for(&mut self, operation: &crate::spec::DeltaOperation) {
+        use crate::spec::DeltaOperation;
 
         match operation {
             DeltaOperation::Delete { .. } => {
@@ -878,13 +880,13 @@ fn validate_effective_commit_target(
         return Err(TransactionError::TableFeaturesRequired(TableFeature::DeletionVectors).into());
     }
 
-    // TODO(cdf-writes): Data-changing operations still do not emit AddCDCFile actions. Commit-time
-    // protocol checks currently reject changeDataFeed tables before these writes can land, but once
-    // the feature is enabled here we need an operation-aware validation instead of relying on that.
-    if table_property_enabled(&metadata, "delta.enableChangeDataFeed")
-        && !protocol_supports_legacy_change_data_feed(&protocol)
-        && !protocol_has_writer_feature(&protocol, &TableFeature::ChangeDataFeed)
-    {
+    // TODO(cdf-writes): Data-changing operations still do not emit AddCDCFile actions. Until CDF
+    // write support is implemented, reject all writes to tables with CDF enabled, regardless of
+    // whether the protocol support is legacy (writer v4-6) or explicit (writer v7+ feature).
+    // Previously this guard only rejected v7+ tables, relying on `can_write_to_protocol` to reject
+    // legacy tables via implied-feature expansion. Now that legacy versions no longer expand
+    // implied features (matching delta-spark), this guard must cover legacy tables too.
+    if table_property_enabled(&metadata, "delta.enableChangeDataFeed") {
         return Err(TransactionError::TableFeaturesRequired(TableFeature::ChangeDataFeed).into());
     }
 
@@ -2208,12 +2210,12 @@ mod tests {
     use url::Url;
 
     use super::*;
+    use crate::delta_log::{default_logstore, get_actions, StorageConfig};
     use crate::schema::protocol_for_create;
     use crate::spec::{
         checksum_path, Action, CommitAction, CommitInfo, DataType, DeltaError, DomainMetadata,
         Metadata, Protocol, SaveMode, StructField, StructType, TableFeature, VersionChecksum,
     };
-    use crate::storage::{default_logstore, get_actions, StorageConfig};
 
     fn test_log_store(store: Arc<dyn ObjectStore>) -> LogStoreRef {
         default_logstore(

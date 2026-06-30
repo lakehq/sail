@@ -45,19 +45,9 @@ impl AsyncShareableBuffer {
             .map(|lock| lock.into_inner())
     }
 
-    pub async fn to_vec(&self) -> Vec<u8> {
-        let inner = self.buffer.read().await;
-        inner.clone()
-    }
-
     pub async fn len(&self) -> usize {
         let inner = self.buffer.read().await;
         inner.len()
-    }
-
-    pub async fn is_empty(&self) -> bool {
-        let inner = self.buffer.read().await;
-        inner.is_empty()
     }
 }
 

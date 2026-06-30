@@ -24,6 +24,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, Extension, UserDefinedLogicalNodeCore};
 use educe::Educe;
+use log::warn;
 use object_store::ObjectStoreExt;
 use sail_common_datafusion::catalog::iceberg::is_iceberg_table_marker;
 use sail_common_datafusion::catalog::managed::metadata_location_value;
@@ -708,8 +709,8 @@ fn validate_iceberg_lakehouse_storage_access(
         .is_some_and(|session| session.remote_signing_enabled)
     {
         // TODO: Wire REST remote signing into Iceberg FileIO/object-store access.
-        return not_impl_err!(
-            "Iceberg REST catalog table {} requires remote signing, which is not implemented yet",
+        warn!(
+            "Iceberg REST catalog table {} advertises remote signing, which is not implemented yet",
             context.catalog_table().join(".")
         );
     }
@@ -719,8 +720,8 @@ fn validate_iceberg_lakehouse_storage_access(
         .is_some_and(|session| session.storage_credential_count > 0)
     {
         // TODO: Apply REST vended credentials to operation-scoped storage access.
-        return not_impl_err!(
-            "Iceberg REST catalog table {} requires vended storage credentials, which is not implemented yet",
+        warn!(
+            "Iceberg REST catalog table {} advertises vended storage credentials, which is not implemented yet",
             context.catalog_table().join(".")
         );
     }
@@ -753,17 +754,13 @@ impl IcebergTableFormat {
         }
 
         let path = &paths[0];
-        let mut table_url = if let Ok(url) = Url::parse(path) {
-            if url.scheme().len() > 1 {
-                url
-            } else {
-                return plan_err!("Iceberg table location must be an absolute path or URL: {path}");
-            }
-        } else if Path::new(path).is_absolute() {
-            Url::from_file_path(path)
-                .map_err(|_| DataFusionError::Plan(format!("invalid file path: {path}")))?
-        } else {
-            return plan_err!("Iceberg table location must be an absolute path or URL: {path}");
+        let mut table_url = match crate::utils::parse_absolute_url(path) {
+            Some(url) => url,
+            _ => file_url_from_absolute_path(path).ok_or_else(|| {
+                DataFusionError::Plan(format!(
+                    "Iceberg table location must be an absolute path or URL: {path}"
+                ))
+            })?,
         };
 
         if !table_url.path().ends_with('/') {
@@ -900,22 +897,71 @@ fn next_partition_spec_id(metadata: &TableMetadata) -> i32 {
         + 1
 }
 
-fn table_metadata_location(table_url: &Url, metadata_file: &str) -> Result<String> {
-    if Url::parse(metadata_file).is_ok() {
+fn file_url_from_absolute_path(path: &str) -> Option<Url> {
+    if Path::new(path).is_absolute() {
+        return Url::from_file_path(path).ok();
+    }
+    windows_drive_path_to_file_url(path)
+}
+
+fn windows_drive_path_to_file_url(path: &str) -> Option<Url> {
+    let bytes = path.as_bytes();
+    if bytes.len() < 3
+        || !bytes[0].is_ascii_alphabetic()
+        || bytes[1] != b':'
+        || !matches!(bytes[2], b'/' | b'\\')
+    {
+        return None;
+    }
+
+    let path = path.replace('\\', "/");
+    Url::parse(&format!("file:///{path}")).ok()
+}
+
+pub(crate) fn table_metadata_location(table_url: &Url, metadata_file: &str) -> Result<String> {
+    if crate::utils::parse_absolute_url(metadata_file).is_some() {
         return Ok(metadata_file.to_string());
     }
 
-    let base_path = crate::utils::url_to_object_path(table_url)?.to_string();
-    let metadata_file = metadata_file.trim_start_matches('/');
-    let relative_metadata_file = metadata_file
-        .strip_prefix(&base_path)
-        .and_then(|path| path.strip_prefix('/'))
-        .unwrap_or(metadata_file);
-
+    let relative_metadata_file = relative_metadata_file(table_url, metadata_file)?;
     Ok(table_url
-        .join(relative_metadata_file)
+        .join(&relative_metadata_file)
         .map_err(|e| DataFusionError::External(Box::new(e)))?
         .to_string())
+}
+
+fn relative_metadata_file(table_url: &Url, metadata_file: &str) -> Result<String> {
+    let base_path = crate::utils::url_to_object_path(table_url)?.to_string();
+    let metadata_file = metadata_file.trim_start_matches('/');
+
+    if let Some(relative) = strip_path_prefix(metadata_file, &base_path) {
+        return Ok(relative.to_string());
+    }
+    if table_url.scheme() == "file" {
+        if let Some(base_without_drive) = strip_windows_drive_prefix(&base_path) {
+            if let Some(relative) = strip_path_prefix(metadata_file, base_without_drive) {
+                return Ok(relative.to_string());
+            }
+        }
+    }
+    Ok(metadata_file.to_string())
+}
+
+fn strip_path_prefix<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
+    let prefix = prefix.trim_matches('/');
+    if prefix.is_empty() {
+        return None;
+    }
+    path.strip_prefix(prefix)?.strip_prefix('/')
+}
+
+fn strip_windows_drive_prefix(path: &str) -> Option<&str> {
+    let bytes = path.as_bytes();
+    if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && bytes[2] == b'/' {
+        Some(&path[3..])
+    } else {
+        None
+    }
 }
 
 fn iceberg_table_properties_from_catalog_create(
@@ -1135,6 +1181,57 @@ mod tests {
     }
 
     #[test]
+    fn parse_table_url_accepts_windows_drive_paths() -> Result<()> {
+        let url = futures::executor::block_on(IcebergTableFormat::parse_table_url(vec![
+            r"C:\Users\runneradmin\AppData\Local\Temp\iceberg_table".to_string(),
+        ]))?;
+        assert_eq!(
+            url.as_str(),
+            "file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parse_table_url_preserves_windows_file_uri_drive() -> Result<()> {
+        let url = futures::executor::block_on(IcebergTableFormat::parse_table_url(vec![
+            "file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table".to_string(),
+        ]))?;
+        assert_eq!(
+            url.as_str(),
+            "file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn table_metadata_location_preserves_file_uri_drive() -> Result<()> {
+        let table_url =
+            Url::parse("file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/")
+                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        assert_eq!(
+            table_metadata_location(&table_url, "metadata/v1.metadata.json")?,
+            "file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json"
+        );
+        assert_eq!(
+            table_metadata_location(
+                &table_url,
+                "C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json",
+            )?,
+            "file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json"
+        );
+        assert_eq!(
+            table_metadata_location(
+                &table_url,
+                "Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json",
+            )?,
+            "file:///C:/Users/runneradmin/AppData/Local/Temp/iceberg_table/metadata/v1.metadata.json"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn read_rejects_required_rest_server_side_scan_planning() {
         let context = LakehouseExecutionContext::catalog_table_context(
             CatalogProviderId("rest".to_string()),
@@ -1161,7 +1258,7 @@ mod tests {
     }
 
     #[test]
-    fn storage_access_rejects_required_rest_remote_signing() {
+    fn storage_access_allows_required_rest_remote_signing() {
         let mut context = LakehouseExecutionContext::catalog_table_context(
             CatalogProviderId("rest".to_string()),
             vec!["rest".to_string(), "db".to_string(), "tbl".to_string()],
@@ -1186,14 +1283,11 @@ mod tests {
         });
 
         let result = validate_iceberg_lakehouse_storage_access(Some(&context));
-        assert!(matches!(
-            &result,
-            Err(err) if format!("{err}").contains("requires remote signing")
-        ));
+        assert!(result.is_ok());
     }
 
     #[test]
-    fn storage_access_rejects_required_rest_vended_credentials() {
+    fn storage_access_allows_required_rest_vended_credentials() {
         let mut context = LakehouseExecutionContext::catalog_table_context(
             CatalogProviderId("rest".to_string()),
             vec!["rest".to_string(), "db".to_string(), "tbl".to_string()],
@@ -1218,9 +1312,6 @@ mod tests {
         });
 
         let result = validate_iceberg_lakehouse_storage_access(Some(&context));
-        assert!(matches!(
-            &result,
-            Err(err) if format!("{err}").contains("vended storage credentials")
-        ));
+        assert!(result.is_ok());
     }
 }

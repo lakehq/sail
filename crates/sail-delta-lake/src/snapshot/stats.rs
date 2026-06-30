@@ -51,6 +51,18 @@ enum AccumulatorType {
 
 // TODO validate this works with "wide and narrow" builds / stats
 
+fn partition_value_matches_scalar(partition_value: &str, value: &ScalarValue) -> bool {
+    match value {
+        ScalarValue::Utf8(Some(value))
+        | ScalarValue::Utf8View(Some(value))
+        | ScalarValue::LargeUtf8(Some(value)) => partition_value == value,
+        ScalarValue::Dictionary(_, inner) => partition_value_matches_scalar(partition_value, inner),
+        // FIXME: is this a good enough default or should we sync this with
+        //  expr_applicable_for_cols and bail out with None
+        _ => value.to_string() == partition_value,
+    }
+}
+
 /// Pruning/statistics view over a materialized snapshot file batch.
 #[derive(Clone)]
 pub struct SnapshotPruningStats<'a> {
@@ -396,32 +408,15 @@ impl PruningStatistics for SnapshotPruningStats<'_> {
 
         let mut contains = Vec::with_capacity(partition_values.len());
 
-        // TODO: this was inspired by parquet's BloomFilter pruning, decide if we should
-        //  just convert to Vec<String> for a subset of column types and use .contains
-        fn check_scalar(pv: &str, value: &ScalarValue) -> bool {
-            match value {
-                ScalarValue::Utf8(Some(v))
-                | ScalarValue::Utf8View(Some(v))
-                | ScalarValue::LargeUtf8(Some(v)) => pv == v,
-
-                ScalarValue::Dictionary(_, inner) => check_scalar(pv, inner),
-                // FIXME: is this a good enough default or should we sync this with
-                //  expr_applicable_for_cols and bail out with None
-                _ => value.to_string() == pv,
-            }
-        }
-
         for i in 0..partition_values.len() {
             if partition_values.is_null(i) {
                 // For IS NULL predicates, we want to include NULL partitions
                 let contains_null = value.iter().any(|scalar| scalar.is_null());
                 contains.push(contains_null);
             } else {
-                contains.push(
-                    value
-                        .iter()
-                        .any(|scalar| check_scalar(partition_values.value(i), scalar)),
-                );
+                contains.push(value.iter().any(|scalar| {
+                    partition_value_matches_scalar(partition_values.value(i), scalar)
+                }));
             }
         }
 

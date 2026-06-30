@@ -21,54 +21,11 @@
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
-use crate::kernel::DeltaOperation;
 use crate::spec::{
-    contains_timestampntz, contains_variant, Action, CommitConflictError, Protocol, Schema,
-    TableFeature, TransactionError,
+    contains_timestampntz, contains_variant, Action, CommitConflictError, DeltaOperation, Protocol,
+    Schema, TableFeature, TransactionError,
 };
 use crate::table::DeltaSnapshot;
-
-static READER_V2: LazyLock<HashSet<TableFeature>> =
-    LazyLock::new(|| HashSet::from_iter([TableFeature::ColumnMapping]));
-static WRITER_V2: LazyLock<HashSet<TableFeature>> =
-    LazyLock::new(|| HashSet::from_iter([TableFeature::AppendOnly, TableFeature::Invariants]));
-static WRITER_V3: LazyLock<HashSet<TableFeature>> = LazyLock::new(|| {
-    HashSet::from_iter([
-        TableFeature::AppendOnly,
-        TableFeature::Invariants,
-        TableFeature::CheckConstraints,
-    ])
-});
-static WRITER_V4: LazyLock<HashSet<TableFeature>> = LazyLock::new(|| {
-    HashSet::from_iter([
-        TableFeature::AppendOnly,
-        TableFeature::Invariants,
-        TableFeature::CheckConstraints,
-        TableFeature::ChangeDataFeed,
-        TableFeature::GeneratedColumns,
-    ])
-});
-static WRITER_V5: LazyLock<HashSet<TableFeature>> = LazyLock::new(|| {
-    HashSet::from_iter([
-        TableFeature::AppendOnly,
-        TableFeature::Invariants,
-        TableFeature::CheckConstraints,
-        TableFeature::ChangeDataFeed,
-        TableFeature::GeneratedColumns,
-        TableFeature::ColumnMapping,
-    ])
-});
-static WRITER_V6: LazyLock<HashSet<TableFeature>> = LazyLock::new(|| {
-    HashSet::from_iter([
-        TableFeature::AppendOnly,
-        TableFeature::Invariants,
-        TableFeature::CheckConstraints,
-        TableFeature::ChangeDataFeed,
-        TableFeature::GeneratedColumns,
-        TableFeature::ColumnMapping,
-        TableFeature::IdentityColumns,
-    ])
-});
 
 pub struct ProtocolChecker {
     reader_features: HashSet<TableFeature>,
@@ -108,9 +65,13 @@ impl ProtocolChecker {
         &self,
         protocol: &Protocol,
     ) -> Result<Option<HashSet<TableFeature>>, TransactionError> {
+        // Legacy reader versions (1, 2) do not carry explicit feature lists. The version
+        // number implies a feature set (e.g. reader v2 implies columnMapping), but —
+        // matching delta-spark's `protocolCheck` — we do not expand the implied set here.
+        // Whether a legacy-implied feature is actually *active* is validated separately
+        // at operation time (e.g. `verify_column_mapping`).
         match protocol.min_reader_version() {
-            0 | 1 => Ok(None),
-            2 => Ok(Some(READER_V2.clone())),
+            0..=2 => Ok(None),
             3 => Ok(Some(
                 protocol
                     .reader_features()
@@ -129,16 +90,19 @@ impl ProtocolChecker {
         &self,
         protocol: &Protocol,
     ) -> Result<Option<HashSet<TableFeature>>, TransactionError> {
-        // Delta protocol differs here:
-        // - writer versions 2..=6 imply a fixed feature set from `minWriterVersion`
-        // - writer version 7 uses the explicit `writerFeatures` declared by the table
+        // Legacy writer versions (1..=6) do not carry explicit feature lists. The version
+        // number implies a feature set (e.g. writer v5 implies columnMapping, changeDataFeed,
+        // ...), but — matching delta-spark's `protocolCheck` — we do not expand the implied
+        // set here. Whether a legacy-implied feature is actually *active* is validated
+        // separately at operation time (e.g. append-only check, CDF guard).
+        //
+        // Previously this method expanded the full implied set for each version and required
+        // the writer to support every implied feature. That was stricter than delta-spark
+        // and blocked writes to tables that did not actually use the unsupported features
+        // (e.g. a v5 column-mapping table without CDF enabled was rejected because CDF is
+        // implied by v5 but not implemented). See lakehq/sail#2041.
         match protocol.min_writer_version() {
-            0 | 1 => Ok(None),
-            2 => Ok(Some(WRITER_V2.clone())),
-            3 => Ok(Some(WRITER_V3.clone())),
-            4 => Ok(Some(WRITER_V4.clone())),
-            5 => Ok(Some(WRITER_V5.clone())),
-            6 => Ok(Some(WRITER_V6.clone())),
+            0..=6 => Ok(None),
             7 => Ok(Some(
                 protocol
                     .writer_features()
@@ -347,8 +311,9 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     reader_features.insert(TableFeature::CatalogManaged);
     let mut writer_features = HashSet::new();
     // Keep this list aligned with end-to-end behavior, not just protocol parsing.
-    // For writer versions 2..=6, claiming support here also means accepting older tables whose
-    // `minWriterVersion` implies the feature set in WRITER_V2..WRITER_V6.
+    // These features are only checked against the explicit `writerFeatures` list on
+    // writer version 7+ tables. Legacy tables (writer version 1..=6) do not have
+    // explicit feature lists; their implied features are validated at operation time.
     writer_features.insert(TableFeature::AppendOnly);
     writer_features.insert(TableFeature::InCommitTimestamp);
     writer_features.insert(TableFeature::TimestampWithoutTimezone);
@@ -481,5 +446,112 @@ mod tests {
             err,
             TransactionError::TableFeaturesRequired(TableFeature::VariantShredding)
         ));
+    }
+
+    // --- Legacy protocol version tests (writer versions 1..=6) ---
+    //
+    // These tests verify that the protocol checker does NOT expand implied feature
+    // sets for legacy writer versions. A table at writer version 5 implies support
+    // for ChangeDataFeed, but if CDF is not enabled the write should succeed even
+    // though sail does not implement CDF writes. See lakehq/sail#2041.
+
+    #[test]
+    fn global_checker_accepts_legacy_writer_v5_without_explicit_features() {
+        // Simulates a delta-spark-created table with column mapping mode=name.
+        // delta-spark produces Protocol(2, 5) with no explicit feature lists.
+        let protocol = Protocol::new(2, 5, None, None);
+
+        INSTANCE.can_read_from_protocol(&protocol).unwrap();
+        INSTANCE.can_write_to_protocol(&protocol).unwrap();
+    }
+
+    #[test]
+    fn global_checker_accepts_legacy_writer_v4_without_explicit_features() {
+        // Writer v4 implies ChangeDataFeed + GeneratedColumns, but we should not
+        // require them unless they are actually active on the table.
+        let protocol = Protocol::new(1, 4, None, None);
+
+        INSTANCE.can_read_from_protocol(&protocol).unwrap();
+        INSTANCE.can_write_to_protocol(&protocol).unwrap();
+    }
+
+    #[test]
+    fn global_checker_accepts_legacy_writer_v6_without_explicit_features() {
+        // Writer v6 implies IdentityColumns on top of v5 features.
+        let protocol = Protocol::new(2, 6, None, None);
+
+        INSTANCE.can_read_from_protocol(&protocol).unwrap();
+        INSTANCE.can_write_to_protocol(&protocol).unwrap();
+    }
+
+    #[test]
+    fn global_checker_accepts_legacy_writer_v2_and_v3() {
+        let v2 = Protocol::new(1, 2, None, None);
+        INSTANCE.can_write_to_protocol(&v2).unwrap();
+
+        let v3 = Protocol::new(1, 3, None, None);
+        INSTANCE.can_write_to_protocol(&v3).unwrap();
+    }
+
+    #[test]
+    fn global_checker_accepts_legacy_reader_v2_without_explicit_features() {
+        // Reader v2 implies ColumnMapping, but we should not require it at the
+        // protocol-check level. Column mapping activation is verified separately.
+        let protocol = Protocol::new(2, 2, None, None);
+
+        INSTANCE.can_read_from_protocol(&protocol).unwrap();
+        INSTANCE.can_write_to_protocol(&protocol).unwrap();
+    }
+
+    #[test]
+    fn global_checker_rejects_v7_with_unsupported_change_data_feed_feature() {
+        // Writer v7 with explicit changeDataFeed writer feature should still be
+        // rejected, since sail does not implement CDF writes.
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::ColumnMapping]),
+            Some(vec![
+                TableFeature::ColumnMapping,
+                TableFeature::ChangeDataFeed,
+            ]),
+        );
+
+        let err = INSTANCE.can_write_to_protocol(&protocol).unwrap_err();
+        assert!(matches!(
+            err,
+            TransactionError::UnsupportedTableFeatures(features)
+                if features.contains(&TableFeature::ChangeDataFeed)
+        ));
+    }
+
+    #[test]
+    fn global_checker_rejects_v7_with_unsupported_reader_feature() {
+        // Reader v3 with an unsupported explicit reader feature should be rejected.
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::RowTracking]),
+            Some(vec![TableFeature::AppendOnly]),
+        );
+
+        let err = INSTANCE.can_read_from_protocol(&protocol).unwrap_err();
+        assert!(matches!(
+            err,
+            TransactionError::UnsupportedTableFeatures(features)
+                if features.contains(&TableFeature::RowTracking)
+        ));
+    }
+
+    #[test]
+    fn global_checker_rejects_unknown_writer_version() {
+        let protocol = Protocol::new(1, 99, None, None);
+        assert!(INSTANCE.can_write_to_protocol(&protocol).is_err());
+    }
+
+    #[test]
+    fn global_checker_rejects_unknown_reader_version() {
+        let protocol = Protocol::new(99, 7, None, Some(vec![]));
+        assert!(INSTANCE.can_read_from_protocol(&protocol).is_err());
     }
 }

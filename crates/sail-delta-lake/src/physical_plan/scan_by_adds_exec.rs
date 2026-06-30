@@ -41,11 +41,11 @@ use crate::datasource::scan::{
 };
 use crate::datasource::{build_file_scan_config, DeltaScanConfig};
 use crate::deletion_vector::DeletionVectorBitmap;
+use crate::delta_log::LogStoreRef;
 use crate::physical_plan::{decode_adds_from_batch, meta_adds, COL_ACTION};
 use crate::schema::{arrow_field_physical_name, get_physical_schema};
 use crate::session_extension::{load_table_uncached, DeltaTableCache};
 use crate::spec::StructType;
-use crate::storage::LogStoreRef;
 use crate::table::DeltaSnapshot;
 
 // TODO(dynamic-file-scheduling): Replace fixed file-count chunking with byte-aware chunking
@@ -66,7 +66,7 @@ struct ScanByAddsStreamState {
     // Lazy init
     table_opened: bool,
     snapshot: Option<Arc<crate::table::DeltaSnapshot>>,
-    log_store: Option<crate::storage::LogStoreRef>,
+    log_store: Option<crate::delta_log::LogStoreRef>,
     session_state: Option<datafusion::execution::SessionState>,
     file_schema: Option<SchemaRef>,
     partition_columns: Option<Vec<String>>,

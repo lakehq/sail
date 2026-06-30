@@ -6,8 +6,8 @@ use moka::future::Cache as FutureCache;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use url::Url;
 
-use crate::kernel::DeltaSnapshotConfig;
-use crate::storage::StorageConfig;
+use crate::delta_log::StorageConfig;
+use crate::snapshot::DeltaSnapshotConfig;
 use crate::table::{
     create_logstore_with_object_store, load_catalog_managed_commits_for_snapshot, DeltaSnapshot,
     DeltaTable,
@@ -38,7 +38,7 @@ impl TableCacheKey {
 
 pub(crate) struct CachedTable {
     pub(crate) snapshot: Arc<DeltaSnapshot>,
-    pub(crate) log_store: crate::storage::LogStoreRef,
+    pub(crate) log_store: crate::delta_log::LogStoreRef,
 }
 
 pub struct DeltaTableCache {

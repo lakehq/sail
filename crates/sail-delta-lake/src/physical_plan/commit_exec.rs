@@ -40,11 +40,7 @@ use url::Url;
 
 use crate::catalog::coordinator::{DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable};
 use crate::catalog_managed::{catalog_managed_delta_table, enable_catalog_managed_create_actions};
-use crate::kernel::transaction::{
-    CatalogManagedStagedCommit, CommitBuilder, CommitProperties, FinalizedCommit,
-    Metrics as CommitFinalMetrics, OperationMetrics,
-};
-use crate::kernel::{DeltaOperation, DeltaSnapshotConfig, SaveMode};
+use crate::delta_log::{get_object_store_from_context, LogStoreRef, StorageConfig};
 use crate::physical_plan::action_schema::ExecCommitMeta;
 use crate::physical_plan::catalog_location::resolve_catalog_table_url;
 use crate::physical_plan::{decode_actions_and_meta_from_batch, DeltaCommitContext, COL_ACTION};
@@ -52,14 +48,18 @@ use crate::schema::{
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
     schema_has_column_defaults, schema_has_generated_columns, schema_has_identity_columns,
 };
+use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
     commit_path, contains_timestampntz_arrow, contains_variant_arrow, ColumnMetadataKey,
-    CommitAction, DeltaError, Metadata, MetadataValue, StatValue, Stats, StructField, StructType,
-    TableFeature,
+    CommitAction, DeltaError, DeltaOperation, Metadata, MetadataValue, SaveMode, StatValue, Stats,
+    StructField, StructType, TableFeature,
 };
-use crate::storage::{get_object_store_from_context, LogStoreRef, StorageConfig};
 use crate::table::{
     create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot,
+};
+use crate::transaction::{
+    CatalogManagedStagedCommit, CommitBuilder, CommitProperties, FinalizedCommit,
+    Metrics as CommitFinalMetrics, OperationMetrics,
 };
 
 const METRIC_NUM_COMMIT_RETRIES: &str = "num_commit_retries";

@@ -30,19 +30,39 @@ pub enum TableRequirement {
     #[serde(rename = "assert-create")]
     AssertCreate {},
     #[serde(rename = "assert-current-schema-id")]
-    AssertCurrentSchemaId {},
+    AssertCurrentSchemaId {
+        #[serde(rename = "current-schema-id")]
+        current_schema_id: i32,
+    },
     #[serde(rename = "assert-default-sort-order-id")]
-    AssertDefaultSortOrderId {},
+    AssertDefaultSortOrderId {
+        #[serde(rename = "default-sort-order-id")]
+        default_sort_order_id: i64,
+    },
     #[serde(rename = "assert-default-spec-id")]
-    AssertDefaultSpecId {},
+    AssertDefaultSpecId {
+        #[serde(rename = "default-spec-id")]
+        default_spec_id: i32,
+    },
     #[serde(rename = "assert-last-assigned-field-id")]
-    AssertLastAssignedFieldId {},
+    AssertLastAssignedFieldId {
+        #[serde(rename = "last-assigned-field-id")]
+        last_assigned_field_id: i32,
+    },
     #[serde(rename = "assert-last-assigned-partition-id")]
-    AssertLastAssignedPartitionId {},
+    AssertLastAssignedPartitionId {
+        #[serde(rename = "last-assigned-partition-id")]
+        last_assigned_partition_id: i32,
+    },
     #[serde(rename = "assert-ref-snapshot-id")]
-    AssertRefSnapshotId {},
+    AssertRefSnapshotId {
+        #[serde(rename = "ref")]
+        r#ref: String,
+        #[serde(rename = "snapshot-id")]
+        snapshot_id: Option<i64>,
+    },
     #[serde(rename = "assert-table-uuid")]
-    AssertTableUuid {},
+    AssertTableUuid { uuid: String },
 }
 
 impl Default for TableRequirement {
