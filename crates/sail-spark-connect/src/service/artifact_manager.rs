@@ -25,6 +25,8 @@ use crate::spark::connect::artifact_statuses_response::ArtifactStatus;
 const PYFILES_PREFIX: &str = "pyfiles/";
 const FILES_PREFIX: &str = "files/";
 const ARCHIVES_PREFIX: &str = "archives/";
+const JARS_PREFIX: &str = "jars/";
+const CLASSES_PREFIX: &str = "classes/";
 const FORWARD_TO_FS_PREFIX: &str = "forward_to_fs/";
 const CACHE_PREFIX: &str = "cache/";
 const STAGING_DIR: &str = ".staging";
@@ -127,6 +129,12 @@ fn artifact_target_path(name: &str, artifact_dir: &Path) -> SparkResult<PathBuf>
 }
 
 fn artifact_kind(normalized_name: &str) -> SparkResult<Option<PySparkArtifactKind>> {
+    if normalized_name.starts_with(JARS_PREFIX) || normalized_name.starts_with(CLASSES_PREFIX) {
+        return Err(SparkError::unsupported(format!(
+            "JVM artifact is not supported: {normalized_name}"
+        )));
+    }
+
     if let Some(file_name) = normalized_name.strip_prefix(PYFILES_PREFIX) {
         if file_name.ends_with(".py")
             || file_name.ends_with(".zip")
@@ -203,7 +211,6 @@ struct StoredArtifact {
     local_path: Option<String>,
     target_path: Option<PathBuf>,
     created_target_path: Option<PathBuf>,
-    python_import_path: Option<String>,
     kind: Option<PySparkArtifactKind>,
     cache_hash: Option<String>,
 }
@@ -217,18 +224,16 @@ struct PendingArtifactUpdates {
 struct PendingArtifactUpdate {
     cache_hash: Option<String>,
     created_target_path: Option<PathBuf>,
-    python_import_path: Option<String>,
     python_artifact: Option<PySparkPythonArtifact>,
-    artifact_uri: Option<String>,
+    created_artifact_uri: Option<String>,
 }
 
 impl PendingArtifactUpdate {
     fn is_empty(&self) -> bool {
         self.cache_hash.is_none()
             && self.created_target_path.is_none()
-            && self.python_import_path.is_none()
             && self.python_artifact.is_none()
-            && self.artifact_uri.is_none()
+            && self.created_artifact_uri.is_none()
     }
 }
 
@@ -242,11 +247,6 @@ impl PendingArtifactUpdates {
     }
 
     fn commit(mut self, artifacts: &SparkArtifactRegistry) -> SparkResult<()> {
-        for update in &self.updates {
-            if let Some(path) = &update.python_import_path {
-                add_to_sys_path(path)?;
-            }
-        }
         for update in &self.updates {
             if let Some(hash) = &update.cache_hash {
                 artifacts.add_cache_artifact(hash.clone())?;
@@ -269,7 +269,7 @@ impl Drop for PendingArtifactUpdates {
         let artifact_uris = self
             .updates
             .iter()
-            .filter_map(|update| update.artifact_uri.clone())
+            .filter_map(|update| update.created_artifact_uri.clone())
             .collect::<Vec<_>>();
         cleanup_artifact_uris(artifact_uris);
 
@@ -452,7 +452,6 @@ fn store_artifact(
             local_path: None,
             target_path: None,
             created_target_path: None,
-            python_import_path: None,
             kind: None,
             cache_hash: None,
         });
@@ -463,17 +462,11 @@ fn store_artifact(
     let cache_hash = cache_artifact_hash(&normalized_name)?;
     if target_path.exists() {
         if payload.content_equals(&target_path)? {
-            let python_path =
-                python_artifact_import_path(&normalized_name, &target_path, artifact_dir)?;
-            if let Some(path) = &python_path {
-                add_to_sys_path(path)?;
-            }
             return Ok(StoredArtifact {
                 normalized_name,
                 local_path: kind.map(|_| target_path.to_string_lossy().into_owned()),
                 target_path: Some(target_path),
                 created_target_path: None,
-                python_import_path: python_path,
                 kind,
                 cache_hash,
             });
@@ -493,66 +486,14 @@ fn store_artifact(
     }
     payload.copy_to(&target_path)?;
 
-    let python_path = python_artifact_import_path(&normalized_name, &target_path, artifact_dir)?;
-    if let Some(path) = &python_path {
-        add_to_sys_path(path)?;
-    }
     Ok(StoredArtifact {
         normalized_name,
         local_path: kind.map(|_| target_path.to_string_lossy().into_owned()),
         target_path: Some(target_path.clone()),
         created_target_path: Some(target_path),
-        python_import_path: python_path,
         kind,
         cache_hash,
     })
-}
-
-fn python_artifact_import_path(
-    normalized_name: &str,
-    target_path: &Path,
-    artifact_dir: &Path,
-) -> SparkResult<Option<String>> {
-    let Some(file_name) = normalized_name.strip_prefix(PYFILES_PREFIX) else {
-        return Ok(None);
-    };
-    if file_name.ends_with(".py") {
-        let dir = target_path.parent().unwrap_or(artifact_dir);
-        Ok(Some(dir.to_string_lossy().into_owned()))
-    } else if file_name.ends_with(".zip")
-        || file_name.ends_with(".egg")
-        || file_name.ends_with(".jar")
-    {
-        Ok(Some(target_path.to_string_lossy().into_owned()))
-    } else {
-        Err(SparkError::invalid(format!(
-            "unsupported Python artifact type: {file_name}"
-        )))
-    }
-}
-
-fn add_to_sys_path(path: &str) -> SparkResult<()> {
-    use pyo3::prelude::PyAnyMethods;
-    use pyo3::types::PyModule;
-    use pyo3::Python;
-
-    let path = path.to_string();
-    Python::attach(|py| {
-        let sys = PyModule::import(py, "sys")?;
-        let path_list = sys.getattr("path")?;
-        let contains: bool = path_list
-            .call_method1("__contains__", (&path,))?
-            .extract()?;
-        if !contains {
-            path_list.call_method1("insert", (0, &path))?;
-        }
-        let importlib = PyModule::import(py, "importlib")?;
-        if let Err(error) = importlib.call_method0("invalidate_caches") {
-            log::debug!("failed to invalidate Python import caches: {error}");
-        }
-        Ok::<(), pyo3::PyErr>(())
-    })
-    .map_err(|e: pyo3::PyErr| SparkError::internal(format!("failed to add to sys.path: {e}")))
 }
 
 async fn artifact_transport(
@@ -561,10 +502,14 @@ async fn artifact_transport(
     sha256: &str,
     size: usize,
     payload: &ArtifactPayload<'_>,
-) -> SparkResult<(Option<Vec<u8>>, Option<String>)> {
+) -> SparkResult<ArtifactTransport> {
     let options = artifacts.options();
     if size <= options.inline_max_bytes {
-        return Ok((Some(payload.read_all()?), None));
+        return Ok(ArtifactTransport {
+            data: Some(payload.read_all()?),
+            uri: None,
+            created_uri: None,
+        });
     }
 
     let Some(base_uri) = &options.store_uri else {
@@ -574,17 +519,27 @@ async fn artifact_transport(
             options.inline_max_bytes
         )));
     };
-    let uri = upload_artifact(base_uri, artifacts.session_id(), sha256, payload).await?;
-    Ok((None, Some(uri)))
+    let uri = artifact_object_uri(base_uri, artifacts.session_id(), sha256)?;
+    let created_uri = if artifacts.has_artifact_uri(&uri)? {
+        None
+    } else {
+        Some(uri.clone())
+    };
+    upload_artifact(&uri, payload).await?;
+    Ok(ArtifactTransport {
+        data: None,
+        uri: Some(uri),
+        created_uri,
+    })
 }
 
-async fn upload_artifact(
-    base_uri: &str,
-    session_id: &str,
-    sha256: &str,
-    payload: &ArtifactPayload<'_>,
-) -> SparkResult<String> {
-    let uri = artifact_object_uri(base_uri, session_id, sha256)?;
+struct ArtifactTransport {
+    data: Option<Vec<u8>>,
+    uri: Option<String>,
+    created_uri: Option<String>,
+}
+
+async fn upload_artifact(uri: &str, payload: &ArtifactPayload<'_>) -> SparkResult<()> {
     let url = Url::parse(&uri).map_err(|e| {
         SparkError::invalid(format!("invalid artifact object-store URI {uri}: {e}"))
     })?;
@@ -599,7 +554,7 @@ async fn upload_artifact(
         .put(&path, PutPayload::from(data))
         .await
         .map_err(|e| SparkError::internal(format!("failed to write artifact {uri}: {e}")))?;
-    Ok(uri)
+    Ok(())
 }
 
 fn artifact_object_uri(base_uri: &str, session_id: &str, sha256: &str) -> SparkResult<String> {
@@ -837,9 +792,8 @@ async fn add_artifact_summary(
         let mut update = PendingArtifactUpdate {
             cache_hash: stored.cache_hash.clone(),
             created_target_path: stored.created_target_path.clone(),
-            python_import_path: stored.python_import_path.clone(),
             python_artifact: None,
-            artifact_uri: None,
+            created_artifact_uri: None,
         };
         if let Some(kind) = stored.kind {
             let target_path = stored.target_path.as_deref().ok_or_else(|| {
@@ -855,7 +809,7 @@ async fn add_artifact_summary(
                 ))
             })?;
             let transport_payload = ArtifactPayload::File(target_path);
-            let (data, uri) = match artifact_transport(
+            let transport = match artifact_transport(
                 artifacts,
                 &stored.normalized_name,
                 sha256,
@@ -877,12 +831,12 @@ async fn add_artifact_summary(
                     return Err(error);
                 }
             };
-            update.artifact_uri = uri.clone();
+            update.created_artifact_uri = transport.created_uri;
             update.python_artifact = Some(PySparkPythonArtifact {
                 name: stored.normalized_name,
                 python_path,
-                data,
-                uri,
+                data: transport.data,
+                uri: transport.uri,
                 sha256: sha256.to_string(),
                 size: size as u64,
                 kind,
@@ -951,6 +905,7 @@ pub(crate) async fn handle_add_artifacts(
     stream: impl Stream<Item = Result<Payload, Status>>,
 ) -> SparkResult<Vec<ArtifactSummary>> {
     let artifacts = ctx.extension::<SparkArtifactRegistry>()?;
+    let _guard = artifacts.lock_add_artifacts().await;
     let artifact_dir = artifacts.artifact_dir()?;
     let allow_local_fs_destination = allow_local_fs_destination(ctx)?;
 

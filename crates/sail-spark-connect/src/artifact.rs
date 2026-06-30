@@ -29,6 +29,7 @@ pub(crate) struct SparkArtifactOptions {
 pub(crate) struct SparkArtifactRegistry {
     session_id: String,
     options: SparkArtifactOptions,
+    add_artifacts_lock: tokio::sync::Mutex<()>,
     state: Mutex<SparkArtifactState>,
 }
 
@@ -68,6 +69,7 @@ impl SparkArtifactRegistry {
         Self {
             session_id,
             options,
+            add_artifacts_lock: tokio::sync::Mutex::new(()),
             state: Mutex::new(SparkArtifactState::new()),
         }
     }
@@ -78,6 +80,10 @@ impl SparkArtifactRegistry {
 
     pub(crate) fn options(&self) -> &SparkArtifactOptions {
         &self.options
+    }
+
+    pub(crate) async fn lock_add_artifacts(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.add_artifacts_lock.lock().await
     }
 
     pub(crate) fn artifact_dir(&self) -> SparkResult<PathBuf> {
@@ -123,22 +129,50 @@ impl SparkArtifactRegistry {
         Ok(state.cache_artifacts.contains(hash))
     }
 
-    pub(crate) fn read_cache_artifact(&self, hash: &str) -> SparkResult<Vec<u8>> {
+    pub(crate) fn has_artifact_uri(&self, uri: &str) -> SparkResult<bool> {
+        let state = self.state.lock()?;
+        Ok(state
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.uri.as_deref() == Some(uri)))
+    }
+
+    fn cache_artifact_path(&self, hash: &str) -> SparkResult<PathBuf> {
         validate_cache_hash(hash)?;
-        let path = {
-            let state = self.state.lock()?;
-            if !state.cache_artifacts.contains(hash) {
-                return Err(SparkError::invalid(format!(
-                    "cached local relation block not found: {hash}"
-                )));
-            }
-            state
-                .artifact_dir
-                .clone()
-                .ok_or_else(|| SparkError::internal("artifact directory was not initialized"))?
-                .join("cache")
-                .join(hash)
-        };
+        let state = self.state.lock()?;
+        if !state.cache_artifacts.contains(hash) {
+            return Err(SparkError::invalid(format!(
+                "cached local relation block not found: {hash}"
+            )));
+        }
+        Ok(state
+            .artifact_dir
+            .clone()
+            .ok_or_else(|| SparkError::internal("artifact directory was not initialized"))?
+            .join("cache")
+            .join(hash))
+    }
+
+    pub(crate) fn cache_artifact_size(&self, hash: &str) -> SparkResult<usize> {
+        let path = self.cache_artifact_path(hash)?;
+        let size = std::fs::metadata(&path)
+            .map_err(|e| {
+                SparkError::internal(format!(
+                    "failed to inspect cached local relation block {}: {e}",
+                    path.display()
+                ))
+            })?
+            .len();
+        usize::try_from(size).map_err(|_| {
+            SparkError::invalid(format!(
+                "cached local relation block {} is too large",
+                path.display()
+            ))
+        })
+    }
+
+    pub(crate) fn read_cache_artifact(&self, hash: &str) -> SparkResult<Vec<u8>> {
+        let path = self.cache_artifact_path(hash)?;
         let data = std::fs::read(&path).map_err(|e| {
             SparkError::internal(format!(
                 "failed to read cached local relation block {}: {e}",
@@ -208,6 +242,12 @@ impl LocalRelationCache for SparkLocalRelationCache {
         let LocalRelation { data, schema } = relation;
         let schema = parse_local_relation_schema(schema.as_deref())?;
         Ok(CachedLocalRelationData { data, schema })
+    }
+
+    fn cached_local_relation_block_size(&self, hash: &str) -> PlanResult<usize> {
+        self.artifacts
+            .cache_artifact_size(hash)
+            .map_err(spark_error_to_plan_error)
     }
 
     fn read_chunked_cached_local_relation_data(&self, hash: &str) -> PlanResult<Vec<u8>> {

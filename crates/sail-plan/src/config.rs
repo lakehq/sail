@@ -21,6 +21,8 @@ pub struct CachedLocalRelationData {
 pub trait LocalRelationCache: Debug + Send + Sync {
     fn read_cached_local_relation(&self, hash: &str) -> PlanResult<CachedLocalRelationData>;
 
+    fn cached_local_relation_block_size(&self, hash: &str) -> PlanResult<usize>;
+
     fn read_chunked_cached_local_relation_data(&self, hash: &str) -> PlanResult<Vec<u8>>;
 
     fn read_chunked_cached_local_relation_schema(&self, hash: &str) -> PlanResult<spec::Schema>;
@@ -39,6 +41,12 @@ impl LocalRelationCache for EmptyLocalRelationCache {
     fn read_chunked_cached_local_relation_data(&self, hash: &str) -> PlanResult<Vec<u8>> {
         Err(PlanError::invalid(format!(
             "chunked cached local relation data block not found: {hash}"
+        )))
+    }
+
+    fn cached_local_relation_block_size(&self, hash: &str) -> PlanResult<usize> {
+        Err(PlanError::invalid(format!(
+            "cached local relation block not found: {hash}"
         )))
     }
 
@@ -61,6 +69,10 @@ pub struct PlanConfig {
     pub pyspark_udf_config: Arc<PySparkUdfConfig>,
     /// Session-local cache for Spark Connect local relation artifacts.
     pub local_relation_cache: Arc<dyn LocalRelationCache>,
+    /// Maximum size in bytes for all chunks of a Spark Connect `ChunkedCachedLocalRelation`.
+    pub local_relation_size_limit: usize,
+    /// Maximum size in bytes for any single chunk of a Spark Connect `ChunkedCachedLocalRelation`.
+    pub local_relation_chunk_size_limit: usize,
     /// The default table file format.
     pub default_table_file_format: String,
     /// The default location for managed databases and tables.
@@ -94,6 +106,8 @@ impl Default for PlanConfig {
             arrow_use_large_var_types: false,
             pyspark_udf_config: Arc::new(PySparkUdfConfig::default()),
             local_relation_cache: Arc::new(EmptyLocalRelationCache),
+            local_relation_size_limit: 3 * 1024 * 1024 * 1024,
+            local_relation_chunk_size_limit: 2000 * 1024 * 1024,
             default_table_file_format: "PARQUET".to_string(),
             default_warehouse_directory: "spark-warehouse".to_string(),
             session_user_id: "".to_string(),

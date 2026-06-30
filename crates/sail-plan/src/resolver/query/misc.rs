@@ -145,13 +145,31 @@ impl PlanResolver<'_> {
                 "chunked cached local relation must contain data",
             ));
         }
-        let mut batches = vec![];
+        let data_sizes = data_hashes
+            .iter()
+            .map(|hash| {
+                self.config
+                    .local_relation_cache
+                    .cached_local_relation_block_size(hash)
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        let schema_size = schema_hash
+            .as_deref()
+            .map(|hash| {
+                self.config
+                    .local_relation_cache
+                    .cached_local_relation_block_size(hash)
+            })
+            .transpose()?;
+        self.check_chunked_cached_local_relation_sizes(data_sizes.into_iter(), schema_size)?;
+
+        let mut data_blocks = Vec::with_capacity(data_hashes.len());
         for hash in data_hashes {
             let data = self
                 .config
                 .local_relation_cache
                 .read_chunked_cached_local_relation_data(&hash)?;
-            batches.extend(read_record_batches(&data)?);
+            data_blocks.push(data);
         }
         let schema = schema_hash
             .map(|hash| {
@@ -160,7 +178,38 @@ impl PlanResolver<'_> {
                     .read_chunked_cached_local_relation_schema(&hash)
             })
             .transpose()?;
+        let mut batches = vec![];
+        for data in data_blocks {
+            batches.extend(read_record_batches(&data)?);
+        }
         self.resolve_local_relation_batches(batches, schema, state)
+    }
+
+    fn check_chunked_cached_local_relation_sizes(
+        &self,
+        data_sizes: impl Iterator<Item = usize>,
+        schema_size: Option<usize>,
+    ) -> PlanResult<()> {
+        let sizes = data_sizes.chain(schema_size).collect::<Vec<_>>();
+        let total_size = sizes
+            .iter()
+            .try_fold(0usize, |total, size| total.checked_add(*size))
+            .ok_or_else(|| {
+                PlanError::invalid("cached local relation size exceeded the platform limit")
+            })?;
+        let relation_size_limit = self.config.local_relation_size_limit;
+        if total_size > relation_size_limit {
+            return Err(PlanError::invalid(format!(
+                "Cached local relation size ({total_size} bytes) exceeds the limit ({relation_size_limit} bytes)."
+            )));
+        }
+        let chunk_size_limit = self.config.local_relation_chunk_size_limit;
+        if sizes.iter().any(|size| *size > chunk_size_limit) {
+            return Err(PlanError::invalid(format!(
+                "One of cached local relation chunks exceeded the limit of {chunk_size_limit} bytes."
+            )));
+        }
+        Ok(())
     }
 
     fn resolve_local_relation_batches(
