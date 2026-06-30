@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
@@ -14,7 +14,7 @@ use tonic::Status;
 use url::Url;
 use uuid::Uuid;
 
-use crate::artifact::SparkArtifactRegistry;
+use crate::artifact::{cleanup_artifact_uris, SparkArtifactRegistry};
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::session::SparkSession;
 use crate::spark::config::SPARK_SQL_ARTIFACT_COPY_FROM_LOCAL_TO_FS_ALLOW_DEST_LOCAL;
@@ -183,8 +183,91 @@ struct StoredArtifact {
     normalized_name: String,
     local_path: Option<String>,
     target_path: Option<PathBuf>,
+    created_target_path: Option<PathBuf>,
+    python_import_path: Option<String>,
     kind: Option<PySparkArtifactKind>,
     cache_hash: Option<String>,
+}
+
+#[derive(Default)]
+struct PendingArtifactUpdates {
+    updates: Vec<PendingArtifactUpdate>,
+    committed: bool,
+}
+
+struct PendingArtifactUpdate {
+    cache_hash: Option<String>,
+    created_target_path: Option<PathBuf>,
+    python_import_path: Option<String>,
+    python_artifact: Option<PySparkPythonArtifact>,
+    artifact_uri: Option<String>,
+}
+
+impl PendingArtifactUpdate {
+    fn is_empty(&self) -> bool {
+        self.cache_hash.is_none()
+            && self.created_target_path.is_none()
+            && self.python_import_path.is_none()
+            && self.python_artifact.is_none()
+            && self.artifact_uri.is_none()
+    }
+}
+
+impl PendingArtifactUpdates {
+    fn push(&mut self, update: Option<PendingArtifactUpdate>) {
+        if let Some(update) = update {
+            if !update.is_empty() {
+                self.updates.push(update);
+            }
+        }
+    }
+
+    fn commit(mut self, artifacts: &SparkArtifactRegistry) -> SparkResult<()> {
+        for update in &self.updates {
+            if let Some(path) = &update.python_import_path {
+                add_to_sys_path(path)?;
+            }
+        }
+        for update in &self.updates {
+            if let Some(hash) = &update.cache_hash {
+                artifacts.add_cache_artifact(hash.clone())?;
+            }
+            if let Some(artifact) = &update.python_artifact {
+                artifacts.add_artifact(artifact.clone())?;
+            }
+        }
+        self.committed = true;
+        Ok(())
+    }
+}
+
+impl Drop for PendingArtifactUpdates {
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+
+        let artifact_uris = self
+            .updates
+            .iter()
+            .filter_map(|update| update.artifact_uri.clone())
+            .collect::<Vec<_>>();
+        cleanup_artifact_uris(artifact_uris);
+
+        let created_paths = self
+            .updates
+            .iter()
+            .filter_map(|update| update.created_target_path.clone())
+            .collect::<HashSet<_>>();
+        for path in created_paths {
+            if let Err(error) = std::fs::remove_file(&path) {
+                log::debug!(
+                    "failed to remove uncommitted artifact file {}: {error}",
+                    path.display()
+                );
+            }
+        }
+    }
 }
 
 enum ArtifactPayload<'a> {
@@ -349,6 +432,8 @@ fn store_artifact(
             normalized_name,
             local_path: None,
             target_path: None,
+            created_target_path: None,
+            python_import_path: None,
             kind: None,
             cache_hash: None,
         });
@@ -368,6 +453,8 @@ fn store_artifact(
                 normalized_name,
                 local_path: kind.map(|_| target_path.to_string_lossy().into_owned()),
                 target_path: Some(target_path),
+                created_target_path: None,
+                python_import_path: python_path,
                 kind,
                 cache_hash,
             });
@@ -394,7 +481,9 @@ fn store_artifact(
     Ok(StoredArtifact {
         normalized_name,
         local_path: kind.map(|_| target_path.to_string_lossy().into_owned()),
-        target_path: Some(target_path),
+        target_path: Some(target_path.clone()),
+        created_target_path: Some(target_path),
+        python_import_path: python_path,
         kind,
         cache_hash,
     })
@@ -703,10 +792,6 @@ fn create_staging_artifact_path(artifact_dir: &Path) -> SparkResult<PathBuf> {
     Ok(staging_dir.join(Uuid::new_v4().to_string()))
 }
 
-fn process_chunk(artifact: &mut ChunkedArtifact, chunk: &ArtifactChunk) -> SparkResult<()> {
-    artifact.process_chunk(chunk)
-}
-
 #[expect(clippy::too_many_arguments)]
 async fn add_artifact_summary(
     name: String,
@@ -718,12 +803,17 @@ async fn add_artifact_summary(
     artifacts: &SparkArtifactRegistry,
     allow_local_fs_destination: bool,
     summaries: &mut Vec<ArtifactSummary>,
-) -> SparkResult<()> {
+) -> SparkResult<Option<PendingArtifactUpdate>> {
+    let mut pending_update = None;
     if is_crc_successful {
         let stored = store_artifact(&name, payload, artifact_dir, allow_local_fs_destination)?;
-        if let Some(cache_hash) = stored.cache_hash {
-            artifacts.add_cache_artifact(cache_hash)?;
-        }
+        let mut update = PendingArtifactUpdate {
+            cache_hash: stored.cache_hash.clone(),
+            created_target_path: stored.created_target_path.clone(),
+            python_import_path: stored.python_import_path.clone(),
+            python_artifact: None,
+            artifact_uri: None,
+        };
         if let Some(kind) = stored.kind {
             let target_path = stored.target_path.as_deref().ok_or_else(|| {
                 SparkError::internal(format!(
@@ -731,31 +821,53 @@ async fn add_artifact_summary(
                     stored.normalized_name
                 ))
             })?;
+            let python_path = stored.local_path.clone().ok_or_else(|| {
+                SparkError::internal(format!(
+                    "stored Python artifact {} did not have a local path",
+                    stored.normalized_name
+                ))
+            })?;
             let transport_payload = ArtifactPayload::File(target_path);
-            let (data, uri) = artifact_transport(
+            let (data, uri) = match artifact_transport(
                 artifacts,
                 &stored.normalized_name,
                 sha256,
                 size,
                 &transport_payload,
             )
-            .await?;
-            artifacts.add_artifact(PySparkPythonArtifact {
+            .await
+            {
+                Ok(result) => result,
+                Err(error) => {
+                    if let Some(path) = &stored.created_target_path {
+                        if let Err(remove_error) = std::fs::remove_file(path) {
+                            log::debug!(
+                                "failed to remove uncommitted artifact file {}: {remove_error}",
+                                path.display()
+                            );
+                        }
+                    }
+                    return Err(error);
+                }
+            };
+            update.artifact_uri = uri.clone();
+            update.python_artifact = Some(PySparkPythonArtifact {
                 name: stored.normalized_name,
-                python_path: stored.local_path.unwrap_or_default(),
+                python_path,
                 data,
                 uri,
                 sha256: sha256.to_string(),
                 size: size as u64,
                 kind,
-            })?;
+            });
         }
+        pending_update = Some(update);
     }
     summaries.push(ArtifactSummary {
         name,
         is_crc_successful,
     });
-    Ok(())
+    Ok(pending_update)
 }
 
 async fn add_single_chunk_artifact(
@@ -765,7 +877,7 @@ async fn add_single_chunk_artifact(
     artifacts: &SparkArtifactRegistry,
     allow_local_fs_destination: bool,
     summaries: &mut Vec<ArtifactSummary>,
-) -> SparkResult<()> {
+) -> SparkResult<Option<PendingArtifactUpdate>> {
     let chunk_ok = validate_crc(&chunk.data, chunk.crc);
     let sha256 = sha256_hex(&chunk.data);
     let size = chunk.data.len();
@@ -790,7 +902,7 @@ async fn finalize_chunked_artifact(
     artifacts: &SparkArtifactRegistry,
     allow_local_fs_destination: bool,
     summaries: &mut Vec<ArtifactSummary>,
-) -> SparkResult<()> {
+) -> SparkResult<Option<PendingArtifactUpdate>> {
     let completed = chunked.finish()?;
     let payload = ArtifactPayload::File(&completed.path);
     add_artifact_summary(
@@ -817,6 +929,7 @@ pub(crate) async fn handle_add_artifacts(
 
     let mut summaries: Vec<ArtifactSummary> = Vec::new();
     let mut current_chunked: Option<ChunkedArtifact> = None;
+    let mut pending_updates = PendingArtifactUpdates::default();
 
     tokio::pin!(stream);
     while let Some(item) = stream.next().await {
@@ -832,15 +945,17 @@ pub(crate) async fn handle_add_artifacts(
                 for artifact in batch.artifacts {
                     let name = artifact.name;
                     let chunk = artifact.data.required("artifact data")?;
-                    add_single_chunk_artifact(
-                        name,
-                        chunk,
-                        &artifact_dir,
-                        &artifacts,
-                        allow_local_fs_destination,
-                        &mut summaries,
-                    )
-                    .await?;
+                    pending_updates.push(
+                        add_single_chunk_artifact(
+                            name,
+                            chunk,
+                            &artifact_dir,
+                            &artifacts,
+                            allow_local_fs_destination,
+                            &mut summaries,
+                        )
+                        .await?,
+                    );
                 }
             }
             Payload::BeginChunk(begin) => {
@@ -858,21 +973,23 @@ pub(crate) async fn handle_add_artifacts(
                     &artifact_dir,
                 )?;
                 if chunked.is_complete() {
-                    finalize_chunked_artifact(
-                        chunked,
-                        &artifact_dir,
-                        &artifacts,
-                        allow_local_fs_destination,
-                        &mut summaries,
-                    )
-                    .await?;
+                    pending_updates.push(
+                        finalize_chunked_artifact(
+                            chunked,
+                            &artifact_dir,
+                            &artifacts,
+                            allow_local_fs_destination,
+                            &mut summaries,
+                        )
+                        .await?,
+                    );
                 } else {
                     current_chunked = Some(chunked);
                 }
             }
             Payload::Chunk(chunk) => {
                 let is_complete = if let Some(ref mut chunked) = current_chunked {
-                    process_chunk(chunked, &chunk)?;
+                    chunked.process_chunk(&chunk)?;
                     chunked.is_complete()
                 } else {
                     return Err(SparkError::invalid(
@@ -881,14 +998,16 @@ pub(crate) async fn handle_add_artifacts(
                 };
                 if is_complete {
                     if let Some(chunked) = current_chunked.take() {
-                        finalize_chunked_artifact(
-                            chunked,
-                            &artifact_dir,
-                            &artifacts,
-                            allow_local_fs_destination,
-                            &mut summaries,
-                        )
-                        .await?;
+                        pending_updates.push(
+                            finalize_chunked_artifact(
+                                chunked,
+                                &artifact_dir,
+                                &artifacts,
+                                allow_local_fs_destination,
+                                &mut summaries,
+                            )
+                            .await?,
+                        );
                     }
                 }
             }
@@ -897,16 +1016,19 @@ pub(crate) async fn handle_add_artifacts(
 
     // Finalize any remaining chunked artifact
     if let Some(chunked) = current_chunked.take() {
-        finalize_chunked_artifact(
-            chunked,
-            &artifact_dir,
-            &artifacts,
-            allow_local_fs_destination,
-            &mut summaries,
-        )
-        .await?;
+        pending_updates.push(
+            finalize_chunked_artifact(
+                chunked,
+                &artifact_dir,
+                &artifacts,
+                allow_local_fs_destination,
+                &mut summaries,
+            )
+            .await?,
+        );
     }
 
+    pending_updates.commit(&artifacts)?;
     Ok(summaries)
 }
 

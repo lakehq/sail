@@ -102,11 +102,20 @@ def test_cache_artifact_status_tracks_cache_namespace(spark):
 
 
 def test_add_multiple_artifacts_as_pyfiles(spark, tmp_path):
-    """Multiple zip artifacts can be added as pyfiles."""
+    """Multiple zip artifacts can be added and used as pyfiles."""
     for i in range(3):
         zip_path = tmp_path / f"sail_multi_module_{i}.zip"
         _make_zip(zip_path, f"sail_multi_module_{i}.py", f"V = {i}\n")
         spark.addArtifact(str(zip_path), pyfile=True)
+
+    @udf(IntegerType())
+    def read_multi_artifact_values(_):
+        import importlib
+
+        return sum(importlib.import_module(f"sail_multi_module_{i}").V for i in range(3))
+
+    rows = spark.range(1).select(read_multi_artifact_values("id").alias("value")).collect()
+    assert rows[0].value == 3
 
 
 def test_add_artifacts_crc_failure_is_reported_without_storing(spark):
@@ -134,6 +143,88 @@ def test_add_artifacts_crc_failure_is_reported_without_storing(spark):
     assert not response.artifacts[0].is_crc_successful
     statuses = _artifact_statuses(spark, ["files/sail_bad_crc.txt"]).statuses
     assert not statuses["files/sail_bad_crc.txt"].exists
+
+
+def test_chunked_pyfile_artifact_is_importable(spark):
+    from pyspark.sql.connect.proto import base_pb2 as proto
+
+    data = b"VALUE = 123\n"
+    first = data[:5]
+    second = data[5:]
+    manager = spark._client._artifact_manager
+    requests = [
+        proto.AddArtifactsRequest(
+            session_id=manager._session_id,
+            user_context=manager._user_context,
+            begin_chunk=proto.AddArtifactsRequest.BeginChunkedArtifact(
+                name="pyfiles/sail_chunked_module.py",
+                total_bytes=len(data),
+                num_chunks=2,
+                initial_chunk=proto.AddArtifactsRequest.ArtifactChunk(
+                    data=first, crc=zlib.crc32(first)
+                ),
+            ),
+        ),
+        proto.AddArtifactsRequest(
+            session_id=manager._session_id,
+            user_context=manager._user_context,
+            chunk=proto.AddArtifactsRequest.ArtifactChunk(
+                data=second, crc=zlib.crc32(second)
+            ),
+        ),
+    ]
+
+    response = manager._retrieve_responses(iter(requests))
+    assert response.artifacts[0].name == "pyfiles/sail_chunked_module.py"
+    assert response.artifacts[0].is_crc_successful
+
+    @udf(IntegerType())
+    def read_chunked_value(_):
+        import sail_chunked_module
+
+        return sail_chunked_module.VALUE
+
+    rows = spark.range(1).select(read_chunked_value("id").alias("value")).collect()
+    assert rows[0].value == 123
+
+
+def test_add_artifacts_batch_failure_does_not_commit_prior_pyfile(spark):
+    from pyspark.sql.connect.proto import base_pb2 as proto
+
+    module_data = b"VALUE = 99\n"
+    invalid_data = b"x"
+    manager = spark._client._artifact_manager
+    request = proto.AddArtifactsRequest(
+        session_id=manager._session_id,
+        user_context=manager._user_context,
+        batch=proto.AddArtifactsRequest.Batch(
+            artifacts=[
+                proto.AddArtifactsRequest.SingleChunkArtifact(
+                    name="pyfiles/sail_partial_commit_module.py",
+                    data=proto.AddArtifactsRequest.ArtifactChunk(
+                        data=module_data, crc=zlib.crc32(module_data)
+                    ),
+                ),
+                proto.AddArtifactsRequest.SingleChunkArtifact(
+                    name="pyfiles/../sail_invalid.py",
+                    data=proto.AddArtifactsRequest.ArtifactChunk(
+                        data=invalid_data, crc=zlib.crc32(invalid_data)
+                    ),
+                ),
+            ]
+        ),
+    )
+
+    with pytest.raises(Exception, match=r"relative path|\\.\\.|invalid"):
+        manager._retrieve_responses(iter([request]))
+
+    @udf(IntegerType())
+    def read_uncommitted_value(_):
+        module = __import__("sail_partial_commit_module")
+        return module.VALUE
+
+    with pytest.raises(Exception, match="sail_partial_commit_module"):
+        spark.range(1).select(read_uncommitted_value("id").alias("value")).collect()
 
 
 def test_chunked_artifact_rejects_incomplete_declared_size_without_large_allocation(spark):

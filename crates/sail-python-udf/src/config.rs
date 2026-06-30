@@ -1,7 +1,7 @@
 use std::ffi::CString;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use num_bigint::BigUint;
@@ -19,6 +19,7 @@ const FILES_PREFIX: &str = "files/";
 const ARCHIVES_PREFIX: &str = "archives/";
 static ARTIFACT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 static ARTIFACT_PROCESS_NAMESPACE: OnceLock<String> = OnceLock::new();
+static INSTALLED_ARTIFACT_PYTHON_PATHS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 const SPARK_FILES_SHIM_SOURCE: &str = r#"
 import os
 
@@ -152,8 +153,6 @@ pub struct PySparkUdfConfig {
     pub python_udf_pandas_int_to_decimal_coercion_enabled: bool,
     #[pyo3(get)]
     pub binary_as_bytes: bool,
-    #[pyo3(get)]
-    pub python_artifact_paths: Vec<String>,
     pub python_artifacts: Vec<PySparkPythonArtifact>,
 }
 
@@ -169,7 +168,6 @@ impl Default for PySparkUdfConfig {
             python_udtf_pandas_conversion_enabled: false,
             python_udf_pandas_int_to_decimal_coercion_enabled: false,
             binary_as_bytes: true,
-            python_artifact_paths: vec![],
             python_artifacts: vec![],
         }
     }
@@ -177,40 +175,17 @@ impl Default for PySparkUdfConfig {
 
 impl PySparkUdfConfig {
     pub fn install_python_artifacts(&self, py: Python) -> PyUdfResult<()> {
-        if self.python_artifact_paths.is_empty() && self.python_artifacts.is_empty() {
+        if self.python_artifacts.is_empty() {
+            clear_python_artifacts(py)?;
             return Ok(());
         }
         let installed = self.resolve_artifacts(py)?;
-        let sys = PyModule::import(py, "sys")?;
-        let path_list = sys.getattr("path")?;
-        for path in installed.python_paths {
-            let contains: bool = path_list
-                .call_method1("__contains__", (path.as_str(),))?
-                .extract()?;
-            if !contains {
-                path_list.call_method1("insert", (0, path.as_str()))?;
-            }
-        }
+        sync_artifact_python_paths(py, &installed.python_paths)?;
         invalidate_import_caches(py)?;
         Ok(())
     }
 
     fn resolve_artifacts(&self, py: Python) -> PyUdfResult<InstalledArtifacts> {
-        if self.python_artifacts.is_empty() {
-            let mut paths = Vec::with_capacity(self.python_artifact_paths.len());
-            for path in &self.python_artifact_paths {
-                if !Path::new(path).exists() {
-                    return Err(PyUdfError::invalid(format!(
-                        "Python artifact path is not accessible in this worker: {path}"
-                    )));
-                }
-                paths.push(path.clone());
-            }
-            return Ok(InstalledArtifacts {
-                python_paths: paths,
-            });
-        }
-
         let root = spark_files_root(&self.python_artifacts)?;
         std::fs::create_dir_all(&root)?;
         configure_spark_files(py, &root)?;
@@ -220,16 +195,16 @@ impl PySparkUdfConfig {
             match artifact.kind {
                 PySparkArtifactKind::PyFile => {
                     let target = root.join(artifact_spark_files_relative_path(artifact)?);
-                    materialize_artifact_file(artifact, &target)?;
+                    py.detach(|| materialize_artifact_file(artifact, &target))?;
                     python_paths.push(python_artifact_import_path(&artifact.name, &target)?);
                 }
                 PySparkArtifactKind::File => {
                     let target = root.join(artifact_spark_files_relative_path(artifact)?);
-                    materialize_artifact_file(artifact, &target)?;
+                    py.detach(|| materialize_artifact_file(artifact, &target))?;
                 }
                 PySparkArtifactKind::Archive => {
                     let archive = root.join(archive_storage_relative_path(artifact)?);
-                    materialize_artifact_file(artifact, &archive)?;
+                    py.detach(|| materialize_artifact_file(artifact, &archive))?;
                     let destination = root.join(artifact_spark_files_relative_path(artifact)?);
                     extract_archive(py, &artifact.name, &archive, &destination, &artifact.sha256)?;
                 }
@@ -337,6 +312,56 @@ fn configure_spark_files(py: Python, root: &Path) -> PyUdfResult<()> {
     spark_files.setattr("_root_directory", root.to_string_lossy().as_ref())?;
     spark_files.setattr("_is_running_on_worker", true)?;
     Ok(())
+}
+
+fn clear_python_artifacts(py: Python) -> PyUdfResult<()> {
+    sync_artifact_python_paths(py, &[])?;
+    clear_spark_files(py);
+    invalidate_import_caches(py)?;
+    Ok(())
+}
+
+fn clear_spark_files(py: Python) {
+    if let Ok(module) = PyModule::import(py, "pyspark.core.files") {
+        if let Ok(spark_files) = module.getattr("SparkFiles") {
+            if let Err(error) = spark_files.setattr("_root_directory", Option::<String>::None) {
+                log::debug!("failed to clear SparkFiles root directory: {error}");
+            }
+            if let Err(error) = spark_files.setattr("_is_running_on_worker", false) {
+                log::debug!("failed to clear SparkFiles worker state: {error}");
+            }
+        }
+    }
+}
+
+fn sync_artifact_python_paths(py: Python, paths: &[String]) -> PyUdfResult<()> {
+    let sys = PyModule::import(py, "sys")?;
+    let path_list = sys.getattr("path")?;
+    let state = INSTALLED_ARTIFACT_PYTHON_PATHS.get_or_init(|| Mutex::new(vec![]));
+    let mut installed = state.lock().map_err(|e| {
+        PyUdfError::internal(format!("failed to lock installed artifact paths: {e}"))
+    })?;
+
+    for path in installed
+        .iter()
+        .filter(|path| !paths.iter().any(|next| next == *path))
+    {
+        while path_list_contains(&path_list, path)? {
+            path_list.call_method1("remove", (path.as_str(),))?;
+        }
+    }
+    for path in paths {
+        if !path_list_contains(&path_list, path)? {
+            path_list.call_method1("insert", (0, path.as_str()))?;
+        }
+    }
+
+    *installed = paths.to_vec();
+    Ok(())
+}
+
+fn path_list_contains(path_list: &pyo3::Bound<'_, pyo3::PyAny>, path: &str) -> PyUdfResult<bool> {
+    Ok(path_list.call_method1("__contains__", (path,))?.extract()?)
 }
 
 fn spark_files_module<'py>(py: Python<'py>) -> PyUdfResult<pyo3::Bound<'py, PyModule>> {

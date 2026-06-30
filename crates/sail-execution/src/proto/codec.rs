@@ -4040,7 +4040,6 @@ impl RemoteExecutionCodec {
             python_udf_pandas_int_to_decimal_coercion_enabled: config
                 .python_udf_pandas_int_to_decimal_coercion_enabled,
             binary_as_bytes: config.binary_as_bytes,
-            python_artifact_paths: vec![],
             python_artifacts: self.decode_python_artifacts.to_vec(),
         };
         Ok(config)
