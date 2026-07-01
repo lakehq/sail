@@ -16,6 +16,8 @@ use datafusion::physical_plan::{
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_data_source::listing::delete::FileDeleteExec;
+use sail_delta_lake::physical_plan::DeltaCommitExec;
+use sail_iceberg::physical_plan::IcebergCommitExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
@@ -287,8 +289,9 @@ fn build_job_graph(
     } else if plan.is::<SystemTableExec>()
         || plan.is::<CatalogCommandExec>()
         || plan.is::<FileDeleteExec>()
+        || plan.is::<DeltaCommitExec>()
+        || plan.is::<IcebergCommitExec>()
     {
-        plan.children().zero()?;
         create_driver_stage(&plan, graph)?
     } else {
         plan
@@ -436,13 +439,13 @@ fn rewrite_inputs(
     Ok((result.data()?, inputs))
 }
 
-// TODO: support driver stage with inputs
 fn create_driver_stage(
     plan: &Arc<dyn ExecutionPlan>,
     graph: &mut JobGraph,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    let (plan, inputs) = rewrite_inputs(plan.clone())?;
     let stage = Stage {
-        inputs: vec![],
+        inputs,
         plan: plan.clone(),
         group: String::new(),
         mode: OutputMode::Pipelined,
