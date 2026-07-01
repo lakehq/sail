@@ -349,6 +349,19 @@ Feature: concat() — simplify hook (single-argument identity)
          |-- result: string (nullable = true)
         """
 
+    # Zero arguments: Spark's `Concat.nullable = children.exists(_.nullable)` is
+    # false for an empty child list, and `concat()` returns a non-null empty string.
+    Scenario: zero arguments yield a non-nullable result
+      When query
+        """
+        SELECT concat() AS result
+        """
+      Then query schema
+        """
+        root
+         |-- result: string (nullable = false)
+        """
+
   Rule: All-literal calls are constant-folded by DataFusion (not the simplify hook)
 
     # `concat` is Immutable, so an all-literal call is evaluated at planning time by

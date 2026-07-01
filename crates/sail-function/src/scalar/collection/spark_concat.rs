@@ -64,8 +64,7 @@ impl ScalarUDFImpl for SparkConcat {
             .map(|field| field.data_type().clone())
             .collect::<Vec<_>>();
         let return_type = concat_return_type(&data_types)?;
-        let nullable =
-            args.arg_fields.is_empty() || args.arg_fields.iter().any(|field| field.is_nullable());
+        let nullable = args.arg_fields.iter().any(|field| field.is_nullable());
         Ok(Arc::new(Field::new(self.name(), return_type, nullable)))
     }
 
