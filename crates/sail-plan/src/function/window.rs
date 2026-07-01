@@ -475,7 +475,7 @@ fn collect_set(input: WinFunctionInput) -> PlanResult<expr::Expr> {
             order_by,
             window_frame,
             filter: null_filter,
-            null_treatment: None,
+            null_treatment: get_null_treatment(Some(true)),
             distinct: true,
         },
     })))
