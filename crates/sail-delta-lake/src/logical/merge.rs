@@ -16,7 +16,7 @@ use crate::logical::table_source::DeltaTableSource;
 
 /// Expand MERGE information into a unified row-level write node for Delta.
 pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
-    let row_index_column = (merge_has_delete_actions(&info)
+    let row_index_column = ((merge_has_delete_actions(&info) || merge_has_update_actions(&info))
         && merge_target_supports_deletion_vectors(info.target.as_ref())?)
     .then_some(MERGE_ROW_INDEX_COLUMN);
     let mut target_plan = ensure_merge_metadata_columns(
@@ -111,6 +111,13 @@ fn merge_has_delete_actions(info: &MergeInfo) -> bool {
             .not_matched_by_source_clauses
             .iter()
             .any(|clause| matches!(clause.action, MergeNotMatchedBySourceAction::Delete))
+}
+
+fn merge_has_update_actions(info: &MergeInfo) -> bool {
+    info.options
+        .matched_clauses
+        .iter()
+        .any(|clause| matches!(clause.action, MergeMatchedAction::UpdateAll))
 }
 
 fn merge_target_supports_deletion_vectors(plan: &LogicalPlan) -> Result<bool> {
