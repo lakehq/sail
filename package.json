@@ -24,7 +24,7 @@
     "eslint-plugin-vue": "^10.9.2",
     "fast-glob": "^3.3.3",
     "gray-matter": "^4.0.3",
-    "js-yaml": "^4.2.0",
+    "js-yaml": "^5.2.0",
     "markdown-it": "^14.2.0",
     "markdown-it-deflist": "^3.0.1",
     "markdown-it-footnote": "^4.0.0",
