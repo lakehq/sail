@@ -1,3 +1,4 @@
+@concat_ws
 Feature: concat_ws function
 
   Rule: concat_ws with scalar arguments
@@ -112,7 +113,109 @@ Feature: concat_ws function
         | result    |
         | x,a,b,y   |
 
+  Rule: concat_ws coerces non-string array elements to STRING (like scalars)
+
+    Scenario: integer array elements are coerced to string
+      When query
+        """
+        SELECT concat_ws(',', array(1, 2, 3)) AS result
+        """
+      Then query result
+        | result |
+        | 1,2,3  |
+
+    Scenario: null elements of a non-string array are skipped
+      When query
+        """
+        SELECT concat_ws(',', array(1, NULL, 3)) AS result
+        """
+      Then query result
+        | result |
+        | 1,3    |
+
+    Scenario: boolean array elements are coerced to string
+      When query
+        """
+        SELECT concat_ws('-', array(true, false)) AS result
+        """
+      Then query result
+        | result      |
+        | true-false  |
+
+    Scenario: double array elements are coerced to string
+      When query
+        """
+        SELECT concat_ws(',', array(1.5, 2.5)) AS result
+        """
+      Then query result
+        | result  |
+        | 1.5,2.5 |
+
+    Scenario: integer array mixed with a scalar
+      When query
+        """
+        SELECT concat_ws(',', array(1, 2), 'x') AS result
+        """
+      Then query result
+        | result |
+        | 1,2,x  |
+
+    Scenario: a whole-NULL non-string array contributes nothing
+      When query
+        """
+        SELECT concat_ws(',', CAST(NULL AS ARRAY<INT>)) AS result
+        """
+      Then query result
+        | result |
+        |        |
+
+    Scenario: an array whose elements are all NULL yields the empty string
+      When query
+        """
+        SELECT concat_ws(',', array(CAST(NULL AS INT), CAST(NULL AS INT))) AS result
+        """
+      Then query result
+        | result |
+        |        |
+
+    Scenario: an int array and a string array concatenate together
+      When query
+        """
+        SELECT concat_ws(',', array(1, 2), array('a', 'b')) AS result
+        """
+      Then query result
+        | result    |
+        | 1,2,a,b   |
+
+    Scenario: date array elements are coerced to string
+      When query
+        """
+        SELECT concat_ws(',', array(DATE '2020-01-01', DATE '2020-01-02')) AS result
+        """
+      Then query result
+        | result                |
+        | 2020-01-01,2020-01-02 |
+
   Rule: concat_ws over multiple rows (column inputs)
+
+    # Per-row list expansion over a column with varying lengths, plus empty and
+    # NULL list cells — exercises walking each row's element range independently.
+    Scenario: concat_ws over an int-array column with varying lengths
+      When query
+        """
+        SELECT concat_ws('-', v) AS result FROM VALUES
+          (0, array(1, 2, 3)),
+          (1, array(4, 5)),
+          (2, CAST(array() AS ARRAY<INT>)),
+          (3, CAST(NULL AS ARRAY<INT>))
+        AS t(id, v) ORDER BY id
+        """
+      Then query result ordered
+        | result |
+        | 1-2-3  |
+        | 4-5    |
+        |        |
+        |        |
 
     Scenario: concat_ws null separator over a column returns NULL per row
       When query
