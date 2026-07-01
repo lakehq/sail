@@ -134,7 +134,7 @@ def data(spark, tmp_path_factory):
     pq.write_table(table, data_path)
     df = spark.read.parquet(data_path)
     df = df.withColumn("EventTime", F.col("EventTime").cast("timestamp"))
-    df = df.withColumn("EventDate", F.date_add(F.lit("1970-01-01"), F.col("EventDate")))
+    df = df.withColumn("EventDate", F.col("EventDate").cast("int").cast("date"))
     df.createOrReplaceTempView("hits")
     yield
     spark.catalog.dropTempView("hits")

@@ -12,12 +12,13 @@ use sail_sql_parser::ast::statement::{
     AsQueryClause, Assignment, AssignmentList, ColumnAlteration, ColumnAlterationList,
     ColumnAlterationOption, ColumnDefinition, ColumnDefinitionList, ColumnDefinitionOption,
     ColumnPosition, ColumnTypeDefinition, CommentValue, CreateDatabaseClause, CreateTableClause,
-    CreateViewClause, CreateViewDefinition, DeleteTableAlias, DescribeItem, ExplainFormat,
-    FileFormat, InsertDirectoryDestination, MergeMatchClause, MergeMatchedAction,
+    CreateViewClause, CreateViewDefinition, DeleteTableAlias, DescribeFunctionName, DescribeItem,
+    ExplainFormat, FileFormat, InsertDirectoryDestination, MergeMatchClause, MergeMatchedAction,
     MergeNotMatchedBySourceAction, MergeNotMatchedByTargetAction, MergeSource, PartitionByItem,
     PartitionByList, PartitionClause, PartitionValue, PartitionValueList, PropertyKey,
     PropertyKeyList, PropertyKeyValue, PropertyList, PropertyValue, RowFormat,
-    RowFormatDelimitedClause, SetClause, SortColumn, SortColumnClause, SortColumnList, Statement,
+    RowFormatDelimitedClause, SetClause, ShowFunctionScope, ShowFunctionsClause,
+    ShowFunctionsPattern, SortColumn, SortColumnClause, SortColumnList, Statement,
     TableColumnIdentityOption, TableColumnIdentityOptions, UpdateTableAlias, ViewColumn,
     ViewColumnList, ViewUsingClause,
 };
@@ -31,6 +32,72 @@ use crate::expression::{
 };
 use crate::query::from_ast_query;
 use crate::value::from_ast_string;
+
+fn from_ast_show_function_scope(scope: Option<ShowFunctionScope>) -> (bool, bool) {
+    match scope {
+        None | Some(ShowFunctionScope::All(_)) => (true, true),
+        Some(ShowFunctionScope::User(_)) => (true, false),
+        Some(ShowFunctionScope::System(_)) => (false, true),
+    }
+}
+
+fn from_ast_show_functions_clause(
+    clause: Option<ShowFunctionsClause>,
+) -> SqlResult<(Option<spec::ObjectName>, Option<String>)> {
+    let Some(clause) = clause else {
+        return Ok((None, None));
+    };
+    match clause {
+        ShowFunctionsClause::NamespacePattern(_, database, _, pattern) => Ok((
+            Some(from_ast_object_name(database)?),
+            Some(from_ast_string(pattern)?),
+        )),
+        ShowFunctionsClause::Namespace(_, database) => {
+            Ok((Some(from_ast_object_name(database)?), None))
+        }
+        ShowFunctionsClause::Pattern(_, ShowFunctionsPattern::String(pattern)) => {
+            Ok((None, Some(from_ast_string(pattern)?)))
+        }
+        ShowFunctionsClause::Pattern(_, ShowFunctionsPattern::Name(pattern)) => {
+            let mut parts: Vec<String> = from_ast_object_name(pattern)?.into();
+            let Some(pattern) = parts.pop() else {
+                return Err(SqlError::invalid("SHOW FUNCTIONS with empty pattern"));
+            };
+            Ok((None, Some(pattern)))
+        }
+    }
+}
+
+fn from_ast_describe_function_name(name: DescribeFunctionName) -> SqlResult<spec::ObjectName> {
+    let name = match name {
+        DescribeFunctionName::Name(name) => return from_ast_object_name(name),
+        DescribeFunctionName::String(name) => from_ast_string(name)?,
+        DescribeFunctionName::TripleGreaterThan(name) => name.text().trim().to_string(),
+        DescribeFunctionName::DoubleVerticalBar(name) => name.text().trim().to_string(),
+        DescribeFunctionName::DoubleGreaterThan(name) => name.text().trim().to_string(),
+        DescribeFunctionName::DoubleLessThan(name) => name.text().trim().to_string(),
+        DescribeFunctionName::GreaterThanEquals(name) => name.text().trim().to_string(),
+        DescribeFunctionName::LessThanEquals(name) => name.text().trim().to_string(),
+        DescribeFunctionName::LessThanGreaterThan(name) => name.text().trim().to_string(),
+        DescribeFunctionName::Spaceship(name) => name.text().trim().to_string(),
+        DescribeFunctionName::NotEquals(name) => name.text().trim().to_string(),
+        DescribeFunctionName::DoubleEquals(name) => name.text().trim().to_string(),
+        DescribeFunctionName::ExclamationMark(name) => name.text().trim().to_string(),
+        DescribeFunctionName::GreaterThan(name) => name.text().trim().to_string(),
+        DescribeFunctionName::LessThan(name) => name.text().trim().to_string(),
+        DescribeFunctionName::Plus(name) => name.text().trim().to_string(),
+        DescribeFunctionName::Minus(name) => name.text().trim().to_string(),
+        DescribeFunctionName::Asterisk(name) => name.text().trim().to_string(),
+        DescribeFunctionName::Slash(name) => name.text().trim().to_string(),
+        DescribeFunctionName::Percent(name) => name.text().trim().to_string(),
+        DescribeFunctionName::Ampersand(name) => name.text().trim().to_string(),
+        DescribeFunctionName::VerticalBar(name) => name.text().trim().to_string(),
+        DescribeFunctionName::Caret(name) => name.text().trim().to_string(),
+        DescribeFunctionName::Tilde(name) => name.text().trim().to_string(),
+        DescribeFunctionName::Equals(name) => name.text().trim().to_string(),
+    };
+    Ok(spec::ObjectName::bare(name))
+}
 
 /// Converts a parsed SQL AST statement into a spec plan (either a query or a command).
 pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
@@ -533,7 +600,22 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
             };
             Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
         }
-        Statement::ShowFunctions { .. } => Err(SqlError::todo("SHOW FUNCTIONS")),
+        Statement::ShowFunctions {
+            show: _,
+            scope,
+            functions: _,
+            clause,
+        } => {
+            let (database, pattern) = from_ast_show_functions_clause(clause)?;
+            let (show_user_functions, show_system_functions) = from_ast_show_function_scope(scope);
+            let node = spec::CommandNode::ShowFunctions {
+                database,
+                pattern,
+                show_user_functions,
+                show_system_functions,
+            };
+            Ok(spec::Plan::Command(spec::CommandPlan::new(node)))
+        }
         Statement::Explain {
             explain: _,
             format,
@@ -1096,18 +1178,10 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
                     function: _,
                     extended,
                     item,
-                } => {
-                    let function = match item {
-                        Either::Left(x @ ObjectName { .. }) => from_ast_object_name(x)?,
-                        Either::Right(x @ StringLiteral { .. }) => {
-                            spec::ObjectName::bare(from_ast_string(x)?)
-                        }
-                    };
-                    spec::CommandNode::DescribeFunction {
-                        function,
-                        extended: extended.is_some(),
-                    }
-                }
+                } => spec::CommandNode::DescribeFunction {
+                    function: from_ast_describe_function_name(item)?,
+                    extended: extended.is_some(),
+                },
                 DescribeItem::Catalog {
                     catalog: _,
                     extended,

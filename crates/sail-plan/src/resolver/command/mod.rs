@@ -7,6 +7,7 @@ use sail_common::spec;
 
 use crate::catalog::CatalogCommandNode;
 use crate::error::{PlanError, PlanResult};
+use crate::function::list_built_in_function_statuses;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
 
@@ -62,6 +63,18 @@ impl PlanResolver<'_> {
                     pattern,
                 })
             }
+            CommandNode::ShowFunctions {
+                database,
+                pattern,
+                show_user_functions,
+                show_system_functions,
+            } => self.resolve_catalog_command(CatalogCommand::ShowFunctions {
+                database: database.map(|x| x.into()).unwrap_or_default(),
+                pattern,
+                system_functions: list_built_in_function_statuses(),
+                show_user_functions,
+                show_system_functions,
+            }),
             CommandNode::ListTables { database, pattern } => {
                 self.resolve_catalog_command(CatalogCommand::ListTables {
                     database: database.map(|x| x.into()).unwrap_or_default(),
@@ -78,6 +91,7 @@ impl PlanResolver<'_> {
                 self.resolve_catalog_command(CatalogCommand::ListFunctions {
                     database: database.map(|x| x.into()).unwrap_or_default(),
                     pattern,
+                    system_functions: list_built_in_function_statuses(),
                 })
             }
             CommandNode::ListColumns { table } => {
@@ -283,8 +297,12 @@ impl PlanResolver<'_> {
             CommandNode::AnalyzeTable { .. } => Err(PlanError::todo("CommandNode::AnalyzeTable")),
             CommandNode::AnalyzeTables { .. } => Err(PlanError::todo("CommandNode::AnalyzeTables")),
             CommandNode::DescribeQuery { .. } => Err(PlanError::todo("CommandNode::DescribeQuery")),
-            CommandNode::DescribeFunction { .. } => {
-                Err(PlanError::todo("CommandNode::DescribeFunction"))
+            CommandNode::DescribeFunction { function, extended } => {
+                self.resolve_catalog_command(CatalogCommand::DescribeFunction {
+                    function: function.into(),
+                    extended,
+                    system_functions: list_built_in_function_statuses(),
+                })
             }
             CommandNode::DescribeCatalog { .. } => {
                 Err(PlanError::todo("CommandNode::DescribeCatalog"))
