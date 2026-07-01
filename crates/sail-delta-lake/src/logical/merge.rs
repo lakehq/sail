@@ -114,10 +114,14 @@ fn merge_has_delete_actions(info: &MergeInfo) -> bool {
 }
 
 fn merge_has_update_actions(info: &MergeInfo) -> bool {
-    info.options
-        .matched_clauses
+    info.options.matched_clauses.iter().any(|clause| {
+        matches!(clause.action, MergeMatchedAction::UpdateAll)
+            || matches!(clause.action, MergeMatchedAction::UpdateSet(_))
+    }) || info
+        .options
+        .not_matched_by_source_clauses
         .iter()
-        .any(|clause| matches!(clause.action, MergeMatchedAction::UpdateAll))
+        .any(|clause| matches!(clause.action, MergeNotMatchedBySourceAction::UpdateSet(_)))
 }
 
 fn merge_target_supports_deletion_vectors(plan: &LogicalPlan) -> Result<bool> {
