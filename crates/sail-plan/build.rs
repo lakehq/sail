@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+// TODO: Make metadata minimal and structured with stricter enums and defaults.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FunctionMetadataEntry {
@@ -199,6 +200,7 @@ fn build_function_metadata(
     entries: &[FunctionMetadataEntry],
     out_dir: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    // TODO: Generate Rust code with `quote` instead of formatting strings.
     let mut output = String::new();
     output
         .push_str("pub(crate) const BUILT_IN_FUNCTION_METADATA: &[BuiltInFunctionMetadata] = &[\n");

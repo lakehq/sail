@@ -20,6 +20,7 @@ pub(crate) struct BuiltInFunctionMetadata {
 include!(concat!(env!("OUT_DIR"), "/function_metadata.rs"));
 
 lazy_static! {
+    // TODO: Generate this lookup as a `phf::Map`.
     static ref BUILT_IN_FUNCTION_METADATA_BY_NAME: HashMap<&'static str, BuiltInFunctionMetadata> =
         HashMap::from_iter(
             BUILT_IN_FUNCTION_METADATA
