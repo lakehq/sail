@@ -429,18 +429,19 @@ fn count_if(input: WinFunctionInput) -> PlanResult<expr::Expr> {
     } = input;
     match arguments.len() {
         1 => {
-            let filter = arguments
+            let predicate = arguments
                 .first()
                 .ok_or_else(|| PlanError::invalid("`count_if` requires 1 argument"))?
                 .clone();
+            let arg = when(predicate, lit(0)).otherwise(lit(ScalarValue::Int32(None)))?;
             Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
                 fun: WindowFunctionDefinition::AggregateUDF(count::count_udaf()),
                 params: WindowFunctionParams {
-                    args: vec![lit(0)],
+                    args: vec![arg],
                     partition_by,
                     order_by,
                     window_frame,
-                    filter: Some(Box::new(filter)),
+                    filter: None,
                     null_treatment: get_null_treatment(ignore_nulls),
                     distinct,
                 },
