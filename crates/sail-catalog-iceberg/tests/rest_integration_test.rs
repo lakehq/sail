@@ -35,29 +35,35 @@ use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt};
 
 async fn setup_catalog(
-    network_name: &str,
+    _network_name: &str,
 ) -> (
     RuntimeAwareCatalogProvider<IcebergRestCatalogProvider>,
     ContainerAsync<GenericImage>,
     ContainerAsync<GenericImage>,
     ContainerAsync<GenericImage>,
 ) {
-    let network = format!("iceberg_{}", network_name);
-
     let minio = GenericImage::new("minio/minio", "RELEASE.2025-05-24T17-08-30Z")
         .with_wait_for(WaitFor::message_on_stderr("MinIO Object Storage Server"))
         .with_exposed_port(ContainerPort::Tcp(9000))
         .with_exposed_port(ContainerPort::Tcp(9001))
         .with_env_var("MINIO_ROOT_USER", "admin")
         .with_env_var("MINIO_ROOT_PASSWORD", "password")
-        .with_network(&network)
         .with_cmd(vec!["server", "/data", "--console-address", ":9001"])
         .start()
         .await
         .expect("Failed to start MinIO");
 
-    let minio_ip = minio.get_bridge_ip_address().await.expect("get bridge ip");
-    let minio_internal_endpoint = format!("http://{minio_ip}:9000");
+    // Use host-port mapping for container-to-container communication.
+    // This avoids `get_bridge_ip_address()`, which does not work reliably with
+    // rootless Podman (HostConfig.NetworkMode is always "bridge" regardless of
+    // the actual network name, so the IP lookup in NetworkSettings.Networks fails).
+    // Instead we expose MinIO on a host port and route the REST catalog container
+    // through `host.containers.internal` (available in both Podman and Docker Desktop).
+    let minio_host_port = minio
+        .get_host_port_ipv4(9000)
+        .await
+        .expect("Failed to get MinIO host port");
+    let minio_internal_endpoint = format!("http://host.containers.internal:{minio_host_port}");
 
     let mc = GenericImage::new("minio/mc", "RELEASE.2025-05-21T01-59-54Z")
         .with_wait_for(WaitFor::message_on_stdout(
@@ -71,7 +77,6 @@ async fn setup_catalog(
         .with_env_var("AWS_ACCESS_KEY_ID", "admin")
         .with_env_var("AWS_SECRET_ACCESS_KEY", "password")
         .with_env_var("AWS_REGION", "us-east-1")
-        .with_network(&network)
         .start()
         .await
         .expect("Failed to start MC");
@@ -95,7 +100,9 @@ async fn setup_catalog(
         .with_env_var("CATALOG_WAREHOUSE", "s3://icebergdata/demo")
         .with_env_var("CATALOG_IO__IMPL", "org.apache.iceberg.aws.s3.S3FileIO")
         .with_env_var("CATALOG_S3_ENDPOINT", minio_internal_endpoint)
-        .with_network(&network)
+        // MinIO requires path-style S3 URLs. Without this the AWS SDK constructs
+        // virtual-hosted URLs like `<bucket>.host.containers.internal` which fail DNS.
+        .with_env_var("CATALOG_S3_PATH__STYLE__ACCESS", "true")
         .start()
         .await
         .expect("Failed to start REST catalog");
@@ -2087,4 +2094,131 @@ async fn test_create_table_partition_truncate() {
         }
         _ => panic!("Expected Table kind"),
     }
+}
+
+fn table_prop(props: &[(String, String)], key: &str) -> Option<String> {
+    props
+        .iter()
+        .find(|(k, _)| k.as_str() == key)
+        .map(|(_, v)| v.clone())
+}
+
+/// A read->mutate->replace round-trip must not pollute the real table with the
+/// catalog-managed keys (`metadata.*`, `metadata-location`) that the read path synthesizes
+/// into returned properties. Feeding a loaded table's properties straight back into a
+/// REPLACE must round-trip to the same user props, with no `metadata.*` echoed back.
+#[tokio::test]
+#[ignore]
+async fn test_replace_table_sanitizes_catalog_managed_properties() {
+    let (rest_catalog, _minio, _mc, _rest) = setup_catalog("replace_sanitize_props_network").await;
+
+    let ns = Namespace::try_from(vec!["replace_sanitize_ns".to_string()]).unwrap();
+    rest_catalog
+        .create_database(
+            &ns,
+            CreateDatabaseOptions {
+                if_not_exists: false,
+                comment: None,
+                location: None,
+                properties: vec![],
+            },
+        )
+        .await
+        .unwrap();
+
+    let columns = vec![CreateTableColumnOptions {
+        name: "id".to_string(),
+        data_type: DataType::Int32,
+        nullable: false,
+        comment: None,
+        default: None,
+        generated_always_as: None,
+        identity: None,
+    }];
+
+    rest_catalog
+        .create_table(
+            &ns,
+            "t_sanitize",
+            CreateTableOptions {
+                columns: columns.clone(),
+                comment: None,
+                constraints: vec![],
+                location: None,
+                format: "iceberg".to_string(),
+                partition_by: vec![],
+                sort_by: vec![],
+                bucket_by: None,
+                mode: CreateTableMode::Create,
+                properties: vec![("owner".to_string(), "alice".to_string())],
+                is_external: true,
+                is_write_precondition: false,
+            },
+        )
+        .await
+        .unwrap();
+
+    // Read the table back: the returned props carry synthesized catalog-managed keys.
+    let loaded = rest_catalog.get_table(&ns, "t_sanitize").await.unwrap();
+    let loaded_props = loaded.kind.properties().to_vec();
+    assert!(
+        loaded_props.iter().any(|(k, _)| k == "metadata.table-uuid"),
+        "read path must synthesize metadata.table-uuid (precondition for this test)"
+    );
+
+    // Feed the loaded props straight back into a REPLACE (read->mutate->replace).
+    let replaced = rest_catalog
+        .create_table(
+            &ns,
+            "t_sanitize",
+            CreateTableOptions {
+                columns: columns.clone(),
+                comment: None,
+                constraints: vec![],
+                location: None,
+                format: "iceberg".to_string(),
+                partition_by: vec![],
+                sort_by: vec![],
+                bucket_by: None,
+                mode: CreateTableMode::Replace,
+                properties: loaded_props.clone(),
+                is_external: true,
+                is_write_precondition: false,
+            },
+        )
+        .await
+        .unwrap();
+
+    let after = replaced.kind.properties();
+    // The user prop survives.
+    assert_eq!(
+        table_prop(after, "owner"),
+        Some("alice".to_string()),
+        "user property must survive the replace round-trip"
+    );
+
+    // No catalog-managed key was written into the real table props. The read path may
+    // re-synthesize `metadata.table-uuid` etc. on the way out, but the stored user props
+    // must not contain a *stale* table-uuid from the previous read. Verify the returned
+    // uuid equals the CURRENT table uuid (re-synthesized), not a persisted duplicate:
+    // fetch again and confirm there is exactly one metadata.table-uuid and it matches.
+    let reloaded = rest_catalog.get_table(&ns, "t_sanitize").await.unwrap();
+    let uuid_count = reloaded
+        .kind
+        .properties()
+        .iter()
+        .filter(|(k, _)| k == "metadata.table-uuid")
+        .count();
+    assert_eq!(
+        uuid_count, 1,
+        "table-uuid must not be duplicated/persisted as a user property"
+    );
+    // The synthesized metadata-location must be the live one, not a stale value fed back in.
+    let stale_location = table_prop(&loaded_props, "metadata-location");
+    let live_location = table_prop(reloaded.kind.properties(), "metadata-location");
+    assert!(live_location.is_some(), "live metadata-location must exist");
+    assert_ne!(
+        live_location, stale_location,
+        "metadata-location must advance (stale pointer not written back as a property)"
+    );
 }
