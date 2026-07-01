@@ -4,7 +4,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field};
 use datafusion::functions_aggregate::{
     approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
-    correlation, count, covariance, grouping, median, min_max, stddev, sum, variance,
+    correlation, count, covariance, first_last, grouping, median, min_max, stddev, sum, variance,
 };
 use datafusion::functions_nested::string::array_to_string;
 use datafusion::functions_window::cume_dist::cume_dist_udwf;
@@ -13,7 +13,7 @@ use datafusion::functions_window::nth_value::{first_value_udwf, last_value_udwf,
 use datafusion::functions_window::rank::{dense_rank_udwf, percent_rank_udwf, rank_udwf};
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion_common::ScalarValue;
-use datafusion_expr::expr::WindowFunctionParams;
+use datafusion_expr::expr::{NullTreatment, WindowFunctionParams};
 use datafusion_expr::{
     cast, expr, lit, when, AggregateUDF, ExprSchemable, WindowFrame, WindowFunctionDefinition,
 };
@@ -135,8 +135,17 @@ fn first_value(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         function_context: _,
     } = input;
     let (args, null_treatment) = get_arguments_and_null_treatment(arguments, ignore_nulls)?;
+    // DataFusion physical proto drops IGNORE NULLS for WindowUDFExpr. Aggregate-window
+    // preserves it, but only ever-expanding frames avoid sliding retract support.
+    let preserve_ignore_nulls = matches!(null_treatment, Some(NullTreatment::IgnoreNulls))
+        && window_frame.start_bound.is_unbounded();
+    let fun = if preserve_ignore_nulls {
+        WindowFunctionDefinition::AggregateUDF(first_last::first_value_udaf())
+    } else {
+        WindowFunctionDefinition::WindowUDF(first_value_udwf())
+    };
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
-        fun: WindowFunctionDefinition::WindowUDF(first_value_udwf()),
+        fun,
         params: WindowFunctionParams {
             args,
             partition_by,
