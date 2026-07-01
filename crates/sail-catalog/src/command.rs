@@ -1,7 +1,7 @@
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use sail_common_datafusion::array::serde::ArrowSerializer;
-use sail_common_datafusion::catalog::LakehouseOperation;
+use sail_common_datafusion::catalog::{FunctionStatus, LakehouseOperation};
 use sail_common_datafusion::datasource::{
     is_lakehouse_format, TableFormatAlterTableOperation, TableFormatCreateTableColumn,
     TableFormatCreateTableInfo, TableFormatRegistry,
@@ -72,6 +72,13 @@ pub enum CatalogCommand {
         database: Vec<String>,
         pattern: String,
     },
+    ShowFunctions {
+        database: Vec<String>,
+        pattern: Option<String>,
+        system_functions: Vec<FunctionStatus>,
+        show_user_functions: bool,
+        show_system_functions: bool,
+    },
     ListTables {
         database: Vec<String>,
         pattern: Option<String>,
@@ -101,6 +108,12 @@ pub enum CatalogCommand {
     ListFunctions {
         database: Vec<String>,
         pattern: Option<String>,
+        system_functions: Vec<FunctionStatus>,
+    },
+    DescribeFunction {
+        function: Vec<String>,
+        extended: bool,
+        system_functions: Vec<FunctionStatus>,
     },
     DropFunction {
         function: Vec<String>,
@@ -168,6 +181,7 @@ impl CatalogCommand {
             CatalogCommand::GetTable { .. } => "GetTable",
             CatalogCommand::ShowTables { .. } => "ShowTables",
             CatalogCommand::ShowTableExtended { .. } => "ShowTableExtended",
+            CatalogCommand::ShowFunctions { .. } => "ShowFunctions",
             CatalogCommand::ListTables { .. } => "ListTables",
             CatalogCommand::ListViews { .. } => "ListViews",
             CatalogCommand::DropTable { .. } => "DropTable",
@@ -176,6 +190,7 @@ impl CatalogCommand {
             CatalogCommand::FunctionExists { .. } => "FunctionExists",
             CatalogCommand::GetFunction { .. } => "GetFunction",
             CatalogCommand::ListFunctions { .. } => "ListFunctions",
+            CatalogCommand::DescribeFunction { .. } => "DescribeFunction",
             CatalogCommand::RegisterFunction { .. } => "RegisterFunction",
             CatalogCommand::RegisterTableFunction { .. } => "RegisterTableFunction",
             CatalogCommand::DropFunction { .. } => "DropFunction",
@@ -205,9 +220,15 @@ impl CatalogCommand {
             CatalogCommand::ShowTableExtended { .. } => {
                 ArrowSerializer::default().schema::<ShowTableExtendedRow>()?
             }
+            CatalogCommand::ShowFunctions { .. } => {
+                ArrowSerializer::default().schema::<ShowFunctionsRow>()?
+            }
             CatalogCommand::ListColumns { .. } => display.table_columns().schema()?,
             CatalogCommand::GetFunction { .. } | CatalogCommand::ListFunctions { .. } => {
                 display.functions().schema()?
+            }
+            CatalogCommand::DescribeFunction { .. } => {
+                ArrowSerializer::default().schema::<DescribeFunctionRow>()?
             }
             CatalogCommand::SetCurrentCatalog { .. }
             | CatalogCommand::SetCurrentDatabase { .. }
@@ -378,6 +399,29 @@ impl CatalogCommand {
                     .collect::<CatalogResult<Vec<_>>>()?;
                 ArrowSerializer::default().build_record_batch(&rows)?
             }
+            CatalogCommand::ShowFunctions {
+                database,
+                pattern,
+                system_functions,
+                show_user_functions,
+                show_system_functions,
+            } => {
+                let rows = manager
+                    .list_functions(
+                        &database,
+                        pattern.as_deref(),
+                        &system_functions,
+                        show_user_functions,
+                        show_system_functions,
+                    )
+                    .await?
+                    .into_iter()
+                    .map(|status| ShowFunctionsRow {
+                        function: status.name,
+                    })
+                    .collect::<Vec<_>>();
+                ArrowSerializer::default().build_record_batch(&rows)?
+            }
             CatalogCommand::ListTables { database, pattern } => {
                 let rows = manager
                     .list_tables_and_views(&database, pattern.as_deref())
@@ -546,8 +590,41 @@ impl CatalogCommand {
             CatalogCommand::GetFunction { .. } => {
                 return Err(CatalogError::NotSupported("get function".to_string()));
             }
-            CatalogCommand::ListFunctions { .. } => {
-                return Err(CatalogError::NotSupported("list functions".to_string()));
+            CatalogCommand::ListFunctions {
+                database,
+                pattern,
+                system_functions,
+            } => {
+                let rows = manager
+                    .list_functions(&database, pattern.as_deref(), &system_functions, true, true)
+                    .await?;
+                display.functions().to_record_batch(rows)?
+            }
+            CatalogCommand::DescribeFunction {
+                function,
+                extended,
+                system_functions,
+            } => {
+                let status = manager
+                    .get_function_status(&function, &system_functions)
+                    .await?;
+                let mut rows = vec![DescribeFunctionRow {
+                    function_desc: format!("Function: {}", status.name),
+                }];
+                if !status.class_name.is_empty() {
+                    rows.push(DescribeFunctionRow {
+                        function_desc: format!("Class: {}", status.class_name),
+                    });
+                }
+                rows.push(DescribeFunctionRow {
+                    function_desc: format!("Usage: {}", status.usage()),
+                });
+                if extended {
+                    rows.push(DescribeFunctionRow {
+                        function_desc: format!("Extended Usage:{}", status.extended_usage()),
+                    });
+                }
+                ArrowSerializer::default().build_record_batch(&rows)?
             }
             CatalogCommand::DropFunction {
                 function,
@@ -988,6 +1065,16 @@ struct ShowTableExtendedRow {
     information: String,
 }
 
+#[derive(Serialize, Deserialize)]
+struct ShowFunctionsRow {
+    function: String,
+}
+
+#[derive(Serialize, Deserialize)]
+struct DescribeFunctionRow {
+    function_desc: String,
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1000,7 +1087,7 @@ mod tests {
     use datafusion_expr::{LogicalPlan, TableSource};
     use sail_common_datafusion::catalog::display::{CatalogObjectDisplay, DefaultCatalogDisplay};
     use sail_common_datafusion::catalog::{
-        DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
+        DatabaseStatus, FunctionStatus, TableColumnStatus, TableKind, TableStatus,
     };
     use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
     use sail_common_datafusion::session::plan::{PlanFormatter, PlanService};
@@ -1042,8 +1129,8 @@ mod tests {
             TestCatalogOutput { value: status.name }
         }
 
-        fn function(name: String) -> Self::Function {
-            TestCatalogOutput { value: name }
+        fn function(status: FunctionStatus) -> Self::Function {
+            TestCatalogOutput { value: status.name }
         }
     }
 
