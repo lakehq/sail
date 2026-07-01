@@ -2,14 +2,22 @@ use std::sync::Arc;
 
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{plan_datafusion_err, JoinType, Result};
-use datafusion::physical_expr::{Partitioning, PhysicalExpr};
+use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
+use datafusion::physical_expr::{LexOrdering, Partitioning, PhysicalExpr, PhysicalSortExpr};
+use datafusion::physical_plan::aggregates::AggregateExec;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, PiecewiseMergeJoinExec,
+    SortMergeJoinExec,
 };
 use datafusion::physical_plan::limit::GlobalLimitExec;
+use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
+use datafusion::physical_plan::sorts::partial_sort::PartialSortExec;
+use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
+use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion::physical_plan::{
     with_new_children_if_necessary, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
@@ -180,7 +188,6 @@ fn build_job_graph(
     if let Some(barrier) = plan.downcast_ref::<BarrierExec>() {
         return build_barrier_job_graph(barrier, usage, graph);
     }
-
     // Recursively build the job graph for the children first
     // and propagate partition usage information.
     let children = if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
@@ -245,52 +252,72 @@ fn build_job_graph(
             ));
         }
         let properties = repartition.properties().clone();
-        let child = plan.children().one()?;
-        match &properties.partitioning {
-            Partitioning::UnknownPartitioning(n) => {
-                let n = *n;
-                let properties = Arc::new(
-                    properties
-                        .as_ref()
-                        .clone()
-                        .with_partitioning(Partitioning::RoundRobinBatch(n)),
-                );
-                create_shuffle(child, graph, properties, consumption)?
-            }
-            Partitioning::RoundRobinBatch(_) | Partitioning::Hash(_, _) => {
-                create_shuffle(child, graph, properties, consumption)?
+        let child = plan.children().one()?.clone();
+        if plan_subtree_contains_scalar_subquery_expr(&child) {
+            plan
+        } else {
+            match &properties.partitioning {
+                Partitioning::UnknownPartitioning(n) => {
+                    let n = *n;
+                    let properties = Arc::new(
+                        properties
+                            .as_ref()
+                            .clone()
+                            .with_partitioning(Partitioning::RoundRobinBatch(n)),
+                    );
+                    create_shuffle(&child, graph, properties, consumption)?
+                }
+                Partitioning::RoundRobinBatch(_) | Partitioning::Hash(_, _) => {
+                    create_shuffle(&child, graph, properties, consumption)?
+                }
             }
         }
     } else if let Some(repartition) = plan.downcast_ref::<ExplicitRepartitionExec>() {
         let properties = repartition.properties().clone();
-        let child = plan.children().one()?;
-        match &properties.partitioning {
-            Partitioning::RoundRobinBatch(channels) => {
-                create_row_shuffle(child, *channels, graph, properties, consumption)?
-            }
-            other => {
-                return Err(ExecutionError::DataFusionError(plan_datafusion_err!(
-                    "unexpected explicit repartition partitioning in distributed planning: {other:?}"
-                )));
+        let child = plan.children().one()?.clone();
+        if plan_subtree_contains_scalar_subquery_expr(&child) {
+            plan
+        } else {
+            match &properties.partitioning {
+                Partitioning::RoundRobinBatch(channels) => {
+                    create_row_shuffle(&child, *channels, graph, properties, consumption)?
+                }
+                other => {
+                    return Err(ExecutionError::DataFusionError(plan_datafusion_err!(
+                        "unexpected explicit repartition partitioning in distributed planning: {other:?}"
+                    )));
+                }
             }
         }
     } else if let Some(coalesce) = plan.downcast_ref::<CoalescePartitionsExec>() {
         let properties = coalesce.properties().clone();
-        let child = plan.children().one()?;
+        let child = plan.children().one()?.clone();
         let fetch = coalesce.fetch();
-        let shuffled = create_shuffle(child, graph, properties, consumption)?;
-        if let Some(f) = fetch {
-            Arc::new(GlobalLimitExec::new(shuffled, 0, Some(f))) as Arc<dyn ExecutionPlan>
+        if plan_subtree_contains_scalar_subquery_expr(&child) {
+            plan
         } else {
-            shuffled
+            let shuffled = create_shuffle(&child, graph, properties, consumption)?;
+            if let Some(f) = fetch {
+                Arc::new(GlobalLimitExec::new(shuffled, 0, Some(f))) as Arc<dyn ExecutionPlan>
+            } else {
+                shuffled
+            }
         }
     } else if plan.is::<SortPreservingMergeExec>() {
-        let child = plan.children().one()?;
-        plan.clone()
-            .with_new_children(vec![create_merge_input(child, graph)?])?
+        let child = plan.children().one()?.clone();
+        if plan_subtree_contains_scalar_subquery_expr(&child) {
+            plan
+        } else {
+            plan.clone()
+                .with_new_children(vec![create_merge_input(&child, graph)?])?
+        }
     } else if let Some(coalesce) = plan.downcast_ref::<CoalesceExec>() {
-        let child = plan.children().one()?;
-        create_rescale_input(child, coalesce.output_partitions(), graph)?
+        let child = plan.children().one()?.clone();
+        if plan_subtree_contains_scalar_subquery_expr(&child) {
+            plan
+        } else {
+            create_rescale_input(&child, coalesce.output_partitions(), graph)?
+        }
     } else if is_driver_only_exec(&plan) {
         create_driver_stage(&plan, graph)?
     } else {
@@ -340,6 +367,112 @@ fn contains_driver_only_exec(plan: &Arc<dyn ExecutionPlan>) -> bool {
             .children()
             .into_iter()
             .any(|child| contains_driver_only_exec(child))
+}
+
+fn plan_subtree_contains_scalar_subquery_expr(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan_node_contains_scalar_subquery_expr(plan)
+        || plan
+            .children()
+            .into_iter()
+            .any(|child| plan_subtree_contains_scalar_subquery_expr(child))
+}
+
+fn plan_node_contains_scalar_subquery_expr(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    if let Some(filter) = plan.downcast_ref::<FilterExec>() {
+        expr_contains_scalar_subquery_expr(filter.predicate())
+    } else if let Some(projection) = plan.downcast_ref::<ProjectionExec>() {
+        projection
+            .expr()
+            .iter()
+            .any(|expr| expr_contains_scalar_subquery_expr(&expr.expr))
+    } else if let Some(aggregate) = plan.downcast_ref::<AggregateExec>() {
+        aggregate
+            .group_expr()
+            .input_exprs()
+            .iter()
+            .any(expr_contains_scalar_subquery_expr)
+            || aggregate
+                .aggr_expr()
+                .iter()
+                .flat_map(|expr| expr.expressions())
+                .any(|expr| expr_contains_scalar_subquery_expr(&expr))
+            || aggregate
+                .filter_expr()
+                .iter()
+                .flatten()
+                .any(expr_contains_scalar_subquery_expr)
+    } else if let Some(sort) = plan.downcast_ref::<SortExec>() {
+        lex_ordering_contains_scalar_subquery_expr(sort.expr())
+    } else if let Some(sort) = plan.downcast_ref::<PartialSortExec>() {
+        lex_ordering_contains_scalar_subquery_expr(sort.expr())
+    } else if let Some(sort) = plan.downcast_ref::<SortPreservingMergeExec>() {
+        lex_ordering_contains_scalar_subquery_expr(sort.expr())
+    } else if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
+        join.on().iter().any(|(left, right)| {
+            expr_contains_scalar_subquery_expr(left) || expr_contains_scalar_subquery_expr(right)
+        }) || join
+            .filter()
+            .is_some_and(|filter| expr_contains_scalar_subquery_expr(filter.expression()))
+    } else if let Some(join) = plan.downcast_ref::<SortMergeJoinExec>() {
+        join.on().iter().any(|(left, right)| {
+            expr_contains_scalar_subquery_expr(left) || expr_contains_scalar_subquery_expr(right)
+        }) || join
+            .filter()
+            .as_ref()
+            .is_some_and(|filter| expr_contains_scalar_subquery_expr(filter.expression()))
+    } else if let Some(join) = plan.downcast_ref::<NestedLoopJoinExec>() {
+        join.filter()
+            .is_some_and(|filter| expr_contains_scalar_subquery_expr(filter.expression()))
+    } else if let Some(join) = plan.downcast_ref::<PiecewiseMergeJoinExec>() {
+        expr_contains_scalar_subquery_expr(&join.on.0)
+            || expr_contains_scalar_subquery_expr(&join.on.1)
+    } else if let Some(window) = plan.downcast_ref::<WindowAggExec>() {
+        window.window_expr().iter().any(|expr| {
+            expr.expressions()
+                .iter()
+                .any(expr_contains_scalar_subquery_expr)
+                || expr
+                    .partition_by()
+                    .iter()
+                    .any(expr_contains_scalar_subquery_expr)
+                || expr
+                    .order_by()
+                    .iter()
+                    .any(sort_expr_contains_scalar_subquery_expr)
+        })
+    } else if let Some(window) = plan.downcast_ref::<BoundedWindowAggExec>() {
+        window.window_expr().iter().any(|expr| {
+            expr.expressions()
+                .iter()
+                .any(expr_contains_scalar_subquery_expr)
+                || expr
+                    .partition_by()
+                    .iter()
+                    .any(expr_contains_scalar_subquery_expr)
+                || expr
+                    .order_by()
+                    .iter()
+                    .any(sort_expr_contains_scalar_subquery_expr)
+        })
+    } else {
+        false
+    }
+}
+
+fn lex_ordering_contains_scalar_subquery_expr(ordering: &LexOrdering) -> bool {
+    ordering.iter().any(sort_expr_contains_scalar_subquery_expr)
+}
+
+fn sort_expr_contains_scalar_subquery_expr(expr: &PhysicalSortExpr) -> bool {
+    expr_contains_scalar_subquery_expr(&expr.expr)
+}
+
+fn expr_contains_scalar_subquery_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    expr.is::<ScalarSubqueryExpr>()
+        || expr
+            .children()
+            .into_iter()
+            .any(expr_contains_scalar_subquery_expr)
 }
 
 fn create_merge_input(
@@ -512,9 +645,15 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use datafusion::logical_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
+    use datafusion::logical_expr::Operator;
+    use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
     use datafusion::physical_expr::Partitioning;
     use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::expressions::{binary, col};
+    use datafusion::physical_plan::filter::FilterExec;
     use datafusion::physical_plan::repartition::RepartitionExec;
+    use datafusion::physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
     use datafusion::physical_plan::union::UnionExec;
     use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
     use sail_catalog::command::CatalogCommand;
@@ -627,5 +766,99 @@ mod tests {
             .downcast_ref::<BarrierExec>()
             .unwrap();
         assert!(barrier.plan().is::<CatalogCommandExec>());
+    }
+
+    #[test]
+    fn test_job_graph_keeps_scalar_subquery_exec_as_proto_scope() {
+        let results = ScalarSubqueryResults::new(1);
+        let scalar_subquery_expr = Arc::new(ScalarSubqueryExpr::new(
+            DataType::Int32,
+            true,
+            SubqueryIndex::new(0),
+            results.clone(),
+        ));
+        let predicate = binary(
+            col("id", schema().as_ref()).unwrap(),
+            Operator::Eq,
+            scalar_subquery_expr,
+            schema().as_ref(),
+        )
+        .unwrap();
+        let input = Arc::new(
+            RepartitionExec::try_new(
+                Arc::new(FilterExec::try_new(predicate, empty_plan()).unwrap()),
+                Partitioning::RoundRobinBatch(4),
+            )
+            .unwrap(),
+        );
+        let subquery = Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            true,
+        )]))));
+        let plan = Arc::new(ScalarSubqueryExec::new(
+            input,
+            vec![ScalarSubqueryLink {
+                plan: subquery,
+                index: SubqueryIndex::new(0),
+            }],
+            results,
+        ));
+        let graph = JobGraph::try_new(plan).unwrap();
+
+        assert_eq!(graph.stages().len(), 1);
+        assert!(graph.stages()[0].plan.is::<ScalarSubqueryExec>());
+    }
+
+    #[test]
+    fn test_job_graph_splits_below_scalar_subquery_expr_scope() {
+        let results = ScalarSubqueryResults::new(1);
+        let scalar_subquery_expr = Arc::new(ScalarSubqueryExpr::new(
+            DataType::Int32,
+            true,
+            SubqueryIndex::new(0),
+            results.clone(),
+        ));
+        let predicate = binary(
+            col("id", schema().as_ref()).unwrap(),
+            Operator::Eq,
+            scalar_subquery_expr,
+            schema().as_ref(),
+        )
+        .unwrap();
+        let input = Arc::new(
+            FilterExec::try_new(
+                predicate,
+                Arc::new(
+                    RepartitionExec::try_new(empty_plan(), Partitioning::RoundRobinBatch(4))
+                        .unwrap(),
+                ),
+            )
+            .unwrap(),
+        );
+        let subquery = Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            true,
+        )]))));
+        let plan = Arc::new(ScalarSubqueryExec::new(
+            input,
+            vec![ScalarSubqueryLink {
+                plan: subquery,
+                index: SubqueryIndex::new(0),
+            }],
+            results,
+        ));
+        let graph = JobGraph::try_new(plan).unwrap();
+
+        assert_eq!(graph.stages().len(), 2);
+        assert!(graph.stages()[1].plan.is::<ScalarSubqueryExec>());
+        assert!(matches!(
+            graph.stages()[1].inputs.as_slice(),
+            [StageInput {
+                stage: 0,
+                mode: InputMode::Shuffle,
+            }]
+        ));
     }
 }

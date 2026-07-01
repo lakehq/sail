@@ -300,7 +300,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     fn try_decode(
         &self,
         buf: &[u8],
-        _inputs: &[Arc<dyn ExecutionPlan>],
+        inputs: &[Arc<dyn ExecutionPlan>],
         ctx: &TaskContext,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let node = ExtendedPhysicalPlanNode::decode(buf)
@@ -336,9 +336,19 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 truncate,
                 schema,
             }) => {
+                let input = match inputs {
+                    [input] => Arc::clone(input),
+                    [] => try_decode_physical_plan(ctx, self, &input)?,
+                    _ => {
+                        return plan_err!(
+                            "ShowStringExec expects exactly one input, got {}",
+                            inputs.len()
+                        );
+                    }
+                };
                 let schema = try_decode_schema(&schema)?;
                 Ok(Arc::new(ShowStringExec::new(
-                    try_decode_physical_plan(ctx, self, &input)?,
+                    input,
                     names,
                     limit as usize,
                     ShowStringFormat::new(
@@ -1366,7 +1376,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(show_string) = node.downcast_ref::<ShowStringExec>() {
             let schema = try_encode_schema(show_string.schema().as_ref())?;
             NodeKind::ShowString(gen::ShowStringExecNode {
-                input: try_encode_physical_plan(self, show_string.input().clone())?,
+                // DataFusion extension nodes already carry children separately.
+                // Keeping the input here duplicates large plans and loses scoped decode context.
+                input: vec![],
                 names: show_string.names().to_vec(),
                 limit: show_string.limit() as u64,
                 style: self.try_encode_show_string_style(show_string.format().style())?,
@@ -4561,6 +4573,70 @@ mod tests {
         as_hof(decoded_expr)?;
 
         assert_same_result(&physical, decoded_expr, schema_ref, vec![Arc::new(list)])
+    }
+
+    #[test]
+    fn test_round_trip_show_string_under_scalar_subquery_preserves_scope() -> Result<()> {
+        use datafusion::arrow::datatypes::{DataType, Field};
+        use datafusion::logical_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
+        use datafusion::logical_expr::Operator;
+        use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
+        use datafusion::physical_plan::empty::EmptyExec;
+        use datafusion::physical_plan::expressions::{binary, col};
+        use datafusion::physical_plan::filter::FilterExec;
+        use datafusion::physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
+
+        let input_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+        let results = ScalarSubqueryResults::new(1);
+        let scalar_subquery_expr = Arc::new(ScalarSubqueryExpr::new(
+            DataType::Int32,
+            true,
+            SubqueryIndex::new(0),
+            results.clone(),
+        ));
+        let predicate = binary(
+            col("id", input_schema.as_ref())?,
+            Operator::Eq,
+            scalar_subquery_expr,
+            input_schema.as_ref(),
+        )?;
+        let input = Arc::new(FilterExec::try_new(
+            predicate,
+            Arc::new(EmptyExec::new(Arc::clone(&input_schema))),
+        )?);
+        let show_string_schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Utf8,
+            false,
+        )]));
+        let show_string = Arc::new(ShowStringExec::new(
+            input,
+            vec!["id".to_string()],
+            20,
+            ShowStringFormat::new(ShowStringStyle::Default, 20),
+            show_string_schema,
+        ));
+        let subquery = Arc::new(EmptyExec::new(Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            true,
+        )]))));
+        let plan = Arc::new(ScalarSubqueryExec::new(
+            show_string,
+            vec![ScalarSubqueryLink {
+                plan: subquery,
+                index: SubqueryIndex::new(0),
+            }],
+            results,
+        ));
+
+        let codec = RemoteExecutionCodec;
+        let bytes = try_encode_physical_plan(&codec, plan)?;
+        let ctx = TaskContext::default();
+        let decoded = try_decode_physical_plan(&ctx, &codec, &bytes)?;
+
+        assert!(decoded.downcast_ref::<ScalarSubqueryExec>().is_some());
+        Ok(())
     }
 
     #[test]
