@@ -2306,6 +2306,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "array_intersect" | "list_intersect" => {
                 Ok(Arc::new(ScalarUDF::from(ArrayIntersect::new())))
             }
+            "array_element" => Ok(datafusion::functions_nested::extract::array_element_udf()),
             "spark_array_position" | "array_position" => {
                 Ok(Arc::new(ScalarUDF::from(SparkArrayPosition::new())))
             }
@@ -2313,10 +2314,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "bitmap_count" => Ok(Arc::new(ScalarUDF::from(BitmapCount::new()))),
             "format_string" => Ok(Arc::new(ScalarUDF::from(FormatStringFunc::new()))),
             "greatest" => Ok(Arc::new(ScalarUDF::from(GreatestFunc::new()))),
+            "get_field" => Ok(datafusion::functions::core::get_field()),
             "least" => Ok(Arc::new(ScalarUDF::from(LeastFunc::new()))),
             "levenshtein" => Ok(Arc::new(ScalarUDF::from(Levenshtein::new()))),
             "make_valid_utf8" => Ok(Arc::new(ScalarUDF::from(MakeValidUtf8::new()))),
             "map_entries" => Ok(Arc::new(ScalarUDF::from(SparkMapEntries::new()))),
+            "map_extract" => Ok(datafusion::functions_nested::map_extract::map_extract_udf()),
             "map_from_arrays" => Ok(Arc::new(ScalarUDF::from(MapFromArrays::new()))),
             "map_from_entries" => Ok(Arc::new(ScalarUDF::from(MapFromEntries::new()))),
             "multi_expr" => Ok(Arc::new(ScalarUDF::from(MultiExpr::new()))),
@@ -4132,6 +4135,36 @@ mod tests {
         let decoded = codec.try_decode_udf("date_part", &[])?;
 
         assert!(decoded.inner().downcast_ref::<SparkDatePart>().is_some());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_decode_empty_buffer_get_field_udf() -> Result<()> {
+        let codec = RemoteExecutionCodec;
+        let decoded = codec.try_decode_udf("get_field", &[])?;
+
+        assert_eq!(decoded.name(), "get_field");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_decode_empty_buffer_array_element_udf() -> Result<()> {
+        let codec = RemoteExecutionCodec;
+        let decoded = codec.try_decode_udf("array_element", &[])?;
+
+        assert_eq!(decoded.name(), "array_element");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_decode_empty_buffer_map_extract_udf() -> Result<()> {
+        let codec = RemoteExecutionCodec;
+        let decoded = codec.try_decode_udf("map_extract", &[])?;
+
+        assert_eq!(decoded.name(), "map_extract");
 
         Ok(())
     }

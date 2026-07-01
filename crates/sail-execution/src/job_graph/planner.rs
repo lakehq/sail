@@ -18,6 +18,7 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_data_source::listing::delete::FileDeleteExec;
 use sail_delta_lake::physical_plan::DeltaCommitExec;
 use sail_iceberg::physical_plan::IcebergCommitExec;
+use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
@@ -176,6 +177,10 @@ fn build_job_graph(
     usage: PartitionUsage,
     graph: &mut JobGraph,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    if let Some(barrier) = plan.downcast_ref::<BarrierExec>() {
+        return build_barrier_job_graph(barrier, usage, graph);
+    }
+
     // Recursively build the job graph for the children first
     // and propagate partition usage information.
     let children = if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
@@ -286,17 +291,55 @@ fn build_job_graph(
     } else if let Some(coalesce) = plan.downcast_ref::<CoalesceExec>() {
         let child = plan.children().one()?;
         create_rescale_input(child, coalesce.output_partitions(), graph)?
-    } else if plan.is::<SystemTableExec>()
-        || plan.is::<CatalogCommandExec>()
-        || plan.is::<FileDeleteExec>()
-        || plan.is::<DeltaCommitExec>()
-        || plan.is::<IcebergCommitExec>()
-    {
+    } else if is_driver_only_exec(&plan) {
         create_driver_stage(&plan, graph)?
     } else {
         plan
     };
     Ok(plan)
+}
+
+fn build_barrier_job_graph(
+    barrier: &BarrierExec,
+    usage: PartitionUsage,
+    graph: &mut JobGraph,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    let preconditions = barrier
+        .preconditions()
+        .iter()
+        .map(|precondition| build_job_graph(precondition.clone(), usage, graph))
+        .collect::<ExecutionResult<Vec<_>>>()?;
+
+    let actual_plan = barrier.plan();
+    let actual_requires_driver = contains_driver_only_exec(actual_plan);
+    let actual_plan = if actual_requires_driver {
+        actual_plan.clone()
+    } else {
+        build_job_graph(actual_plan.clone(), usage, graph)?
+    };
+
+    let plan = Arc::new(BarrierExec::new(preconditions, actual_plan)) as Arc<dyn ExecutionPlan>;
+    if actual_requires_driver {
+        create_driver_stage(&plan, graph)
+    } else {
+        Ok(plan)
+    }
+}
+
+fn is_driver_only_exec(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    plan.is::<SystemTableExec>()
+        || plan.is::<CatalogCommandExec>()
+        || plan.is::<FileDeleteExec>()
+        || plan.is::<DeltaCommitExec>()
+        || plan.is::<IcebergCommitExec>()
+}
+
+fn contains_driver_only_exec(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    is_driver_only_exec(plan)
+        || plan
+            .children()
+            .into_iter()
+            .any(|child| contains_driver_only_exec(child))
 }
 
 fn create_merge_input(
@@ -474,11 +517,14 @@ mod tests {
     use datafusion::physical_plan::repartition::RepartitionExec;
     use datafusion::physical_plan::union::UnionExec;
     use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+    use sail_catalog::command::CatalogCommand;
+    use sail_physical_plan::barrier::BarrierExec;
+    use sail_physical_plan::catalog_command::CatalogCommandExec;
     use sail_physical_plan::coalesce::CoalesceExec;
     use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
     use super::JobGraph;
-    use crate::job_graph::{InputMode, OutputDistribution, StageInput};
+    use crate::job_graph::{InputMode, OutputDistribution, StageInput, TaskPlacement};
 
     fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]))
@@ -486,6 +532,10 @@ mod tests {
 
     fn empty_plan() -> Arc<dyn ExecutionPlan> {
         Arc::new(EmptyExec::new(schema()))
+    }
+
+    fn empty_schema() -> SchemaRef {
+        Arc::new(Schema::empty())
     }
 
     #[test]
@@ -549,5 +599,33 @@ mod tests {
                 mode: InputMode::Rescale,
             }]
         ));
+    }
+
+    #[test]
+    fn test_job_graph_keeps_driver_only_barrier_plan_inside_barrier() {
+        let precondition = Arc::new(
+            RepartitionExec::try_new(empty_plan(), Partitioning::RoundRobinBatch(4)).unwrap(),
+        );
+        let command = Arc::new(CatalogCommandExec::new(
+            CatalogCommand::CurrentCatalog,
+            empty_schema(),
+        ));
+        let graph =
+            JobGraph::try_new(Arc::new(BarrierExec::new(vec![precondition], command))).unwrap();
+
+        assert_eq!(graph.stages().len(), 3);
+        assert!(matches!(
+            graph.stages()[1].inputs.as_slice(),
+            [StageInput {
+                stage: 0,
+                mode: InputMode::Shuffle,
+            }]
+        ));
+        assert_eq!(graph.stages()[1].placement, TaskPlacement::Driver);
+        let barrier = graph.stages()[1]
+            .plan
+            .downcast_ref::<BarrierExec>()
+            .unwrap();
+        assert!(barrier.plan().is::<CatalogCommandExec>());
     }
 }
