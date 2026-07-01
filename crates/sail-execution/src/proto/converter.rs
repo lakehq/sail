@@ -2,17 +2,24 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{FieldRef, Schema};
-use datafusion::common::{plan_datafusion_err, plan_err, Result};
+use datafusion::common::config::CsvOptions;
+use datafusion::common::{internal_err, plan_datafusion_err, plan_err, Result};
+use datafusion::datasource::physical_plan::CsvSource;
+use datafusion::datasource::source::DataSourceExec;
 use datafusion::logical_expr::{LambdaParametersProgress, ValueOrLambda};
 use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable};
 use datafusion::physical_expr::{HigherOrderFunctionExpr, PhysicalExpr};
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion_proto::physical_plan::from_proto::{
+    parse_protobuf_file_scan_config, parse_table_schema_from_proto,
+};
 use datafusion_proto::physical_plan::to_proto::serialize_physical_expr_with_converter;
 use datafusion_proto::physical_plan::{
     PhysicalExtensionCodec, PhysicalPlanDecodeContext, PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf::{
-    physical_expr_node, PhysicalExprNode, PhysicalExtensionExprNode, PhysicalPlanNode,
+    self, physical_expr_node, physical_plan_node, PhysicalExprNode, PhysicalExtensionExprNode,
+    PhysicalPlanNode,
 };
 use prost::Message;
 
@@ -37,7 +44,12 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
         proto: &PhysicalPlanNode,
         ctx: &PhysicalPlanDecodeContext<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.default_proto_to_execution_plan(proto, ctx)
+        match proto.physical_plan_type.as_ref() {
+            Some(physical_plan_node::PhysicalPlanType::CsvScan(scan)) => {
+                self.csv_scan_proto_to_execution_plan(scan, ctx)
+            }
+            _ => self.default_proto_to_execution_plan(proto, ctx),
+        }
     }
 
     fn execution_plan_to_proto(
@@ -217,6 +229,52 @@ impl RemotePhysicalProtoConverter {
             input_schema,
             Arc::clone(ctx.task_ctx().session_config().options()),
         )?))
+    }
+
+    fn csv_scan_proto_to_execution_plan(
+        &self,
+        scan: &protobuf::CsvScanExecNode,
+        ctx: &PhysicalPlanDecodeContext<'_>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let base_conf = scan
+            .base_conf
+            .as_ref()
+            .ok_or_else(|| plan_datafusion_err!("missing CSV file scan base config"))?;
+        let escape = match &scan.optional_escape {
+            Some(protobuf::csv_scan_exec_node::OptionalEscape::Escape(escape)) => {
+                Some(csv_single_byte(escape, "escape")?)
+            }
+            None => None,
+        };
+        let comment = match &scan.optional_comment {
+            Some(protobuf::csv_scan_exec_node::OptionalComment::Comment(comment)) => {
+                Some(csv_single_byte(comment, "comment")?)
+            }
+            None => None,
+        };
+
+        let table_schema = parse_table_schema_from_proto(base_conf)?;
+        let csv_options = CsvOptions {
+            has_header: Some(scan.has_header),
+            delimiter: csv_single_byte(&scan.delimiter, "delimiter")?,
+            quote: csv_single_byte(&scan.quote, "quote")?,
+            escape,
+            comment,
+            newlines_in_values: Some(scan.newlines_in_values),
+            truncated_rows: Some(scan.truncate_rows),
+            ..Default::default()
+        };
+        let source = Arc::new(CsvSource::new(table_schema).with_csv_options(csv_options));
+        let config = parse_protobuf_file_scan_config(base_conf, ctx, self, source)?;
+        Ok(DataSourceExec::from_data_source(config))
+    }
+}
+
+fn csv_single_byte(value: &str, description: &str) -> Result<u8> {
+    if value.len() == 1 {
+        Ok(value.as_bytes()[0])
+    } else {
+        internal_err!("Invalid CSV {description}: expected single character, got {value}")
     }
 }
 

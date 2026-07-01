@@ -4,7 +4,10 @@ use std::sync::Arc;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::internal_err;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion::datasource::physical_plan::{FileScanConfig, FileScanConfigBuilder, ParquetSource};
+use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
+use datafusion::datasource::physical_plan::{
+    CsvSource, FileScanConfig, FileScanConfigBuilder, JsonSource, ParquetSource,
+};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
@@ -118,15 +121,20 @@ impl TaskRunner {
         let result = plan.transform(|node| {
             if let Some(ds) = node.downcast_ref::<DataSourceExec>() {
                 if let Some(base_config) = ds.data_source().downcast_ref::<FileScanConfig>() {
+                    let compression = infer_lost_file_compression_type(ds, base_config);
+                    let needs_parquet_adapter =
+                        ds.downcast_to_file_source::<ParquetSource>().is_some();
                     let mut builder =
                         FileScanConfigBuilder::from(base_config.clone()).with_preserve_order(true);
-                    if ds.downcast_to_file_source::<ParquetSource>().is_some() {
+                    if let Some(compression) = compression {
+                        builder = builder.with_file_compression_type(compression);
+                    }
+                    if needs_parquet_adapter {
                         let adapter_factory: Arc<dyn PhysicalExprAdapterFactory> =
                             Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {});
                         builder = builder.with_expr_adapter(Some(adapter_factory));
                     }
-                    if !base_config.preserve_order
-                        || ds.downcast_to_file_source::<ParquetSource>().is_some()
+                    if !base_config.preserve_order || compression.is_some() || needs_parquet_adapter
                     {
                         let new_exec = DataSourceExec::from_data_source(builder.build());
                         return Ok(Transformed::yes(new_exec as Arc<dyn ExecutionPlan>));
@@ -190,5 +198,48 @@ impl TaskRunner {
         let shuffle =
             ShuffleWriteExec::new(plan, locations, Arc::new(accessor), partitioning, row_based);
         Ok(Arc::new(shuffle))
+    }
+}
+
+fn infer_lost_file_compression_type(
+    data_source: &DataSourceExec,
+    file_scan: &FileScanConfig,
+) -> Option<FileCompressionType> {
+    if file_scan.file_compression_type.is_compressed() {
+        return None;
+    }
+    if data_source.downcast_to_file_source::<CsvSource>().is_none()
+        && data_source
+            .downcast_to_file_source::<JsonSource>()
+            .is_none()
+    {
+        return None;
+    }
+
+    let mut inferred = None;
+    for file in file_scan.file_groups.iter().flat_map(|group| group.iter()) {
+        let path = file.object_meta.location.as_ref();
+        let compression = infer_compressed_file_name(path)?;
+        match inferred {
+            None => inferred = Some(compression),
+            Some(current) if current == compression => {}
+            Some(_) => return None,
+        }
+    }
+    inferred
+}
+
+fn infer_compressed_file_name(path: &str) -> Option<FileCompressionType> {
+    let name = path.rsplit('/').next().unwrap_or(path).to_ascii_lowercase();
+    if name.ends_with(".gz") || name.contains(".gz.") {
+        Some(FileCompressionType::GZIP)
+    } else if name.ends_with(".bz2") || name.contains(".bz2.") {
+        Some(FileCompressionType::BZIP2)
+    } else if name.ends_with(".xz") || name.contains(".xz.") {
+        Some(FileCompressionType::XZ)
+    } else if name.ends_with(".zst") || name.contains(".zst.") {
+        Some(FileCompressionType::ZSTD)
+    } else {
+        None
     }
 }
