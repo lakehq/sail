@@ -52,6 +52,42 @@ def test_list_functions_has_metadata_for_built_ins(spark):
         assert functions[name].description
 
 
+def test_list_functions_includes_user_registered_udfs(spark):
+    function_name = "catalog_add_one"
+    spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {function_name}")
+    try:
+        spark.udf.register(
+            function_name,
+            lambda value: value + 1 if value is not None else None,
+            "long",
+        )
+
+        functions = {f.name: f for f in spark.catalog.listFunctions()}
+        function = functions[function_name]
+        assert function.name == function_name
+        assert function.isTemporary is True
+        assert function_name in {
+            f.name for f in spark.catalog.listFunctions("default", function_name)
+        }
+        assert _show_function_names(spark, f"SHOW USER FUNCTIONS LIKE '{function_name}'") == {
+            function_name
+        }
+        assert _show_function_names(spark, f"SHOW SYSTEM FUNCTIONS LIKE '{function_name}'") == set()
+        assert _show_function_names(spark, f"SHOW ALL FUNCTIONS LIKE '{function_name}'") == {
+            function_name
+        }
+        assert spark.sql(f"SELECT {function_name}(1) AS value").collect()[0].value == 2
+
+        rows = [
+            row.function_desc
+            for row in spark.sql(f"DESCRIBE FUNCTION {function_name}").collect()
+        ]
+        assert rows[0] == f"Function: {function_name}"
+        assert rows[-1] == "Usage: N/A."
+    finally:
+        spark.sql(f"DROP TEMPORARY FUNCTION IF EXISTS {function_name}")
+
+
 def test_list_functions_respects_database_and_pattern(spark):
     names = {f.name for f in spark.catalog.listFunctions("default", "to*")}
     assert "to_date" in names

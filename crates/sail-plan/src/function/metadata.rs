@@ -28,12 +28,9 @@ lazy_static! {
         );
 }
 
-pub(crate) fn built_in_function_status(name: &str) -> FunctionStatus {
-    let Some(metadata) = BUILT_IN_FUNCTION_METADATA_BY_NAME.get(name) else {
-        return FunctionStatus::built_in(name.to_string());
-    };
+fn built_in_function_status(metadata: &BuiltInFunctionMetadata) -> FunctionStatus {
     FunctionStatus {
-        name: name.to_string(),
+        name: metadata.name.to_string(),
         catalog: None,
         namespace: None,
         signatures: metadata
@@ -54,12 +51,7 @@ pub(crate) fn built_in_function_status(name: &str) -> FunctionStatus {
 
 pub(crate) fn built_in_public_function_status(name: &str) -> Option<FunctionStatus> {
     let metadata = BUILT_IN_FUNCTION_METADATA_BY_NAME.get(name)?;
-    metadata.is_public.then(|| built_in_function_status(name))
-}
-
-#[cfg(test)]
-pub(crate) fn built_in_function_metadata_names() -> impl Iterator<Item = &'static str> {
-    BUILT_IN_FUNCTION_METADATA
-        .iter()
-        .map(|metadata| metadata.name)
+    metadata
+        .is_public
+        .then(|| built_in_function_status(metadata))
 }

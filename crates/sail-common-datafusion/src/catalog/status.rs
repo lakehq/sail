@@ -51,23 +51,6 @@ pub struct FunctionStatus {
 }
 
 impl FunctionStatus {
-    pub fn built_in(name: String) -> Self {
-        Self {
-            name,
-            catalog: None,
-            namespace: None,
-            signatures: vec![],
-            usage: None,
-            arguments: None,
-            examples: None,
-            note: None,
-            since: None,
-            deprecated: None,
-            class_name: String::new(),
-            is_temporary: true,
-        }
-    }
-
     pub fn temporary(name: String) -> Self {
         Self {
             name,

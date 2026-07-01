@@ -810,6 +810,6 @@ pub(crate) fn get_built_in_window_function(name: &str) -> PlanResult<WinFunction
         .clone())
 }
 
-pub(crate) fn list_built_in_window_function_names() -> Vec<&'static str> {
-    BUILT_IN_WINDOW_FUNCTIONS.keys().copied().collect()
+pub(crate) fn list_built_in_window_function_names() -> impl Iterator<Item = &'static str> {
+    BUILT_IN_WINDOW_FUNCTIONS.keys().copied()
 }
