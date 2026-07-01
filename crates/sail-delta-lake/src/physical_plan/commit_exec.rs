@@ -33,7 +33,7 @@ use futures::stream::{self, StreamExt};
 use log::warn;
 use object_store::{Error as ObjectStoreError, ObjectStoreExt, PutMode, PutOptions};
 use sail_catalog::manager::CatalogManager;
-use sail_common_datafusion::catalog::LakehouseExecutionContext;
+use sail_common_datafusion::catalog::{CommitAuthority, LakehouseExecutionContext};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
@@ -42,7 +42,6 @@ use crate::catalog::coordinator::{DeltaCatalogCommitCoordinator, DeltaCatalogMan
 use crate::catalog_managed::{catalog_managed_delta_table, enable_catalog_managed_create_actions};
 use crate::delta_log::{get_object_store_from_context, LogStoreRef, StorageConfig};
 use crate::physical_plan::action_schema::ExecCommitMeta;
-use crate::physical_plan::catalog_location::resolve_catalog_table_url;
 use crate::physical_plan::{decode_actions_and_meta_from_batch, DeltaCommitContext, COL_ACTION};
 use crate::schema::{
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
@@ -572,8 +571,6 @@ impl ExecutionPlan for DeltaCommitExec {
         let future = async move {
             let _elapsed_compute_timer = elapsed_compute.timer();
             let storage_config = StorageConfig;
-            let table_url =
-                resolve_catalog_table_url(&context, catalog_table.as_deref(), &table_url).await?;
             let object_store = get_object_store_from_context(&context, &table_url)?;
 
             let mut total_rows = 0u64;
@@ -665,11 +662,13 @@ impl ExecutionPlan for DeltaCommitExec {
                 return Ok(batch);
             }
 
-            let catalog_managed_table = match catalog_table.as_deref() {
-                Some(catalog_table) => {
+            let catalog_managed_table = match (catalog_table.as_deref(), lakehouse_table.as_ref()) {
+                (Some(catalog_table), Some(lakehouse_table))
+                    if lakehouse_table.commit == CommitAuthority::DeltaRatifiedCommit =>
+                {
                     Self::load_catalog_managed_table(&context, catalog_table, &table_url).await?
                 }
-                None => None,
+                _ => None,
             };
             // For new tables, always ensure Protocol + Metadata are present and use Create.
             // Even if the writer supplied an operation (e.g., Overwrite), the first commit
