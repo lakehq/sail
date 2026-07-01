@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 import pytest
 from pyspark.sql import SparkSession
 from pyspark.sql.utils import AnalysisException
+from pytest_bdd import given, parsers
 from testcontainers.core.container import DockerContainer
 from testcontainers.core.network import Network
 from testcontainers.core.waiting_utils import wait_for_logs
@@ -417,6 +418,24 @@ def hms_s3_database(
         jvm_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
     except Exception:  # noqa: BLE001
         spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+
+
+# ---------------------------------------------------------------------------
+# pytest-bdd steps for `.feature` scenarios
+# ---------------------------------------------------------------------------
+
+
+@given(parsers.parse("the HMS test database as {name}"), target_fixture="variables")
+def hms_test_database_variable(name: str, hms_s3_database: str, variables: dict) -> dict:
+    """Expose the S3-backed HMS database name as a `.feature` template variable.
+
+    The database is provisioned by the ``hms_s3_database`` fixture (created via
+    reference Spark with an ``s3://`` LOCATION, dropped on teardown). Scenarios
+    reference it as e.g. ``{{ db }}`` in ``statement template`` / ``query template``
+    steps so managed tables land under the MinIO-backed warehouse.
+    """
+    variables[name] = hms_s3_database
+    return variables
 
 
 # ---------------------------------------------------------------------------
