@@ -114,7 +114,7 @@ impl ScalarUDFImpl for SparkEncode {
                                 let string_array = string_array.as_string::<i32>();
                                 let mut builder = BinaryBuilder::with_capacity(
                                     string_array.len(),
-                                    string_array.len(),
+                                    string_array.get_buffer_memory_size(),
                                 );
                                 for string in string_array.iter() {
                                     if let Some(string) = string {
@@ -129,7 +129,7 @@ impl ScalarUDFImpl for SparkEncode {
                                 let string_array = string_array.as_string::<i64>();
                                 let mut builder = LargeBinaryBuilder::with_capacity(
                                     string_array.len(),
-                                    string_array.len(),
+                                    string_array.get_buffer_memory_size(),
                                 );
                                 for string in string_array.iter() {
                                     if let Some(string) = string {
@@ -144,7 +144,7 @@ impl ScalarUDFImpl for SparkEncode {
                                 let string_array = string_array.as_string_view();
                                 let mut builder = BinaryBuilder::with_capacity(
                                     string_array.len(),
-                                    string_array.len(),
+                                    string_array.get_buffer_memory_size(),
                                 );
                                 for string in string_array.iter() {
                                     if let Some(string) = string {
