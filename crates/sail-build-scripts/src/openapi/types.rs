@@ -163,7 +163,7 @@ pub struct Parameter {
     pub examples: ObjectMap<AnyValue>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ParameterLocation {
     Query,
@@ -243,11 +243,13 @@ pub struct Schema {
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
     pub default: Option<AnyValue>,
     #[serde(default)]
     pub example: Option<AnyValue>,
     #[serde(default, rename = "enum")]
-    pub enum_values: Vec<AnyValue>,
+    pub enum_values: Vec<String>,
     #[serde(default, rename = "const")]
     pub const_value: Option<AnyValue>,
     #[serde(default)]
@@ -308,7 +310,7 @@ pub struct Discriminator {
     pub mapping: ObjectMap<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SchemaType {
     Null,

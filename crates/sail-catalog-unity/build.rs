@@ -13,7 +13,7 @@ fn build_unity_catalog() -> Result<(), Box<dyn std::error::Error>> {
     let src = "spec/unity-catalog-all.yaml";
     println!("cargo:rerun-if-changed={src}");
 
-    let _openapi = sail_build_scripts::openapi::load_spec(src)?;
+    let openapi = sail_build_scripts::openapi::load_spec(src)?;
 
     let file = std::fs::File::open(src)?;
     let spec = serde_yaml::from_reader(file)?;
@@ -57,6 +57,14 @@ fn build_unity_catalog() -> Result<(), Box<dyn std::error::Error>> {
     let content = add_table_info_columns_deserializer(content);
 
     std::fs::write(out_file, content)?;
+
+    let mut out_file = std::path::Path::new(&std::env::var("OUT_DIR")?).to_path_buf();
+    out_file.push("unity_catalog_gen.rs");
+    sail_build_scripts::openapi::client::write_client(
+        &openapi,
+        &sail_build_scripts::openapi::client::OpenApiConfig::new(),
+        out_file,
+    )?;
 
     Ok(())
 }

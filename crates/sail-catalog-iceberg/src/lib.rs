@@ -15,6 +15,10 @@
 #![expect(clippy::all)]
 
 pub mod apis;
+pub mod gen {
+    #![expect(clippy::enum_variant_names)]
+    include!(concat!(env!("OUT_DIR"), "/iceberg_rest_catalog_gen.rs"));
+}
 mod models;
 mod provider;
 

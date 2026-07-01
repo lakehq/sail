@@ -29,6 +29,7 @@ reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
+percent-encoding = { workspace = true }
 progenitor-client = { workspace = true }
 secrecy = { workspace = true }
 chrono = { workspace = true }

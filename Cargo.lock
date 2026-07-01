@@ -7579,6 +7579,7 @@ dependencies = [
  "arrow",
  "async-trait",
  "chrono",
+ "percent-encoding",
  "prettyplease",
  "progenitor",
  "progenitor-client",
