@@ -178,6 +178,8 @@ message ExtendedScalarUdf {
     SparkToXmlUdf spark_to_xml = 29;
     SparkBinUdf spark_bin = 30;
     SparkNegativeUdf spark_negative = 31;
+    SparkCeilUdf spark_ceil = 32;
+    SparkFloorUdf spark_floor = 33;
   }
 }
 
@@ -276,6 +278,14 @@ message SparkDateUdf {
 
 message SparkVariantGetUdf {
   bool safe = 1;
+}
+
+message SparkCeilUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkFloorUdf {
+  bool ansi_mode = 1;
 }
 
 message SparkNextDayUdf {

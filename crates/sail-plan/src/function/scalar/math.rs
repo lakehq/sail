@@ -425,7 +425,11 @@ fn eulers_constant() -> Expr {
 }
 
 fn ceil_floor(input: ScalarFunctionInput, name: &str) -> PlanResult<Expr> {
-    let ScalarFunctionInput { arguments, .. } = input;
+    let ScalarFunctionInput {
+        arguments,
+        function_context,
+    } = input;
+    let ansi_mode = function_context.plan_config.ansi_mode;
     // DataFusion bug: `ReturnTypeArgs.scalar_arguments` is None if scalar argument is nested
     let arguments = if arguments.len() == 2 {
         let (arg, target_scale) = arguments.two()?;
@@ -487,9 +491,9 @@ fn ceil_floor(input: ScalarFunctionInput, name: &str) -> PlanResult<Expr> {
         arguments
     };
     let func = if matches!(name.to_lowercase().trim(), "ceil") {
-        Arc::new(ScalarUDF::from(SparkCeil::new()))
+        Arc::new(ScalarUDF::from(SparkCeil::new(ansi_mode)))
     } else {
-        Arc::new(ScalarUDF::from(SparkFloor::new()))
+        Arc::new(ScalarUDF::from(SparkFloor::new(ansi_mode)))
     };
     Ok(Expr::ScalarFunction(expr::ScalarFunction {
         func,
