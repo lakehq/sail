@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_catalog::provider::AlterTableOptions;
 use sail_common_datafusion::catalog::managed::{
-    metadata_location_update, metadata_location_value, previous_metadata_location_update,
+    metadata_location_update, previous_metadata_location_update,
 };
 use sail_common_hms::hms::{
     CheckLockRequest, DataOperationType, LockComponent, LockLevel, LockRequest, LockState,
@@ -12,7 +12,7 @@ use sail_common_hms::hms::{
 };
 use volo_thrift::MaybeException;
 
-use crate::provider::{apply_alter_table_options, HmsCatalogProvider};
+use crate::provider::{apply_alter_table_options, hms_metadata_location, HmsCatalogProvider};
 
 const HMS_LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(30);
 const HMS_LOCK_CHECK_INTERVAL: Duration = Duration::from_millis(200);
@@ -38,14 +38,7 @@ pub(crate) fn validate_metadata_location_precondition(
     if metadata_location_update(properties).is_none() {
         return Ok(());
     }
-    let current = hms_table.parameters.as_ref().and_then(|parameters| {
-        metadata_location_value(
-            parameters
-                .iter()
-                .map(|(key, value)| (key.as_str(), value.as_str())),
-        )
-        .map(ToString::to_string)
-    });
+    let current = hms_metadata_location(hms_table);
     if current.as_deref() != Some(expected) {
         return Err(CatalogError::Conflict(format!(
             "Cannot commit catalog-managed table '{db_name}.{table_name}' because base metadata location '{expected}' does not match current HMS metadata location '{}'",
@@ -75,6 +68,113 @@ pub(crate) async fn alter_table_with_lock(
         .await?;
         apply_alter_table_options(&mut hms_table, db_name, table_name, options)?;
         HmsCatalogProvider::alter_table_with_client(&client, db_name, table_name, hms_table).await
+    }
+    .await;
+    let unlock_result = release_table_lock(&client, db_name, table_name, lock_id).await;
+    match (result, unlock_result) {
+        (Err(error), _) => Err(error),
+        (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
+/// Pre-validates a replacement `Table` before the drop, so client-detectable defects fail
+/// while the original is still present. Rejects duplicate column names (case-insensitive, per
+/// HMS/Spark), which HMS would otherwise reject server-side only after the drop.
+fn validate_replacement_table(
+    replacement: &Table,
+    db_name: &str,
+    table_name: &str,
+) -> CatalogResult<()> {
+    let mut seen = std::collections::HashSet::new();
+    let columns = replacement
+        .sd
+        .as_ref()
+        .and_then(|sd| sd.cols.as_deref())
+        .into_iter()
+        .flatten();
+    let partitions = replacement.partition_keys.as_deref().into_iter().flatten();
+    for field in columns.chain(partitions) {
+        if let Some(name) = field.name.as_deref() {
+            if !seen.insert(name.to_ascii_lowercase()) {
+                return Err(CatalogError::InvalidArgument(format!(
+                    "Cannot replace table '{db_name}.{table_name}': duplicate column name '{name}'"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Replaces an HMS table by drop-then-create under an exclusive lock: HMS has no atomic
+/// swap (`alter_table` can't change `partition_keys`, rename/create over an existing name
+/// throw, and DDL isn't transactional), so the result is a fresh, unrelated table.
+///
+/// Re-reads under the lock and re-validates `expected_metadata_location` (OCC) so a commit
+/// that landed since the caller's read is rejected, not clobbered. On create failure the
+/// original is restored from the pre-drop snapshot; a failed restore yields a
+/// `CatalogError::External` making the "table left dropped" state explicit.
+///
+/// Residual non-atomic window: between drop and create the table is absent to any reader
+/// bypassing the advisory lock. Drop is metadata-only (`delete_data = false`); Sail creates
+/// only EXTERNAL tables. See `create_table` for the same-location stale-data note.
+pub(crate) async fn replace_table_with_lock(
+    provider: &HmsCatalogProvider,
+    db_name: &str,
+    table_name: &str,
+    mut replacement: Table,
+    expected_metadata_location: Option<String>,
+) -> CatalogResult<()> {
+    validate_replacement_table(&replacement, db_name, table_name)?;
+    let (_, client) = provider.current_client().await?;
+    let lock_id = acquire_table_lock(&client, db_name, table_name).await?;
+    let result = async {
+        let current = HmsCatalogProvider::get_table_with_client(
+            &client,
+            db_name,
+            table_name,
+            "Failed to fetch HMS table for locked replace",
+        )
+        .await?;
+        crate::provider::assert_replace_metadata_location_unchanged(
+            expected_metadata_location.as_deref(),
+            &current,
+            db_name,
+            table_name,
+        )?;
+        // Carry the owner forward so REPLACE doesn't reset it (only `owner` is exposed;
+        // grants are not carried).
+        if let Some(owner) = current.owner.clone() {
+            replacement.owner = Some(owner);
+        }
+        HmsCatalogProvider::drop_table_with_client(&client, db_name, table_name, false, false)
+            .await?;
+        match HmsCatalogProvider::create_table_with_client(
+            &client,
+            db_name,
+            table_name,
+            replacement,
+        )
+        .await
+        {
+            Ok(()) => Ok(()),
+            Err(create_error) => {
+                // Compensating restore: the drop already committed, so re-create the
+                // original from the pre-drop snapshot; combine errors if that also fails.
+                match HmsCatalogProvider::create_table_with_client(
+                    &client, db_name, table_name, current,
+                )
+                .await
+                {
+                    Ok(()) => Err(create_error),
+                    Err(restore_error) => Err(CatalogError::External(format!(
+                        "Failed to replace table '{db_name}.{table_name}': create failed ({create_error}) \
+                         and the compensating restore of the original also failed ({restore_error}); \
+                         the table has been left dropped in HMS and must be recovered manually"
+                    ))),
+                }
+            }
+        }
     }
     .await;
     let unlock_result = release_table_lock(&client, db_name, table_name, lock_id).await;
@@ -239,4 +339,68 @@ fn hms_unlock_error(
     error: ThriftHiveMetastoreUnlockException,
 ) -> CatalogError {
     CatalogError::External(format!("{context} for '{db_name}.{table_name}': {error:?}"))
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::unwrap_used)]
+
+    use sail_common_hms::hms::{FieldSchema, StorageDescriptor, Table};
+
+    use super::validate_replacement_table;
+
+    fn field(name: &str) -> FieldSchema {
+        FieldSchema {
+            name: Some(name.to_string().into()),
+            r#type: Some("string".into()),
+            ..Default::default()
+        }
+    }
+
+    fn table_with(cols: Vec<FieldSchema>, partitions: Vec<FieldSchema>) -> Table {
+        Table {
+            sd: Some(StorageDescriptor {
+                cols: Some(cols),
+                ..Default::default()
+            }),
+            partition_keys: (!partitions.is_empty()).then_some(partitions),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn accepts_distinct_columns() {
+        let table = table_with(vec![field("id"), field("value")], vec![field("day")]);
+        assert!(validate_replacement_table(&table, "db", "t").is_ok());
+    }
+
+    #[test]
+    fn rejects_duplicate_regular_columns() {
+        let table = table_with(vec![field("id"), field("id")], vec![]);
+        let error = validate_replacement_table(&table, "db", "t").unwrap_err();
+        assert!(matches!(
+            error,
+            sail_catalog::error::CatalogError::InvalidArgument(_)
+        ));
+        assert!(error.to_string().contains("duplicate column name 'id'"));
+    }
+
+    #[test]
+    fn rejects_duplicate_across_regular_and_partition() {
+        // HMS stores partition keys in the same COLUMNS namespace; a name shared
+        // between a regular column and a partition key would also collide.
+        let table = table_with(vec![field("id"), field("day")], vec![field("day")]);
+        let error = validate_replacement_table(&table, "db", "t").unwrap_err();
+        assert!(matches!(
+            error,
+            sail_catalog::error::CatalogError::InvalidArgument(_)
+        ));
+    }
+
+    #[test]
+    fn duplicate_detection_is_case_insensitive() {
+        // HMS/Spark treat column identity case-insensitively.
+        let table = table_with(vec![field("ID"), field("id")], vec![]);
+        assert!(validate_replacement_table(&table, "db", "t").is_err());
+    }
 }
