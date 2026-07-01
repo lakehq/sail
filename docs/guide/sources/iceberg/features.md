@@ -9,36 +9,37 @@ rank: 2
 
 The following table lists the features supported by Sail for Iceberg tables.
 
-| Feature                              | Supported          |
-| ------------------------------------ | ------------------ |
-| Current snapshot reads               | :white_check_mark: |
-| Metadata-as-data read path           | :white_check_mark: |
-| Append writes                        | :white_check_mark: |
-| Overwrite writes                     | :white_check_mark: |
-| Predicate overwrite writes           | :construction:     |
-| Partition overwrite writes           | :construction:     |
-| Copy-on-write writes                 | :white_check_mark: |
-| Merge-on-read writes                 | :construction:     |
-| Row-level `DELETE`                   | :construction:     |
-| `MERGE INTO`                         | :construction:     |
-| `UPDATE`                             | :construction:     |
-| Partitioned tables                   | :white_check_mark: |
-| Predicate pushdown and file pruning  | :white_check_mark: |
-| Time travel (by snapshot ID)         | :white_check_mark: |
-| Time travel (by timestamp)           | :white_check_mark: |
-| Snapshot references (`refs`)         | :white_check_mark: |
-| Branch and tag creation              | :construction:     |
-| Table property DDL                   | :white_check_mark: |
-| Format-version selection             | :white_check_mark: |
-| Commit conflict resolution and retry | :construction:     |
-| Iceberg REST catalog integration     | :white_check_mark: |
-| File system table commits            | :white_check_mark: |
-| Multi-table atomic transactions      | :construction:     |
-| Compaction (`rewrite_data_files`)    | :construction:     |
-| Position-delete rewrite procedures   | :construction:     |
-| Z-order clustering                   | :construction:     |
-| Iceberg View Spec                    | :construction:     |
-| Iceberg SQL UDF Spec                 | :construction:     |
+| Feature                               | Supported          |
+| ------------------------------------- | ------------------ |
+| Current snapshot reads                | :white_check_mark: |
+| Metadata-as-data read path            | :white_check_mark: |
+| Append writes                         | :white_check_mark: |
+| Overwrite writes                      | :white_check_mark: |
+| `CREATE OR REPLACE` / `REPLACE TABLE` | :white_check_mark: |
+| Predicate overwrite writes            | :construction:     |
+| Partition overwrite writes            | :construction:     |
+| Copy-on-write writes                  | :white_check_mark: |
+| Merge-on-read writes                  | :construction:     |
+| Row-level `DELETE`                    | :construction:     |
+| `MERGE INTO`                          | :construction:     |
+| `UPDATE`                              | :construction:     |
+| Partitioned tables                    | :white_check_mark: |
+| Predicate pushdown and file pruning   | :white_check_mark: |
+| Time travel (by snapshot ID)          | :white_check_mark: |
+| Time travel (by timestamp)            | :white_check_mark: |
+| Snapshot references (`refs`)          | :white_check_mark: |
+| Branch and tag creation               | :construction:     |
+| Table property DDL                    | :white_check_mark: |
+| Format-version selection              | :white_check_mark: |
+| Commit conflict resolution and retry  | :construction:     |
+| Iceberg REST catalog integration      | :white_check_mark: |
+| File system table commits             | :white_check_mark: |
+| Multi-table atomic transactions       | :construction:     |
+| Compaction (`rewrite_data_files`)     | :construction:     |
+| Position-delete rewrite procedures    | :construction:     |
+| Z-order clustering                    | :construction:     |
+| Iceberg View Spec                     | :construction:     |
+| Iceberg SQL UDF Spec                  | :construction:     |
 
 Both non-partitioned and partitioned tables are supported for reading and writing.
 
