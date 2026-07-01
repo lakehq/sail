@@ -66,22 +66,13 @@ def test_list_functions_includes_user_registered_udfs(spark):
         function = functions[function_name]
         assert function.name == function_name
         assert function.isTemporary is True
-        assert function_name in {
-            f.name for f in spark.catalog.listFunctions("default", function_name)
-        }
-        assert _show_function_names(spark, f"SHOW USER FUNCTIONS LIKE '{function_name}'") == {
-            function_name
-        }
+        assert function_name in {f.name for f in spark.catalog.listFunctions("default", function_name)}
+        assert _show_function_names(spark, f"SHOW USER FUNCTIONS LIKE '{function_name}'") == {function_name}
         assert _show_function_names(spark, f"SHOW SYSTEM FUNCTIONS LIKE '{function_name}'") == set()
-        assert _show_function_names(spark, f"SHOW ALL FUNCTIONS LIKE '{function_name}'") == {
-            function_name
-        }
-        assert spark.sql(f"SELECT {function_name}(1) AS value").collect()[0].value == 2
+        assert _show_function_names(spark, f"SHOW ALL FUNCTIONS LIKE '{function_name}'") == {function_name}
+        assert spark.sql(f"SELECT {function_name}(1) AS value").collect()[0].value == 2  # noqa PLR2004
 
-        rows = [
-            row.function_desc
-            for row in spark.sql(f"DESCRIBE FUNCTION {function_name}").collect()
-        ]
+        rows = [row.function_desc for row in spark.sql(f"DESCRIBE FUNCTION {function_name}").collect()]
         assert rows[0] == f"Function: {function_name}"
         assert rows[-1] == "Usage: N/A."
     finally:
