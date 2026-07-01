@@ -859,7 +859,10 @@ fn build_default_merge_expansion(
             MergeMatchedAction::Delete => {
                 delete_pred = or_pred(delete_pred, pred);
             }
-            MergeMatchedAction::UpdateAll | MergeMatchedAction::UpdateSet(_) => {}
+            MergeMatchedAction::UpdateAll | MergeMatchedAction::UpdateSet(_) => {
+                delete_pred = or_pred(delete_pred, pred.clone());
+                insert_pred = or_pred(insert_pred, pred);
+            }
         }
     }
 
@@ -872,7 +875,10 @@ fn build_default_merge_expansion(
             MergeNotMatchedBySourceAction::Delete => {
                 delete_pred = or_pred(delete_pred, pred);
             }
-            MergeNotMatchedBySourceAction::UpdateSet(_) => {}
+            MergeNotMatchedBySourceAction::UpdateSet(_) => {
+                delete_pred = or_pred(delete_pred, pred.clone());
+                insert_pred = or_pred(insert_pred, pred);
+            }
         }
     }
 
