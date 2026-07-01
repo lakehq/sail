@@ -2515,7 +2515,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkAESEncrypt>()
             || node_inner.is::<SparkArray>()
             || node_inner.is::<SparkBase64>()
-            || node_inner.is::<SparkBin>()
             || node_inner.is::<SparkBitCount>()
             || node_inner.is::<SparkBitGet>()
             || node_inner.is::<SparkBitwiseNot>()
