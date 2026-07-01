@@ -15,13 +15,18 @@ use crate::scalar::datetime::utils::to_time64_array;
 /// Returns the divisor in microseconds for a given time_diff unit string.
 /// Returns `None` for unsupported units.
 fn unit_divisor(unit: &str) -> Option<i64> {
-    match unit.to_uppercase().as_str() {
-        "MICROSECOND" => Some(1),
-        "MILLISECOND" => Some(1_000),
-        "SECOND" => Some(1_000_000),
-        "MINUTE" => Some(60_000_000),
-        "HOUR" => Some(3_600_000_000),
-        _ => None,
+    if unit.eq_ignore_ascii_case("MICROSECOND") {
+        Some(1)
+    } else if unit.eq_ignore_ascii_case("MILLISECOND") {
+        Some(1_000)
+    } else if unit.eq_ignore_ascii_case("SECOND") {
+        Some(1_000_000)
+    } else if unit.eq_ignore_ascii_case("MINUTE") {
+        Some(60_000_000)
+    } else if unit.eq_ignore_ascii_case("HOUR") {
+        Some(3_600_000_000)
+    } else {
+        None
     }
 }
 
