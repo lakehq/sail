@@ -4,7 +4,7 @@ use std::sync::Arc;
 use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::internal_err;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion::datasource::physical_plan::{FileScanConfigBuilder, ParquetSource};
+use datafusion::datasource::physical_plan::{FileScanConfig, FileScanConfigBuilder, ParquetSource};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
@@ -85,7 +85,7 @@ impl TaskRunner {
     {
         let plan =
             try_decode_physical_plan(&context, self.codec.as_ref(), definition.plan.as_ref())?;
-        let plan = self.rewrite_parquet_adapters(plan)?;
+        let plan = self.rewrite_file_scans(plan)?;
         let plan = self.rewrite_shuffle(
             ctx,
             key,
@@ -111,18 +111,26 @@ impl TaskRunner {
         Ok(stream)
     }
 
-    fn rewrite_parquet_adapters(
+    fn rewrite_file_scans(
         &mut self,
         plan: Arc<dyn ExecutionPlan>,
     ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
         let result = plan.transform(|node| {
             if let Some(ds) = node.downcast_ref::<DataSourceExec>() {
-                if let Some((base_config, _parquet)) = ds.downcast_to_file_source::<ParquetSource>()
-                {
-                    let adapter_factory: Arc<dyn PhysicalExprAdapterFactory> =
-                        Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {});
-                    let builder = FileScanConfigBuilder::from(base_config.clone())
-                        .with_expr_adapter(Some(adapter_factory));
+                if let Some(base_config) = ds.data_source().downcast_ref::<FileScanConfig>() {
+                    // DataFusion file scans can use process-local sibling state to let
+                    // partitions steal work from a shared queue of all file groups. In Sail
+                    // cluster mode each partition runs as an isolated task with its own
+                    // deserialized plan, so that queue would be recreated in every task and
+                    // every task would scan every file. Preserve-order disables sibling
+                    // work sharing and keeps each task on its own file group.
+                    let mut builder =
+                        FileScanConfigBuilder::from(base_config.clone()).with_preserve_order(true);
+                    if ds.downcast_to_file_source::<ParquetSource>().is_some() {
+                        let adapter_factory: Arc<dyn PhysicalExprAdapterFactory> =
+                            Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {});
+                        builder = builder.with_expr_adapter(Some(adapter_factory));
+                    }
                     let new_exec = DataSourceExec::from_data_source(builder.build());
                     return Ok(Transformed::yes(new_exec as Arc<dyn ExecutionPlan>));
                 }
