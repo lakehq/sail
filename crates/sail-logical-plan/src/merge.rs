@@ -897,10 +897,9 @@ fn build_default_merge_expansion(
 
     let delete_expr = delete_pred.unwrap_or_else(|| lit(false));
     let insert_expr = insert_pred.unwrap_or_else(|| lit(false));
-    let active_expr = target_present.or(insert_expr);
 
     let filtered = LogicalPlanBuilder::from(join.as_ref().clone())
-        .filter(active_expr)?
+        .filter(insert_expr)?
         .build()?;
 
     let projection_exprs = build_merge_projection(
