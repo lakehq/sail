@@ -9,8 +9,8 @@ use url::Url;
 use crate::delta_log::StorageConfig;
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::table::{
-    create_logstore_with_object_store, load_catalog_managed_commits_for_snapshot, DeltaSnapshot,
-    DeltaTable,
+    catalog_managed_commit_context, create_logstore_with_object_store,
+    load_catalog_managed_commits_for_snapshot, DeltaSnapshot, DeltaTable,
 };
 
 const DEFAULT_MAX_ENTRIES: u64 = 1024;
@@ -58,6 +58,7 @@ impl DeltaTableCache {
         version: i64,
         lakehouse_table: Option<&LakehouseExecutionContext>,
     ) -> Result<Arc<CachedTable>> {
+        let lakehouse_table = catalog_managed_commit_context(lakehouse_table);
         let key = TableCacheKey::new(table_url, version, lakehouse_table);
         let table_url = table_url.clone();
         let lakehouse_table = lakehouse_table.cloned();
@@ -100,7 +101,7 @@ pub(crate) async fn load_table_uncached(
         require_files: false,
         ..Default::default()
     };
-    if let Some(lakehouse_table) = lakehouse_table {
+    if let Some(lakehouse_table) = catalog_managed_commit_context(lakehouse_table) {
         table_config.catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
             context,
             lakehouse_table,
@@ -163,6 +164,39 @@ mod tests {
         context.capability_fingerprint =
             CapabilityFingerprint(format!("unity:schema.table:{session_fingerprint}"));
         context
+    }
+
+    fn filesystem_lakehouse_context() -> LakehouseExecutionContext {
+        LakehouseExecutionContext::catalog_table_context(
+            CatalogProviderId("memory".to_string()),
+            vec![
+                "memory".to_string(),
+                "default".to_string(),
+                "table".to_string(),
+            ],
+            CatalogTableIdentity {
+                table_id: None,
+                table_uri: Some("file:///tmp/table".to_string()),
+            },
+            LakehouseOperation::Read,
+            LakehouseFormat::Delta,
+            LakehouseAuthority::CatalogRegistered {
+                lifecycle: TableLifecycle::External,
+                pointer: MetadataPointerAuthority::StorageDiscovery,
+                commit: CommitAuthority::Filesystem,
+            },
+            ScanAuthority::ClientTableFormat,
+        )
+    }
+
+    #[test]
+    fn catalog_managed_commit_context_requires_ratified_commit_authority() {
+        let ratified = lakehouse_context("session-a");
+        let filesystem = filesystem_lakehouse_context();
+
+        assert!(catalog_managed_commit_context(Some(&ratified)).is_some());
+        assert!(catalog_managed_commit_context(Some(&filesystem)).is_none());
+        assert!(catalog_managed_commit_context(None).is_none());
     }
 
     #[test]
