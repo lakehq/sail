@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::fmt;
 
 use datafusion::arrow::error::ArrowError;
 use datafusion_common::DataFusionError;
@@ -81,6 +82,37 @@ pub enum CommonErrorCause {
 }
 
 impl CommonErrorCause {
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Unknown(x)
+            | Self::Internal(x)
+            | Self::NotImplemented(x)
+            | Self::InvalidArgument(x)
+            | Self::Io(x)
+            | Self::ArrowCast(x)
+            | Self::ArrowMemory(x)
+            | Self::ArrowParse(x)
+            | Self::ArrowCompute(x)
+            | Self::ArrowIpc(x)
+            | Self::ArrowCDataInterface(x)
+            | Self::ArrowDivideByZero(x)
+            | Self::ArrowArithmeticOverflow(x)
+            | Self::ArrowDictionaryKeyOverflow(x)
+            | Self::ArrowRunEndIndexOverflow(x)
+            | Self::ArrowOffsetOverflow(x)
+            | Self::FormatCsv(x)
+            | Self::FormatJson(x)
+            | Self::FormatParquet(x)
+            | Self::FormatAvro(x)
+            | Self::Plan(x)
+            | Self::Schema(x)
+            | Self::Configuration(x)
+            | Self::Execution(x)
+            | Self::DeltaTable(x) => x,
+            Self::Python(x) => &x.summary,
+        }
+    }
+
     fn build<Py: PythonErrorCauseExtractor>(
         error: &(dyn std::error::Error + 'static),
         seen: &mut HashSet<*const dyn std::error::Error>,
@@ -90,6 +122,9 @@ impl CommonErrorCause {
             return Self::Unknown("circular error reference".to_string());
         }
         seen.insert(ptr);
+        if let Some(e) = error.downcast_ref::<CommonErrorCause>() {
+            return e.clone();
+        }
         if let Some(e) = error.downcast_ref::<ArrowError>() {
             return match e {
                 ArrowError::NotYetImplemented(x) => Self::NotImplemented(x.clone()),
@@ -169,3 +204,11 @@ impl CommonErrorCause {
         Self::build::<Py>(error, &mut HashSet::new())
     }
 }
+
+impl fmt::Display for CommonErrorCause {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
+impl std::error::Error for CommonErrorCause {}
