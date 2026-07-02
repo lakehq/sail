@@ -135,6 +135,7 @@ use sail_function::scalar::csv::spark_to_csv::SparkToCsv;
 use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
+use sail_function::scalar::datetime::spark_current_time::SparkCurrentTime;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_interval::{
@@ -202,6 +203,7 @@ use sail_function::scalar::string::make_valid_utf8::MakeValidUtf8;
 use sail_function::scalar::string::randstr::Randstr;
 use sail_function::scalar::string::soundex::Soundex;
 use sail_function::scalar::string::spark_base64::{SparkBase64, SparkUnbase64};
+use sail_function::scalar::string::spark_binary_string::{PadSide, SparkBinaryPad};
 use sail_function::scalar::string::spark_concat_ws::SparkConcatWs;
 use sail_function::scalar::string::spark_encode_decode::{SparkDecode, SparkEncode};
 use sail_function::scalar::string::spark_mask::SparkMask;
@@ -2290,6 +2292,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 ))));
             }
         };
+        if let Some(precision) = SparkCurrentTime::precision_from_name(name) {
+            return Ok(Arc::new(ScalarUDF::from(SparkCurrentTime::new(precision))));
+        }
         match name {
             "array_item_with_position" => {
                 Ok(Arc::new(ScalarUDF::from(ArrayItemWithPosition::new())))
@@ -2338,6 +2343,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkConcat::new())))
             }
             "spark_split" | "split" => Ok(Arc::new(ScalarUDF::from(SparkSplit::new()))),
+            "spark_binary_lpad" => Ok(Arc::new(ScalarUDF::from(SparkBinaryPad::new(
+                PadSide::Left,
+            )))),
+            "spark_binary_rpad" => Ok(Arc::new(ScalarUDF::from(SparkBinaryPad::new(
+                PadSide::Right,
+            )))),
             "regexp_extract" => Ok(Arc::new(ScalarUDF::from(SparkRegexpExtract::new()))),
             "regexp_extract_all" => Ok(Arc::new(ScalarUDF::from(SparkRegexpExtractAll::new()))),
             "sentences" => Ok(Arc::new(ScalarUDF::from(SparkSentences::new()))),
@@ -2512,9 +2523,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkBitGet>()
             || node_inner.is::<SparkBitwiseNot>()
             || node_inner.is::<SparkBRound>()
+            || node_inner.is::<SparkBinaryPad>()
             || node_inner.is::<SparkCalendarInterval>()
             || node_inner.is::<SparkCeil>()
             || node_inner.is::<SparkConcat>()
+            || node_inner.is::<SparkCurrentTime>()
             || node_inner.is::<SparkConv>()
             || node_inner.is::<SparkCrc32>()
             || node_inner.is::<SparkDateTrunc>()

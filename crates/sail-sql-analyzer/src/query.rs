@@ -19,8 +19,8 @@ use sail_sql_parser::common::Sequence;
 use crate::error::{SqlError, SqlResult};
 use crate::expression::{
     expr_with_default_column_values, from_ast_expression, from_ast_function_arguments,
-    from_ast_grouping_expression, from_ast_identifier_list, from_ast_object_name,
-    from_ast_order_by, from_ast_window,
+    from_ast_grouping_expression, from_ast_grouping_sets_clause, from_ast_identifier_list,
+    from_ast_object_name, from_ast_order_by, from_ast_window,
 };
 
 #[derive(Default)]
@@ -279,12 +279,16 @@ fn from_ast_query_select(select: QuerySelect) -> SqlResult<spec::QueryPlan> {
             let GroupByClause {
                 group_by: _,
                 expressions,
+                grouping_sets,
                 modifier,
             } = x;
-            let expr = expressions
+            let mut expr = expressions
                 .into_items()
                 .map(from_ast_grouping_expression)
                 .collect::<SqlResult<Vec<spec::Expr>>>()?;
+            if let Some(grouping_sets) = grouping_sets {
+                expr.push(from_ast_grouping_sets_clause(grouping_sets)?);
+            }
             let expr = match modifier {
                 None => expr,
                 Some(GroupByModifier::WithRollup(_, _)) => vec![spec::Expr::Rollup(expr)],

@@ -450,7 +450,42 @@
     {
       "input": "-- single comment\\\nwith line continuity\nSELECT * FROM a",
       "output": {
-        "failure": "invalid argument: found continuity at 29:39 expected '(', or 'AS'"
+        "success": {
+          "query": {
+            "project": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "a"
+                    ],
+                    "temporal": null,
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "expressions": [
+                {
+                  "unresolvedStar": {
+                    "target": null,
+                    "planId": null,
+                    "wildcardOptions": {
+                      "ilikePattern": null,
+                      "excludeColumns": null,
+                      "exceptColumns": null,
+                      "replaceColumns": null,
+                      "renameColumns": null
+                    }
+                  }
+                }
+              ]
+            },
+            "planId": null
+          }
+        }
       }
     },
     {

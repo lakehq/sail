@@ -87,6 +87,7 @@ pub enum DataType {
     Time(
         Time,
         Option<(LeftParenthesis, IntegerLiteral, RightParenthesis)>,
+        Option<TimeWithoutTimeZone>,
     ),
     Interval(IntervalType),
     Array(
@@ -169,6 +170,13 @@ pub enum TimezoneType {
     WithTimeZone(With, Time, Zone),
     WithoutTimeZone(Without, Time, Zone),
     WithLocalTimeZone(With, Local, Time, Zone),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub struct TimeWithoutTimeZone {
+    pub without: Without,
+    pub time: Time,
+    pub zone: Zone,
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]

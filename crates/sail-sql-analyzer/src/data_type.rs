@@ -59,6 +59,8 @@ fn from_ast_time_precision(
     precision: Option<(LeftParenthesis, IntegerLiteral, RightParenthesis)>,
 ) -> SqlResult<spec::TimeUnit> {
     let precision = precision.as_ref().map(|(_, p, _)| p.value);
+    // TODO: Carry exact TIME(p) precision instead of mapping Spark precision to
+    // Arrow time units when p is not 0, 3, 6, or 9.
     match precision {
         Some(0) => Ok(spec::TimeUnit::Second),
         Some(3) => Ok(spec::TimeUnit::Millisecond),
@@ -177,7 +179,7 @@ pub fn from_ast_data_type(sql_type: DataType) -> SqlResult<spec::DataType> {
                 timestamp_type: spec::TimestampType::WithLocalTimeZone,
             })
         }
-        DataType::Time(_, precision) => {
+        DataType::Time(_, precision, _) => {
             let time_unit = from_ast_time_precision(precision)?;
             match time_unit {
                 spec::TimeUnit::Second | spec::TimeUnit::Millisecond => {

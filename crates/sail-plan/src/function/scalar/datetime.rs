@@ -11,8 +11,11 @@ use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
 use sail_common::datetime::time_unit_to_multiplier;
+use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
+use sail_function::scalar::datetime::spark_current_time::SparkCurrentTime;
+use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_last_day::SparkLastDay;
@@ -341,6 +344,49 @@ fn current_timezone(input: ScalarFunctionInput) -> PlanResult<Expr> {
     Ok(session_tz)
 }
 
+fn current_time(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let precision = match input.arguments.len() {
+        0 => 6,
+        1 => {
+            let precision = input.arguments.one()?;
+            current_time_precision(&precision)?
+        }
+        n => Err(PlanError::invalid(format!(
+            "current_time requires 0 or 1 arguments, got {n}"
+        )))?,
+    };
+    if !(0..=6).contains(&precision) {
+        return Err(PlanError::invalid(format!(
+            "current_time precision must be between 0 and 6, got {precision}"
+        )));
+    }
+    Ok(ScalarUDF::from(SparkCurrentTime::new(precision)).call(vec![]))
+}
+
+fn current_time_precision(expr: &Expr) -> PlanResult<i32> {
+    let value = LiteralEvaluator::new().evaluate(expr).map_err(|e| {
+        PlanError::invalid(format!(
+            "current_time precision must be a foldable integer expression: {e}"
+        ))
+    })?;
+    if value.is_null() {
+        return Err(PlanError::invalid(
+            "current_time precision cannot evaluate to NULL",
+        ));
+    }
+    let value = value.cast_to(&DataType::Int32).map_err(|e| {
+        PlanError::invalid(format!(
+            "current_time precision must be an integer expression: {e}"
+        ))
+    })?;
+    match value {
+        ScalarValue::Int32(Some(value)) => Ok(value),
+        other => Err(PlanError::invalid(format!(
+            "current_time precision must be an integer expression, got {other:?}"
+        ))),
+    }
+}
+
 fn to_chrono_fmt(format: Expr) -> Expr {
     ScalarUDF::from(SparkToChronoFmt::new()).call(vec![format])
 }
@@ -364,6 +410,28 @@ fn to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
         Ok(expr_fn::to_date(vec![expr, format]))
     } else {
         Err(PlanError::invalid("to_date requires 1 or 2 arguments"))
+    }
+}
+
+fn try_to_date(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    if input.arguments.len() == 1 {
+        let expr = input.arguments.one()?;
+        let expr_type = expr.get_type(input.function_context.schema)?;
+        if matches!(
+            expr_type,
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+        ) {
+            Ok(ScalarUDF::from(SparkDate::new(true)).call(vec![expr]))
+        } else {
+            Ok(try_cast(expr, DataType::Date32))
+        }
+    } else if input.arguments.len() == 2 {
+        Ok(cast(
+            timestamp_with_try(input, false, true)?,
+            DataType::Date32,
+        ))
+    } else {
+        Err(PlanError::invalid("try_to_date requires 1 or 2 arguments"))
     }
 }
 
@@ -709,6 +777,16 @@ fn make_ym_interval(args: Vec<Expr>) -> PlanResult<Expr> {
     Ok(ScalarUDF::from(SparkMakeYmInterval::new()).call(vec![years, months]))
 }
 
+fn try_make_interval(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let n = input.arguments.len();
+    if !(1..=7).contains(&n) {
+        return Err(PlanError::invalid(format!(
+            "try_make_interval requires 1 to 7 arguments, got {n}"
+        )));
+    }
+    Ok(ScalarUDF::from(SparkMakeInterval::new()).call(input.arguments))
+}
+
 fn make_timestamp_ltz(args: Vec<Expr>, session_tz: &Arc<str>, is_try: bool) -> PlanResult<Expr> {
     let ntz_ts = if args.len() == 2 || args.len() == 6 {
         ScalarUDF::from(SparkMakeTimestampNtz::new(is_try)).call(args)
@@ -1044,7 +1122,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("convert_timezone", F::custom(convert_timezone)),
         ("curdate", F::nullary(expr_fn::current_date)),
         ("current_date", F::nullary(expr_fn::current_date)),
-        ("current_time", F::nullary(expr_fn::current_time)),
+        ("current_time", F::custom(current_time)),
         (
             "current_timestamp",
             F::custom(current_timestamp_microseconds),
@@ -1152,6 +1230,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("timestamp_diff", F::custom(datediff)),
         ("to_date", F::custom(to_date)),
         ("to_time", F::custom(to_time)),
+        ("try_to_date", F::custom(try_to_date)),
         ("try_to_time", F::custom(try_to_time)),
         (
             "to_timestamp",
@@ -1178,7 +1257,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
         ("to_unix_timestamp", F::custom(to_unix_timestamp)),
         ("to_utc_timestamp", F::custom(to_utc_timestamp)),
         ("trunc", F::binary(trunc)),
-        ("try_make_interval", F::unknown("try_make_interval")),
+        ("try_make_interval", F::custom(try_make_interval)),
         (
             "try_make_timestamp",
             F::custom(|input| make_timestamp(input, true)),

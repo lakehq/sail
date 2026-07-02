@@ -59,7 +59,7 @@ fn avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
         .transpose()?
         == Some(DataType::Null)
     {
-        return Ok(lit(ScalarValue::Null));
+        return Ok(lit(ScalarValue::Float64(None)));
     }
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
         func: average::avg_udaf(),
@@ -69,6 +69,28 @@ fn avg(input: AggFunctionInput) -> PlanResult<expr::Expr> {
             filter: input.filter,
             order_by: input.order_by,
             null_treatment,
+        },
+    }))
+}
+
+fn sum(input: AggFunctionInput) -> PlanResult<expr::Expr> {
+    if input
+        .arguments
+        .first()
+        .map(|arg| arg.get_type(input.function_context.schema))
+        .transpose()?
+        == Some(DataType::Null)
+    {
+        return Ok(lit(ScalarValue::Float64(None)));
+    }
+    Ok(expr::Expr::AggregateFunction(AggregateFunction {
+        func: sum::sum_udaf(),
+        params: AggregateFunctionParams {
+            args: input.arguments,
+            distinct: input.distinct,
+            filter: input.filter,
+            order_by: input.order_by,
+            null_treatment: get_null_treatment(input.ignore_nulls),
         },
     }))
 }
@@ -751,7 +773,7 @@ fn list_built_in_aggregate_functions() -> Vec<(&'static str, AggFunction)> {
         ("stddev_pop", F::default(stddev::stddev_pop_udaf)),
         ("stddev_samp", F::default(stddev::stddev_udaf)),
         ("string_agg", F::custom(listagg)),
-        ("sum", F::default(sum::sum_udaf)),
+        ("sum", F::custom(sum)),
         ("try_avg", F::custom(try_avg)),
         ("try_sum", F::custom(try_sum)),
         ("var_pop", F::default(variance::var_pop_udaf)),

@@ -1743,7 +1743,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Invalid or Unsupported Configuration: Could not find config namespace \"spark\""
+        "success": "ok"
       }
     },
     {
@@ -1771,7 +1771,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Invalid or Unsupported Configuration: Could not find config namespace \"spark\""
+        "success": "ok"
       }
     }
   ]

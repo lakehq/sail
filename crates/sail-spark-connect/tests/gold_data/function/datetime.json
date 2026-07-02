@@ -392,7 +392,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: zero values expected: [Literal(Int32(0), None)]"
+        "success": "ok"
       }
     },
     {
@@ -414,7 +414,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: zero values expected: [BinaryExpr(BinaryExpr { left: Literal(Int32(1), None), op: Plus, right: Literal(Int32(1), None) })]"
+        "success": "ok"
       }
     },
     {
@@ -436,7 +436,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: zero values expected: [Literal(Int32(3), None)]"
+        "success": "ok"
       }
     },
     {
@@ -458,7 +458,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: attribute ObjectName([Identifier(\"current_time\")]) is missing from the schema: cannot resolve attribute"
+        "success": "ok"
       }
     },
     {
@@ -3142,7 +3142,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_make_interval"
+        "success": "ok"
       }
     },
     {
@@ -3164,7 +3164,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_make_interval"
+        "success": "ok"
       }
     },
     {
@@ -3186,7 +3186,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_make_interval"
+        "success": "ok"
       }
     },
     {
@@ -3208,7 +3208,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: try_make_interval"
+        "success": "ok"
       }
     },
     {
@@ -3692,7 +3692,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_to_date"
+        "success": "ok"
       }
     },
     {
@@ -3714,7 +3714,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_to_date"
+        "success": "ok"
       }
     },
     {
@@ -3736,7 +3736,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_to_date"
+        "success": "ok"
       }
     },
     {

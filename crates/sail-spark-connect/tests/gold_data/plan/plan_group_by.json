@@ -111,7 +111,138 @@
     {
       "input": "select a, b, sum(c) as c from d group by a, b grouping sets((a, b), (a), ())",
       "output": {
-        "failure": "invalid argument: found grouping at 46:54 expected '->', '.', '(', '[', '::', 'ESCAPE', 'IS', 'NOT', 'IN', '*', '/', '%', 'DIV', '+', '-', '||', '>>>', '>>', '<<', '&', '^', '|', '!=', '!>', '!<', '==', '=', '>=', '>', '<=>', '<=', '<>', '<', 'BETWEEN', 'LIKE', 'ILIKE', 'RLIKE', 'REGEXP', 'SIMILAR', 'AND', 'OR', ',', 'WITH', 'HAVING', 'INTERSECT', 'UNION', 'EXCEPT', 'MINUS', 'WINDOW', 'ORDER', 'SORT', 'CLUSTER', 'DISTRIBUTE', 'LIMIT', 'OFFSET', ';', or end of input"
+        "success": {
+          "query": {
+            "aggregate": {
+              "input": {
+                "read": {
+                  "namedTable": {
+                    "name": [
+                      "d"
+                    ],
+                    "temporal": null,
+                    "sample": null,
+                    "options": []
+                  },
+                  "isStreaming": false
+                },
+                "planId": null
+              },
+              "grouping": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "groupingSets": [
+                    [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "a"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      },
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "b"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      }
+                    ],
+                    [
+                      {
+                        "unresolvedAttribute": {
+                          "name": [
+                            "a"
+                          ],
+                          "planId": null,
+                          "isMetadataColumn": false
+                        }
+                      }
+                    ],
+                    []
+                  ]
+                }
+              ],
+              "aggregate": [
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "a"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "unresolvedAttribute": {
+                    "name": [
+                      "b"
+                    ],
+                    "planId": null,
+                    "isMetadataColumn": false
+                  }
+                },
+                {
+                  "alias": {
+                    "expr": {
+                      "unresolvedFunction": {
+                        "functionName": [
+                          "sum"
+                        ],
+                        "arguments": [
+                          {
+                            "unresolvedAttribute": {
+                              "name": [
+                                "c"
+                              ],
+                              "planId": null,
+                              "isMetadataColumn": false
+                            }
+                          }
+                        ],
+                        "namedArguments": [],
+                        "isDistinct": false,
+                        "isUserDefinedFunction": false,
+                        "isInternal": null,
+                        "ignoreNulls": null,
+                        "filter": null,
+                        "orderBy": null
+                      }
+                    },
+                    "name": [
+                      "c"
+                    ],
+                    "metadata": null
+                  }
+                }
+              ],
+              "having": null,
+              "withGroupingExpressions": false
+            },
+            "planId": null
+          }
+        }
       }
     },
     {
