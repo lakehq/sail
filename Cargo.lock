@@ -7496,6 +7496,7 @@ dependencies = [
  "datafusion",
  "futures",
  "libloading 0.8.9",
+ "log",
  "pilota",
  "sail-catalog",
  "sail-common",

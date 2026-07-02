@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use sail_catalog::error::{CatalogError, CatalogResult};
@@ -6,9 +8,10 @@ use sail_common_datafusion::catalog::managed::{
     metadata_location_update, previous_metadata_location_update,
 };
 use sail_common_hms::hms::{
-    CheckLockRequest, DataOperationType, LockComponent, LockLevel, LockRequest, LockState,
-    LockType, Table, ThriftHiveMetastoreCheckLockException, ThriftHiveMetastoreClient,
-    ThriftHiveMetastoreLockException, ThriftHiveMetastoreUnlockException, UnlockRequest,
+    CheckLockRequest, DataOperationType, HeartbeatRequest, LockComponent, LockLevel, LockRequest,
+    LockState, LockType, Table, ThriftHiveMetastoreCheckLockException, ThriftHiveMetastoreClient,
+    ThriftHiveMetastoreHeartbeatException, ThriftHiveMetastoreLockException,
+    ThriftHiveMetastoreUnlockException, UnlockRequest,
 };
 use volo_thrift::MaybeException;
 
@@ -16,6 +19,10 @@ use crate::provider::{apply_alter_table_options, hms_metadata_location, HmsCatal
 
 const HMS_LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(30);
 const HMS_LOCK_CHECK_INTERVAL: Duration = Duration::from_millis(200);
+/// Interval between lock heartbeats sent during the critical section. HMS expires idle locks
+/// at the server `hive.txn.timeout` (default 300s); a fixed 60s interval stays comfortably
+/// below any realistic timeout (~timeout/5) while keeping RPC overhead negligible.
+const HMS_LOCK_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
 
 pub(crate) fn is_metadata_location_update(options: &AlterTableOptions) -> bool {
     match options {
@@ -55,27 +62,23 @@ pub(crate) async fn alter_table_with_lock(
     options: AlterTableOptions,
 ) -> CatalogResult<()> {
     let (_, client) = provider.current_client().await?;
-    let lock_id = acquire_table_lock(&client, db_name, table_name).await?;
-    // TODO: Distinguish HMS lock/heartbeat/alter failures that make commit
-    // state unknown from ordinary conflicts or external errors.
-    let result = async {
-        let mut hms_table = HmsCatalogProvider::get_table_with_client(
-            &client,
-            db_name,
-            table_name,
-            "Failed to fetch HMS table for locked alter",
-        )
-        .await?;
-        apply_alter_table_options(&mut hms_table, db_name, table_name, options)?;
-        HmsCatalogProvider::alter_table_with_client(&client, db_name, table_name, hms_table).await
-    }
-    .await;
-    let unlock_result = release_table_lock(&client, db_name, table_name, lock_id).await;
-    match (result, unlock_result) {
-        (Err(error), _) => Err(error),
-        (Ok(()), Err(error)) => Err(error),
-        (Ok(()), Ok(())) => Ok(()),
-    }
+    let guard = LockGuard::acquire(client, db_name, table_name).await?;
+    // Clone the handle for the critical section; the guard keeps its own for heartbeat/unlock.
+    let client = guard.client().clone();
+    guard
+        .run_locked(async {
+            let mut hms_table = HmsCatalogProvider::get_table_with_client(
+                &client,
+                db_name,
+                table_name,
+                "Failed to fetch HMS table for locked alter",
+            )
+            .await?;
+            apply_alter_table_options(&mut hms_table, db_name, table_name, options)?;
+            HmsCatalogProvider::alter_table_with_client(&client, db_name, table_name, hms_table)
+                .await
+        })
+        .await
 }
 
 /// Pre-validates a replacement `Table` before the drop, so client-detectable defects fail
@@ -127,61 +130,239 @@ pub(crate) async fn replace_table_with_lock(
 ) -> CatalogResult<()> {
     validate_replacement_table(&replacement, db_name, table_name)?;
     let (_, client) = provider.current_client().await?;
-    let lock_id = acquire_table_lock(&client, db_name, table_name).await?;
-    let result = async {
-        let current = HmsCatalogProvider::get_table_with_client(
-            &client,
-            db_name,
-            table_name,
-            "Failed to fetch HMS table for locked replace",
-        )
-        .await?;
-        crate::provider::assert_replace_metadata_location_unchanged(
-            expected_metadata_location.as_deref(),
-            &current,
-            db_name,
-            table_name,
-        )?;
-        // Carry the owner forward so REPLACE doesn't reset it (only `owner` is exposed;
-        // grants are not carried).
-        if let Some(owner) = current.owner.clone() {
-            replacement.owner = Some(owner);
-        }
-        HmsCatalogProvider::drop_table_with_client(&client, db_name, table_name, false, false)
+    let guard = LockGuard::acquire(client, db_name, table_name).await?;
+    // Clone the handle for the critical section; the guard keeps its own for heartbeat/unlock.
+    let client = guard.client().clone();
+    guard
+        .run_locked(async {
+            let current = HmsCatalogProvider::get_table_with_client(
+                &client,
+                db_name,
+                table_name,
+                "Failed to fetch HMS table for locked replace",
+            )
             .await?;
-        match HmsCatalogProvider::create_table_with_client(
-            &client,
-            db_name,
-            table_name,
-            replacement,
-        )
+            crate::provider::assert_replace_metadata_location_unchanged(
+                expected_metadata_location.as_deref(),
+                &current,
+                db_name,
+                table_name,
+            )?;
+            // Carry the owner forward so REPLACE doesn't reset it (only `owner` is exposed;
+            // grants are not carried).
+            if let Some(owner) = current.owner.clone() {
+                replacement.owner = Some(owner);
+            }
+            HmsCatalogProvider::drop_table_with_client(&client, db_name, table_name, false, false)
+                .await?;
+            match HmsCatalogProvider::create_table_with_client(
+                &client,
+                db_name,
+                table_name,
+                replacement,
+            )
+            .await
+            {
+                Ok(()) => Ok(()),
+                Err(create_error) => {
+                    // Compensating restore: the drop already committed, so re-create the
+                    // original from the pre-drop snapshot; combine errors if that also fails.
+                    match HmsCatalogProvider::create_table_with_client(
+                        &client, db_name, table_name, current,
+                    )
+                    .await
+                    {
+                        Ok(()) => Err(create_error),
+                        Err(restore_error) => Err(CatalogError::External(format!(
+                            "Failed to replace table '{db_name}.{table_name}': create failed ({create_error}) \
+                             and the compensating restore of the original also failed ({restore_error}); \
+                             the table has been left dropped in HMS and must be recovered manually"
+                        ))),
+                    }
+                }
+            }
+        })
         .await
-        {
-            Ok(()) => Ok(()),
-            Err(create_error) => {
-                // Compensating restore: the drop already committed, so re-create the
-                // original from the pre-drop snapshot; combine errors if that also fails.
-                match HmsCatalogProvider::create_table_with_client(
-                    &client, db_name, table_name, current,
-                )
+}
+
+/// RAII holder for an acquired HMS table lock.
+///
+/// Owns the `lock_id` and a client handle, and drives a periodic heartbeat while a critical
+/// section runs so the server does not expire the lock mid-operation (HMS drops idle locks at
+/// `hive.txn.timeout`, default 300s). The lock is released via `unlock` on every exit path:
+/// [`LockGuard::run_locked`] always unlocks (success and error), and [`Drop`] provides a
+/// best-effort fallback so the lock is freed even on an early return or panic that bypasses
+/// `run_locked`.
+///
+/// The heartbeat runs as a detached background task that only keeps the lock alive; it can
+/// **never** cancel the critical section. On a heartbeat RPC failure it records the loss in a
+/// shared flag and stops. [`LockGuard::run_locked`] awaits the critical section to completion
+/// (whose own compensating-restore logic handles a create failure), and only *before* the
+/// irreversible `drop_table` may a caller consult the flag and bail; past the drop the section
+/// always finishes so no code path drops the critical future between `drop_table` and its
+/// restore. The server-side `hive.txn.timeout` is the real backstop for a genuinely lost lock.
+struct LockGuard {
+    client: ThriftHiveMetastoreClient,
+    lock_id: i64,
+    db_name: String,
+    table_name: String,
+    /// Set once the lock has been released so [`Drop`] does not attempt a redundant unlock.
+    released: bool,
+}
+
+impl LockGuard {
+    async fn acquire(
+        client: ThriftHiveMetastoreClient,
+        db_name: &str,
+        table_name: &str,
+    ) -> CatalogResult<Self> {
+        let lock_id = acquire_table_lock(&client, db_name, table_name).await?;
+        Ok(Self {
+            client,
+            lock_id,
+            db_name: db_name.to_string(),
+            table_name: table_name.to_string(),
+            released: false,
+        })
+    }
+
+    /// Borrow the client so the critical section can reuse the same connection.
+    fn client(&self) -> &ThriftHiveMetastoreClient {
+        &self.client
+    }
+
+    /// Runs `critical` while heartbeating the lock, then releases it.
+    ///
+    /// The heartbeat is spawned as a detached background task that only keeps the lock alive; it
+    /// can never cancel `critical`. `critical` is awaited to completion here — no `select!` that
+    /// could drop it mid-operation — so its own compensating-restore logic always gets to run on
+    /// a create failure. After it finishes, the heartbeat task is aborted. A heartbeat RPC
+    /// failure is recorded in a shared flag and, since the lock may then have been lost, is
+    /// surfaced only as a warning (the server-side `hive.txn.timeout` is the real backstop): it
+    /// does **not** override the outcome of an already-committed critical section. The lock is
+    /// unlocked on both the success and error paths; an unlock failure is surfaced only when the
+    /// critical section itself succeeded.
+    async fn run_locked<F>(mut self, critical: F) -> CatalogResult<()>
+    where
+        F: std::future::Future<Output = CatalogResult<()>>,
+    {
+        let heartbeat_failed = Arc::new(AtomicBool::new(false));
+        let heartbeat = tokio::spawn(Self::heartbeat_loop(
+            self.client.clone(),
+            self.lock_id,
+            self.db_name.clone(),
+            self.table_name.clone(),
+            Arc::clone(&heartbeat_failed),
+        ));
+
+        // Await the critical section to completion: never cancelled by the heartbeat, so the
+        // drop+create+restore sequence always runs as a unit.
+        let result = critical.await;
+
+        // The critical section is done; stop heartbeating.
+        heartbeat.abort();
+
+        if heartbeat_failed.load(Ordering::Acquire) {
+            // Best-effort signal only: the operation has already committed (or restored), so a
+            // lost lock cannot un-commit it. The server lock timeout is the real backstop.
+            log::warn!(
+                "HMS lock heartbeat for '{}.{}' failed during the operation; the lock may have \
+                 been lost, but the critical section had already run to completion",
+                self.db_name,
+                self.table_name
+            );
+        }
+
+        let unlock_result = self.release().await;
+        match (result, unlock_result) {
+            (Err(error), _) => Err(error),
+            (Ok(()), Err(error)) => Err(error),
+            (Ok(()), Ok(())) => Ok(()),
+        }
+    }
+
+    /// Sends a heartbeat every [`HMS_LOCK_HEARTBEAT_INTERVAL`] to keep the lock alive while the
+    /// critical section runs. Loops until aborted by [`LockGuard::run_locked`]; on a heartbeat
+    /// RPC failure it records the loss in `heartbeat_failed` and stops. It never returns a value
+    /// that could cancel or influence the critical section — the flag is advisory only.
+    async fn heartbeat_loop(
+        client: ThriftHiveMetastoreClient,
+        lock_id: i64,
+        db_name: String,
+        table_name: String,
+        heartbeat_failed: Arc<AtomicBool>,
+    ) {
+        let mut interval = tokio::time::interval(HMS_LOCK_HEARTBEAT_INTERVAL);
+        // Skip the immediate first tick: the lock was just acquired, so heartbeat only after
+        // the first interval has elapsed.
+        interval.tick().await;
+        loop {
+            interval.tick().await;
+            match client
+                .heartbeat(HeartbeatRequest {
+                    lockid: Some(lock_id),
+                    txnid: None,
+                })
                 .await
-                {
-                    Ok(()) => Err(create_error),
-                    Err(restore_error) => Err(CatalogError::External(format!(
-                        "Failed to replace table '{db_name}.{table_name}': create failed ({create_error}) \
-                         and the compensating restore of the original also failed ({restore_error}); \
-                         the table has been left dropped in HMS and must be recovered manually"
-                    ))),
+            {
+                Ok(MaybeException::Ok(())) => {}
+                Ok(MaybeException::Exception(err)) => {
+                    let error = hms_heartbeat_error(
+                        "Lost HMS lock during operation",
+                        &db_name,
+                        &table_name,
+                        err,
+                    );
+                    log::warn!("{error}");
+                    heartbeat_failed.store(true, Ordering::Release);
+                    return;
+                }
+                Err(err) => {
+                    let error = HmsCatalogProvider::hms_client_error(
+                        &format!(
+                            "Failed to heartbeat HMS lock for '{db_name}.{table_name}'; the lock may have been lost"
+                        ),
+                        err,
+                    );
+                    log::warn!("{error}");
+                    heartbeat_failed.store(true, Ordering::Release);
+                    return;
                 }
             }
         }
     }
-    .await;
-    let unlock_result = release_table_lock(&client, db_name, table_name, lock_id).await;
-    match (result, unlock_result) {
-        (Err(error), _) => Err(error),
-        (Ok(()), Err(error)) => Err(error),
-        (Ok(()), Ok(())) => Ok(()),
+
+    /// Releases the lock exactly once, marking the guard so [`Drop`] does not repeat it.
+    async fn release(&mut self) -> CatalogResult<()> {
+        if self.released {
+            return Ok(());
+        }
+        self.released = true;
+        release_table_lock(&self.client, &self.db_name, &self.table_name, self.lock_id).await
+    }
+}
+
+impl Drop for LockGuard {
+    fn drop(&mut self) {
+        if self.released {
+            return;
+        }
+        // `run_locked` normally releases the lock; this is the fallback for paths that bypass
+        // it (early return before `run_locked`, or a panic unwinding through it). Drop is
+        // synchronous, so spawn a detached best-effort unlock — but only if a runtime is
+        // entered. A bare `tokio::spawn` panics with no runtime, and panicking in `Drop` during
+        // a panic-unwind aborts the process; when there is no runtime we skip the unlock and
+        // rely on the server lock timeout as the backstop.
+        self.released = true;
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            let client = self.client.clone();
+            let request = UnlockRequest {
+                lockid: self.lock_id,
+            };
+            handle.spawn(async move {
+                let _ = client.unlock(request).await;
+            });
+        }
     }
 }
 
@@ -341,13 +522,36 @@ fn hms_unlock_error(
     CatalogError::External(format!("{context} for '{db_name}.{table_name}': {error:?}"))
 }
 
+fn hms_heartbeat_error(
+    context: &str,
+    db_name: &str,
+    table_name: &str,
+    error: ThriftHiveMetastoreHeartbeatException,
+) -> CatalogError {
+    CatalogError::External(format!("{context} for '{db_name}.{table_name}': {error:?}"))
+}
+
 #[cfg(test)]
 mod tests {
     #![expect(clippy::unwrap_used)]
 
     use sail_common_hms::hms::{FieldSchema, StorageDescriptor, Table};
 
-    use super::validate_replacement_table;
+    use super::{
+        validate_replacement_table, HMS_LOCK_ACQUIRE_TIMEOUT, HMS_LOCK_HEARTBEAT_INTERVAL,
+    };
+
+    #[test]
+    fn heartbeat_interval_stays_below_default_hms_txn_timeout() {
+        // HMS expires idle locks at `hive.txn.timeout` (default 300s). The heartbeat interval
+        // must leave a comfortable margin so a heartbeat lands well before expiry even with
+        // jitter or a slow RPC. Guard against anyone bumping the interval past that margin.
+        let default_hms_txn_timeout = std::time::Duration::from_secs(300);
+        assert!(HMS_LOCK_HEARTBEAT_INTERVAL * 3 <= default_hms_txn_timeout);
+        // Sanity: the first heartbeat fires after the acquire timeout window, so a lock that
+        // took a while to acquire is still refreshed promptly rather than left idle.
+        assert!(HMS_LOCK_HEARTBEAT_INTERVAL >= HMS_LOCK_ACQUIRE_TIMEOUT);
+    }
 
     fn field(name: &str) -> FieldSchema {
         FieldSchema {
