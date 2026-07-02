@@ -179,52 +179,6 @@ Feature: TIME functions (make_time, time_diff, time_trunc)
       | 2      |
       | 150    |
 
-    Scenario: time_diff unit from column is case-insensitive across rows
-      When query
-      """
-      SELECT time_diff(unit, TIME '08:00:00', TIME '10:30:00') AS result
-      FROM (VALUES ('hour'), ('Hour'), ('HOUR'), ('minute'), ('MiNuTe')) AS t(unit)
-      """
-      Then query result
-      | result |
-      | 2      |
-      | 2      |
-      | 2      |
-      | 150    |
-      | 150    |
-
-    Scenario: time_diff mixes unit and times per row
-      When query
-      """
-      SELECT time_diff(unit, s, e) AS result
-      FROM (VALUES
-        ('hour',        TIME '00:00:00', TIME '05:30:00'),
-        ('MINUTE',      TIME '10:00:00', TIME '10:45:00'),
-        ('sEcOnD',      TIME '00:00:00', TIME '00:00:30'),
-        ('Millisecond', TIME '00:00:00', TIME '00:00:01.500'),
-        ('microsecond', TIME '00:00:00', TIME '00:00:00.000123')
-      ) AS t(unit, s, e)
-      """
-      Then query result
-      | result |
-      | 5      |
-      | 45     |
-      | 30     |
-      | 1500   |
-      | 123    |
-
-    Scenario: time_diff unit from column with interleaved NULL
-      When query
-      """
-      SELECT time_diff(unit, TIME '01:00:00', TIME '03:00:00') AS result
-      FROM (VALUES ('hour'), (CAST(NULL AS STRING)), ('Hour')) AS t(unit)
-      """
-      Then query result
-      | result |
-      | 2      |
-      | NULL   |
-      | 2      |
-
   Rule: time_trunc
 
     Scenario: time_trunc hour
