@@ -16,13 +16,17 @@ use crate::functions_utils::make_scalar_function;
 /// The `to_char` / `to_varchar` function for numeric input, formatting a decimal value
 /// as a string according to a number format such as `'$99,999.99S'`.
 ///
-/// This is a port of the formatting half of Spark's
-/// `org.apache.spark.sql.catalyst.util.ToNumberParser`, which backs the `ToCharacter`
-/// expression. Datetime and binary inputs are dispatched to other functions at plan time.
+/// The numeric formatter follows the formatting half of Spark's
+/// `org.apache.spark.sql.catalyst.util.ToNumberParser`, which backs the
+/// `ToCharacter` expression. Datetime and binary inputs are dispatched to other
+/// functions at plan time.
 ///
 /// `ansi_mode` controls the behavior of the implicit cast from float or string input to
 /// a decimal value: failures and overflows produce an error in ANSI mode and NULL otherwise.
 /// (Failures to match a valid format always produce an error, in both modes.)
+///
+/// [Credit]: <https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/expressions/numberFormatExpressions.scala>
+/// [Credit]: <https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/util/ToNumberParser.scala>
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkToChar {
     ansi_mode: bool,
@@ -348,7 +352,7 @@ enum GroupToken {
     ThousandsSeparator,
 }
 
-/// A token of the number format string, port of Spark's `ToNumberParser.InputToken`.
+/// A token of the number format string, matching Spark's `ToNumberParser.InputToken`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum FormatToken {
     /// Consecutive digit sequences and thousands separators, in their original order.
@@ -399,7 +403,7 @@ enum FlatToken {
     Unrecognized(char),
 }
 
-/// A validated number format, port of Spark's `ToNumberParser` restricted to the
+/// A validated number format matching Spark's `ToNumberParser`, restricted to the
 /// formatting direction used by `to_char`.
 #[derive(Debug)]
 struct NumberFormat {
@@ -455,7 +459,7 @@ impl NumberFormat {
         })
     }
 
-    /// Formats a decimal value, port of `ToNumberParser.format`.
+    /// Formats a decimal value following `ToNumberParser.format`.
     fn format(&self, value: &DecimalString) -> Result<String> {
         let negative = value.negative;
         // Strip leading zeros from the integer part and trailing zeros from the
@@ -590,7 +594,7 @@ impl NumberFormat {
     }
 }
 
-/// Tokenizes the (uppercased) format string, port of `ToNumberParser.formatTokens`.
+/// Tokenizes the (uppercased) format string following `ToNumberParser.formatTokens`.
 fn tokenize(format: &str) -> Vec<FlatToken> {
     let chars: Vec<char> = format.chars().collect();
     let mut tokens: Vec<FlatToken> = Vec::new();
@@ -686,7 +690,7 @@ fn group_tokens(tokens: Vec<FlatToken>) -> Vec<FormatToken> {
     grouped
 }
 
-/// Validates the format tokens, port of `ToNumberParser.checkInputDataTypes`.
+/// Validates the format tokens following `ToNumberParser.checkInputDataTypes`.
 fn validate_tokens(format: &str, tokens: &[FormatToken]) -> Result<()> {
     // Make sure the format string contains at least one token.
     if format.is_empty() {
