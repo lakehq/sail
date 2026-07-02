@@ -1,7 +1,8 @@
 """Pure-unit tests for the JDBC data source — no Spark session or DB container required.
 
-Tests are collected without ``pytestmark = pytest.mark.integration`` so they
-run in every CI tier (fast feedback, no Docker).
+No ``pytestmark = pytest.mark.integration``, so these run without Docker on every
+Spark tier that has the Python DataSource write API. They import ``jdbc.py``, which
+needs ``pyspark.sql.datasource`` (Spark 4.1+), so the module is skipped below that.
 """
 
 from __future__ import annotations
@@ -10,6 +11,11 @@ import datetime as dt
 
 import pyarrow as pa
 import pytest
+
+from pysail.testing.spark.utils.common import pyspark_version
+
+if pyspark_version() < (4, 1):
+    pytest.skip("JDBC data source requires the PySpark Python DataSource write API (4.1+)", allow_module_level=True)
 
 # ---------------------------------------------------------------------------
 # _filter_to_sql
