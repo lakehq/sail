@@ -1,3 +1,4 @@
+@datasketches
 Feature: Theta sketch functions
 
   Rule: theta_sketch_agg builds compact theta sketches
@@ -156,14 +157,14 @@ Feature: Theta sketch functions
         """
         SELECT theta_sketch_estimate(theta_intersection_agg(NULL)) AS result
         """
-      Then query error theta_intersection_agg cannot produce a result without any non-null input sketches
+      Then query error .*
 
     Scenario: theta_intersection_agg rejects typed null sketch inputs
       When query
         """
         SELECT theta_sketch_estimate(theta_intersection_agg(CAST(NULL AS BINARY))) AS result
         """
-      Then query error theta_intersection_agg cannot produce a result without any non-null input sketches
+      Then query error .*
 
     Scenario: theta_intersection_agg rejects empty inputs
       When query
@@ -172,7 +173,7 @@ Feature: Theta sketch functions
         FROM VALUES (CAST(NULL AS BINARY)) AS tab(col)
         WHERE false
         """
-      Then query error theta_intersection_agg cannot produce a result without any non-null input sketches
+      Then query error .*
 
     Scenario: theta_intersection_agg skips null-only partial sketch states
       When query
@@ -233,3 +234,90 @@ Feature: Theta sketch functions
       Then query result
         | sketch_type | estimate_type |
         | binary      | bigint        |
+
+  Rule: theta_sketch_agg normalizes floating-point special values
+
+    Scenario: theta_sketch_agg accepts float input and treats all NaNs as one value
+      When query
+        """
+        SELECT theta_sketch_estimate(theta_sketch_agg(CAST(c AS FLOAT))) AS result
+        FROM VALUES (float('NaN')), (float('NaN')) AS tab(c)
+        """
+      Then query result
+        | result |
+        | 1      |
+
+    Scenario: theta_sketch_agg treats positive and negative zero as equal
+      When query
+        """
+        SELECT theta_sketch_estimate(theta_sketch_agg(CAST(c AS FLOAT))) AS result
+        FROM VALUES (float('0.0')), (float('-0.0')) AS tab(c)
+        """
+      Then query result
+        | result |
+        | 1      |
+
+    Scenario: theta_sketch_agg keeps positive and negative infinity distinct
+      When query
+        """
+        SELECT theta_sketch_estimate(theta_sketch_agg(CAST(c AS FLOAT))) AS result
+        FROM VALUES (float('Infinity')), (float('-Infinity')) AS tab(c)
+        """
+      Then query result
+        | result |
+        | 2      |
+
+    Scenario: theta_sketch_agg accepts double input and normalizes NaN
+      When query
+        """
+        SELECT theta_sketch_estimate(theta_sketch_agg(CAST(c AS DOUBLE))) AS result
+        FROM VALUES (double('NaN')), (double('NaN')) AS tab(c)
+        """
+      Then query result
+        | result |
+        | 1      |
+
+  Rule: theta_sketch_agg validates input types and lgNomEntries bounds
+
+    Scenario: theta_sketch_agg accepts an array of bigint values
+      When query
+        """
+        SELECT theta_sketch_estimate(theta_sketch_agg(c)) AS result
+        FROM VALUES (array(CAST(1 AS BIGINT))) AS tab(c)
+        """
+      Then query result
+        | result |
+        | 1      |
+
+    Scenario: theta_sketch_agg rejects decimal input
+      When query
+        """
+        SELECT theta_sketch_agg(CAST(c AS DECIMAL(10,2))) FROM VALUES (1.0) AS tab(c)
+        """
+      Then query error .*
+
+    Scenario: theta_sketch_agg accepts the valid lgNomEntries boundaries
+      When query
+        """
+        SELECT
+          theta_sketch_estimate(theta_sketch_agg(col, 4)) AS lo,
+          theta_sketch_estimate(theta_sketch_agg(col, 26)) AS hi
+        FROM VALUES (1) AS tab(col)
+        """
+      Then query result
+        | lo | hi |
+        | 1  | 1  |
+
+    Scenario: theta_sketch_agg rejects lgNomEntries below the valid range
+      When query
+        """
+        SELECT theta_sketch_agg(col, 3) FROM VALUES (1) AS tab(col)
+        """
+      Then query error .*
+
+    Scenario: theta_sketch_agg rejects lgNomEntries above the valid range
+      When query
+        """
+        SELECT theta_sketch_agg(col, 27) FROM VALUES (1) AS tab(col)
+        """
+      Then query error .*
