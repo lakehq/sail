@@ -11,3 +11,5 @@ pub enum BuildError {
     #[error("invalid input: {0}")]
     InvalidInput(String),
 }
+
+pub type BuildResult<T> = Result<T, BuildError>;

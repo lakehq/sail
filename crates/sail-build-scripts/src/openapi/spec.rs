@@ -6,9 +6,17 @@
 //! The types can be extended if more OpenAPI features are needed in the future.
 use std::collections::BTreeMap;
 use std::fmt;
+use std::path::Path;
 
 use serde::de::{self, IgnoredAny, Visitor};
 use serde::Deserialize;
+
+use crate::error::BuildResult;
+
+pub fn load_spec(path: impl AsRef<Path>) -> BuildResult<OpenApi> {
+    let content = std::fs::read_to_string(path)?;
+    Ok(serde_yaml::from_str(&content)?)
+}
 
 pub type ObjectMap<T> = BTreeMap<String, T>;
 

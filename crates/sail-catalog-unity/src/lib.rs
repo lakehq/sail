@@ -21,6 +21,7 @@ pub mod unity {
 }
 
 pub mod gen {
+    #![expect(unused_imports)]
     #![expect(clippy::enum_variant_names)]
     include!(concat!(env!("OUT_DIR"), "/unity_catalog_gen.rs"));
 }

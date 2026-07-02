@@ -9,11 +9,12 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
+use sail_build_scripts::openapi::generator::{generate_openapi_client, OpenApiConfig};
+
 fn build_unity_catalog() -> Result<(), Box<dyn std::error::Error>> {
     let src = "spec/unity-catalog-all.yaml";
     println!("cargo:rerun-if-changed={src}");
-
-    let openapi = sail_build_scripts::openapi::load_spec(src)?;
 
     let file = std::fs::File::open(src)?;
     let spec = serde_yaml::from_reader(file)?;
@@ -57,14 +58,6 @@ fn build_unity_catalog() -> Result<(), Box<dyn std::error::Error>> {
     let content = add_table_info_columns_deserializer(content);
 
     std::fs::write(out_file, content)?;
-
-    let mut out_file = std::path::Path::new(&std::env::var("OUT_DIR")?).to_path_buf();
-    out_file.push("unity_catalog_gen.rs");
-    sail_build_scripts::openapi::client::write_client(
-        &openapi,
-        &sail_build_scripts::openapi::client::OpenApiConfig::new(),
-        out_file,
-    )?;
 
     Ok(())
 }
@@ -142,5 +135,12 @@ fn add_table_info_columns_deserializer(content: String) -> String {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
     build_unity_catalog()?;
+
+    generate_openapi_client(
+        "spec/unity-catalog-all.yaml",
+        std::path::Path::new(&std::env::var("OUT_DIR")?).join("unity_catalog_gen.rs"),
+        OpenApiConfig::new(),
+    )?;
+
     Ok(())
 }

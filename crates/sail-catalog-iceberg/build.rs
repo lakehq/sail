@@ -10,26 +10,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-fn read_iceberg_rest_catalog() -> Result<(), sail_build_scripts::error::BuildError> {
-    let src = "spec/iceberg-rest-catalog.yaml";
-    println!("cargo:rerun-if-changed={src}");
-
-    let openapi = sail_build_scripts::openapi::load_spec(src)?;
-    let mut out_file = std::path::Path::new(&std::env::var("OUT_DIR")?).to_path_buf();
-    out_file.push("iceberg_rest_catalog_gen.rs");
-    sail_build_scripts::openapi::client::write_client(
-        &openapi,
-        &sail_build_scripts::openapi::client::OpenApiConfig {
-            excluded_operations: &["getToken"],
-            ..sail_build_scripts::openapi::client::OpenApiConfig::new()
-        },
-        out_file,
-    )?;
-    Ok(())
-}
+use sail_build_scripts::openapi::generator::{generate_openapi_client, OpenApiConfig};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
-    read_iceberg_rest_catalog()?;
+
+    generate_openapi_client(
+        "spec/iceberg-rest-catalog.yaml",
+        std::path::Path::new(&std::env::var("OUT_DIR")?).join("iceberg_rest_catalog_gen.rs"),
+        OpenApiConfig {
+            excluded_operations: ["getToken".to_owned()].into_iter().collect(),
+            ..OpenApiConfig::new()
+        },
+    )?;
+
     Ok(())
 }

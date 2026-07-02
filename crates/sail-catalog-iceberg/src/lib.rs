@@ -15,12 +15,14 @@
 #![expect(clippy::all)]
 
 pub mod apis;
+mod models;
+mod provider;
+
 pub mod gen {
+    #![expect(unused_imports)]
     #![expect(clippy::enum_variant_names)]
     include!(concat!(env!("OUT_DIR"), "/iceberg_rest_catalog_gen.rs"));
 }
-mod models;
-mod provider;
 
 pub use provider::{
     IcebergRestCatalogOptions, IcebergRestCatalogProvider, REST_CATALOG_PROP_PREFIX,
