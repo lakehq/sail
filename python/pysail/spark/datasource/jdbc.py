@@ -47,18 +47,26 @@ try:
         DataSource,
         DataSourceArrowWriter,
         DataSourceReader,
+        InputPartition,
+        WriterCommitMessage,
+    )
+except ImportError as e:
+    msg = "PySpark with the Python DataSource API is required (PySpark >= 4.0)"
+    raise ImportError(msg) from e
+
+try:
+    from pyspark.sql.datasource import (
         EqualTo,
         Filter,
         GreaterThan,
         GreaterThanOrEqual,
-        InputPartition,
         LessThan,
         LessThanOrEqual,
-        WriterCommitMessage,
     )
-except ImportError as e:
-    msg = "PySpark with the DataSource API is required (PySpark >= 4.0)"
-    raise ImportError(msg) from e
+
+    _HAS_FILTER_PUSHDOWN = True
+except ImportError:
+    _HAS_FILTER_PUSHDOWN = False
 
 
 # ============================================================================
@@ -197,6 +205,12 @@ class JdbcDataSourceReader(DataSourceReader):
     # ------------------------------------------------------------------
 
     def pushFilters(self, filters: list[Filter]) -> Iterator[Filter]:  # noqa: N802
+        if not _HAS_FILTER_PUSHDOWN:
+            # Filter pushdown classes require PySpark >= 4.1; reject everything so
+            # Sail applies the filters post-read instead.
+            yield from filters
+            return
+
         if not self.push_down_predicate:
             yield from filters
             return
