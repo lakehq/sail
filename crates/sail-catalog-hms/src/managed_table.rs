@@ -64,18 +64,21 @@ pub(crate) async fn alter_table_with_lock(
     let (_, client) = provider.current_client().await?;
     let guard = LockGuard::acquire(client, db_name, table_name).await?;
     // Clone the handle for the critical section; the guard keeps its own for heartbeat/unlock.
+    // The section is spawned as a `'static` task, so it owns its inputs.
     let client = guard.client().clone();
+    let db_name = db_name.to_string();
+    let table_name = table_name.to_string();
     guard
-        .run_locked(async {
+        .run_locked(async move {
             let mut hms_table = HmsCatalogProvider::get_table_with_client(
                 &client,
-                db_name,
-                table_name,
+                &db_name,
+                &table_name,
                 "Failed to fetch HMS table for locked alter",
             )
             .await?;
-            apply_alter_table_options(&mut hms_table, db_name, table_name, options)?;
-            HmsCatalogProvider::alter_table_with_client(&client, db_name, table_name, hms_table)
+            apply_alter_table_options(&mut hms_table, &db_name, &table_name, options)?;
+            HmsCatalogProvider::alter_table_with_client(&client, &db_name, &table_name, hms_table)
                 .await
         })
         .await
@@ -132,33 +135,36 @@ pub(crate) async fn replace_table_with_lock(
     let (_, client) = provider.current_client().await?;
     let guard = LockGuard::acquire(client, db_name, table_name).await?;
     // Clone the handle for the critical section; the guard keeps its own for heartbeat/unlock.
+    // The section is spawned as a `'static` task, so it owns its inputs.
     let client = guard.client().clone();
+    let db_name = db_name.to_string();
+    let table_name = table_name.to_string();
     guard
-        .run_locked(async {
+        .run_locked(async move {
             let current = HmsCatalogProvider::get_table_with_client(
                 &client,
-                db_name,
-                table_name,
+                &db_name,
+                &table_name,
                 "Failed to fetch HMS table for locked replace",
             )
             .await?;
             crate::provider::assert_replace_metadata_location_unchanged(
                 expected_metadata_location.as_deref(),
                 &current,
-                db_name,
-                table_name,
+                &db_name,
+                &table_name,
             )?;
             // Carry the owner forward so REPLACE doesn't reset it (only `owner` is exposed;
             // grants are not carried).
             if let Some(owner) = current.owner.clone() {
                 replacement.owner = Some(owner);
             }
-            HmsCatalogProvider::drop_table_with_client(&client, db_name, table_name, false, false)
+            HmsCatalogProvider::drop_table_with_client(&client, &db_name, &table_name, false, false)
                 .await?;
             match HmsCatalogProvider::create_table_with_client(
                 &client,
-                db_name,
-                table_name,
+                &db_name,
+                &table_name,
                 replacement,
             )
             .await
@@ -168,7 +174,7 @@ pub(crate) async fn replace_table_with_lock(
                     // Compensating restore: the drop already committed, so re-create the
                     // original from the pre-drop snapshot; combine errors if that also fails.
                     match HmsCatalogProvider::create_table_with_client(
-                        &client, db_name, table_name, current,
+                        &client, &db_name, &table_name, current,
                     )
                     .await
                     {
@@ -185,6 +191,16 @@ pub(crate) async fn replace_table_with_lock(
         .await
 }
 
+/// Aborts the wrapped task when dropped, so a cancelled or unwinding `run_locked` never leaks
+/// the heartbeat task (dropping a bare `JoinHandle` only detaches it — it keeps running).
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
 /// RAII holder for an acquired HMS table lock.
 ///
 /// Owns the `lock_id` and a client handle, and drives a periodic heartbeat while a critical
@@ -194,13 +210,13 @@ pub(crate) async fn replace_table_with_lock(
 /// best-effort fallback so the lock is freed even on an early return or panic that bypasses
 /// `run_locked`.
 ///
-/// The heartbeat runs as a detached background task that only keeps the lock alive; it can
-/// **never** cancel the critical section. On a heartbeat RPC failure it records the loss in a
-/// shared flag and stops. [`LockGuard::run_locked`] awaits the critical section to completion
-/// (whose own compensating-restore logic handles a create failure), and only *before* the
-/// irreversible `drop_table` may a caller consult the flag and bail; past the drop the section
-/// always finishes so no code path drops the critical future between `drop_table` and its
-/// restore. The server-side `hive.txn.timeout` is the real backstop for a genuinely lost lock.
+/// The heartbeat runs as a background task that only keeps the lock alive; it can **never**
+/// cancel the critical section. On a heartbeat RPC failure it records the loss in a shared flag
+/// and stops. [`LockGuard::run_locked`] runs the critical section on a spawned task with the
+/// guard moved in, so drop+create+restore completes as a unit even if the caller's future is
+/// dropped. The staleness flag is advisory only — it is read after the section has completed and
+/// merely warns; nothing consults it to abort, and the server-side `hive.txn.timeout` is the
+/// real backstop for a genuinely lost lock.
 struct LockGuard {
     client: ThriftHiveMetastoreClient,
     lock_id: i64,
@@ -233,51 +249,66 @@ impl LockGuard {
 
     /// Runs `critical` while heartbeating the lock, then releases it.
     ///
-    /// The heartbeat is spawned as a detached background task that only keeps the lock alive; it
-    /// can never cancel `critical`. `critical` is awaited to completion here — no `select!` that
-    /// could drop it mid-operation — so its own compensating-restore logic always gets to run on
-    /// a create failure. After it finishes, the heartbeat task is aborted. A heartbeat RPC
-    /// failure is recorded in a shared flag and, since the lock may then have been lost, is
-    /// surfaced only as a warning (the server-side `hive.txn.timeout` is the real backstop): it
-    /// does **not** override the outcome of an already-committed critical section. The lock is
-    /// unlocked on both the success and error paths; an unlock failure is surfaced only when the
-    /// critical section itself succeeded.
-    async fn run_locked<F>(mut self, critical: F) -> CatalogResult<()>
+    /// The critical section is run on its own spawned task and the guard is moved into that task,
+    /// so the drop+create+restore sequence completes **even if the caller's future is dropped**
+    /// (client disconnect, request timeout): a torn-in-half replace would leave the table dropped
+    /// with no restore. Awaiting the guard inline (no `spawn`) would not survive external
+    /// cancellation; `select!` was already avoided so the heartbeat cannot cancel it either.
+    ///
+    /// The heartbeat only keeps the lock alive; it can never cancel the critical section, and is
+    /// aborted (via [`AbortOnDrop`]) as soon as the section finishes or the task unwinds. A
+    /// heartbeat RPC failure is recorded in a flag and surfaced only as a warning — the operation
+    /// has already committed (or restored) by the time it is read, so it cannot un-commit; the
+    /// server-side `hive.txn.timeout` is the real backstop. The lock is released on the success,
+    /// error, and panic paths; an unlock failure is surfaced only when the section itself
+    /// succeeded.
+    async fn run_locked<F>(self, critical: F) -> CatalogResult<()>
     where
-        F: std::future::Future<Output = CatalogResult<()>>,
+        F: std::future::Future<Output = CatalogResult<()>> + Send + 'static,
     {
-        let heartbeat_failed = Arc::new(AtomicBool::new(false));
-        let heartbeat = tokio::spawn(Self::heartbeat_loop(
-            self.client.clone(),
-            self.lock_id,
-            self.db_name.clone(),
-            self.table_name.clone(),
-            Arc::clone(&heartbeat_failed),
-        ));
+        // Keep names for the join-error message; the guard itself is moved into the task.
+        let db_name = self.db_name.clone();
+        let table_name = self.table_name.clone();
 
-        // Await the critical section to completion: never cancelled by the heartbeat, so the
-        // drop+create+restore sequence always runs as a unit.
-        let result = critical.await;
+        let supervisor = tokio::spawn(async move {
+            // The guard is owned here: its `Drop` releases the lock if `critical` panics.
+            let mut guard = self;
+            let heartbeat_failed = Arc::new(AtomicBool::new(false));
+            let heartbeat = AbortOnDrop(tokio::spawn(Self::heartbeat_loop(
+                guard.client.clone(),
+                guard.lock_id,
+                guard.db_name.clone(),
+                guard.table_name.clone(),
+                Arc::clone(&heartbeat_failed),
+            )));
 
-        // The critical section is done; stop heartbeating.
-        heartbeat.abort();
+            let result = critical.await;
 
-        if heartbeat_failed.load(Ordering::Acquire) {
-            // Best-effort signal only: the operation has already committed (or restored), so a
-            // lost lock cannot un-commit it. The server lock timeout is the real backstop.
-            log::warn!(
-                "HMS lock heartbeat for '{}.{}' failed during the operation; the lock may have \
-                 been lost, but the critical section had already run to completion",
-                self.db_name,
-                self.table_name
-            );
-        }
+            // Section done; stop heartbeating before releasing the lock.
+            drop(heartbeat);
 
-        let unlock_result = self.release().await;
-        match (result, unlock_result) {
-            (Err(error), _) => Err(error),
-            (Ok(()), Err(error)) => Err(error),
-            (Ok(()), Ok(())) => Ok(()),
+            if heartbeat_failed.load(Ordering::Acquire) {
+                log::warn!(
+                    "HMS lock heartbeat for '{}.{}' failed during the operation; the lock may \
+                     have been lost, but the critical section had already run to completion",
+                    guard.db_name,
+                    guard.table_name
+                );
+            }
+
+            let unlock_result = guard.release().await;
+            (result, unlock_result)
+        });
+
+        match supervisor.await {
+            Ok((result, unlock_result)) => match (result, unlock_result) {
+                (Err(error), _) => Err(error),
+                (Ok(()), Err(error)) => Err(error),
+                (Ok(()), Ok(())) => Ok(()),
+            },
+            Err(join_error) => Err(CatalogError::External(format!(
+                "HMS locked operation for '{db_name}.{table_name}' failed to complete: {join_error}"
+            ))),
         }
     }
 
