@@ -20,8 +20,7 @@ use crate::plan::gen::extended_physical_expr_node::ExprKind;
 use crate::plan::gen::{
     ExtendedPhysicalExprNode, HigherOrderUdfExprNode, LambdaExprNode, LambdaVariableExprNode,
 };
-use crate::proto::decode::try_decode_field_ref;
-use crate::proto::decode::try_decode_higher_order_udf;
+use crate::proto::decode::{try_decode_field_ref, try_decode_higher_order_udf};
 use crate::proto::encode::{try_encode_field_ref, try_encode_higher_order_udf};
 
 pub struct RemotePhysicalProtoConverter;
