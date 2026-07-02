@@ -15,8 +15,21 @@ from pysail.testing.spark.utils.common import pyspark_version
 
 pytestmark = pytest.mark.integration
 
-if pyspark_version() < (4, 1):
-    pytest.skip("Python data source requires Spark 4.1+", allow_module_level=True)
+try:
+    from pyspark.sql.datasource import DataSourceArrowWriter  # noqa: F401  (Spark 4.0+)
+except ImportError:
+    pytest.skip("JDBC data source requires the PySpark Python DataSource API (4.0+)", allow_module_level=True)
+
+# Sail's engine-level filter pushdown (crates/sail-data-source/.../filter.rs) unconditionally
+# constructs `pyspark.sql.datasource` filter class instances (EqualTo, IsNotNull, etc.) for any
+# `.filter()`/join predicate against a Python data source, regardless of what the data source's
+# own `pushFilters()` does with them. Those classes are 4.1-only, so any test that filters a JDBC
+# DataFrame fails on 4.0 with an AttributeError raised from Sail's Rust side — this is a Sail
+# engine limitation, not something `jdbc.py` can guard against.
+_requires_pushdown_classes = pytest.mark.skipif(
+    pyspark_version() < (4, 1),
+    reason="Sail's engine-level filter pushdown requires PySpark 4.1+ filter classes",
+)
 
 _PG_IMAGE = "postgres:16-alpine"
 _PG_USER = "testuser"
@@ -228,6 +241,7 @@ def test_error_nonexistent_table(spark, jdbc_opts):
 # ---------------------------------------------------------------------------
 
 
+@_requires_pushdown_classes
 def test_null_values_handling(spark, jdbc_opts):
     df = spark.read.format("jdbc").option("dbtable", "users").options(**jdbc_opts).load()
     null_ages = df.filter("age IS NULL").collect()
@@ -244,6 +258,7 @@ def test_null_values_handling(spark, jdbc_opts):
 # ---------------------------------------------------------------------------
 
 
+@_requires_pushdown_classes
 def test_empty_table(spark, jdbc_opts):
     df = spark.read.format("jdbc").option("dbtable", "empty_table").options(**jdbc_opts).load()
     assert df.count() == 0
@@ -255,6 +270,7 @@ def test_empty_table(spark, jdbc_opts):
 # ---------------------------------------------------------------------------
 
 
+@_requires_pushdown_classes
 def test_large_dataset(spark, jdbc_opts):
     df = spark.read.format("jdbc").option("dbtable", "large_table").options(**jdbc_opts).load()
     assert df.count() == 10000  # noqa: PLR2004
@@ -266,6 +282,7 @@ def test_large_dataset(spark, jdbc_opts):
 # ---------------------------------------------------------------------------
 
 
+@_requires_pushdown_classes
 def test_unicode_strings(spark, jdbc_opts):
     df = spark.read.format("jdbc").option("dbtable", "users").options(**jdbc_opts).load()
     assert len(df.filter("name = '张伟'").collect()) == 1
@@ -279,6 +296,7 @@ def test_unicode_strings(spark, jdbc_opts):
 # ---------------------------------------------------------------------------
 
 
+@_requires_pushdown_classes
 def test_data_types(spark, jdbc_opts):
     df = spark.read.format("jdbc").option("dbtable", "data_types_test").options(**jdbc_opts).load()
     row = df.filter("id = 1").collect()[0]
@@ -301,6 +319,7 @@ def test_data_types(spark, jdbc_opts):
 # ---------------------------------------------------------------------------
 
 
+@_requires_pushdown_classes
 def test_join_operations(spark, jdbc_opts):
     users = spark.read.format("jdbc").option("dbtable", "users").options(**jdbc_opts).load()
     orders = spark.read.format("jdbc").option("dbtable", "orders").options(**jdbc_opts).load()
@@ -335,6 +354,7 @@ def test_join_operations(spark, jdbc_opts):
 # ---------------------------------------------------------------------------
 
 
+@_requires_pushdown_classes
 def test_complex_filters(spark, jdbc_opts):
     df = spark.read.format("jdbc").option("dbtable", "users").options(**jdbc_opts).load()
 
@@ -356,6 +376,7 @@ def test_complex_filters(spark, jdbc_opts):
 # ---------------------------------------------------------------------------
 
 
+@_requires_pushdown_classes
 def test_partition_with_nulls(spark, jdbc_opts):
     df = (
         spark.read.format("jdbc")
@@ -376,6 +397,7 @@ def test_partition_with_nulls(spark, jdbc_opts):
 # ---------------------------------------------------------------------------
 
 
+@_requires_pushdown_classes
 def test_sql_injection_filter_value(spark, jdbc_opts):
     from pyspark.sql.functions import col
 

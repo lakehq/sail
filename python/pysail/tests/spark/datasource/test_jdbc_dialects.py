@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import pytest
 
-from pysail.testing.spark.utils.common import pyspark_version
-
 pytestmark = pytest.mark.integration
 
-if pyspark_version() < (4, 1):
-    pytest.skip("Python data source requires Spark 4.1+", allow_module_level=True)
+try:
+    from pyspark.sql.datasource import DataSourceArrowWriter  # noqa: F401  (Spark 4.0+)
+except ImportError:
+    pytest.skip("JDBC data source requires the PySpark Python DataSource API (4.0+)", allow_module_level=True)
 
 
 @pytest.fixture(scope="module", autouse=True)

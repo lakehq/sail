@@ -1,8 +1,10 @@
 """Pure-unit tests for the JDBC data source — no Spark session or DB container required.
 
 No ``pytestmark = pytest.mark.integration``, so these run without Docker on every
-Spark tier that has the Python DataSource write API. They import ``jdbc.py``, which
-needs ``pyspark.sql.datasource`` (Spark 4.1+), so the module is skipped below that.
+Spark tier that has the Python DataSource API. They import ``jdbc.py``, which needs
+``pyspark.sql.datasource`` (Spark 4.0+), so the module is skipped below that. Tests
+exercising filter pushdown additionally need the 4.1-only pushdown classes and are
+individually marked below.
 """
 
 from __future__ import annotations
@@ -14,14 +16,17 @@ import pytest
 
 from pysail.testing.spark.utils.common import pyspark_version
 
-if pyspark_version() < (4, 1):
-    pytest.skip("JDBC data source requires the PySpark Python DataSource write API (4.1+)", allow_module_level=True)
+try:
+    from pyspark.sql.datasource import DataSourceArrowWriter  # noqa: F401  (Spark 4.0+)
+except ImportError:
+    pytest.skip("JDBC data source requires the PySpark Python DataSource API (4.0+)", allow_module_level=True)
 
 # ---------------------------------------------------------------------------
 # _filter_to_sql
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(pyspark_version() < (4, 1), reason="filter pushdown requires PySpark 4.1+")
 def test_filter_to_sql_unit():
     from pyspark.sql.datasource import (
         EqualTo,
@@ -103,6 +108,7 @@ def test_parse_custom_schema_unit():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(pyspark_version() < (4, 1), reason="filter pushdown requires PySpark 4.1+")
 def test_lit_unit():
     from pyspark.sql.datasource import EqualTo
 
