@@ -20,7 +20,7 @@ use crate::plan::gen::extended_physical_expr_node::ExprKind;
 use crate::plan::gen::{
     ExtendedPhysicalExprNode, HigherOrderUdfExprNode, LambdaExprNode, LambdaVariableExprNode,
 };
-use crate::proto::decode::try_decode_higher_order_udf;
+use crate::proto::decode::{try_decode_field_ref, try_decode_higher_order_udf};
 use crate::proto::encode::{try_encode_field_ref, try_encode_higher_order_udf};
 
 pub struct RemotePhysicalProtoConverter;
@@ -59,22 +59,13 @@ impl PhysicalProtoConverterExtension for RemotePhysicalProtoConverter {
                 self.higher_order_proto_to_expr(node, inputs, input_schema, ctx)
             }
             Some((ExprKind::LambdaVariable(node), _)) => {
+                let field = try_decode_field_ref(&node.field)?;
                 let index = usize::try_from(node.index).map_err(|_| {
                     plan_datafusion_err!(
                         "LambdaVariable index {} does not fit in usize",
                         node.index
                     )
                 })?;
-                let field = input_schema
-                    .fields()
-                    .get(index)
-                    .ok_or_else(|| {
-                        plan_datafusion_err!(
-                            "LambdaVariable index {index} out of bounds for schema with {} fields",
-                            input_schema.fields().len()
-                        )
-                    })?
-                    .clone();
                 Ok(Arc::new(LambdaVariable::new(index, field)))
             }
             Some((ExprKind::Lambda(node), inputs)) => {
