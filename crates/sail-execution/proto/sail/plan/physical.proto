@@ -351,10 +351,16 @@ message StandardUdaf {}
 message ExtendedWindowUdf {
   oneof UdwfKind {
     StandardUdwf standard = 1;
+    SparkFirstLastValueUdwf spark_first_last_value = 2;
   }
 }
 
 message StandardUdwf {}
+
+message SparkFirstLastValueUdwf {
+  bool first = 1;
+  bool ignore_nulls = 2;
+}
 
 // Distinguishes Pandas (202) vs Arrow-native (252) grouped aggregate UDFs
 enum PySparkGroupAggKind {

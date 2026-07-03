@@ -4,7 +4,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field};
 use datafusion::functions_aggregate::{
     approx_distinct, approx_percentile_cont, array_agg, average, bit_and_or_xor, bool_and_or,
-    correlation, count, covariance, first_last, grouping, median, min_max, stddev, sum, variance,
+    correlation, count, covariance, grouping, median, min_max, stddev, sum, variance,
 };
 use datafusion::functions_nested::string::array_to_string;
 use datafusion::functions_window::cume_dist::cume_dist_udwf;
@@ -38,7 +38,7 @@ use sail_function::aggregate::theta_sketch::{
     ThetaIntersectionAggFunction, ThetaSketchAggFunction, ThetaUnionAggFunction,
 };
 use sail_function::aggregate::try_avg::TryAvgFunction;
-use sail_function::window::spark_ntile_udwf;
+use sail_function::window::{spark_first_value_udwf, spark_last_value_udwf, spark_ntile_udwf};
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
@@ -135,12 +135,10 @@ fn first_value(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         function_context: _,
     } = input;
     let (args, null_treatment) = get_arguments_and_null_treatment(arguments, ignore_nulls)?;
-    // DataFusion physical proto drops IGNORE NULLS for WindowUDFExpr. Aggregate-window
-    // preserves it, but only ever-expanding frames avoid sliding retract support.
-    let preserve_ignore_nulls = matches!(null_treatment, Some(NullTreatment::IgnoreNulls))
-        && window_frame.start_bound.is_unbounded();
-    let fun = if preserve_ignore_nulls {
-        WindowFunctionDefinition::AggregateUDF(first_last::first_value_udaf())
+    // DataFusion physical proto drops IGNORE NULLS for WindowUDFExpr, so use a
+    // Sail UDWF with the null treatment encoded in the function state.
+    let fun = if matches!(null_treatment, Some(NullTreatment::IgnoreNulls)) {
+        WindowFunctionDefinition::WindowUDF(spark_first_value_udwf(true))
     } else {
         WindowFunctionDefinition::WindowUDF(first_value_udwf())
     };
@@ -169,8 +167,13 @@ fn last_value(input: WinFunctionInput) -> PlanResult<expr::Expr> {
         function_context: _,
     } = input;
     let (args, null_treatment) = get_arguments_and_null_treatment(arguments, ignore_nulls)?;
+    let fun = if matches!(null_treatment, Some(NullTreatment::IgnoreNulls)) {
+        WindowFunctionDefinition::WindowUDF(spark_last_value_udwf(true))
+    } else {
+        WindowFunctionDefinition::WindowUDF(last_value_udwf())
+    };
     Ok(expr::Expr::WindowFunction(Box::new(expr::WindowFunction {
-        fun: WindowFunctionDefinition::WindowUDF(last_value_udwf()),
+        fun,
         params: WindowFunctionParams {
             args,
             partition_by,
