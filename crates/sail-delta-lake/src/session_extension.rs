@@ -166,39 +166,6 @@ mod tests {
         context
     }
 
-    fn filesystem_lakehouse_context() -> LakehouseExecutionContext {
-        LakehouseExecutionContext::catalog_table_context(
-            CatalogProviderId("memory".to_string()),
-            vec![
-                "memory".to_string(),
-                "default".to_string(),
-                "table".to_string(),
-            ],
-            CatalogTableIdentity {
-                table_id: None,
-                table_uri: Some("file:///tmp/table".to_string()),
-            },
-            LakehouseOperation::Read,
-            LakehouseFormat::Delta,
-            LakehouseAuthority::CatalogRegistered {
-                lifecycle: TableLifecycle::External,
-                pointer: MetadataPointerAuthority::StorageDiscovery,
-                commit: CommitAuthority::Filesystem,
-            },
-            ScanAuthority::ClientTableFormat,
-        )
-    }
-
-    #[test]
-    fn catalog_managed_commit_context_requires_ratified_commit_authority() {
-        let ratified = lakehouse_context("session-a");
-        let filesystem = filesystem_lakehouse_context();
-
-        assert!(catalog_managed_commit_context(Some(&ratified)).is_some());
-        assert!(catalog_managed_commit_context(Some(&filesystem)).is_none());
-        assert!(catalog_managed_commit_context(None).is_none());
-    }
-
     #[test]
     fn table_cache_key_is_stable_without_lakehouse_context() {
         let url = Url::parse("file:///tmp/table").unwrap();

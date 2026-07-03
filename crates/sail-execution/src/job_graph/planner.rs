@@ -648,10 +648,12 @@ mod tests {
 
         assert_eq!(graph.stages().len(), 3);
         assert_eq!(graph.stages()[1].placement, TaskPlacement::Driver);
+        #[expect(clippy::expect_used)]
         let barrier = graph.stages()[1]
             .plan
             .downcast_ref::<BarrierExec>()
             .expect("driver stage should contain BarrierExec");
+        #[expect(clippy::expect_used)]
         let cooperative = barrier
             .plan()
             .downcast_ref::<CooperativeExec>()
