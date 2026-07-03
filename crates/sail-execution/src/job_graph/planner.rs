@@ -172,20 +172,26 @@ enum PartitionUsage {
     Shared,
 }
 
+#[derive(Clone, Copy)]
+enum DriverStageHandling {
+    CreateStage,
+    PreserveRoot,
+}
+
 /// Recursively splits an execution plan into stages at shuffle boundaries and adds them to the job graph.
 fn build_job_graph(
     plan: Arc<dyn ExecutionPlan>,
     usage: PartitionUsage,
     graph: &mut JobGraph,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-    build_job_graph_inner(plan, usage, graph, false)
+    plan_job_graph_stages(plan, usage, graph, DriverStageHandling::CreateStage)
 }
 
-fn build_job_graph_inner(
+fn plan_job_graph_stages(
     plan: Arc<dyn ExecutionPlan>,
     usage: PartitionUsage,
     graph: &mut JobGraph,
-    preserve_driver_stage_root: bool,
+    driver_stage_handling: DriverStageHandling,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
     if let Some(barrier) = plan.downcast_ref::<BarrierExec>() {
         return build_barrier_job_graph(barrier, usage, graph);
@@ -233,12 +239,17 @@ fn build_job_graph_inner(
         // At the stage boundary, we only expect to use the child partition once
         // since the shuffle writer can materialize the data for multiple consumption.
         vec![build_job_graph(child.clone(), PartitionUsage::Once, graph)?]
-    } else if preserve_driver_stage_root
+    } else if matches!(driver_stage_handling, DriverStageHandling::PreserveRoot)
         && plan.is::<CooperativeExec>()
         && is_driver_stage_plan(&plan)
     {
         let child = plan.children().one()?;
-        vec![build_job_graph_inner(child.clone(), usage, graph, true)?]
+        vec![plan_job_graph_stages(
+            child.clone(),
+            usage,
+            graph,
+            DriverStageHandling::PreserveRoot,
+        )?]
     } else {
         plan.children()
             .into_iter()
@@ -313,7 +324,7 @@ fn build_job_graph_inner(
         || plan.is::<DeltaCommitExec>()
         || plan.is::<IcebergCommitExec>()
     {
-        if preserve_driver_stage_root {
+        if matches!(driver_stage_handling, DriverStageHandling::PreserveRoot) {
             plan
         } else {
             create_driver_stage(&plan, graph)?
@@ -336,7 +347,12 @@ fn build_barrier_job_graph(
         .collect::<ExecutionResult<Vec<_>>>()?;
     let plan_is_driver_stage = is_driver_stage_plan(barrier.plan());
     let plan = if plan_is_driver_stage {
-        build_job_graph_inner(barrier.plan().clone(), usage, graph, true)?
+        plan_job_graph_stages(
+            barrier.plan().clone(),
+            usage,
+            graph,
+            DriverStageHandling::PreserveRoot,
+        )?
     } else {
         build_job_graph(barrier.plan().clone(), usage, graph)?
     };
