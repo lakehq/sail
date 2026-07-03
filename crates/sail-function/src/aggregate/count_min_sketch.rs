@@ -385,14 +385,15 @@ fn resolve_float64_literal(args: &AccumulatorArgs, index: usize, name: &str) -> 
     })?;
     let value = get_scalar_value(value).map_err(|_| {
         DataFusionError::Plan(format!(
-            "count_min_sketch requires {name} to be a constant floating point value"
+            "count_min_sketch requires {name} to be a constant double value"
         ))
     })?;
+    // `validate_count_min_sketch_types` already rejects anything but Float64 for
+    // eps/confidence, so only the Float64 literal can reach here.
     match value {
-        ScalarValue::Float32(Some(value)) => Ok(value as f64),
         ScalarValue::Float64(Some(value)) => Ok(value),
         value => Err(DataFusionError::Plan(format!(
-            "count_min_sketch requires {name} to be a non-null floating point literal, got {}",
+            "count_min_sketch requires {name} to be a non-null double literal, got {}",
             value.data_type()
         ))),
     }
