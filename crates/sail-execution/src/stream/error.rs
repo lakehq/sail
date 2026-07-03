@@ -4,7 +4,7 @@ use std::fmt::Formatter;
 use std::sync::Arc;
 
 use arrow_flight::error::FlightError;
-use sail_common_datafusion::error::CommonErrorCause;
+use sail_common_datafusion::error::{CommonErrorCause, RemotePythonError};
 use sail_python_udf::error::PyErrExtractor;
 use tonic::{Code, Status};
 use tonic_types::{ErrorDetails, StatusExt};
@@ -14,7 +14,6 @@ pub type TaskStreamResult<T> = Result<T, TaskStreamError>;
 #[derive(Debug, Clone)]
 pub enum TaskStreamError {
     Unknown(String),
-    Cause(CommonErrorCause),
     External(Arc<dyn std::error::Error + Send + Sync + 'static>),
 }
 
@@ -22,7 +21,6 @@ impl fmt::Display for TaskStreamError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             TaskStreamError::Unknown(x) => write!(f, "{x}"),
-            TaskStreamError::Cause(x) => write!(f, "{x}"),
             TaskStreamError::External(e) => write!(f, "{e}"),
         }
     }
@@ -32,7 +30,6 @@ impl std::error::Error for TaskStreamError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             TaskStreamError::Unknown(_) => None,
-            TaskStreamError::Cause(e) => Some(e),
             TaskStreamError::External(e) => Some(e.as_ref()),
         }
     }
@@ -87,7 +84,36 @@ impl From<FlightError> for TaskStreamError {
 
 impl From<CommonErrorCause> for TaskStreamError {
     fn from(value: CommonErrorCause) -> Self {
-        Self::Cause(value)
+        match value {
+            CommonErrorCause::Unknown(x)
+            | CommonErrorCause::Internal(x)
+            | CommonErrorCause::NotImplemented(x)
+            | CommonErrorCause::InvalidArgument(x)
+            | CommonErrorCause::Io(x)
+            | CommonErrorCause::ArrowCast(x)
+            | CommonErrorCause::ArrowMemory(x)
+            | CommonErrorCause::ArrowParse(x)
+            | CommonErrorCause::ArrowCompute(x)
+            | CommonErrorCause::ArrowIpc(x)
+            | CommonErrorCause::ArrowCDataInterface(x)
+            | CommonErrorCause::ArrowDivideByZero(x)
+            | CommonErrorCause::ArrowArithmeticOverflow(x)
+            | CommonErrorCause::ArrowDictionaryKeyOverflow(x)
+            | CommonErrorCause::ArrowRunEndIndexOverflow(x)
+            | CommonErrorCause::ArrowOffsetOverflow(x)
+            | CommonErrorCause::FormatCsv(x)
+            | CommonErrorCause::FormatJson(x)
+            | CommonErrorCause::FormatParquet(x)
+            | CommonErrorCause::FormatAvro(x)
+            | CommonErrorCause::Plan(x)
+            | CommonErrorCause::Schema(x)
+            | CommonErrorCause::Configuration(x)
+            | CommonErrorCause::Execution(x)
+            | CommonErrorCause::DeltaTable(x) => Self::Unknown(x),
+            CommonErrorCause::Python(cause) => {
+                Self::External(Arc::new(RemotePythonError::from(cause)))
+            }
+        }
     }
 }
 
@@ -95,7 +121,6 @@ impl From<TaskStreamError> for CommonErrorCause {
     fn from(value: TaskStreamError) -> Self {
         match value {
             TaskStreamError::Unknown(x) => CommonErrorCause::Unknown(x),
-            TaskStreamError::Cause(x) => x,
             TaskStreamError::External(e) => CommonErrorCause::new::<PyErrExtractor>(&e),
         }
     }
