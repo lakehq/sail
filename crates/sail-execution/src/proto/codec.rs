@@ -82,6 +82,7 @@ use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
+use sail_data_source::formats::noop::NoopSinkExec;
 use sail_data_source::formats::python::{
     InputPartition, PythonDataSourceExec, PythonDataSourceWriteCommitExec,
     PythonDataSourceWriteExec,
@@ -881,6 +882,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::ConsoleSink(gen::ConsoleSinkExecNode { input }) => {
                 let input = try_decode_physical_plan(ctx, self, &input)?;
                 Ok(Arc::new(ConsoleSinkExec::new(input)))
+            }
+            NodeKind::NoopSink(gen::NoopSinkExecNode { input }) => {
+                let input = try_decode_physical_plan(ctx, self, &input)?;
+                Ok(Arc::new(NoopSinkExec::new(input)))
             }
             NodeKind::SocketSource(gen::SocketSourceExecNode {
                 host,
@@ -1738,6 +1743,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(console_sink) = node.downcast_ref::<ConsoleSinkExec>() {
             let input = try_encode_physical_plan(self, console_sink.input().clone())?;
             NodeKind::ConsoleSink(gen::ConsoleSinkExecNode { input })
+        } else if let Some(noop_sink) = node.downcast_ref::<NoopSinkExec>() {
+            let input = try_encode_physical_plan(self, noop_sink.input().clone())?;
+            NodeKind::NoopSink(gen::NoopSinkExecNode { input })
         } else if let Some(socket_source) = node.downcast_ref::<SocketSourceExec>() {
             let options = socket_source.options();
             let max_batch_size = u64::try_from(options.max_batch_size).map_err(|_| {
