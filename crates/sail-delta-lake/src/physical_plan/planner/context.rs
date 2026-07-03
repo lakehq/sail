@@ -29,8 +29,8 @@ use crate::physical_plan::{
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::table::{
-    create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot, DeltaSnapshot,
-    DeltaTable,
+    catalog_managed_commit_context, create_delta_table_with_object_store,
+    load_catalog_managed_commits_for_snapshot, DeltaSnapshot, DeltaTable,
 };
 
 /// Configuration shared by all Delta planners.
@@ -318,7 +318,9 @@ impl<'a> PlannerContext<'a> {
         } else {
             let log_store = self.log_store()?;
             let mut table_config = table_config;
-            if let Some(lakehouse_table) = &self.config.lakehouse_table {
+            if let Some(lakehouse_table) =
+                catalog_managed_commit_context(self.config.lakehouse_table.as_ref())
+            {
                 table_config.catalog_managed_commits = load_catalog_managed_commits_for_snapshot(
                     &self.session,
                     lakehouse_table,

@@ -4,6 +4,7 @@ use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{plan_datafusion_err, JoinType, Result};
 use datafusion::physical_expr::{Partitioning, PhysicalExpr};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::coop::CooperativeExec;
 use datafusion::physical_plan::joins::{
     CrossJoinExec, HashJoinExec, NestedLoopJoinExec, PartitionMode, PiecewiseMergeJoinExec,
 };
@@ -16,6 +17,9 @@ use datafusion::physical_plan::{
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_data_source::listing::delete::FileDeleteExec;
+use sail_delta_lake::physical_plan::DeltaCommitExec;
+use sail_iceberg::physical_plan::IcebergCommitExec;
+use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
 use sail_physical_plan::repartition::ExplicitRepartitionExec;
@@ -168,12 +172,31 @@ enum PartitionUsage {
     Shared,
 }
 
+#[derive(Clone, Copy)]
+enum DriverStageHandling {
+    CreateStage,
+    PreserveRoot,
+}
+
 /// Recursively splits an execution plan into stages at shuffle boundaries and adds them to the job graph.
 fn build_job_graph(
     plan: Arc<dyn ExecutionPlan>,
     usage: PartitionUsage,
     graph: &mut JobGraph,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    plan_job_graph_stages(plan, usage, graph, DriverStageHandling::CreateStage)
+}
+
+fn plan_job_graph_stages(
+    plan: Arc<dyn ExecutionPlan>,
+    usage: PartitionUsage,
+    graph: &mut JobGraph,
+    driver_stage_handling: DriverStageHandling,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    if let Some(barrier) = plan.downcast_ref::<BarrierExec>() {
+        return build_barrier_job_graph(barrier, usage, graph);
+    }
+
     // Recursively build the job graph for the children first
     // and propagate partition usage information.
     let children = if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
@@ -216,6 +239,17 @@ fn build_job_graph(
         // At the stage boundary, we only expect to use the child partition once
         // since the shuffle writer can materialize the data for multiple consumption.
         vec![build_job_graph(child.clone(), PartitionUsage::Once, graph)?]
+    } else if matches!(driver_stage_handling, DriverStageHandling::PreserveRoot)
+        && plan.is::<CooperativeExec>()
+        && is_driver_stage_plan(&plan)
+    {
+        let child = plan.children().one()?;
+        vec![plan_job_graph_stages(
+            child.clone(),
+            usage,
+            graph,
+            DriverStageHandling::PreserveRoot,
+        )?]
     } else {
         plan.children()
             .into_iter()
@@ -287,13 +321,59 @@ fn build_job_graph(
     } else if plan.is::<SystemTableExec>()
         || plan.is::<CatalogCommandExec>()
         || plan.is::<FileDeleteExec>()
+        || plan.is::<DeltaCommitExec>()
+        || plan.is::<IcebergCommitExec>()
     {
-        plan.children().zero()?;
-        create_driver_stage(&plan, graph)?
+        if matches!(driver_stage_handling, DriverStageHandling::PreserveRoot) {
+            plan
+        } else {
+            create_driver_stage(&plan, graph)?
+        }
     } else {
         plan
     };
     Ok(plan)
+}
+
+fn build_barrier_job_graph(
+    barrier: &BarrierExec,
+    usage: PartitionUsage,
+    graph: &mut JobGraph,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    let preconditions = barrier
+        .preconditions()
+        .iter()
+        .map(|precondition| build_job_graph(precondition.clone(), usage, graph))
+        .collect::<ExecutionResult<Vec<_>>>()?;
+    let plan_is_driver_stage = is_driver_stage_plan(barrier.plan());
+    let plan = if plan_is_driver_stage {
+        plan_job_graph_stages(
+            barrier.plan().clone(),
+            usage,
+            graph,
+            DriverStageHandling::PreserveRoot,
+        )?
+    } else {
+        build_job_graph(barrier.plan().clone(), usage, graph)?
+    };
+    let barrier = Arc::new(BarrierExec::new(preconditions, plan)) as Arc<dyn ExecutionPlan>;
+    if plan_is_driver_stage {
+        create_driver_stage(&barrier, graph)
+    } else {
+        Ok(barrier)
+    }
+}
+
+fn is_driver_stage_plan(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    if let Some(cooperative) = plan.downcast_ref::<CooperativeExec>() {
+        return is_driver_stage_plan(cooperative.input());
+    }
+
+    plan.is::<SystemTableExec>()
+        || plan.is::<CatalogCommandExec>()
+        || plan.is::<FileDeleteExec>()
+        || plan.is::<DeltaCommitExec>()
+        || plan.is::<IcebergCommitExec>()
 }
 
 fn create_merge_input(
@@ -436,14 +516,15 @@ fn rewrite_inputs(
     Ok((result.data()?, inputs))
 }
 
-// TODO: support driver stage with inputs
 fn create_driver_stage(
     plan: &Arc<dyn ExecutionPlan>,
     graph: &mut JobGraph,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    let (plan, inputs) = rewrite_inputs(plan.clone())?;
+    let properties = plan.properties().clone();
     let stage = Stage {
-        inputs: vec![],
-        plan: plan.clone(),
+        inputs,
+        plan,
         group: String::new(),
         mode: OutputMode::Pipelined,
         distribution: OutputDistribution::RoundRobin { channels: 1 },
@@ -456,7 +537,7 @@ fn create_driver_stage(
             stage: s,
             mode: InputMode::Forward,
         },
-        plan.properties().clone(),
+        properties,
     )))
 }
 
@@ -467,15 +548,19 @@ mod tests {
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion::physical_expr::Partitioning;
+    use datafusion::physical_plan::coop::CooperativeExec;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::repartition::RepartitionExec;
     use datafusion::physical_plan::union::UnionExec;
     use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+    use sail_catalog::command::CatalogCommand;
+    use sail_physical_plan::barrier::BarrierExec;
+    use sail_physical_plan::catalog_command::CatalogCommandExec;
     use sail_physical_plan::coalesce::CoalesceExec;
     use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
     use super::JobGraph;
-    use crate::job_graph::{InputMode, OutputDistribution, StageInput};
+    use crate::job_graph::{InputMode, OutputDistribution, StageInput, TaskPlacement};
 
     fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]))
@@ -544,6 +629,48 @@ mod tests {
             [StageInput {
                 stage: 0,
                 mode: InputMode::Rescale,
+            }]
+        ));
+    }
+
+    #[test]
+    fn test_job_graph_keeps_driver_actual_plan_inside_barrier() {
+        let precondition = Arc::new(
+            RepartitionExec::try_new(empty_plan(), Partitioning::RoundRobinBatch(1)).unwrap(),
+        );
+        let command = Arc::new(CatalogCommandExec::new(
+            CatalogCommand::CurrentCatalog,
+            schema(),
+        ));
+        let command = Arc::new(CooperativeExec::new(command));
+        let graph =
+            JobGraph::try_new(Arc::new(BarrierExec::new(vec![precondition], command))).unwrap();
+
+        assert_eq!(graph.stages().len(), 3);
+        assert_eq!(graph.stages()[1].placement, TaskPlacement::Driver);
+        #[expect(clippy::expect_used)]
+        let barrier = graph.stages()[1]
+            .plan
+            .downcast_ref::<BarrierExec>()
+            .expect("driver stage should contain BarrierExec");
+        #[expect(clippy::expect_used)]
+        let cooperative = barrier
+            .plan()
+            .downcast_ref::<CooperativeExec>()
+            .expect("barrier actual plan should preserve CooperativeExec");
+        assert!(cooperative.input().is::<CatalogCommandExec>());
+        assert!(matches!(
+            graph.stages()[1].inputs.as_slice(),
+            [StageInput {
+                stage: 0,
+                mode: InputMode::Shuffle,
+            }]
+        ));
+        assert!(matches!(
+            graph.stages()[2].inputs.as_slice(),
+            [StageInput {
+                stage: 1,
+                mode: InputMode::Forward,
             }]
         ));
     }

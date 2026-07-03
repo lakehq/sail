@@ -54,7 +54,6 @@ use url::Url;
 
 use crate::conversion::DeltaTypeConverter;
 use crate::delta_log::get_object_store_from_context;
-use crate::physical_plan::catalog_location::resolve_catalog_table_url;
 use crate::physical_plan::writer_options::DeltaWriterExecOptions;
 use crate::physical_plan::{
     delta_action_schema, encode_actions, DeltaWriteContext, ExecCommitMeta,
@@ -613,7 +612,6 @@ impl DeltaWriterExec {
         let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(partition);
 
         let table_url = self.table_url.clone();
-        let catalog_table = self.catalog_table().map(<[String]>::to_vec);
         let options = self.options.clone();
         let partition_columns = self.partition_columns.clone();
         let sink_mode = self.sink_mode.clone();
@@ -636,8 +634,6 @@ impl DeltaWriterExec {
             } = &options;
             let timezone = session_timezone;
 
-            let table_url =
-                resolve_catalog_table_url(&context, catalog_table.as_deref(), &table_url).await?;
             let object_store = get_object_store_from_context(&context, &table_url)?;
 
             match &sink_mode {
