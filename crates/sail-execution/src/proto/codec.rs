@@ -722,6 +722,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 version,
                 statistics,
                 lakehouse_table_json,
+                catalog_managed_commits_json,
             }) => {
                 let input = try_decode_physical_plan(ctx, self, &input)?;
                 let table_url = Url::parse(&table_url)
@@ -762,6 +763,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map(|bytes| self.try_decode_statistics(bytes))
                     .transpose()?;
                 let lakehouse_table = self.try_decode_lakehouse_table(&lakehouse_table_json)?;
+                let catalog_managed_commits = if catalog_managed_commits_json.is_empty() {
+                    None
+                } else {
+                    Some(self.try_decode_json(
+                        &catalog_managed_commits_json,
+                        "Delta catalog-managed commit set",
+                    )?)
+                };
                 Ok(Arc::new(
                     DeltaScanByAddsExec::new(
                         input,
@@ -774,6 +783,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         limit,
                         pushdown_filter,
                         lakehouse_table,
+                        catalog_managed_commits,
                     )
                     .with_output_statistics(statistics),
                 ))
@@ -1656,6 +1666,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             };
             let statistics =
                 Some(self.try_encode_statistics(delta_scan_by_adds_exec.statistics())?);
+            let catalog_managed_commits_json = delta_scan_by_adds_exec
+                .catalog_managed_commits()
+                .map(|value| self.try_encode_json(value, "Delta catalog-managed commit set"))
+                .unwrap_or_else(|| Ok(String::new()))?;
             NodeKind::DeltaScanByAdds(gen::DeltaScanByAddsExecNode {
                 input,
                 table_url: delta_scan_by_adds_exec.table_url().to_string(),
@@ -1669,6 +1683,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 statistics,
                 lakehouse_table_json: self
                     .try_encode_lakehouse_table(delta_scan_by_adds_exec.lakehouse_table())?,
+                catalog_managed_commits_json,
             })
         } else if let Some(delta_discovery_exec) = node.downcast_ref::<DeltaDiscoveryExec>() {
             let input = Some(try_encode_physical_plan(
