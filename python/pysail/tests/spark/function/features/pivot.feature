@@ -1,3 +1,4 @@
+@pivot
 Feature: PIVOT rotates rows into columns
 
   Pivot groups by the remaining (or explicitly grouped) columns and produces one
@@ -157,9 +158,13 @@ Feature: PIVOT rotates rows into columns
         | 2012 | 5000 | 20000 |
         | 2013 | NULL | 30000 |
 
-  Rule: Count aggregate
+  Rule: Count aggregate fills absent combinations with NULL, not 0
 
-    Scenario: pivot count of rows per course
+    # An absent (group, pivot-value) combination is NULL even for count: on the PivotFirst
+    # path Spark only computes the aggregate over (group, value) pairs that occur in the
+    # data, so 2013/dotNET is NULL, not 0. Each cell is gated on whether any row matched the
+    # pivot value, so a group with no matching rows yields NULL.
+    Scenario: pivot count of rows per course (absent combo is NULL, not 0)
       When query
         """
         SELECT * FROM (
@@ -176,4 +181,115 @@ Feature: PIVOT rotates rows into columns
       Then query result
         | year | dotNET | Java |
         | 2012 | 2      | 1    |
-        | 2013 | 0      | 1    |
+        | 2013 | NULL   | 1    |
+
+    # The flip side that pins the semantics: when the (group, value) pair DOES occur but the
+    # counted column is all-NULL, count is 0 (count ignores NULLs) — so 2012/dotNET is 0
+    # while the absent 2013/dotNET is NULL. The gate keeps the 0 (rows matched) and turns
+    # only the truly-absent cell into NULL.
+    Scenario: count over an existing all-NULL group is 0 while an absent group is NULL
+      When query
+        """
+        SELECT * FROM (
+          SELECT year, course, earnings FROM VALUES
+            (2012, 'dotNET', CAST(NULL AS INT)),
+            (2012, 'Java', 20000),
+            (2013, 'Java', 30000)
+          AS courseSales(year, course, earnings)
+        ) PIVOT (
+          count(earnings) FOR (course) IN ('dotNET', 'Java')
+        )
+        """
+      Then query result
+        | year | dotNET | Java |
+        | 2012 | 0      | 1    |
+        | 2013 | NULL   | 1    |
+
+    # count(DISTINCT) is the same counting family: absent combo is NULL, not 0.
+    Scenario: pivot count(DISTINCT) leaves absent combinations NULL
+      When query
+        """
+        SELECT * FROM (
+          SELECT year, course, earnings FROM VALUES
+            (2012, 'dotNET', 10),
+            (2012, 'dotNET', 10),
+            (2012, 'Java', 2),
+            (2013, 'Java', 3)
+          AS courseSales(year, course, earnings)
+        ) PIVOT (
+          count(DISTINCT earnings) FOR (course) IN ('dotNET', 'Java')
+        )
+        """
+      Then query result
+        | year | dotNET | Java |
+        | 2012 | 1      | 1    |
+        | 2013 | NULL   | 1    |
+
+    # approx_count_distinct returns 0 on empty too, so it must also be NULL on an absent
+    # combo (PivotFirst path).
+    Scenario: pivot approx_count_distinct leaves absent combinations NULL
+      When query
+        """
+        SELECT * FROM (
+          SELECT year, course, earnings FROM VALUES
+            (2012, 'dotNET', 10),
+            (2012, 'dotNET', 20),
+            (2012, 'Java', 2),
+            (2013, 'Java', 3)
+          AS courseSales(year, course, earnings)
+        ) PIVOT (
+          approx_count_distinct(earnings) FOR (course) IN ('dotNET', 'Java')
+        )
+        """
+      Then query result
+        | year | dotNET | Java |
+        | 2012 | 2      | 1    |
+        | 2013 | NULL   | 1    |
+
+    # Mixing count with a non-PivotFirst aggregate (a string max) forces Spark's general
+    # path, where count's absent combo is 0 (not NULL). The NULL gate only applies on the
+    # PivotFirst path, so the general-path count must keep 0 here (regression guard for the
+    # fix): 2013/dotNET_c is 0 while the string max for the same absent cell is NULL.
+    Scenario: count on the general path keeps 0 for absent combos
+      When query
+        """
+        SELECT * FROM (
+          SELECT year, course, earnings, note FROM VALUES
+            (2012, 'dotNET', 10, 'p'),
+            (2012, 'dotNET', 20, 'q'),
+            (2012, 'Java', 2, 'r'),
+            (2013, 'Java', 3, 's')
+          AS courseSales(year, course, earnings, note)
+        ) PIVOT (
+          count(earnings) AS c, max(note) AS m
+          FOR (course) IN ('dotNET', 'Java')
+        )
+        """
+      Then query result
+        | year | dotNET_c | dotNET_m | Java_c | Java_m |
+        | 2012 | 2        | q        | 1      | r      |
+        | 2013 | 0        | NULL     | 1      | s      |
+
+  Rule: collect_list/collect_set fill absent combinations with an empty array
+
+    # Spark's general (non-PivotFirst) path computes collect_list over the existing group,
+    # ignoring NULLs, so an absent (group, value) combination is an empty array [], not NULL.
+    # collect_list/collect_set coalesce their empty aggregate to [] (see collect_list.feature),
+    # so this matches Spark.
+    Scenario: pivot collect_list fills an absent combination with an empty array
+      When query
+        """
+        SELECT * FROM (
+          SELECT year, course, earnings FROM VALUES
+            (2012, 'dotNET', 10),
+            (2012, 'Java', 2),
+            (2013, 'Java', 3)
+          AS courseSales(year, course, earnings)
+        ) PIVOT (
+          collect_list(earnings) FOR (course) IN ('dotNET', 'Java')
+        )
+        """
+      Then query result
+        | year | dotNET | Java |
+        | 2012 | [10]   | [2]  |
+        | 2013 | []     | [3]  |
