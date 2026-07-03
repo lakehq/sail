@@ -60,8 +60,8 @@ use crate::spec::{
     StructField, StructType, TableFeature, TableProperties,
 };
 use crate::table::{
-    create_delta_table_with_object_store, create_logstore_with_object_store,
-    infer_delta_logical_metadata, infer_delta_logical_schema,
+    catalog_managed_commit_context, create_delta_table_with_object_store,
+    create_logstore_with_object_store, infer_delta_logical_metadata, infer_delta_logical_schema,
     load_catalog_managed_commits_for_snapshot, open_table_with_object_store_and_table_config,
     DeltaTable,
 };
@@ -647,13 +647,14 @@ pub(crate) async fn plan_delta_write(
         .object_store_registry
         .get_store(&table_url)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let lakehouse_planning_context = lakehouse_table.as_ref().filter(|context| {
-        context.table_identity.table_id.is_some()
-            && !matches!(
-                context.operation,
-                LakehouseOperation::Create | LakehouseOperation::Register
-            )
-    });
+    let lakehouse_planning_context = catalog_managed_commit_context(lakehouse_table.as_ref())
+        .filter(|context| {
+            context.table_identity.table_id.is_some()
+                && !matches!(
+                    context.operation,
+                    LakehouseOperation::Create | LakehouseOperation::Register
+                )
+        });
     let table = match open_delta_write_planning_table(
         ctx,
         table_url.clone(),
@@ -782,7 +783,7 @@ async fn open_delta_write_planning_table(
         ..Default::default()
     };
 
-    if let Some(lakehouse_table) = lakehouse_table {
+    if let Some(lakehouse_table) = catalog_managed_commit_context(lakehouse_table) {
         let log_store = create_logstore_with_object_store(
             Arc::clone(&object_store),
             table_url.clone(),
