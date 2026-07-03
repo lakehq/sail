@@ -700,15 +700,6 @@ fn to_utc_timestamp(input: ScalarFunctionInput) -> PlanResult<Expr> {
     Ok(cast(ts, DataType::Timestamp(unit, Some(session_tz))))
 }
 
-fn make_ym_interval(args: Vec<Expr>) -> PlanResult<Expr> {
-    let (years, months) = if args.len() == 2 {
-        args.two()?
-    } else {
-        (args.one()?, lit(0_i32))
-    };
-    Ok(ScalarUDF::from(SparkMakeYmInterval::new()).call(vec![years, months]))
-}
-
 fn make_timestamp_ltz(args: Vec<Expr>, session_tz: &Arc<str>, is_try: bool) -> PlanResult<Expr> {
     let ntz_ts = if args.len() == 2 || args.len() == 6 {
         ScalarUDF::from(SparkMakeTimestampNtz::new(is_try)).call(args)
@@ -1108,7 +1099,7 @@ pub(super) fn list_built_in_datetime_functions() -> Vec<(&'static str, ScalarFun
             "make_timestamp_ntz",
             F::custom(|input| make_timestamp_ntz(input.arguments, false)),
         ),
-        ("make_ym_interval", F::var_arg(make_ym_interval)),
+        ("make_ym_interval", F::udf(SparkMakeYmInterval::new())),
         ("minute", F::unary(|arg| integer_part(arg, "MINUTE"))),
         ("month", F::unary(|arg| integer_part(arg, "MONTH"))),
         (
