@@ -82,6 +82,7 @@ use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
+use sail_data_source::formats::noop::NoopSinkExec;
 use sail_data_source::formats::python::{
     InputPartition, PythonDataSourceExec, PythonDataSourceWriteCommitExec,
     PythonDataSourceWriteExec,
@@ -229,7 +230,7 @@ use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf
 use sail_function::scalar::xml::to_xml::SparkToXml;
 use sail_function::scalar::xml::xpath::Xpath;
 use sail_function::scalar::xml::xpath_typed::{xpath_typed_name_to_kind, XpathTyped};
-use sail_function::window::SparkNtile;
+use sail_function::window::{SparkFirstLastValue, SparkFirstLastValueKind, SparkNtile};
 use sail_iceberg::physical_plan::{
     IcebergCommitExec, IcebergDeleteApplyExec, IcebergDiscoveryExec, IcebergManifestScanExec,
     IcebergScanByDataFilesExec, IcebergWriterExec,
@@ -881,6 +882,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::ConsoleSink(gen::ConsoleSinkExecNode { input }) => {
                 let input = try_decode_physical_plan(ctx, self, &input)?;
                 Ok(Arc::new(ConsoleSinkExec::new(input)))
+            }
+            NodeKind::NoopSink(gen::NoopSinkExecNode { input }) => {
+                let input = try_decode_physical_plan(ctx, self, &input)?;
+                Ok(Arc::new(NoopSinkExec::new(input)))
             }
             NodeKind::SocketSource(gen::SocketSourceExecNode {
                 host,
@@ -1738,6 +1743,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(console_sink) = node.downcast_ref::<ConsoleSinkExec>() {
             let input = try_encode_physical_plan(self, console_sink.input().clone())?;
             NodeKind::ConsoleSink(gen::ConsoleSinkExecNode { input })
+        } else if let Some(noop_sink) = node.downcast_ref::<NoopSinkExec>() {
+            let input = try_encode_physical_plan(self, noop_sink.input().clone())?;
+            NodeKind::NoopSink(gen::NoopSinkExecNode { input })
         } else if let Some(socket_source) = node.downcast_ref::<SocketSourceExec>() {
             let options = socket_source.options();
             let max_batch_size = u64::try_from(options.max_batch_size).map_err(|_| {
@@ -2507,7 +2515,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkAESEncrypt>()
             || node_inner.is::<SparkArray>()
             || node_inner.is::<SparkBase64>()
-            || node_inner.is::<SparkBin>()
             || node_inner.is::<SparkBitCount>()
             || node_inner.is::<SparkBitGet>()
             || node_inner.is::<SparkBitwiseNot>()
@@ -3005,16 +3012,34 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "ntile" => Ok(Arc::new(WindowUDF::from(SparkNtile::new()))),
                 _ => plan_err!("Could not find Window Function: {name}"),
             },
+            Some(UdwfKind::SparkFirstLastValue(gen::SparkFirstLastValueUdwf {
+                first,
+                ignore_nulls,
+            })) => {
+                let fun = if first {
+                    SparkFirstLastValue::first(ignore_nulls)
+                } else {
+                    SparkFirstLastValue::last(ignore_nulls)
+                };
+                Ok(Arc::new(WindowUDF::from(fun)))
+            }
             None => plan_err!("ExtendedWindowUdf: no UDWF found for {name}"),
         }
     }
 
     fn try_encode_udwf(&self, node: &WindowUDF, buf: &mut Vec<u8>) -> Result<()> {
-        if !node.inner().is::<SparkNtile>() {
+        let udwf_kind = if node.inner().is::<SparkNtile>() {
+            UdwfKind::Standard(gen::StandardUdwf {})
+        } else if let Some(func) = node.inner().downcast_ref::<SparkFirstLastValue>() {
+            UdwfKind::SparkFirstLastValue(gen::SparkFirstLastValueUdwf {
+                first: matches!(func.kind(), SparkFirstLastValueKind::First),
+                ignore_nulls: func.ignore_nulls(),
+            })
+        } else {
             return Ok(());
-        }
+        };
         let node = ExtendedWindowUdf {
-            udwf_kind: Some(UdwfKind::Standard(gen::StandardUdwf {})),
+            udwf_kind: Some(udwf_kind),
         };
         node.encode(buf)
             .map_err(|e| plan_datafusion_err!("failed to encode udwf: {e}"))
@@ -4111,6 +4136,14 @@ mod tests {
         codec.try_decode_udf(&name, &buf)
     }
 
+    fn round_trip_udwf(udwf: WindowUDF) -> Result<Arc<WindowUDF>> {
+        let codec = RemoteExecutionCodec;
+        let name = udwf.name().to_string();
+        let mut buf = vec![];
+        codec.try_encode_udwf(&udwf, &mut buf)?;
+        codec.try_decode_udwf(&name, &buf)
+    }
+
     #[test]
     fn test_round_trip_spark_variant_explode_helper_udf() -> Result<()> {
         let decoded = round_trip_udf(ScalarUDF::from(SparkVariantExplodeUdf::new()))?;
@@ -4120,6 +4153,29 @@ mod tests {
             .downcast_ref::<SparkVariantExplodeUdf>()
             .is_some());
         assert_eq!(decoded.name(), "spark_variant_explode");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_first_last_value_udwf() -> Result<()> {
+        let decoded = round_trip_udwf(WindowUDF::from(SparkFirstLastValue::first(true)))?;
+        let func = decoded
+            .inner()
+            .downcast_ref::<SparkFirstLastValue>()
+            .ok_or_else(|| plan_datafusion_err!("decoded UDWF is not SparkFirstLastValue"))?;
+        assert_eq!(decoded.name(), "first_value");
+        assert_eq!(func.kind(), SparkFirstLastValueKind::First);
+        assert!(func.ignore_nulls());
+
+        let decoded = round_trip_udwf(WindowUDF::from(SparkFirstLastValue::last(true)))?;
+        let func = decoded
+            .inner()
+            .downcast_ref::<SparkFirstLastValue>()
+            .ok_or_else(|| plan_datafusion_err!("decoded UDWF is not SparkFirstLastValue"))?;
+        assert_eq!(decoded.name(), "last_value");
+        assert_eq!(func.kind(), SparkFirstLastValueKind::Last);
+        assert!(func.ignore_nulls());
 
         Ok(())
     }
