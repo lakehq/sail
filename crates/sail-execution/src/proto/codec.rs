@@ -142,6 +142,7 @@ use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::spark_date::SparkDate;
+use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
@@ -2443,6 +2444,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeYmInterval::new())))
             }
             "spark_make_time" | "make_time" => Ok(Arc::new(ScalarUDF::from(SparkMakeTime::new()))),
+            "date_part" | "datepart" | "extract" => {
+                Ok(Arc::new(ScalarUDF::from(SparkDatePart::new())))
+            }
             "date_trunc" => Ok(Arc::new(ScalarUDF::from(SparkDateTrunc::new()))),
             "spark_time_diff" | "time_diff" => Ok(Arc::new(ScalarUDF::from(SparkTimeDiff::new()))),
             "spark_time_trunc" | "time_trunc" => {
@@ -2544,6 +2548,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkConcat>()
             || node_inner.is::<SparkConv>()
             || node_inner.is::<SparkCrc32>()
+            || node_inner.is::<SparkDatePart>()
             || node_inner.is::<SparkDateTrunc>()
             || node_inner.is::<SparkDayTimeInterval>()
             || node_inner.is::<SparkDecode>()
@@ -2615,6 +2620,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<UrlDecode>()
             || node_inner.is::<UrlEncode>()
             || node_inner.is::<Xpath>()
+            || matches!(node.name(), "date_part" | "datepart" | "extract")
             || node.name() == "json_as_text"
             || node.name() == "json_len"
             || node.name() == "json_length"
@@ -4203,6 +4209,16 @@ mod tests {
             .downcast_ref::<SparkVariantExplodeUdf>()
             .is_some());
         assert_eq!(decoded.name(), "spark_variant_explode");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_date_part_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkDatePart::new()))?;
+
+        assert!(decoded.inner().downcast_ref::<SparkDatePart>().is_some());
+        assert_eq!(decoded.name(), "date_part");
 
         Ok(())
     }
