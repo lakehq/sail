@@ -12,7 +12,7 @@ use educe::Educe;
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 use sail_common_datafusion::utils::items::ItemTaker;
 
-use crate::formats::noop::writer::NoopSinkExec;
+pub use crate::formats::noop::writer::NoopSinkExec;
 
 mod writer;
 
