@@ -19,3 +19,16 @@ Feature: EXPLAIN in distributed execution
       GROUP BY k
       """
     Then query plan matches snapshot
+
+  Scenario: EXPLAIN includes aggregate expression scalar subquery distributed plan in local-cluster mode
+    When query
+      """
+      EXPLAIN
+      SELECT k, SUM(CAST(v AS BIGINT) + (
+        SELECT MIN(CAST(x AS BIGINT))
+        FROM VALUES (10), (20) AS s(x)
+      )) AS total
+      FROM VALUES (1, 1), (1, 2), (2, 3) AS t(k, v)
+      GROUP BY k
+      """
+    Then query plan matches snapshot

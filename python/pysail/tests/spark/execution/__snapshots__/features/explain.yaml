@@ -1,5 +1,60 @@
 # serializer version: 1
 ---
+name: "test_explain_includes_aggregate_expression_scalar_subquery_distributed_plan_in_localcluster_mode"
+data:
+  |-
+    == Physical Plan ==
+    ProjectionExec: expr=[#7@0 as k, #8@1 as total]
+      ScalarSubqueryExec: subqueries=1
+        ProjectionExec: expr=[#2@0 as #7, sum(t.#3 + #6)@1 as #8]
+          AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3 + #6)]
+            RepartitionExec: partitioning=Hash([#2@0], 4), input_partitions=1
+              AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3 + #6)]
+                ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+                  DataSourceExec: partitions=1, partition_sizes=[1]
+        ProjectionExec: expr=[min(s.#5)@0 as #6]
+          AggregateExec: mode=Single, gby=[], aggr=[min(s.#5)]
+            ProjectionExec: expr=[column1@0 as #5]
+              DataSourceExec: partitions=1, partition_sizes=[1]
+  
+  
+    == Distributed Plan ==
+    === stage 0 ===
+    inputs=[]
+    mode=Pipelined
+    partitions=1
+    distribution=RoundRobin(channels=1)
+    placement=Worker
+    ProjectionExec: expr=[min(s.#5)@0 as #6]
+      AggregateExec: mode=Single, gby=[], aggr=[min(s.#5)]
+        ProjectionExec: expr=[column1@0 as #5]
+          DataSourceExec: partitions=1, partition_sizes=[1]
+  
+    === stage 1 ===
+    inputs=[StageInput(stage=0, mode=Broadcast)]
+    mode=Pipelined
+    partitions=1
+    distribution=Hash(keys=[#2@0], channels=4)
+    placement=Worker
+    ScalarSubqueryExec: subqueries=1
+      AggregateExec: mode=Partial, gby=[#2@0 as #2], aggr=[sum(t.#3 + #6)]
+        ProjectionExec: expr=[column1@0 as #2, column2@1 as #3]
+          DataSourceExec: partitions=1, partition_sizes=[1]
+      StageInputExec: input=0, partitioning=UnknownPartitioning(1)
+  
+    === stage 2 ===
+    inputs=[StageInput(stage=1, mode=Shuffle), StageInput(stage=0, mode=Broadcast)]
+    mode=Pipelined
+    partitions=4
+    distribution=RoundRobin(channels=1)
+    placement=Worker
+    ProjectionExec: expr=[#7@0 as k, #8@1 as total]
+      ScalarSubqueryExec: subqueries=1
+        ProjectionExec: expr=[#2@0 as #7, sum(t.#3 + #6)@1 as #8]
+          AggregateExec: mode=FinalPartitioned, gby=[#2@0 as #2], aggr=[sum(t.#3 + #6)]
+            StageInputExec: input=0, partitioning=Hash([#2@0], 4)
+        StageInputExec: input=1, partitioning=UnknownPartitioning(1)
+---
 name: "test_explain_includes_the_distributed_execution_plan_in_localcluster_mode"
 data:
   |-
