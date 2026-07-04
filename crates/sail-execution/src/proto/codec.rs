@@ -3066,6 +3066,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
     fn try_encode_udwf(&self, node: &WindowUDF, buf: &mut Vec<u8>) -> Result<()> {
         let udwf_kind = if node.inner().is::<SparkNtile>() {
             UdwfKind::Standard(gen::StandardUdwf {})
+        } else if let Some(func) = node.inner().downcast_ref::<SparkFirstLastValue>() {
+            UdwfKind::SparkFirstLastValue(gen::SparkFirstLastValueUdwf {
+                first: matches!(func.kind(), SparkFirstLastValueKind::First),
+                ignore_nulls: func.ignore_nulls(),
+            })
         } else if matches!(
             node.name(),
             "cume_dist"
@@ -3082,11 +3087,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 | "percent_rank"
         ) {
             UdwfKind::Standard(gen::StandardUdwf {})
-        } else if let Some(func) = node.inner().downcast_ref::<SparkFirstLastValue>() {
-            UdwfKind::SparkFirstLastValue(gen::SparkFirstLastValueUdwf {
-                first: matches!(func.kind(), SparkFirstLastValueKind::First),
-                ignore_nulls: func.ignore_nulls(),
-            })
         } else {
             return Ok(());
         };
