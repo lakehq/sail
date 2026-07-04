@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion::common::{plan_datafusion_err, JoinType, Result};
+use datafusion::logical_expr::execution_props::ScalarSubqueryResults;
 use datafusion::physical_expr::{Partitioning, PhysicalExpr};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::coop::CooperativeExec;
@@ -10,9 +11,11 @@ use datafusion::physical_plan::joins::{
 };
 use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
+use datafusion::physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::{
-    with_new_children_if_necessary, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    displayable, with_new_children_if_necessary, ExecutionPlan, ExecutionPlanProperties,
+    PlanProperties,
 };
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -184,7 +187,7 @@ fn build_job_graph(
     usage: PartitionUsage,
     graph: &mut JobGraph,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-    plan_job_graph_stages(plan, usage, graph, DriverStageHandling::CreateStage)
+    plan_job_graph_stages(plan, usage, graph, DriverStageHandling::CreateStage, None)
 }
 
 fn plan_job_graph_stages(
@@ -192,9 +195,14 @@ fn plan_job_graph_stages(
     usage: PartitionUsage,
     graph: &mut JobGraph,
     driver_stage_handling: DriverStageHandling,
+    scalar_subqueries: Option<&[ScalarSubqueryLink]>,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    if let Some(scalar) = plan.downcast_ref::<ScalarSubqueryExec>() {
+        return build_scalar_subquery_job_graph(scalar, usage, graph, driver_stage_handling);
+    }
+
     if let Some(barrier) = plan.downcast_ref::<BarrierExec>() {
-        return build_barrier_job_graph(barrier, usage, graph);
+        return build_barrier_job_graph(barrier, usage, graph, scalar_subqueries);
     }
 
     // Recursively build the job graph for the children first
@@ -204,14 +212,38 @@ fn plan_job_graph_stages(
         match join.mode {
             PartitionMode::Partitioned => {
                 vec![
-                    build_job_graph(left.clone(), usage, graph)?,
-                    build_job_graph(right.clone(), usage, graph)?,
+                    plan_job_graph_stages(
+                        left.clone(),
+                        usage,
+                        graph,
+                        DriverStageHandling::CreateStage,
+                        scalar_subqueries,
+                    )?,
+                    plan_job_graph_stages(
+                        right.clone(),
+                        usage,
+                        graph,
+                        DriverStageHandling::CreateStage,
+                        scalar_subqueries,
+                    )?,
                 ]
             }
             PartitionMode::CollectLeft => {
                 vec![
-                    build_job_graph(left.clone(), PartitionUsage::Shared, graph)?,
-                    build_job_graph(right.clone(), usage, graph)?,
+                    plan_job_graph_stages(
+                        left.clone(),
+                        PartitionUsage::Shared,
+                        graph,
+                        DriverStageHandling::CreateStage,
+                        scalar_subqueries,
+                    )?,
+                    plan_job_graph_stages(
+                        right.clone(),
+                        usage,
+                        graph,
+                        DriverStageHandling::CreateStage,
+                        scalar_subqueries,
+                    )?,
                 ]
             }
             PartitionMode::Auto => {
@@ -226,8 +258,20 @@ fn plan_job_graph_stages(
     {
         let (left, right) = plan.children().two()?;
         vec![
-            build_job_graph(left.clone(), PartitionUsage::Shared, graph)?,
-            build_job_graph(right.clone(), usage, graph)?,
+            plan_job_graph_stages(
+                left.clone(),
+                PartitionUsage::Shared,
+                graph,
+                DriverStageHandling::CreateStage,
+                scalar_subqueries,
+            )?,
+            plan_job_graph_stages(
+                right.clone(),
+                usage,
+                graph,
+                DriverStageHandling::CreateStage,
+                scalar_subqueries,
+            )?,
         ]
     } else if plan.is::<RepartitionExec>()
         || plan.is::<ExplicitRepartitionExec>()
@@ -238,7 +282,13 @@ fn plan_job_graph_stages(
         let child = plan.children().one()?;
         // At the stage boundary, we only expect to use the child partition once
         // since the shuffle writer can materialize the data for multiple consumption.
-        vec![build_job_graph(child.clone(), PartitionUsage::Once, graph)?]
+        vec![plan_job_graph_stages(
+            child.clone(),
+            PartitionUsage::Once,
+            graph,
+            DriverStageHandling::CreateStage,
+            scalar_subqueries,
+        )?]
     } else if matches!(driver_stage_handling, DriverStageHandling::PreserveRoot)
         && plan.is::<CooperativeExec>()
         && is_driver_stage_plan(&plan)
@@ -249,11 +299,20 @@ fn plan_job_graph_stages(
             usage,
             graph,
             DriverStageHandling::PreserveRoot,
+            scalar_subqueries,
         )?]
     } else {
         plan.children()
             .into_iter()
-            .map(|x| build_job_graph(x.clone(), usage, graph))
+            .map(|x| {
+                plan_job_graph_stages(
+                    x.clone(),
+                    usage,
+                    graph,
+                    DriverStageHandling::CreateStage,
+                    scalar_subqueries,
+                )
+            })
             .collect::<ExecutionResult<Vec<_>>>()?
     };
     let plan = with_new_children_if_necessary(plan, children)?;
@@ -282,19 +341,24 @@ fn plan_job_graph_stages(
                         .clone()
                         .with_partitioning(Partitioning::RoundRobinBatch(n)),
                 );
-                create_shuffle(child, graph, properties, consumption)?
+                create_shuffle(child, graph, properties, consumption, scalar_subqueries)?
             }
             Partitioning::RoundRobinBatch(_) | Partitioning::Hash(_, _) => {
-                create_shuffle(child, graph, properties, consumption)?
+                create_shuffle(child, graph, properties, consumption, scalar_subqueries)?
             }
         }
     } else if let Some(repartition) = plan.downcast_ref::<ExplicitRepartitionExec>() {
         let properties = repartition.properties().clone();
         let child = plan.children().one()?;
         match &properties.partitioning {
-            Partitioning::RoundRobinBatch(channels) => {
-                create_row_shuffle(child, *channels, graph, properties, consumption)?
-            }
+            Partitioning::RoundRobinBatch(channels) => create_row_shuffle(
+                child,
+                *channels,
+                graph,
+                properties,
+                consumption,
+                scalar_subqueries,
+            )?,
             other => {
                 return Err(ExecutionError::DataFusionError(plan_datafusion_err!(
                     "unexpected explicit repartition partitioning in distributed planning: {other:?}"
@@ -305,7 +369,7 @@ fn plan_job_graph_stages(
         let properties = coalesce.properties().clone();
         let child = plan.children().one()?;
         let fetch = coalesce.fetch();
-        let shuffled = create_shuffle(child, graph, properties, consumption)?;
+        let shuffled = create_shuffle(child, graph, properties, consumption, scalar_subqueries)?;
         if let Some(f) = fetch {
             Arc::new(GlobalLimitExec::new(shuffled, 0, Some(f))) as Arc<dyn ExecutionPlan>
         } else {
@@ -313,11 +377,19 @@ fn plan_job_graph_stages(
         }
     } else if plan.is::<SortPreservingMergeExec>() {
         let child = plan.children().one()?;
-        plan.clone()
-            .with_new_children(vec![create_merge_input(child, graph)?])?
+        plan.clone().with_new_children(vec![create_merge_input(
+            child,
+            graph,
+            scalar_subqueries,
+        )?])?
     } else if let Some(coalesce) = plan.downcast_ref::<CoalesceExec>() {
         let child = plan.children().one()?;
-        create_rescale_input(child, coalesce.output_partitions(), graph)?
+        create_rescale_input(
+            child,
+            coalesce.output_partitions(),
+            graph,
+            scalar_subqueries,
+        )?
     } else if plan.is::<SystemTableExec>()
         || plan.is::<CatalogCommandExec>()
         || plan.is::<FileDeleteExec>()
@@ -327,7 +399,7 @@ fn plan_job_graph_stages(
         if matches!(driver_stage_handling, DriverStageHandling::PreserveRoot) {
             plan
         } else {
-            create_driver_stage(&plan, graph)?
+            create_driver_stage(&plan, graph, scalar_subqueries)?
         }
     } else {
         plan
@@ -335,15 +407,63 @@ fn plan_job_graph_stages(
     Ok(plan)
 }
 
+fn build_scalar_subquery_job_graph(
+    scalar: &ScalarSubqueryExec,
+    usage: PartitionUsage,
+    graph: &mut JobGraph,
+    driver_stage_handling: DriverStageHandling,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    let subqueries = scalar
+        .subqueries()
+        .iter()
+        .map(|link| {
+            // The link plan is materialized once as its own stage. Reuse happens
+            // at the outer broadcast input consumed by ScalarSubqueryExec.
+            let plan = plan_job_graph_stages(
+                link.plan.clone(),
+                PartitionUsage::Once,
+                graph,
+                DriverStageHandling::CreateStage,
+                None,
+            )?;
+            let plan = create_scalar_subquery_input(&plan, graph)?;
+            Ok(ScalarSubqueryLink {
+                plan,
+                index: link.index,
+            })
+        })
+        .collect::<ExecutionResult<Vec<_>>>()?;
+    let input = plan_job_graph_stages(
+        scalar.input().clone(),
+        usage,
+        graph,
+        driver_stage_handling,
+        Some(subqueries.as_slice()),
+    )?;
+    Ok(wrap_scalar_subquery_stage_if_needed(
+        input,
+        Some(subqueries.as_slice()),
+    ))
+}
+
 fn build_barrier_job_graph(
     barrier: &BarrierExec,
     usage: PartitionUsage,
     graph: &mut JobGraph,
+    scalar_subqueries: Option<&[ScalarSubqueryLink]>,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
     let preconditions = barrier
         .preconditions()
         .iter()
-        .map(|precondition| build_job_graph(precondition.clone(), usage, graph))
+        .map(|precondition| {
+            plan_job_graph_stages(
+                precondition.clone(),
+                usage,
+                graph,
+                DriverStageHandling::CreateStage,
+                scalar_subqueries,
+            )
+        })
         .collect::<ExecutionResult<Vec<_>>>()?;
     let plan_is_driver_stage = is_driver_stage_plan(barrier.plan());
     let plan = if plan_is_driver_stage {
@@ -352,13 +472,20 @@ fn build_barrier_job_graph(
             usage,
             graph,
             DriverStageHandling::PreserveRoot,
+            scalar_subqueries,
         )?
     } else {
-        build_job_graph(barrier.plan().clone(), usage, graph)?
+        plan_job_graph_stages(
+            barrier.plan().clone(),
+            usage,
+            graph,
+            DriverStageHandling::CreateStage,
+            scalar_subqueries,
+        )?
     };
     let barrier = Arc::new(BarrierExec::new(preconditions, plan)) as Arc<dyn ExecutionPlan>;
     if plan_is_driver_stage {
-        create_driver_stage(&barrier, graph)
+        create_driver_stage(&barrier, graph, scalar_subqueries)
     } else {
         Ok(barrier)
     }
@@ -376,11 +503,40 @@ fn is_driver_stage_plan(plan: &Arc<dyn ExecutionPlan>) -> bool {
         || plan.is::<IcebergCommitExec>()
 }
 
+fn wrap_scalar_subquery_stage_if_needed(
+    plan: Arc<dyn ExecutionPlan>,
+    scalar_subqueries: Option<&[ScalarSubqueryLink]>,
+) -> Arc<dyn ExecutionPlan> {
+    let Some(scalar_subqueries) = scalar_subqueries else {
+        return plan;
+    };
+    if scalar_subqueries.is_empty() || !plan_contains_scalar_subquery_expr(&plan) {
+        return plan;
+    }
+    Arc::new(ScalarSubqueryExec::new(
+        plan,
+        scalar_subqueries.to_vec(),
+        ScalarSubqueryResults::new(scalar_subqueries.len()),
+    ))
+}
+
+fn plan_contains_scalar_subquery_expr(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    // DataFusion does not expose a generic ExecutionPlan expression visitor.
+    // The display tree is the uniform view that includes expressions for both
+    // DataFusion built-in nodes and Sail extension nodes.
+    displayable(plan.as_ref())
+        .indent(false)
+        .to_string()
+        .contains("scalar_subquery(")
+}
+
 fn create_merge_input(
     plan: &Arc<dyn ExecutionPlan>,
     graph: &mut JobGraph,
+    scalar_subqueries: Option<&[ScalarSubqueryLink]>,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
     let properties = plan.properties().clone();
+    let plan = wrap_scalar_subquery_stage_if_needed(plan.clone(), scalar_subqueries);
     let (plan, inputs) = rewrite_inputs(plan.clone())?;
     let stage = Stage {
         inputs,
@@ -401,11 +557,45 @@ fn create_merge_input(
     )))
 }
 
+fn create_scalar_subquery_input(
+    plan: &Arc<dyn ExecutionPlan>,
+    graph: &mut JobGraph,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    let (plan, inputs) = rewrite_inputs(plan.clone())?;
+    let stage = Stage {
+        inputs,
+        plan,
+        group: String::new(),
+        mode: OutputMode::Pipelined,
+        distribution: OutputDistribution::RoundRobin { channels: 1 },
+        placement: TaskPlacement::Worker,
+    };
+    let s = graph.stages.len();
+    graph.stages.push(stage);
+    // ScalarSubqueryExec reads the link as a scalar value on every output
+    // partition, so the materialized stage is exposed as one broadcast input.
+    let properties = Arc::new(PlanProperties::new(
+        datafusion::physical_expr::EquivalenceProperties::new(graph.stages[s].plan.schema()),
+        Partitioning::UnknownPartitioning(1),
+        graph.stages[s].plan.pipeline_behavior(),
+        graph.stages[s].plan.boundedness(),
+    ));
+    Ok(Arc::new(StageInputExec::new(
+        StageInput {
+            stage: s,
+            mode: InputMode::Broadcast,
+        },
+        properties,
+    )))
+}
+
 fn create_rescale_input(
     plan: &Arc<dyn ExecutionPlan>,
     output_partitions: usize,
     graph: &mut JobGraph,
+    scalar_subqueries: Option<&[ScalarSubqueryLink]>,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    let plan = wrap_scalar_subquery_stage_if_needed(plan.clone(), scalar_subqueries);
     let (plan, inputs) = rewrite_inputs(plan.clone())?;
     let stage = Stage {
         inputs,
@@ -439,6 +629,7 @@ fn create_shuffle(
     // which are different from the properties of the input plan.
     properties: Arc<PlanProperties>,
     consumption: ShuffleConsumption,
+    scalar_subqueries: Option<&[ScalarSubqueryLink]>,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
     let distribution = match properties.partitioning.clone() {
         Partitioning::RoundRobinBatch(channels) | Partitioning::UnknownPartitioning(channels) => {
@@ -446,6 +637,7 @@ fn create_shuffle(
         }
         Partitioning::Hash(keys, channels) => OutputDistribution::Hash { keys, channels },
     };
+    let plan = wrap_scalar_subquery_stage_if_needed(plan.clone(), scalar_subqueries);
     let (plan, inputs) = rewrite_inputs(plan.clone())?;
     let stage = Stage {
         inputs,
@@ -476,8 +668,10 @@ fn create_row_shuffle(
     graph: &mut JobGraph,
     properties: Arc<PlanProperties>,
     consumption: ShuffleConsumption,
+    scalar_subqueries: Option<&[ScalarSubqueryLink]>,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
     let distribution = OutputDistribution::RoundRobinRow { channels };
+    let plan = wrap_scalar_subquery_stage_if_needed(plan.clone(), scalar_subqueries);
     let (plan, inputs) = rewrite_inputs(plan.clone())?;
     let stage = Stage {
         inputs,
@@ -519,7 +713,9 @@ fn rewrite_inputs(
 fn create_driver_stage(
     plan: &Arc<dyn ExecutionPlan>,
     graph: &mut JobGraph,
+    scalar_subqueries: Option<&[ScalarSubqueryLink]>,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    let plan = wrap_scalar_subquery_stage_if_needed(plan.clone(), scalar_subqueries);
     let (plan, inputs) = rewrite_inputs(plan.clone())?;
     let properties = plan.properties().clone();
     let stage = Stage {
@@ -547,10 +743,14 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+    use datafusion::logical_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
+    use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
     use datafusion::physical_expr::Partitioning;
     use datafusion::physical_plan::coop::CooperativeExec;
     use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion::physical_plan::filter::FilterExec;
     use datafusion::physical_plan::repartition::RepartitionExec;
+    use datafusion::physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
     use datafusion::physical_plan::union::UnionExec;
     use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
     use sail_catalog::command::CatalogCommand;
@@ -561,6 +761,7 @@ mod tests {
 
     use super::JobGraph;
     use crate::job_graph::{InputMode, OutputDistribution, StageInput, TaskPlacement};
+    use crate::plan::StageInputExec;
 
     fn schema() -> SchemaRef {
         Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]))
@@ -673,5 +874,87 @@ mod tests {
                 mode: InputMode::Forward,
             }]
         ));
+    }
+
+    #[test]
+    fn test_job_graph_wraps_scalar_subquery_stage_after_shuffle_split() {
+        let results = ScalarSubqueryResults::new(1);
+        let predicate = Arc::new(ScalarSubqueryExpr::new(
+            DataType::Boolean,
+            false,
+            SubqueryIndex::new(0),
+            results.clone(),
+        ));
+        let filtered = Arc::new(FilterExec::try_new(predicate, empty_plan()).unwrap());
+        let repartitioned =
+            Arc::new(RepartitionExec::try_new(filtered, Partitioning::RoundRobinBatch(4)).unwrap());
+        let plan = Arc::new(ScalarSubqueryExec::new(
+            repartitioned,
+            vec![ScalarSubqueryLink {
+                plan: empty_plan(),
+                index: SubqueryIndex::new(0),
+            }],
+            results,
+        ));
+
+        let graph = JobGraph::try_new(plan).unwrap();
+
+        assert!(graph.stages().len() >= 3);
+        let stage = graph
+            .stages()
+            .iter()
+            .find_map(|stage| stage.plan.downcast_ref::<ScalarSubqueryExec>())
+            .expect("stage containing ScalarSubqueryExpr should keep a ScalarSubqueryExec wrapper");
+        assert_eq!(stage.subqueries().len(), 1);
+        assert!(stage.input().is::<FilterExec>());
+    }
+
+    #[test]
+    fn test_job_graph_broadcasts_scalar_subquery_stage_inputs() {
+        let results = ScalarSubqueryResults::new(1);
+        let predicate = Arc::new(ScalarSubqueryExpr::new(
+            DataType::Boolean,
+            false,
+            SubqueryIndex::new(0),
+            results.clone(),
+        ));
+        let filtered = Arc::new(FilterExec::try_new(predicate, empty_plan()).unwrap());
+        let repartitioned =
+            Arc::new(RepartitionExec::try_new(filtered, Partitioning::RoundRobinBatch(4)).unwrap());
+        let subquery = Arc::new(
+            RepartitionExec::try_new(empty_plan(), Partitioning::RoundRobinBatch(4)).unwrap(),
+        );
+        let plan = Arc::new(ScalarSubqueryExec::new(
+            repartitioned,
+            vec![ScalarSubqueryLink {
+                plan: subquery,
+                index: SubqueryIndex::new(0),
+            }],
+            results,
+        ));
+
+        let graph = JobGraph::try_new(plan).unwrap();
+        let stage = graph
+            .stages()
+            .iter()
+            .find(|stage| stage.plan.is::<ScalarSubqueryExec>())
+            .expect("stage containing ScalarSubqueryExpr should keep a ScalarSubqueryExec wrapper");
+        let scalar = stage.plan.downcast_ref::<ScalarSubqueryExec>().unwrap();
+        let subquery_input = scalar.subqueries()[0]
+            .plan
+            .downcast_ref::<StageInputExec<usize>>()
+            .expect("scalar subquery link should read from a stage input");
+
+        assert_eq!(
+            subquery_input
+                .properties()
+                .output_partitioning()
+                .partition_count(),
+            1
+        );
+        assert!(stage
+            .inputs
+            .iter()
+            .any(|input| matches!(input.mode, InputMode::Broadcast)));
     }
 }
