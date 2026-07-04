@@ -22,6 +22,11 @@ use datafusion::execution::TaskContext;
 use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
+use datafusion::functions_window::cume_dist::cume_dist_udwf;
+use datafusion::functions_window::lead_lag::{lag_udwf, lead_udwf};
+use datafusion::functions_window::nth_value::{first_value_udwf, last_value_udwf, nth_value_udwf};
+use datafusion::functions_window::rank::{dense_rank_udwf, percent_rank_udwf, rank_udwf};
+use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::{
     AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF,
 };
@@ -137,6 +142,7 @@ use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::spark_date::SparkDate;
+use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
@@ -2438,6 +2444,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeYmInterval::new())))
             }
             "spark_make_time" | "make_time" => Ok(Arc::new(ScalarUDF::from(SparkMakeTime::new()))),
+            "date_part" | "datepart" | "extract" => {
+                Ok(Arc::new(ScalarUDF::from(SparkDatePart::new())))
+            }
             "date_trunc" => Ok(Arc::new(ScalarUDF::from(SparkDateTrunc::new()))),
             "spark_time_diff" | "time_diff" => Ok(Arc::new(ScalarUDF::from(SparkTimeDiff::new()))),
             "spark_time_trunc" | "time_trunc" => {
@@ -2539,6 +2548,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkConcat>()
             || node_inner.is::<SparkConv>()
             || node_inner.is::<SparkCrc32>()
+            || node_inner.is::<SparkDatePart>()
             || node_inner.is::<SparkDateTrunc>()
             || node_inner.is::<SparkDayTimeInterval>()
             || node_inner.is::<SparkDecode>()
@@ -2610,6 +2620,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<UrlDecode>()
             || node_inner.is::<UrlEncode>()
             || node_inner.is::<Xpath>()
+            || matches!(node.name(), "date_part" | "datepart" | "extract")
             || node.name() == "json_as_text"
             || node.name() == "json_len"
             || node.name() == "json_length"
@@ -3024,7 +3035,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         let ExtendedWindowUdf { udwf_kind } = udwf;
         match udwf_kind {
             Some(UdwfKind::Standard(gen::StandardUdwf {})) => match name {
+                "cume_dist" => Ok(cume_dist_udwf()),
+                "dense_rank" => Ok(dense_rank_udwf()),
+                "first" | "first_value" => Ok(first_value_udwf()),
+                "lag" => Ok(lag_udwf()),
+                "last" | "last_value" => Ok(last_value_udwf()),
+                "lead" => Ok(lead_udwf()),
+                "nth_value" => Ok(nth_value_udwf()),
                 "ntile" => Ok(Arc::new(WindowUDF::from(SparkNtile::new()))),
+                "rank" => Ok(rank_udwf()),
+                "row_number" => Ok(row_number_udwf()),
+                "percent_rank" => Ok(percent_rank_udwf()),
                 _ => plan_err!("Could not find Window Function: {name}"),
             },
             Some(UdwfKind::SparkFirstLastValue(gen::SparkFirstLastValueUdwf {
@@ -3050,6 +3071,22 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 first: matches!(func.kind(), SparkFirstLastValueKind::First),
                 ignore_nulls: func.ignore_nulls(),
             })
+        } else if matches!(
+            node.name(),
+            "cume_dist"
+                | "dense_rank"
+                | "first"
+                | "first_value"
+                | "lag"
+                | "last"
+                | "last_value"
+                | "lead"
+                | "nth_value"
+                | "rank"
+                | "row_number"
+                | "percent_rank"
+        ) {
+            UdwfKind::Standard(gen::StandardUdwf {})
         } else {
             return Ok(());
         };
@@ -4152,10 +4189,14 @@ mod tests {
     }
 
     fn round_trip_udwf(udwf: WindowUDF) -> Result<Arc<WindowUDF>> {
+        round_trip_udwf_arc(Arc::new(udwf))
+    }
+
+    fn round_trip_udwf_arc(udwf: Arc<WindowUDF>) -> Result<Arc<WindowUDF>> {
         let codec = RemoteExecutionCodec;
         let name = udwf.name().to_string();
         let mut buf = vec![];
-        codec.try_encode_udwf(&udwf, &mut buf)?;
+        codec.try_encode_udwf(udwf.as_ref(), &mut buf)?;
         codec.try_decode_udwf(&name, &buf)
     }
 
@@ -4168,6 +4209,16 @@ mod tests {
             .downcast_ref::<SparkVariantExplodeUdf>()
             .is_some());
         assert_eq!(decoded.name(), "spark_variant_explode");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_date_part_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkDatePart::new()))?;
+
+        assert!(decoded.inner().downcast_ref::<SparkDatePart>().is_some());
+        assert_eq!(decoded.name(), "date_part");
 
         Ok(())
     }
@@ -4191,6 +4242,33 @@ mod tests {
         assert_eq!(decoded.name(), "last_value");
         assert_eq!(func.kind(), SparkFirstLastValueKind::Last);
         assert!(func.ignore_nulls());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_standard_window_udwfs() -> Result<()> {
+        let udwfs = [
+            cume_dist_udwf(),
+            dense_rank_udwf(),
+            first_value_udwf(),
+            lag_udwf(),
+            last_value_udwf(),
+            lead_udwf(),
+            nth_value_udwf(),
+            rank_udwf(),
+            row_number_udwf(),
+            percent_rank_udwf(),
+        ];
+
+        for udwf in udwfs {
+            let name = udwf.name().to_string();
+            let decoded = round_trip_udwf_arc(udwf)?;
+            assert_eq!(decoded.name(), name);
+        }
+
+        let decoded = round_trip_udwf(WindowUDF::from(SparkNtile::new()))?;
+        assert!(decoded.inner().downcast_ref::<SparkNtile>().is_some());
 
         Ok(())
     }
