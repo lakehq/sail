@@ -9,7 +9,9 @@ use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::LogicalPlan;
 use sail_common::spec;
+use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
+use sail_common_datafusion::session::job::JobService;
 
 use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
@@ -332,6 +334,16 @@ fn render_section(title: &str, body: &str) -> String {
     format!("== {title} ==\n{body}")
 }
 
+fn render_with_distributed_plan(
+    mut sections: Vec<String>,
+    distributed_plan: Option<&str>,
+) -> String {
+    if let Some(plan) = distributed_plan {
+        sections.push(render_section("Distributed Plan", plan));
+    }
+    sections.join("\n\n")
+}
+
 fn render_stringified_plans(plans: &[StringifiedPlan]) -> String {
     let mut rendered = Vec::with_capacity(plans.len());
     let mut prev: Option<&StringifiedPlan> = None;
@@ -367,6 +379,18 @@ async fn maybe_collect_metrics(
         }
     }
     Ok(())
+}
+
+fn distributed_plan_string(
+    ctx: &SessionContext,
+    physical: &Option<Arc<dyn ExecutionPlan>>,
+) -> Option<String> {
+    let plan = physical.as_ref()?;
+    let service = ctx.extension::<JobService>().ok()?;
+    match service.runner().explain(Arc::clone(plan)) {
+        Ok(plan) => plan,
+        Err(err) => Some(format!("Distributed plan error: {err}")),
+    }
 }
 
 pub async fn explain_string(
@@ -413,6 +437,7 @@ async fn explain_from_collected(
         collected.logical_string(&collected.optimized_logical, PlanType::FinalLogicalPlan);
 
     let mut physical = PhysicalStrings::default();
+    let distributed_plan = distributed_plan_string(ctx, &collected.physical_plan);
 
     let output = match options.kind {
         ExplainKind::Simple => {
@@ -432,58 +457,67 @@ async fn explain_from_collected(
                     physical.with_schema(&collected),
                 ));
             }
-            sections.join("\n\n")
+            render_with_distributed_plan(sections, distributed_plan.as_deref())
         }
-        ExplainKind::Extended => [
-            render_section("Parsed Logical Plan", &logical_simple),
-            // prepend schema to make analyzed plan distinct from optimized plan
-            render_section("Analyzed Logical Plan", &logical_analyzed_schema),
-            render_section("Optimized Logical Plan", &logical_optimized),
-            render_section(
-                "Physical Plan",
-                if options.analyze {
-                    physical.full_with_metrics(&collected)
-                } else {
-                    physical.plain(&collected, options.verbose)
-                },
-            ),
-        ]
-        .join("\n\n"),
-        ExplainKind::Codegen => [
-            render_section(
-                "Codegen",
-                "Whole-stage codegen is not supported; showing physical plan instead.",
-            ),
-            render_section(
-                "Plan Steps",
-                &render_stringified_plans(&collected.stringified),
-            ),
-            render_section(
-                "Physical Plan",
-                if options.analyze {
-                    physical.full_with_metrics(&collected)
-                } else {
-                    physical.plain(&collected, options.verbose)
-                },
-            ),
-        ]
-        .join("\n\n"),
-        ExplainKind::Cost => [
-            render_section("Optimized Logical Plan", &logical_optimized),
-            // TODO: Spark COST mode shows logical plan + stats; we currently return physical +
-            // stats
-            render_section(
-                "Physical Plan",
-                if options.verbose || options.analyze {
-                    physical.full(&collected)
-                } else {
-                    physical.with_stats(&collected)
-                },
-            ),
-        ]
-        .join("\n\n"),
+        ExplainKind::Extended => render_with_distributed_plan(
+            vec![
+                render_section("Parsed Logical Plan", &logical_simple),
+                // prepend schema to make analyzed plan distinct from optimized plan
+                render_section("Analyzed Logical Plan", &logical_analyzed_schema),
+                render_section("Optimized Logical Plan", &logical_optimized),
+                render_section(
+                    "Physical Plan",
+                    if options.analyze {
+                        physical.full_with_metrics(&collected)
+                    } else {
+                        physical.plain(&collected, options.verbose)
+                    },
+                ),
+            ],
+            distributed_plan.as_deref(),
+        ),
+        ExplainKind::Codegen => render_with_distributed_plan(
+            vec![
+                render_section(
+                    "Codegen",
+                    "Whole-stage codegen is not supported; showing physical plan instead.",
+                ),
+                render_section(
+                    "Plan Steps",
+                    &render_stringified_plans(&collected.stringified),
+                ),
+                render_section(
+                    "Physical Plan",
+                    if options.analyze {
+                        physical.full_with_metrics(&collected)
+                    } else {
+                        physical.plain(&collected, options.verbose)
+                    },
+                ),
+            ],
+            distributed_plan.as_deref(),
+        ),
+        ExplainKind::Cost => render_with_distributed_plan(
+            vec![
+                render_section("Optimized Logical Plan", &logical_optimized),
+                // TODO: Spark COST mode shows logical plan + stats; we currently return physical +
+                // stats
+                render_section(
+                    "Physical Plan",
+                    if options.verbose || options.analyze {
+                        physical.full(&collected)
+                    } else {
+                        physical.with_stats(&collected)
+                    },
+                ),
+            ],
+            distributed_plan.as_deref(),
+        ),
         // TODO: Spark FORMATTED mode emits outline + node details
-        ExplainKind::Formatted => render_section("Physical Plan", physical.full(&collected)),
+        ExplainKind::Formatted => render_with_distributed_plan(
+            vec![render_section("Physical Plan", physical.full(&collected))],
+            distributed_plan.as_deref(),
+        ),
     };
 
     Ok(ExplainString {
