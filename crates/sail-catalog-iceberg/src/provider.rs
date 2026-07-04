@@ -1129,6 +1129,25 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                         )
                         .cloned();
 
+                    // Whether the existing table carries a real (non-empty) partition spec, so a
+                    // REPLACE that drops partitioning knows to reset it rather than emit a dedup'd
+                    // spec that leaves `SetDefaultSpec{-1}` dangling.
+                    let existing_is_partitioned = find_by_id_or_last(
+                        existing_metadata.partition_specs.as_ref(),
+                        existing_metadata.default_spec_id,
+                        |s| s.spec_id,
+                    )
+                    .is_some_and(|s| !s.fields.is_empty());
+
+                    // Same reasoning for sort: a table with a real sort order needs it reset to
+                    // unsorted on a REPLACE that omits the sort clause.
+                    let existing_is_sorted = find_by_id_or_last(
+                        existing_metadata.sort_orders.as_ref(),
+                        existing_metadata.default_sort_order_id,
+                        |o| Some(o.order_id),
+                    )
+                    .is_some_and(|o| !o.fields.is_empty());
+
                     let updates = build_replace_updates(
                         &schema,
                         partition_spec.clone(),
@@ -1138,6 +1157,8 @@ impl CatalogProvider for IcebergRestCatalogProvider {
                         location.as_deref(),
                         existing_current_schema.as_ref(),
                         existing_current_snapshot_id.is_some(),
+                        existing_is_partitioned,
+                        existing_is_sorted,
                     );
 
                     // UUID is stable across a concurrent replace/data commit, so also assert the
@@ -1748,6 +1769,8 @@ fn build_replace_updates(
     location: Option<&str>,
     existing_current_schema: Option<&crate::models::Schema>,
     has_current_snapshot: bool,
+    existing_is_partitioned: bool,
+    existing_is_sorted: bool,
 ) -> Vec<crate::models::TableUpdate> {
     let mut updates: Vec<crate::models::TableUpdate> = Vec::new();
 
@@ -1772,14 +1795,52 @@ fn build_replace_updates(
         updates.push(crate::models::TableUpdate::SetCurrentSchemaUpdate { schema_id: -1 });
     }
 
-    if let Some(spec) = partition_spec {
-        updates.push(crate::models::TableUpdate::AddPartitionSpecUpdate { spec });
-        updates.push(crate::models::TableUpdate::SetDefaultSpecUpdate { spec_id: -1 });
+    // REPLACE is a full redefinition, not a merge: when the new table omits `PARTITIONED BY`
+    // or a sort clause, reset to unpartitioned / unsorted instead of inheriting the old table's.
+    match partition_spec {
+        Some(spec) => {
+            updates.push(crate::models::TableUpdate::AddPartitionSpecUpdate { spec });
+            updates.push(crate::models::TableUpdate::SetDefaultSpecUpdate { spec_id: -1 });
+        }
+        // Reset a previously-partitioned table to unpartitioned: add the empty spec (a genuinely
+        // new spec, so the server's "last added" `-1` resolves) and make it the default. The REST
+        // parser requires `spec-id`; 0 is the reserved unpartitioned id, reassigned on add.
+        None if existing_is_partitioned => {
+            updates.push(crate::models::TableUpdate::AddPartitionSpecUpdate {
+                spec: Box::new(crate::models::PartitionSpec {
+                    spec_id: Some(0),
+                    fields: Vec::new(),
+                }),
+            });
+            updates.push(crate::models::TableUpdate::SetDefaultSpecUpdate { spec_id: -1 });
+        }
+        // Already unpartitioned: adding the empty spec would dedup, leaving `-1` with nothing to
+        // point at ("no partition spec has been added"), so emit no partition update.
+        None => {}
     }
 
-    if let Some(order) = write_order {
-        updates.push(crate::models::TableUpdate::AddSortOrderUpdate { sort_order: order });
-        updates.push(crate::models::TableUpdate::SetDefaultSortOrderUpdate { sort_order_id: -1 });
+    match write_order {
+        Some(order) => {
+            updates.push(crate::models::TableUpdate::AddSortOrderUpdate { sort_order: order });
+            updates
+                .push(crate::models::TableUpdate::SetDefaultSortOrderUpdate { sort_order_id: -1 });
+        }
+        // Reset a previously-sorted table to unsorted. A table created with a sort order does not
+        // carry the unsorted order (id 0), so add it (a genuinely new order → `-1` resolves) and
+        // default to it. Setting the default to 0 directly would NPE on the missing order.
+        None if existing_is_sorted => {
+            updates.push(crate::models::TableUpdate::AddSortOrderUpdate {
+                sort_order: Box::new(crate::models::SortOrder {
+                    order_id: 0,
+                    fields: Vec::new(),
+                }),
+            });
+            updates
+                .push(crate::models::TableUpdate::SetDefaultSortOrderUpdate { sort_order_id: -1 });
+        }
+        // Already unsorted: adding the unsorted order would dedup, leaving `-1` with nothing to
+        // point at ("no sort order has been added"), so emit no sort update.
+        None => {}
     }
 
     if let Some(loc) = location {
@@ -3783,6 +3844,8 @@ mod tests {
             None,
             Some(&schema),
             false,
+            false,
+            false,
         );
 
         let removals: Vec<String> = updates
@@ -3824,6 +3887,8 @@ mod tests {
                 None,
                 Some(&schema),
                 has_current_snapshot,
+                false,
+                false,
             )
             .into_iter()
             .any(|u| {
@@ -3841,6 +3906,88 @@ mod tests {
         assert!(
             !has_reset(false),
             "REPLACE of an empty table must not remove a non-existent main ref"
+        );
+    }
+
+    #[test]
+    fn test_build_replace_updates_clears_partition_and_sort_when_omitted() {
+        let schema = empty_schema();
+        let updates_for = |existing_is_partitioned: bool, existing_is_sorted: bool| {
+            build_replace_updates(
+                &schema,
+                None,
+                None,
+                HashMap::new(),
+                &HashMap::new(),
+                None,
+                Some(&schema),
+                false,
+                existing_is_partitioned,
+                existing_is_sorted,
+            )
+        };
+        let has_add_spec = |u: &[crate::models::TableUpdate]| {
+            u.iter().find_map(|u| match u {
+                crate::models::TableUpdate::AddPartitionSpecUpdate { spec } => Some(spec.clone()),
+                _ => None,
+            })
+        };
+        let has_add_order = |u: &[crate::models::TableUpdate]| {
+            u.iter().find_map(|u| match u {
+                crate::models::TableUpdate::AddSortOrderUpdate { sort_order } => {
+                    Some(sort_order.clone())
+                }
+                _ => None,
+            })
+        };
+        let has_set_default_spec =
+            |u: &[crate::models::TableUpdate]| {
+                u.iter().any(|u| matches!(
+                u,
+                crate::models::TableUpdate::SetDefaultSpecUpdate { spec_id } if *spec_id == -1
+            ))
+            };
+        let has_set_default_order = |u: &[crate::models::TableUpdate]| {
+            u.iter().any(|u| matches!(
+                u,
+                crate::models::TableUpdate::SetDefaultSortOrderUpdate { sort_order_id } if *sort_order_id == -1
+            ))
+        };
+
+        // A previously partitioned/sorted table dropping both must add the empty spec/order and
+        // default to each (`-1` = last added), yielding a genuinely unpartitioned, unsorted table.
+        let both = updates_for(true, true);
+        assert!(
+            has_add_spec(&both).is_some_and(|s| s.fields.is_empty()) && has_set_default_spec(&both),
+            "dropping partitioning must add the empty spec and default to it"
+        );
+        assert!(
+            has_add_order(&both).is_some_and(|o| o.fields.is_empty())
+                && has_set_default_order(&both),
+            "dropping the sort clause must add the unsorted order and default to it"
+        );
+
+        // An already unpartitioned + unsorted table must emit no spec/order update at all (adding
+        // would dedup and leave SetDefault{-1} dangling).
+        let neither = updates_for(false, false);
+        assert!(
+            has_add_spec(&neither).is_none() && has_add_order(&neither).is_none(),
+            "an already unpartitioned/unsorted table must emit no spec/order update"
+        );
+        assert!(
+            !neither.iter().any(|u| matches!(
+                u,
+                crate::models::TableUpdate::SetDefaultSpecUpdate { .. }
+                    | crate::models::TableUpdate::SetDefaultSortOrderUpdate { .. }
+            )),
+            "an already unpartitioned/unsorted table must emit no SetDefault update"
+        );
+
+        // The two axes are independent: sorted-but-unpartitioned resets only the sort.
+        let sort_only = updates_for(false, true);
+        assert!(
+            has_add_spec(&sort_only).is_none() && has_add_order(&sort_only).is_some(),
+            "a sorted, unpartitioned table must reset only the sort order"
         );
     }
 
