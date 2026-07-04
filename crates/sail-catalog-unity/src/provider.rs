@@ -116,6 +116,32 @@ impl UnityCatalogProvider {
         }
     }
 
+    async fn create_managed_staging_location(
+        &self,
+        client: &Client,
+        catalog_name: &str,
+        schema_name: &str,
+        table: &str,
+    ) -> CatalogResult<String> {
+        let request = types::CreateStagingTable::builder()
+            .name(self.object_name(table))
+            .catalog_name(self.object_name(catalog_name))
+            .schema_name(self.object_name(schema_name));
+        let response = match client.create_staging_table().body(request).send().await {
+            Ok(response) => response,
+            Err(e) => {
+                return Err(CatalogError::External(format!(
+                    "Failed to create staging table: {e}"
+                )));
+            }
+        };
+        response.into_inner().staging_location.ok_or_else(|| {
+            CatalogError::External(
+                "Unity Catalog staging table response is missing a staging location".to_string(),
+            )
+        })
+    }
+
     fn qualified_object_name(&self, names: &[&str]) -> String {
         names
             .iter()
@@ -517,7 +543,7 @@ impl CatalogProvider for UnityCatalogProvider {
             mode,
             properties,
             is_external,
-            is_write_precondition: _,
+            is_write_precondition,
         } = options;
 
         if mode.is_replace() {
@@ -644,27 +670,20 @@ impl CatalogProvider for UnityCatalogProvider {
                     "Storage location is required for external Unity Catalog tables".to_string(),
                 )
             })?
-        } else {
-            // The SQL planner supplies generated default locations for managed tables. Unity
-            // managed table creation must use a staging location allocated by the catalog.
-            let request = types::CreateStagingTable::builder()
-                .name(self.object_name(table))
-                .catalog_name(self.object_name(&catalog_name))
-                .schema_name(self.object_name(&schema_name));
-            let response = match client.create_staging_table().body(request).send().await {
-                Ok(response) => response,
-                Err(e) => {
-                    return Err(CatalogError::External(format!(
-                        "Failed to create staging table: {e}"
-                    )));
-                }
-            };
-            response.into_inner().staging_location.ok_or_else(|| {
+        } else if is_write_precondition {
+            // CTAS/data-write preconditions run before the writer, so they must use
+            // the staging location already returned by plan_lakehouse_create.
+            location.ok_or_else(|| {
                 CatalogError::External(
-                    "Unity Catalog staging table response is missing a staging location"
+                    "Unity Catalog managed table write precondition is missing a planned staging location"
                         .to_string(),
                 )
             })?
+        } else {
+            // The SQL planner supplies generated default locations for managed tables. Unity
+            // managed table creation must use a staging location allocated by the catalog.
+            self.create_managed_staging_location(&client, &catalog_name, &schema_name, table)
+                .await?
         };
 
         let request = types::CreateTable::builder()
@@ -843,11 +862,22 @@ impl CatalogProvider for UnityCatalogProvider {
             sail_catalog::provider::CreateTableMetadataRequirement::None,
             &self.lakehouse_capabilities(),
         );
-        let _ = (database, table);
         if request.options.format.eq_ignore_ascii_case("delta") && !request.options.is_external {
             plan.materialization = LakehouseCreateMaterialization::AfterCatalogTableFormat {
                 mode: TableFormatCreateMetadataMode::CatalogCoordinated,
             };
+            if request.options.is_write_precondition {
+                let client = self
+                    .get_client()
+                    .await
+                    .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
+                let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
+                let location = self
+                    .create_managed_staging_location(&client, &catalog_name, &schema_name, table)
+                    .await?;
+                plan.table.status.location = Some(location.clone());
+                plan.table.execution.table_identity.table_uri = Some(location);
+            }
         }
         Ok(plan)
     }
