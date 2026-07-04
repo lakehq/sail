@@ -4,9 +4,9 @@ use sail_common::spec::{self};
 use sail_sql_parser::ast::expression::{
     AtomExpr, BinaryOperator, CaseElse, CaseWhen, DuplicateTreatment, Expr, FilterClause,
     FunctionArgument, FunctionArgumentList, FunctionExpr, GroupingExpr, GroupingSet,
-    LambdaFunctionParameters, NullTreatment, OrderByExpr, OrderDirection, OrderNulls, OverClause,
-    PatternEscape, PatternQuantifier, TableExpr, TrimExpr, UnaryOperator, WindowFrame,
-    WindowFrameBound, WindowModifier, WindowSpec, WithinGroupClause,
+    GroupingSetsClause, LambdaFunctionParameters, NullTreatment, OrderByExpr, OrderDirection,
+    OrderNulls, OverClause, PatternEscape, PatternQuantifier, TableExpr, TrimExpr, UnaryOperator,
+    WindowFrame, WindowFrameBound, WindowModifier, WindowSpec, WithinGroupClause,
 };
 use sail_sql_parser::ast::identifier::{ObjectName, QualifiedWildcard};
 use sail_sql_parser::ast::query::{
@@ -22,6 +22,10 @@ use crate::query::{from_ast_named_expression, from_ast_query};
 use crate::value::{
     from_ast_boolean_literal, from_ast_number_literal, from_ast_string, from_ast_string_literal,
 };
+
+pub(crate) type PositionalFunctionArgs = Vec<spec::Expr>;
+pub(crate) type NamedFunctionArgs = Vec<(spec::Identifier, spec::Expr)>;
+pub(crate) type FunctionArgs = (PositionalFunctionArgs, NamedFunctionArgs);
 
 #[derive(Default)]
 struct WindowModifiers {
@@ -96,10 +100,9 @@ fn negated(expr: spec::Expr) -> spec::Expr {
     })
 }
 
-#[expect(clippy::type_complexity)]
 pub(crate) fn from_ast_function_arguments(
     args: impl IntoIterator<Item = FunctionArgument>,
-) -> SqlResult<(Vec<spec::Expr>, Vec<(spec::Identifier, spec::Expr)>)> {
+) -> SqlResult<FunctionArgs> {
     let mut arguments = vec![];
     let mut named_arguments = vec![];
     for arg in args {
@@ -944,6 +947,26 @@ fn from_ast_atom_expression(atom: AtomExpr) -> SqlResult<spec::Expr> {
                 order_by: None,
             }))
         }
+        AtomExpr::CurrentTime(_, arguments) => {
+            let arguments = arguments
+                .and_then(|(_, argument, _)| {
+                    argument.map(|argument| from_ast_expression(*argument))
+                })
+                .transpose()?
+                .into_iter()
+                .collect();
+            Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
+                function_name: spec::ObjectName::bare("current_time"),
+                arguments,
+                named_arguments: vec![],
+                is_distinct: false,
+                is_user_defined_function: false,
+                is_internal: None,
+                ignore_nulls: None,
+                filter: None,
+                order_by: None,
+            }))
+        }
         AtomExpr::CurrentDate(_, _) => {
             Ok(spec::Expr::UnresolvedFunction(spec::UnresolvedFunction {
                 function_name: spec::ObjectName::bare("current_date"),
@@ -1104,6 +1127,15 @@ pub(crate) fn from_ast_grouping_expression(expr: GroupingExpr) -> SqlResult<spec
         }
         GroupingExpr::Default(expr) => from_ast_expression(expr),
     }
+}
+
+pub(crate) fn from_ast_grouping_sets_clause(clause: GroupingSetsClause) -> SqlResult<spec::Expr> {
+    let GroupingSetsClause { expressions, .. } = clause;
+    let expr = expressions
+        .into_items()
+        .map(from_ast_grouping_set)
+        .collect::<SqlResult<Vec<_>>>()?;
+    Ok(spec::Expr::GroupingSets(expr))
 }
 
 fn from_ast_grouping_set(grouping: GroupingSet) -> SqlResult<Vec<spec::Expr>> {

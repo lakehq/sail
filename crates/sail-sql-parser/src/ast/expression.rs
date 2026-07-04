@@ -10,7 +10,7 @@ use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
 use crate::ast::data_type::{DataType, IntervalDayTimeUnit, IntervalYearMonthUnit};
 use crate::ast::identifier::{Ident, ObjectName, Variable};
 use crate::ast::keywords::{
-    All, And, Any, As, Asc, Between, Both, By, Case, Cast, Cube, Current, CurrentDate,
+    All, And, Any, As, Asc, Between, Both, By, Case, Cast, Cube, Current, CurrentDate, CurrentTime,
     CurrentTimestamp, CurrentUser, Date, Day, Days, Desc, Distinct, Div, Else, End, Escape, Exists,
     Extract, False, Filter, First, Following, For, From, Group, Grouping, Hour, Hours, Identifier,
     Ignore, Ilike, In, Interval, Is, Last, Leading, Like, Microsecond, Microseconds, Millisecond,
@@ -215,6 +215,17 @@ pub enum AtomExpr {
     CurrentTimestamp(
         CurrentTimestamp,
         Option<(LeftParenthesis, RightParenthesis)>,
+    ),
+    CurrentTime(
+        CurrentTime,
+        #[parser(function = |(e, _, _), o| {
+            unit(o)
+                .then(boxed(e).or_not())
+                .then(unit(o))
+                .map(|((left, expr), right)| (left, expr, right))
+                .or_not()
+        })]
+        Option<(LeftParenthesis, Option<Box<Expr>>, RightParenthesis)>,
     ),
     CurrentDate(CurrentDate, Option<(LeftParenthesis, RightParenthesis)>),
     IdentifierClause(
@@ -612,6 +623,17 @@ pub enum GroupingExpr {
         #[parser(function = |e, o| compose(e, o))] GroupingSet,
     ),
     Default(#[parser(function = |e, _| e)] Expr),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "Expr")]
+pub struct GroupingSetsClause {
+    pub grouping: Grouping,
+    pub sets: Sets,
+    pub left: LeftParenthesis,
+    #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
+    pub expressions: Sequence<GroupingSet, Comma>,
+    pub right: RightParenthesis,
 }
 
 // TODO: support nested grouping sets

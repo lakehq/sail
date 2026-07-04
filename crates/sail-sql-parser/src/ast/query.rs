@@ -8,7 +8,8 @@ use either::Either;
 use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
 
 use crate::ast::expression::{
-    DuplicateTreatment, Expr, FunctionArgument, GroupingExpr, OrderByExpr, WindowSpec,
+    DuplicateTreatment, Expr, FunctionArgument, GroupingExpr, GroupingSetsClause, OrderByExpr,
+    WindowSpec,
 };
 use crate::ast::identifier::{column_ident, object_name, table_ident, Ident, ObjectName};
 use crate::ast::keywords::{
@@ -518,6 +519,8 @@ pub struct GroupByClause {
     pub group_by: (Group, By),
     #[parser(function = |e, o| sequence(compose(e, o), unit(o)))]
     pub expressions: Sequence<GroupingExpr, Comma>,
+    #[parser(function = |e, o| compose(e, o).or_not())]
+    pub grouping_sets: Option<GroupingSetsClause>,
     pub modifier: Option<GroupByModifier>,
 }
 

@@ -2071,7 +2071,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: This feature is not implemented: Unsupported data type: Interval(YearMonth) for mode function"
+        "success": "ok"
       }
     },
     {
@@ -4017,7 +4017,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: [return_type] SUM not supported for Null"
+        "success": "ok"
       }
     },
     {

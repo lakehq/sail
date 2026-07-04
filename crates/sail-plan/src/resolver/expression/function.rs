@@ -72,6 +72,11 @@ impl PlanResolver<'_> {
         }
 
         let canonical_function_name = function_name.to_ascii_lowercase();
+        let (arguments, kwarg_names) = Self::normalize_builtin_function_arguments(
+            &canonical_function_name,
+            arguments,
+            kwarg_names,
+        );
         let catalog_manager = self.ctx.extension::<CatalogManager>()?;
         if let Some(udf) = catalog_manager.get_function(&canonical_function_name)? {
             if udf.inner().is::<PySparkUnresolvedUDF>() {
@@ -383,6 +388,52 @@ impl PlanResolver<'_> {
         }
 
         Ok((names, exprs))
+    }
+
+    fn normalize_builtin_function_arguments(
+        function_name: &str,
+        arguments: Vec<spec::Expr>,
+        kwarg_names: Vec<Option<String>>,
+    ) -> (Vec<spec::Expr>, Vec<Option<String>>) {
+        match function_name {
+            "encode" => Self::normalize_encode_arguments(arguments, kwarg_names),
+            _ => (arguments, kwarg_names),
+        }
+    }
+
+    fn normalize_encode_arguments(
+        arguments: Vec<spec::Expr>,
+        kwarg_names: Vec<Option<String>>,
+    ) -> (Vec<spec::Expr>, Vec<Option<String>>) {
+        let pairs = arguments.into_iter().zip(kwarg_names).collect::<Vec<_>>();
+        let mut value = None;
+        let mut charset = None;
+        let mut positional_index = 0;
+        for (argument, name) in pairs.iter().cloned() {
+            let slot = if let Some(name) = name {
+                match name.to_ascii_lowercase().as_str() {
+                    "value" => &mut value,
+                    "charset" => &mut charset,
+                    _ => return pairs.into_iter().unzip(),
+                }
+            } else {
+                let slot = match positional_index {
+                    0 => &mut value,
+                    1 => &mut charset,
+                    _ => return pairs.into_iter().unzip(),
+                };
+                positional_index += 1;
+                slot
+            };
+            if slot.is_some() {
+                return pairs.into_iter().unzip();
+            }
+            *slot = Some(argument);
+        }
+        match (value, charset) {
+            (Some(value), Some(charset)) => (vec![value, charset], vec![None, None]),
+            _ => pairs.into_iter().unzip(),
+        }
     }
 
     /// For `mode() WITHIN GROUP (ORDER BY col)`, move the sort expression into the

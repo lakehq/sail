@@ -24,12 +24,18 @@
       "input": "current_time",
       "output": {
         "success": {
-          "unresolvedAttribute": {
-            "name": [
+          "unresolvedFunction": {
+            "functionName": [
               "current_time"
             ],
-            "planId": null,
-            "isMetadataColumn": false
+            "arguments": [],
+            "namedArguments": [],
+            "isDistinct": false,
+            "isUserDefinedFunction": false,
+            "isInternal": null,
+            "ignoreNulls": null,
+            "filter": null,
+            "orderBy": null
           }
         }
       }

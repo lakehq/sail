@@ -9,7 +9,8 @@ use datafusion::arrow::array::{
 };
 use datafusion::arrow::datatypes::{
     DataType, Date32Type, Date64Type, Field, FieldRef, Float16Type, Float32Type, Float64Type,
-    Int16Type, Int32Type, Int64Type, Int8Type, Time32MillisecondType, Time32SecondType,
+    Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType,
+    IntervalUnit, IntervalYearMonthType, Time32MillisecondType, Time32SecondType,
     Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type,
     UInt64Type, UInt8Type,
@@ -77,94 +78,105 @@ impl AggregateUDFImpl for ModeFunction {
         let data_type = &acc_args.exprs[0].data_type(acc_args.schema)?;
         let tie_break = resolve_tie_break(&acc_args)?;
 
-        let accumulator: Box<dyn Accumulator> = match data_type {
-            DataType::Int8 => Box::new(PrimitiveModeAccumulator::<Int8Type>::new(
-                data_type, tie_break,
-            )),
-            DataType::Int16 => Box::new(PrimitiveModeAccumulator::<Int16Type>::new(
-                data_type, tie_break,
-            )),
-            DataType::Int32 => Box::new(PrimitiveModeAccumulator::<Int32Type>::new(
-                data_type, tie_break,
-            )),
-            DataType::Int64 => Box::new(PrimitiveModeAccumulator::<Int64Type>::new(
-                data_type, tie_break,
-            )),
-            DataType::UInt8 => Box::new(PrimitiveModeAccumulator::<UInt8Type>::new(
-                data_type, tie_break,
-            )),
-            DataType::UInt16 => Box::new(PrimitiveModeAccumulator::<UInt16Type>::new(
-                data_type, tie_break,
-            )),
-            DataType::UInt32 => Box::new(PrimitiveModeAccumulator::<UInt32Type>::new(
-                data_type, tie_break,
-            )),
-            DataType::UInt64 => Box::new(PrimitiveModeAccumulator::<UInt64Type>::new(
-                data_type, tie_break,
-            )),
+        let accumulator: Box<dyn Accumulator> =
+            match data_type {
+                DataType::Int8 => Box::new(PrimitiveModeAccumulator::<Int8Type>::new(
+                    data_type, tie_break,
+                )),
+                DataType::Int16 => Box::new(PrimitiveModeAccumulator::<Int16Type>::new(
+                    data_type, tie_break,
+                )),
+                DataType::Int32 => Box::new(PrimitiveModeAccumulator::<Int32Type>::new(
+                    data_type, tie_break,
+                )),
+                DataType::Int64 => Box::new(PrimitiveModeAccumulator::<Int64Type>::new(
+                    data_type, tie_break,
+                )),
+                DataType::UInt8 => Box::new(PrimitiveModeAccumulator::<UInt8Type>::new(
+                    data_type, tie_break,
+                )),
+                DataType::UInt16 => Box::new(PrimitiveModeAccumulator::<UInt16Type>::new(
+                    data_type, tie_break,
+                )),
+                DataType::UInt32 => Box::new(PrimitiveModeAccumulator::<UInt32Type>::new(
+                    data_type, tie_break,
+                )),
+                DataType::UInt64 => Box::new(PrimitiveModeAccumulator::<UInt64Type>::new(
+                    data_type, tie_break,
+                )),
 
-            DataType::Date32 => Box::new(PrimitiveModeAccumulator::<Date32Type>::new(
-                data_type, tie_break,
-            )),
-            DataType::Date64 => Box::new(PrimitiveModeAccumulator::<Date64Type>::new(
-                data_type, tie_break,
-            )),
-            DataType::Time32(TimeUnit::Millisecond) => {
-                Box::new(PrimitiveModeAccumulator::<Time32MillisecondType>::new(
+                DataType::Date32 => Box::new(PrimitiveModeAccumulator::<Date32Type>::new(
                     data_type, tie_break,
-                ))
-            }
-            DataType::Time32(TimeUnit::Second) => Box::new(PrimitiveModeAccumulator::<
-                Time32SecondType,
-            >::new(data_type, tie_break)),
-            DataType::Time64(TimeUnit::Microsecond) => {
-                Box::new(PrimitiveModeAccumulator::<Time64MicrosecondType>::new(
+                )),
+                DataType::Date64 => Box::new(PrimitiveModeAccumulator::<Date64Type>::new(
                     data_type, tie_break,
-                ))
-            }
-            DataType::Time64(TimeUnit::Nanosecond) => {
-                Box::new(PrimitiveModeAccumulator::<Time64NanosecondType>::new(
-                    data_type, tie_break,
-                ))
-            }
-            DataType::Timestamp(TimeUnit::Microsecond, _) => {
-                Box::new(PrimitiveModeAccumulator::<TimestampMicrosecondType>::new(
-                    data_type, tie_break,
-                ))
-            }
-            DataType::Timestamp(TimeUnit::Millisecond, _) => {
-                Box::new(PrimitiveModeAccumulator::<TimestampMillisecondType>::new(
-                    data_type, tie_break,
-                ))
-            }
-            DataType::Timestamp(TimeUnit::Nanosecond, _) => {
-                Box::new(PrimitiveModeAccumulator::<TimestampNanosecondType>::new(
-                    data_type, tie_break,
-                ))
-            }
-            DataType::Timestamp(TimeUnit::Second, _) => {
-                Box::new(PrimitiveModeAccumulator::<TimestampSecondType>::new(
-                    data_type, tie_break,
-                ))
-            }
+                )),
+                DataType::Time32(TimeUnit::Millisecond) => {
+                    Box::new(PrimitiveModeAccumulator::<Time32MillisecondType>::new(
+                        data_type, tie_break,
+                    ))
+                }
+                DataType::Time32(TimeUnit::Second) => {
+                    Box::new(PrimitiveModeAccumulator::<Time32SecondType>::new(
+                        data_type, tie_break,
+                    ))
+                }
+                DataType::Time64(TimeUnit::Microsecond) => {
+                    Box::new(PrimitiveModeAccumulator::<Time64MicrosecondType>::new(
+                        data_type, tie_break,
+                    ))
+                }
+                DataType::Time64(TimeUnit::Nanosecond) => {
+                    Box::new(PrimitiveModeAccumulator::<Time64NanosecondType>::new(
+                        data_type, tie_break,
+                    ))
+                }
+                DataType::Timestamp(TimeUnit::Microsecond, _) => Box::new(
+                    PrimitiveModeAccumulator::<TimestampMicrosecondType>::new(data_type, tie_break),
+                ),
+                DataType::Timestamp(TimeUnit::Millisecond, _) => Box::new(
+                    PrimitiveModeAccumulator::<TimestampMillisecondType>::new(data_type, tie_break),
+                ),
+                DataType::Timestamp(TimeUnit::Nanosecond, _) => Box::new(
+                    PrimitiveModeAccumulator::<TimestampNanosecondType>::new(data_type, tie_break),
+                ),
+                DataType::Timestamp(TimeUnit::Second, _) => {
+                    Box::new(PrimitiveModeAccumulator::<TimestampSecondType>::new(
+                        data_type, tie_break,
+                    ))
+                }
+                DataType::Interval(IntervalUnit::YearMonth) => Box::new(
+                    PrimitiveModeAccumulator::<IntervalYearMonthType>::new(data_type, tie_break),
+                ),
+                DataType::Interval(IntervalUnit::DayTime) => {
+                    Box::new(PrimitiveModeAccumulator::<IntervalDayTimeType>::new(
+                        data_type, tie_break,
+                    ))
+                }
+                DataType::Interval(IntervalUnit::MonthDayNano) => Box::new(
+                    PrimitiveModeAccumulator::<IntervalMonthDayNanoType>::new(data_type, tie_break),
+                ),
 
-            DataType::Float16 => Box::new(FloatModeAccumulator::<Float16Type>::new(
-                data_type, tie_break,
-            )),
-            DataType::Float32 => Box::new(FloatModeAccumulator::<Float32Type>::new(
-                data_type, tie_break,
-            )),
-            DataType::Float64 => Box::new(FloatModeAccumulator::<Float64Type>::new(
-                data_type, tie_break,
-            )),
+                DataType::Float16 => Box::new(FloatModeAccumulator::<Float16Type>::new(
+                    data_type, tie_break,
+                )),
+                DataType::Float32 => Box::new(FloatModeAccumulator::<Float32Type>::new(
+                    data_type, tie_break,
+                )),
+                DataType::Float64 => Box::new(FloatModeAccumulator::<Float64Type>::new(
+                    data_type, tie_break,
+                )),
 
-            DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {
-                Box::new(BytesModeAccumulator::new(data_type, tie_break))
-            }
-            _ => {
-                return not_impl_err!("Unsupported data type: {:?} for mode function", data_type);
-            }
-        };
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8 => {
+                    Box::new(BytesModeAccumulator::new(data_type, tie_break))
+                }
+                _ => {
+                    return not_impl_err!(
+                        "Unsupported data type: {:?} for mode function",
+                        data_type
+                    );
+                }
+            };
 
         Ok(accumulator)
     }
