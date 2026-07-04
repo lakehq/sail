@@ -39,6 +39,18 @@ def _load_table(iceberg_rest_endpoint: str, table_name: str) -> dict:
         return json.load(response)
 
 
+def _default_spec_fields(metadata: dict) -> list[dict]:
+    spec_id = metadata["default-spec-id"]
+    spec = next(spec for spec in metadata["partition-specs"] if spec["spec-id"] == spec_id)
+    return spec["fields"]
+
+
+def _default_sort_fields(metadata: dict) -> list[dict]:
+    order_id = metadata["default-sort-order-id"]
+    order = next(order for order in metadata["sort-orders"] if order["order-id"] == order_id)
+    return order["fields"]
+
+
 def test_replace_preserves_table_uuid(
     spark: SparkSession,
     iceberg_rest_endpoint: str,
@@ -149,6 +161,47 @@ def test_replace_resets_current_snapshot(
     # The replaced table reads as empty through SQL.
     rows = spark.sql(f"SELECT id, name FROM {table_fqn}").collect()  # noqa: S608
     assert rows == []
+
+
+def test_replace_clears_partition_spec(
+    spark: SparkSession,
+    iceberg_rest_endpoint: str,
+) -> None:
+    table_name = "clear_part_t"
+    table_fqn = f"{NAMESPACE}.{table_name}"
+    spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+    spark.sql(f"CREATE TABLE {table_fqn} (id INT, region STRING) USING iceberg PARTITIONED BY (region)")
+
+    before = _load_table(iceberg_rest_endpoint, table_name)["metadata"]
+    assert _default_spec_fields(before), "sanity: the created table must be partitioned"
+
+    # REPLACE dropping PARTITIONED BY is a full redefinition — the spec must reset to unpartitioned.
+    spark.sql(f"CREATE OR REPLACE TABLE {table_fqn} (id INT, region STRING) USING iceberg")
+
+    after = _default_spec_fields(_load_table(iceberg_rest_endpoint, table_name)["metadata"])
+    assert after == [], f"REPLACE dropping PARTITIONED BY must clear the partition spec, got {after!r}"
+
+
+def test_replace_clears_sort_order(
+    spark: SparkSession,
+    iceberg_rest_endpoint: str,
+) -> None:
+    table_name = "clear_sort_t"
+    table_fqn = f"{NAMESPACE}.{table_name}"
+    spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+    spark.sql(
+        f"CREATE TABLE {table_fqn} (id INT, name STRING) USING iceberg "
+        f"CLUSTERED BY (id) SORTED BY (name) INTO 8 BUCKETS"
+    )
+
+    before = _load_table(iceberg_rest_endpoint, table_name)["metadata"]
+    assert _default_sort_fields(before), "sanity: the created table must be sorted"
+
+    # REPLACE dropping the sort clause must reset to the unsorted order, not inherit the old one.
+    spark.sql(f"CREATE OR REPLACE TABLE {table_fqn} (id INT, name STRING) USING iceberg")
+
+    after = _default_sort_fields(_load_table(iceberg_rest_endpoint, table_name)["metadata"])
+    assert after == [], f"REPLACE dropping the sort clause must clear the sort order, got {after!r}"
 
 
 def test_replace_creates_missing_table(
