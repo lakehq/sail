@@ -461,10 +461,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }) => {
                 let file_compression_type: FileCompressionType =
                     self.try_decode_file_compression_type(file_compression_type)?;
-                let proto = try_decode_message(&base_config)?;
-                let table_schema = parse_protobuf_file_scan_schema(&proto)?;
+                let base_config = try_decode_message(&base_config)?;
+                let table_schema = parse_table_schema_from_proto(&base_config)?;
                 let source = parse_protobuf_file_scan_config(
-                    &proto,
+                    &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
                     &RemotePhysicalProtoConverter {},
                     Arc::new(JsonSource::new(table_schema)),
@@ -478,14 +478,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 base_config,
                 options,
             }) => {
-                let proto = try_decode_message(&base_config)?;
-                let table_schema = parse_table_schema_from_proto(&proto)?;
+                let base_config = try_decode_message(&base_config)?;
+                let table_schema = parse_table_schema_from_proto(&base_config)?;
                 let options = try_decode_message::<gen_datafusion_common::CsvOptions>(&options)?;
                 let csv_options: CsvOptions = (&options).try_into()?;
                 let file_compression_type: FileCompressionType = csv_options.compression.into();
                 let source = CsvSource::new(table_schema).with_csv_options(csv_options);
                 let source = parse_protobuf_file_scan_config(
-                    &proto,
+                    &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
                     &RemotePhysicalProtoConverter {},
                     Arc::new(source),
@@ -500,9 +500,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 options,
                 predicate,
             }) => {
-                let proto = try_decode_message(&base_config)?;
-                let predicate_schema = parse_protobuf_file_scan_schema(&proto)?;
-                let table_schema = parse_table_schema_from_proto(&proto)?;
+                let base_config = try_decode_message(&base_config)?;
+                let predicate_schema = parse_protobuf_file_scan_schema(&base_config)?;
+                let table_schema = parse_table_schema_from_proto(&base_config)?;
                 let options =
                     try_decode_message::<gen_datafusion_common::TableParquetOptions>(&options)?;
                 let options: TableParquetOptions = (&options).try_into()?;
@@ -511,9 +511,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         try_decode_physical_expr(ctx, self, &predicate, predicate_schema.as_ref())
                     })
                     .transpose()?;
-                let object_store_url = match proto.object_store_url.is_empty() {
+                let object_store_url = match base_config.object_store_url.is_empty() {
                     false => datafusion::execution::object_store::ObjectStoreUrl::parse(
-                        &proto.object_store_url,
+                        &base_config.object_store_url,
                     )?,
                     true => datafusion::execution::object_store::ObjectStoreUrl::local_filesystem(),
                 };
@@ -528,7 +528,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     source = source.with_predicate(predicate);
                 }
                 let source = parse_protobuf_file_scan_config(
-                    &proto,
+                    &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
                     &RemotePhysicalProtoConverter {},
                     Arc::new(source),
@@ -536,10 +536,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
             NodeKind::Arrow(gen::ArrowExecNode { base_config }) => {
-                let proto = try_decode_message(&base_config)?;
-                let table_schema = parse_protobuf_file_scan_schema(&proto)?;
+                let base_config = try_decode_message(&base_config)?;
+                let table_schema = parse_table_schema_from_proto(&base_config)?;
                 let source = parse_protobuf_file_scan_config(
-                    &proto,
+                    &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
                     &RemotePhysicalProtoConverter {},
                     Arc::new(ArrowSource::new_file_source(table_schema)),
@@ -564,10 +564,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         );
                     }
                 };
-                let proto = try_decode_message(&base_config)?;
-                let table_schema = parse_protobuf_file_scan_schema(&proto)?;
+                let base_config = try_decode_message(&base_config)?;
+                let table_schema = parse_table_schema_from_proto(&base_config)?;
                 let source = parse_protobuf_file_scan_config(
-                    &proto,
+                    &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
                     &RemotePhysicalProtoConverter {},
                     Arc::new(TextSource::new(table_schema, whole_text, line_sep)),
@@ -581,10 +581,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 base_config,
                 path_glob_filter,
             }) => {
-                let proto = try_decode_message(&base_config)?;
-                let table_schema = parse_protobuf_file_scan_schema(&proto)?;
+                let base_config = try_decode_message(&base_config)?;
+                let table_schema = parse_table_schema_from_proto(&base_config)?;
                 let source = parse_protobuf_file_scan_config(
-                    &proto,
+                    &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
                     &RemotePhysicalProtoConverter {},
                     Arc::new(BinarySource::new(table_schema, path_glob_filter)),
@@ -593,10 +593,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
             NodeKind::Avro(gen::AvroExecNode { base_config }) => {
-                let proto = try_decode_message(&base_config)?;
-                let table_schema = parse_protobuf_file_scan_schema(&proto)?;
+                let base_config = try_decode_message(&base_config)?;
+                let table_schema = parse_table_schema_from_proto(&base_config)?;
                 let source = parse_protobuf_file_scan_config(
-                    &proto,
+                    &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
                     &RemotePhysicalProtoConverter {},
                     Arc::new(AvroSource::new(table_schema)),
