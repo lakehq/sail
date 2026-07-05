@@ -22,8 +22,7 @@ use crate::driver::TaskStatus;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{TaskKey, TaskKeyDisplay};
 use crate::plan::{ShuffleReadExec, ShuffleWriteExec, StageInputExec};
-use crate::proto::codec::RemoteExecutionCodec;
-use crate::proto::decode::try_decode_physical_plan;
+use crate::proto::{decode_remote_physical_plan, RemoteExecutionCodec};
 use crate::stream_accessor::{StreamAccessor, StreamAccessorMessage};
 use crate::task::definition::{TaskDefinition, TaskInput, TaskOutput};
 use crate::task_runner::monitor::TaskMonitor;
@@ -84,7 +83,7 @@ impl TaskRunner {
         T::Message: TaskRunnerMessage + StreamAccessorMessage,
     {
         let plan =
-            try_decode_physical_plan(&context, self.codec.as_ref(), definition.plan.as_ref())?;
+            decode_remote_physical_plan(&context, self.codec.as_ref(), definition.plan.as_ref())?;
         let plan = self.rewrite_file_scans(plan)?;
         let plan = self.rewrite_shuffle(
             ctx,

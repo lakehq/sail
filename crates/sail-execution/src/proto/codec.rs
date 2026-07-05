@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use datafusion::common::config::{CsvOptions, TableParquetOptions};
 use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::common::{
     plan_datafusion_err, plan_err, Constraint, Constraints, JoinSide, Result, ScalarValue,
@@ -12,9 +13,10 @@ use datafusion::common::{
 };
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{
-    ArrowSource, AvroSource, FileScanConfig, FileScanConfigBuilder, FileSink, FileSinkConfig,
-    JsonSource,
+    ArrowSource, AvroSource, CsvSource, FileScanConfig, FileScanConfigBuilder, FileSink,
+    FileSinkConfig, FileSource, JsonSource, ParquetSource,
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
@@ -46,7 +48,7 @@ use datafusion::physical_plan::{ExecutionPlan, PlanProperties};
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
 use datafusion_proto::physical_plan::from_proto::{
     parse_physical_sort_exprs, parse_protobuf_file_scan_config, parse_protobuf_file_scan_schema,
-    parse_protobuf_partitioning,
+    parse_protobuf_partitioning, parse_table_schema_from_proto,
 };
 use datafusion_proto::physical_plan::to_proto::{
     serialize_file_scan_config, serialize_partitioning, serialize_physical_sort_exprs,
@@ -247,6 +249,7 @@ use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
+use sail_physical_plan::data_source::RemoteDataSourceExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
@@ -458,10 +461,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }) => {
                 let file_compression_type: FileCompressionType =
                     self.try_decode_file_compression_type(file_compression_type)?;
-                let proto = try_decode_message(&base_config)?;
-                let table_schema = parse_protobuf_file_scan_schema(&proto)?;
+                let base_config = try_decode_message(&base_config)?;
+                let table_schema = parse_table_schema_from_proto(&base_config)?;
                 let source = parse_protobuf_file_scan_config(
-                    &proto,
+                    &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
                     &RemotePhysicalProtoConverter {},
                     Arc::new(JsonSource::new(table_schema)),
@@ -471,11 +474,72 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .build();
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
-            NodeKind::Arrow(gen::ArrowExecNode { base_config }) => {
-                let proto = try_decode_message(&base_config)?;
-                let table_schema = parse_protobuf_file_scan_schema(&proto)?;
+            NodeKind::Csv(gen::CsvExecNode {
+                base_config,
+                options,
+            }) => {
+                let base_config = try_decode_message(&base_config)?;
+                let table_schema = parse_table_schema_from_proto(&base_config)?;
+                let options = try_decode_message::<gen_datafusion_common::CsvOptions>(&options)?;
+                let csv_options: CsvOptions = (&options).try_into()?;
+                let file_compression_type: FileCompressionType = csv_options.compression.into();
+                let source = CsvSource::new(table_schema).with_csv_options(csv_options);
                 let source = parse_protobuf_file_scan_config(
-                    &proto,
+                    &base_config,
+                    &PhysicalPlanDecodeContext::new(ctx, self),
+                    &RemotePhysicalProtoConverter {},
+                    Arc::new(source),
+                )?;
+                let source = FileScanConfigBuilder::from(source)
+                    .with_file_compression_type(file_compression_type)
+                    .build();
+                Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+            }
+            NodeKind::Parquet(gen::ParquetExecNode {
+                base_config,
+                options,
+                predicate,
+            }) => {
+                let base_config = try_decode_message(&base_config)?;
+                let predicate_schema = parse_protobuf_file_scan_schema(&base_config)?;
+                let table_schema = parse_table_schema_from_proto(&base_config)?;
+                let options =
+                    try_decode_message::<gen_datafusion_common::TableParquetOptions>(&options)?;
+                let options: TableParquetOptions = (&options).try_into()?;
+                let predicate = predicate
+                    .map(|predicate| {
+                        try_decode_physical_expr(ctx, self, &predicate, predicate_schema.as_ref())
+                    })
+                    .transpose()?;
+                let object_store_url = match base_config.object_store_url.is_empty() {
+                    false => datafusion::execution::object_store::ObjectStoreUrl::parse(
+                        &base_config.object_store_url,
+                    )?,
+                    true => datafusion::execution::object_store::ObjectStoreUrl::local_filesystem(),
+                };
+                let store = ctx.runtime_env().object_store(object_store_url)?;
+                let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
+                let reader_factory =
+                    Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
+                let mut source = ParquetSource::new(table_schema)
+                    .with_parquet_file_reader_factory(reader_factory)
+                    .with_table_parquet_options(options);
+                if let Some(predicate) = predicate {
+                    source = source.with_predicate(predicate);
+                }
+                let source = parse_protobuf_file_scan_config(
+                    &base_config,
+                    &PhysicalPlanDecodeContext::new(ctx, self),
+                    &RemotePhysicalProtoConverter {},
+                    Arc::new(source),
+                )?;
+                Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+            }
+            NodeKind::Arrow(gen::ArrowExecNode { base_config }) => {
+                let base_config = try_decode_message(&base_config)?;
+                let table_schema = parse_table_schema_from_proto(&base_config)?;
+                let source = parse_protobuf_file_scan_config(
+                    &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
                     &RemotePhysicalProtoConverter {},
                     Arc::new(ArrowSource::new_file_source(table_schema)),
@@ -500,10 +564,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         );
                     }
                 };
-                let proto = try_decode_message(&base_config)?;
-                let table_schema = parse_protobuf_file_scan_schema(&proto)?;
+                let base_config = try_decode_message(&base_config)?;
+                let table_schema = parse_table_schema_from_proto(&base_config)?;
                 let source = parse_protobuf_file_scan_config(
-                    &proto,
+                    &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
                     &RemotePhysicalProtoConverter {},
                     Arc::new(TextSource::new(table_schema, whole_text, line_sep)),
@@ -517,10 +581,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 base_config,
                 path_glob_filter,
             }) => {
-                let proto = try_decode_message(&base_config)?;
-                let table_schema = parse_protobuf_file_scan_schema(&proto)?;
+                let base_config = try_decode_message(&base_config)?;
+                let table_schema = parse_table_schema_from_proto(&base_config)?;
                 let source = parse_protobuf_file_scan_config(
-                    &proto,
+                    &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
                     &RemotePhysicalProtoConverter {},
                     Arc::new(BinarySource::new(table_schema, path_glob_filter)),
@@ -529,10 +593,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
             NodeKind::Avro(gen::AvroExecNode { base_config }) => {
-                let proto = try_decode_message(&base_config)?;
-                let table_schema = parse_protobuf_file_scan_schema(&proto)?;
+                let base_config = try_decode_message(&base_config)?;
+                let table_schema = parse_table_schema_from_proto(&base_config)?;
                 let source = parse_protobuf_file_scan_config(
-                    &proto,
+                    &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
                     &RemotePhysicalProtoConverter {},
                     Arc::new(AvroSource::new(table_schema)),
@@ -1522,7 +1586,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 common_prefix_length,
             })
-        } else if let Some(data_source) = node.downcast_ref::<DataSourceExec>() {
+        } else if let Some(data_source) = node.downcast_ref::<RemoteDataSourceExec>() {
             let source = data_source.data_source();
             if let Some(file_scan) = source.downcast_ref::<FileScanConfig>() {
                 let file_source = file_scan.file_source();
@@ -1550,8 +1614,51 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         base_config,
                         path_glob_filter: binary_source.path_glob_filter().cloned(),
                     })
+                } else if let Some(csv_source) = file_source.downcast_ref::<CsvSource>() {
+                    let base_config = try_encode_message(serialize_file_scan_config(
+                        file_scan,
+                        self,
+                        &RemotePhysicalProtoConverter {},
+                    )?)?;
+                    let csv_options = CsvOptions {
+                        has_header: Some(csv_source.has_header()),
+                        delimiter: csv_source.delimiter(),
+                        quote: csv_source.quote(),
+                        terminator: csv_source.terminator(),
+                        escape: csv_source.escape(),
+                        comment: csv_source.comment(),
+                        newlines_in_values: Some(csv_source.newlines_in_values()),
+                        truncated_rows: Some(csv_source.truncate_rows()),
+                        compression: file_scan.file_compression_type.into(),
+                        ..Default::default()
+                    };
+                    let options = try_encode_message(gen_datafusion_common::CsvOptions::try_from(
+                        &csv_options,
+                    )?)?;
+                    NodeKind::Csv(gen::CsvExecNode {
+                        base_config,
+                        options,
+                    })
+                } else if let Some(parquet_source) = file_source.downcast_ref::<ParquetSource>() {
+                    let base_config = try_encode_message(serialize_file_scan_config(
+                        file_scan,
+                        self,
+                        &RemotePhysicalProtoConverter {},
+                    )?)?;
+                    let options = gen_datafusion_common::TableParquetOptions::try_from(
+                        parquet_source.table_parquet_options(),
+                    )?;
+                    let options = try_encode_message(options)?;
+                    let predicate = parquet_source
+                        .filter()
+                        .map(|predicate| try_encode_physical_expr(self, &predicate))
+                        .transpose()?;
+                    NodeKind::Parquet(gen::ParquetExecNode {
+                        base_config,
+                        options,
+                        predicate,
+                    })
                 } else if file_source.is::<JsonSource>() {
-                    // TODO: Check if we still need to have JsonSource: https://github.com/apache/datafusion/pull/14224
                     let base_config = try_encode_message(serialize_file_scan_config(
                         file_scan,
                         self,
@@ -1564,7 +1671,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         file_compression_type,
                     })
                 } else if file_source.is::<ArrowSource>() {
-                    // TODO: Check if we still need to have ArrowSource: https://github.com/apache/datafusion/pull/14224
                     let base_config = try_encode_message(serialize_file_scan_config(
                         file_scan,
                         self,
@@ -1582,7 +1688,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     return plan_err!("unsupported data source node: {data_source:?}");
                 }
             } else if let Some(memory) = source.downcast_ref::<MemorySourceConfig>() {
-                // TODO: Check if we still need to have MemorySourceConfig: https://github.com/apache/datafusion/pull/14224
                 // `memory.schema()` is the schema after projection.
                 // We must use the original schema here.
                 let schema = memory.original_schema();
