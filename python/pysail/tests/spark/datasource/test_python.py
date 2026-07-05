@@ -15,6 +15,7 @@ import pyarrow as pa
 import pytest
 
 from pysail.testing.spark.session import spark_session_factory
+from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 try:
     from pyspark.sql.datasource import (
@@ -1589,7 +1590,7 @@ def test_python_sql_insert_into_python_datasource(spark, tmp_path):
             return SQLInsertReader()
 
         def writer(self, schema, overwrite):
-            return SQLInsertWriter(schema, overwrite, str(state_path))
+            return SQLInsertWriter(schema, overwrite, self.options["state_path"])
 
     class SQLInsertReader(DataSourceReader):
         def partitions(self):
@@ -1603,7 +1604,10 @@ def test_python_sql_insert_into_python_datasource(spark, tmp_path):
             yield batch
 
     spark.dataSource.register(SQLInsertDataSource)
-    spark.sql(f"CREATE TABLE {table_name} USING {table_name}")
+    spark.sql(
+        f"CREATE TABLE {table_name} USING {table_name} "
+        f"OPTIONS (state_path '{escape_sql_string_literal(str(state_path))}')"
+    )
 
     try:
         # Read should work
