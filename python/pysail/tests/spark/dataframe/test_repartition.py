@@ -29,6 +29,14 @@ def normalized_plan(df):
     return normalize_plan_text(df._explain_string())  # noqa: SLF001
 
 
+def explicit_repartition_child_is(plan_text: str, child_name: str) -> bool:
+    lines = [line for line in plan_text.splitlines() if line.strip()]
+    for i, line in enumerate(lines[:-1]):
+        if "ExplicitRepartitionExec:" in line:
+            return child_name in lines[i + 1]
+    return False
+
+
 def test_explicit_repartition(spark):
     assert partition_count(spark.range(0, 10, 1, 2)) == 2  # noqa: PLR2004
     assert (
@@ -91,6 +99,23 @@ def test_explicit_repartition_plan_shape_uses_expected_physical_nodes(spark):
     assert "RepartitionExec: partitioning=RoundRobinBatch(5)" in round_robin_plan
     assert "RepartitionExec: partitioning=RoundRobinBatch(1)" in repartition_one_plan
     assert "RepartitionExec: partitioning=Hash([" in hash_plan
+
+
+def test_explicit_repartition_pushes_filter_down(spark):
+    df = spark.range(6).repartition(5).filter(F.col("id") % 2 == 0)
+    plan = normalized_plan(df)
+
+    assert explicit_repartition_child_is(plan, "FilterExec:")
+
+
+def test_explicit_repartition_pushes_column_projection_down(spark):
+    df1 = spark.sql("SELECT id AS id1 FROM range(6)")
+    df2 = spark.sql("SELECT id AS id2 FROM range(6)")
+    df3 = spark.sql("SELECT id AS id3 FROM range(6)")
+    df = df1.join(df2, df1.id1 == df2.id2).join(df3, df1.id1 == df3.id3).repartition(5).select("id1", "id2")
+    plan = normalized_plan(df)
+
+    assert explicit_repartition_child_is(plan, "ProjectionExec:")
 
 
 def test_explicit_coalesce(spark):
