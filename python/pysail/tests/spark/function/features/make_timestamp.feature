@@ -1,3 +1,4 @@
+@make_timestamp_ntz
 Feature: make_timestamp_ntz and try_make_timestamp_ntz functions
 
   Rule: Basic timestamp creation with 6 arguments
@@ -165,3 +166,73 @@ Feature: make_timestamp_ntz and try_make_timestamp_ntz functions
       | 2024 | 2024-01-01 00:00:00 |
       | 2024 | 2024-06-15 12:30:45.5 |
       | 2024 | NULL                |
+
+  Rule: Per-element NULL propagation with 6 arguments over columns
+
+    Scenario: try_make_timestamp_ntz null second only, rest valid, returns NULL not a valid timestamp
+      When query
+      """
+      SELECT try_make_timestamp_ntz(year, month, day, hour, min, sec) AS result
+      FROM VALUES
+        (2020, 1, 1, 0, 0, CAST(0.0 AS DOUBLE)),
+        (2020, 1, 1, 0, 0, CAST(NULL AS DOUBLE))
+      AS t(year, month, day, hour, min, sec)
+      ORDER BY sec NULLS LAST
+      """
+      Then query result ordered
+      | result              |
+      | 2020-01-01 00:00:00 |
+      | NULL                |
+
+    Scenario: make_timestamp_ntz null second only over columns returns NULL without error
+      When query
+      """
+      SELECT make_timestamp_ntz(year, month, day, hour, min, sec) AS result
+      FROM VALUES
+        (2020, 1, 1, 0, 0, CAST(0.0 AS DOUBLE)),
+        (2020, 1, 1, 0, 0, CAST(NULL AS DOUBLE))
+      AS t(year, month, day, hour, min, sec)
+      ORDER BY sec NULLS LAST
+      """
+      Then query result ordered
+      | result              |
+      | 2020-01-01 00:00:00 |
+      | NULL                |
+
+    Scenario: make_timestamp_ntz null year over columns returns NULL without error
+      When query
+      """
+      SELECT make_timestamp_ntz(year, 1, 1, 0, 0, 0.0) AS result
+      FROM VALUES (2020), (CAST(NULL AS INT))
+      AS t(year)
+      ORDER BY year NULLS LAST
+      """
+      Then query result ordered
+      | result              |
+      | 2020-01-01 00:00:00 |
+      | NULL                |
+
+    Scenario: try_make_timestamp_ntz any null component over columns returns NULL
+      When query
+      """
+      SELECT try_make_timestamp_ntz(year, month, day, hour, min, sec) AS result
+      FROM VALUES
+        (CAST(NULL AS INT), 1, 1, 0, 0, 0.0),
+        (2020, CAST(NULL AS INT), 1, 0, 0, 0.0),
+        (2020, 1, CAST(NULL AS INT), 0, 0, 0.0),
+        (2020, 1, 1, CAST(NULL AS INT), 0, 0.0),
+        (2020, 1, 1, 0, CAST(NULL AS INT), 0.0),
+        (2020, 1, 1, 0, 0, CAST(NULL AS DOUBLE)),
+        (2020, 1, 1, 0, 0, 0.0)
+      AS t(year, month, day, hour, min, sec)
+      ORDER BY year NULLS FIRST, month NULLS FIRST, day NULLS FIRST, hour NULLS FIRST, min NULLS FIRST, sec NULLS FIRST
+      """
+      Then query result ordered
+      | result              |
+      | NULL                |
+      | NULL                |
+      | NULL                |
+      | NULL                |
+      | NULL                |
+      | NULL                |
+      | 2020-01-01 00:00:00 |
