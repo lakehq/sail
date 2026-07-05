@@ -23,7 +23,7 @@ use crate::plan::gen::{
 use crate::proto::decode::{try_decode_field_ref, try_decode_higher_order_udf};
 use crate::proto::encode::{try_encode_field_ref, try_encode_higher_order_udf};
 
-pub struct RemotePhysicalProtoConverter;
+pub(super) struct RemotePhysicalProtoConverter;
 
 impl Debug for RemotePhysicalProtoConverter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

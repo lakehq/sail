@@ -65,6 +65,7 @@ message ExtendedPhysicalPlanNode {
     CoalesceExecNode coalesce = 50;
     FileDeleteExecNode file_delete = 51;
     NoopSinkExecNode noop_sink = 52;
+    CsvExecNode csv = 53;
   }
 }
 
@@ -580,6 +581,19 @@ message ValuesExecNode {
 message NdJsonExecNode {
   bytes base_config = 1;
   CompressionTypeVariant file_compression_type = 2;
+}
+
+message CsvExecNode {
+  bytes base_config = 1;
+  CompressionTypeVariant file_compression_type = 2;
+  bool has_header = 3;
+  bytes delimiter = 4;
+  bytes quote = 5;
+  optional bytes escape = 6;
+  optional bytes comment = 7;
+  bool newlines_in_values = 8;
+  bool truncate_rows = 9;
+  optional bytes terminator = 10;
 }
 
 message ArrowExecNode {

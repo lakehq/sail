@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use datafusion::common::config::CsvOptions;
 use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::common::{
     plan_datafusion_err, plan_err, Constraint, Constraints, JoinSide, Result, ScalarValue,
@@ -13,8 +14,8 @@ use datafusion::common::{
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::{
-    ArrowSource, AvroSource, FileScanConfig, FileScanConfigBuilder, FileSink, FileSinkConfig,
-    JsonSource,
+    ArrowSource, AvroSource, CsvSource, FileScanConfig, FileScanConfigBuilder, FileSink,
+    FileSinkConfig, JsonSource,
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
@@ -247,6 +248,7 @@ use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
+use sail_physical_plan::data_source::RemoteDataSourceExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
@@ -465,6 +467,57 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     &PhysicalPlanDecodeContext::new(ctx, self),
                     &RemotePhysicalProtoConverter {},
                     Arc::new(JsonSource::new(table_schema)),
+                )?;
+                let source = FileScanConfigBuilder::from(source)
+                    .with_file_compression_type(file_compression_type)
+                    .build();
+                Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+            }
+            NodeKind::Csv(gen::CsvExecNode {
+                base_config,
+                file_compression_type,
+                has_header,
+                delimiter,
+                quote,
+                escape,
+                comment,
+                newlines_in_values,
+                truncate_rows,
+                terminator,
+            }) => {
+                let file_compression_type: FileCompressionType =
+                    self.try_decode_file_compression_type(file_compression_type)?;
+                let delimiter = self.try_decode_byte(delimiter, "delimiter")?;
+                let quote = self.try_decode_byte(quote, "quote")?;
+                let escape = escape
+                    .map(|bytes| self.try_decode_byte(bytes, "escape"))
+                    .transpose()?;
+                let comment = comment
+                    .map(|bytes| self.try_decode_byte(bytes, "comment"))
+                    .transpose()?;
+                let terminator = terminator
+                    .map(|bytes| self.try_decode_byte(bytes, "terminator"))
+                    .transpose()?;
+                let proto = try_decode_message(&base_config)?;
+                let table_schema = parse_protobuf_file_scan_schema(&proto)?;
+                let csv_options = CsvOptions {
+                    has_header: Some(has_header),
+                    delimiter,
+                    quote,
+                    newlines_in_values: Some(newlines_in_values),
+                    truncated_rows: Some(truncate_rows),
+                    ..Default::default()
+                };
+                let source = CsvSource::new(table_schema)
+                    .with_csv_options(csv_options)
+                    .with_escape(escape)
+                    .with_comment(comment)
+                    .with_terminator(terminator);
+                let source = parse_protobuf_file_scan_config(
+                    &proto,
+                    &PhysicalPlanDecodeContext::new(ctx, self),
+                    &RemotePhysicalProtoConverter {},
+                    Arc::new(source),
                 )?;
                 let source = FileScanConfigBuilder::from(source)
                     .with_file_compression_type(file_compression_type)
@@ -1522,7 +1575,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 common_prefix_length,
             })
-        } else if let Some(data_source) = node.downcast_ref::<DataSourceExec>() {
+        } else if let Some(data_source) = node.downcast_ref::<RemoteDataSourceExec>() {
             let source = data_source.data_source();
             if let Some(file_scan) = source.downcast_ref::<FileScanConfig>() {
                 let file_source = file_scan.file_source();
@@ -1550,8 +1603,36 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         base_config,
                         path_glob_filter: binary_source.path_glob_filter().cloned(),
                     })
+                } else if let Some(csv_source) = file_source.downcast_ref::<CsvSource>() {
+                    let base_config = try_encode_message(serialize_file_scan_config(
+                        file_scan,
+                        self,
+                        &RemotePhysicalProtoConverter {},
+                    )?)?;
+                    let file_compression_type =
+                        self.try_encode_file_compression_type(file_scan.file_compression_type)?;
+                    NodeKind::Csv(gen::CsvExecNode {
+                        base_config,
+                        file_compression_type,
+                        has_header: csv_source.has_header(),
+                        delimiter: self.try_encode_byte(csv_source.delimiter(), "delimiter")?,
+                        quote: self.try_encode_byte(csv_source.quote(), "quote")?,
+                        escape: csv_source
+                            .escape()
+                            .map(|x| self.try_encode_byte(x, "escape"))
+                            .transpose()?,
+                        comment: csv_source
+                            .comment()
+                            .map(|x| self.try_encode_byte(x, "comment"))
+                            .transpose()?,
+                        newlines_in_values: csv_source.newlines_in_values(),
+                        truncate_rows: csv_source.truncate_rows(),
+                        terminator: csv_source
+                            .terminator()
+                            .map(|x| self.try_encode_byte(x, "terminator"))
+                            .transpose()?,
+                    })
                 } else if file_source.is::<JsonSource>() {
-                    // TODO: Check if we still need to have JsonSource: https://github.com/apache/datafusion/pull/14224
                     let base_config = try_encode_message(serialize_file_scan_config(
                         file_scan,
                         self,
@@ -1564,7 +1645,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         file_compression_type,
                     })
                 } else if file_source.is::<ArrowSource>() {
-                    // TODO: Check if we still need to have ArrowSource: https://github.com/apache/datafusion/pull/14224
                     let base_config = try_encode_message(serialize_file_scan_config(
                         file_scan,
                         self,
@@ -1582,7 +1662,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     return plan_err!("unsupported data source node: {data_source:?}");
                 }
             } else if let Some(memory) = source.downcast_ref::<MemorySourceConfig>() {
-                // TODO: Check if we still need to have MemorySourceConfig: https://github.com/apache/datafusion/pull/14224
                 // `memory.schema()` is the schema after projection.
                 // We must use the original schema here.
                 let schema = memory.original_schema();
@@ -3176,6 +3255,17 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
 }
 
 impl RemoteExecutionCodec {
+    fn try_decode_byte(&self, bytes: Vec<u8>, name: &str) -> Result<u8> {
+        match bytes.as_slice() {
+            [x] => Ok(*x),
+            _ => plan_err!("{name} must be a single byte, got: {bytes:?}"),
+        }
+    }
+
+    fn try_encode_byte(&self, value: u8, _name: &str) -> Result<Vec<u8>> {
+        Ok(vec![value])
+    }
+
     #[expect(clippy::type_complexity)]
     fn try_decode_cast_column_expr(
         &self,
