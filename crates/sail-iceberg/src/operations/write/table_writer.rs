@@ -275,15 +275,15 @@ impl IcebergTableWriter {
             let writer = self.finish_partition_state(state).await?;
             let (bytes, meta) = writer.close().await?;
             let (rel, full) = self.generator.with_partition_dir(Some(partition_dir));
-            log::trace!("iceberg.table_writer.flush_partition.writing: {}", &full);
+            log::trace!("iceberg.table_writer.flush_partition.writing: {}", full);
             self.store
                 .put(&full, object_store::PutPayload::from(bytes))
                 .await
                 .map_err(|e| e.to_string())?;
             log::trace!(
                 "iceberg.table_writer.flush_partition.written: rel={} full={}",
-                &rel,
-                &full
+                rel,
+                full
             );
             let file_path = match self.table_url.join(&rel) {
                 Ok(u) => u.to_string(),

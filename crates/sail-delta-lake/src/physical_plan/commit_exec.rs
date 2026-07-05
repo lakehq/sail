@@ -653,7 +653,7 @@ impl ExecutionPlan for DeltaCommitExec {
             log::trace!(
                 "final_actions_len: {}, final_action_kinds: {:?}",
                 final_actions.len(),
-                &kinds
+                kinds
             );
 
             if !has_commit_payload_actions(&final_actions) {

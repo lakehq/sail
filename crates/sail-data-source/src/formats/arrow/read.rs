@@ -21,7 +21,7 @@ use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
 #[derive(Debug, Default, Clone)]
 pub struct ArrowReadFormat;
 
-const ARROW_MAGIC: [u8; 6] = [b'A', b'R', b'R', b'O', b'W', b'1'];
+const ARROW_MAGIC: [u8; 6] = *b"ARROW1";
 const CONTINUATION_MARKER: [u8; 4] = [0xff; 4];
 
 async fn is_object_in_arrow_ipc_file_format(

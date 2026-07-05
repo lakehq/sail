@@ -897,7 +897,7 @@ async fn scan_file_for_matching_rows(
         "{}{}{}",
         table_root,
         object_store::path::DELIMITER,
-        &add.path
+        add.path
     ));
     let file_size = add.size as u64;
     let partitioned_file = PartitionedFile::new(file_location.to_string(), file_size);

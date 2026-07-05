@@ -899,7 +899,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     }
                 }
 
-                log::trace!("commit_exec: applying updates: {:?}", &action_updates);
+                log::trace!("commit_exec: applying updates: {:?}", action_updates);
                 let mut newest_snapshot_seq: Option<i64> = None;
                 let mut newest_snapshot_added_rows: Option<i64> = None;
                 let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
@@ -965,9 +965,9 @@ impl ExecutionPlan for IcebergCommitExec {
 
                 log::trace!(
                     "Writing metadata: {} snapshot_id={:?} table_url={}",
-                    &new_meta_rel,
+                    new_meta_rel,
                     table_meta.current_snapshot_id,
-                    &table_url
+                    table_url
                 );
 
                 let new_meta_path = object_store::path::Path::from(new_meta_rel.as_str());
