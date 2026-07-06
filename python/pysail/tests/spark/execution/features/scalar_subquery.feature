@@ -214,6 +214,37 @@ Feature: Scalar subqueries in distributed execution
       """
     Then query plan matches snapshot
 
+  Scenario: Scalar subquery in non-equi join condition
+    When query
+      """
+      SELECT l.v, r.w
+      FROM VALUES (1), (2), (3) AS l(v)
+      JOIN VALUES (11), (12), (13) AS r(w)
+        ON CAST(l.v AS BIGINT) + (
+          SELECT MIN(CAST(x AS BIGINT))
+          FROM VALUES (10), (20) AS s(x)
+        ) < CAST(r.w AS BIGINT)
+      ORDER BY l.v, r.w
+      """
+    Then query result collected ordered
+      | v | w  |
+      | 1 | 12 |
+      | 1 | 13 |
+      | 2 | 13 |
+    When query
+      """
+      EXPLAIN
+      SELECT l.v, r.w
+      FROM VALUES (1), (2), (3) AS l(v)
+      JOIN VALUES (11), (12), (13) AS r(w)
+        ON CAST(l.v AS BIGINT) + (
+          SELECT MIN(CAST(x AS BIGINT))
+          FROM VALUES (10), (20) AS s(x)
+        ) < CAST(r.w AS BIGINT)
+      ORDER BY l.v, r.w
+      """
+    Then query plan matches snapshot
+
   Scenario: Scalar subquery in having filter
     When query
       """
@@ -360,6 +391,32 @@ Feature: Scalar subqueries in distributed execution
       """
     Then query plan matches snapshot
 
+  @spark-4
+  Scenario: Scalar subquery in aggregate order by
+    When query
+      """
+      SELECT listagg(v, ',') WITHIN GROUP (
+        ORDER BY CASE WHEN (
+          SELECT MIN(x) FROM VALUES (1) AS s(x)
+        ) = 1 THEN sort_key ELSE -sort_key END
+      ) AS joined
+      FROM VALUES ('a', 2), ('b', 1), ('c', 3) AS t(v, sort_key)
+      """
+    Then query result collected
+      | joined |
+      | b,a,c  |
+    When query
+      """
+      EXPLAIN
+      SELECT listagg(v, ',') WITHIN GROUP (
+        ORDER BY CASE WHEN (
+          SELECT MIN(x) FROM VALUES (1) AS s(x)
+        ) = 1 THEN sort_key ELSE -sort_key END
+      ) AS joined
+      FROM VALUES ('a', 2), ('b', 1), ('c', 3) AS t(v, sort_key)
+      """
+    Then query plan matches snapshot
+
   Scenario: Nested scalar subquery
     When query
       """
@@ -380,6 +437,34 @@ Feature: Scalar subqueries in distributed execution
       SELECT v, CAST(v AS BIGINT) + (
         SELECT MIN(x) + (SELECT MIN(y) FROM VALUES (1) AS u(y))
         FROM VALUES (10), (20) AS s(x)
+      ) AS shifted
+      FROM VALUES (1), (2) AS t(v)
+      ORDER BY v
+      """
+    Then query plan matches snapshot
+
+  Scenario: Empty scalar subquery result
+    When query
+      """
+      SELECT v, CAST(v AS BIGINT) + (
+        SELECT CAST(x AS BIGINT)
+        FROM VALUES (10) AS s(x)
+        WHERE x > 100
+      ) AS shifted
+      FROM VALUES (1), (2) AS t(v)
+      ORDER BY v
+      """
+    Then query result collected ordered
+      | v | shifted |
+      | 1 | NULL    |
+      | 2 | NULL    |
+    When query
+      """
+      EXPLAIN
+      SELECT v, CAST(v AS BIGINT) + (
+        SELECT CAST(x AS BIGINT)
+        FROM VALUES (10) AS s(x)
+        WHERE x > 100
       ) AS shifted
       FROM VALUES (1), (2) AS t(v)
       ORDER BY v
@@ -412,6 +497,32 @@ Feature: Scalar subqueries in distributed execution
       """
     Then query plan matches snapshot
 
+  Scenario: Multi-row scalar subquery errors
+    When query
+      """
+      SELECT v, CAST(v AS BIGINT) + (
+        SELECT CAST(x AS BIGINT)
+        FROM VALUES (10), (20) AS s(x)
+      ) AS shifted
+      FROM VALUES (1) AS t(v)
+      """
+    Then query error (?i)(SCALAR_SUBQUERY_TOO_MANY_ROWS|more than one row)
+
+  @spark-4
+  @sail-bug
+  Scenario: Unaggregated correlated scalar subquery errors at runtime
+    When query
+      """
+      SELECT outer_t.k, (
+        SELECT inner_t.x
+        FROM VALUES (1, 4), (1, 2), (2, 3) AS inner_t(k, x)
+        WHERE inner_t.k = outer_t.k
+      ) AS x
+      FROM VALUES (1), (2) AS outer_t(k)
+      ORDER BY outer_t.k
+      """
+    Then query error (?i)(SCALAR_SUBQUERY_TOO_MANY_ROWS|more than one row)
+
   Scenario: Correlated scalar subquery in projection
     When query
       """
@@ -439,5 +550,93 @@ Feature: Scalar subqueries in distributed execution
       ) AS mx
       FROM VALUES (1, 2), (1, 4), (2, 1), (2, 3) AS outer_t(k, v)
       ORDER BY outer_t.k, outer_t.v
+      """
+    Then query plan matches snapshot
+
+  Scenario: Correlated scalar subquery no-match result
+    When query
+      """
+      SELECT outer_t.k, outer_t.v, (
+        SELECT MAX(inner_t.x)
+        FROM VALUES (1, 4), (1, 2) AS inner_t(k, x)
+        WHERE inner_t.k = outer_t.k
+      ) AS mx
+      FROM VALUES (1, 2), (2, 3) AS outer_t(k, v)
+      ORDER BY outer_t.k
+      """
+    Then query result collected ordered
+      | k | v | mx   |
+      | 1 | 2 | 4    |
+      | 2 | 3 | NULL |
+    When query
+      """
+      EXPLAIN
+      SELECT outer_t.k, outer_t.v, (
+        SELECT MAX(inner_t.x)
+        FROM VALUES (1, 4), (1, 2) AS inner_t(k, x)
+        WHERE inner_t.k = outer_t.k
+      ) AS mx
+      FROM VALUES (1, 2), (2, 3) AS outer_t(k, v)
+      ORDER BY outer_t.k
+      """
+    Then query plan matches snapshot
+
+  Scenario: Correlated scalar subquery with nested scalar in projection
+    When query
+      """
+      SELECT outer_t.k, outer_t.v, (
+        SELECT MAX(inner_t.x) + (SELECT MIN(y) FROM VALUES (1) AS u(y))
+        FROM VALUES (1, 4), (1, 2), (2, 3), (2, 1) AS inner_t(k, x)
+        WHERE inner_t.k = outer_t.k
+      ) AS shifted
+      FROM VALUES (1, 2), (1, 4), (2, 1), (2, 3) AS outer_t(k, v)
+      ORDER BY outer_t.k, outer_t.v
+      """
+    Then query result collected ordered
+      | k | v | shifted |
+      | 1 | 2 | 5       |
+      | 1 | 4 | 5       |
+      | 2 | 1 | 4       |
+      | 2 | 3 | 4       |
+    When query
+      """
+      EXPLAIN
+      SELECT outer_t.k, outer_t.v, (
+        SELECT MAX(inner_t.x) + (SELECT MIN(y) FROM VALUES (1) AS u(y))
+        FROM VALUES (1, 4), (1, 2), (2, 3), (2, 1) AS inner_t(k, x)
+        WHERE inner_t.k = outer_t.k
+      ) AS shifted
+      FROM VALUES (1, 2), (1, 4), (2, 1), (2, 3) AS outer_t(k, v)
+      ORDER BY outer_t.k, outer_t.v
+      """
+    Then query plan matches snapshot
+
+  Scenario: Correlated scalar subquery with nested scalar in filter
+    When query
+      """
+      SELECT outer_t.k, outer_t.v
+      FROM VALUES (1, 2), (1, 5), (2, 1), (2, 4) AS outer_t(k, v)
+      WHERE outer_t.v = (
+        SELECT MAX(inner_t.x) + (SELECT MIN(y) FROM VALUES (1) AS u(y))
+        FROM VALUES (1, 4), (1, 2), (2, 3), (2, 1) AS inner_t(k, x)
+        WHERE inner_t.k = outer_t.k
+      )
+      ORDER BY outer_t.k
+      """
+    Then query result collected ordered
+      | k | v |
+      | 1 | 5 |
+      | 2 | 4 |
+    When query
+      """
+      EXPLAIN
+      SELECT outer_t.k, outer_t.v
+      FROM VALUES (1, 2), (1, 5), (2, 1), (2, 4) AS outer_t(k, v)
+      WHERE outer_t.v = (
+        SELECT MAX(inner_t.x) + (SELECT MIN(y) FROM VALUES (1) AS u(y))
+        FROM VALUES (1, 4), (1, 2), (2, 3), (2, 1) AS inner_t(k, x)
+        WHERE inner_t.k = outer_t.k
+      )
+      ORDER BY outer_t.k
       """
     Then query plan matches snapshot
