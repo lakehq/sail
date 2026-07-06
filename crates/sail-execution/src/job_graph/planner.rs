@@ -186,6 +186,12 @@ enum DriverStageHandling {
     PreserveRoot,
 }
 
+#[derive(Clone, Copy)]
+struct ScalarSubqueryContext<'a> {
+    links: &'a [ScalarSubqueryLink],
+    results: &'a ScalarSubqueryResults,
+}
+
 struct PlannedSubtree {
     plan: Arc<dyn ExecutionPlan>,
     // TODO: Track pending SubqueryIndex values if wrapper placement must
@@ -251,14 +257,14 @@ fn plan_job_graph_stages(
     usage: PartitionUsage,
     graph: &mut JobGraph,
     driver_stage_handling: DriverStageHandling,
-    scalar_subqueries: Option<&[ScalarSubqueryLink]>,
+    scalar_context: Option<ScalarSubqueryContext<'_>>,
 ) -> ExecutionResult<PlannedSubtree> {
     if let Some(scalar) = plan.downcast_ref::<ScalarSubqueryExec>() {
         return build_scalar_subquery_job_graph(scalar, usage, graph, driver_stage_handling);
     }
 
     if let Some(barrier) = plan.downcast_ref::<BarrierExec>() {
-        return build_barrier_job_graph(barrier, usage, graph, scalar_subqueries);
+        return build_barrier_job_graph(barrier, usage, graph, scalar_context);
     }
 
     // Recursively build the job graph for the children first
@@ -273,14 +279,14 @@ fn plan_job_graph_stages(
                         usage,
                         graph,
                         DriverStageHandling::CreateStage,
-                        scalar_subqueries,
+                        scalar_context,
                     )?,
                     plan_job_graph_stages(
                         right.clone(),
                         usage,
                         graph,
                         DriverStageHandling::CreateStage,
-                        scalar_subqueries,
+                        scalar_context,
                     )?,
                 ]
             }
@@ -291,14 +297,14 @@ fn plan_job_graph_stages(
                         PartitionUsage::Shared,
                         graph,
                         DriverStageHandling::CreateStage,
-                        scalar_subqueries,
+                        scalar_context,
                     )?,
                     plan_job_graph_stages(
                         right.clone(),
                         usage,
                         graph,
                         DriverStageHandling::CreateStage,
-                        scalar_subqueries,
+                        scalar_context,
                     )?,
                 ]
             }
@@ -319,14 +325,14 @@ fn plan_job_graph_stages(
                 PartitionUsage::Shared,
                 graph,
                 DriverStageHandling::CreateStage,
-                scalar_subqueries,
+                scalar_context,
             )?,
             plan_job_graph_stages(
                 right.clone(),
                 usage,
                 graph,
                 DriverStageHandling::CreateStage,
-                scalar_subqueries,
+                scalar_context,
             )?,
         ]
     } else if plan.is::<RepartitionExec>()
@@ -343,7 +349,7 @@ fn plan_job_graph_stages(
             PartitionUsage::Once,
             graph,
             DriverStageHandling::CreateStage,
-            scalar_subqueries,
+            scalar_context,
         )?]
     } else if matches!(driver_stage_handling, DriverStageHandling::PreserveRoot)
         && plan.is::<CooperativeExec>()
@@ -355,7 +361,7 @@ fn plan_job_graph_stages(
             usage,
             graph,
             DriverStageHandling::PreserveRoot,
-            scalar_subqueries,
+            scalar_context,
         )?]
     } else {
         plan.children()
@@ -366,7 +372,7 @@ fn plan_job_graph_stages(
                     usage,
                     graph,
                     DriverStageHandling::CreateStage,
-                    scalar_subqueries,
+                    scalar_context,
                 )
             })
             .collect::<ExecutionResult<Vec<_>>>()?
@@ -397,10 +403,10 @@ fn plan_job_graph_stages(
                         .clone()
                         .with_partitioning(Partitioning::RoundRobinBatch(n)),
                 );
-                create_shuffle(child, graph, properties, consumption, scalar_subqueries)?
+                create_shuffle(child, graph, properties, consumption, scalar_context)?
             }
             Partitioning::RoundRobinBatch(_) | Partitioning::Hash(_, _) => {
-                create_shuffle(child, graph, properties, consumption, scalar_subqueries)?
+                create_shuffle(child, graph, properties, consumption, scalar_context)?
             }
         };
         PlannedSubtree::without_pending_scalar_subquery_expr(plan)
@@ -414,7 +420,7 @@ fn plan_job_graph_stages(
                 graph,
                 properties,
                 consumption,
-                scalar_subqueries,
+                scalar_context,
             )?,
             other => {
                 return Err(ExecutionError::DataFusionError(plan_datafusion_err!(
@@ -427,7 +433,7 @@ fn plan_job_graph_stages(
         let properties = coalesce.properties().clone();
         let fetch = coalesce.fetch();
         let child = subtree.only_child()?;
-        let shuffled = create_shuffle(child, graph, properties, consumption, scalar_subqueries)?;
+        let shuffled = create_shuffle(child, graph, properties, consumption, scalar_context)?;
         if let Some(f) = fetch {
             PlannedSubtree::without_pending_scalar_subquery_expr(Arc::new(GlobalLimitExec::new(
                 shuffled,
@@ -443,16 +449,12 @@ fn plan_job_graph_stages(
         let plan = subtree
             .plan
             .clone()
-            .with_new_children(vec![create_merge_input(child, graph, scalar_subqueries)?])?;
+            .with_new_children(vec![create_merge_input(child, graph, scalar_context)?])?;
         PlannedSubtree::new(plan, subtree.node_has_scalar_subquery_expr)
     } else if let Some(coalesce) = subtree.plan.downcast_ref::<CoalesceExec>() {
         let child = subtree.only_child()?;
-        let plan = create_rescale_input(
-            child,
-            coalesce.output_partitions(),
-            graph,
-            scalar_subqueries,
-        )?;
+        let plan =
+            create_rescale_input(child, coalesce.output_partitions(), graph, scalar_context)?;
         PlannedSubtree::without_pending_scalar_subquery_expr(plan)
     } else if subtree.plan.is::<SystemTableExec>()
         || subtree.plan.is::<CatalogCommandExec>()
@@ -463,8 +465,7 @@ fn plan_job_graph_stages(
         if matches!(driver_stage_handling, DriverStageHandling::PreserveRoot) {
             subtree.into_planned_subtree()
         } else {
-            let plan =
-                create_driver_stage(subtree.into_planned_subtree(), graph, scalar_subqueries)?;
+            let plan = create_driver_stage(subtree.into_planned_subtree(), graph, scalar_context)?;
             PlannedSubtree::without_pending_scalar_subquery_expr(plan)
         }
     } else {
@@ -528,9 +529,18 @@ fn build_scalar_subquery_job_graph(
         usage,
         graph,
         driver_stage_handling,
-        Some(subqueries.as_slice()),
+        Some(ScalarSubqueryContext {
+            links: subqueries.as_slice(),
+            results: scalar.results(),
+        }),
     )?;
-    let plan = wrap_pending_scalar_subqueries(input, Some(subqueries.as_slice()));
+    let plan = wrap_pending_scalar_subqueries(
+        input,
+        Some(ScalarSubqueryContext {
+            links: subqueries.as_slice(),
+            results: scalar.results(),
+        }),
+    );
     Ok(PlannedSubtree::without_pending_scalar_subquery_expr(plan))
 }
 
@@ -538,7 +548,7 @@ fn build_barrier_job_graph(
     barrier: &BarrierExec,
     usage: PartitionUsage,
     graph: &mut JobGraph,
-    scalar_subqueries: Option<&[ScalarSubqueryLink]>,
+    scalar_context: Option<ScalarSubqueryContext<'_>>,
 ) -> ExecutionResult<PlannedSubtree> {
     let preconditions = barrier
         .preconditions()
@@ -549,7 +559,7 @@ fn build_barrier_job_graph(
                 usage,
                 graph,
                 DriverStageHandling::CreateStage,
-                scalar_subqueries,
+                scalar_context,
             )
         })
         .collect::<ExecutionResult<Vec<_>>>()?;
@@ -567,7 +577,7 @@ fn build_barrier_job_graph(
             usage,
             graph,
             DriverStageHandling::PreserveRoot,
-            scalar_subqueries,
+            scalar_context,
         )?
     } else {
         plan_job_graph_stages(
@@ -575,7 +585,7 @@ fn build_barrier_job_graph(
             usage,
             graph,
             DriverStageHandling::CreateStage,
-            scalar_subqueries,
+            scalar_context,
         )?
     };
     let barrier_has_pending_scalar_subquery_expr =
@@ -584,7 +594,7 @@ fn build_barrier_job_graph(
     let barrier = PlannedSubtree::new(barrier, barrier_has_pending_scalar_subquery_expr);
     if plan_is_driver_stage {
         Ok(PlannedSubtree::without_pending_scalar_subquery_expr(
-            create_driver_stage(barrier, graph, scalar_subqueries)?,
+            create_driver_stage(barrier, graph, scalar_context)?,
         ))
     } else {
         Ok(barrier)
@@ -605,18 +615,18 @@ fn is_driver_stage_plan(plan: &Arc<dyn ExecutionPlan>) -> bool {
 
 fn wrap_pending_scalar_subqueries(
     plan: PlannedSubtree,
-    scalar_subqueries: Option<&[ScalarSubqueryLink]>,
+    scalar_context: Option<ScalarSubqueryContext<'_>>,
 ) -> Arc<dyn ExecutionPlan> {
-    let Some(scalar_subqueries) = scalar_subqueries else {
+    let Some(scalar_context) = scalar_context else {
         return plan.plan;
     };
-    if scalar_subqueries.is_empty() || !plan.has_pending_scalar_subquery_expr {
+    if scalar_context.links.is_empty() || !plan.has_pending_scalar_subquery_expr {
         return plan.plan;
     }
     Arc::new(ScalarSubqueryExec::new(
         plan.plan,
-        scalar_subqueries.to_vec(),
-        ScalarSubqueryResults::new(scalar_subqueries.len()),
+        scalar_context.links.to_vec(),
+        scalar_context.results.clone(),
     ))
 }
 
@@ -730,10 +740,10 @@ fn physical_expr_has_scalar_subquery(expr: &Arc<dyn PhysicalExpr>) -> bool {
 fn create_merge_input(
     plan: PlannedSubtree,
     graph: &mut JobGraph,
-    scalar_subqueries: Option<&[ScalarSubqueryLink]>,
+    scalar_context: Option<ScalarSubqueryContext<'_>>,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
     let properties = plan.plan.properties().clone();
-    let plan = wrap_pending_scalar_subqueries(plan, scalar_subqueries);
+    let plan = wrap_pending_scalar_subqueries(plan, scalar_context);
     let stage = push_stage(
         plan,
         graph,
@@ -763,9 +773,9 @@ fn create_rescale_input(
     plan: PlannedSubtree,
     output_partitions: usize,
     graph: &mut JobGraph,
-    scalar_subqueries: Option<&[ScalarSubqueryLink]>,
+    scalar_context: Option<ScalarSubqueryContext<'_>>,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-    let plan = wrap_pending_scalar_subqueries(plan, scalar_subqueries);
+    let plan = wrap_pending_scalar_subqueries(plan, scalar_context);
     let stage = push_stage(
         plan,
         graph,
@@ -783,7 +793,7 @@ fn create_shuffle(
     // which are different from the properties of the input plan.
     properties: Arc<PlanProperties>,
     consumption: ShuffleConsumption,
-    scalar_subqueries: Option<&[ScalarSubqueryLink]>,
+    scalar_context: Option<ScalarSubqueryContext<'_>>,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
     let distribution = match properties.partitioning.clone() {
         Partitioning::RoundRobinBatch(channels) | Partitioning::UnknownPartitioning(channels) => {
@@ -791,7 +801,7 @@ fn create_shuffle(
         }
         Partitioning::Hash(keys, channels) => OutputDistribution::Hash { keys, channels },
     };
-    let plan = wrap_pending_scalar_subqueries(plan, scalar_subqueries);
+    let plan = wrap_pending_scalar_subqueries(plan, scalar_context);
     let stage = push_stage(plan, graph, distribution, TaskPlacement::Worker)?;
     let mode = match consumption {
         ShuffleConsumption::Single => InputMode::Shuffle,
@@ -809,10 +819,10 @@ fn create_row_shuffle(
     graph: &mut JobGraph,
     properties: Arc<PlanProperties>,
     consumption: ShuffleConsumption,
-    scalar_subqueries: Option<&[ScalarSubqueryLink]>,
+    scalar_context: Option<ScalarSubqueryContext<'_>>,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
     let distribution = OutputDistribution::RoundRobinRow { channels };
-    let plan = wrap_pending_scalar_subqueries(plan, scalar_subqueries);
+    let plan = wrap_pending_scalar_subqueries(plan, scalar_context);
     let stage = push_stage(plan, graph, distribution, TaskPlacement::Worker)?;
     let mode = match consumption {
         ShuffleConsumption::Single => InputMode::Shuffle,
@@ -883,9 +893,9 @@ fn stage_properties_with_unknown_partitioning(
 fn create_driver_stage(
     plan: PlannedSubtree,
     graph: &mut JobGraph,
-    scalar_subqueries: Option<&[ScalarSubqueryLink]>,
+    scalar_context: Option<ScalarSubqueryContext<'_>>,
 ) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
-    let plan = wrap_pending_scalar_subqueries(plan, scalar_subqueries);
+    let plan = wrap_pending_scalar_subqueries(plan, scalar_context);
     let stage = push_stage(
         plan,
         graph,
@@ -1070,7 +1080,18 @@ mod tests {
             .find_map(|stage| stage.plan.downcast_ref::<ScalarSubqueryExec>())
             .expect("stage containing ScalarSubqueryExpr should keep a ScalarSubqueryExec wrapper");
         assert_eq!(stage.subqueries().len(), 1);
-        assert!(stage.input().is::<FilterExec>());
+        let filter = stage
+            .input()
+            .downcast_ref::<FilterExec>()
+            .expect("ScalarSubqueryExec input should be the filtered stage");
+        let scalar_expr = filter
+            .predicate()
+            .downcast_ref::<ScalarSubqueryExpr>()
+            .expect("filter predicate should contain a scalar subquery expression");
+        assert!(ScalarSubqueryResults::ptr_eq(
+            stage.results(),
+            scalar_expr.results()
+        ));
     }
 
     #[test]

@@ -82,6 +82,21 @@ def test_aggregate_expression_with_scalar_subquery_in_cluster_mode(spark):
     assert result == [Row(total=36)]
 
 
+def test_correlated_scalar_subquery_in_cluster_mode(spark):
+    result = spark.sql("""
+        SELECT outer_t.k, outer_t.v
+        FROM VALUES (1, 2), (1, 4), (2, 1), (2, 3) AS outer_t(k, v)
+        WHERE outer_t.v = (
+            SELECT MAX(inner_t.x)
+            FROM VALUES (1, 4), (1, 2), (2, 3), (2, 1) AS inner_t(k, x)
+            WHERE inner_t.k = outer_t.k
+        )
+        ORDER BY outer_t.k
+    """).collect()
+
+    assert result == [Row(k=1, v=4), Row(k=2, v=3)]
+
+
 def test_join_operations(spark):
     """Test join operations in local-cluster mode."""
     customers = spark.createDataFrame(

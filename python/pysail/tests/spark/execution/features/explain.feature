@@ -32,3 +32,18 @@ Feature: EXPLAIN in distributed execution
       GROUP BY k
       """
     Then query plan matches snapshot
+
+  Scenario: EXPLAIN includes correlated scalar subquery distributed plan in local-cluster mode
+    When query
+      """
+      EXPLAIN
+      SELECT outer_t.k, outer_t.v
+      FROM VALUES (1, 2), (1, 4), (2, 1), (2, 3) AS outer_t(k, v)
+      WHERE outer_t.v = (
+        SELECT MAX(inner_t.x)
+        FROM VALUES (1, 4), (1, 2), (2, 3), (2, 1) AS inner_t(k, x)
+        WHERE inner_t.k = outer_t.k
+      )
+      ORDER BY outer_t.k
+      """
+    Then query plan matches snapshot
