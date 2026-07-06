@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
-use datafusion::common::{internal_datafusion_err, internal_err, Result};
+use datafusion::common::{internal_datafusion_err, internal_err, DataFusionError, Result};
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::{execute_stream, ExecutionPlan};
 use datafusion::prelude::SessionContext;
@@ -14,6 +14,7 @@ use tokio::sync::mpsc::error::SendError;
 use tokio::sync::oneshot;
 
 use crate::driver::{DriverActor, DriverEvent, DriverOptions};
+use crate::job_graph::JobGraph;
 
 pub struct LocalJobRunner {
     next_job_id: AtomicU64,
@@ -103,6 +104,12 @@ impl StateObservable<JobRunnerObserver> for ClusterJobRunner {
 
 #[tonic::async_trait]
 impl JobRunner for ClusterJobRunner {
+    fn explain(&self, plan: Arc<dyn ExecutionPlan>) -> Result<Option<String>> {
+        JobGraph::try_new(plan)
+            .map(|graph| Some(graph.to_string()))
+            .map_err(|e| DataFusionError::External(Box::new(e)))
+    }
+
     /// Executes a plan on the cluster. This is where the cool stuff happens.
     async fn execute(
         &self,
