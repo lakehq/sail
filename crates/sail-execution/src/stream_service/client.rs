@@ -54,11 +54,13 @@ impl TaskStreamFlightClient {
         // schema mismatch. As a workaround, here we cast the record batch to the expected schema.
         // https://github.com/apache/arrow-rs/issues/10291
         let stream = stream.and_then(move |batch| {
-            let schema = schema.clone();
-            futures::future::ready(
-                cast_record_batch_positionally(batch, schema)
-                    .map_err(|e| TaskStreamError::External(Arc::new(e))),
-            )
+            let result = if batch.schema().as_ref() == schema.as_ref() {
+                Ok(batch)
+            } else {
+                cast_record_batch_positionally(batch, schema.clone())
+                    .map_err(|e| TaskStreamError::External(Arc::new(e)))
+            };
+            futures::future::ready(result)
         });
         Ok(Box::pin(stream) as TaskStreamSource)
     }
