@@ -1,12 +1,16 @@
+use std::sync::Arc;
+
 use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::flight_service_client::FlightServiceClient;
 use datafusion::arrow::datatypes::SchemaRef;
 use futures::TryStreamExt;
 use prost::Message;
+use sail_common_datafusion::array::record_batch::cast_record_batch_positionally;
 
 use crate::error::ExecutionResult;
 use crate::id::TaskStreamKey;
 use crate::rpc::{ClientHandle, ClientOptions, ClientService};
+use crate::stream::error::TaskStreamError;
 use crate::stream::gen::TaskStreamTicket;
 use crate::stream::reader::TaskStreamSource;
 
@@ -26,9 +30,7 @@ impl TaskStreamFlightClient {
     pub async fn fetch_task_stream(
         &self,
         key: TaskStreamKey,
-        // The schema is unused for now since we have only in-memory streams.
-        // The schema may be needed if we have on-disk streams.
-        _schema: SchemaRef,
+        schema: SchemaRef,
     ) -> ExecutionResult<TaskStreamSource> {
         let ticket = TaskStreamTicket {
             job_id: key.job_id.into(),
@@ -48,6 +50,16 @@ impl TaskStreamFlightClient {
         let response = self.inner.get().await?.do_get(request).await?;
         let stream = response.into_inner().map_err(|e| e.into());
         let stream = FlightRecordBatchStream::new_from_flight_data(stream).map_err(|e| e.into());
+        // The Flight data encoder may have issue with the `LargeList` data type, causing
+        // schema mismatch. As a workaround, here we cast the record batch to the expected schema.
+        // https://github.com/apache/arrow-rs/issues/10291
+        let stream = stream.and_then(move |batch| {
+            let schema = schema.clone();
+            futures::future::ready(
+                cast_record_batch_positionally(batch, schema)
+                    .map_err(|e| TaskStreamError::External(Arc::new(e))),
+            )
+        });
         Ok(Box::pin(stream) as TaskStreamSource)
     }
 }
