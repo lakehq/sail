@@ -334,16 +334,6 @@ fn render_section(title: &str, body: &str) -> String {
     format!("== {title} ==\n{body}")
 }
 
-fn render_with_distributed_plan(
-    mut sections: Vec<String>,
-    distributed_plan: Option<&str>,
-) -> String {
-    if let Some(plan) = distributed_plan {
-        sections.push(render_section("Distributed Plan", plan));
-    }
-    sections.join("\n\n")
-}
-
 fn render_stringified_plans(plans: &[StringifiedPlan]) -> String {
     let mut rendered = Vec::with_capacity(plans.len());
     let mut prev: Option<&StringifiedPlan> = None;
@@ -439,7 +429,7 @@ async fn explain_from_collected(
     let mut physical = PhysicalStrings::default();
     let distributed_plan = distributed_plan_string(ctx, &collected.physical_plan);
 
-    let output = match options.kind {
+    let mut sections = match options.kind {
         ExplainKind::Simple => {
             let physical_for_mode = if options.analyze {
                 physical.full_with_metrics(&collected)
@@ -457,9 +447,9 @@ async fn explain_from_collected(
                     physical.with_schema(&collected),
                 ));
             }
-            render_with_distributed_plan(sections, distributed_plan.as_deref())
+            sections
         }
-        ExplainKind::Extended => render_with_distributed_plan(
+        ExplainKind::Extended => {
             vec![
                 render_section("Parsed Logical Plan", &logical_simple),
                 // prepend schema to make analyzed plan distinct from optimized plan
@@ -473,10 +463,9 @@ async fn explain_from_collected(
                         physical.plain(&collected, options.verbose)
                     },
                 ),
-            ],
-            distributed_plan.as_deref(),
-        ),
-        ExplainKind::Codegen => render_with_distributed_plan(
+            ]
+        }
+        ExplainKind::Codegen => {
             vec![
                 render_section(
                     "Codegen",
@@ -494,10 +483,9 @@ async fn explain_from_collected(
                         physical.plain(&collected, options.verbose)
                     },
                 ),
-            ],
-            distributed_plan.as_deref(),
-        ),
-        ExplainKind::Cost => render_with_distributed_plan(
+            ]
+        }
+        ExplainKind::Cost => {
             vec![
                 render_section("Optimized Logical Plan", &logical_optimized),
                 // TODO: Spark COST mode shows logical plan + stats; we currently return physical +
@@ -510,15 +498,17 @@ async fn explain_from_collected(
                         physical.with_stats(&collected)
                     },
                 ),
-            ],
-            distributed_plan.as_deref(),
-        ),
+            ]
+        }
         // TODO: Spark FORMATTED mode emits outline + node details
-        ExplainKind::Formatted => render_with_distributed_plan(
-            vec![render_section("Physical Plan", physical.full(&collected))],
-            distributed_plan.as_deref(),
-        ),
+        ExplainKind::Formatted => {
+            vec![render_section("Physical Plan", physical.full(&collected))]
+        }
     };
+    if let Some(plan) = distributed_plan {
+        sections.push(render_section("Distributed Plan", &plan));
+    }
+    let output = sections.join("\n\n");
 
     Ok(ExplainString {
         output,
