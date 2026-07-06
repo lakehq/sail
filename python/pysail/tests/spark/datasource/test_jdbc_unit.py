@@ -168,6 +168,62 @@ def test_write_supported_dialects_return_writers():
         assert isinstance(ds.writer(schema, overwrite=False), expected)
 
 
+@pytest.mark.parametrize("bad", ["0", "-1"])
+def test_write_batchsize_must_be_positive(bad):
+    """writer() rejects a non-positive batchsize on the driver, before fan-out.
+
+    A zero batchsize would raise at executor runtime (``range`` step 0), and a negative
+    one would silently skip all inserts while still reporting rows written.
+    """
+    from pyspark.sql.types import IntegerType, StructField, StructType
+
+    from pysail.spark.datasource.jdbc import JdbcDataSource
+
+    schema = StructType([StructField("id", IntegerType())])
+    ds = JdbcDataSource(options={"url": "jdbc:postgresql://localhost:5432/db", "dbtable": "t", "batchsize": bad})
+    with pytest.raises(ValueError, match="batchsize"):
+        ds.writer(schema, overwrite=False)
+
+
+def test_sqlalchemy_staging_create_is_retry_safe(tmp_path):
+    """A retried task must not fail on a staging table left by a prior attempt.
+
+    Staging names are deterministic, so a second create of the same name (as happens on
+    Spark task retry) must drop-then-create rather than raise "table already exists".
+    """
+    sa = pytest.importorskip("sqlalchemy")
+
+    from pysail.spark.datasource.jdbc import SqlAlchemyWriteEngine
+
+    url = f"sqlite:///{tmp_path / 'target.db'}"
+    setup = sa.create_engine(url)
+    with setup.begin() as conn:
+        conn.execute(sa.text("CREATE TABLE t (id INTEGER)"))
+    setup.dispose()
+
+    writer = SqlAlchemyWriteEngine(
+        url=url, dbtable="t", columns=["id"], overwrite=True, batch_size=1000, run_id="run"
+    )
+    engine = writer._create_engine()
+    try:
+        staging = writer._staging(0)
+        writer._create_staging_like_target(engine, staging)
+        # Simulated retry: same deterministic staging name, must not raise.
+        writer._create_staging_like_target(engine, staging)
+    finally:
+        engine.dispose()
+
+
+def test_write_engines_reject_nonpositive_batch_size():
+    """Both engines validate batch_size on construction (defence in depth)."""
+    from pysail.spark.datasource.jdbc import PgWriteEngine, SqlAlchemyWriteEngine
+
+    with pytest.raises(ValueError, match="batch_size"):
+        PgWriteEngine(dsn="postgresql://x/y", dbtable="t", batch_size=0)
+    with pytest.raises(ValueError, match="batch_size"):
+        SqlAlchemyWriteEngine(url="sqlite://", dbtable="t", columns=["id"], overwrite=True, batch_size=0, run_id="r")
+
+
 def test_write_unsupported_dialect_raises():
     """Dialects without a write backend raise a clear error."""
     from pyspark.sql.types import IntegerType, StructField, StructType

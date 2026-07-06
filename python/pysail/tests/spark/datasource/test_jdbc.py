@@ -629,6 +629,24 @@ def test_write_overwrite_replaces(spark, jdbc_opts, write_table):
     assert result.collect()[0].name == "Charlie"
 
 
+@pytest.mark.parametrize("write_table", ["wt_batched_overwrite"], indirect=True)
+def test_write_overwrite_small_batchsize_writes_all_rows(spark, jdbc_opts, write_table):
+    """A batchsize smaller than the partition chunks the ADBC ingest yet writes every row."""
+    from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+
+    schema = StructType([StructField("id", IntegerType()), StructField("name", StringType())])
+    df = spark.createDataFrame([(i, f"n{i}") for i in range(1, 6)], schema)
+
+    # batchsize 2 over 5 rows exercises the chunk loop incl. a partial final chunk.
+    df.write.format("jdbc").option("dbtable", write_table).option("batchsize", "2").options(
+        **jdbc_opts
+    ).mode("overwrite").save()
+
+    result = _read_pg_table(spark, jdbc_opts, write_table)
+    assert result.count() == 5  # noqa: PLR2004
+    assert {r.id for r in result.collect()} == {1, 2, 3, 4, 5}
+
+
 @pytest.mark.parametrize("write_table", ["wt_empty_df"], indirect=True)
 def test_write_empty_df(spark, jdbc_opts, write_table):
     """Writing an empty DataFrame leaves the table empty."""

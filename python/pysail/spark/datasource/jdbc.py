@@ -301,9 +301,10 @@ def _build_where(filters: list[str]) -> str:
 # Overwrite modes:
 #   * append   — ingest into the target (must exist). At-least-once: a retried task
 #                re-ingests, so duplicates are possible (as with Spark's JDBC writer).
-#   * atomic   — ingest into a staging table; commit() RENAMEs it over the target in
-#                one txn. Never leaves the target partially written, but does NOT
-#                preserve grants/RLS/FK back-references (use truncate if they must survive).
+#   * atomic   — ingest into a shared staging table; commit() RENAMEs it over the target
+#                in one txn. Never leaves the target partially written, but is at-least-once
+#                under task retry (a re-run re-ingests into the shared staging, like append)
+#                and does NOT preserve grants/RLS/FK back-refs (use truncate if they must).
 #   * truncate — advisory lock lets one partition TRUNCATE, then all ingest directly.
 #                Preserves the table object but is NON-ATOMIC (target left partial if a
 #                task dies mid-run). Prefer atomic unless grants/RLS must survive.
@@ -341,6 +342,12 @@ def _staging_name_truncate_sentinel(dbtable: str, run_id: str) -> str:
     schema, table = _split_schema(dbtable)
     sentinel = f"{table}{_TRUNC_SENTINEL_PREFIX}{run_id}"
     return f"{schema}.{sentinel}" if schema else sentinel
+
+
+def _iter_arrow_chunks(table_obj: pa.Table, batch_size: int) -> Iterator[pa.Table]:
+    """Yield *table_obj* in ``batch_size``-row zero-copy slices."""
+    for start in range(0, table_obj.num_rows, batch_size):
+        yield table_obj.slice(start, batch_size)
 
 
 def _safe_error(exc: BaseException, dsn: str) -> str:
@@ -381,6 +388,9 @@ class PgWriteEngine:
     ) -> None:
         if overwrite_mode not in self._VALID_MODES:
             msg = f"Invalid overwrite_mode {overwrite_mode!r}. Valid values: {sorted(self._VALID_MODES)}"
+            raise ValueError(msg)
+        if batch_size <= 0:
+            msg = f"batch_size must be a positive integer, got {batch_size}."
             raise ValueError(msg)
 
         self.dsn = dsn
@@ -469,7 +479,8 @@ class PgWriteEngine:
             try:
                 with pg_dbapi.connect(self.dsn) as conn:
                     with conn.cursor() as cur:
-                        cur.adbc_ingest(ingest_table, table_obj, mode="append", db_schema_name=ingest_schema)
+                        for chunk in _iter_arrow_chunks(table_obj, self.batch_size):
+                            cur.adbc_ingest(ingest_table, chunk, mode="append", db_schema_name=ingest_schema)
                     conn.commit()
                 rows = table_obj.num_rows
             except Exception as e:
@@ -659,6 +670,9 @@ class SqlAlchemyWriteEngine:
         run_id: str,
         connect_args: dict | None = None,
     ) -> None:
+        if batch_size <= 0:
+            msg = f"batch_size must be a positive integer, got {batch_size}."
+            raise ValueError(msg)
         self.url = url
         self.dbtable = dbtable
         self.columns = columns
@@ -696,13 +710,11 @@ class SqlAlchemyWriteEngine:
         """
         import sqlalchemy as sa  # noqa: PLC0415
 
-        n = table_obj.num_rows
-        if n == 0:
+        if table_obj.num_rows == 0:
             return
         with engine.begin() as conn:
-            for start in range(0, n, self.batch_size):
-                chunk = table_obj.slice(start, self.batch_size).to_pylist()
-                conn.execute(sa.insert(sa_table), chunk)
+            for chunk in _iter_arrow_chunks(table_obj, self.batch_size):
+                conn.execute(sa.insert(sa_table), chunk.to_pylist())
 
     def _create_staging_like_target(self, engine, staging: str):
         """Create an empty staging table matching the target's columns; return its
@@ -714,10 +726,11 @@ class SqlAlchemyWriteEngine:
         staging_cols = [
             sa.Column(c.name, c.type, nullable=c.nullable, primary_key=c.primary_key) for c in target.columns
         ]
-        # run_id/partition_id suffix makes names collision-free; prior orphans are
-        # handled by abort()/cleanup, not a pre-create drop.
+        # Drop-then-create: staging names are deterministic, so a retried task must not fail on
+        # (nor reuse the rows of) a leftover from a prior attempt.
         staging_table = sa.Table(staging, sa.MetaData(), *staging_cols, schema=self.schema)
         with engine.begin() as conn:
+            conn.execute(sa.schema.DropTable(staging_table, if_exists=True))
             staging_table.create(conn)
         return staging_table
 
@@ -1125,6 +1138,9 @@ class JdbcDataSource(DataSource):
         password = opts.get("password") or None
         conn_str = _jdbc_url_to_dsn(url, user, password)
         batch_size = int(opts.get("batchsize", "65536"))
+        if batch_size <= 0:
+            msg = f"Option 'batchsize' must be a positive integer, got {batch_size}."
+            raise ValueError(msg)
 
         import uuid  # noqa: PLC0415
 

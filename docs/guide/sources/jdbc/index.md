@@ -201,7 +201,10 @@ ignored.
   - PostgreSQL — controlled by `overwriteMode`. `atomic` (default) loads all
     partitions into one staging table, then swaps it over the target in a single
     `DROP; RENAME` transaction (replaces the table object, so grants/ACLs/RLS are
-    **not** preserved); the target is never left partially written. `truncate`
+    **not** preserved); the target is never left partially written. It is, however,
+    **at-least-once** under Spark task retry / speculative execution — a re-run
+    partition re-ingests into the shared staging, so the swapped-in table can contain
+    duplicates (same as `append`); disable speculation for exactly-once overwrite. `truncate`
     `TRUNCATE`s the target once then ingests directly, preserving the table object
     but **non-atomically** — if a task fails mid-job the target is left partially
     populated (Spark documents the same caveat and advises turning `truncate` off
