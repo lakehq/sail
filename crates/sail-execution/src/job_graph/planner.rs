@@ -46,7 +46,19 @@ impl JobGraph {
             stages: vec![],
             schema: plan.schema(),
         };
-        let last = build_job_graph(plan, PartitionUsage::Once, &mut graph)?.plan;
+        let last = plan_job_graph_stages(
+            plan,
+            PartitionUsage::Once,
+            &mut graph,
+            DriverStageHandling::PreserveRoot,
+            None,
+        )?
+        .plan;
+        let placement = if is_driver_stage_plan(&last) {
+            TaskPlacement::Driver
+        } else {
+            TaskPlacement::Worker
+        };
         let (last, inputs) = rewrite_inputs(last)?;
         graph.stages.push(Stage {
             inputs,
@@ -54,7 +66,7 @@ impl JobGraph {
             group: String::new(),
             mode: OutputMode::Pipelined,
             distribution: OutputDistribution::RoundRobin { channels: 1 },
-            placement: TaskPlacement::Worker,
+            placement,
         });
         Ok(graph)
     }
@@ -244,14 +256,6 @@ impl RebuiltSubtree {
 }
 
 /// Recursively splits an execution plan into stages at shuffle boundaries and adds them to the job graph.
-fn build_job_graph(
-    plan: Arc<dyn ExecutionPlan>,
-    usage: PartitionUsage,
-    graph: &mut JobGraph,
-) -> ExecutionResult<PlannedSubtree> {
-    plan_job_graph_stages(plan, usage, graph, DriverStageHandling::CreateStage, None)
-}
-
 fn plan_job_graph_stages(
     plan: Arc<dyn ExecutionPlan>,
     usage: PartitionUsage,
@@ -1006,6 +1010,20 @@ mod tests {
                 mode: InputMode::Rescale,
             }]
         ));
+    }
+
+    #[test]
+    fn test_job_graph_keeps_root_catalog_command_on_driver() {
+        let command = Arc::new(CatalogCommandExec::new(
+            CatalogCommand::CurrentCatalog,
+            schema(),
+        ));
+        let graph = JobGraph::try_new(command).unwrap();
+
+        assert_eq!(graph.stages().len(), 1);
+        assert_eq!(graph.stages()[0].placement, TaskPlacement::Driver);
+        assert!(graph.stages()[0].inputs.is_empty());
+        assert!(graph.stages()[0].plan.is::<CatalogCommandExec>());
     }
 
     #[test]
