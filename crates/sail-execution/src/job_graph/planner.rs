@@ -268,7 +268,13 @@ fn plan_job_graph_stages(
     }
 
     if let Some(barrier) = plan.downcast_ref::<BarrierExec>() {
-        return build_barrier_job_graph(barrier, usage, graph, scalar_context);
+        return build_barrier_job_graph(
+            barrier,
+            usage,
+            graph,
+            driver_stage_handling,
+            scalar_context,
+        );
     }
 
     // Recursively build the job graph for the children first
@@ -552,6 +558,7 @@ fn build_barrier_job_graph(
     barrier: &BarrierExec,
     usage: PartitionUsage,
     graph: &mut JobGraph,
+    driver_stage_handling: DriverStageHandling,
     scalar_context: Option<ScalarSubqueryContext<'_>>,
 ) -> ExecutionResult<PlannedSubtree> {
     let preconditions = barrier
@@ -597,9 +604,13 @@ fn build_barrier_job_graph(
     let barrier = Arc::new(BarrierExec::new(preconditions, plan.plan)) as Arc<dyn ExecutionPlan>;
     let barrier = PlannedSubtree::new(barrier, barrier_has_pending_scalar_subquery_expr);
     if plan_is_driver_stage {
-        Ok(PlannedSubtree::without_pending_scalar_subquery_expr(
-            create_driver_stage(barrier, graph, scalar_context)?,
-        ))
+        if matches!(driver_stage_handling, DriverStageHandling::PreserveRoot) {
+            Ok(barrier)
+        } else {
+            Ok(PlannedSubtree::without_pending_scalar_subquery_expr(
+                create_driver_stage(barrier, graph, scalar_context)?,
+            ))
+        }
     } else {
         Ok(barrier)
     }
@@ -608,6 +619,9 @@ fn build_barrier_job_graph(
 fn is_driver_stage_plan(plan: &Arc<dyn ExecutionPlan>) -> bool {
     if let Some(cooperative) = plan.downcast_ref::<CooperativeExec>() {
         return is_driver_stage_plan(cooperative.input());
+    }
+    if let Some(barrier) = plan.downcast_ref::<BarrierExec>() {
+        return is_driver_stage_plan(barrier.plan());
     }
 
     plan.is::<SystemTableExec>()
@@ -927,6 +941,7 @@ mod tests {
     use datafusion::physical_plan::coop::CooperativeExec;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::filter::FilterExec;
+    use datafusion::physical_plan::projection::ProjectionExec;
     use datafusion::physical_plan::repartition::RepartitionExec;
     use datafusion::physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
     use datafusion::physical_plan::union::UnionExec;
@@ -1039,7 +1054,7 @@ mod tests {
         let graph =
             JobGraph::try_new(Arc::new(BarrierExec::new(vec![precondition], command))).unwrap();
 
-        assert_eq!(graph.stages().len(), 3);
+        assert_eq!(graph.stages().len(), 2);
         assert_eq!(graph.stages()[1].placement, TaskPlacement::Driver);
         #[expect(clippy::expect_used)]
         let barrier = graph.stages()[1]
@@ -1059,6 +1074,32 @@ mod tests {
                 mode: InputMode::Shuffle,
             }]
         ));
+    }
+
+    #[test]
+    fn test_job_graph_creates_driver_stage_for_nested_driver_barrier() {
+        let precondition = Arc::new(
+            RepartitionExec::try_new(empty_plan(), Partitioning::RoundRobinBatch(1)).unwrap(),
+        );
+        let command = Arc::new(CatalogCommandExec::new(
+            CatalogCommand::CurrentCatalog,
+            schema(),
+        ));
+        let command = Arc::new(CooperativeExec::new(command));
+        let barrier = Arc::new(BarrierExec::new(vec![precondition], command));
+        let projection = Arc::new(
+            ProjectionExec::try_new(
+                vec![(col("id", schema().as_ref()).unwrap(), "id".to_string())],
+                barrier,
+            )
+            .unwrap(),
+        );
+
+        let graph = JobGraph::try_new(projection).unwrap();
+
+        assert_eq!(graph.stages().len(), 3);
+        assert_eq!(graph.stages()[1].placement, TaskPlacement::Driver);
+        assert!(graph.stages()[1].plan.is::<BarrierExec>());
         assert!(matches!(
             graph.stages()[2].inputs.as_slice(),
             [StageInput {
