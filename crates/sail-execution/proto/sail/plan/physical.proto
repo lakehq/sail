@@ -64,13 +64,16 @@ message ExtendedPhysicalPlanNode {
     DeletionVectorRowsWriterExecNode deletion_vector_rows_writer = 49;
     CoalesceExecNode coalesce = 50;
     FileDeleteExecNode file_delete = 51;
+    NoopSinkExecNode noop_sink = 52;
+    CsvExecNode csv = 53;
+    ParquetExecNode parquet = 54;
   }
 }
 
 message ExtendedPhysicalExprNode {
   oneof ExprKind {
     CastColumnExprNode schema_evolution_cast = 1;
-    HigherOrderFunctionExprNode higher_order_function = 2;
+    HigherOrderUdfExprNode higher_order_udf = 2;
     LambdaExprNode lambda = 3;
     LambdaVariableExprNode lambda_variable = 4;
   }
@@ -81,21 +84,37 @@ message CastColumnExprNode {
   bytes target_schema = 2;
 }
 
-// A Spark higher-order function (e.g. `filter`). The argument expressions
-// (including the lambda) are carried as the extension node's `inputs`.
-// `input_schema` is the schema the inner expression was planned against,
-// needed to rebuild it. `udf` identifies the concrete higher-order function,
-// following the same one-variant-per-function pattern as `ExtendedScalarUdf`.
-message HigherOrderFunctionExprNode {
-  bytes input_schema = 1;
-  HigherOrderUdf udf = 2;
+message LambdaExprNode {
+  repeated string params = 1;
+}
+
+message LambdaVariableExprNode {
+  uint32 index = 1;
+  bytes field = 2;
+}
+
+message HigherOrderUdfExprNode {
+  HigherOrderUdf udf = 1;
 }
 
 message HigherOrderUdf {
-  oneof UdfKind {
+  oneof HigherOrderUdfKind {
     SparkArrayFilterUdf filter = 1;
+    SparkArrayTransformUdf transform = 2;
+    SparkArrayExistsUdf exists = 3;
+    SparkArrayForallUdf forall = 4;
+    SparkArrayAggregateUdf aggregate = 5;
+    SparkArraySortUdf sort = 6;
   }
 }
+
+message SparkArrayAggregateUdf {
+  bool element_first = 1;
+}
+
+message SparkArrayExistsUdf {}
+
+message SparkArrayForallUdf {}
 
 message SparkArrayFilterUdf {
   // True when the lambda parameters are `[index, element]` (an index-only
@@ -114,16 +133,19 @@ message SparkArrayFilterUdf {
   bool index_first = 1;
 }
 
-// A lambda function. Its body is carried as the extension node's single input.
-message LambdaExprNode {
-  repeated string params = 1;
+message SparkArrayTransformUdf {
+  // True when the lambda parameters are `[index, element]` (an index-only
+  // lambda rewritten by the planner) instead of `[element, index]`. See the
+  // identical workaround documented on `SparkArrayFilterUdf.index_first`.
+  bool index_first = 1;
 }
 
-// A reference to a lambda parameter, resolved to a position in the (extended)
-// schema with its field type.
-message LambdaVariableExprNode {
-  uint64 index = 1;
-  bytes field = 2;
+message SparkArraySortUdf {
+  // True when the comparator columns are fed in `[right, left]` order (a
+  // right-only comparator `(l, r) -> f(r)` rewritten by the planner to a
+  // single-parameter lambda). See the identical workaround documented on
+  // `SparkArrayFilterUdf.index_first`.
+  bool swapped = 1;
 }
 
 message ExtendedScalarUdf {
@@ -175,7 +197,12 @@ message ExtendedAggregateUdf {
     PySparkGroupAggUdaf py_spark_group_agg = 2;
     PySparkGroupMapUdaf py_spark_group_map = 3;
     PySparkBatchCollectorUdaf py_spark_batch_collector = 4;
+    PercentileDiscUdaf percentile_disc = 5;
   }
+}
+
+message PercentileDiscUdaf {
+  bool ansi_mode = 1;
 }
 
 message StandardUdf {}
@@ -243,6 +270,7 @@ message TimestampNowUdf {
 message SparkTimestampUdf {
   optional string timezone = 1;
   bool is_try = 2;
+  bool ansi_mode = 3;
 }
 
 message SparkDateUdf {
@@ -326,10 +354,16 @@ message StandardUdaf {}
 message ExtendedWindowUdf {
   oneof UdwfKind {
     StandardUdwf standard = 1;
+    SparkFirstLastValueUdwf spark_first_last_value = 2;
   }
 }
 
 message StandardUdwf {}
+
+message SparkFirstLastValueUdwf {
+  bool first = 1;
+  bool ignore_nulls = 2;
+}
 
 // Distinguishes Pandas (202) vs Arrow-native (252) grouped aggregate UDFs
 enum PySparkGroupAggKind {
@@ -550,6 +584,17 @@ message NdJsonExecNode {
   CompressionTypeVariant file_compression_type = 2;
 }
 
+message CsvExecNode {
+  bytes base_config = 1;
+  bytes options = 2;
+}
+
+message ParquetExecNode {
+  bytes base_config = 1;
+  bytes options = 2;
+  optional bytes predicate = 3;
+}
+
 message ArrowExecNode {
   bytes base_config = 1;
 }
@@ -685,6 +730,7 @@ message DeltaScanByAddsExecNode {
   int64 version = 9;
   optional bytes statistics = 10;
   string lakehouse_table_json = 11;
+  string catalog_managed_commits_json = 12;
   // TODO: Consider snapshot hints (partition columns, kernel schema) to avoid worker log reads.
 }
 
@@ -709,6 +755,10 @@ message DeltaRemoveActionsExecNode {
 }
 
 message ConsoleSinkExecNode {
+  bytes input = 1;
+}
+
+message NoopSinkExecNode {
   bytes input = 1;
 }
 

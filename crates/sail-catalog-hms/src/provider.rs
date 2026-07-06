@@ -828,7 +828,7 @@ impl HmsCatalogProvider {
 }
 
 fn validate_create_table_options(options: &CreateTableOptions) -> CatalogResult<()> {
-    if options.replace {
+    if options.mode.is_replace() {
         return Err(CatalogError::NotSupported(
             "Hive Metastore catalog does not support REPLACE".to_string(),
         ));
@@ -1031,6 +1031,7 @@ impl CatalogProvider for HmsCatalogProvider {
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
         let format = options.format.trim().to_lowercase();
+        let if_not_exists = options.mode.ignore_if_exists();
 
         validate_create_table_options(&options)?;
         let db_name = validate_namespace(database)?;
@@ -1062,7 +1063,7 @@ impl CatalogProvider for HmsCatalogProvider {
             &format_for_metadata,
         )?;
 
-        self.create_hms_table(database, table, hms_table, options.if_not_exists)
+        self.create_hms_table(database, table, hms_table, if_not_exists)
             .await
     }
 

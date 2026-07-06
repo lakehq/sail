@@ -23,6 +23,7 @@ use std::time::{Duration, Instant};
 
 use reqwest::header::{HeaderValue, ACCEPT};
 use reqwest::{Client, Method, Response};
+use sail_catalog::credentials::CatalogCredentials;
 use sail_catalog::error::{CatalogError, CatalogResult};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -67,6 +68,24 @@ pub enum CredentialProvider {
 
     /// a credential to fetch expiring auth tokens
     TokenCredential(TokenCache<String>, Box<dyn TokenCredential>),
+}
+
+#[async_trait::async_trait]
+impl CatalogCredentials for CredentialProvider {
+    async fn retrieve(&self) -> CatalogResult<Option<String>> {
+        match self {
+            CredentialProvider::BearerToken(token) => Ok(Some(token.clone())),
+            CredentialProvider::TokenCredential(cache, cred) => {
+                let oauth_client = Client::builder().build().map_err(|e| {
+                    CatalogError::External(format!("Failed to build OAuth client: {e}"))
+                })?;
+                let token = cache
+                    .get_or_insert_with(|| cred.fetch_token(&oauth_client))
+                    .await?;
+                Ok(Some(token))
+            }
+        }
+    }
 }
 
 #[derive(Deserialize, Debug)]

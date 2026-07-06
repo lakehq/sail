@@ -66,7 +66,16 @@ impl OptionLayer {
     /// The returned map can be passed to code that accepts `HashMap<String, String>`.
     pub fn into_opaque_options(self) -> HashMap<String, String> {
         match self {
-            OptionLayer::TablePropertyList { items } => items.into_iter().collect(),
+            OptionLayer::TablePropertyList { items } => items
+                .into_iter()
+                .map(|(key, value)| {
+                    if let Some(key) = key.strip_prefix("option.") {
+                        (key.to_string(), value)
+                    } else {
+                        (key, value)
+                    }
+                })
+                .collect(),
             OptionLayer::OptionList { items } => items.into_iter().collect(),
             OptionLayer::TableLocation { .. }
             | OptionLayer::AsOfTimestamp { .. }

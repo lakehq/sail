@@ -19,6 +19,7 @@ use crate::datasource::scan::{
     build_file_scan_config, file_scan_projection_for_schema, FileScanParams, TableStatsMode,
 };
 use crate::datasource::{df_logical_schema, simplify_expr, DeltaScanConfig};
+use crate::delta_log::LogStoreRef;
 use crate::options::gen::DeltaWriteOptions;
 use crate::physical_plan::planner::metadata_predicate::{
     build_metadata_filter, predicate_requires_stats,
@@ -28,7 +29,6 @@ use crate::physical_plan::planner::{DeltaPlannerConfig, PlannerContext};
 use crate::physical_plan::{DeltaDiscoveryExec, DeltaScanByAddsExec, RelaxedTzCastExec};
 use crate::schema::get_physical_schema;
 use crate::spec::{Add, ColumnMappingMode, StructType};
-use crate::storage::LogStoreRef;
 use crate::table::DeltaSnapshot;
 
 pub(crate) async fn plan_delta_scan(
@@ -367,6 +367,7 @@ pub(crate) async fn plan_delta_scan(
             limit,
             pushdown_filter,
             None,
+            snapshot.load_config().catalog_managed_commits.clone(),
         )
         .with_table_statistics(snapshot.datafusion_table_statistics(None)),
     );

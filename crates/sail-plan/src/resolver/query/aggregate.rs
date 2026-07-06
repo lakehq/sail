@@ -2,7 +2,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, Tre
 use datafusion_common::{
     Column, DFSchemaRef, DataFusionError, Result as DataFusionResult, ScalarValue,
 };
-use datafusion_expr::utils::{expr_as_column_expr, find_aggregate_exprs};
+use datafusion_expr::utils::find_aggregate_exprs;
 use datafusion_expr::{
     bitwise_and, bitwise_shift_right, cast, Aggregate, Expr, LogicalPlan, LogicalPlanBuilder,
     Volatility,
@@ -598,12 +598,35 @@ impl PlanResolver<'_> {
         Ok(expr
             .transform_down(|e| {
                 if base.contains(&e) {
-                    Ok(Transformed::yes(expr_as_column_expr(&e, plan)?))
+                    Ok(Transformed::yes(
+                        Self::expr_as_column_expr(&e, plan)
+                            .map_err(|e| DataFusionError::External(Box::new(e)))?,
+                    ))
                 } else {
                     Ok(Transformed::no(e))
                 }
             })
             .data()?)
+    }
+
+    // Modification of DataFusion's `expr_as_column_expr`
+    fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> PlanResult<Expr> {
+        match expr {
+            Expr::Column(column) => {
+                let result = plan
+                    .schema()
+                    .qualified_field_from_column(column)
+                    .or_else(|_| {
+                        let column = Column::new_unqualified(column.name.clone());
+                        plan.schema().qualified_field_from_column(&column)
+                    })?;
+                let (qualifier, field) = result;
+                Ok(Expr::from(Column::from((qualifier, field))))
+            }
+            _ => Ok(Expr::Column(Column::from_name(
+                expr.schema_name().to_string(),
+            ))),
+        }
     }
 
     /// Spark CheckAnalysis: GroupedAgg Pandas/Arrow UDFs cannot be mixed with regular

@@ -30,7 +30,7 @@ pub struct CommitViewRequest {
     #[serde(rename = "identifier", skip_serializing_if = "Option::is_none")]
     pub identifier: Option<Box<models::TableIdentifier>>,
     #[serde(rename = "requirements", skip_serializing_if = "Option::is_none")]
-    pub requirements: Option<Vec<models::AssertViewUuid>>,
+    pub requirements: Option<Vec<models::ViewRequirement>>,
     #[serde(rename = "updates")]
     pub updates: Vec<models::ViewUpdate>,
 }

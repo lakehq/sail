@@ -1,10 +1,10 @@
-mod codec;
 pub mod driver;
 pub mod error;
 mod id;
 mod job_graph;
 pub mod job_runner;
 mod plan;
+mod proto;
 mod rpc;
 mod stream;
 mod stream_accessor;

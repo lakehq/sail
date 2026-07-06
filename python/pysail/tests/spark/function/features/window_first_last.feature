@@ -171,3 +171,34 @@ Feature: first_value and last_value window functions with sliding frames
         | 10   | 10      |
         | NULL | 10      |
         | 20   | 10      |
+
+    Scenario: first_value and last_value ignore nulls over a sliding frame
+      When query
+        """
+        SELECT
+          id,
+          x,
+          FIRST_VALUE(x) IGNORE NULLS OVER (
+            ORDER BY id ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING
+          ) AS x_first,
+          LAST_VALUE(x) IGNORE NULLS OVER (
+            ORDER BY id ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING
+          ) AS x_last
+        FROM (
+          SELECT 1 AS id, NULL AS x
+          UNION ALL SELECT 2, 10
+          UNION ALL SELECT 3, NULL
+          UNION ALL SELECT 4, 20
+          UNION ALL SELECT 5, NULL
+          UNION ALL SELECT 6, 30
+        )
+        ORDER BY id
+        """
+      Then query result ordered
+        | id | x    | x_first | x_last |
+        | 1  | NULL | 10      | 10     |
+        | 2  | 10   | 10      | 10     |
+        | 3  | NULL | 10      | 20     |
+        | 4  | 20   | 20      | 20     |
+        | 5  | NULL | 20      | 30     |
+        | 6  | 30   | 30      | 30     |

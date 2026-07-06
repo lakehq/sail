@@ -91,11 +91,13 @@ fn coerce_to_temporal(
     if is_string_type(data_type) {
         match target_type {
             DataType::Date32 => Ok(ScalarUDF::from(SparkDate::new(false)).call(vec![arg])),
-            DataType::Timestamp(_, timezone) => Ok(ScalarUDF::from(SparkTimestamp::try_new(
-                timezone.clone(),
-                false,
-            )?)
-            .call(vec![arg])),
+            // Only reached on the ANSI-enabled coalesce path, so strict parsing.
+            DataType::Timestamp(_, timezone) => {
+                Ok(
+                    ScalarUDF::from(SparkTimestamp::try_new(timezone.clone(), true, false)?)
+                        .call(vec![arg]),
+                )
+            }
             _ => Ok(cast(arg, target_type.clone())),
         }
     } else if is_temporal_type(data_type) {

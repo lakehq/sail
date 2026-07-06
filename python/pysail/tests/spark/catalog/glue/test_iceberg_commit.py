@@ -79,7 +79,7 @@ def _current_schema_field_names(metadata: dict) -> list[str]:
 
 
 def test_ctas_records_glue_iceberg_metadata_location(
-    glue_spark: SparkSession,
+    spark: SparkSession,
     moto_endpoint: str,
     tmp_path: Path,
 ) -> None:
@@ -88,10 +88,10 @@ def test_ctas_records_glue_iceberg_metadata_location(
     table_fqn = f"{database}.{table}"
     location = (tmp_path / "ctas_t").as_uri()
 
-    glue_spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
     try:
-        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-        glue_spark.sql(
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(
             f"""
             CREATE TABLE {table_fqn}
             USING ICEBERG
@@ -104,15 +104,15 @@ def test_ctas_records_glue_iceberg_metadata_location(
         assert metadata_location.startswith(location)
         _assert_uuid_metadata_location(metadata_location)
 
-        rows = glue_spark.sql(f"SELECT id, name FROM {table_fqn}").collect()
+        rows = spark.sql(f"SELECT id, name FROM {table_fqn}").collect()
         assert [(row.id, row.name) for row in rows] == [(1, "a")]
     finally:
-        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-        glue_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
 
 
 def test_insert_advances_glue_iceberg_metadata_location(
-    glue_spark: SparkSession,
+    spark: SparkSession,
     moto_endpoint: str,
     tmp_path: Path,
 ) -> None:
@@ -121,10 +121,10 @@ def test_insert_advances_glue_iceberg_metadata_location(
     table_fqn = f"{database}.{table}"
     location = (tmp_path / "commit_t").as_uri()
 
-    glue_spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
     try:
-        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-        glue_spark.sql(
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(
             f"""
             CREATE TABLE {table_fqn} (
               id INT,
@@ -140,10 +140,10 @@ def test_insert_advances_glue_iceberg_metadata_location(
         created_metadata = _load_metadata_json(created_location)
         assert created_metadata["current-snapshot-id"] == -1
         assert created_metadata["snapshots"] == []
-        rows = glue_spark.sql(f"SELECT id, name FROM {table_fqn}").collect()
+        rows = spark.sql(f"SELECT id, name FROM {table_fqn}").collect()
         assert rows == []
 
-        glue_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a'), (2, 'b')")
+        spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a'), (2, 'b')")
         first_location = _metadata_location(moto_endpoint, database, table)
         assert first_location != created_location
         assert first_location.startswith(location)
@@ -152,7 +152,7 @@ def test_insert_advances_glue_iceberg_metadata_location(
         assert len(first_metadata["metadata-log"]) == 1
         assert first_metadata["metadata-log"][0]["metadata-file"] == created_location
 
-        glue_spark.sql(f"INSERT INTO {table_fqn} VALUES (3, 'c')")
+        spark.sql(f"INSERT INTO {table_fqn} VALUES (3, 'c')")
         second_location = _metadata_location(moto_endpoint, database, table)
         assert second_location != first_location
         assert second_location.startswith(location)
@@ -163,15 +163,15 @@ def test_insert_advances_glue_iceberg_metadata_location(
             first_location,
         ]
 
-        rows = glue_spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
+        rows = spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
         assert [(row.id, row.name) for row in rows] == [(1, "a"), (2, "b"), (3, "c")]
     finally:
-        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-        glue_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
 
 
 def test_merge_schema_append_advances_glue_iceberg_metadata_location(
-    glue_spark: SparkSession,
+    spark: SparkSession,
     moto_endpoint: str,
     tmp_path: Path,
 ) -> None:
@@ -180,10 +180,10 @@ def test_merge_schema_append_advances_glue_iceberg_metadata_location(
     table_fqn = f"{database}.{table}"
     location = (tmp_path / "merge_schema_t").as_uri()
 
-    glue_spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
     try:
-        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-        glue_spark.sql(
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(
             f"""
             CREATE TABLE {table_fqn} (
               id INT,
@@ -193,11 +193,11 @@ def test_merge_schema_append_advances_glue_iceberg_metadata_location(
             LOCATION '{location}'
             """
         )
-        glue_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a')")
+        spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a')")
         before_location = _metadata_location(moto_endpoint, database, table)
         _assert_uuid_metadata_location(before_location, 1)
 
-        evolved = glue_spark.createDataFrame([(2, "b", 20)], schema="id INT, name STRING, age INT")
+        evolved = spark.createDataFrame([(2, "b", 20)], schema="id INT, name STRING, age INT")
         (evolved.write.format("iceberg").mode("append").option("mergeSchema", "true").saveAsTable(table_fqn))
 
         after_location = _metadata_location(moto_endpoint, database, table)
@@ -208,15 +208,15 @@ def test_merge_schema_append_advances_glue_iceberg_metadata_location(
         assert after_metadata["metadata-log"][-1]["metadata-file"] == before_location
         assert _current_schema_field_names(after_metadata) == ["id", "name", "age"]
 
-        rows = glue_spark.sql(f"SELECT id, name, age FROM {table_fqn} ORDER BY id").collect()
+        rows = spark.sql(f"SELECT id, name, age FROM {table_fqn} ORDER BY id").collect()
         assert [(row.id, row.name, row.age) for row in rows] == [(1, "a", None), (2, "b", 20)]
     finally:
-        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-        glue_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
 
 
 def test_insert_overwrite_advances_glue_iceberg_metadata_location(
-    glue_spark: SparkSession,
+    spark: SparkSession,
     moto_endpoint: str,
     tmp_path: Path,
 ) -> None:
@@ -225,10 +225,10 @@ def test_insert_overwrite_advances_glue_iceberg_metadata_location(
     table_fqn = f"{database}.{table}"
     location = (tmp_path / "overwrite_t").as_uri()
 
-    glue_spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
     try:
-        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-        glue_spark.sql(
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(
             f"""
             CREATE TABLE {table_fqn} (
               id INT,
@@ -241,11 +241,11 @@ def test_insert_overwrite_advances_glue_iceberg_metadata_location(
         created_location = _metadata_location(moto_endpoint, database, table)
         _assert_uuid_metadata_location(created_location, 0)
 
-        glue_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'old'), (2, 'old')")
+        spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'old'), (2, 'old')")
         before_overwrite_location = _metadata_location(moto_endpoint, database, table)
         _assert_uuid_metadata_location(before_overwrite_location, 1)
 
-        glue_spark.sql(f"INSERT OVERWRITE TABLE {table_fqn} VALUES (3, 'new'), (4, 'new')")
+        spark.sql(f"INSERT OVERWRITE TABLE {table_fqn} VALUES (3, 'new'), (4, 'new')")
         after_overwrite_location = _metadata_location(moto_endpoint, database, table)
         assert after_overwrite_location != before_overwrite_location
         assert after_overwrite_location.startswith(location)
@@ -257,15 +257,15 @@ def test_insert_overwrite_advances_glue_iceberg_metadata_location(
         ]
         assert after_metadata["snapshots"][-1]["summary"]["operation"] == "overwrite"
 
-        rows = glue_spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
+        rows = spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
         assert [(row.id, row.name) for row in rows] == [(3, "new"), (4, "new")]
     finally:
-        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-        glue_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
 
 
 def test_create_table_validation_runs_before_glue_iceberg_metadata_materialization(
-    glue_spark: SparkSession,
+    spark: SparkSession,
     tmp_path: Path,
 ) -> None:
     database = "glue_iceberg_rejected_create_db"
@@ -273,10 +273,10 @@ def test_create_table_validation_runs_before_glue_iceberg_metadata_materializati
     table_fqn = f"{database}.{table}"
     table_path = tmp_path / table
 
-    glue_spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
     try:
         with pytest.raises(Exception, match="BUCKET BY"):
-            glue_spark.sql(
+            spark.sql(
                 f"""
                 CREATE TABLE {table_fqn} (
                   id INT,
@@ -290,12 +290,12 @@ def test_create_table_validation_runs_before_glue_iceberg_metadata_materializati
 
         assert not (table_path / "metadata").exists()
     finally:
-        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-        glue_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
 
 
 def test_sail_reads_and_appends_glue_iceberg_table_with_jvm_style_marker(
-    glue_spark: SparkSession,
+    spark: SparkSession,
     moto_endpoint: str,
     tmp_path: Path,
 ) -> None:
@@ -304,10 +304,10 @@ def test_sail_reads_and_appends_glue_iceberg_table_with_jvm_style_marker(
     table_fqn = f"{database}.{table}"
     location = (tmp_path / "jvm_marker").as_uri()
 
-    glue_spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
     try:
-        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-        glue_spark.sql(
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(
             f"""
             CREATE TABLE {table_fqn} (
               id INT,
@@ -317,7 +317,7 @@ def test_sail_reads_and_appends_glue_iceberg_table_with_jvm_style_marker(
             LOCATION '{location}'
             """
         )
-        glue_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a')")
+        spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a')")
         first_location = _metadata_location(moto_endpoint, database, table)
 
         parameters = _glue_parameters(moto_endpoint, database, table)
@@ -329,25 +329,25 @@ def test_sail_reads_and_appends_glue_iceberg_table_with_jvm_style_marker(
         assert parameters.get("TABLE_TYPE") == "ICEBERG"
         assert "table_type" not in parameters
 
-        rows = glue_spark.sql(f"SELECT id, name FROM {table_fqn}").collect()
+        rows = spark.sql(f"SELECT id, name FROM {table_fqn}").collect()
         assert [(row.id, row.name) for row in rows] == [(1, "a")]
 
-        glue_spark.sql(f"INSERT INTO {table_fqn} VALUES (2, 'b')")
+        spark.sql(f"INSERT INTO {table_fqn} VALUES (2, 'b')")
         second_location = _metadata_location(moto_endpoint, database, table)
         assert second_location != first_location
         _assert_uuid_metadata_location(second_location)
         second_metadata = _load_metadata_json(second_location)
         assert second_metadata["metadata-log"][-1]["metadata-file"] == first_location
 
-        rows = glue_spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
+        rows = spark.sql(f"SELECT id, name FROM {table_fqn} ORDER BY id").collect()
         assert [(row.id, row.name) for row in rows] == [(1, "a"), (2, "b")]
     finally:
-        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-        glue_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
 
 
 def test_glue_rejects_stale_iceberg_metadata_location_update(
-    glue_spark: SparkSession,
+    spark: SparkSession,
     moto_endpoint: str,
     tmp_path: Path,
 ) -> None:
@@ -356,10 +356,10 @@ def test_glue_rejects_stale_iceberg_metadata_location_update(
     table_fqn = f"{database}.{table}"
     location = (tmp_path / "stale_commit").as_uri()
 
-    glue_spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
+    spark.sql(f"CREATE DATABASE IF NOT EXISTS {database}")
     try:
-        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-        glue_spark.sql(
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(
             f"""
             CREATE TABLE {table_fqn} (
               id INT,
@@ -369,11 +369,11 @@ def test_glue_rejects_stale_iceberg_metadata_location_update(
             LOCATION '{location}'
             """
         )
-        glue_spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a')")
+        spark.sql(f"INSERT INTO {table_fqn} VALUES (1, 'a')")
         current_location = _metadata_location(moto_endpoint, database, table)
 
         with pytest.raises(Exception, match="catalog-managed Iceberg tables"):
-            glue_spark.sql(
+            spark.sql(
                 f"""
                 ALTER TABLE {table_fqn}
                 SET TBLPROPERTIES (
@@ -385,5 +385,5 @@ def test_glue_rejects_stale_iceberg_metadata_location_update(
 
         assert _metadata_location(moto_endpoint, database, table) == current_location
     finally:
-        glue_spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
-        glue_spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")
+        spark.sql(f"DROP TABLE IF EXISTS {table_fqn}")
+        spark.sql(f"DROP DATABASE IF EXISTS {database} CASCADE")

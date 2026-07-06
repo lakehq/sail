@@ -249,9 +249,10 @@ fn percentile_disc(input: AggFunctionInput) -> PlanResult<expr::Expr> {
     let column = sort.expr;
     let percentile = input.arguments.one()?;
     let args = vec![column, percentile];
+    let ansi_mode = input.function_context.plan_config.ansi_mode;
 
     Ok(expr::Expr::AggregateFunction(AggregateFunction {
-        func: percentile_disc_udaf(),
+        func: percentile_disc_udaf(ansi_mode),
         params: AggregateFunctionParams {
             args,
             distinct: input.distinct,
@@ -764,4 +765,8 @@ pub(crate) fn get_built_in_aggregate_function(name: &str) -> PlanResult<AggFunct
         .get(name)
         .ok_or_else(|| PlanError::unsupported(format!("unknown aggregate function: {name}")))?
         .clone())
+}
+
+pub(crate) fn list_built_in_aggregate_function_names() -> impl Iterator<Item = &'static str> {
+    BUILT_IN_AGGREGATE_FUNCTIONS.keys().copied()
 }
