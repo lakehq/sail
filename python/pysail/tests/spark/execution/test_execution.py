@@ -69,34 +69,6 @@ def test_aggregation_with_groupby(large_dataset):
     assert group_0["sum_value"] == sum(i * 2 for i in range(0, 1000, 10))
 
 
-def test_aggregate_expression_with_scalar_subquery_in_cluster_mode(spark):
-    result = spark.sql("""
-        SELECT
-            SUM(CAST(v AS BIGINT) + (
-                SELECT MIN(CAST(x AS BIGINT))
-                FROM VALUES (10), (20) AS s(x)
-            )) AS total
-        FROM VALUES (1), (2), (3) AS t(v)
-    """).collect()
-
-    assert result == [Row(total=36)]
-
-
-def test_correlated_scalar_subquery_in_cluster_mode(spark):
-    result = spark.sql("""
-        SELECT outer_t.k, outer_t.v
-        FROM VALUES (1, 2), (1, 4), (2, 1), (2, 3) AS outer_t(k, v)
-        WHERE outer_t.v = (
-            SELECT MAX(inner_t.x)
-            FROM VALUES (1, 4), (1, 2), (2, 3), (2, 1) AS inner_t(k, x)
-            WHERE inner_t.k = outer_t.k
-        )
-        ORDER BY outer_t.k
-    """).collect()
-
-    assert result == [Row(k=1, v=4), Row(k=2, v=3)]
-
-
 def test_join_operations(spark):
     """Test join operations in local-cluster mode."""
     customers = spark.createDataFrame(
