@@ -508,6 +508,9 @@ Feature: Scalar subqueries in distributed execution
       """
     Then query error (?i)(SCALAR_SUBQUERY_TOO_MANY_ROWS|more than one row)
 
+  # Spark 4 analyzes this query and raises the scalar-subquery cardinality error
+  # at runtime. Sail currently rejects it during planning via DataFusion's
+  # correlated scalar subquery invariant.
   @spark-4
   @sail-bug
   Scenario: Unaggregated correlated scalar subquery errors at runtime
