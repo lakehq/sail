@@ -7,7 +7,7 @@ use sail_sql_analyzer::parser::parse_data_type;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::proto::data_type_json::parse_spark_json_data_type;
-use crate::spark::connect::{data_type as sdt, DataType};
+use crate::spark::connect::{DataType, data_type as sdt};
 
 pub(crate) const DEFAULT_FIELD_NAME: &str = "value";
 
@@ -304,7 +304,7 @@ mod tests {
     use sail_common::spec;
     use sail_common::tests::test_gold_set;
 
-    use super::{parse_spark_data_type, DEFAULT_FIELD_NAME};
+    use super::{DEFAULT_FIELD_NAME, parse_spark_data_type};
     use crate::error::{SparkError, SparkResult};
 
     #[test]

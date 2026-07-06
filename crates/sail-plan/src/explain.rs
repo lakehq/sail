@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
-use datafusion::physical_plan::{collect, displayable, ExecutionPlan};
+use datafusion::physical_plan::{ExecutionPlan, collect, displayable};
 use datafusion::prelude::SessionContext;
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::{DataFusionError, Result};
@@ -15,8 +15,8 @@ use sail_common_datafusion::session::job::JobService;
 
 use crate::config::PlanConfig;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::plan::NamedPlan;
 use crate::resolver::PlanResolver;
+use crate::resolver::plan::NamedPlan;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExplainKind {

@@ -12,8 +12,8 @@ use log::debug;
 use object_store::local::LocalFileSystem;
 use object_store::path::Path;
 use object_store::{
-    path, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta,
-    ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+    GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    PutMultipartOptions, PutOptions, PutPayload, PutResult, path,
 };
 use regex::Regex;
 use reqwest::StatusCode;

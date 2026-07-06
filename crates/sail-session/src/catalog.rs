@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::common::{plan_datafusion_err, Result};
+use datafusion::common::{Result, plan_datafusion_err};
 use datafusion_common::plan_err;
 use sail_catalog::credentials::{
     CatalogCredentials, EmptyCatalogCredentials, StaticCatalogCredentials,
@@ -16,7 +16,7 @@ use sail_catalog_hms::{HmsCatalogConfig, HmsCatalogProvider};
 use sail_catalog_iceberg::{IcebergRestCatalogOptions, IcebergRestCatalogProvider};
 use sail_catalog_memory::MemoryCatalogProvider;
 use sail_catalog_onelake::{OneLakeApiKind, OneLakeCatalogProvider};
-use sail_catalog_system::{SystemCatalogProvider, SYSTEM_CATALOG_NAME};
+use sail_catalog_system::{SYSTEM_CATALOG_NAME, SystemCatalogProvider};
 use sail_catalog_unity::{UnityCatalogConfig, UnityCatalogOptions, UnityCatalogProvider};
 use sail_common::config::{AppConfig, CacheType, CatalogCacheConfig, CatalogType, OneLakeApi};
 use sail_common::runtime::RuntimeHandle;

@@ -70,7 +70,7 @@ pub fn get_pushdown_filters(
 fn expr_is_exact_predicate_for_cols(partition_cols: &[String], expr: &Expr) -> bool {
     let mut is_applicable = true;
     let _ = expr.apply(|expr| match expr {
-        Expr::Column(Column { ref name, .. }) => {
+        Expr::Column(Column { name, .. }) => {
             is_applicable &= partition_cols.contains(name);
 
             if is_applicable {
@@ -79,7 +79,7 @@ fn expr_is_exact_predicate_for_cols(partition_cols: &[String], expr: &Expr) -> b
                 Ok(TreeNodeRecursion::Stop)
             }
         }
-        Expr::BinaryExpr(BinaryExpr { ref op, .. }) => {
+        Expr::BinaryExpr(BinaryExpr { op, .. }) => {
             is_applicable &= matches!(
                 op,
                 Operator::And

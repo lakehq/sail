@@ -1,4 +1,4 @@
-use datafusion_expr::{expr, Expr, ScalarUDF};
+use datafusion_expr::{Expr, ScalarUDF, expr};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::xml::to_xml::SparkToXml;
 use sail_function::scalar::xml::xpath::Xpath;

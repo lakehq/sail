@@ -11,8 +11,8 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    new_null_array, Array, ArrayRef, AsArray, GenericListArray, LargeStringArray, OffsetSizeTrait,
-    StringArray, StringBuilder, StringViewArray,
+    Array, ArrayRef, AsArray, GenericListArray, LargeStringArray, OffsetSizeTrait, StringArray,
+    StringBuilder, StringViewArray, new_null_array,
 };
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::Result;

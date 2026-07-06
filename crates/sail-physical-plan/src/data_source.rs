@@ -4,7 +4,7 @@ use std::sync::Arc;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
-use datafusion_common::{exec_err, internal_err, Result};
+use datafusion_common::{Result, exec_err, internal_err};
 
 /// A [`DataSourceExec`] wrapper for Sail remote codec.
 ///

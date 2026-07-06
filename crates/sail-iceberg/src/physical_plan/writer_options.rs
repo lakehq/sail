@@ -19,7 +19,7 @@ use sail_common_datafusion::variant::DEFAULT_VARIANT_INFERENCE_NODE_BUDGET;
 use serde::{Deserialize, Serialize};
 
 use crate::operations::write::config::VariantShreddingConfig;
-use crate::options::gen::IcebergWriteOptions;
+use crate::options::r#gen::IcebergWriteOptions;
 
 const PARQUET_SHRED_VARIANTS: &str = "write.parquet.shred-variants";
 const PARQUET_VARIANT_INFERENCE_BUFFER_SIZE: &str = "write.parquet.variant-inference-buffer-size";

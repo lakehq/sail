@@ -16,13 +16,13 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use datafusion_common::{internal_err, plan_err, Result, Statistics};
+use datafusion_common::{Result, Statistics, internal_err, plan_err};
 use futures::{Stream, StreamExt};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::repartition::{
-    RepartitionBufferConfig, DEFAULT_REPARTITION_BUFFER_SIZE,
+    DEFAULT_REPARTITION_BUFFER_SIZE, RepartitionBufferConfig,
 };
-use tokio::sync::mpsc::{channel, Receiver, Sender};
+use tokio::sync::mpsc::{Receiver, Sender, channel};
 
 #[derive(Debug, Clone)]
 pub struct RowRoundRobinPartitioner {

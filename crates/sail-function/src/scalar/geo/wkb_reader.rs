@@ -27,7 +27,9 @@ pub enum WkbError {
     InvalidType(i32),
     #[error("Unsupported dimension: {0}")]
     UnsupportedDimension(i32),
-    #[error("Unexpected end of WKB buffer: expected {expected} bytes at position {position}, but only {remaining} remaining")]
+    #[error(
+        "Unexpected end of WKB buffer: expected {expected} bytes at position {position}, but only {remaining} remaining"
+    )]
     UnexpectedEndOfBuffer {
         expected: usize,
         remaining: usize,
@@ -37,7 +39,9 @@ pub enum WkbError {
     NonFiniteCoordinate { value: f64, position: usize },
     #[error("Invalid coordinate value at position {position}: {message}")]
     InvalidCoordinateValue { message: String, position: usize },
-    #[error("Too few points in linestring at position {position}: expected at least {expected_min}, got {actual}")]
+    #[error(
+        "Too few points in linestring at position {position}: expected at least {expected_min}, got {actual}"
+    )]
     TooFewPointsInLineString {
         expected_min: i32,
         actual: i32,
@@ -45,7 +49,9 @@ pub enum WkbError {
     },
     #[error("Ring is not closed at position {position}")]
     RingNotClosed { position: usize },
-    #[error("Too few points in ring at position {position}: expected at least {expected_min}, got {actual}")]
+    #[error(
+        "Too few points in ring at position {position}: expected at least {expected_min}, got {actual}"
+    )]
     TooFewPointsInRing {
         expected_min: i32,
         actual: i32,
@@ -57,7 +63,9 @@ pub enum WkbError {
     ExpectedLineStringInMultiLineString { position: usize },
     #[error("Expected Polygon in MultiPolygon at position {position}")]
     ExpectedPolygonInMultiPolygon { position: usize },
-    #[error("Dimension mismatch at position {position}: expected Z={expected_has_z}, M={expected_has_m}, got Z={actual_has_z}, M={actual_has_m}")]
+    #[error(
+        "Dimension mismatch at position {position}: expected Z={expected_has_z}, M={expected_has_m}, got Z={actual_has_z}, M={actual_has_m}"
+    )]
     DimensionMismatch {
         expected_has_z: bool,
         actual_has_z: bool,
@@ -454,12 +462,12 @@ impl WkbReader {
             }
         }
 
-        if let (Some(first), Some(last)) = (first_coords, last_coords) {
-            if first != last {
-                return Err(WkbError::RingNotClosed {
-                    position: num_points_pos,
-                });
-            }
+        if let (Some(first), Some(last)) = (first_coords, last_coords)
+            && first != last
+        {
+            return Err(WkbError::RingNotClosed {
+                position: num_points_pos,
+            });
         }
 
         Ok(())

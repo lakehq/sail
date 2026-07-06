@@ -19,13 +19,13 @@
 
 use std::sync::Arc;
 
-use apache_avro::{to_value, Writer as AvroWriter};
+use apache_avro::{Writer as AvroWriter, to_value};
 
 use super::{
     DataFile, Manifest, ManifestEntry, ManifestEntryRef, ManifestMetadata, ManifestStatus,
 };
-use crate::spec::manifest_list::{ManifestContentType, ManifestFile};
 use crate::spec::FormatVersion;
+use crate::spec::manifest_list::{ManifestContentType, ManifestFile};
 
 #[derive(Debug, Clone)]
 pub struct ManifestWriterBuilder {

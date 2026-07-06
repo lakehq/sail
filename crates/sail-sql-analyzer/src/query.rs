@@ -686,7 +686,7 @@ fn query_plan_with_table_modifier(
                     let alias = match alias {
                         Some((_, Either::Left(x))) => Some(x.value.into()),
                         Some((_, Either::Right(IdentList { .. }))) => {
-                            return Err(SqlError::invalid("multiple alias for pivot value"))
+                            return Err(SqlError::invalid("multiple alias for pivot value"));
                         }
                         None => None,
                     };

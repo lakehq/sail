@@ -3,7 +3,7 @@ use std::fmt::Formatter;
 use datafusion::common::{DFSchemaRef, Result};
 use datafusion::logical_expr::{Expr, LogicalPlan, UserDefinedLogicalNodeCore};
 use datafusion::prelude::SessionContext;
-use datafusion_common::{internal_datafusion_err, DFSchema};
+use datafusion_common::{DFSchema, internal_datafusion_err};
 use educe::Educe;
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::utils::quote_names_if_needed;

@@ -217,24 +217,22 @@ fn find_matching_field<'a>(
     candidate: &StructField,
     existing_fields: &'a [&StructField],
 ) -> Option<&'a StructField> {
-    if let Some(cid) = column_mapping_id(candidate) {
-        if let Some(field) = existing_fields
+    if let Some(cid) = column_mapping_id(candidate)
+        && let Some(field) = existing_fields
             .iter()
             .copied()
             .find(|f| column_mapping_id(f) == Some(cid))
-        {
-            return Some(field);
-        }
+    {
+        return Some(field);
     }
 
-    if let Some(phys) = column_mapping_physical_name(candidate) {
-        if let Some(field) = existing_fields
+    if let Some(phys) = column_mapping_physical_name(candidate)
+        && let Some(field) = existing_fields
             .iter()
             .copied()
             .find(|f| column_mapping_physical_name(f) == Some(phys))
-        {
-            return Some(field);
-        }
+    {
+        return Some(field);
     }
 
     existing_fields

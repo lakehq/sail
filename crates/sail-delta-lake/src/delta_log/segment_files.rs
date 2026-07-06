@@ -13,7 +13,7 @@
 use crate::checkpoint::read_checkpoint_main_rows_from_checkpoint_file;
 pub(crate) use crate::delta_log::ReplayedTableHeader;
 use crate::delta_log::{list_log_files, read_last_checkpoint_version_from_store};
-use crate::spec::{is_uuid_checkpoint_filename, sidecar_log_path, DeltaResult};
+use crate::spec::{DeltaResult, is_uuid_checkpoint_filename, sidecar_log_path};
 
 /// The minimal set of Delta log files needed to reconstruct table state up to a given version.
 #[derive(Debug, Clone, Default)]

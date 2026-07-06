@@ -9,24 +9,24 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::helpers::pruned_partition_list;
 use datafusion::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
-use datafusion::execution::cache::cache_manager::CachedFileMetadata;
-use datafusion::execution::cache::TableScopedPath;
 use datafusion::execution::SessionState;
+use datafusion::execution::cache::TableScopedPath;
+use datafusion::execution::cache::cache_manager::CachedFileMetadata;
 use datafusion::logical_expr::dml::InsertOp;
 use datafusion::logical_expr::expr_rewriter::unnormalize_cols;
 use datafusion::logical_expr::{Expr, LogicalPlan, TableScan, UserDefinedLogicalNode};
 use datafusion::physical_expr::create_lex_ordering;
 use datafusion::physical_expr_common::sort_expr::LexOrdering;
-use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
 use datafusion_common::stats::Precision;
-use datafusion_common::{internal_err, plan_err, project_schema, Statistics};
+use datafusion_common::{Statistics, internal_err, plan_err, project_schema};
+use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_datasource::source::DataSourceExec;
-use datafusion_datasource::ListingTableUrl;
-use futures::{future, stream, Stream, StreamExt};
+use futures::{Stream, StreamExt, future, stream};
 use object_store::ObjectStore;
 use sail_common_datafusion::datasource::create_sort_order;
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
@@ -522,24 +522,21 @@ async fn get_files_with_limit(
 
         let file = file_result?;
 
-        if collect_stats {
-            if let Some(file_stats) = &file.statistics {
-                num_rows = if file_group.is_empty() {
-                    file_stats.num_rows
-                } else {
-                    num_rows.add(&file_stats.num_rows)
-                };
-            }
+        if collect_stats && let Some(file_stats) = &file.statistics {
+            num_rows = if file_group.is_empty() {
+                file_stats.num_rows
+            } else {
+                num_rows.add(&file_stats.num_rows)
+            };
         }
 
         file_group.push(file);
 
-        if let Some(limit) = limit {
-            if let Precision::Exact(row_count) = num_rows {
-                if row_count > limit {
-                    state = ProcessingState::ReachedLimit;
-                }
-            }
+        if let Some(limit) = limit
+            && let Precision::Exact(row_count) = num_rows
+            && row_count > limit
+        {
+            state = ProcessingState::ReachedLimit;
         }
     }
 

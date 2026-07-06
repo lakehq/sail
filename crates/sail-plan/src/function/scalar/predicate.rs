@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{expr, lit, not, Operator, ScalarUDF};
+use datafusion_expr::{Operator, ScalarUDF, expr, lit, not};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::predicate::rewrite_like_pattern::RewriteLikePatternFunc;
 

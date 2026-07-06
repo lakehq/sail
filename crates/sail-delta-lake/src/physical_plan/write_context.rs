@@ -5,7 +5,7 @@ use datafusion::arrow::datatypes::{Field, Schema, SchemaRef};
 use datafusion_common::{DataFusionError, Result};
 use sail_common_datafusion::column_features::SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY;
 use sail_common_datafusion::datasource::{
-    PhysicalSinkMode, MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN,
+    MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN, PhysicalSinkMode,
 };
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -24,8 +24,8 @@ use crate::schema::{
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
-    contains_timestampntz_arrow, contains_variant_arrow, Action, ColumnMappingMode, DeltaOperation,
-    DomainMetadata, Metadata, Protocol, SaveMode, StructType, TableProperties, Transaction,
+    Action, ColumnMappingMode, DeltaOperation, DomainMetadata, Metadata, Protocol, SaveMode,
+    StructType, TableProperties, Transaction, contains_timestampntz_arrow, contains_variant_arrow,
 };
 use crate::table::DeltaSnapshot;
 

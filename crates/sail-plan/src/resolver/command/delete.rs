@@ -16,8 +16,8 @@ use sail_common_datafusion::rename::expression::expression_before_rename;
 use sail_common_datafusion::rename::schema::rename_schema;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
     /// Resolves the DELETE command.

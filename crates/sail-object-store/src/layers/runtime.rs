@@ -13,7 +13,7 @@ use object_store::{
     UploadPart,
 };
 use tokio::runtime::Handle;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::codegen::Bytes;
 

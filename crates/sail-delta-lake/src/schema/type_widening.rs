@@ -700,17 +700,17 @@ fn resolve_field_path<'a>(
             (DataType::Array(_), other) => {
                 return Err(DeltaTableError::schema(format!(
                     "expected 'element' for array type change path, found '{other}'"
-                )))
+                )));
             }
             (DataType::Map(_), other) => {
                 return Err(DeltaTableError::schema(format!(
                     "expected 'key' or 'value' for map type change path, found '{other}'"
-                )))
+                )));
             }
             (other_type, other) => {
                 return Err(DeltaTableError::schema(format!(
                     "cannot resolve type change path segment '{other}' through {other_type}"
-                )))
+                )));
             }
         }
     }

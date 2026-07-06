@@ -8,7 +8,7 @@ use datafusion::arrow::compute::kernels::nullif::nullif;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::functions::string::concat::ConcatFunc;
 use datafusion_common::utils::list_ndims;
-use datafusion_common::{internal_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err, plan_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -101,10 +101,10 @@ impl ScalarUDFImpl for SparkConcat {
                 .iter()
                 .map(|arg| info.get_data_type(arg))
                 .collect::<Result<Vec<_>>>()?;
-            if let Ok(return_type) = concat_return_type(&arg_types) {
-                if let Ok(null) = ScalarValue::try_from(&return_type) {
-                    return Ok(ExprSimplifyResult::Simplified(Expr::Literal(null, None)));
-                }
+            if let Ok(null) = concat_return_type(&arg_types)
+                .and_then(|data_type| ScalarValue::try_from(&data_type))
+            {
+                return Ok(ExprSimplifyResult::Simplified(Expr::Literal(null, None)));
             }
         }
 
@@ -407,7 +407,9 @@ fn concat_return_type(arg_types: &[DataType]) -> Result<DataType> {
                     }
                 }
                 _ => {
-                    return plan_err!("The array_concat function can only accept list as the args.")
+                    return plan_err!(
+                        "The array_concat function can only accept list as the args."
+                    );
                 }
             }
         }

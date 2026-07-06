@@ -163,21 +163,21 @@ impl GlueCatalogProvider {
 
         // Add partition columns
         for pk in table.partition_keys() {
-            if let Some(type_str) = pk.r#type() {
-                if let Ok(data_type) = glue_type_to_arrow(type_str) {
-                    columns.push(TableColumnStatus {
-                        name: pk.name().to_string(),
-                        data_type,
-                        nullable: true,
-                        comment: pk.comment().map(|s| s.to_string()),
-                        default: None,
-                        generated_always_as: None,
-                        identity: None,
-                        is_partition: true,
-                        is_bucket: false,
-                        is_cluster: false,
-                    });
-                }
+            if let Some(type_str) = pk.r#type()
+                && let Ok(data_type) = glue_type_to_arrow(type_str)
+            {
+                columns.push(TableColumnStatus {
+                    name: pk.name().to_string(),
+                    data_type,
+                    nullable: true,
+                    comment: pk.comment().map(|s| s.to_string()),
+                    default: None,
+                    generated_always_as: None,
+                    identity: None,
+                    is_partition: true,
+                    is_bucket: false,
+                    is_cluster: false,
+                });
             }
         }
 

@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use async_recursion::async_recursion;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::Column;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_expr::expr::{Alias, Sort};
 use datafusion_expr::{
     Aggregate, Expr, Extension, LogicalPlan, LogicalPlanBuilder, Projection, Window,
@@ -12,8 +12,8 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_logical_plan::sort::SortWithinPartitionsNode;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_sort(
@@ -136,20 +136,20 @@ impl PlanResolver<'_> {
                     name,
                     ..
                 }) = expr
+                    && relation == &col.relation
+                    && name == &col.name
                 {
-                    if relation == &col.relation && name == &col.name {
-                        return Some(expr.as_ref().clone());
-                    }
+                    return Some(expr.as_ref().clone());
                 }
                 None
             })
         };
         let expr = expr
             .transform_down(|e| {
-                if let Expr::Column(ref col) = e {
-                    if let Some(expr) = find(col) {
-                        return Ok(Transformed::yes(expr));
-                    }
+                if let Expr::Column(ref col) = e
+                    && let Some(expr) = find(col)
+                {
+                    return Ok(Transformed::yes(expr));
                 }
                 Ok(Transformed::no(e))
             })
@@ -175,10 +175,9 @@ impl PlanResolver<'_> {
                     name,
                     ..
                 }) = expr
+                    && expr.as_ref() == target
                 {
-                    if expr.as_ref() == target {
-                        return Some(Expr::Column(Column::new(relation.clone(), name.clone())));
-                    }
+                    return Some(Expr::Column(Column::new(relation.clone(), name.clone())));
                 }
                 None
             })

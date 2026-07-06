@@ -176,7 +176,7 @@ pub fn from_ast_statement(statement: Statement) -> SqlResult<spec::Plan> {
         } => {
             let cascade = match specifier {
                 Some(Either::Left(Restrict { .. })) => {
-                    return Err(SqlError::todo("RESTRICT in DROP DATABASE"))
+                    return Err(SqlError::todo("RESTRICT in DROP DATABASE"));
                 }
                 Some(Either::Right(Cascade { .. })) => true,
                 None => false,
@@ -1345,7 +1345,7 @@ fn from_ast_table_definition(
         (None, Some(stored_as)) => Some(from_ast_file_format(stored_as)?),
         (None, None) => None,
         (Some(_), Some(_)) => {
-            return Err(SqlError::invalid("conflicting USING and STORED AS clauses"))
+            return Err(SqlError::invalid("conflicting USING and STORED AS clauses"));
         }
     };
     let partition_by = partition_by

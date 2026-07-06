@@ -4,13 +4,13 @@ use tokio::sync::oneshot;
 use tonic::{Request, Response, Status};
 
 use crate::driver::actor::DriverActor;
-use crate::driver::gen::driver_service_server::DriverService;
-use crate::driver::gen::{
+use crate::driver::r#gen::driver_service_server::DriverService;
+use crate::driver::r#gen::{
     RegisterWorkerRequest, RegisterWorkerResponse, ReportTaskStatusRequest,
     ReportTaskStatusResponse, ReportWorkerHeartbeatRequest, ReportWorkerHeartbeatResponse,
     ReportWorkerKnownPeersRequest, ReportWorkerKnownPeersResponse,
 };
-use crate::driver::{gen, DriverEvent};
+use crate::driver::{DriverEvent, r#gen};
 use crate::error::ExecutionError;
 use crate::id::{TaskKey, WorkerId};
 
@@ -115,7 +115,7 @@ impl DriverService for DriverServer {
             cause,
             sequence,
         } = request;
-        let status = gen::TaskStatus::try_from(status).map_err(ExecutionError::from)?;
+        let status = r#gen::TaskStatus::try_from(status).map_err(ExecutionError::from)?;
         let cause = cause
             .map(|x| serde_json::from_str(&x))
             .transpose()

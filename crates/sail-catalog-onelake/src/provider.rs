@@ -137,10 +137,10 @@ impl OneLakeCatalogProvider {
         // Keep the mirrored `location` table property consistent with the field above
         // (DESCRIBE DATABASE EXTENDED surfaces both).
         for (key, value) in status.properties.iter_mut() {
-            if key.eq_ignore_ascii_case("location") {
-                if let Some(abfss) = normalize_onelake_location(value) {
-                    *value = abfss;
-                }
+            if key.eq_ignore_ascii_case("location")
+                && let Some(abfss) = normalize_onelake_location(value)
+            {
+                *value = abfss;
             }
         }
         status
@@ -149,10 +149,10 @@ impl OneLakeCatalogProvider {
     fn normalize_table_status(&self, mut status: TableStatus) -> TableStatus {
         if matches!(self.config.api, OneLakeApiKind::Delta) {
             status.database = self.normalize_delta_database(status.database);
-            if let TableKind::Table { location, .. } = &mut status.kind {
-                if let Some(url) = location.take() {
-                    *location = Some(normalize_onelake_location(&url).unwrap_or(url));
-                }
+            if let TableKind::Table { location, .. } = &mut status.kind
+                && let Some(url) = location.take()
+            {
+                *location = Some(normalize_onelake_location(&url).unwrap_or(url));
             }
         }
         status
@@ -416,7 +416,9 @@ mod tests {
         assert_eq!(
             normalize_onelake_location("OneLake_LakeSail_Testing/LakeSail.Lakehouse/Tables/dbo")
                 .as_deref(),
-            Some("abfss://OneLake_LakeSail_Testing@onelake.dfs.fabric.microsoft.com/LakeSail.Lakehouse/Tables/dbo"),
+            Some(
+                "abfss://OneLake_LakeSail_Testing@onelake.dfs.fabric.microsoft.com/LakeSail.Lakehouse/Tables/dbo"
+            ),
         );
         // Delta/Unity: absolute https OneLake URL -> abfss (unchanged from before).
         assert_eq!(

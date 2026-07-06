@@ -525,9 +525,10 @@ mod tests {
             canonicalize_and_validate_table_properties([("delta.checkpointInterval", "0")]);
         assert!(result.is_err());
         if let Err(err) = result {
-            assert!(err
-                .to_string()
-                .contains("invalid value for delta.checkpointInterval"));
+            assert!(
+                err.to_string()
+                    .contains("invalid value for delta.checkpointInterval")
+            );
         }
     }
 
