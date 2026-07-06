@@ -30,7 +30,7 @@ use sail_catalog::provider::{
 };
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
 use sail_common::http::SAIL_USER_AGENT;
-use sail_common_datafusion::catalog::managed::METADATA_LOCATION_KEY;
+use sail_common_datafusion::catalog::managed::{is_metadata_location_key, METADATA_LOCATION_KEY};
 use sail_common_datafusion::catalog::{
     CapabilityFingerprint, CatalogTableBucketBy, CatalogTableConstraint, CatalogTableSort,
     DatabaseStatus, IcebergRestTableSessionRef, ScanAuthority, TableAccessSessionRef,
@@ -54,6 +54,8 @@ pub const REST_CATALOG_PROP_PREFIX: &str = "prefix";
 pub const REST_CATALOG_PROP_NAMESPACE_SEPARATOR: &str = "namespace-separator";
 
 const REST_CATALOG_DEFAULT_NAMESPACE_SEPARATOR: &str = "\x1F";
+/// Reserved branch ref tracking `current-snapshot-id`; removing it resets the current snapshot.
+const MAIN_BRANCH_REF: &str = "main";
 const REST_ACCESS_DELEGATION_VENDED_CREDENTIALS: &str = "vended-credentials";
 const REST_TABLE_SCAN_PLANNING_MODE_KEY: &str = "scan-planning-mode";
 const REST_REMOTE_SIGNING_ENABLED_KEY: &str = "s3.remote-signing-enabled";
@@ -1011,12 +1013,6 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             }
         }
 
-        if mode.is_replace() {
-            return Err(CatalogError::NotSupported(
-                "Replace table is not supported yet".to_string(),
-            ));
-        }
-
         let format_version = requested_iceberg_format_version(&properties)?;
         let fields = columns_to_nested_fields(&columns, format_version)?;
 
@@ -1059,7 +1055,167 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             props.insert("comment".to_string(), c);
         }
         for (k, v) in properties {
+            // Drop catalog-managed keys so a read->mutate->create/replace round-trip
+            // doesn't write the provider's own metadata fields back into the table.
+            if is_catalog_managed_key(&k) {
+                continue;
+            }
             props.insert(k, v);
+        }
+
+        if mode.is_replace() {
+            // Atomic replace via update_table (no drop), so UUID/location/history are preserved.
+            // `Replace` requires an existing table; `CreateOrReplace` falls through to create.
+            let existing = match client
+                .catalog_api_api()
+                .load_table(
+                    &catalog_config.namespace_string(database)?,
+                    table,
+                    None,
+                    None,
+                    None,
+                    catalog_config.prefix(),
+                )
+                .await
+            {
+                Ok(result) => Some(result),
+                Err(apis::Error::ResponseError(apis::ResponseContent { status, .. }))
+                    if status == reqwest::StatusCode::NOT_FOUND =>
+                {
+                    None
+                }
+                Err(e) => {
+                    return Err(CatalogError::External(format!(
+                        "Failed to load table for replace: {e}"
+                    )))
+                }
+            };
+
+            match existing {
+                None if mode.replace_requires_existing() => {
+                    return Err(CatalogError::NotFound(
+                        CatalogObject::Table,
+                        format!(
+                            "{}.{}",
+                            quote_namespace_if_needed(database),
+                            quote_name_if_needed(table)
+                        ),
+                    ));
+                }
+                None => {
+                    // CreateOrReplace on a non-existent table: fall through to create.
+                }
+                Some(existing_result) => {
+                    // Assert the existing UUID so the server rejects concurrent drop+recreate races.
+                    let crate::models::LoadTableResult {
+                        metadata: existing_metadata,
+                        ..
+                    } = existing_result;
+                    let existing_uuid = existing_metadata.table_uuid;
+                    let existing_current_schema_id = existing_metadata.current_schema_id;
+                    // `<= 0` (Java's `-1` sentinel, spec-equivalent to null) means no current
+                    // snapshot, i.e. the table is already empty.
+                    let existing_current_snapshot_id =
+                        existing_metadata.current_snapshot_id.filter(|id| *id > 0);
+                    let existing_props: HashMap<String, String> =
+                        existing_metadata.properties.unwrap_or_default();
+
+                    // Current schema, so build_replace_updates can skip an unchanged one.
+                    let existing_current_schema: Option<crate::models::Schema> =
+                        find_by_id_or_last(
+                            existing_metadata.schemas.as_ref(),
+                            existing_current_schema_id,
+                            |s| s.schema_id,
+                        )
+                        .cloned();
+
+                    // Whether the existing table carries a real (non-empty) partition spec, so a
+                    // REPLACE that drops partitioning knows to reset it rather than emit a dedup'd
+                    // spec that leaves `SetDefaultSpec{-1}` dangling.
+                    let existing_is_partitioned = find_by_id_or_last(
+                        existing_metadata.partition_specs.as_ref(),
+                        existing_metadata.default_spec_id,
+                        |s| s.spec_id,
+                    )
+                    .is_some_and(|s| !s.fields.is_empty());
+
+                    // Same reasoning for sort: a table with a real sort order needs it reset to
+                    // unsorted on a REPLACE that omits the sort clause.
+                    let existing_is_sorted = find_by_id_or_last(
+                        existing_metadata.sort_orders.as_ref(),
+                        existing_metadata.default_sort_order_id,
+                        |o| Some(o.order_id),
+                    )
+                    .is_some_and(|o| !o.fields.is_empty());
+
+                    let updates = build_replace_updates(
+                        &schema,
+                        partition_spec.clone(),
+                        write_order.clone(),
+                        props,
+                        &existing_props,
+                        location.as_deref(),
+                        existing_current_schema.as_ref(),
+                        existing_current_snapshot_id.is_some(),
+                        existing_is_partitioned,
+                        existing_is_sorted,
+                    );
+
+                    // UUID is stable across a concurrent replace/data commit, so also assert the
+                    // main ref and schema id to force a 409 if another writer raced us.
+                    let mut requirements = vec![crate::models::TableRequirement::AssertTableUuid {
+                        uuid: existing_uuid,
+                    }];
+                    requirements.push(crate::models::TableRequirement::AssertRefSnapshotId {
+                        r#ref: MAIN_BRANCH_REF.to_string(),
+                        snapshot_id: existing_current_snapshot_id,
+                    });
+                    if let Some(schema_id) = existing_current_schema_id {
+                        requirements.push(crate::models::TableRequirement::AssertCurrentSchemaId {
+                            current_schema_id: schema_id,
+                        });
+                    }
+
+                    let commit_request =
+                        crate::models::CommitTableRequest::new(requirements, updates);
+
+                    let commit_response = client
+                        .catalog_api_api()
+                        .update_table(
+                            &catalog_config.namespace_string(database)?,
+                            table,
+                            commit_request,
+                            catalog_config.prefix(),
+                        )
+                        .await
+                        .map_err(|e| match e {
+                            apis::Error::ResponseError(apis::ResponseContent {
+                                status,
+                                content,
+                                ..
+                            }) => CatalogError::External(format!(
+                                "Failed to atomically replace table: status {status}: {}",
+                                redact_rest_error_body(&content)
+                            )),
+                            other => CatalogError::External(format!(
+                                "Failed to atomically replace table: {other}"
+                            )),
+                        })?;
+
+                    let load_result = crate::models::LoadTableResult {
+                        metadata_location: Some(commit_response.metadata_location),
+                        metadata: commit_response.metadata,
+                        config: None,
+                        storage_credentials: None,
+                    };
+                    return Self::load_table_result_to_status(
+                        &self.name,
+                        database,
+                        table,
+                        load_result,
+                    );
+                }
+            }
         }
 
         let request = crate::models::CreateTableRequest {
@@ -1596,6 +1752,154 @@ impl CatalogProvider for IcebergRestCatalogProvider {
             Err(e) => Err(CatalogError::External(format!("Failed to drop view: {e}"))),
         }
     }
+}
+
+/// Builds the `TableUpdate` vector for an atomic REPLACE, mirroring Spark's `replaceTransaction`.
+///
+/// With a live current snapshot, removes the `main` ref so the replaced table starts empty
+/// (the no-data counterpart of RTAS). Snapshot *history* is kept: `snapshots` is untouched.
+/// `RemoveSchemasUpdate` is omitted by design — some REST catalogs reject it while a snapshot
+/// still references the schema, and Spark omits it too.
+fn build_replace_updates(
+    schema: &crate::models::Schema,
+    partition_spec: Option<Box<crate::models::PartitionSpec>>,
+    write_order: Option<Box<crate::models::SortOrder>>,
+    new_props: HashMap<String, String>,
+    existing_props: &HashMap<String, String>,
+    location: Option<&str>,
+    existing_current_schema: Option<&crate::models::Schema>,
+    has_current_snapshot: bool,
+    existing_is_partitioned: bool,
+    existing_is_sorted: bool,
+) -> Vec<crate::models::TableUpdate> {
+    let mut updates: Vec<crate::models::TableUpdate> = Vec::new();
+
+    // Only when a live snapshot exists: removing a non-existent `main` ref would be rejected.
+    if has_current_snapshot {
+        updates.push(crate::models::TableUpdate::RemoveSnapshotRefUpdate {
+            ref_name: MAIN_BRANCH_REF.to_string(),
+        });
+    }
+
+    // Skip AddSchema for an unchanged schema: Java dedups it, then SetCurrentSchema{-1} fails
+    // because no schema was actually added.
+    let schema_changed = match existing_current_schema {
+        None => true,
+        Some(existing) => existing.fields != schema.fields,
+    };
+    if schema_changed {
+        updates.push(crate::models::TableUpdate::AddSchemaUpdate {
+            schema: Box::new(schema.clone()),
+            last_column_id: None,
+        });
+        updates.push(crate::models::TableUpdate::SetCurrentSchemaUpdate { schema_id: -1 });
+    }
+
+    // REPLACE is a full redefinition, not a merge: when the new table omits `PARTITIONED BY`
+    // or a sort clause, reset to unpartitioned / unsorted instead of inheriting the old table's.
+    match partition_spec {
+        Some(spec) => {
+            updates.push(crate::models::TableUpdate::AddPartitionSpecUpdate { spec });
+            updates.push(crate::models::TableUpdate::SetDefaultSpecUpdate { spec_id: -1 });
+        }
+        // Reset a previously-partitioned table to unpartitioned: add the empty spec (a genuinely
+        // new spec, so the server's "last added" `-1` resolves) and make it the default. The REST
+        // parser requires `spec-id`; 0 is the reserved unpartitioned id, reassigned on add.
+        None if existing_is_partitioned => {
+            updates.push(crate::models::TableUpdate::AddPartitionSpecUpdate {
+                spec: Box::new(crate::models::PartitionSpec {
+                    spec_id: Some(0),
+                    fields: Vec::new(),
+                }),
+            });
+            updates.push(crate::models::TableUpdate::SetDefaultSpecUpdate { spec_id: -1 });
+        }
+        // Already unpartitioned: adding the empty spec would dedup, leaving `-1` with nothing to
+        // point at ("no partition spec has been added"), so emit no partition update.
+        None => {}
+    }
+
+    match write_order {
+        Some(order) => {
+            updates.push(crate::models::TableUpdate::AddSortOrderUpdate { sort_order: order });
+            updates
+                .push(crate::models::TableUpdate::SetDefaultSortOrderUpdate { sort_order_id: -1 });
+        }
+        // Reset a previously-sorted table to unsorted. A table created with a sort order does not
+        // carry the unsorted order (id 0), so add it (a genuinely new order → `-1` resolves) and
+        // default to it. Setting the default to 0 directly would NPE on the missing order.
+        None if existing_is_sorted => {
+            updates.push(crate::models::TableUpdate::AddSortOrderUpdate {
+                sort_order: Box::new(crate::models::SortOrder {
+                    order_id: 0,
+                    fields: Vec::new(),
+                }),
+            });
+            updates
+                .push(crate::models::TableUpdate::SetDefaultSortOrderUpdate { sort_order_id: -1 });
+        }
+        // Already unsorted: adding the unsorted order would dedup, leaving `-1` with nothing to
+        // point at ("no sort order has been added"), so emit no sort update.
+        None => {}
+    }
+
+    if let Some(loc) = location {
+        updates.push(crate::models::TableUpdate::SetLocationUpdate {
+            location: loc.to_string(),
+        });
+    }
+
+    // Stale user props: present before, absent from the new set. Catalog-managed keys kept.
+    let removals: Vec<String> = existing_props
+        .keys()
+        .filter(|key| !new_props.contains_key(*key) && !is_catalog_managed_key(key))
+        .cloned()
+        .collect();
+
+    if !new_props.is_empty() {
+        updates.push(crate::models::TableUpdate::SetPropertiesUpdate { updates: new_props });
+    }
+
+    if !removals.is_empty() {
+        updates.push(crate::models::TableUpdate::RemovePropertiesUpdate { removals });
+    }
+
+    updates
+}
+
+/// Maximum number of characters of a raw REST error body kept in a surfaced error.
+const REST_ERROR_BODY_MAX_LEN: usize = 512;
+
+/// Redacts URL query strings and truncates a raw REST error body before surfacing it, so an
+/// echoed presigned URL or vending response can't leak signatures/tokens into logs.
+fn redact_rest_error_body(content: &str) -> String {
+    let mut out = String::with_capacity(content.len().min(REST_ERROR_BODY_MAX_LEN) + 16);
+    let mut chars = content.chars();
+    while let Some(c) = chars.next() {
+        if c == '?' {
+            // Drop the whole query string: presigned URLs carry the signature/credentials there.
+            out.push_str("?<redacted>");
+            for rest in chars.by_ref() {
+                if rest.is_whitespace() || rest == '"' || rest == '\'' {
+                    out.push(rest);
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+        if out.len() >= REST_ERROR_BODY_MAX_LEN {
+            out.push_str("...<truncated>");
+            break;
+        }
+    }
+    out
+}
+
+/// Property keys owned by the catalog (metadata pointer + `metadata.*`), preserved across
+/// REPLACE. `write.*` is user-owned, so a REPLACE that omits it must remove it.
+fn is_catalog_managed_key(key: &str) -> bool {
+    is_metadata_location_key(key) || key.starts_with("metadata.")
 }
 
 /// Finds an item by ID, falling back to the last item if not found or no ID is provided.
@@ -3486,5 +3790,230 @@ mod tests {
     async fn test_get_database() {
         test_get_database_impl(None).await;
         test_get_database_impl(Some("test")).await;
+    }
+
+    fn empty_schema() -> crate::models::Schema {
+        crate::models::Schema {
+            r#type: crate::models::schema::Type::Struct,
+            fields: Vec::new(),
+            schema_id: Some(0),
+            identifier_field_ids: None,
+        }
+    }
+
+    #[test]
+    fn test_is_catalog_managed_key_classification() {
+        // Catalog-owned: metadata-location pointer and synthesized `metadata.*` fields.
+        assert!(is_catalog_managed_key("metadata-location"));
+        assert!(is_catalog_managed_key("metadata_location"));
+        assert!(is_catalog_managed_key("metadata.table-uuid"));
+        assert!(is_catalog_managed_key("metadata.format-version"));
+
+        // User-owned: `write.*` and ordinary keys.
+        assert!(!is_catalog_managed_key("write.target-file-size-bytes"));
+        assert!(!is_catalog_managed_key("write.format.default"));
+        assert!(!is_catalog_managed_key("write.parquet.compression-codec"));
+        assert!(!is_catalog_managed_key("owner"));
+    }
+
+    #[test]
+    fn test_build_replace_updates_removes_user_write_property() {
+        let schema = empty_schema();
+        let new_props: HashMap<String, String> = HashMap::new();
+        let mut existing_props: HashMap<String, String> = HashMap::new();
+        existing_props.insert(
+            "write.target-file-size-bytes".to_string(),
+            "536870912".to_string(),
+        );
+        // Catalog-managed keys that must never be removed.
+        existing_props.insert(
+            "metadata-location".to_string(),
+            "s3://bucket/t/metadata/00000.json".to_string(),
+        );
+        existing_props.insert(
+            "metadata.table-uuid".to_string(),
+            "00000000-0000-0000-0000-000000000000".to_string(),
+        );
+
+        let updates = build_replace_updates(
+            &schema,
+            None,
+            None,
+            new_props,
+            &existing_props,
+            None,
+            Some(&schema),
+            false,
+            false,
+            false,
+        );
+
+        let removals: Vec<String> = updates
+            .iter()
+            .filter_map(|update| match update {
+                crate::models::TableUpdate::RemovePropertiesUpdate { removals } => {
+                    Some(removals.clone())
+                }
+                _ => None,
+            })
+            .flatten()
+            .collect();
+
+        assert!(
+            removals.contains(&"write.target-file-size-bytes".to_string()),
+            "user-set write.* property must be removed on replace, got removals: {removals:?}"
+        );
+        assert!(
+            !removals.contains(&"metadata-location".to_string()),
+            "catalog-managed metadata-location must never be removed"
+        );
+        assert!(
+            !removals.contains(&"metadata.table-uuid".to_string()),
+            "catalog-managed metadata.* keys must never be removed"
+        );
+    }
+
+    #[test]
+    fn test_build_replace_updates_resets_current_snapshot() {
+        let schema = empty_schema();
+
+        let has_reset = |has_current_snapshot: bool| {
+            build_replace_updates(
+                &schema,
+                None,
+                None,
+                HashMap::new(),
+                &HashMap::new(),
+                None,
+                Some(&schema),
+                has_current_snapshot,
+                false,
+                false,
+            )
+            .into_iter()
+            .any(|u| {
+                matches!(
+                    u,
+                    crate::models::TableUpdate::RemoveSnapshotRefUpdate { ref_name } if ref_name == "main"
+                )
+            })
+        };
+
+        assert!(
+            has_reset(true),
+            "REPLACE of a table with a live snapshot must reset the main ref"
+        );
+        assert!(
+            !has_reset(false),
+            "REPLACE of an empty table must not remove a non-existent main ref"
+        );
+    }
+
+    #[test]
+    fn test_build_replace_updates_clears_partition_and_sort_when_omitted() {
+        let schema = empty_schema();
+        let updates_for = |existing_is_partitioned: bool, existing_is_sorted: bool| {
+            build_replace_updates(
+                &schema,
+                None,
+                None,
+                HashMap::new(),
+                &HashMap::new(),
+                None,
+                Some(&schema),
+                false,
+                existing_is_partitioned,
+                existing_is_sorted,
+            )
+        };
+        let has_add_spec = |u: &[crate::models::TableUpdate]| {
+            u.iter().find_map(|u| match u {
+                crate::models::TableUpdate::AddPartitionSpecUpdate { spec } => Some(spec.clone()),
+                _ => None,
+            })
+        };
+        let has_add_order = |u: &[crate::models::TableUpdate]| {
+            u.iter().find_map(|u| match u {
+                crate::models::TableUpdate::AddSortOrderUpdate { sort_order } => {
+                    Some(sort_order.clone())
+                }
+                _ => None,
+            })
+        };
+        let has_set_default_spec =
+            |u: &[crate::models::TableUpdate]| {
+                u.iter().any(|u| matches!(
+                u,
+                crate::models::TableUpdate::SetDefaultSpecUpdate { spec_id } if *spec_id == -1
+            ))
+            };
+        let has_set_default_order = |u: &[crate::models::TableUpdate]| {
+            u.iter().any(|u| matches!(
+                u,
+                crate::models::TableUpdate::SetDefaultSortOrderUpdate { sort_order_id } if *sort_order_id == -1
+            ))
+        };
+
+        // A previously partitioned/sorted table dropping both must add the empty spec/order and
+        // default to each (`-1` = last added), yielding a genuinely unpartitioned, unsorted table.
+        let both = updates_for(true, true);
+        assert!(
+            has_add_spec(&both).is_some_and(|s| s.fields.is_empty()) && has_set_default_spec(&both),
+            "dropping partitioning must add the empty spec and default to it"
+        );
+        assert!(
+            has_add_order(&both).is_some_and(|o| o.fields.is_empty())
+                && has_set_default_order(&both),
+            "dropping the sort clause must add the unsorted order and default to it"
+        );
+
+        // An already unpartitioned + unsorted table must emit no spec/order update at all (adding
+        // would dedup and leave SetDefault{-1} dangling).
+        let neither = updates_for(false, false);
+        assert!(
+            has_add_spec(&neither).is_none() && has_add_order(&neither).is_none(),
+            "an already unpartitioned/unsorted table must emit no spec/order update"
+        );
+        assert!(
+            !neither.iter().any(|u| matches!(
+                u,
+                crate::models::TableUpdate::SetDefaultSpecUpdate { .. }
+                    | crate::models::TableUpdate::SetDefaultSortOrderUpdate { .. }
+            )),
+            "an already unpartitioned/unsorted table must emit no SetDefault update"
+        );
+
+        // The two axes are independent: sorted-but-unpartitioned resets only the sort.
+        let sort_only = updates_for(false, true);
+        assert!(
+            has_add_spec(&sort_only).is_none() && has_add_order(&sort_only).is_some(),
+            "a sorted, unpartitioned table must reset only the sort order"
+        );
+    }
+
+    #[test]
+    fn test_redact_rest_error_body_strips_query_and_bounds_length() {
+        let body = r#"{"error":"failed to write s3://b/t/metadata/x.avro?X-Amz-Signature=deadbeef&X-Amz-Credential=AKIA%2Fus-east-1 for table"}"#;
+        let redacted = redact_rest_error_body(body);
+        assert!(
+            !redacted.contains("X-Amz-Signature"),
+            "signature must be redacted, got: {redacted}"
+        );
+        assert!(
+            !redacted.contains("X-Amz-Credential"),
+            "credential must be redacted, got: {redacted}"
+        );
+        assert!(
+            redacted.contains("s3://b/t/metadata/x.avro?<redacted>"),
+            "URL path must be preserved with query redacted, got: {redacted}"
+        );
+
+        let long = "a".repeat(4096);
+        let redacted_long = redact_rest_error_body(&long);
+        assert!(
+            redacted_long.len() < long.len(),
+            "overlong body must be truncated"
+        );
+        assert!(redacted_long.ends_with("...<truncated>"));
     }
 }
