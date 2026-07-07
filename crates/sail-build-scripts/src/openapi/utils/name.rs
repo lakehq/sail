@@ -1,19 +1,17 @@
 use proc_macro2::Ident;
-use quote::format_ident;
 
-pub fn type_ident(value: &str) -> Ident {
-    let value = type_name_text(value);
-    format_ident!("{value}")
+pub fn type_ident(value: &str) -> String {
+    type_name_text(value)
 }
 
-pub fn value_ident(value: &str) -> Ident {
+pub fn value_ident(value: &str) -> String {
     let value = identifier_text(value);
     if syn::parse_str::<Ident>(&value).is_ok() {
-        format_ident!("{value}")
+        value
     } else if syn::parse_str::<Ident>(&format!("r#{value}")).is_ok() {
-        format_ident!("r#{value}")
+        format!("r#{value}")
     } else {
-        format_ident!("{value}_")
+        format!("{value}_")
     }
 }
 

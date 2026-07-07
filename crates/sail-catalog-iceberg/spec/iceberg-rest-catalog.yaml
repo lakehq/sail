@@ -3776,6 +3776,13 @@ components:
       }
 
     ReportMetricsRequest:
+      # We patch the OpenAPI specification to add the discriminator.
+      # See also: https://github.com/apache/iceberg/issues/12696
+      discriminator:
+        propertyName: report-type
+        mapping:
+          scan-report: '#/components/schemas/ScanReport'
+          commit-report: '#/components/schemas/CommitReport'
       anyOf:
         - $ref: '#/components/schemas/ScanReport'
         - $ref: '#/components/schemas/CommitReport'

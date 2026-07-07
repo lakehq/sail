@@ -30,7 +30,7 @@ pub struct OpenApi {
     #[serde(default)]
     pub tags: Vec<Tag>,
     #[serde(default)]
-    pub paths: ObjectMap<RefOr<PathItem>>,
+    pub paths: ObjectMap<MaybeRef<PathItem>>,
     #[serde(default)]
     pub components: Components,
     #[serde(default)]
@@ -86,11 +86,11 @@ pub struct Tag {
 #[serde(deny_unknown_fields)]
 pub struct Components {
     #[serde(default)]
-    pub schemas: ObjectMap<Schema>,
+    pub schemas: ObjectMap<MaybeRef<Schema, SchemaReference>>,
     #[serde(default)]
-    pub parameters: ObjectMap<RefOr<Parameter>>,
+    pub parameters: ObjectMap<MaybeRef<Parameter>>,
     #[serde(default)]
-    pub responses: ObjectMap<RefOr<Response>>,
+    pub responses: ObjectMap<MaybeRef<Response>>,
     #[serde(default)]
     pub examples: ObjectMap<AnyValue>,
     #[serde(default, rename = "securitySchemes")]
@@ -105,7 +105,7 @@ pub struct PathItem {
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
-    pub parameters: Vec<RefOr<Parameter>>,
+    pub parameters: Vec<MaybeRef<Parameter>>,
     #[serde(default)]
     pub get: Option<Operation>,
     #[serde(default)]
@@ -136,11 +136,11 @@ pub struct Operation {
     #[serde(default, rename = "operationId")]
     pub operation_id: Option<String>,
     #[serde(default)]
-    pub parameters: Vec<RefOr<Parameter>>,
+    pub parameters: Vec<MaybeRef<Parameter>>,
     #[serde(default, rename = "requestBody")]
-    pub request_body: Option<RefOr<RequestBody>>,
+    pub request_body: Option<MaybeRef<RequestBody>>,
     #[serde(default, deserialize_with = "deserialize_string_key_map")]
-    pub responses: ObjectMap<RefOr<Response>>,
+    pub responses: ObjectMap<MaybeRef<Response>>,
     #[serde(default)]
     pub deprecated: Option<bool>,
     #[serde(default)]
@@ -158,7 +158,7 @@ pub struct Parameter {
     #[serde(default)]
     pub required: Option<bool>,
     #[serde(default)]
-    pub schema: Option<Schema>,
+    pub schema: Option<MaybeRef<Schema, SchemaReference>>,
     #[serde(default)]
     pub style: Option<String>,
     #[serde(default)]
@@ -198,7 +198,7 @@ pub struct Response {
     #[serde(default)]
     pub content: ObjectMap<MediaType>,
     #[serde(default)]
-    pub headers: ObjectMap<RefOr<Header>>,
+    pub headers: ObjectMap<MaybeRef<Header>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -217,7 +217,7 @@ pub struct Header {
     #[serde(default)]
     pub explode: Option<bool>,
     #[serde(default)]
-    pub schema: Option<Schema>,
+    pub schema: Option<MaybeRef<Schema, SchemaReference>>,
     #[serde(default)]
     pub example: Option<AnyValue>,
     #[serde(default)]
@@ -228,7 +228,7 @@ pub struct Header {
 #[serde(deny_unknown_fields)]
 pub struct MediaType {
     #[serde(default)]
-    pub schema: Option<Schema>,
+    pub schema: Option<MaybeRef<Schema, SchemaReference>>,
     #[serde(default)]
     pub example: Option<AnyValue>,
     #[serde(default)]
@@ -238,8 +238,6 @@ pub struct MediaType {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Schema {
-    #[serde(default, rename = "$ref")]
-    pub reference: Option<String>,
     #[serde(
         default,
         rename = "type",
@@ -261,19 +259,19 @@ pub struct Schema {
     #[serde(default, rename = "const")]
     pub const_value: Option<AnyValue>,
     #[serde(default)]
-    pub properties: ObjectMap<Schema>,
+    pub properties: ObjectMap<MaybeRef<Schema, SchemaReference>>,
     #[serde(default)]
     pub required: Vec<String>,
     #[serde(default)]
-    pub items: Option<Box<Schema>>,
+    pub items: Option<Box<MaybeRef<Schema, SchemaReference>>>,
     #[serde(default, rename = "additionalProperties")]
     pub additional_properties: Option<AdditionalProperties>,
     #[serde(default, rename = "allOf")]
-    pub all_of: Vec<Schema>,
+    pub all_of: Vec<MaybeRef<Schema, SchemaReference>>,
     #[serde(default, rename = "oneOf")]
-    pub one_of: Vec<Schema>,
+    pub one_of: Vec<MaybeRef<Schema, SchemaReference>>,
     #[serde(default, rename = "anyOf")]
-    pub any_of: Vec<Schema>,
+    pub any_of: Vec<MaybeRef<Schema, SchemaReference>>,
     #[serde(default)]
     pub nullable: Option<bool>,
     #[serde(default)]
@@ -306,7 +304,7 @@ pub struct Schema {
 #[serde(untagged)]
 pub enum AdditionalProperties {
     Bool(bool),
-    Schema(Box<Schema>),
+    Schema(Box<MaybeRef<Schema, SchemaReference>>),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -332,8 +330,8 @@ pub enum SchemaType {
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
-pub enum RefOr<T> {
-    Ref(Reference),
+pub enum MaybeRef<T, R = Reference> {
+    Ref(R),
     Value(T),
 }
 
@@ -342,6 +340,19 @@ pub enum RefOr<T> {
 pub struct Reference {
     #[serde(rename = "$ref")]
     pub reference: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchemaReference {
+    #[serde(rename = "$ref")]
+    pub reference: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default, rename = "const")]
+    pub const_value: Option<AnyValue>,
+    #[serde(default, rename = "enum")]
+    pub enum_values: Vec<String>,
 }
 
 /// A placeholder type for any value that we do not care about during deserialization.

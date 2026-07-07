@@ -1,9 +1,5 @@
-use proc_macro2::Ident;
-use quote::format_ident;
-
 use crate::error::{BuildError, BuildResult};
 use crate::openapi::spec::{Operation, PathItem};
-use crate::openapi::utils::name::type_ident;
 
 #[derive(Clone, Copy)]
 pub enum HttpMethod {
@@ -29,10 +25,6 @@ impl HttpMethod {
             Self::Patch => "PATCH",
             Self::Trace => "TRACE",
         }
-    }
-
-    pub fn ident(self) -> Ident {
-        format_ident!("{}", self.name())
     }
 }
 
@@ -93,11 +85,11 @@ impl HttpStatus {
         }
     }
 
-    pub fn variant(self) -> BuildResult<Ident> {
-        let phrase = match self {
-            Self::Success(_) => return Ok(format_ident!("Success")),
-            Self::ClientError => return Ok(format_ident!("ClientError")),
-            Self::ServerError => return Ok(format_ident!("ServerError")),
+    pub fn variant(self) -> BuildResult<&'static str> {
+        Ok(match self {
+            Self::Success(_) => "Success",
+            Self::ClientError => "ClientError",
+            Self::ServerError => "ServerError",
             Self::ExactError(status) => match status {
                 300 => "MultipleChoices",
                 301 => "MovedPermanently",
@@ -152,7 +144,6 @@ impl HttpStatus {
                     )));
                 }
             },
-        };
-        Ok(type_ident(phrase))
+        })
     }
 }

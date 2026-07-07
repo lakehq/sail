@@ -7,7 +7,9 @@ use super::config::OpenApiConfig;
 use crate::error::{BuildError, BuildResult};
 use crate::openapi::generator::operation::OperationDefinition;
 use crate::openapi::generator::schema::SchemaDefinition;
-use crate::openapi::spec::{load_spec, OpenApi, Parameter, PathItem, RefOr, Response, Schema};
+use crate::openapi::spec::{
+    load_spec, MaybeRef, OpenApi, Parameter, PathItem, Response, Schema, SchemaReference,
+};
 
 pub fn generate_openapi_client(
     spec_path: impl AsRef<Path>,
@@ -104,10 +106,13 @@ impl<'a> OpenApiGenerator<'a> {
         })
     }
 
-    pub(super) fn resolve_path_item(&self, item: &'a RefOr<PathItem>) -> BuildResult<&'a PathItem> {
+    pub(super) fn resolve_path_item(
+        &self,
+        item: &'a MaybeRef<PathItem>,
+    ) -> BuildResult<&'a PathItem> {
         match item {
-            RefOr::Value(value) => Ok(value),
-            RefOr::Ref(reference) => Err(BuildError::InvalidInput(format!(
+            MaybeRef::Value(value) => Ok(value),
+            MaybeRef::Ref(reference) => Err(BuildError::InvalidInput(format!(
                 "path item references are not supported: {}",
                 reference.reference
             ))),
@@ -116,11 +121,11 @@ impl<'a> OpenApiGenerator<'a> {
 
     pub(super) fn resolve_parameter(
         &self,
-        parameter: &'a RefOr<Parameter>,
+        parameter: &'a MaybeRef<Parameter>,
     ) -> BuildResult<&'a Parameter> {
         match parameter {
-            RefOr::Value(value) => Ok(value),
-            RefOr::Ref(reference) => {
+            MaybeRef::Value(value) => Ok(value),
+            MaybeRef::Ref(reference) => {
                 let name = component_name(&reference.reference, "parameters")?;
                 self.openapi
                     .components
@@ -136,11 +141,11 @@ impl<'a> OpenApiGenerator<'a> {
 
     pub(super) fn resolve_response(
         &self,
-        response: &'a RefOr<Response>,
+        response: &'a MaybeRef<Response>,
     ) -> BuildResult<&'a Response> {
         match response {
-            RefOr::Value(value) => Ok(value),
-            RefOr::Ref(reference) => {
+            MaybeRef::Value(value) => Ok(value),
+            MaybeRef::Ref(reference) => {
                 let name = component_name(&reference.reference, "responses")?;
                 self.openapi
                     .components
@@ -160,7 +165,10 @@ impl<'a> OpenApiGenerator<'a> {
             self.openapi.components.schemas.get(name).ok_or_else(|| {
                 BuildError::InvalidInput(format!("unknown schema reference: {name}"))
             })?;
-        Ok((name, schema))
+        match schema {
+            MaybeRef::Value(value) => Ok((name, value)),
+            MaybeRef::Ref(reference) => self.resolve_schema(&reference.reference),
+        }
     }
 }
 
