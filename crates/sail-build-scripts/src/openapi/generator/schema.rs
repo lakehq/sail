@@ -1,13 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::quote;
 
 use super::core::OpenApiGenerator;
 use crate::error::{BuildError, BuildResult};
 use crate::openapi::spec::{AdditionalProperties, MaybeRef, Schema, SchemaReference, SchemaType};
 use crate::openapi::utils::docs::doc_attrs;
-use crate::openapi::utils::name::{to_snake_case, type_ident, type_name_text, value_ident};
+use crate::openapi::utils::name::{type_name, value_name, RustName};
 use crate::openapi::utils::types::{RustType, TypePosition};
 
 impl<'a> OpenApiGenerator<'a> {
@@ -33,7 +33,7 @@ impl<'a> OpenApiGenerator<'a> {
             MaybeRef::Ref(reference) => self.resolve_schema(&reference.reference)?.1,
         };
         let schema = self.schema_definition_inner(
-            name.to_owned(),
+            type_name(name),
             Some(name),
             schema,
             &mut inline,
@@ -49,7 +49,7 @@ impl<'a> OpenApiGenerator<'a> {
 
     fn schema_definition_inner(
         &self,
-        type_name: String,
+        type_name: RustName,
         serde_name: Option<&str>,
         schema: &'a Schema,
         inline: &mut InlineSchemas,
@@ -89,9 +89,10 @@ impl<'a> OpenApiGenerator<'a> {
             });
         }
 
-        if let Some(tag) = any_of_tag(schema)? {
+        if let (Some(tag), None) = (any_of_tag(schema)?, serde_type.as_ref()) {
             return Err(BuildError::InvalidInput(format!(
-                "tagged anyOf schema {type_name} using {tag} must define discriminator mapping"
+                "tagged anyOf schema {} using {tag} must define discriminator mapping",
+                type_name
             )));
         }
 
@@ -344,7 +345,7 @@ impl<'a> OpenApiGenerator<'a> {
         let (name, _) = self.resolve_schema(&reference.reference)?;
         let rust_type = RustType::Named {
             qualifier: Vec::new(),
-            name: type_name_text(name),
+            name: type_name(name),
         };
         Ok(match position {
             TypePosition::Normal => rust_type,
@@ -405,15 +406,16 @@ impl<'a> OpenApiGenerator<'a> {
         let mut output = Vec::new();
         for (name, schema) in properties {
             let is_required = required.contains(name.as_str());
-            let identifier = value_ident(&to_snake_case(&name));
-            let serde_rename = (identifier.trim_start_matches("r#") != name).then(|| name.clone());
+            let identifier = value_name(&name);
+            let serde_rename =
+                (identifier.to_string().trim_start_matches("r#") != name).then(|| name.clone());
             let rust_type = self.schema_type_with_inline(
                 schema,
                 TypePosition::Nested,
                 inline,
                 used_inline_type_names,
                 in_module,
-                &type_name_text(&name),
+                &type_name(&name).to_string(),
             )?;
             let rust_type = if is_required {
                 rust_type
@@ -464,7 +466,7 @@ impl<'a> OpenApiGenerator<'a> {
         let (variant, rust_type) = if let MaybeRef::Ref(reference) = schema {
             let (name, _) = self.resolve_schema(&reference.reference)?;
             (
-                type_ident(name),
+                type_name(name),
                 self.schema_type(schema, TypePosition::Nested)?,
             )
         } else {
@@ -482,7 +484,7 @@ impl<'a> OpenApiGenerator<'a> {
             if is_nullable(schema) {
                 rust_type = RustType::Option(Box::new(rust_type));
             }
-            (format!("Value{index}"), rust_type)
+            (RustName::new(format!("Value{index}")), rust_type)
         };
         Ok(EnumVariant {
             name: variant,
@@ -636,7 +638,7 @@ impl<'a> OpenApiGenerator<'a> {
         used_inline_type_names: &mut BTreeSet<String>,
     ) -> BuildResult<EnumVariant> {
         let (name, schema) = self.resolve_schema(reference)?;
-        let variant = type_ident(name);
+        let variant = type_name(name);
         let rename = values
             .first()
             .ok_or_else(|| {
@@ -675,7 +677,7 @@ fn string_enum_variants(schema: &Schema) -> BuildResult<Option<Vec<StringEnumVar
     let mut used = BTreeSet::new();
     let mut variants = Vec::new();
     for (index, value) in schema.enum_values.iter().enumerate() {
-        let variant = unique_ident(&type_name_text(value), index, &mut used);
+        let variant = unique_ident(value, index, &mut used);
         variants.push(StringEnumVariant {
             name: variant,
             rename: value.clone(),
@@ -739,11 +741,11 @@ fn is_transparent_all_of(schema: &Schema) -> bool {
 }
 
 pub(super) struct SchemaDefinition {
-    type_name: String,
+    type_name: RustName,
     summary: Option<String>,
     description: Option<String>,
     serde_type: Option<String>,
-    module_name: Option<String>,
+    module_name: Option<RustName>,
     inline_definitions: Vec<SchemaDefinition>,
     kind: SchemaKind,
 }
@@ -766,12 +768,12 @@ enum SchemaKind {
 }
 
 struct StringEnumVariant {
-    name: String,
+    name: RustName,
     rename: String,
 }
 
 struct EnumVariant {
-    name: String,
+    name: RustName,
     rename: Option<String>,
     aliases: Vec<String>,
     rust_type: Option<RustType>,
@@ -780,21 +782,21 @@ struct EnumVariant {
 
 struct SchemaField {
     name: String,
-    identifier: String,
+    identifier: RustName,
     serde_rename: Option<String>,
     is_optional: bool,
     rust_type: RustType,
 }
 
 struct InlineSchemas {
-    module_name: String,
+    module_name: RustName,
     definitions: Vec<SchemaDefinition>,
 }
 
 impl InlineSchemas {
     fn new(name: &str) -> Self {
         Self {
-            module_name: value_ident(&to_snake_case(name)),
+            module_name: value_name(name),
             definitions: Vec::new(),
         }
     }
@@ -830,7 +832,7 @@ impl InlineSchemas {
         }
     }
 
-    fn module_name(&self) -> Option<String> {
+    fn module_name(&self) -> Option<RustName> {
         if self.definitions.is_empty() {
             return None;
         }
@@ -838,20 +840,17 @@ impl InlineSchemas {
     }
 }
 
-fn unique_ident(value: &str, index: usize, used: &mut BTreeSet<String>) -> String {
-    let mut name = type_name_text(value);
-    if name.is_empty() {
-        name = format!("Value{index}");
-    }
+fn unique_ident(value: &str, index: usize, used: &mut BTreeSet<String>) -> RustName {
+    let mut name = type_name(value).to_string();
     if !used.insert(name.clone()) {
         name = format!("{name}{index}");
         used.insert(name.clone());
     }
-    name
+    RustName::new(name)
 }
 
-fn unique_type_name(suggested_name: &str, used_names: &mut BTreeSet<String>) -> String {
-    let mut name = type_name_text(suggested_name);
+fn unique_type_name(suggested_name: &str, used_names: &mut BTreeSet<String>) -> RustName {
+    let mut name = type_name(suggested_name).to_string();
     if !used_names.insert(name.clone()) {
         let base = name;
         let mut index = 2;
@@ -863,20 +862,19 @@ fn unique_type_name(suggested_name: &str, used_names: &mut BTreeSet<String>) -> 
             index += 1;
         }
     }
-    name
+    RustName::new(name)
 }
 
 impl SchemaDefinition {
     pub(super) fn tokens(&self) -> BuildResult<TokenStream> {
         let module = if let Some(module_name) = &self.module_name {
-            let module = format_ident!("{}", module_name);
             let definitions = self
                 .inline_definitions
                 .iter()
                 .map(SchemaDefinition::single_tokens)
                 .collect::<BuildResult<Vec<_>>>()?;
             Some(quote! {
-                pub mod #module {
+                pub mod #module_name {
                     use super::*;
 
                     #(#definitions)*
@@ -893,7 +891,7 @@ impl SchemaDefinition {
     }
 
     fn single_tokens(&self) -> BuildResult<TokenStream> {
-        let type_name = format_ident!("{}", type_ident(&self.type_name));
+        let type_name = &self.type_name;
         let docs = doc_attrs(self.summary.as_deref(), self.description.as_deref());
         let serde_type = self.serde_type.as_ref().map(|from_type| {
             quote! {
@@ -918,10 +916,13 @@ impl SchemaDefinition {
                 untagged,
                 variants,
             } => {
-                let serde_tag = tag
-                    .as_ref()
-                    .map(|tag| quote! { #[serde(tag = #tag)] })
-                    .or_else(|| untagged.then(|| quote! { #[serde(untagged)] }));
+                let serde_tag = if serde_type.is_none() {
+                    tag.as_ref()
+                        .map(|tag| quote! { #[serde(tag = #tag)] })
+                        .or_else(|| untagged.then(|| quote! { #[serde(untagged)] }))
+                } else {
+                    None
+                };
                 let variants = variants.iter().map(generate_enum_variant);
                 Ok(quote! {
                     #(#docs)*
@@ -944,19 +945,24 @@ impl SchemaDefinition {
                     }
                 })
             }
-            SchemaKind::Transparent { rust_type } => Ok(quote! {
-                #(#docs)*
-                #derives
-                #[serde(transparent)]
-                #serde_type
-                pub struct #type_name(pub #rust_type);
-            }),
+            SchemaKind::Transparent { rust_type } => {
+                let serde_transparent = serde_type
+                    .is_none()
+                    .then(|| quote! { #[serde(transparent)] });
+                Ok(quote! {
+                    #(#docs)*
+                    #derives
+                    #serde_transparent
+                    #serde_type
+                    pub struct #type_name(pub #rust_type);
+                })
+            }
         }
     }
 }
 
 fn generate_string_enum_variant(variant: &StringEnumVariant) -> TokenStream {
-    let name = format_ident!("{}", variant.name);
+    let name = &variant.name;
     let rename = &variant.rename;
     quote! {
         #[serde(rename = #rename)]
@@ -965,7 +971,7 @@ fn generate_string_enum_variant(variant: &StringEnumVariant) -> TokenStream {
 }
 
 fn generate_enum_variant(variant: &EnumVariant) -> TokenStream {
-    let name = format_ident!("{}", variant.name);
+    let name = &variant.name;
     let rename = variant
         .rename
         .as_ref()
@@ -999,7 +1005,7 @@ fn generate_enum_variant(variant: &EnumVariant) -> TokenStream {
 }
 
 fn generate_schema_field(field: &SchemaField) -> TokenStream {
-    let name = format_ident!("{}", field.identifier);
+    let name = &field.identifier;
     let rust_type = &field.rust_type;
     let rename = field
         .serde_rename
@@ -1016,7 +1022,7 @@ fn generate_schema_field(field: &SchemaField) -> TokenStream {
 }
 
 fn generate_variant_field(field: &SchemaField) -> TokenStream {
-    let name = format_ident!("{}", field.identifier);
+    let name = &field.identifier;
     let rust_type = &field.rust_type;
     let rename = field
         .serde_rename

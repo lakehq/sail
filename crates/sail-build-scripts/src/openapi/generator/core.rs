@@ -7,9 +7,7 @@ use super::config::OpenApiConfig;
 use crate::error::{BuildError, BuildResult};
 use crate::openapi::generator::operation::OperationDefinition;
 use crate::openapi::generator::schema::SchemaDefinition;
-use crate::openapi::spec::{
-    load_spec, MaybeRef, OpenApi, Parameter, PathItem, Response, Schema, SchemaReference,
-};
+use crate::openapi::spec::{load_spec, MaybeRef, OpenApi, Parameter, PathItem, Response, Schema};
 
 pub fn generate_openapi_client(
     spec_path: impl AsRef<Path>,

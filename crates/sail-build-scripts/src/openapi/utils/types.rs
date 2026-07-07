@@ -1,5 +1,7 @@
 use proc_macro2::TokenStream;
-use quote::{format_ident, quote};
+use quote::quote;
+
+use crate::openapi::utils::name::RustName;
 
 #[derive(Clone)]
 pub enum RustType {
@@ -11,8 +13,8 @@ pub enum RustType {
     String,
     JsonValue,
     Named {
-        qualifier: Vec<String>,
-        name: String,
+        qualifier: Vec<RustName>,
+        name: RustName,
     },
     Box(Box<RustType>),
     Option(Box<RustType>),
@@ -58,7 +60,6 @@ impl quote::ToTokens for RustType {
                 let segments = qualifier
                     .iter()
                     .chain(std::iter::once(name))
-                    .map(|value| format_ident!("{value}"))
                     .collect::<Vec<_>>();
                 quote! { #(#segments)::* }
             }

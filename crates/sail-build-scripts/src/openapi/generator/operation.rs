@@ -1,5 +1,5 @@
-use proc_macro2::{Ident, Literal, TokenStream};
-use quote::{format_ident, quote};
+use proc_macro2::{Literal, TokenStream};
+use quote::quote;
 
 use super::core::OpenApiGenerator;
 use super::schema::has_schema_type;
@@ -10,7 +10,7 @@ use crate::openapi::spec::{
 };
 use crate::openapi::utils::docs::doc_attrs;
 use crate::openapi::utils::http::{is_json_media_type, operation_entries, HttpMethod, HttpStatus};
-use crate::openapi::utils::name::{to_snake_case, type_ident, type_name_text, value_ident};
+use crate::openapi::utils::name::{type_name, value_name, RustName};
 use crate::openapi::utils::types::{RustType, TypePosition};
 
 impl OpenApiGenerator<'_> {
@@ -120,7 +120,7 @@ impl OpenApiGenerator<'_> {
                 },
                 ParameterLocation::Cookie => unreachable!("cookie parameters handled above"),
             };
-            let identifier_name = if matches!(kind, ParameterKind::Header { .. }) {
+            let identifier = if matches!(kind, ParameterKind::Header { .. }) {
                 parameter
                     .name
                     .strip_prefix("X-")
@@ -131,7 +131,7 @@ impl OpenApiGenerator<'_> {
             };
             output.push(OperationParameter {
                 name: parameter.name.clone(),
-                identifier: value_ident(&to_snake_case(identifier_name)),
+                identifier: value_name(identifier),
                 rust_type,
                 kind,
             });
@@ -220,21 +220,17 @@ impl OpenApiGenerator<'_> {
             MaybeRef::Value(value) => value,
             MaybeRef::Ref(reference) => {
                 let (_, schema) = self.resolve_schema(&reference.reference)?;
-                return self.parameter_type_inner(schema);
+                schema
             }
         };
-        self.parameter_type_inner(schema)
-    }
 
-    fn parameter_type_inner(&self, schema: &Schema) -> BuildResult<RustType> {
         if has_schema_type(schema, SchemaType::Array) {
             let items = schema.items.as_deref().ok_or_else(|| {
                 BuildError::InvalidInput("array parameter schema is missing items".to_owned())
             })?;
             let item = self.parameter_type(items)?;
-            return Ok(RustType::Vec(Box::new(item)));
-        }
-        if has_schema_type(schema, SchemaType::Boolean) {
+            Ok(RustType::Vec(Box::new(item)))
+        } else if has_schema_type(schema, SchemaType::Boolean) {
             Ok(RustType::Bool)
         } else if has_schema_type(schema, SchemaType::Integer) {
             Ok(match schema.format.as_deref() {
@@ -267,13 +263,13 @@ pub(super) struct OperationDefinition {
 
 impl OperationDefinition {
     pub(super) fn method_tokens(&self) -> BuildResult<TokenStream> {
-        let method_name = format_ident!("{}", value_ident(&to_snake_case(&self.operation_id)));
-        let error_type = format_ident!("{}", operation_error_type(&self.operation_id));
+        let method_name = value_name(&self.operation_id);
+        let error_type = operation_error_type_name(&self.operation_id);
         let path = generate_path_expression(&self.path, &self.parameters)?;
-        let method = format_ident!("{}", self.method.name());
+        let method = RustName::new(self.method.name());
 
         let arguments = self.parameters.iter().map(|parameter| {
-            let ident = format_ident!("{}", parameter.identifier);
+            let ident = &parameter.identifier;
             let rust_type = &parameter.rust_type;
             quote! { #ident: #rust_type }
         });
@@ -386,12 +382,12 @@ impl OperationDefinition {
     }
 
     pub(super) fn error_enum_tokens(&self) -> BuildResult<TokenStream> {
-        let name = format_ident!("{}", operation_error_type(&self.operation_id));
+        let name = operation_error_type_name(&self.operation_id);
         let variants = self
             .error_responses
             .iter()
             .map(|response| {
-                let variant = format_ident!("{}", response.status.variant()?);
+                let variant = type_name(response.status.variant()?);
                 if response.rust_type.is_unit() {
                     Ok(quote! { #variant, })
                 } else {
@@ -453,7 +449,7 @@ fn generate_path_expression(
                     "path parameter {name} in {path} has no parameter definition"
                 ))
             })?;
-        let ident = format_ident!("{}", parameter.identifier);
+        let ident = &parameter.identifier;
         let required = parameter.kind.required();
         let optional_segment =
             !required && expression.ends_with('/') && after_start[end + 1..].starts_with('/');
@@ -521,7 +517,7 @@ fn generate_query(parameters: &[OperationParameter]) -> Vec<TokenStream> {
             continue;
         };
         let name = &parameter.name;
-        let identifier = format_ident!("{}", parameter.identifier);
+        let identifier = &parameter.identifier;
         output.push(match (required, array) {
             (true, false) => {
                 quote! { query.push((#name.to_owned(), #identifier.to_string())); }
@@ -561,7 +557,7 @@ fn generate_headers(parameters: &[OperationParameter]) -> Vec<TokenStream> {
             continue;
         };
         let name = &parameter.name;
-        let identifier = format_ident!("{}", parameter.identifier);
+        let identifier = &parameter.identifier;
         output.push(match (required, array) {
             (true, false) => {
                 quote! { request = request.header(#name, #identifier.to_string()); }
@@ -609,10 +605,10 @@ fn generate_response_body_expression(rust_type: &RustType) -> TokenStream {
 }
 
 fn generate_error_match_arm(
-    error_type: &Ident,
+    error_type: &RustName,
     response: &OperationResponse,
 ) -> BuildResult<TokenStream> {
-    let variant = format_ident!("{}", response.status.variant()?);
+    let variant = type_name(response.status.variant()?);
     let value = if response.rust_type.is_unit() {
         quote! { #error_type::#variant }
     } else {
@@ -636,14 +632,14 @@ fn generate_error_match_arm(
     }
 }
 
-fn operation_error_type(operation_id: &str) -> String {
-    type_ident(&format!("{}Error", type_name_text(operation_id)))
+fn operation_error_type_name(operation_id: &str) -> RustName {
+    RustName::new(format!("{}Error", type_name(operation_id)))
 }
 
 #[derive(Clone)]
 struct OperationParameter {
     name: String,
-    identifier: String,
+    identifier: RustName,
     rust_type: RustType,
     kind: ParameterKind,
 }
