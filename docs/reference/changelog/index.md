@@ -5,6 +5,39 @@ next: false
 
 # Changelog
 
+## 0.6.6
+
+_July 7, 2026_
+
+- Improved distributed query execution and fixed a few issues around query plans in the cluster mode ([#2171](https://github.com/lakehq/sail/pull/2171), [#2182](https://github.com/lakehq/sail/pull/2182), [#2191](https://github.com/lakehq/sail/pull/2191), [#2192](https://github.com/lakehq/sail/pull/2192), [#2194](https://github.com/lakehq/sail/pull/2194), [#2199](https://github.com/lakehq/sail/pull/2199), [#2200](https://github.com/lakehq/sail/pull/2200), [#2201](https://github.com/lakehq/sail/pull/2201), and [#2207](https://github.com/lakehq/sail/pull/2207)).
+- Improved Delta Lake integration ([#2195](https://github.com/lakehq/sail/pull/2195)).
+- Added support for the `SHOW FUNCTIONS` and `DESCRIBE FUNCTION` SQL statements ([#2151](https://github.com/lakehq/sail/pull/2151)).
+- Added support to recover Python data source options from table properties ([#2203](https://github.com/lakehq/sail/pull/2203)).
+- Improved the `PIVOT` clause in SQL queries ([#2197](https://github.com/lakehq/sail/pull/2197)).
+- Improved the following SQL functions ([#2158](https://github.com/lakehq/sail/pull/2158), [#2174](https://github.com/lakehq/sail/pull/2174), [#2175](https://github.com/lakehq/sail/pull/2175), [#2180](https://github.com/lakehq/sail/pull/2180), [#2187](https://github.com/lakehq/sail/pull/2187), [#2188](https://github.com/lakehq/sail/pull/2188), [#2189](https://github.com/lakehq/sail/pull/2189), [#2196](https://github.com/lakehq/sail/pull/2196), [#2197](https://github.com/lakehq/sail/pull/2197), and [#2204](https://github.com/lakehq/sail/pull/2204)):
+  - `base64`
+  - `bin`
+  - `bround`
+  - `collect_list`
+  - `collect_set`
+  - `concat`
+  - `concat_ws`
+  - `decode`
+  - `encode`
+  - `from_json`
+  - `make_timestamp_ntz`
+  - `make_ym_interval`
+  - `schema_of_variant`
+  - `struct`
+  - `time_diff`
+  - `to_csv`
+  - `to_json`
+  - `unbase64`
+
+### Contributors
+
+Huge thanks to [@davidlghellin](https://github.com/davidlghellin) for your contributions!
+
 ## 0.6.5
 
 _June 29, 2026_
