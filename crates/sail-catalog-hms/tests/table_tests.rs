@@ -176,3 +176,14 @@ async fn test_list_tables_excludes_views() {
     assert!(tables.iter().any(|table| table.name == "items"));
     assert!(tables.iter().all(|table| table.name != "v_items"));
 }
+
+// NOTE: REPLACE / CREATE OR REPLACE TABLE behaviour for the HMS provider is now covered by
+// the Spark-SQL `.feature` tests in
+// `python/pysail/tests/spark/catalog/hms/features/replace_table.feature`
+// (schema change, dropped columns, partition change, replaced-table reads, create-vs-replace
+// on a missing table, and the critical "invalid replacement preserves the original" regression).
+// The client-side pre-validation that backs that regression is unit-tested in
+// `sail-catalog-hms/src/managed_table.rs` (`validate_replacement_table`). The REPLACE-path
+// metadata-location OCC (`assert_replace_metadata_location_unchanged`) is unit-tested in
+// `sail-catalog-hms/src/provider.rs`; the ALTER-path OCC conflict is covered by the Python
+// test `test_hms_rejects_stale_iceberg_metadata_location_update`.

@@ -11,6 +11,7 @@ use sail_catalog::provider::{
     TableFormatCreateMetadataMode,
 };
 use sail_common::runtime::RuntimeHandle;
+use sail_common_datafusion::catalog::managed::metadata_location_value;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableStatus};
 use sail_common_hms::hms::{
     EnvironmentContext, GetTableRequest, Table, ThriftHiveMetastoreAlterTableException,
@@ -91,6 +92,38 @@ fn build_drop_table_request(purge: bool) -> DropTableRequest {
         delete_data: false,
         environment_context,
     }
+}
+
+/// Returns the metadata-location pointer from an HMS table's parameters, if present.
+pub(crate) fn hms_metadata_location(table: &Table) -> Option<String> {
+    let parameters = table.parameters.as_ref()?;
+    metadata_location_value(
+        parameters
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str())),
+    )
+    .map(ToString::to_string)
+}
+
+/// OCC guard for REPLACE: HMS has no CAS, so lakehouse tables re-validate the
+/// metadata-location pointer under the lock. Plain tables (no stamp) rely on the lock alone.
+pub(crate) fn assert_replace_metadata_location_unchanged(
+    expected: Option<&str>,
+    current: &Table,
+    db_name: &str,
+    table_name: &str,
+) -> CatalogResult<()> {
+    let Some(expected) = expected else {
+        return Ok(());
+    };
+    let current_location = hms_metadata_location(current);
+    if current_location.as_deref() != Some(expected) {
+        return Err(CatalogError::Conflict(format!(
+            "Cannot replace table '{db_name}.{table_name}': a concurrent modification advanced its metadata location from '{expected}' to '{}'",
+            current_location.as_deref().unwrap_or("<none>")
+        )));
+    }
+    Ok(())
 }
 
 pub(crate) fn apply_alter_table_options(
@@ -612,6 +645,67 @@ impl HmsCatalogProvider {
         }
     }
 
+    /// Creates a table on a specific client, for use under an already-held lock (where
+    /// failover-selecting `create_hms_table` could switch clients mid-critical-section).
+    pub(crate) async fn create_table_with_client(
+        client: &ThriftHiveMetastoreClient,
+        db_name: &str,
+        table_name: &str,
+        table: Table,
+    ) -> CatalogResult<()> {
+        match client.create_table(table).await {
+            Ok(MaybeException::Ok(())) => Ok(()),
+            Ok(MaybeException::Exception(ThriftHiveMetastoreCreateTableException::O1(_))) => {
+                Err(CatalogError::AlreadyExists(
+                    CatalogObject::Table,
+                    format!("{db_name}.{table_name}"),
+                ))
+            }
+            Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
+                "Failed to create HMS table '{db_name}.{table_name}': {err:?}"
+            ))),
+            Err(err) => Err(Self::hms_client_error(
+                &format!("Failed to create HMS table '{db_name}.{table_name}'"),
+                err,
+            )),
+        }
+    }
+
+    /// Drops a table on a specific client, for use under an already-held lock.
+    pub(crate) async fn drop_table_with_client(
+        client: &ThriftHiveMetastoreClient,
+        db_name: &str,
+        table_name: &str,
+        delete_data: bool,
+        if_exists: bool,
+    ) -> CatalogResult<()> {
+        match client
+            .drop_table(
+                db_name.to_string().into(),
+                table_name.to_string().into(),
+                delete_data,
+            )
+            .await
+        {
+            Ok(MaybeException::Ok(())) => Ok(()),
+            Ok(MaybeException::Exception(ThriftHiveMetastoreDropTableException::O1(_)))
+                if if_exists =>
+            {
+                Ok(())
+            }
+            Ok(MaybeException::Exception(ThriftHiveMetastoreDropTableException::O1(_))) => Err(
+                CatalogError::NotFound(CatalogObject::Table, format!("{db_name}.{table_name}")),
+            ),
+            Ok(MaybeException::Exception(err)) => Err(CatalogError::External(format!(
+                "Failed to drop HMS table '{db_name}.{table_name}': {err:?}"
+            ))),
+            Err(err) => Err(Self::hms_client_error(
+                &format!("Failed to drop HMS table '{db_name}.{table_name}'"),
+                err,
+            )),
+        }
+    }
+
     pub(crate) async fn create_hms_table(
         &self,
         database: &Namespace,
@@ -828,11 +922,6 @@ impl HmsCatalogProvider {
 }
 
 fn validate_create_table_options(options: &CreateTableOptions) -> CatalogResult<()> {
-    if options.mode.is_replace() {
-        return Err(CatalogError::NotSupported(
-            "Hive Metastore catalog does not support REPLACE".to_string(),
-        ));
-    }
     if !options.constraints.is_empty() {
         return Err(CatalogError::NotSupported(
             "Hive Metastore catalog does not support constraints for generic tables".to_string(),
@@ -1030,12 +1119,13 @@ impl CatalogProvider for HmsCatalogProvider {
         table: &str,
         options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
-        let format = options.format.trim().to_lowercase();
+        let format_str = options.format.trim().to_lowercase();
         let if_not_exists = options.mode.ignore_if_exists();
+        let is_replace = options.mode.is_replace();
 
         validate_create_table_options(&options)?;
         let db_name = validate_namespace(database)?;
-        let format = HiveCatalogFormat::from_format(&format)?;
+        let format = HiveCatalogFormat::from_format(&format_str)?;
         let partition_columns: Vec<String> = options
             .partition_by
             .iter()
@@ -1062,6 +1152,46 @@ impl CatalogProvider for HmsCatalogProvider {
             &partition_columns,
             &format_for_metadata,
         )?;
+
+        if is_replace {
+            // REPLACE is drop-then-create under an exclusive lock (see
+            // `replace_table_with_lock`). Limitation: a plain-Hive EXTERNAL REPLACE reusing
+            // the SAME location leaves stale files (drop is metadata-only, no object-store
+            // handle here); lakehouse formats mask this via rewritten metadata.
+            let replace_requires_existing = options.mode.replace_requires_existing();
+            let existing = match self.fetch_hms_table(database, table).await {
+                Ok(t) => Some(t),
+                Err(CatalogError::NotFound(_, _)) => None,
+                Err(other) => return Err(other),
+            };
+
+            match existing {
+                None if replace_requires_existing => {
+                    return Err(CatalogError::NotFound(
+                        CatalogObject::Table,
+                        format!("{db_name}.{table}"),
+                    ));
+                }
+                None => {
+                    // CreateOrReplace on a non-existent table: fall through to create.
+                }
+                Some(existing_table) => {
+                    // OCC stamp; replace_table_with_lock re-validates it under the HMS lock.
+                    let expected_metadata_location = hms_metadata_location(&existing_table);
+
+                    managed_table::replace_table_with_lock(
+                        self,
+                        &db_name,
+                        table,
+                        hms_table.clone(),
+                        expected_metadata_location,
+                    )
+                    .await?;
+
+                    return table_to_status(&self.name, database, &hms_table);
+                }
+            }
+        }
 
         self.create_hms_table(database, table, hms_table, if_not_exists)
             .await
@@ -1682,5 +1812,56 @@ mod tests {
         });
 
         assert_eq!(timeout, Duration::from_secs(12));
+    }
+
+    fn iceberg_table_with_metadata_location(location: &str) -> Table {
+        Table {
+            parameters: Some(AHashMap::from_iter([(
+                FastStr::from_static_str("metadata_location"),
+                FastStr::from(location.to_string()),
+            )])),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_replace_precondition_errors_on_metadata_location_mismatch() {
+        let current = iceberg_table_with_metadata_location(
+            "s3://warehouse/items/metadata/00002-new.metadata.json",
+        );
+
+        let error = super::assert_replace_metadata_location_unchanged(
+            Some("s3://warehouse/items/metadata/00001-old.metadata.json"),
+            &current,
+            "default",
+            "items",
+        )
+        .unwrap_err();
+
+        assert!(matches!(error, CatalogError::Conflict(_)));
+        assert!(error.to_string().contains("concurrent modification"));
+    }
+
+    #[test]
+    fn test_replace_precondition_accepts_unchanged_metadata_location() {
+        let location = "s3://warehouse/items/metadata/00001-current.metadata.json";
+        let current = iceberg_table_with_metadata_location(location);
+
+        super::assert_replace_metadata_location_unchanged(
+            Some(location),
+            &current,
+            "default",
+            "items",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_replace_precondition_noop_without_expected_location() {
+        // Plain tables carry no metadata-location stamp; the precondition is a no-op.
+        let current = Table::default();
+
+        super::assert_replace_metadata_location_unchanged(None, &current, "default", "items")
+            .unwrap();
     }
 }
