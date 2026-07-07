@@ -381,7 +381,7 @@ fn create_builder(
             })
         }
         DataType::LargeUtf8 => Ok(FieldBuilder::LargeString(
-            LargeStringBuilder::with_capacity(capacity, capacity * 16),
+            LargeStringBuilder::with_capacity(capacity, 0),
         )),
         DataType::Map(field, ordered) => {
             let (keys_field, values_field) = match field.data_type() {
@@ -420,8 +420,7 @@ fn create_builder(
             })
         }
         DataType::Utf8 => Ok(FieldBuilder::String(StringBuilder::with_capacity(
-            capacity,
-            capacity * 16,
+            capacity, 0,
         ))),
         DataType::Timestamp(time_unit, tz) => {
             let resolved_tz = tz.clone().unwrap_or(Arc::from(session_timezone));

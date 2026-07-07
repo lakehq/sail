@@ -2,11 +2,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
+use datafusion::functions_aggregate::count::count_udaf;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, DFSchemaRef, ScalarValue};
-use datafusion_expr::expr::NullTreatment;
+use datafusion_expr::expr::{AggregateFunctionParams, NullTreatment};
 use datafusion_expr::{
-    col, expr, lit, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection, ScalarUDF,
+    col, expr, lit, when, ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection, ScalarUDF,
 };
 use datafusion_functions_nested::expr_fn as nested_fn;
 use sail_common::spec;
@@ -156,12 +157,31 @@ impl PlanResolver<'_> {
                     pivot_column.clone().eq(lit(scalar))
                 }
             };
+            // On the PivotFirst path, an absent (group, pivot-value) combination is NULL even
+            // for `count` (Spark only computes the aggregate over (group, value) pairs that
+            // occur in the data). The aggregate FILTER below makes `count` return 0 for such a
+            // group, so gate each cell on whether any row matched the pivot value. This is a
+            // no-op for sum/avg/min/max (already NULL on empty) and corrects the counting
+            // family (count, count(DISTINCT), approx_count_distinct). On the general path
+            // (`spark_uses_pivot_first == false`) Spark itself returns 0 there, matching the
+            // unguarded FILTER, so no guard is applied.
+            let row_present = if spark_uses_pivot_first {
+                Some(count_rows_matching(&predicate).gt(lit(0i64)))
+            } else {
+                None
+            };
             for agg in &aggregates {
                 let expr = inject_pivot_filter(
                     agg.expr.clone(),
                     &predicate,
                     force_first_last_ignore_nulls,
                 )?;
+                let expr = match &row_present {
+                    Some(condition) => {
+                        when(condition.clone(), expr).otherwise(lit(ScalarValue::Null))?
+                    }
+                    None => expr,
+                };
                 let name = if single_aggregate {
                     value_name.clone()
                 } else {
@@ -505,6 +525,22 @@ fn scalar_is_nan(scalar: &ScalarValue) -> bool {
         ScalarValue::Float64(Some(value)) => value.is_nan(),
         _ => false,
     }
+}
+
+/// Build `count(1) FILTER (WHERE predicate)`: the number of rows in the group that match
+/// the pivot value. Used to distinguish an absent (group, pivot-value) combination (zero
+/// matching rows -> NULL cell) from a present one whose aggregate happens to be `0`.
+fn count_rows_matching(predicate: &expr::Expr) -> expr::Expr {
+    expr::Expr::AggregateFunction(expr::AggregateFunction {
+        func: count_udaf(),
+        params: AggregateFunctionParams {
+            args: vec![lit(1i64)],
+            distinct: false,
+            filter: Some(Box::new(predicate.clone())),
+            order_by: vec![],
+            null_treatment: None,
+        },
+    })
 }
 
 /// Add `predicate` as a FILTER to every aggregate function inside `expr`,

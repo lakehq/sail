@@ -122,6 +122,7 @@ pub async fn build_delete_plan(
         None,
         None,
         ctx.lakehouse_table().cloned(),
+        snapshot_state.load_config().catalog_managed_commits.clone(),
     ));
 
     // Adapt the predicate to the scan schema. PhysicalExpr Column indices are schema-dependent,

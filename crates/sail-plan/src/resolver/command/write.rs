@@ -463,7 +463,7 @@ impl PlanResolver<'_> {
                         .iter()
                         .map(|part| part.as_ref().to_string())
                         .collect::<Vec<_>>();
-                    let create_options = CreateTableOptions {
+                    let mut create_options = CreateTableOptions {
                         columns,
                         comment: None,
                         constraints: vec![],
@@ -488,6 +488,14 @@ impl PlanResolver<'_> {
                             },
                         )
                         .await?;
+                    if let Some(location) = create_plan.table.status.location.clone() {
+                        if create_options.location.as_deref() != Some(location.as_str()) {
+                            create_options.location = Some(location.clone());
+                            sink_info.options.push(OptionLayer::OptionList {
+                                items: vec![("path".to_string(), location)],
+                            });
+                        }
+                    }
                     sink_info.lakehouse_table = Some(
                         create_plan
                             .table

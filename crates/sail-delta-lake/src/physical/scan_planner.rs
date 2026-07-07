@@ -367,6 +367,7 @@ pub(crate) async fn plan_delta_scan(
             limit,
             pushdown_filter,
             None,
+            snapshot.load_config().catalog_managed_commits.clone(),
         )
         .with_table_statistics(snapshot.datafusion_table_statistics(None)),
     );

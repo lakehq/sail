@@ -27,7 +27,6 @@ use datafusion::physical_plan::{ExecutionPlan, Partitioning};
 use datafusion_physical_expr::expressions::{lit, Column as PhysicalColumn};
 
 mod action_schema;
-mod catalog_location;
 mod commit_exec;
 pub mod discovery_exec;
 mod dv_writer_exec;

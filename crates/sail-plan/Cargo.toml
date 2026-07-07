@@ -48,3 +48,7 @@ indexmap = { workspace = true }
 log = { workspace = true }
 regex = { workspace = true }
 parquet-variant-compute = { workspace = true }
+
+[build-dependencies]
+serde = { workspace = true }
+serde_yaml = { workspace = true }

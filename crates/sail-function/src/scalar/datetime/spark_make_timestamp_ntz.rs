@@ -113,6 +113,16 @@ impl ScalarUDFImpl for SparkMakeTimestampNtz {
             let mut builder: PrimitiveBuilder<TimestampMicrosecondType> =
                 PrimitiveArray::builder(number_rows);
             for i in 0..number_rows {
+                if years.is_null(i)
+                    || months.is_null(i)
+                    || days.is_null(i)
+                    || hours.is_null(i)
+                    || minutes.is_null(i)
+                    || seconds.is_null(i)
+                {
+                    builder.append_null();
+                    continue;
+                }
                 let year = years.value(i);
                 let month = months.value(i);
                 let day = days.value(i);
