@@ -23,7 +23,27 @@ use crate::plan::gen;
 use crate::plan::gen::higher_order_udf::HigherOrderUdfKind;
 use crate::proto::converter::RemotePhysicalProtoConverter;
 
-pub fn try_decode_message<M>(buf: &[u8]) -> Result<M>
+pub fn decode_remote_physical_plan(
+    ctx: &TaskContext,
+    codec: &dyn PhysicalExtensionCodec,
+    buf: &[u8],
+) -> Result<Arc<dyn ExecutionPlan>> {
+    // The remote codec decodes data sources directly into `DataSourceExec`.
+    // `RemoteDataSourceExec` is only used before encoding to bypass DataFusion's
+    // built-in `DataSourceExec` codec.
+    try_decode_physical_plan(ctx, codec, buf)
+}
+
+pub fn decode_remote_physical_expr(
+    ctx: &TaskContext,
+    codec: &dyn PhysicalExtensionCodec,
+    buf: &[u8],
+    schema: &Schema,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    try_decode_physical_expr(ctx, codec, buf, schema)
+}
+
+pub(super) fn try_decode_message<M>(buf: &[u8]) -> Result<M>
 where
     M: Message + Default,
 {
@@ -32,18 +52,18 @@ where
     Ok(message)
 }
 
-pub fn try_decode_schema(buf: &[u8]) -> Result<Schema> {
+pub(super) fn try_decode_schema(buf: &[u8]) -> Result<Schema> {
     let schema = try_decode_message::<gen_datafusion_common::Schema>(buf)?;
     Ok((&schema).try_into()?)
 }
 
-pub fn try_decode_field_ref(buf: &[u8]) -> Result<FieldRef> {
+pub(super) fn try_decode_field_ref(buf: &[u8]) -> Result<FieldRef> {
     let field = try_decode_message::<gen_datafusion_common::Field>(buf)?;
     let field: Field = (&field).try_into()?;
     Ok(Arc::new(field))
 }
 
-pub fn try_decode_physical_plan(
+pub(super) fn try_decode_physical_plan(
     ctx: &TaskContext,
     codec: &dyn PhysicalExtensionCodec,
     buf: &[u8],
@@ -52,7 +72,7 @@ pub fn try_decode_physical_plan(
     proto_to_physical_plan(ctx, codec, &plan)
 }
 
-pub fn proto_to_physical_plan(
+pub(super) fn proto_to_physical_plan(
     ctx: &TaskContext,
     codec: &dyn PhysicalExtensionCodec,
     plan: &PhysicalPlanNode,
@@ -60,7 +80,7 @@ pub fn proto_to_physical_plan(
     plan.try_into_physical_plan_with_converter(ctx, codec, &RemotePhysicalProtoConverter {})
 }
 
-pub fn try_decode_physical_expr(
+pub(super) fn try_decode_physical_expr(
     ctx: &TaskContext,
     codec: &dyn PhysicalExtensionCodec,
     buf: &[u8],
@@ -70,7 +90,7 @@ pub fn try_decode_physical_expr(
     proto_to_physical_expr(ctx, codec, &expr, schema)
 }
 
-pub fn proto_to_physical_expr(
+pub(super) fn proto_to_physical_expr(
     ctx: &TaskContext,
     codec: &dyn PhysicalExtensionCodec,
     expr: &PhysicalExprNode,
@@ -80,7 +100,9 @@ pub fn proto_to_physical_expr(
     converter.proto_to_physical_expr(expr, schema, &PhysicalPlanDecodeContext::new(ctx, codec))
 }
 
-pub fn try_decode_higher_order_udf(udf: &gen::HigherOrderUdf) -> Result<Arc<HigherOrderUDF>> {
+pub(super) fn try_decode_higher_order_udf(
+    udf: &gen::HigherOrderUdf,
+) -> Result<Arc<HigherOrderUDF>> {
     let udf_kind = udf
         .higher_order_udf_kind
         .as_ref()

@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::compute::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+use datafusion::common::config::{CsvOptions, TableParquetOptions};
 use datafusion::common::parsers::CompressionTypeVariant;
 use datafusion::common::{
     plan_datafusion_err, plan_err, Constraint, Constraints, JoinSide, Result, ScalarValue,
@@ -12,9 +13,10 @@ use datafusion::common::{
 };
 use datafusion::datasource::file_format::file_compression_type::FileCompressionType;
 use datafusion::datasource::memory::MemorySourceConfig;
+use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::{
-    ArrowSource, AvroSource, FileScanConfig, FileScanConfigBuilder, FileSink, FileSinkConfig,
-    JsonSource,
+    ArrowSource, AvroSource, CsvSource, FileScanConfig, FileScanConfigBuilder, FileSink,
+    FileSinkConfig, FileSource, JsonSource, ParquetSource,
 };
 use datafusion::datasource::sink::DataSinkExec;
 use datafusion::datasource::source::{DataSource, DataSourceExec};
@@ -22,6 +24,11 @@ use datafusion::execution::TaskContext;
 use datafusion::functions::core::greatest::GreatestFunc;
 use datafusion::functions::core::least::LeastFunc;
 use datafusion::functions::string::overlay::OverlayFunc;
+use datafusion::functions_window::cume_dist::cume_dist_udwf;
+use datafusion::functions_window::lead_lag::{lag_udwf, lead_udwf};
+use datafusion::functions_window::nth_value::{first_value_udwf, last_value_udwf, nth_value_udwf};
+use datafusion::functions_window::rank::{dense_rank_udwf, percent_rank_udwf, rank_udwf};
+use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::logical_expr::{
     AggregateUDF, AggregateUDFImpl, ScalarUDF, ScalarUDFImpl, WindowUDF,
 };
@@ -41,7 +48,7 @@ use datafusion::physical_plan::{ExecutionPlan, PlanProperties};
 use datafusion_proto::generated::datafusion_common as gen_datafusion_common;
 use datafusion_proto::physical_plan::from_proto::{
     parse_physical_sort_exprs, parse_protobuf_file_scan_config, parse_protobuf_file_scan_schema,
-    parse_protobuf_partitioning,
+    parse_protobuf_partitioning, parse_table_schema_from_proto,
 };
 use datafusion_proto::physical_plan::to_proto::{
     serialize_file_scan_config, serialize_partitioning, serialize_physical_sort_exprs,
@@ -82,6 +89,7 @@ use sail_common_datafusion::system::catalog::SystemTable;
 use sail_common_datafusion::udf::StreamUDF;
 use sail_data_source::formats::binary::source::BinarySource;
 use sail_data_source::formats::console::ConsoleSinkExec;
+use sail_data_source::formats::noop::NoopSinkExec;
 use sail_data_source::formats::python::{
     InputPartition, PythonDataSourceExec, PythonDataSourceWriteCommitExec,
     PythonDataSourceWriteExec,
@@ -136,6 +144,7 @@ use sail_function::scalar::csv::SparkSchemaOfCsv;
 use sail_function::scalar::datetime::convert_tz::ConvertTz;
 use sail_function::scalar::datetime::negate_duration::NegateDuration;
 use sail_function::scalar::datetime::spark_date::SparkDate;
+use sail_function::scalar::datetime::spark_date_part::SparkDatePart;
 use sail_function::scalar::datetime::spark_date_trunc::SparkDateTrunc;
 use sail_function::scalar::datetime::spark_interval::{
     SparkCalendarInterval, SparkDayTimeInterval, SparkYearMonthInterval,
@@ -150,7 +159,6 @@ use sail_function::scalar::datetime::spark_time_diff::SparkTimeDiff;
 use sail_function::scalar::datetime::spark_time_trunc::SparkTimeTrunc;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
 use sail_function::scalar::datetime::spark_to_chrono_fmt::SparkToChronoFmt;
-use sail_function::scalar::datetime::spark_try_to_timestamp::SparkTryToTimestamp;
 use sail_function::scalar::datetime::spark_unix_timestamp::SparkUnixTimestamp;
 use sail_function::scalar::datetime::spark_window_buckets::SparkWindowBuckets;
 use sail_function::scalar::datetime::spark_year::SparkYear;
@@ -230,7 +238,7 @@ use sail_function::scalar::variant::spark_variant_to_json::SparkVariantToJsonUdf
 use sail_function::scalar::xml::to_xml::SparkToXml;
 use sail_function::scalar::xml::xpath::Xpath;
 use sail_function::scalar::xml::xpath_typed::{xpath_typed_name_to_kind, XpathTyped};
-use sail_function::window::SparkNtile;
+use sail_function::window::{SparkFirstLastValue, SparkFirstLastValueKind, SparkNtile};
 use sail_iceberg::physical_plan::{
     IcebergCommitExec, IcebergDeleteApplyExec, IcebergDiscoveryExec, IcebergManifestScanExec,
     IcebergScanByDataFilesExec, IcebergWriterExec,
@@ -241,6 +249,7 @@ use sail_logical_plan::show_string::{ShowStringFormat, ShowStringStyle};
 use sail_physical_plan::barrier::BarrierExec;
 use sail_physical_plan::catalog_command::CatalogCommandExec;
 use sail_physical_plan::coalesce::CoalesceExec;
+use sail_physical_plan::data_source::RemoteDataSourceExec;
 use sail_physical_plan::map_partitions::MapPartitionsExec;
 use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 use sail_physical_plan::monotonic_id::MonotonicIdExec;
@@ -452,10 +461,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }) => {
                 let file_compression_type: FileCompressionType =
                     self.try_decode_file_compression_type(file_compression_type)?;
-                let proto = try_decode_message(&base_config)?;
-                let table_schema = parse_protobuf_file_scan_schema(&proto)?;
+                let base_config = try_decode_message(&base_config)?;
+                let table_schema = parse_table_schema_from_proto(&base_config)?;
                 let source = parse_protobuf_file_scan_config(
-                    &proto,
+                    &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
                     &RemotePhysicalProtoConverter {},
                     Arc::new(JsonSource::new(table_schema)),
@@ -465,11 +474,72 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .build();
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
-            NodeKind::Arrow(gen::ArrowExecNode { base_config }) => {
-                let proto = try_decode_message(&base_config)?;
-                let table_schema = parse_protobuf_file_scan_schema(&proto)?;
+            NodeKind::Csv(gen::CsvExecNode {
+                base_config,
+                options,
+            }) => {
+                let base_config = try_decode_message(&base_config)?;
+                let table_schema = parse_table_schema_from_proto(&base_config)?;
+                let options = try_decode_message::<gen_datafusion_common::CsvOptions>(&options)?;
+                let csv_options: CsvOptions = (&options).try_into()?;
+                let file_compression_type: FileCompressionType = csv_options.compression.into();
+                let source = CsvSource::new(table_schema).with_csv_options(csv_options);
                 let source = parse_protobuf_file_scan_config(
-                    &proto,
+                    &base_config,
+                    &PhysicalPlanDecodeContext::new(ctx, self),
+                    &RemotePhysicalProtoConverter {},
+                    Arc::new(source),
+                )?;
+                let source = FileScanConfigBuilder::from(source)
+                    .with_file_compression_type(file_compression_type)
+                    .build();
+                Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+            }
+            NodeKind::Parquet(gen::ParquetExecNode {
+                base_config,
+                options,
+                predicate,
+            }) => {
+                let base_config = try_decode_message(&base_config)?;
+                let predicate_schema = parse_protobuf_file_scan_schema(&base_config)?;
+                let table_schema = parse_table_schema_from_proto(&base_config)?;
+                let options =
+                    try_decode_message::<gen_datafusion_common::TableParquetOptions>(&options)?;
+                let options: TableParquetOptions = (&options).try_into()?;
+                let predicate = predicate
+                    .map(|predicate| {
+                        try_decode_physical_expr(ctx, self, &predicate, predicate_schema.as_ref())
+                    })
+                    .transpose()?;
+                let object_store_url = match base_config.object_store_url.is_empty() {
+                    false => datafusion::execution::object_store::ObjectStoreUrl::parse(
+                        &base_config.object_store_url,
+                    )?,
+                    true => datafusion::execution::object_store::ObjectStoreUrl::local_filesystem(),
+                };
+                let store = ctx.runtime_env().object_store(object_store_url)?;
+                let metadata_cache = ctx.runtime_env().cache_manager.get_file_metadata_cache();
+                let reader_factory =
+                    Arc::new(CachedParquetFileReaderFactory::new(store, metadata_cache));
+                let mut source = ParquetSource::new(table_schema)
+                    .with_parquet_file_reader_factory(reader_factory)
+                    .with_table_parquet_options(options);
+                if let Some(predicate) = predicate {
+                    source = source.with_predicate(predicate);
+                }
+                let source = parse_protobuf_file_scan_config(
+                    &base_config,
+                    &PhysicalPlanDecodeContext::new(ctx, self),
+                    &RemotePhysicalProtoConverter {},
+                    Arc::new(source),
+                )?;
+                Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
+            }
+            NodeKind::Arrow(gen::ArrowExecNode { base_config }) => {
+                let base_config = try_decode_message(&base_config)?;
+                let table_schema = parse_table_schema_from_proto(&base_config)?;
+                let source = parse_protobuf_file_scan_config(
+                    &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
                     &RemotePhysicalProtoConverter {},
                     Arc::new(ArrowSource::new_file_source(table_schema)),
@@ -494,10 +564,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         );
                     }
                 };
-                let proto = try_decode_message(&base_config)?;
-                let table_schema = parse_protobuf_file_scan_schema(&proto)?;
+                let base_config = try_decode_message(&base_config)?;
+                let table_schema = parse_table_schema_from_proto(&base_config)?;
                 let source = parse_protobuf_file_scan_config(
-                    &proto,
+                    &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
                     &RemotePhysicalProtoConverter {},
                     Arc::new(TextSource::new(table_schema, whole_text, line_sep)),
@@ -511,10 +581,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 base_config,
                 path_glob_filter,
             }) => {
-                let proto = try_decode_message(&base_config)?;
-                let table_schema = parse_protobuf_file_scan_schema(&proto)?;
+                let base_config = try_decode_message(&base_config)?;
+                let table_schema = parse_table_schema_from_proto(&base_config)?;
                 let source = parse_protobuf_file_scan_config(
-                    &proto,
+                    &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
                     &RemotePhysicalProtoConverter {},
                     Arc::new(BinarySource::new(table_schema, path_glob_filter)),
@@ -523,10 +593,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(DataSourceExec::new(Arc::new(source))))
             }
             NodeKind::Avro(gen::AvroExecNode { base_config }) => {
-                let proto = try_decode_message(&base_config)?;
-                let table_schema = parse_protobuf_file_scan_schema(&proto)?;
+                let base_config = try_decode_message(&base_config)?;
+                let table_schema = parse_table_schema_from_proto(&base_config)?;
                 let source = parse_protobuf_file_scan_config(
-                    &proto,
+                    &base_config,
                     &PhysicalPlanDecodeContext::new(ctx, self),
                     &RemotePhysicalProtoConverter {},
                     Arc::new(AvroSource::new(table_schema)),
@@ -722,6 +792,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 version,
                 statistics,
                 lakehouse_table_json,
+                catalog_managed_commits_json,
             }) => {
                 let input = try_decode_physical_plan(ctx, self, &input)?;
                 let table_url = Url::parse(&table_url)
@@ -762,6 +833,14 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     .map(|bytes| self.try_decode_statistics(bytes))
                     .transpose()?;
                 let lakehouse_table = self.try_decode_lakehouse_table(&lakehouse_table_json)?;
+                let catalog_managed_commits = if catalog_managed_commits_json.is_empty() {
+                    None
+                } else {
+                    Some(self.try_decode_json(
+                        &catalog_managed_commits_json,
+                        "Delta catalog-managed commit set",
+                    )?)
+                };
                 Ok(Arc::new(
                     DeltaScanByAddsExec::new(
                         input,
@@ -774,6 +853,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         limit,
                         pushdown_filter,
                         lakehouse_table,
+                        catalog_managed_commits,
                     )
                     .with_output_statistics(statistics),
                 ))
@@ -882,6 +962,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             NodeKind::ConsoleSink(gen::ConsoleSinkExecNode { input }) => {
                 let input = try_decode_physical_plan(ctx, self, &input)?;
                 Ok(Arc::new(ConsoleSinkExec::new(input)))
+            }
+            NodeKind::NoopSink(gen::NoopSinkExecNode { input }) => {
+                let input = try_decode_physical_plan(ctx, self, &input)?;
+                Ok(Arc::new(NoopSinkExec::new(input)))
             }
             NodeKind::SocketSource(gen::SocketSourceExecNode {
                 host,
@@ -1502,7 +1586,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input,
                 common_prefix_length,
             })
-        } else if let Some(data_source) = node.downcast_ref::<DataSourceExec>() {
+        } else if let Some(data_source) = node.downcast_ref::<RemoteDataSourceExec>() {
             let source = data_source.data_source();
             if let Some(file_scan) = source.downcast_ref::<FileScanConfig>() {
                 let file_source = file_scan.file_source();
@@ -1530,8 +1614,51 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         base_config,
                         path_glob_filter: binary_source.path_glob_filter().cloned(),
                     })
+                } else if let Some(csv_source) = file_source.downcast_ref::<CsvSource>() {
+                    let base_config = try_encode_message(serialize_file_scan_config(
+                        file_scan,
+                        self,
+                        &RemotePhysicalProtoConverter {},
+                    )?)?;
+                    let csv_options = CsvOptions {
+                        has_header: Some(csv_source.has_header()),
+                        delimiter: csv_source.delimiter(),
+                        quote: csv_source.quote(),
+                        terminator: csv_source.terminator(),
+                        escape: csv_source.escape(),
+                        comment: csv_source.comment(),
+                        newlines_in_values: Some(csv_source.newlines_in_values()),
+                        truncated_rows: Some(csv_source.truncate_rows()),
+                        compression: file_scan.file_compression_type.into(),
+                        ..Default::default()
+                    };
+                    let options = try_encode_message(gen_datafusion_common::CsvOptions::try_from(
+                        &csv_options,
+                    )?)?;
+                    NodeKind::Csv(gen::CsvExecNode {
+                        base_config,
+                        options,
+                    })
+                } else if let Some(parquet_source) = file_source.downcast_ref::<ParquetSource>() {
+                    let base_config = try_encode_message(serialize_file_scan_config(
+                        file_scan,
+                        self,
+                        &RemotePhysicalProtoConverter {},
+                    )?)?;
+                    let options = gen_datafusion_common::TableParquetOptions::try_from(
+                        parquet_source.table_parquet_options(),
+                    )?;
+                    let options = try_encode_message(options)?;
+                    let predicate = parquet_source
+                        .filter()
+                        .map(|predicate| try_encode_physical_expr(self, &predicate))
+                        .transpose()?;
+                    NodeKind::Parquet(gen::ParquetExecNode {
+                        base_config,
+                        options,
+                        predicate,
+                    })
                 } else if file_source.is::<JsonSource>() {
-                    // TODO: Check if we still need to have JsonSource: https://github.com/apache/datafusion/pull/14224
                     let base_config = try_encode_message(serialize_file_scan_config(
                         file_scan,
                         self,
@@ -1544,7 +1671,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                         file_compression_type,
                     })
                 } else if file_source.is::<ArrowSource>() {
-                    // TODO: Check if we still need to have ArrowSource: https://github.com/apache/datafusion/pull/14224
                     let base_config = try_encode_message(serialize_file_scan_config(
                         file_scan,
                         self,
@@ -1562,7 +1688,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                     return plan_err!("unsupported data source node: {data_source:?}");
                 }
             } else if let Some(memory) = source.downcast_ref::<MemorySourceConfig>() {
-                // TODO: Check if we still need to have MemorySourceConfig: https://github.com/apache/datafusion/pull/14224
                 // `memory.schema()` is the schema after projection.
                 // We must use the original schema here.
                 let schema = memory.original_schema();
@@ -1652,6 +1777,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             };
             let statistics =
                 Some(self.try_encode_statistics(delta_scan_by_adds_exec.statistics())?);
+            let catalog_managed_commits_json = delta_scan_by_adds_exec
+                .catalog_managed_commits()
+                .map(|value| self.try_encode_json(value, "Delta catalog-managed commit set"))
+                .unwrap_or_else(|| Ok(String::new()))?;
             NodeKind::DeltaScanByAdds(gen::DeltaScanByAddsExecNode {
                 input,
                 table_url: delta_scan_by_adds_exec.table_url().to_string(),
@@ -1665,6 +1794,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 statistics,
                 lakehouse_table_json: self
                     .try_encode_lakehouse_table(delta_scan_by_adds_exec.lakehouse_table())?,
+                catalog_managed_commits_json,
             })
         } else if let Some(delta_discovery_exec) = node.downcast_ref::<DeltaDiscoveryExec>() {
             let input = Some(try_encode_physical_plan(
@@ -1739,6 +1869,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(console_sink) = node.downcast_ref::<ConsoleSinkExec>() {
             let input = try_encode_physical_plan(self, console_sink.input().clone())?;
             NodeKind::ConsoleSink(gen::ConsoleSinkExecNode { input })
+        } else if let Some(noop_sink) = node.downcast_ref::<NoopSinkExec>() {
+            let input = try_encode_physical_plan(self, noop_sink.input().clone())?;
+            NodeKind::NoopSink(gen::NoopSinkExecNode { input })
         } else if let Some(socket_source) = node.downcast_ref::<SocketSourceExec>() {
             let options = socket_source.options();
             let max_batch_size = u64::try_from(options.max_batch_size).map_err(|_| {
@@ -2212,8 +2345,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = TimestampNow::new(Arc::from(timezone), time_unit);
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone, is_try }) => {
-                let udf = SparkTimestamp::try_new(timezone.map(Arc::from), is_try)?;
+            UdfKind::SparkTimestamp(gen::SparkTimestampUdf {
+                timezone,
+                is_try,
+                ansi_mode,
+            }) => {
+                let udf = SparkTimestamp::try_new(timezone.map(Arc::from), ansi_mode, is_try)?;
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::SparkDate(gen::SparkDateUdf { is_try }) => {
@@ -2412,6 +2549,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkMakeYmInterval::new())))
             }
             "spark_make_time" | "make_time" => Ok(Arc::new(ScalarUDF::from(SparkMakeTime::new()))),
+            "date_part" | "datepart" | "extract" => {
+                Ok(Arc::new(ScalarUDF::from(SparkDatePart::new())))
+            }
             "date_trunc" => Ok(Arc::new(ScalarUDF::from(SparkDateTrunc::new()))),
             "spark_time_diff" | "time_diff" => Ok(Arc::new(ScalarUDF::from(SparkTimeDiff::new()))),
             "spark_time_trunc" | "time_trunc" => {
@@ -2432,9 +2572,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 Ok(Arc::new(ScalarUDF::from(SparkCalendarInterval::new())))
             }
             "spark_to_chrono_fmt" => Ok(Arc::new(ScalarUDF::from(SparkToChronoFmt::new()))),
-            "spark_try_to_timestamp" | "try_to_timestamp" => {
-                Ok(Arc::new(ScalarUDF::from(SparkTryToTimestamp::new())))
-            }
             "spark_expm1" | "expm1" => Ok(Arc::new(ScalarUDF::from(SparkExpm1::new()))),
             "spark_ceil" | "ceil" => Ok(Arc::new(ScalarUDF::from(SparkCeil::new()))),
             "spark_floor" | "floor" => Ok(Arc::new(ScalarUDF::from(SparkFloor::new()))),
@@ -2507,7 +2644,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkAESEncrypt>()
             || node_inner.is::<SparkArray>()
             || node_inner.is::<SparkBase64>()
-            || node_inner.is::<SparkBin>()
             || node_inner.is::<SparkBitCount>()
             || node_inner.is::<SparkBitGet>()
             || node_inner.is::<SparkBitwiseNot>()
@@ -2517,6 +2653,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkConcat>()
             || node_inner.is::<SparkConv>()
             || node_inner.is::<SparkCrc32>()
+            || node_inner.is::<SparkDatePart>()
             || node_inner.is::<SparkDateTrunc>()
             || node_inner.is::<SparkDayTimeInterval>()
             || node_inner.is::<SparkDecode>()
@@ -2568,7 +2705,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkTryParseUrl>()
             || node_inner.is::<SparkTrySubtract>()
             || node_inner.is::<SparkTryToBinary>()
-            || node_inner.is::<SparkTryToTimestamp>()
             || node_inner.is::<HllSketchEstimateFunction>()
             || node_inner.is::<HllUnionFunction>()
             || node_inner.is::<ThetaDifferenceFunction>()
@@ -2589,6 +2725,7 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<UrlDecode>()
             || node_inner.is::<UrlEncode>()
             || node_inner.is::<Xpath>()
+            || matches!(node.name(), "date_part" | "datepart" | "extract")
             || node.name() == "json_as_text"
             || node.name() == "json_len"
             || node.name() == "json_length"
@@ -2672,7 +2809,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkTimestamp>() {
             let timezone = func.timezone().map(|x| x.to_string());
             let is_try = func.is_try();
-            UdfKind::SparkTimestamp(gen::SparkTimestampUdf { timezone, is_try })
+            let ansi_mode = func.ansi_mode();
+            UdfKind::SparkTimestamp(gen::SparkTimestampUdf {
+                timezone,
+                is_try,
+                ansi_mode,
+            })
         } else if let Some(func) = node.inner().downcast_ref::<SparkDate>() {
             let is_try = func.is_try();
             UdfKind::SparkDate(gen::SparkDateUdf { is_try })
@@ -2765,7 +2907,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 "min_by" => Ok(Arc::new(AggregateUDF::from(MinByFunction::new()))),
                 "mode" => Ok(Arc::new(AggregateUDF::from(ModeFunction::new()))),
                 "percentile" => Ok(Arc::new(AggregateUDF::from(PercentileFunction::new()))),
-                "percentile_disc" => Ok(Arc::new(AggregateUDF::from(PercentileDisc::new()))),
                 "product" => Ok(Arc::new(AggregateUDF::from(ProductFunction::new()))),
                 "regr_avgx" => Ok(Arc::new(AggregateUDF::from(Regr::new(
                     RegrType::AvgX,
@@ -2898,6 +3039,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udaf = PySparkBatchCollectorUDF::new(input_types, input_names);
                 Ok(Arc::new(AggregateUDF::from(udaf)))
             }
+            Some(UdafKind::PercentileDisc(gen::PercentileDiscUdaf { ansi_mode })) => {
+                Ok(Arc::new(AggregateUDF::from(PercentileDisc::new(ansi_mode))))
+            }
             None => plan_err!("ExtendedAggregateUdf: no UDF found for {name}"),
         }
     }
@@ -2916,7 +3060,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node.inner().is::<MinByFunction>()
             || node.inner().is::<ModeFunction>()
             || node.inner().is::<PercentileFunction>()
-            || node.inner().is::<PercentileDisc>()
             || node.inner().is::<ProductFunction>()
             || node.inner().is::<Regr>()
             || node.inner().is::<SchemaOfVariantAggFunction>()
@@ -2977,6 +3120,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 input_types,
                 input_names: func.input_names().to_vec(),
             })
+        } else if let Some(func) = node.inner().downcast_ref::<PercentileDisc>() {
+            UdafKind::PercentileDisc(gen::PercentileDiscUdaf {
+                ansi_mode: func.ansi_mode(),
+            })
         } else {
             return Ok(());
         };
@@ -2993,19 +3140,63 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         let ExtendedWindowUdf { udwf_kind } = udwf;
         match udwf_kind {
             Some(UdwfKind::Standard(gen::StandardUdwf {})) => match name {
+                "cume_dist" => Ok(cume_dist_udwf()),
+                "dense_rank" => Ok(dense_rank_udwf()),
+                "first" | "first_value" => Ok(first_value_udwf()),
+                "lag" => Ok(lag_udwf()),
+                "last" | "last_value" => Ok(last_value_udwf()),
+                "lead" => Ok(lead_udwf()),
+                "nth_value" => Ok(nth_value_udwf()),
                 "ntile" => Ok(Arc::new(WindowUDF::from(SparkNtile::new()))),
+                "rank" => Ok(rank_udwf()),
+                "row_number" => Ok(row_number_udwf()),
+                "percent_rank" => Ok(percent_rank_udwf()),
                 _ => plan_err!("Could not find Window Function: {name}"),
             },
+            Some(UdwfKind::SparkFirstLastValue(gen::SparkFirstLastValueUdwf {
+                first,
+                ignore_nulls,
+            })) => {
+                let fun = if first {
+                    SparkFirstLastValue::first(ignore_nulls)
+                } else {
+                    SparkFirstLastValue::last(ignore_nulls)
+                };
+                Ok(Arc::new(WindowUDF::from(fun)))
+            }
             None => plan_err!("ExtendedWindowUdf: no UDWF found for {name}"),
         }
     }
 
     fn try_encode_udwf(&self, node: &WindowUDF, buf: &mut Vec<u8>) -> Result<()> {
-        if !node.inner().is::<SparkNtile>() {
+        let udwf_kind = if node.inner().is::<SparkNtile>() {
+            UdwfKind::Standard(gen::StandardUdwf {})
+        } else if let Some(func) = node.inner().downcast_ref::<SparkFirstLastValue>() {
+            UdwfKind::SparkFirstLastValue(gen::SparkFirstLastValueUdwf {
+                first: matches!(func.kind(), SparkFirstLastValueKind::First),
+                ignore_nulls: func.ignore_nulls(),
+            })
+        } else if matches!(
+            node.name(),
+            "cume_dist"
+                | "dense_rank"
+                | "first"
+                | "first_value"
+                | "lag"
+                | "last"
+                | "last_value"
+                | "lead"
+                | "nth_value"
+                | "rank"
+                | "row_number"
+                | "percent_rank"
+        ) {
+            UdwfKind::Standard(gen::StandardUdwf {})
+        } else {
             return Ok(());
-        }
+        };
         let node = ExtendedWindowUdf {
-            udwf_kind: Some(UdwfKind::Standard(gen::StandardUdwf {})),
+            udwf_kind: Some(udwf_kind),
         };
         node.encode(buf)
             .map_err(|e| plan_datafusion_err!("failed to encode udwf: {e}"))
@@ -4102,6 +4293,18 @@ mod tests {
         codec.try_decode_udf(&name, &buf)
     }
 
+    fn round_trip_udwf(udwf: WindowUDF) -> Result<Arc<WindowUDF>> {
+        round_trip_udwf_arc(Arc::new(udwf))
+    }
+
+    fn round_trip_udwf_arc(udwf: Arc<WindowUDF>) -> Result<Arc<WindowUDF>> {
+        let codec = RemoteExecutionCodec;
+        let name = udwf.name().to_string();
+        let mut buf = vec![];
+        codec.try_encode_udwf(udwf.as_ref(), &mut buf)?;
+        codec.try_decode_udwf(&name, &buf)
+    }
+
     #[test]
     fn test_round_trip_spark_variant_explode_helper_udf() -> Result<()> {
         let decoded = round_trip_udf(ScalarUDF::from(SparkVariantExplodeUdf::new()))?;
@@ -4111,6 +4314,66 @@ mod tests {
             .downcast_ref::<SparkVariantExplodeUdf>()
             .is_some());
         assert_eq!(decoded.name(), "spark_variant_explode");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_date_part_udf() -> Result<()> {
+        let decoded = round_trip_udf(ScalarUDF::from(SparkDatePart::new()))?;
+
+        assert!(decoded.inner().downcast_ref::<SparkDatePart>().is_some());
+        assert_eq!(decoded.name(), "date_part");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_spark_first_last_value_udwf() -> Result<()> {
+        let decoded = round_trip_udwf(WindowUDF::from(SparkFirstLastValue::first(true)))?;
+        let func = decoded
+            .inner()
+            .downcast_ref::<SparkFirstLastValue>()
+            .ok_or_else(|| plan_datafusion_err!("decoded UDWF is not SparkFirstLastValue"))?;
+        assert_eq!(decoded.name(), "first_value");
+        assert_eq!(func.kind(), SparkFirstLastValueKind::First);
+        assert!(func.ignore_nulls());
+
+        let decoded = round_trip_udwf(WindowUDF::from(SparkFirstLastValue::last(true)))?;
+        let func = decoded
+            .inner()
+            .downcast_ref::<SparkFirstLastValue>()
+            .ok_or_else(|| plan_datafusion_err!("decoded UDWF is not SparkFirstLastValue"))?;
+        assert_eq!(decoded.name(), "last_value");
+        assert_eq!(func.kind(), SparkFirstLastValueKind::Last);
+        assert!(func.ignore_nulls());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_round_trip_standard_window_udwfs() -> Result<()> {
+        let udwfs = [
+            cume_dist_udwf(),
+            dense_rank_udwf(),
+            first_value_udwf(),
+            lag_udwf(),
+            last_value_udwf(),
+            lead_udwf(),
+            nth_value_udwf(),
+            rank_udwf(),
+            row_number_udwf(),
+            percent_rank_udwf(),
+        ];
+
+        for udwf in udwfs {
+            let name = udwf.name().to_string();
+            let decoded = round_trip_udwf_arc(udwf)?;
+            assert_eq!(decoded.name(), name);
+        }
+
+        let decoded = round_trip_udwf(WindowUDF::from(SparkNtile::new()))?;
+        assert!(decoded.inner().downcast_ref::<SparkNtile>().is_some());
 
         Ok(())
     }

@@ -25,7 +25,12 @@ class _SparkSessionFactory:
 
     def create(self) -> SparkSession:
         app = f"test-{uuid.uuid4().hex}"
-        session = SparkSession.builder.appName(app).remote(self._remote).create()
+        builder = SparkSession.builder.appName(app).remote(self._remote)
+        # PySpark 4.1 removed `local` connection-string support from `.create()`
+        # (raises UNSUPPORTED_LOCAL_CONNECTION_STRING), but `.getOrCreate()` still
+        # boots a local JVM-backed Spark Connect server. Use it so feature tests can
+        # run against real Spark via `SPARK_REMOTE="local"`.
+        session = builder.getOrCreate() if self._remote.startswith("local") else builder.create()
         configure_spark_session(session)
         patch_spark_connect_session(session)
         self._sessions.append(session)

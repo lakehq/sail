@@ -17,6 +17,7 @@ pub use action_schema::{
     domain_metadata_struct_type, metadata_struct_type, protocol_struct_type, remove_struct_type,
     sidecar_struct_type, transaction_struct_type,
 };
+pub(crate) use actions::{logical_file_key, LogicalFileKey};
 pub use actions::{
     Action, Add, CheckpointMetadata, CommitAction, CommitInfo, DeletionVectorDescriptor,
     DomainMetadata, Remove, RemoveOptions, Sidecar, StorageType, Transaction,
@@ -30,9 +31,9 @@ pub use log::{
     delta_log_prefix_path, delta_log_root_path, is_compacted_json_filename,
     is_json_checkpoint_filename, is_uuid_checkpoint_filename, last_checkpoint_path,
     parse_checkpoint_version, parse_checksum_version, parse_commit_version,
-    parse_compacted_json_versions, parse_version_prefix, sidecar_file_path, sidecars_dir_path,
-    staged_commit_path, temp_commit_path, uuid_checkpoint_path, DELTA_LOG_DIR,
-    LAST_CHECKPOINT_FILE, SIDECARS_DIR,
+    parse_compacted_json_versions, parse_version_prefix, sidecar_file_name, sidecar_file_path,
+    sidecar_log_path, sidecars_dir_path, staged_commit_path, temp_commit_path,
+    uuid_checkpoint_path, DELTA_LOG_DIR, LAST_CHECKPOINT_FILE, SIDECARS_DIR,
 };
 pub use metadata::{Format, Metadata};
 pub use operation::{DeltaOperation, MergePredicate, SaveMode};

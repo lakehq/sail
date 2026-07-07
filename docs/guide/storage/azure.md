@@ -45,7 +45,7 @@ Sail supports the following URI formats for Azure storage services:
       <li>
         <code
           ><SyntaxText
-            raw="'abfs'['s']'://'<container>'@'<account>'.dfs.fabric.windows.net/'<path>"
+            raw="'abfs'['s']'://'<container>'@'<account>'.dfs.fabric.microsoft.com/'<path>"
         /></code>
         (Hadoop driver convention with Microsoft Fabric)
       </li>

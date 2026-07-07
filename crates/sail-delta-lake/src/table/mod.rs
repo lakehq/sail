@@ -34,7 +34,9 @@ use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
 };
-use sail_common_datafusion::catalog::{LakehouseExecutionContext, TableColumnStatus};
+use sail_common_datafusion::catalog::{
+    CommitAuthority, LakehouseExecutionContext, TableColumnStatus,
+};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
 
@@ -50,24 +52,24 @@ pub use features::{
     EnabledRowTrackingToken, RowTrackingToken, SupportedRowTrackingToken,
 };
 
-use crate::delta_log::resolve_version_timestamp;
-pub use crate::kernel::snapshot::DeltaSnapshot;
-use crate::kernel::transaction::CommitBuilder;
-use crate::kernel::{
-    catalog_managed_commit_file_name, CatalogManagedCommitFile, CatalogManagedCommitSet,
-    DeltaOperation, DeltaSnapshotConfig, SaveMode,
-};
+use crate::delta_log::{default_logstore, resolve_version_timestamp, LogStoreRef, StorageConfig};
 use crate::logical::table_source::DeltaTableSource;
 use crate::options::gen::DeltaReadOptions;
 use crate::schema::{
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
     schema_has_column_defaults, schema_has_generated_columns, schema_has_identity_columns,
 };
+pub use crate::snapshot::DeltaSnapshot;
+use crate::snapshot::{
+    catalog_managed_commit_file_name, CatalogManagedCommitFile, CatalogManagedCommitSet,
+    DeltaSnapshotConfig,
+};
 use crate::spec::{
     contains_timestampntz_arrow, contains_variant_arrow, CommitAction, DeltaError,
-    DeltaError as DeltaTableError, DeltaResult, Protocol, StructType, TableFeature,
+    DeltaError as DeltaTableError, DeltaOperation, DeltaResult, Protocol, SaveMode, StructType,
+    TableFeature,
 };
-use crate::storage::{default_logstore, LogStoreRef, StorageConfig};
+use crate::transaction::CommitBuilder;
 
 /// In memory representation of a Delta Table
 ///
@@ -386,6 +388,12 @@ fn is_missing_delta_log_error(error: &DeltaTableError) -> bool {
         DeltaTableError::InvalidTableLocation(message)
             if message.contains("No commit files found in _delta_log")
     )
+}
+
+pub(crate) fn catalog_managed_commit_context(
+    lakehouse_table: Option<&LakehouseExecutionContext>,
+) -> Option<&LakehouseExecutionContext> {
+    lakehouse_table.filter(|context| context.commit == CommitAuthority::DeltaRatifiedCommit)
 }
 
 async fn load_catalog_managed_delta_bootstrap_info<C>(
@@ -752,7 +760,7 @@ async fn load_delta_read_state(
     let log_store =
         create_logstore_with_object_store(object_store, table_url.clone(), storage_config)?;
 
-    let catalog_managed_commits = match lakehouse_table.as_ref() {
+    let catalog_managed_commits = match catalog_managed_commit_context(lakehouse_table.as_ref()) {
         Some(lakehouse_table) => {
             load_catalog_managed_commits_for_snapshot(
                 &ctx,

@@ -44,7 +44,11 @@ impl Table {
         table_url: Url,
         metadata_location: Option<String>,
     ) -> Result<Self> {
-        log::trace!("Loading Iceberg table: {}", table_url);
+        log::trace!(
+            "Loading Iceberg table: table_url={}, metadata_location={:?}",
+            table_url,
+            metadata_location,
+        );
         let object_store = ctx
             .runtime_env()
             .object_store_registry

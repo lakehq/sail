@@ -3,7 +3,7 @@ import pytest
 from pysail.testing.spark.session import spark_connect_server
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="package")
 def remote():
     # The catalog tests rely on the default memory catalog of a particular name.
     # We explicitly configure it so that the tests are skipped when `SPARK_REMOTE` is set,

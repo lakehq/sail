@@ -7,7 +7,7 @@ use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskStreamKey, WorkerId};
-use crate::proto::decode::try_decode_physical_expr;
+use crate::proto::decode_remote_physical_expr;
 use crate::stream::reader::TaskReadLocation;
 use crate::stream::writer::{LocalStreamStorage, TaskWriteLocation};
 use crate::task::gen;
@@ -609,7 +609,7 @@ impl TaskOutput {
                 let keys = keys
                     .iter()
                     .map(|k| {
-                        try_decode_physical_expr(ctx, codec, k.as_ref(), schema)
+                        decode_remote_physical_expr(ctx, codec, k.as_ref(), schema)
                             .map_err(|e| e.into())
                     })
                     .collect::<ExecutionResult<Vec<_>>>()?;

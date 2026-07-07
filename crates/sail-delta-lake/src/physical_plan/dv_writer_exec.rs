@@ -26,12 +26,12 @@ use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapter
 use url::Url;
 
 use crate::deletion_vector::{DeletionVectorBitmap, DeletionVectorWriter};
-use crate::kernel::transaction::OperationMetrics;
 use crate::physical_plan::{
     current_timestamp_millis, decode_adds_from_batch, delta_action_schema, encode_actions,
     meta_adds, ExecCommitMeta, COL_ACTION,
 };
 use crate::spec::{Action, Add, RemoveOptions};
+use crate::transaction::OperationMetrics;
 
 /// Update an Add action's stats to reflect that the bounds are now wide (non-tight)
 /// because a Deletion Vector has been added or updated.
@@ -79,7 +79,7 @@ pub struct DeletionVectorWriterExec {
     /// Mapping from replay output partition column names to Delta log partition value keys.
     partition_value_columns: Option<Vec<(String, String)>>,
     /// The delta operation to record in the commit log.
-    operation: Option<crate::kernel::DeltaOperation>,
+    operation: Option<crate::spec::DeltaOperation>,
     /// Metrics set.
     metrics: ExecutionPlanMetricsSet,
     /// Cached plan properties.
@@ -94,7 +94,7 @@ impl DeletionVectorWriterExec {
         table_schema: datafusion::arrow::datatypes::SchemaRef,
         version: i64,
         partition_value_columns: Option<Vec<(String, String)>>,
-        operation: Option<crate::kernel::DeltaOperation>,
+        operation: Option<crate::spec::DeltaOperation>,
     ) -> Result<Self> {
         let schema = delta_action_schema()?;
         let partition_count = input.output_partitioning().partition_count().max(1);
@@ -141,7 +141,7 @@ impl DeletionVectorWriterExec {
         self.partition_value_columns.as_deref()
     }
 
-    pub fn operation(&self) -> Option<&crate::kernel::DeltaOperation> {
+    pub fn operation(&self) -> Option<&crate::spec::DeltaOperation> {
         self.operation.as_ref()
     }
 }
@@ -159,7 +159,7 @@ pub struct DeletionVectorRowsWriterExec {
     row_index_column: String,
     version: i64,
     partition_value_columns: Option<Vec<(String, String)>>,
-    operation: Option<crate::kernel::DeltaOperation>,
+    operation: Option<crate::spec::DeltaOperation>,
     metrics: ExecutionPlanMetricsSet,
     cache: Arc<PlanProperties>,
 }
@@ -173,7 +173,7 @@ impl DeletionVectorRowsWriterExec {
         row_index_column: impl Into<String>,
         version: i64,
         partition_value_columns: Option<Vec<(String, String)>>,
-        operation: Option<crate::kernel::DeltaOperation>,
+        operation: Option<crate::spec::DeltaOperation>,
     ) -> Result<Self> {
         let path_column = path_column.into();
         let row_index_column = row_index_column.into();
@@ -240,7 +240,7 @@ impl DeletionVectorRowsWriterExec {
         self.partition_value_columns.as_deref()
     }
 
-    pub fn operation(&self) -> Option<&crate::kernel::DeltaOperation> {
+    pub fn operation(&self) -> Option<&crate::spec::DeltaOperation> {
         self.operation.as_ref()
     }
 }

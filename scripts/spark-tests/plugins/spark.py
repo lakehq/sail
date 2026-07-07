@@ -341,6 +341,10 @@ SKIPPED_SPARK_TESTS = [
         reason="JVM-dependent test",
     ),
     TestMarker(
+        keywords=["pyspark.sql.functions.reflect"],
+        reason="JVM-dependent test",
+    ),
+    TestMarker(
         keywords=["test_parity_dataframe.py", "test_local_checkpoint_dataframe"],
         reason="JVM physical plan assertion; checkpoint behavior is covered by PySail tests",
     ),

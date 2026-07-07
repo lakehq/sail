@@ -310,6 +310,12 @@ pub enum CommandNode {
         database: Option<ObjectName>,
         pattern: String,
     },
+    ShowFunctions {
+        database: Option<ObjectName>,
+        pattern: Option<String>,
+        show_user_functions: bool,
+        show_system_functions: bool,
+    },
     ListTables {
         database: Option<ObjectName>,
         pattern: Option<String>,
@@ -776,7 +782,10 @@ pub struct Pivot {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PivotValue {
-    pub values: Vec<Literal>,
+    /// The value expressions for a single pivot output column. Each is a foldable expression
+    /// (a literal, typed literal such as `DATE'...'`, or a cast) that the resolver evaluates to a
+    /// scalar. A single-element list is the common case; multiple elements form a struct pivot.
+    pub values: Vec<Expr>,
     pub alias: Option<Identifier>,
 }
 

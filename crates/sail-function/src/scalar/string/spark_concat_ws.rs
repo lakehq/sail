@@ -116,7 +116,7 @@ fn concat_ws_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         .map(ConcatArg::try_new)
         .collect::<Result<Vec<_>>>()?;
 
-    let mut builder = StringBuilder::with_capacity(num_rows, num_rows * 16);
+    let mut builder = StringBuilder::with_capacity(num_rows, 0);
     let mut row_buf = String::new(); // reused across rows; capacity is kept after clear()
 
     for row in 0..num_rows {

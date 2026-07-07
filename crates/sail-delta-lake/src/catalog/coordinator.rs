@@ -9,10 +9,10 @@ use sail_common::spec::{SAIL_SPARK_UDT_METADATA_KEY, SPARK_METADATA_JSON_KEY};
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 
-use crate::kernel::transaction::CatalogManagedStagedCommit;
 use crate::spec::{
     CommitAction, DataType as DeltaDataType, Metadata, MetadataValue, PrimitiveType, StructField,
 };
+use crate::transaction::CatalogManagedStagedCommit;
 
 #[derive(Debug, Clone)]
 pub(crate) struct DeltaCatalogManagedTable {
