@@ -5,7 +5,9 @@ These tests verify the Python DataSource API works correctly with Sail,
 including both Arrow RecordBatch and tuple-based paths.
 """
 
+import json
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -13,6 +15,7 @@ import pyarrow as pa
 import pytest
 
 from pysail.testing.spark.session import spark_session_factory
+from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
 try:
     from pyspark.sql.datasource import (
@@ -30,6 +33,21 @@ try:
     )
 except ImportError:
     pytest.skip("Python DataSource API is not available in this Spark version", allow_module_level=True)
+
+
+def _read_test_state(path: str | Path) -> dict[str, Any]:
+    path = Path(path)
+    if not path.exists():
+        return {}
+    text = path.read_text(encoding="utf-8")
+    return json.loads(text) if text else {}
+
+
+def _update_test_state(path: str, **updates: Any) -> None:
+    state = _read_test_state(path)
+    state.update(updates)
+    Path(path).write_text(json.dumps(state, default=str), encoding="utf-8")
+
 
 # ============================================================================
 # RangeDataSource - Example datasource that generates sequential integers
@@ -896,9 +914,10 @@ def _create_writable_test_datasource():
     class InMemoryWriter(DataSourceWriter):
         """Row-based writer for testing."""
 
-        def __init__(self, schema, overwrite):
+        def __init__(self, schema, overwrite, state_path):
             self.schema = schema
             self.overwrite = overwrite
+            self.state_path = state_path
             self.data = []
             self.committed = False
             self.aborted = False
@@ -915,7 +934,7 @@ def _create_writable_test_datasource():
             """Commit the write."""
             self.committed = True
             self.commit_messages = messages
-            WritableDataSource.row_commit_messages = messages
+            _update_test_state(self.state_path, row_commit_messages=messages)
 
         def abort(self, messages):
             """Abort the write."""
@@ -925,9 +944,10 @@ def _create_writable_test_datasource():
     class InMemoryArrowWriter(DataSourceArrowWriter):
         """Arrow-based writer for testing."""
 
-        def __init__(self, schema, overwrite):
+        def __init__(self, schema, overwrite, state_path):
             self.schema = schema
             self.overwrite = overwrite
+            self.state_path = state_path
             self.batches = []
             self.committed = False
             self.aborted = False
@@ -947,7 +967,7 @@ def _create_writable_test_datasource():
             """Commit the write."""
             self.committed = True
             self.commit_messages = messages
-            WritableDataSource.arrow_commit_messages = messages
+            _update_test_state(self.state_path, arrow_commit_messages=messages)
 
         def abort(self, messages):
             """Abort the write."""
@@ -957,12 +977,10 @@ def _create_writable_test_datasource():
     class WritableDataSource(DataSource):
         """DataSource that supports both reading and writing."""
 
-        row_commit_messages = None
-        arrow_commit_messages = None
-
         def __init__(self, options):
             self.options = options
             self.writer_type = options.get("writer_type", "row")
+            self.state_path = options["state_path"]
 
         @classmethod
         def name(cls):
@@ -988,14 +1006,15 @@ def _create_writable_test_datasource():
         def writer(self, schema, overwrite):
             """Return writer based on configuration."""
             if self.writer_type == "arrow":
-                return InMemoryArrowWriter(schema, overwrite)
-            return InMemoryWriter(schema, overwrite)
+                return InMemoryArrowWriter(schema, overwrite, self.state_path)
+            return InMemoryWriter(schema, overwrite, self.state_path)
 
     return WritableDataSource, datasource_name
 
 
-def test_python_basic_write(spark):
+def test_python_basic_write(spark, tmp_path):
     """Test basic Row-based write."""
+    state_path = tmp_path / "basic_write_state.json"
     writable_test_ds, datasource_name = _create_writable_test_datasource()
     spark.dataSource.register(writable_test_ds)
 
@@ -1003,16 +1022,19 @@ def test_python_basic_write(spark):
     df = spark.createDataFrame([(1, "a"), (2, "b"), (3, "c")], ["id", "value"])
 
     # Write data
-    df.write.format(datasource_name).option("writer_type", "row").mode("append").save()
+    df.write.format(datasource_name).option("writer_type", "row").option("state_path", str(state_path)).mode(
+        "append"
+    ).save()
 
     # Verify commit was called
-    row_messages = writable_test_ds.row_commit_messages
+    row_messages = _read_test_state(state_path).get("row_commit_messages")
     assert row_messages is not None
     assert len(row_messages) > 0
 
 
-def test_python_arrow_write(spark):
+def test_python_arrow_write(spark, tmp_path):
     """Test Arrow-based write."""
+    state_path = tmp_path / "arrow_write_state.json"
     writable_test_ds, datasource_name = _create_writable_test_datasource()
     spark.dataSource.register(writable_test_ds)
 
@@ -1020,20 +1042,24 @@ def test_python_arrow_write(spark):
     df = spark.createDataFrame([(1, "x"), (2, "y")], ["id", "value"])
 
     # Write data using Arrow writer
-    df.write.format(datasource_name).option("writer_type", "arrow").mode("append").save()
+    df.write.format(datasource_name).option("writer_type", "arrow").option("state_path", str(state_path)).mode(
+        "append"
+    ).save()
 
     # Verify commit was called
-    arrow_messages = writable_test_ds.arrow_commit_messages
+    arrow_messages = _read_test_state(state_path).get("arrow_commit_messages")
     assert arrow_messages is not None
     assert len(arrow_messages) > 0
 
 
-def test_python_write_overwrite_mode(spark):
+def test_python_write_overwrite_mode(spark, tmp_path):
     """Test that overwrite mode is passed correctly."""
+    state_path = tmp_path / "overwrite_state.json"
 
     class OverwriteCheckWriter(DataSourceWriter):
-        def __init__(self, schema, overwrite):  # noqa: ARG002
+        def __init__(self, schema, overwrite, state_path):  # noqa: ARG002
             self.overwrite = overwrite
+            self.state_path = state_path
             self.data = []
 
         def write(self, iterator):
@@ -1043,9 +1069,7 @@ def test_python_write_overwrite_mode(spark):
 
         def commit(self, messages):  # noqa: ARG002
             # Store overwrite flag for verification
-            OverwriteCheckWriter._last_overwrite = self.overwrite
-
-    OverwriteCheckWriter._last_overwrite = None  # noqa: SLF001
+            _update_test_state(self.state_path, last_overwrite=self.overwrite)
 
     class OverwriteCheckDataSource(DataSource):
         def __init__(self, options):
@@ -1059,22 +1083,24 @@ def test_python_write_overwrite_mode(spark):
             return "id INT"
 
         def writer(self, schema, overwrite):
-            return OverwriteCheckWriter(schema, overwrite)
+            return OverwriteCheckWriter(schema, overwrite, self.options["state_path"])
 
     spark.dataSource.register(OverwriteCheckDataSource)
 
     df = spark.createDataFrame([(1,), (2,)], ["id"])
-    df.write.format("overwrite_check").mode("overwrite").save()
+    df.write.format("overwrite_check").option("state_path", str(state_path)).mode("overwrite").save()
 
-    assert OverwriteCheckWriter._last_overwrite is True  # noqa: SLF001
+    assert _read_test_state(state_path).get("last_overwrite") is True
 
 
-def test_python_write_append_mode(spark):
+def test_python_write_append_mode(spark, tmp_path):
     """Test that append mode is passed correctly."""
+    state_path = tmp_path / "append_state.json"
 
     class AppendCheckWriter(DataSourceWriter):
-        def __init__(self, schema, overwrite):  # noqa: ARG002
+        def __init__(self, schema, overwrite, state_path):  # noqa: ARG002
             self.overwrite = overwrite
+            self.state_path = state_path
             self.data = []
 
         def write(self, iterator):
@@ -1083,9 +1109,7 @@ def test_python_write_append_mode(spark):
             return {}
 
         def commit(self, messages):  # noqa: ARG002
-            AppendCheckWriter._last_overwrite = self.overwrite
-
-    AppendCheckWriter._last_overwrite = None  # noqa: SLF001
+            _update_test_state(self.state_path, last_overwrite=self.overwrite)
 
     class AppendCheckDataSource(DataSource):
         def __init__(self, options):
@@ -1099,21 +1123,23 @@ def test_python_write_append_mode(spark):
             return "id INT"
 
         def writer(self, schema, overwrite):
-            return AppendCheckWriter(schema, overwrite)
+            return AppendCheckWriter(schema, overwrite, self.options["state_path"])
 
     spark.dataSource.register(AppendCheckDataSource)
 
     df = spark.createDataFrame([(1,), (2,)], ["id"])
-    df.write.format("append_check").mode("append").save()
+    df.write.format("append_check").option("state_path", str(state_path)).mode("append").save()
 
-    assert AppendCheckWriter._last_overwrite is False  # noqa: SLF001
+    assert _read_test_state(state_path).get("last_overwrite") is False
 
 
-def test_python_write_commit(spark):
+def test_python_write_commit(spark, tmp_path):
     """Test that commit is called with all partition messages."""
+    state_path = tmp_path / "commit_state.json"
 
     class CommitTrackingWriter(DataSourceWriter):
-        def __init__(self, schema, overwrite):  # noqa: ARG002
+        def __init__(self, schema, overwrite, state_path):  # noqa: ARG002
+            self.state_path = state_path
             self.data = []
 
         def write(self, iterator):
@@ -1121,9 +1147,7 @@ def test_python_write_commit(spark):
             return {"count": count}
 
         def commit(self, messages):
-            CommitTrackingWriter._commit_messages = messages
-
-    CommitTrackingWriter._commit_messages = []  # noqa: SLF001
+            _update_test_state(self.state_path, commit_messages=messages)
 
     class CommitTrackingDataSource(DataSource):
         def __init__(self, options):
@@ -1137,20 +1161,22 @@ def test_python_write_commit(spark):
             return "id INT"
 
         def writer(self, schema, overwrite):
-            return CommitTrackingWriter(schema, overwrite)
+            return CommitTrackingWriter(schema, overwrite, self.options["state_path"])
 
     spark.dataSource.register(CommitTrackingDataSource)
 
     df = spark.createDataFrame([(1,), (2,), (3,)], ["id"])
-    df.write.format("commit_tracking").save()
+    df.write.format("commit_tracking").option("state_path", str(state_path)).save()
 
     # Verify commit was called with messages
-    assert CommitTrackingWriter._commit_messages is not None  # noqa: SLF001
-    assert len(CommitTrackingWriter._commit_messages) > 0  # noqa: SLF001
+    commit_messages = _read_test_state(state_path).get("commit_messages")
+    assert commit_messages is not None
+    assert len(commit_messages) > 0
 
 
-def test_python_write_empty_dataframe(spark):
+def test_python_write_empty_dataframe(spark, tmp_path):
     """Test writing an empty DataFrame."""
+    state_path = tmp_path / "empty_write_state.json"
     writable_test_ds, datasource_name = _create_writable_test_datasource()
     spark.dataSource.register(writable_test_ds)
 
@@ -1158,10 +1184,10 @@ def test_python_write_empty_dataframe(spark):
     df = spark.createDataFrame([], "id INT, value STRING")
 
     # Write should succeed even with empty data
-    df.write.format(datasource_name).option("writer_type", "row").save()
+    df.write.format(datasource_name).option("writer_type", "row").option("state_path", str(state_path)).save()
 
     # Verify commit was called
-    row_messages = writable_test_ds.row_commit_messages
+    row_messages = _read_test_state(state_path).get("row_commit_messages")
     assert row_messages is not None
 
 
@@ -1203,15 +1229,13 @@ def test_python_write_no_writer_implemented(spark):
         df.write.format("readonly").save()
 
 
-def test_python_write_abort_on_failure(spark):
+def test_python_write_abort_on_failure(spark, tmp_path):
     """Test that abort is called when writer.write() raises an exception."""
+    state_path = tmp_path / "abort_on_failure_state.json"
 
     class FailingWriter(DataSourceWriter):
-        _abort_called = False
-        _abort_messages = None
-
-        def __init__(self, schema, overwrite):
-            pass
+        def __init__(self, schema, overwrite, state_path):  # noqa: ARG002
+            self.state_path = state_path
 
         def write(self, iterator):  # noqa: ARG002
             msg = "Intentional write failure for testing"
@@ -1223,11 +1247,7 @@ def test_python_write_abort_on_failure(spark):
             raise AssertionError(msg)
 
         def abort(self, messages):
-            FailingWriter._abort_called = True
-            FailingWriter._abort_messages = messages
-
-    FailingWriter._abort_called = False  # noqa: SLF001
-    FailingWriter._abort_messages = None  # noqa: SLF001
+            _update_test_state(self.state_path, abort_called=True, abort_messages=messages)
 
     class FailingWriteDataSource(DataSource):
         def __init__(self, options):
@@ -1241,7 +1261,7 @@ def test_python_write_abort_on_failure(spark):
             return "id INT"
 
         def writer(self, schema, overwrite):
-            return FailingWriter(schema, overwrite)
+            return FailingWriter(schema, overwrite, self.options["state_path"])
 
     spark.dataSource.register(FailingWriteDataSource)
 
@@ -1249,18 +1269,17 @@ def test_python_write_abort_on_failure(spark):
 
     # Write should fail
     with pytest.raises(Exception, match=r"(?i)write failure|error"):
-        df.write.format("failing_write").save()
+        df.write.format("failing_write").option("state_path", str(state_path)).save()
 
     # Verify abort was called
-    assert FailingWriter._abort_called, "abort() should have been called on write failure"  # noqa: SLF001
+    assert _read_test_state(state_path).get("abort_called"), "abort() should have been called on write failure"
 
 
-def test_python_write_save_path_passed(spark):
+def test_python_write_save_path_passed(spark, tmp_path):
     """Test that .save("/my/path") passes the path to DataSource via options["path"]."""
+    state_path = tmp_path / "save_path_state.json"
 
     class PathCheckWriter(DataSourceWriter):
-        _received_path = None
-
         def __init__(self, schema, overwrite):
             pass
 
@@ -1276,7 +1295,7 @@ def test_python_write_save_path_passed(spark):
         def __init__(self, options):
             self.options = options
             # Capture the path option for test verification
-            PathCheckDataSource._received_options = dict(options)
+            _update_test_state(options["state_path"], received_options=dict(options))
 
         @classmethod
         def name(cls):
@@ -1288,29 +1307,24 @@ def test_python_write_save_path_passed(spark):
         def writer(self, schema, overwrite):
             return PathCheckWriter(schema, overwrite)
 
-    PathCheckDataSource._received_options = {}  # noqa: SLF001
-
     spark.dataSource.register(PathCheckDataSource)
 
     df = spark.createDataFrame([(1,), (2,)], ["id"])
-    df.write.format("path_check").mode("append").save("/my/test/path")
+    df.write.format("path_check").option("state_path", str(state_path)).mode("append").save("/my/test/path")
 
     # Verify the path was passed through options
-    assert "path" in PathCheckDataSource._received_options, (  # noqa: SLF001
-        "Save path should be passed to DataSource via options['path']"
-    )
-    assert PathCheckDataSource._received_options["path"] == "/my/test/path"  # noqa: SLF001
+    received_options = _read_test_state(state_path).get("received_options", {})
+    assert "path" in received_options, "Save path should be passed to DataSource via options['path']"
+    assert received_options["path"] == "/my/test/path"
 
 
-def test_python_write_commit_failure_triggers_abort(spark):
+def test_python_write_commit_failure_triggers_abort(spark, tmp_path):
     """Test that abort is called when commit() raises an exception."""
+    state_path = tmp_path / "commit_failure_state.json"
 
     class CommitFailWriter(DataSourceWriter):
-        _abort_called = False
-        _abort_messages = None
-
-        def __init__(self, schema, overwrite):
-            pass
+        def __init__(self, schema, overwrite, state_path):  # noqa: ARG002
+            self.state_path = state_path
 
         def write(self, iterator):
             count = sum(1 for _ in iterator)
@@ -1321,11 +1335,7 @@ def test_python_write_commit_failure_triggers_abort(spark):
             raise RuntimeError(msg)
 
         def abort(self, messages):
-            CommitFailWriter._abort_called = True
-            CommitFailWriter._abort_messages = messages
-
-    CommitFailWriter._abort_called = False  # noqa: SLF001
-    CommitFailWriter._abort_messages = None  # noqa: SLF001
+            _update_test_state(self.state_path, abort_called=True, abort_messages=messages)
 
     class CommitFailDataSource(DataSource):
         def __init__(self, options):
@@ -1339,7 +1349,7 @@ def test_python_write_commit_failure_triggers_abort(spark):
             return "id INT"
 
         def writer(self, schema, overwrite):
-            return CommitFailWriter(schema, overwrite)
+            return CommitFailWriter(schema, overwrite, self.options["state_path"])
 
     spark.dataSource.register(CommitFailDataSource)
 
@@ -1347,16 +1357,15 @@ def test_python_write_commit_failure_triggers_abort(spark):
 
     # Write should fail because commit fails
     with pytest.raises(Exception, match=r"(?i)commit failure|error"):
-        df.write.format("commit_fail").save()
+        df.write.format("commit_fail").option("state_path", str(state_path)).save()
 
     # Verify abort was called after commit failure
-    assert CommitFailWriter._abort_called, (  # noqa: SLF001
-        "abort() should have been called after commit failure"
-    )
+    assert _read_test_state(state_path).get("abort_called"), "abort() should have been called after commit failure"
 
 
-def test_python_write_null_values(spark):
+def test_python_write_null_values(spark, tmp_path):
     """Test writing data that contains null values."""
+    state_path = tmp_path / "null_values_state.json"
     writable_test_ds, datasource_name = _create_writable_test_datasource()
     spark.dataSource.register(writable_test_ds)
 
@@ -1367,26 +1376,29 @@ def test_python_write_null_values(spark):
     )
 
     # Test row-based write with nulls
-    df.write.format(datasource_name).option("writer_type", "row").mode("append").save()
-    row_messages = writable_test_ds.row_commit_messages
+    df.write.format(datasource_name).option("writer_type", "row").option("state_path", str(state_path)).mode(
+        "append"
+    ).save()
+    row_messages = _read_test_state(state_path).get("row_commit_messages")
     assert row_messages is not None
     assert len(row_messages) > 0
 
     # Test Arrow-based write with nulls
-    df.write.format(datasource_name).option("writer_type", "arrow").mode("append").save()
-    arrow_messages = writable_test_ds.arrow_commit_messages
+    df.write.format(datasource_name).option("writer_type", "arrow").option("state_path", str(state_path)).mode(
+        "append"
+    ).save()
+    arrow_messages = _read_test_state(state_path).get("arrow_commit_messages")
     assert arrow_messages is not None
     assert len(arrow_messages) > 0
 
 
-def test_python_write_none_commit_message(spark):
+def test_python_write_none_commit_message(spark, tmp_path):
     """Test that writer returning None as commit message is handled correctly."""
+    state_path = tmp_path / "none_commit_message_state.json"
 
     class NoneMessageWriter(DataSourceWriter):
-        _commit_messages = None
-
-        def __init__(self, schema, overwrite):
-            pass
+        def __init__(self, schema, overwrite, state_path):  # noqa: ARG002
+            self.state_path = state_path
 
         def write(self, iterator):
             for _ in iterator:
@@ -1394,9 +1406,7 @@ def test_python_write_none_commit_message(spark):
             # Explicitly return None (no commit message)
 
         def commit(self, messages):
-            NoneMessageWriter._commit_messages = messages
-
-    NoneMessageWriter._commit_messages = None  # noqa: SLF001
+            _update_test_state(self.state_path, commit_messages=messages)
 
     class NoneMessageDataSource(DataSource):
         def __init__(self, options):
@@ -1410,16 +1420,17 @@ def test_python_write_none_commit_message(spark):
             return "id INT"
 
         def writer(self, schema, overwrite):
-            return NoneMessageWriter(schema, overwrite)
+            return NoneMessageWriter(schema, overwrite, self.options["state_path"])
 
     spark.dataSource.register(NoneMessageDataSource)
 
     df = spark.createDataFrame([(1,), (2,)], ["id"])
-    df.write.format("none_message").save()
+    df.write.format("none_message").option("state_path", str(state_path)).save()
 
     # Verify commit was called — messages list should contain the None message
-    assert NoneMessageWriter._commit_messages is not None  # noqa: SLF001
-    assert len(NoneMessageWriter._commit_messages) > 0  # noqa: SLF001
+    commit_messages = _read_test_state(state_path).get("commit_messages")
+    assert commit_messages is not None
+    assert len(commit_messages) > 0
 
 
 # ============================================================================
@@ -1549,14 +1560,14 @@ def test_python_sql_create_table_arrow_datasource(spark):
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")
 
 
-def test_python_sql_insert_into_python_datasource(spark):
+def test_python_sql_insert_into_python_datasource(spark, tmp_path):
     """Test INSERT INTO on a Python data source table."""
     table_name = f"sql_insert_{uuid4().hex[:8]}"
+    state_path = tmp_path / "sql_insert_state.json"
 
     class SQLInsertWriter(DataSourceWriter):
-        _commit_messages = None
-
-        def __init__(self, schema, overwrite):  # noqa: ARG002
+        def __init__(self, schema, overwrite, state_path):  # noqa: ARG002
+            self.state_path = state_path
             self.data = []
 
         def write(self, iterator):
@@ -1565,9 +1576,7 @@ def test_python_sql_insert_into_python_datasource(spark):
             return {"count": len(self.data)}
 
         def commit(self, messages):
-            SQLInsertWriter._commit_messages = messages
-
-    SQLInsertWriter._commit_messages = None  # noqa: SLF001
+            _update_test_state(self.state_path, commit_messages=messages)
 
     class SQLInsertDataSource(DataSource):
         @classmethod
@@ -1581,7 +1590,7 @@ def test_python_sql_insert_into_python_datasource(spark):
             return SQLInsertReader()
 
         def writer(self, schema, overwrite):
-            return SQLInsertWriter(schema, overwrite)
+            return SQLInsertWriter(schema, overwrite, self.options["state_path"])
 
     class SQLInsertReader(DataSourceReader):
         def partitions(self):
@@ -1595,7 +1604,10 @@ def test_python_sql_insert_into_python_datasource(spark):
             yield batch
 
     spark.dataSource.register(SQLInsertDataSource)
-    spark.sql(f"CREATE TABLE {table_name} USING {table_name}")
+    spark.sql(
+        f"CREATE TABLE {table_name} USING {table_name} "
+        f"OPTIONS (state_path '{escape_sql_string_literal(str(state_path))}')"
+    )
 
     try:
         # Read should work
@@ -1605,7 +1617,8 @@ def test_python_sql_insert_into_python_datasource(spark):
 
         # INSERT INTO should trigger the writer
         spark.sql(f"INSERT INTO {table_name} VALUES (2, 'new'), (3, 'another')")  # noqa: S608
-        assert SQLInsertWriter._commit_messages is not None  # noqa: SLF001
-        assert len(SQLInsertWriter._commit_messages) > 0  # noqa: SLF001
+        commit_messages = _read_test_state(state_path).get("commit_messages")
+        assert commit_messages is not None
+        assert len(commit_messages) > 0
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table_name}")

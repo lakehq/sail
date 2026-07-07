@@ -275,20 +275,29 @@ fn spark_to_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Array
     let fields = struct_array.fields();
     let columns = struct_array.columns();
 
-    let mut output: Vec<Option<String>> = Vec::with_capacity(num_rows);
+    // Reused row buffer + `StringBuilder`: no per-row `Vec<String>` + `join`, and no
+    // outer `Vec<Option<String>>` — write each field (and the separator) straight into
+    // `row`, then append once into the Arrow buffer.
+    // Reserve the exact item/offset count (known); let the value byte-buffer grow on
+    // its own — CSV row length is unknown up front and, for strings, the byte-capacity
+    // hint barely matters (byte-copy dominates).
+    let mut builder = StringBuilder::with_capacity(num_rows, 0);
+    let mut row = String::new();
 
     for row_idx in 0..num_rows {
         if struct_array.is_null(row_idx) {
-            output.push(None);
+            builder.append_null();
             continue;
         }
 
-        let mut parts: Vec<String> = Vec::with_capacity(fields.len());
-
+        row.clear();
         for (col_idx, field) in fields.iter().enumerate() {
+            if col_idx > 0 {
+                row.push_str(&options.sep);
+            }
             let col = &columns[col_idx];
             if col.is_null(row_idx) {
-                parts.push(write_csv_null_field(&options));
+                row.push_str(&write_csv_null_field(&options));
             } else {
                 let value_str = format_field_to_csv(
                     col,
@@ -297,14 +306,14 @@ fn spark_to_csv_inner(args: &[ArrayRef], session_timezone: &str) -> Result<Array
                     &options,
                     session_timezone,
                 )?;
-                parts.push(write_csv_field(&value_str, &options));
+                row.push_str(&write_csv_field(&value_str, &options));
             }
         }
 
-        output.push(Some(parts.join(&options.sep)));
+        builder.append_value(&row);
     }
 
-    Ok(Arc::new(StringArray::from(output)))
+    Ok(Arc::new(builder.finish()))
 }
 
 /// Extracts a timestamp value from an Arrow array at `row_idx` as microseconds,

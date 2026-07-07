@@ -176,7 +176,7 @@ where
     // exactly once.
     let (lower, upper) = iter.size_hint();
     let cap = upper.unwrap_or(lower);
-    let mut builder = StringBuilder::with_capacity(cap, cap * 8);
+    let mut builder = StringBuilder::with_capacity(cap, 0);
     let mut scratch = String::with_capacity(64);
     for v in iter {
         match v {
@@ -225,9 +225,7 @@ fn bin_int_array_to_string(
     array: &datafusion::arrow::array::PrimitiveArray<Int64Type>,
 ) -> ArrayRef {
     let len = array.len();
-    // 8 chars/row average is a heuristic; the buffer grows as needed but
-    // starts close to the typical size so we avoid most reallocs.
-    let mut builder = StringBuilder::with_capacity(len, len * 8);
+    let mut builder = StringBuilder::with_capacity(len, 0);
     let mut scratch = String::with_capacity(64);
     if array.null_count() == 0 {
         for value in array.values().iter().copied() {
@@ -279,7 +277,7 @@ fn double_to_i64(value: f64, ansi: bool) -> Result<i64> {
 }
 
 fn bin_float_array(array: &PrimitiveArray<Float64Type>, ansi: bool) -> Result<StringArray> {
-    let mut builder = StringBuilder::with_capacity(array.len(), array.len() * 8);
+    let mut builder = StringBuilder::with_capacity(array.len(), 0);
     let mut scratch = String::with_capacity(64);
     for v in array.iter() {
         match v {

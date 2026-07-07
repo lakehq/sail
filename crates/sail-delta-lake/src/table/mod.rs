@@ -34,7 +34,9 @@ use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
 };
-use sail_common_datafusion::catalog::{LakehouseExecutionContext, TableColumnStatus};
+use sail_common_datafusion::catalog::{
+    CommitAuthority, LakehouseExecutionContext, TableColumnStatus,
+};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use url::Url;
 
@@ -386,6 +388,12 @@ fn is_missing_delta_log_error(error: &DeltaTableError) -> bool {
         DeltaTableError::InvalidTableLocation(message)
             if message.contains("No commit files found in _delta_log")
     )
+}
+
+pub(crate) fn catalog_managed_commit_context(
+    lakehouse_table: Option<&LakehouseExecutionContext>,
+) -> Option<&LakehouseExecutionContext> {
+    lakehouse_table.filter(|context| context.commit == CommitAuthority::DeltaRatifiedCommit)
 }
 
 async fn load_catalog_managed_delta_bootstrap_info<C>(
@@ -752,7 +760,7 @@ async fn load_delta_read_state(
     let log_store =
         create_logstore_with_object_store(object_store, table_url.clone(), storage_config)?;
 
-    let catalog_managed_commits = match lakehouse_table.as_ref() {
+    let catalog_managed_commits = match catalog_managed_commit_context(lakehouse_table.as_ref()) {
         Some(lakehouse_table) => {
             load_catalog_managed_commits_for_snapshot(
                 &ctx,

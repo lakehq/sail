@@ -64,6 +64,9 @@ message ExtendedPhysicalPlanNode {
     DeletionVectorRowsWriterExecNode deletion_vector_rows_writer = 49;
     CoalesceExecNode coalesce = 50;
     FileDeleteExecNode file_delete = 51;
+    NoopSinkExecNode noop_sink = 52;
+    CsvExecNode csv = 53;
+    ParquetExecNode parquet = 54;
   }
 }
 
@@ -351,10 +354,16 @@ message StandardUdaf {}
 message ExtendedWindowUdf {
   oneof UdwfKind {
     StandardUdwf standard = 1;
+    SparkFirstLastValueUdwf spark_first_last_value = 2;
   }
 }
 
 message StandardUdwf {}
+
+message SparkFirstLastValueUdwf {
+  bool first = 1;
+  bool ignore_nulls = 2;
+}
 
 // Distinguishes Pandas (202) vs Arrow-native (252) grouped aggregate UDFs
 enum PySparkGroupAggKind {
@@ -575,6 +584,17 @@ message NdJsonExecNode {
   CompressionTypeVariant file_compression_type = 2;
 }
 
+message CsvExecNode {
+  bytes base_config = 1;
+  bytes options = 2;
+}
+
+message ParquetExecNode {
+  bytes base_config = 1;
+  bytes options = 2;
+  optional bytes predicate = 3;
+}
+
 message ArrowExecNode {
   bytes base_config = 1;
 }
@@ -710,6 +730,7 @@ message DeltaScanByAddsExecNode {
   int64 version = 9;
   optional bytes statistics = 10;
   string lakehouse_table_json = 11;
+  string catalog_managed_commits_json = 12;
   // TODO: Consider snapshot hints (partition columns, kernel schema) to avoid worker log reads.
 }
 
@@ -734,6 +755,10 @@ message DeltaRemoveActionsExecNode {
 }
 
 message ConsoleSinkExecNode {
+  bytes input = 1;
+}
+
+message NoopSinkExecNode {
   bytes input = 1;
 }
 

@@ -4,13 +4,10 @@
 //! argument is an array, its elements are joined too. Null values (scalar and
 //! array elements) are skipped; a null separator yields a null row.
 //!
-//! The kernel downcasts each argument once into a typed accessor before the row
-//! loop and writes parts directly into the `StringBuilder` via `fmt::Write` (no
-//! intermediate `String`). List arguments have their element type forced to Utf8
-//! by `coerce_types`, so the list child is downcast once up front too — the row
-//! loop walks `value_offsets()` instead of re-slicing/re-downcasting per row.
+//! The kernel uses one reused `String` buffer + `StringBuilder`, downcasting each
+//! argument once into a typed accessor before the row loop to avoid per-element
+//! allocation.
 
-use std::fmt::Write as _;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
@@ -136,24 +133,11 @@ impl ScalarUDFImpl for SparkConcatWs {
                 DataType::Null => Ok(DataType::Null),
                 DataType::Utf8 | DataType::Utf8View => Ok(DataType::Utf8),
                 DataType::LargeUtf8 => Ok(DataType::LargeUtf8),
-                // Expand list args at runtime; force the element type to Utf8 so
-                // the planner casts non-string children to STRING (Spark coerces
-                // array elements the same way it does scalars, e.g.
-                // `concat_ws(',', array(1,2,3))` -> "1,2,3"). The forced Utf8 also
-                // lets the kernel downcast the list child once (see Rule 23).
                 DataType::List(field)
                 | DataType::ListView(field)
-                | DataType::FixedSizeList(field, _) => Ok(DataType::List(Arc::new(Field::new(
-                    field.name(),
-                    DataType::Utf8,
-                    field.is_nullable(),
-                )))),
+                | DataType::FixedSizeList(field, _) => Ok(DataType::List(Arc::clone(field))),
                 DataType::LargeList(field) | DataType::LargeListView(field) => {
-                    Ok(DataType::LargeList(Arc::new(Field::new(
-                        field.name(),
-                        DataType::Utf8,
-                        field.is_nullable(),
-                    ))))
+                    Ok(DataType::LargeList(Arc::clone(field)))
                 }
                 // Spark casts any other scalar (numbers, booleans, dates, binary, …) to STRING.
                 other => {
@@ -182,12 +166,8 @@ fn concat_ws_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
     };
     let num_rows = separator_arg.len();
 
-    // A null-typed separator makes every row null. The `simplify` hook folds a
-    // *literal* null separator to a constant NULL at planning time, so in a normal
-    // query this branch is not reached; it stays as a safeguard for a non-literal
-    // Null-typed separator (e.g. a Null-typed column) or a direct invoke that
-    // bypasses simplification. Return an N-null column (not a single scalar) so the
-    // shape lines up with the other arguments.
+    // A null-typed separator makes every row null. Return an N-null column (not a
+    // single scalar) so the shape lines up with the other arguments.
     if *separator_arg.data_type() == DataType::Null {
         return Ok(new_null_array(&DataType::Utf8, num_rows));
     }
@@ -200,7 +180,8 @@ fn concat_ws_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
         .map(ConcatArg::try_new)
         .collect::<Result<Vec<_>>>()?;
 
-    let mut builder = StringBuilder::with_capacity(num_rows, num_rows * 16);
+    let mut builder = StringBuilder::with_capacity(num_rows, 0);
+    let mut row_buf = String::new(); // reused across rows; capacity is kept after clear()
 
     for row in 0..num_rows {
         if separator.is_null(row) {
@@ -208,12 +189,12 @@ fn concat_ws_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             continue;
         }
         let sep = separator.value(row);
+        row_buf.clear();
         let mut first = true;
         for arg in &values {
-            arg.write_row(row, sep, &mut builder, &mut first);
+            arg.write_row(row, sep, &mut row_buf, &mut first)?;
         }
-        // Finalise the row: records the offset + validity, no extra byte copy.
-        builder.append_value("");
+        builder.append_value(&row_buf);
     }
 
     Ok(Arc::new(builder.finish()))
@@ -253,12 +234,12 @@ impl<'a> StrCol<'a> {
     }
 }
 
-/// A value argument, downcast once: a string column, a list of strings, or all-null.
+/// A value argument, downcast once: a string column, an array of strings, or all-null.
 enum ConcatArg<'a> {
     Null,
     Str(StrCol<'a>),
-    List(ListCol<'a, i32>),
-    LargeList(ListCol<'a, i64>),
+    List(&'a GenericListArray<i32>),
+    LargeList(&'a GenericListArray<i64>),
 }
 
 impl<'a> ConcatArg<'a> {
@@ -268,8 +249,8 @@ impl<'a> ConcatArg<'a> {
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
                 Ok(Self::Str(StrCol::try_new(arr)?))
             }
-            DataType::List(_) => Ok(Self::List(ListCol::try_new(arr.as_list::<i32>())?)),
-            DataType::LargeList(_) => Ok(Self::LargeList(ListCol::try_new(arr.as_list::<i64>())?)),
+            DataType::List(_) => Ok(Self::List(arr.as_list::<i32>())),
+            DataType::LargeList(_) => Ok(Self::LargeList(arr.as_list::<i64>())),
             other => Err(unsupported_data_type_exec_err(
                 "concat_ws",
                 "STRING or ARRAY<STRING>",
@@ -278,59 +259,54 @@ impl<'a> ConcatArg<'a> {
         }
     }
 
-    /// Append this argument's contribution for `row` directly into `builder`.
-    fn write_row(&self, row: usize, sep: &str, builder: &mut StringBuilder, first: &mut bool) {
+    /// Append this argument's contribution for `row` directly into `buf`.
+    fn write_row(&self, row: usize, sep: &str, buf: &mut String, first: &mut bool) -> Result<()> {
         match self {
             Self::Null => {}
             Self::Str(col) => {
                 if !col.is_null(row) {
-                    push_part(builder, col.value(row), sep, first);
+                    push_part(buf, col.value(row), sep, first);
                 }
             }
-            Self::List(list) => list.write_row(row, sep, builder, first),
-            Self::LargeList(list) => list.write_row(row, sep, builder, first),
+            Self::List(list) => write_list_elements(*list, row, sep, buf, first)?,
+            Self::LargeList(list) => write_list_elements(*list, row, sep, buf, first)?,
         }
+        Ok(())
     }
 }
 
-/// A list-of-strings argument. The child is always a string column — `coerce_types`
-/// forces the element type to Utf8 — so it is downcast ONCE here; per-row access
-/// walks `value_offsets()` against that child instead of re-slicing (`value(row)`)
-/// and re-downcasting per row.
-struct ListCol<'a, O: OffsetSizeTrait> {
-    list: &'a GenericListArray<O>,
-    child: StrCol<'a>,
-}
-
-impl<'a, O: OffsetSizeTrait> ListCol<'a, O> {
-    fn try_new(list: &'a GenericListArray<O>) -> Result<Self> {
-        let child = StrCol::try_new(list.values())?;
-        Ok(Self { list, child })
+/// Append the non-null elements of a list cell into `buf`.
+fn write_list_elements<O: OffsetSizeTrait>(
+    list: &GenericListArray<O>,
+    row: usize,
+    sep: &str,
+    buf: &mut String,
+    first: &mut bool,
+) -> Result<()> {
+    if list.is_null(row) {
+        return Ok(());
     }
-
-    /// Append the non-null elements of `row`'s list cell. A null or empty cell
-    /// contributes nothing — Spark renders it as "", not an error.
-    fn write_row(&self, row: usize, sep: &str, builder: &mut StringBuilder, first: &mut bool) {
-        if self.list.is_null(row) {
-            return;
-        }
-        let offsets = self.list.value_offsets();
-        let (start, end) = (offsets[row].as_usize(), offsets[row + 1].as_usize());
-        for i in start..end {
-            if !self.child.is_null(i) {
-                push_part(builder, self.child.value(i), sep, first);
-            }
+    let elements = list.value(row);
+    // An empty array (e.g. `array()`) or an all-null-typed array contributes
+    // nothing — Spark renders it as "", not an error.
+    if elements.is_empty() || *elements.data_type() == DataType::Null {
+        return Ok(());
+    }
+    let len = elements.len();
+    let elements = StrCol::try_new(&elements)?;
+    for i in 0..len {
+        if !elements.is_null(i) {
+            push_part(buf, elements.value(i), sep, first);
         }
     }
+    Ok(())
 }
 
-/// Write `part` into `builder`, prefixing the separator for everything after the
-/// first. `StringBuilder::write_str` is infallible (it only extends the byte
-/// buffer), so the returned `fmt::Result` is discarded.
-fn push_part(builder: &mut StringBuilder, part: &str, sep: &str, first: &mut bool) {
+/// Write `part` into `buf`, prefixing the separator for everything after the first.
+fn push_part(buf: &mut String, part: &str, sep: &str, first: &mut bool) {
     if !*first {
-        let _ = builder.write_str(sep);
+        buf.push_str(sep);
     }
     *first = false;
-    let _ = builder.write_str(part);
+    buf.push_str(part);
 }
