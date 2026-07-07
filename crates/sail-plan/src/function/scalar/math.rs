@@ -16,25 +16,119 @@ use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
 use sail_function::scalar::math::random::Random;
 use sail_function::scalar::math::spark_abs::SparkAbs;
+use sail_function::scalar::math::spark_add::SparkAdd;
 use sail_function::scalar::math::spark_bin::SparkBin;
 use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
 use sail_function::scalar::math::spark_div::SparkIntervalDiv;
+use sail_function::scalar::math::spark_divide::SparkDivide;
+use sail_function::scalar::math::spark_multiply::SparkMultiply;
 use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
-use sail_function::scalar::math::spark_try_add::SparkTryAdd;
-use sail_function::scalar::math::spark_try_div::SparkTryDiv;
+use sail_function::scalar::math::spark_subtract::SparkSubtract;
 use sail_function::scalar::math::spark_try_mod::SparkTryMod;
-use sail_function::scalar::math::spark_try_mult::SparkTryMult;
-use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
 use sail_function::scalar::math::spark_unhex::SparkUnHex;
 use sail_function::scalar::math::spark_uniform::SparkUniform;
 use sail_function::scalar::misc::raise_error::RaiseError;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{ScalarFunction, ScalarFunctionInput};
+
+/// Integral and decimal are the operand types where Spark `+`/`-`/`*` overflow
+/// semantics differ from DataFusion's native wrapping operator, so they may need
+/// the ANSI-aware `SparkAdd`/`SparkSubtract`/`SparkMultiply` UDFs.
+fn is_overflow_prone(data_type: &DataType) -> bool {
+    data_type.is_integer() || data_type.is_decimal()
+}
+
+/// Whether an integral/decimal `+`/`-`/`*` must go through the ANSI-aware UDF
+/// rather than the native operator. Native wrapping already matches Spark for
+/// integral arithmetic under ANSI off (and preserves `BinaryExpr` for
+/// simplification), so the UDF is needed only where the native operator diverges:
+/// ANSI mode on (overflow must raise) or any decimal operand (native neither
+/// errors nor NULLs on precision overflow, and Spark's precision-loss rule
+/// differs).
+fn needs_overflow_udf(left: &DataType, right: &DataType, ansi_mode: bool) -> bool {
+    ansi_mode || left.is_decimal() || right.is_decimal()
+}
+
+/// Rewrite an integer *literal* to its minimal-precision `DECIMAL(p, 0)` so that
+/// `DECIMAL <op> <int literal>` follows Spark's precision rule (e.g.
+/// `DECIMAL(10,2) * 3` → `DECIMAL(12,2)`, treating `3` as `DECIMAL(1,0)`), rather
+/// than DataFusion's type-based `int → DECIMAL(10,0)`. Non-literals are returned
+/// unchanged (Spark only narrows literals; int columns keep `DECIMAL(10,0)`).
+fn narrow_int_literal(expr: Expr) -> Expr {
+    let Expr::Literal(scalar, metadata) = &expr else {
+        return expr;
+    };
+    let value: i128 = match scalar {
+        ScalarValue::Int8(Some(v)) => *v as i128,
+        ScalarValue::Int16(Some(v)) => *v as i128,
+        ScalarValue::Int32(Some(v)) => *v as i128,
+        ScalarValue::Int64(Some(v)) => *v as i128,
+        _ => return expr,
+    };
+    let precision = if value == 0 {
+        1
+    } else {
+        value.unsigned_abs().to_string().len() as u8
+    };
+    Expr::Literal(
+        ScalarValue::Decimal128(Some(value), precision, 0),
+        metadata.clone(),
+    )
+}
+
+/// Cast a string operand of `+`/`-`/`*` to a numeric type, Spark-style: under
+/// ANSI on the string is cast to the other operand's numeric type (may error at
+/// runtime on malformed input), under ANSI off it is leniently coerced to DOUBLE.
+fn cast_string_operand(expr: Expr, other_type: &DataType, ansi_mode: bool) -> Expr {
+    if ansi_mode {
+        cast(expr, other_type.clone())
+    } else {
+        try_cast(expr, DataType::Float64)
+    }
+}
+
+/// Apply Spark's operand-coercion adjustments for `+`/`-`/`*` that DataFusion's
+/// `BinaryTypeCoercer` does not perform: string→numeric (#4), float×decimal→double
+/// (#5), and integer-literal→minimal-decimal (#1/#2). Temporal and same-type
+/// numeric operands pass through unchanged.
+fn spark_arith_coerce(
+    left: Expr,
+    right: Expr,
+    ansi_mode: bool,
+    schema: &DFSchemaRef,
+) -> (Expr, Expr) {
+    let (lt, rt) = (left.get_type(schema), right.get_type(schema));
+    match (&lt, &rt) {
+        (Ok(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View), Ok(other))
+            if other.is_numeric() =>
+        {
+            let casted = cast_string_operand(left, other, ansi_mode);
+            (casted, right)
+        }
+        (Ok(other), Ok(DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View))
+            if other.is_numeric() =>
+        {
+            let casted = cast_string_operand(right, other, ansi_mode);
+            (left, casted)
+        }
+        (Ok(l), Ok(r))
+            if (l.is_floating() && r.is_decimal()) || (l.is_decimal() && r.is_floating()) =>
+        {
+            (
+                cast(left, DataType::Float64),
+                cast(right, DataType::Float64),
+            )
+        }
+        (Ok(l), Ok(r)) if l.is_decimal() && r.is_integer() => (left, narrow_int_literal(right)),
+        (Ok(l), Ok(r)) if l.is_integer() && r.is_decimal() => (narrow_int_literal(left), right),
+        _ => (left, right),
+    }
+}
 
 /// Arguments:
 ///   - left: A numeric, DATE, TIMESTAMP, or INTERVAL expression.
@@ -58,6 +152,8 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
         Ok(arguments.one()?)
     } else {
         let (left, right) = arguments.two()?;
+        let ansi_mode = function_context.plan_config.ansi_mode;
+        let (left, right) = spark_arith_coerce(left, right, ansi_mode, function_context.schema);
         let (left_type, right_type) = (
             left.get_type(function_context.schema),
             right.get_type(function_context.schema),
@@ -74,6 +170,17 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             }
             (Ok(DataType::Date32), Ok(right_type)) if right_type.is_numeric() => {
                 cast(cast(left, DataType::Int32) + right, DataType::Date32)
+            }
+            // Integral/decimal addition: only ANSI-on or decimal needs SparkAdd;
+            // native wrapping already matches Spark for integral ANSI off.
+            (Ok(left_type), Ok(right_type))
+                if is_overflow_prone(&left_type) && is_overflow_prone(&right_type) =>
+            {
+                if needs_overflow_udf(&left_type, &right_type, ansi_mode) {
+                    ScalarUDF::from(SparkAdd::new(ansi_mode, false)).call(vec![left, right])
+                } else {
+                    left + right
+                }
             }
             // TODO: In case getting the type fails, we don't want to fail the query.
             //  Future work is needed here, ideally we create something like `Operator::SparkPlus`.
@@ -115,6 +222,8 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
         ))
     } else {
         let (left, right) = arguments.two()?;
+        let ansi_mode = function_context.plan_config.ansi_mode;
+        let (left, right) = spark_arith_coerce(left, right, ansi_mode, function_context.schema);
         let (left_type, right_type) = (
             left.get_type(function_context.schema),
             right.get_type(function_context.schema),
@@ -125,6 +234,28 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             }
             (Ok(DataType::Date32), Ok(right_type)) if right_type.is_numeric() => {
                 cast(cast(left, DataType::Int32) - right, DataType::Date32)
+            }
+            // Spark `DATE - DATE` yields a day-time interval (Sail's
+            // `Duration(Microsecond)`), not a bare day count: day difference
+            // scaled by microseconds-per-day.
+            (Ok(DataType::Date32), Ok(DataType::Date32)) => {
+                let days = cast(left, DataType::Int64) - cast(right, DataType::Int64);
+                cast(
+                    days * lit(86_400_000_000_i64),
+                    DataType::Duration(TimeUnit::Microsecond),
+                )
+            }
+            // Integral/decimal subtraction: only ANSI-on or decimal needs
+            // SparkSubtract; native wrapping already matches Spark for integral
+            // ANSI off.
+            (Ok(left_type), Ok(right_type))
+                if is_overflow_prone(&left_type) && is_overflow_prone(&right_type) =>
+            {
+                if needs_overflow_udf(&left_type, &right_type, ansi_mode) {
+                    ScalarUDF::from(SparkSubtract::new(ansi_mode, false)).call(vec![left, right])
+                } else {
+                    left - right
+                }
             }
             // TODO: In case getting the type fails, we don't want to fail the query.
             //  Future work is needed here, ideally we create something like `Operator::SparkMinus`.
@@ -155,6 +286,8 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
     } = input;
 
     let (left, right) = arguments.two()?;
+    let ansi_mode = function_context.plan_config.ansi_mode;
+    let (left, right) = spark_arith_coerce(left, right, ansi_mode, function_context.schema);
     let (left_type, right_type) = (
         left.get_type(function_context.schema),
         right.get_type(function_context.schema),
@@ -175,6 +308,18 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 left * cast(right, DataType::Int64),
                 DataType::Duration(TimeUnit::Microsecond),
             )
+        }
+        // Integral/decimal multiply: only ANSI-on or decimal needs SparkMultiply
+        // (decimal also for Spark's precision-loss rule); native wrapping already
+        // matches Spark for integral ANSI off.
+        (Ok(left_type), Ok(right_type))
+            if is_overflow_prone(&left_type) && is_overflow_prone(&right_type) =>
+        {
+            if needs_overflow_udf(&left_type, &right_type, ansi_mode) {
+                ScalarUDF::from(SparkMultiply::new(ansi_mode, false)).call(vec![left, right])
+            } else {
+                left * right
+            }
         }
         // TODO: In case getting the type fails, we don't want to fail the query.
         //  Future work is needed here, ideally we create something like `Operator::SparkMultiply`.
@@ -655,6 +800,25 @@ fn spark_negative(input: ScalarFunctionInput) -> PlanResult<Expr> {
     ))
 }
 
+/// `try_add` — the `safe = true` face of [`SparkAdd`]. ANSI-invariant: any
+/// overflow becomes NULL regardless of `spark.sql.ansi.enabled`, so `ansi_mode`
+/// is pinned to `false`.
+fn try_add(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    Ok(ScalarUDF::from(SparkAdd::new(false, true)).call(input.arguments))
+}
+
+fn try_subtract(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    Ok(ScalarUDF::from(SparkSubtract::new(false, true)).call(input.arguments))
+}
+
+fn try_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    Ok(ScalarUDF::from(SparkMultiply::new(false, true)).call(input.arguments))
+}
+
+fn try_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    Ok(ScalarUDF::from(SparkDivide::new(false, true)).call(input.arguments))
+}
+
 pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
@@ -720,11 +884,11 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("sqrt", F::unary(double(expr_fn::sqrt))),
         ("tan", F::unary(double(expr_fn::tan))),
         ("tanh", F::unary(double(expr_fn::tanh))),
-        ("try_add", F::udf(SparkTryAdd::new())),
-        ("try_divide", F::udf(SparkTryDiv::new())),
-        ("try_multiply", F::udf(SparkTryMult::new())),
+        ("try_add", F::custom(try_add)),
+        ("try_divide", F::custom(try_divide)),
+        ("try_multiply", F::custom(try_multiply)),
         ("try_mod", F::udf(SparkTryMod::new())),
-        ("try_subtract", F::udf(SparkTrySubtract::new())),
+        ("try_subtract", F::custom(try_subtract)),
         ("unhex", F::udf(SparkUnHex::new())),
         ("uniform", F::udf(SparkUniform::new())),
         ("width_bucket", F::quaternary(math_fn::width_bucket)),

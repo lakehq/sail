@@ -182,6 +182,10 @@ message ExtendedScalarUdf {
     SparkBinUdf spark_bin = 30;
     SparkNegativeUdf spark_negative = 31;
     SparkFromXmlUdf spark_from_xml = 32;
+    SparkAddUdf spark_add = 33;
+    SparkSubtractUdf spark_subtract = 34;
+    SparkMultiplyUdf spark_multiply = 35;
+    SparkDivideUdf spark_divide = 36;
   }
 }
 
@@ -314,6 +318,26 @@ message SparkPmodUdf {
 
 message SparkNegativeUdf {
   bool ansi_mode = 1;
+}
+
+message SparkAddUdf {
+  bool ansi_mode = 1;
+  bool safe = 2;
+}
+
+message SparkSubtractUdf {
+  bool ansi_mode = 1;
+  bool safe = 2;
+}
+
+message SparkMultiplyUdf {
+  bool ansi_mode = 1;
+  bool safe = 2;
+}
+
+message SparkDivideUdf {
+  bool ansi_mode = 1;
+  bool safe = 2;
 }
 
 message SparkFromCsvUdf {

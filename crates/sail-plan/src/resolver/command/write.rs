@@ -36,8 +36,8 @@ use sail_common_datafusion::logical_expr::ExprWithSource;
 use sail_common_datafusion::rename::logical_plan::rename_logical_plan;
 use sail_common_datafusion::rename::schema::rename_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
-use sail_function::scalar::math::spark_try_add::SparkTryAdd;
-use sail_function::scalar::math::spark_try_mult::SparkTryMult;
+use sail_function::scalar::math::spark_add::SparkAdd;
+use sail_function::scalar::math::spark_multiply::SparkMultiply;
 use sail_function::scalar::misc::raise_error::RaiseError;
 use sail_logical_plan::barrier::BarrierNode;
 
@@ -1551,9 +1551,10 @@ impl PlanResolver<'_> {
             Operator::Minus,
             Box::new(lit(1_i64)),
         ));
-        let product =
-            ScalarUDF::from(SparkTryMult::new()).call(vec![row_offset, lit(identity.step)]);
-        let value = ScalarUDF::from(SparkTryAdd::new()).call(vec![lit(base), product.clone()]);
+        let product = ScalarUDF::from(SparkMultiply::new(false, true))
+            .call(vec![row_offset, lit(identity.step)]);
+        let value =
+            ScalarUDF::from(SparkAdd::new(false, true)).call(vec![lit(base), product.clone()]);
         let err_msg = format!(
             "[DELTA_IDENTITY_COLUMN_VALUE_OVERFLOW] identity column `{column_name}` overflowed BIGINT while generating values"
         );

@@ -414,7 +414,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Error during planning: zero values expected: [BinaryExpr(BinaryExpr { left: Literal(Int32(1), None), op: Plus, right: Literal(Int32(1), None) })]"
+        "failure": "error in DataFusion: Error during planning: zero values expected: [ScalarFunction(ScalarFunction { func: ScalarUDF { inner: SparkAdd { signature: Signature { type_signature: UserDefined, volatility: Immutable, parameter_names: None }, ansi_mode: true, safe: false } }, args: [Literal(Int32(1), None), Literal(Int32(1), None)] })]"
       }
     },
     {

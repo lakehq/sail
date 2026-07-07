@@ -454,7 +454,13 @@ mod tests {
     #[tokio::test]
     async fn test_resolve_expression_with_name() -> PlanResult<()> {
         let ctx = create_session()?;
-        let resolver = PlanResolver::new(&ctx, Arc::new(PlanConfig::new()?));
+        // ANSI off so `1 + 2` stays a native `BinaryExpr` (under ANSI it routes to
+        // the overflow-aware `SparkAdd` UDF); this test only checks name resolution.
+        let config = PlanConfig {
+            ansi_mode: false,
+            ..PlanConfig::new()?
+        };
+        let resolver = PlanResolver::new(&ctx, Arc::new(config));
 
         async fn resolve(resolver: &PlanResolver<'_>, expr: spec::Expr) -> PlanResult<NamedExpr> {
             resolver

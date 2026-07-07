@@ -176,19 +176,19 @@ use sail_function::scalar::math::rand_poisson::RandPoisson;
 use sail_function::scalar::math::randn::Randn;
 use sail_function::scalar::math::random::Random;
 use sail_function::scalar::math::spark_abs::SparkAbs;
+use sail_function::scalar::math::spark_add::SparkAdd;
 use sail_function::scalar::math::spark_bin::SparkBin;
 use sail_function::scalar::math::spark_bround::SparkBRound;
 use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
 use sail_function::scalar::math::spark_div::SparkIntervalDiv;
+use sail_function::scalar::math::spark_divide::SparkDivide;
+use sail_function::scalar::math::spark_multiply::SparkMultiply;
 use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
-use sail_function::scalar::math::spark_try_add::SparkTryAdd;
-use sail_function::scalar::math::spark_try_div::SparkTryDiv;
+use sail_function::scalar::math::spark_subtract::SparkSubtract;
 use sail_function::scalar::math::spark_try_mod::SparkTryMod;
-use sail_function::scalar::math::spark_try_mult::SparkTryMult;
-use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
 use sail_function::scalar::math::spark_unhex::SparkUnHex;
 use sail_function::scalar::math::spark_uniform::SparkUniform;
 use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
@@ -2418,6 +2418,22 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkNegative(r#gen::SparkNegativeUdf { ansi_mode }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkNegative::new(ansi_mode))));
             }
+            UdfKind::SparkAdd(r#gen::SparkAddUdf { ansi_mode, safe }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkAdd::new(ansi_mode, safe))));
+            }
+            UdfKind::SparkSubtract(r#gen::SparkSubtractUdf { ansi_mode, safe }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkSubtract::new(
+                    ansi_mode, safe,
+                ))));
+            }
+            UdfKind::SparkMultiply(r#gen::SparkMultiplyUdf { ansi_mode, safe }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkMultiply::new(
+                    ansi_mode, safe,
+                ))));
+            }
+            UdfKind::SparkDivide(r#gen::SparkDivideUdf { ansi_mode, safe }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkDivide::new(ansi_mode, safe))));
+            }
             UdfKind::SparkMakeTimestampNtz(r#gen::SparkMakeTimestampNtzUdf { is_try }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new(
                     is_try,
@@ -2590,17 +2606,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8::new()))),
             "spark_to_large_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToLargeUtf8::new()))),
             "spark_to_utf8_view" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8View::new()))),
-            "spark_try_add" | "try_add" => Ok(Arc::new(ScalarUDF::from(SparkTryAdd::new()))),
-            "spark_try_divide" | "try_divide" => Ok(Arc::new(ScalarUDF::from(SparkTryDiv::new()))),
             "spark_try_mod" | "try_mod" => Ok(Arc::new(ScalarUDF::from(SparkTryMod::new()))),
-            "spark_try_multiply" | "try_multiply" => {
-                Ok(Arc::new(ScalarUDF::from(SparkTryMult::new())))
-            }
             "spark_version" | "version" => Ok(Arc::new(ScalarUDF::from(SparkVersion::new()))),
             "spark_to_json" | "to_json" => Ok(Arc::new(ScalarUDF::from(SparkToJson::new()))),
-            "spark_try_subtract" | "try_subtract" => {
-                Ok(Arc::new(ScalarUDF::from(SparkTrySubtract::new())))
-            }
             "spark_uniform" | "uniform" => Ok(Arc::new(ScalarUDF::from(SparkUniform::new()))),
             "spark_width_bucket" | "width_bucket" => {
                 Ok(Arc::new(ScalarUDF::from(SparkWidthBucket::new())))
@@ -2708,14 +2716,10 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkToLargeUtf8>()
             || node_inner.is::<SparkToUtf8>()
             || node_inner.is::<SparkToUtf8View>()
-            || node_inner.is::<SparkTryAdd>()
             || node_inner.is::<SparkTryAESDecrypt>()
             || node_inner.is::<SparkTryAESEncrypt>()
-            || node_inner.is::<SparkTryDiv>()
             || node_inner.is::<SparkTryMod>()
-            || node_inner.is::<SparkTryMult>()
             || node_inner.is::<SparkTryParseUrl>()
-            || node_inner.is::<SparkTrySubtract>()
             || node_inner.is::<SparkTryToBinary>()
             || node_inner.is::<HllSketchEstimateFunction>()
             || node_inner.is::<HllUnionFunction>()
@@ -2878,6 +2882,26 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
         } else if let Some(func) = node.inner().downcast_ref::<SparkNegative>() {
             let ansi_mode = func.ansi_mode();
             UdfKind::SparkNegative(r#gen::SparkNegativeUdf { ansi_mode })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkAdd>() {
+            UdfKind::SparkAdd(r#gen::SparkAddUdf {
+                ansi_mode: func.ansi_mode(),
+                safe: func.safe(),
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkSubtract>() {
+            UdfKind::SparkSubtract(r#gen::SparkSubtractUdf {
+                ansi_mode: func.ansi_mode(),
+                safe: func.safe(),
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkMultiply>() {
+            UdfKind::SparkMultiply(r#gen::SparkMultiplyUdf {
+                ansi_mode: func.ansi_mode(),
+                safe: func.safe(),
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkDivide>() {
+            UdfKind::SparkDivide(r#gen::SparkDivideUdf {
+                ansi_mode: func.ansi_mode(),
+                safe: func.safe(),
+            })
         } else if let Some(func) = node.inner().downcast_ref::<SparkMakeTimestampNtz>() {
             let is_try = func.is_try();
             UdfKind::SparkMakeTimestampNtz(r#gen::SparkMakeTimestampNtzUdf { is_try })
