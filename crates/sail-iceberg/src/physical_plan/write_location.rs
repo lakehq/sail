@@ -91,43 +91,49 @@ pub(crate) fn parquet_file_path(data_dir: &str, file_prefix: &str) -> String {
 mod tests {
     use super::*;
 
-    fn table_url() -> Url {
-        Url::parse("file:///tmp/iceberg/table/").unwrap()
+    fn table_url() -> std::result::Result<Url, url::ParseError> {
+        Url::parse("file:///tmp/iceberg/table/")
     }
 
     #[test]
-    fn data_dir_prefers_write_data_path_option() {
+    fn data_dir_prefers_write_data_path_option() -> std::result::Result<(), url::ParseError> {
         let properties =
             HashMap::from([("write.data.path".to_string(), "property-data".to_string())]);
+        let table_url = table_url()?;
 
         let actual = resolve_data_dir_from_options_and_properties(
             Some("option-data"),
             Some("folder-data"),
             &properties,
-            &table_url(),
+            &table_url,
         );
 
         assert_eq!(actual, "option-data");
+        Ok(())
     }
 
     #[test]
-    fn data_dir_uses_folder_storage_path_option_before_table_properties() {
+    fn data_dir_uses_folder_storage_path_option_before_table_properties(
+    ) -> std::result::Result<(), url::ParseError> {
         let properties =
             HashMap::from([("write.data.path".to_string(), "property-data".to_string())]);
+        let table_url = table_url()?;
 
         let actual = resolve_data_dir_from_options_and_properties(
             None,
             Some("folder-data"),
             &properties,
-            &table_url(),
+            &table_url,
         );
 
         assert_eq!(actual, "folder-data");
+        Ok(())
     }
 
     #[test]
-    fn data_dir_falls_back_to_table_properties_then_default() {
-        let table_url = table_url();
+    fn data_dir_falls_back_to_table_properties_then_default(
+    ) -> std::result::Result<(), url::ParseError> {
+        let table_url = table_url()?;
         let properties = HashMap::from([(
             "write.folder-storage.path".to_string(),
             "property-folder".to_string(),
@@ -140,17 +146,20 @@ mod tests {
         let actual =
             resolve_data_dir_from_options_and_properties(None, None, &HashMap::new(), &table_url);
         assert_eq!(actual, DEFAULT_DATA_DIR);
+        Ok(())
     }
 
     #[test]
-    fn data_dir_normalizes_absolute_paths_under_table_root() {
-        let table_url = table_url();
+    fn data_dir_normalizes_absolute_paths_under_table_root(
+    ) -> std::result::Result<(), url::ParseError> {
+        let table_url = table_url()?;
         let actual = resolve_data_dir_from_property_value(
             Some("file:///tmp/iceberg/table/custom/data/"),
             &table_url,
         );
 
         assert_eq!(actual.as_deref(), Some("custom/data"));
+        Ok(())
     }
 
     #[test]

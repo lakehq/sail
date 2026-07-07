@@ -64,8 +64,8 @@ def test_iceberg_merge_mor_update_delete_insert_writes_delete_manifest_and_reads
             """
         )
         spark.sql(
-            f"""
-            INSERT INTO {table_name}
+            """
+            INSERT INTO iceberg_merge_mor_rows
             SELECT * FROM VALUES
               (1, 'old', 'keep'),
               (2, 'old', 'update'),
@@ -84,8 +84,8 @@ def test_iceberg_merge_mor_update_delete_insert_writes_delete_manifest_and_reads
         )
 
         spark.sql(
-            f"""
-            MERGE INTO {table_name} AS t
+            """
+            MERGE INTO iceberg_merge_mor_rows AS t
             USING iceberg_merge_mor_source AS s
             ON t.id = s.id
             WHEN MATCHED AND t.flag = 'update' THEN
@@ -98,8 +98,7 @@ def test_iceberg_merge_mor_update_delete_insert_writes_delete_manifest_and_reads
         )
 
         rows = [
-            tuple(row)
-            for row in spark.sql(f"SELECT id, value, flag FROM {table_name} ORDER BY id").collect()
+            tuple(row) for row in spark.sql("SELECT id, value, flag FROM iceberg_merge_mor_rows ORDER BY id").collect()
         ]
         assert rows == [
             (1, "old", "keep"),
@@ -110,11 +109,13 @@ def test_iceberg_merge_mor_update_delete_insert_writes_delete_manifest_and_reads
         metadata = _find_latest_metadata(table_path)
         current_snapshot = _current_snapshot(metadata)
         assert current_snapshot["summary"]["operation"] == "overwrite"
-        assert len(metadata["snapshots"]) == 2
+        expected_snapshot_count = 2
+        assert len(metadata["snapshots"]) == expected_snapshot_count
 
         manifests = _current_manifest_list(metadata)["manifests"]
+        expected_deleted_row_count = 2
         assert _manifest_count(manifests, content="deletes", key="added-files-count") >= 1
-        assert _manifest_count(manifests, content="deletes", key="added-rows-count") >= 2
+        assert _manifest_count(manifests, content="deletes", key="added-rows-count") >= expected_deleted_row_count
         assert _manifest_count(manifests, content="data", key="deleted-files-count") == 0
         assert _manifest_count(manifests, content="data", key="deleted-rows-count") == 0
 
@@ -124,10 +125,7 @@ def test_iceberg_merge_mor_update_delete_insert_writes_delete_manifest_and_reads
         assert data_entries
         assert delete_entries
         assert all(entry.data_file.file_path.startswith(custom_prefix) for entry in data_entries)
-        assert all(
-            entry.data_file.file_path.startswith(f"{custom_prefix}delete-")
-            for entry in delete_entries
-        )
+        assert all(entry.data_file.file_path.startswith(f"{custom_prefix}delete-") for entry in delete_entries)
     finally:
         _drop_table(spark, table_name)
 
@@ -152,7 +150,7 @@ def test_iceberg_merge_rejects_multiple_source_rows_for_one_target_row(spark, tm
             )
             """
         )
-        spark.sql(f"INSERT INTO {table_name} VALUES (1, 'target')")
+        spark.sql("INSERT INTO iceberg_merge_cardinality VALUES (1, 'target')")
         spark.sql(
             """
             CREATE OR REPLACE TEMP VIEW iceberg_merge_cardinality_source AS
@@ -163,7 +161,7 @@ def test_iceberg_merge_rejects_multiple_source_rows_for_one_target_row(spark, tm
             """
         )
 
-        with pytest.raises(Exception, match="MERGE_CARDINALITY_VIOLATION|Multiple source rows"):
+        with pytest.raises(Exception, match=r"MERGE_CARDINALITY_VIOLATION|Multiple source rows"):
             spark.sql(
                 f"""
                 MERGE INTO {table_name} AS t
@@ -176,8 +174,54 @@ def test_iceberg_merge_rejects_multiple_source_rows_for_one_target_row(spark, tm
                 """
             ).collect()
 
-        rows = [tuple(row) for row in spark.sql(f"SELECT id, value FROM {table_name}").collect()]
+        rows = [tuple(row) for row in spark.sql("SELECT id, value FROM iceberg_merge_cardinality").collect()]
         assert rows == [(1, "target")]
         assert len(_current_manifests(table_path)) == 1
+    finally:
+        _drop_table(spark, table_name)
+
+
+def test_iceberg_merge_rejects_position_deletes_on_v1_table(spark, tmp_path):
+    table_name = "iceberg_merge_v1_position_delete"
+    table_path = tmp_path / table_name
+
+    _drop_table(spark, table_name)
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (
+              id INT,
+              value STRING
+            )
+            USING iceberg
+            LOCATION '{_uri_sql(table_path)}'
+            TBLPROPERTIES (
+              'format-version' = '1',
+              'write.merge.mode' = 'merge-on-read'
+            )
+            """
+        )
+        spark.sql("INSERT INTO iceberg_merge_v1_position_delete VALUES (1, 'old')")
+        spark.sql(
+            """
+            CREATE OR REPLACE TEMP VIEW iceberg_merge_v1_source AS
+            SELECT * FROM VALUES (1, 'new') AS src(id, value)
+            """
+        )
+
+        with pytest.raises(Exception, match=r"format-version 2|position delete writes"):
+            spark.sql(
+                f"""
+                MERGE INTO {table_name} AS t
+                USING iceberg_merge_v1_source AS s
+                ON t.id = s.id
+                WHEN MATCHED THEN
+                  UPDATE SET value = s.value
+                """
+            ).collect()
+
+        rows = [tuple(row) for row in spark.sql("SELECT id, value FROM iceberg_merge_v1_position_delete").collect()]
+        assert rows == [(1, "old")]
+        assert len(_find_latest_metadata(table_path)["snapshots"]) == 1
     finally:
         _drop_table(spark, table_name)

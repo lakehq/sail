@@ -57,7 +57,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn appends_metadata_columns_and_preserves_schema_metadata() {
+    fn appends_metadata_columns_and_preserves_schema_metadata() -> Result<()> {
         let schema = ArrowSchema::new_with_metadata(
             vec![Arc::new(Field::new("id", DataType::Int64, false))],
             HashMap::from([("owner".to_string(), "iceberg".to_string())]),
@@ -65,8 +65,7 @@ mod tests {
 
         let actual =
             RowLevelMetadataColumns::new(Some("__sail_file_path"), Some("__sail_file_row_index"))
-                .append_to_schema(&schema)
-                .unwrap();
+                .append_to_schema(&schema)?;
 
         assert_eq!(
             actual.metadata().get("owner").map(String::as_str),
@@ -77,22 +76,27 @@ mod tests {
         assert_eq!(actual.field(1).data_type(), &DataType::Utf8);
         assert_eq!(actual.field(2).name(), "__sail_file_row_index");
         assert_eq!(actual.field(2).data_type(), &DataType::Int64);
+        Ok(())
     }
 
     #[test]
-    fn rejects_existing_metadata_column_names() {
+    fn rejects_existing_metadata_column_names() -> Result<()> {
         let schema = ArrowSchema::new(vec![Arc::new(Field::new(
             "__sail_file_path",
             DataType::Utf8,
             true,
         ))]);
 
-        let err = RowLevelMetadataColumns::new(Some("__sail_file_path"), None)
+        let err = match RowLevelMetadataColumns::new(Some("__sail_file_path"), None)
             .append_to_schema(&schema)
-            .unwrap_err();
+        {
+            Ok(_) => return plan_err!("metadata column conflict should fail"),
+            Err(e) => e,
+        };
 
         assert!(err
             .to_string()
             .contains("conflicts with an existing table column"));
+        Ok(())
     }
 }

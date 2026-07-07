@@ -56,6 +56,22 @@ impl IcebergMergeMetadataExec {
             cache,
         })
     }
+
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
+
+    pub fn data_file_path(&self) -> &str {
+        &self.data_file_path
+    }
+
+    pub fn file_column_name(&self) -> Option<&str> {
+        self.file_column_name.as_deref()
+    }
+
+    pub fn row_index_column_name(&self) -> Option<&str> {
+        self.row_index_column_name.as_deref()
+    }
 }
 
 #[async_trait]

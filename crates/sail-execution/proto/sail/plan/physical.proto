@@ -67,6 +67,10 @@ message ExtendedPhysicalPlanNode {
     NoopSinkExecNode noop_sink = 52;
     CsvExecNode csv = 53;
     ParquetExecNode parquet = 54;
+    IcebergMergeDataRowsExecNode iceberg_merge_data_rows = 55;
+    IcebergMergeMetadataExecNode iceberg_merge_metadata = 56;
+    IcebergPositionDeleteWriterExecNode iceberg_position_delete_writer = 57;
+    IcebergEqualityDeleteWriterExecNode iceberg_equality_delete_writer = 58;
   }
 }
 
@@ -933,6 +937,36 @@ message IcebergDeleteApplyExecNode {
   string equality_deletes_json = 4;
   string table_url = 5;
   string iceberg_schema_json = 6;
+}
+
+message IcebergMergeDataRowsExecNode {
+  bytes input = 1;
+}
+
+message IcebergMergeMetadataExecNode {
+  bytes input = 1;
+  string data_file_path = 2;
+  optional string file_column_name = 3;
+  optional string row_index_column_name = 4;
+}
+
+message IcebergPositionDeleteWriterExecNode {
+  bytes input = 1;
+  string table_url = 2;
+  string table_properties_json = 3;
+  optional string write_data_path = 4;
+  optional string write_folder_storage_path = 5;
+  string file_column_name = 6;
+  string row_index_column_name = 7;
+}
+
+message IcebergEqualityDeleteWriterExecNode {
+  bytes input = 1;
+  string table_url = 2;
+  string table_properties_json = 3;
+  optional string write_data_path = 4;
+  optional string write_folder_storage_path = 5;
+  string lakehouse_table_json = 6;
 }
 
 message DeltaLogReplayExecNode {

@@ -1,4 +1,3 @@
-use bytes::Bytes;
 use datafusion::execution::context::TaskContext;
 use datafusion_common::{DataFusionError, Result};
 use object_store::path::Path as ObjectPath;
@@ -59,7 +58,7 @@ pub(crate) async fn write_delete_parquet_file(
     let path = ObjectPath::from(rel.as_str());
     store_ctx
         .prefixed
-        .put(&path, object_store::PutPayload::from(Bytes::from(bytes)))
+        .put(&path, object_store::PutPayload::from(bytes))
         .await
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
     let delete_file_path = crate::utils::join_table_uri(

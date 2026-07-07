@@ -73,6 +73,10 @@ impl IcebergMergeDataRowsExec {
             cache,
         })
     }
+
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
 }
 
 #[async_trait]

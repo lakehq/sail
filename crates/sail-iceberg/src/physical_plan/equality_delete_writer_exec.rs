@@ -71,6 +71,32 @@ impl IcebergEqualityDeleteWriterExec {
             cache,
         }
     }
+
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
+
+    pub fn table_url(&self) -> &Url {
+        &self.table_url
+    }
+
+    pub fn table_properties(&self) -> &[(String, String)] {
+        &self.table_properties
+    }
+
+    pub fn write_data_path(&self) -> Option<&str> {
+        self.write_data_path.as_deref()
+    }
+
+    pub fn write_folder_storage_path(&self) -> Option<&str> {
+        self.write_folder_storage_path.as_deref()
+    }
+
+    pub fn lakehouse_table(
+        &self,
+    ) -> Option<&sail_common_datafusion::catalog::LakehouseExecutionContext> {
+        self.lakehouse_table.as_ref()
+    }
 }
 
 #[async_trait]
@@ -194,16 +220,13 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
 
                 let writer = match writer.as_mut() {
                     Some(writer) => writer,
-                    None => {
-                        writer = Some(
-                            ArrowParquetWriter::try_new(
-                                delete_spec.arrow_schema.as_ref(),
-                                WriterProperties::default(),
-                            )
-                            .map_err(DataFusionError::Execution)?,
-                        );
-                        writer.as_mut().expect("writer was initialized")
-                    }
+                    None => writer.insert(
+                        ArrowParquetWriter::try_new(
+                            delete_spec.arrow_schema.as_ref(),
+                            WriterProperties::default(),
+                        )
+                        .map_err(DataFusionError::Execution)?,
+                    ),
                 };
                 writer
                     .write_batch(&delete_batch)

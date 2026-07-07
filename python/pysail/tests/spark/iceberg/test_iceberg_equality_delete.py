@@ -199,8 +199,8 @@ def test_iceberg_sql_delete_writes_equality_delete_file_and_filters_rows(spark, 
             """
         )
         spark.sql(
-            f"""
-            INSERT INTO {table_name}
+            """
+            INSERT INTO iceberg_sql_equality_delete
             SELECT * FROM VALUES
               (1, 'keep-1', 'keep'),
               (2, 'drop-2', 'drop'),
@@ -208,11 +208,11 @@ def test_iceberg_sql_delete_writes_equality_delete_file_and_filters_rows(spark, 
             """
         )
 
-        spark.sql(f"DELETE FROM {table_name} WHERE flag = 'drop'").collect()
+        spark.sql("DELETE FROM iceberg_sql_equality_delete WHERE flag = 'drop'").collect()
 
         rows = [
             tuple(row)
-            for row in spark.sql(f"SELECT id, name, flag FROM {table_name} ORDER BY id").collect()
+            for row in spark.sql("SELECT id, name, flag FROM iceberg_sql_equality_delete ORDER BY id").collect()
         ]
         assert rows == [(1, "keep-1", "keep"), (3, "keep-3", "keep")]
 
@@ -235,9 +235,7 @@ def test_iceberg_sql_delete_writes_equality_delete_file_and_filters_rows(spark, 
         assert delete_file.content == DataFileContent.EQUALITY_DELETES
         assert delete_file.equality_ids == [1, 2, 3]
         assert getattr(delete_file, "referenced_data_file", None) is None
-        assert delete_file.file_path.startswith(
-            f"{(table_path / 'custom_data').as_uri()}/equality-delete-"
-        )
+        assert delete_file.file_path.startswith(f"{(table_path / 'custom_data').as_uri()}/equality-delete-")
 
         delete_rows = pq.read_table(_local_table_path(delete_file.file_path)).to_pylist()
         assert delete_rows == [{"id": 2, "name": "drop-2", "flag": "drop"}]

@@ -79,6 +79,34 @@ impl IcebergPositionDeleteWriterExec {
             cache,
         }
     }
+
+    pub fn input(&self) -> &Arc<dyn ExecutionPlan> {
+        &self.input
+    }
+
+    pub fn table_url(&self) -> &Url {
+        &self.table_url
+    }
+
+    pub fn table_properties(&self) -> &[(String, String)] {
+        &self.table_properties
+    }
+
+    pub fn write_data_path(&self) -> Option<&str> {
+        self.write_data_path.as_deref()
+    }
+
+    pub fn write_folder_storage_path(&self) -> Option<&str> {
+        self.write_folder_storage_path.as_deref()
+    }
+
+    pub fn file_column_name(&self) -> &str {
+        &self.file_column_name
+    }
+
+    pub fn row_index_column_name(&self) -> &str {
+        &self.row_index_column_name
+    }
 }
 
 #[async_trait]
@@ -169,6 +197,11 @@ impl ExecutionPlan for IcebergPositionDeleteWriterExec {
                 &table_properties,
             )
             .await?;
+            if table_meta.format_version < FormatVersion::V2 {
+                return Err(DataFusionError::Plan(
+                    "Iceberg position delete writes require table format-version 2".to_string(),
+                ));
+            }
             if table_meta.format_version >= FormatVersion::V3 {
                 return Err(DataFusionError::NotImplemented(
                     "Iceberg v3 MERGE MOR position delete writes are not supported; v3 requires deletion vectors".to_string(),
