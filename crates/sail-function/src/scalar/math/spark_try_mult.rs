@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray};
+use datafusion::arrow::compute::kernels::numeric::mul;
 use datafusion::arrow::compute::{CastOptions, cast_with_options};
 use datafusion::arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 use datafusion::arrow::datatypes::{
@@ -8,13 +9,16 @@ use datafusion::arrow::datatypes::{
 };
 use datafusion_common::Result;
 use datafusion_common::utils::take_function_args;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    ColumnarValue, Operator, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 use datafusion_functions::utils::make_scalar_function;
 
 use crate::error::unsupported_data_types_exec_err;
 use crate::scalar::math::utils::try_op::{
-    try_binary_op_primitive, try_op_interval_monthdaynano_i32, try_op_interval_monthdaynano_i64,
-    try_op_interval_yearmonth_i32,
+    arith_input_types, arith_result_type, is_float_or_decimal, null_decimal_overflow,
+    try_arrow_arith, try_binary_op_primitive, try_op_interval_monthdaynano_i32,
+    try_op_interval_monthdaynano_i64, try_op_interval_yearmonth_i32,
 };
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -67,10 +71,15 @@ impl ScalarUDFImpl for SparkTryMult {
                 DataType::Int32 | DataType::Int64,
                 DataType::Interval(MonthDayNano),
             ] => Ok(DataType::Interval(MonthDayNano)),
+            [left, right] if is_float_or_decimal(left) || is_float_or_decimal(right) => {
+                // FLOAT/DOUBLE keep the wider float type; DECIMAL follows Spark's
+                // multiply precision/scale rule (inherited from DataFusion).
+                arith_result_type(left, Operator::Multiply, right)
+            }
 
             _ => Err(unsupported_data_types_exec_err(
                 "try_multiply",
-                "Int32, Int64, Interval(YearMonth), Interval(MonthDayNano)",
+                "Int32, Int64, Float, Decimal, Interval(YearMonth), Interval(MonthDayNano)",
                 arg_types,
             )),
         }
@@ -95,9 +104,13 @@ impl ScalarUDFImpl for SparkTryMult {
             (DataType::Int32, DataType::Int64) | (DataType::Int64, DataType::Int32) => {
                 Ok(vec![DataType::Int64, DataType::Int64])
             }
+            (l, r) if is_float_or_decimal(l) || is_float_or_decimal(r) => {
+                let (cl, cr) = arith_input_types(l, Operator::Multiply, r)?;
+                Ok(vec![cl, cr])
+            }
             _ => Err(unsupported_data_types_exec_err(
                 "try_multiply",
-                "Int32, Int64, Interval(YearMonth), Interval(MonthDayNano)",
+                "Int32, Int64, Float, Decimal, Interval(YearMonth), Interval(MonthDayNano)",
                 types,
             )),
         }
@@ -158,9 +171,16 @@ fn try_multiply_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 },
             ))
         }
+        (l, r) if is_float_or_decimal(l) || is_float_or_decimal(r) => {
+            // FLOAT never overflows to NULL (IEEE 754); DECIMAL overflow becomes a
+            // per-element NULL. Reuse Arrow's checked multiply so precision/scale
+            // match Spark.
+            let result_type = arith_result_type(l, Operator::Multiply, r)?;
+            null_decimal_overflow(try_arrow_arith(left_arr, right_arr, &result_type, mul)?)
+        }
         (l, r) => Err(unsupported_data_types_exec_err(
             "try_multiply",
-            "Int32, Int64, Interval(YearMonth), Interval(MonthDayNano)",
+            "Int32, Int64, Float, Decimal, Interval(YearMonth), Interval(MonthDayNano)",
             &[l.clone(), r.clone()],
         )),
     }

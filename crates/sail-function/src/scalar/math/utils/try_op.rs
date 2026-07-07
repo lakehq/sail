@@ -2,18 +2,157 @@ use std::sync::Arc;
 
 use chrono::{Duration, Months, NaiveDate};
 use datafusion::arrow::array::{
-    Array, ArrowPrimitiveType, Date32Array, Date32Builder, DurationMicrosecondArray, Int32Array,
-    Int64Array, IntervalMonthDayNanoArray, IntervalMonthDayNanoBuilder, PrimitiveArray,
-    PrimitiveBuilder, TimestampMicrosecondArray, TimestampMicrosecondBuilder,
+    new_null_array, Array, ArrayRef, ArrowPrimitiveType, AsArray, Date32Array, Date32Builder,
+    Datum, DurationMicrosecondArray, Int32Array, Int64Array, IntervalMonthDayNanoArray,
+    IntervalMonthDayNanoBuilder, PrimitiveArray, PrimitiveBuilder, TimestampMicrosecondArray,
+    TimestampMicrosecondBuilder,
 };
+use datafusion::arrow::compute::concat;
 use datafusion::arrow::datatypes::{
-    Date32Type, Float64Type, Int32Type, Int64Type, IntervalMonthDayNano, IntervalMonthDayNanoType,
-    IntervalYearMonthType,
+    DataType, Date32Type, Decimal128Type, Decimal256Type, DecimalType, Float64Type, Int32Type,
+    Int64Type, IntervalMonthDayNano, IntervalMonthDayNanoType, IntervalYearMonthType,
 };
+use datafusion::arrow::error::ArrowError;
 use datafusion_common::ScalarValue;
+use datafusion_expr::type_coercion::binary::BinaryTypeCoercer;
+use datafusion_expr::Operator;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 
 const DAY_NANOS_I128: i128 = 86_400_000_000_000;
+
+/// `true` for the numeric types that Spark arithmetic promotes through
+/// DataFusion's decimal/float coercion (as opposed to the integer, interval,
+/// date and timestamp cases handled by the dedicated kernels above).
+pub fn is_float_or_decimal(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Float16
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _)
+    )
+}
+
+/// Coerced input types Spark/DataFusion would use for `lhs <op> rhs`.
+pub fn arith_input_types(
+    lhs: &DataType,
+    op: Operator,
+    rhs: &DataType,
+) -> datafusion_common::Result<(DataType, DataType)> {
+    BinaryTypeCoercer::new(lhs, &op, rhs).get_input_types()
+}
+
+/// Result type Spark/DataFusion would produce for `lhs <op> rhs`.
+pub fn arith_result_type(
+    lhs: &DataType,
+    op: Operator,
+    rhs: &DataType,
+) -> datafusion_common::Result<DataType> {
+    BinaryTypeCoercer::new(lhs, &op, rhs).get_result_type()
+}
+
+/// Apply a checked Arrow arithmetic kernel with Spark `try_*` semantics.
+///
+/// Arrow's checked kernels (`add`/`sub`/`mul`/`div`) return an error when any
+/// element overflows or divides by zero (floats follow IEEE 754 instead). Spark
+/// `try_*` turns exactly those checked exceptions into a per-element NULL, and it
+/// does so regardless of `spark.sql.ansi.enabled` (the functions are
+/// ANSI-invariant). This runs the kernel over the whole array (fast path) and,
+/// only if that errors, re-runs it element-by-element so the offending rows
+/// become NULL while the rest keep their computed value.
+///
+/// `result_type` must be the type the kernel itself produces (e.g. from
+/// [`arith_result_type`] or the UDF's return field) so the NULL placeholders
+/// concatenate cleanly with the successful pieces.
+///
+/// Only the two *arithmetic* exceptions (overflow and division by zero) are
+/// turned into NULL; any other kernel error (e.g. a genuine type mismatch) is
+/// propagated so it never silently masquerades as an all-NULL result.
+pub fn try_arrow_arith(
+    left: &ArrayRef,
+    right: &ArrayRef,
+    result_type: &DataType,
+    kernel: fn(&dyn Datum, &dyn Datum) -> Result<ArrayRef, ArrowError>,
+) -> datafusion_common::Result<ArrayRef> {
+    match kernel(left, right) {
+        Ok(out) => return Ok(out),
+        Err(e) if !is_arithmetic_exception(&e) => return Err(e.into()),
+        Err(_) => {} // overflow / divide-by-zero: recompute per element below
+    }
+    let len = left.len();
+    let mut pieces: Vec<ArrayRef> = Vec::with_capacity(len);
+    for i in 0..len {
+        let l = left.slice(i, 1);
+        let r = right.slice(i, 1);
+        match kernel(&l, &r) {
+            Ok(v) => pieces.push(v),
+            Err(e) if !is_arithmetic_exception(&e) => return Err(e.into()),
+            Err(_) => pieces.push(new_null_array(result_type, 1)),
+        }
+    }
+    let refs: Vec<&dyn Array> = pieces.iter().map(|a| a.as_ref()).collect();
+    Ok(concat(&refs)?)
+}
+
+/// The checked-arithmetic exceptions Spark `try_*` swallows into NULL. Any other
+/// [`ArrowError`] is a real failure and must be propagated, not nulled.
+fn is_arithmetic_exception(err: &ArrowError) -> bool {
+    matches!(
+        err,
+        ArrowError::ArithmeticOverflow(_) | ArrowError::DivideByZero
+    )
+}
+
+fn null_overflow_decimal<T: DecimalType>(
+    arr: &PrimitiveArray<T>,
+    precision: u8,
+    scale: i8,
+) -> Result<PrimitiveArray<T>, ArrowError> {
+    let mut builder = PrimitiveBuilder::<T>::with_capacity(arr.len());
+    for i in 0..arr.len() {
+        if arr.is_null(i) {
+            builder.append_null();
+        } else {
+            let v = arr.value(i);
+            if T::is_valid_decimal_precision(v, precision) {
+                builder.append_value(v);
+            } else {
+                builder.append_null();
+            }
+        }
+    }
+    builder.finish().with_precision_and_scale(precision, scale)
+}
+
+/// Null out DECIMAL values that do not fit the array's declared precision.
+///
+/// Arrow's checked arithmetic kernels only error on native (i128/i256) overflow,
+/// not when a result exceeds the *declared* decimal precision. Spark's `try_*`
+/// yields NULL in that case, so this post-pass (applied after
+/// [`try_arrow_arith`]) enforces the precision bound per element. Non-decimal
+/// arrays pass through unchanged.
+pub fn null_decimal_overflow(array: ArrayRef) -> datafusion_common::Result<ArrayRef> {
+    match array.data_type() {
+        DataType::Decimal128(p, s) => {
+            let (p, s) = (*p, *s);
+            Ok(Arc::new(null_overflow_decimal::<Decimal128Type>(
+                array.as_primitive::<Decimal128Type>(),
+                p,
+                s,
+            )?))
+        }
+        DataType::Decimal256(p, s) => {
+            let (p, s) = (*p, *s);
+            Ok(Arc::new(null_overflow_decimal::<Decimal256Type>(
+                array.as_primitive::<Decimal256Type>(),
+                p,
+                s,
+            )?))
+        }
+        _ => Ok(array),
+    }
+}
 
 pub fn binary_op_scalar_or_array<T: ArrowPrimitiveType>(
     left: &ColumnarValue,
@@ -1096,5 +1235,83 @@ mod tests {
         assert_eq!(res.months, 6);
         assert_eq!(res.days, 0);
         assert_eq!(res.nanoseconds, 0);
+    }
+
+    mod tests_arrow_arith {
+        use datafusion::arrow::array::{AsArray, Decimal128Array, Int32Array};
+        use datafusion::arrow::compute::kernels::numeric::{div, mul};
+        use datafusion::arrow::datatypes::{DataType, Decimal128Type, Int32Type};
+
+        use super::*;
+
+        #[test]
+        fn test_fast_path_and_null_propagation() -> datafusion_common::Result<()> {
+            let l: ArrayRef = Arc::new(Int32Array::from(vec![Some(2), Some(3), None]));
+            let r: ArrayRef = Arc::new(Int32Array::from(vec![Some(5), Some(6), Some(7)]));
+            let out = try_arrow_arith(&l, &r, &DataType::Int32, mul)?;
+            let out = out.as_primitive::<Int32Type>();
+            assert_eq!(out.value(0), 10);
+            assert_eq!(out.value(1), 18);
+            assert!(out.is_null(2));
+            Ok(())
+        }
+
+        #[test]
+        fn test_overflow_becomes_null() -> datafusion_common::Result<()> {
+            // i32::MAX * 2 overflows the checked kernel -> that row is NULL, the
+            // rest still compute (per-element fallback).
+            let l: ArrayRef = Arc::new(Int32Array::from(vec![Some(i32::MAX), Some(4)]));
+            let r: ArrayRef = Arc::new(Int32Array::from(vec![Some(2), Some(5)]));
+            let out = try_arrow_arith(&l, &r, &DataType::Int32, mul)?;
+            let out = out.as_primitive::<Int32Type>();
+            assert!(out.is_null(0));
+            assert_eq!(out.value(1), 20);
+            Ok(())
+        }
+
+        #[test]
+        fn test_div_by_zero_becomes_null() -> datafusion_common::Result<()> {
+            let l: ArrayRef = Arc::new(Int32Array::from(vec![Some(10), Some(20)]));
+            let r: ArrayRef = Arc::new(Int32Array::from(vec![Some(0), Some(5)]));
+            let out = try_arrow_arith(&l, &r, &DataType::Int32, div)?;
+            let out = out.as_primitive::<Int32Type>();
+            assert!(out.is_null(0));
+            assert_eq!(out.value(1), 4);
+            Ok(())
+        }
+
+        #[test]
+        fn test_null_decimal_overflow_enforces_declared_precision() -> datafusion_common::Result<()>
+        {
+            // 10^38 fits in i128 but has 39 digits, so it exceeds the default
+            // DECIMAL(38,10) precision. `Decimal128Array::from` builds it unvalidated
+            // (exactly how Arrow's checked `mul` can leave an over-precision result),
+            // and `null_decimal_overflow` must turn it into NULL while keeping 5.
+            let over = 10i128.pow(38);
+            let arr: ArrayRef = Arc::new(Decimal128Array::from(vec![Some(over), Some(5)]));
+            let out = null_decimal_overflow(arr)?;
+            let out = out.as_primitive::<Decimal128Type>();
+            assert!(out.is_null(0));
+            assert_eq!(out.value(1), 5);
+            Ok(())
+        }
+
+        #[test]
+        fn test_decimal_precision_overflow_becomes_null() -> datafusion_common::Result<()> {
+            // 10^37 * 10^37 exceeds DECIMAL precision 38 -> NULL; 2 * 3 stays 6.
+            let big = 10i128.pow(37);
+            let l: ArrayRef = Arc::new(
+                Decimal128Array::from(vec![Some(big), Some(2)]).with_precision_and_scale(38, 0)?,
+            );
+            let r: ArrayRef = Arc::new(
+                Decimal128Array::from(vec![Some(big), Some(3)]).with_precision_and_scale(38, 0)?,
+            );
+            let result_type = arith_result_type(l.data_type(), Operator::Multiply, r.data_type())?;
+            let out = try_arrow_arith(&l, &r, &result_type, mul)?;
+            let out = out.as_primitive::<Decimal128Type>();
+            assert!(out.is_null(0));
+            assert_eq!(out.value(1), 6);
+            Ok(())
+        }
     }
 }
