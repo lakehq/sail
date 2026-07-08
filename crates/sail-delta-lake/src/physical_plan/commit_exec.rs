@@ -27,7 +27,7 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::stream::{self, StreamExt};
 use log::warn;
@@ -40,18 +40,18 @@ use url::Url;
 
 use crate::catalog::coordinator::{DeltaCatalogCommitCoordinator, DeltaCatalogManagedTable};
 use crate::catalog_managed::{catalog_managed_delta_table, enable_catalog_managed_create_actions};
-use crate::delta_log::{get_object_store_from_context, LogStoreRef, StorageConfig};
+use crate::delta_log::{LogStoreRef, StorageConfig, get_object_store_from_context};
 use crate::physical_plan::action_schema::ExecCommitMeta;
-use crate::physical_plan::{decode_actions_and_meta_from_batch, DeltaCommitContext, COL_ACTION};
+use crate::physical_plan::{COL_ACTION, DeltaCommitContext, decode_actions_and_meta_from_batch};
 use crate::schema::{
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
     schema_has_column_defaults, schema_has_generated_columns, schema_has_identity_columns,
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
-    commit_path, contains_timestampntz_arrow, contains_variant_arrow, ColumnMetadataKey,
-    CommitAction, DeltaError, DeltaOperation, Metadata, MetadataValue, SaveMode, StatValue, Stats,
-    StructField, StructType, TableFeature,
+    ColumnMetadataKey, CommitAction, DeltaError, DeltaOperation, Metadata, MetadataValue, SaveMode,
+    StatValue, Stats, StructField, StructType, TableFeature, commit_path,
+    contains_timestampntz_arrow, contains_variant_arrow,
 };
 use crate::table::{
     create_delta_table_with_object_store, load_catalog_managed_commits_for_snapshot,
@@ -377,12 +377,11 @@ impl DeltaCommitExec {
         if let Some(protocol) = actions.iter().find_map(|action| match action {
             CommitAction::Protocol(protocol) => Some(protocol),
             _ => None,
-        }) {
-            if protocol != snapshot.protocol() {
-                return Err(DataFusionError::Plan(
-                    "Delta table already exists with a different protocol".to_string(),
-                ));
-            }
+        }) && protocol != snapshot.protocol()
+        {
+            return Err(DataFusionError::Plan(
+                "Delta table already exists with a different protocol".to_string(),
+            ));
         }
 
         if let Some(metadata) = actions.iter().find_map(|action| match action {
@@ -872,34 +871,46 @@ impl ExecutionPlan for DeltaCommitExec {
                             operation,
                             operation_metrics,
                         )
-                    } else if let Some(bootstrap_reference) =
-                        Self::existing_create_bootstrap_snapshot(&log_store, &bootstrap_actions)
-                            .await?
-                    {
-                        let operation =
-                            Self::write_operation_for_sink_mode(&partition_columns, &sink_mode);
-                        (
-                            Some(bootstrap_reference),
-                            commit_actions,
-                            operation,
-                            operation_metrics,
-                        )
                     } else {
-                        let bootstrap_commit = CommitBuilder::from(
-                            CommitProperties::default().with_user_metadata(user_metadata.clone()),
+                        match Self::existing_create_bootstrap_snapshot(
+                            &log_store,
+                            &bootstrap_actions,
                         )
-                        .with_actions(bootstrap_actions)
-                        .build(None, log_store.clone(), operation)
-                        .await
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                        let operation =
-                            Self::write_operation_for_sink_mode(&partition_columns, &sink_mode);
-                        (
-                            bootstrap_commit.snapshot,
-                            commit_actions,
-                            operation,
-                            operation_metrics,
-                        )
+                        .await?
+                        {
+                            Some(bootstrap_reference) => {
+                                let operation = Self::write_operation_for_sink_mode(
+                                    &partition_columns,
+                                    &sink_mode,
+                                );
+                                (
+                                    Some(bootstrap_reference),
+                                    commit_actions,
+                                    operation,
+                                    operation_metrics,
+                                )
+                            }
+                            _ => {
+                                let bootstrap_commit = CommitBuilder::from(
+                                    CommitProperties::default()
+                                        .with_user_metadata(user_metadata.clone()),
+                                )
+                                .with_actions(bootstrap_actions)
+                                .build(None, log_store.clone(), operation)
+                                .await
+                                .map_err(|e| DataFusionError::External(Box::new(e)))?;
+                                let operation = Self::write_operation_for_sink_mode(
+                                    &partition_columns,
+                                    &sink_mode,
+                                );
+                                (
+                                    bootstrap_commit.snapshot,
+                                    commit_actions,
+                                    operation,
+                                    operation_metrics,
+                                )
+                            }
+                        }
                     }
                 } else {
                     (

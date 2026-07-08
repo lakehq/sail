@@ -8,8 +8,8 @@ use datafusion::arrow::array::{
 use datafusion::arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use datafusion::arrow::datatypes::{
     DataType, Decimal128Type, Decimal256Type, Field, FieldRef, Float16Type, Float32Type,
-    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalUnit, UInt16Type, UInt32Type,
-    UInt64Type, UInt8Type,
+    Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, IntervalUnit, UInt8Type, UInt16Type,
+    UInt32Type, UInt64Type,
 };
 use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
@@ -25,7 +25,7 @@ use crate::aggregate::utils::{
 };
 
 macro_rules! dispatch_numeric_type {
-    ($input_dt:expr, $helper:ident, $err_msg:expr) => {
+    ($input_dt:expr_2021, $helper:ident, $err_msg:expr_2021) => {
         match &$input_dt {
             DataType::Int8 => $helper!(Int8Type, $input_dt),
             DataType::Int16 => $helper!(Int16Type, $input_dt),
@@ -269,12 +269,14 @@ impl AggregateUDFImpl for PercentileDisc {
             "percentile_disc"
         };
 
-        Ok(vec![Field::new(
-            format_state_name(args.name, state_name),
-            DataType::List(Arc::new(field)),
-            true,
-        )
-        .into()])
+        Ok(vec![
+            Field::new(
+                format_state_name(args.name, state_name),
+                DataType::List(Arc::new(field)),
+                true,
+            )
+            .into(),
+        ])
     }
 
     fn accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
@@ -319,7 +321,7 @@ impl AggregateUDFImpl for PercentileDisc {
 
         // DISTINCT was rejected above, so there's only one accumulator shape.
         macro_rules! helper {
-            ($t:ty, $dt:expr) => {
+            ($t:ty, $dt:expr_2021) => {
                 Ok(Box::new(PercentileDiscAccumulator::<$t> {
                     data_type: $dt.clone(),
                     all_values: vec![],
@@ -390,7 +392,7 @@ impl AggregateUDFImpl for PercentileDisc {
         let ansi_mode = self.ansi_mode;
 
         macro_rules! helper {
-            ($t:ty, $dt:expr) => {
+            ($t:ty, $dt:expr_2021) => {
                 Ok(Box::new(PercentileDiscGroupsAccumulator::<$t>::new(
                     $dt, percentile, descending, ansi_mode,
                 )))

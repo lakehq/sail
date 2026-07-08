@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{Array, ArrayRef, ListBuilder, StringArray, StringBuilder};
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::utils::take_function_args;
-use datafusion_common::{plan_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use xee_xpath::{Documents, Item, Queries, Query};
 

@@ -1,10 +1,10 @@
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 
-use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::Array;
+use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
-use datafusion_common::{not_impl_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, not_impl_err, plan_err};
 use half::f16;
 use sail_common_datafusion::formatter::{
     Date32Formatter, Date64Formatter, DurationMicrosecondFormatter, DurationMillisecondFormatter,
@@ -775,7 +775,7 @@ mod tests {
     };
     use datafusion::arrow::buffer::OffsetBuffer;
     use datafusion::arrow::datatypes::{
-        i256, DataType, Field, Int32Type, IntervalDayTime, IntervalMonthDayNano,
+        DataType, Field, Int32Type, IntervalDayTime, IntervalMonthDayNano, i256,
     };
     use datafusion_common::arrow::array::ArrayRef;
     use sail_common::spec::SAIL_MAP_FIELD_NAME;

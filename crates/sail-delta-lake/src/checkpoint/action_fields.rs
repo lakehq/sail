@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{new_null_array, Array, ArrayRef, StringArray, StructArray};
+use datafusion::arrow::array::{Array, ArrayRef, StringArray, StructArray, new_null_array};
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{
     DataType as ArrowDataType, Field, FieldRef, Fields, Schema as ArrowSchema,
@@ -14,9 +14,9 @@ use crate::schema::make_physical_arrow_schema;
 use crate::snapshot::materialize::parse_partition_values_array;
 use crate::spec::fields::{FIELD_NAME_PARTITION_VALUES_PARSED, FIELD_NAME_STATS_PARSED};
 use crate::spec::{
-    add_struct_type, parse_stats_json_array, remove_struct_type, stats_schema, ColumnMappingMode,
-    ColumnMetadataKey, DeltaError as DeltaTableError, DeltaResult, Metadata, StructField,
-    StructType, TableProperties,
+    ColumnMappingMode, ColumnMetadataKey, DeltaError as DeltaTableError, DeltaResult, Metadata,
+    StructField, StructType, TableProperties, add_struct_type, parse_stats_json_array,
+    remove_struct_type, stats_schema,
 };
 
 pub(crate) struct AddAugmentationConfig {
@@ -161,11 +161,11 @@ impl AddAugmentationConfig {
             add_cols.push(Arc::new(partition_values_parsed));
         }
 
-        if !self.write_stats_as_json {
-            if let Some(stats_idx) = stats_idx {
-                add_fields.remove(stats_idx);
-                add_cols.remove(stats_idx);
-            }
+        if !self.write_stats_as_json
+            && let Some(stats_idx) = stats_idx
+        {
+            add_fields.remove(stats_idx);
+            add_cols.remove(stats_idx);
         }
 
         let new_add = StructArray::try_new(Fields::from(add_fields), add_cols, nulls)?;

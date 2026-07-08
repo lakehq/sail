@@ -30,10 +30,10 @@ impl CatalogCredentials for OneLakeCredentials {
                             .with_container_name(workspace)
                             .with_use_fabric_endpoint(true);
 
-                        if std::env::var("AZURE_STORAGE_TOKEN").is_err() {
-                            if let Ok(token) = std::env::var("AZURE_ACCESS_TOKEN") {
-                                builder = builder.with_bearer_token_authorization(token);
-                            }
+                        if std::env::var("AZURE_STORAGE_TOKEN").is_err()
+                            && let Ok(token) = std::env::var("AZURE_ACCESS_TOKEN")
+                        {
+                            builder = builder.with_bearer_token_authorization(token);
                         }
 
                         let store = builder.build().map_err(|e| {

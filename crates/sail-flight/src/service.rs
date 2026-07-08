@@ -11,7 +11,7 @@ use arrow_flight::{
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::prelude::SessionContext;
-use futures::{stream, Stream, StreamExt};
+use futures::{Stream, StreamExt, stream};
 use log::{debug, info};
 use prost::Message;
 use sail_common::spec;

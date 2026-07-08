@@ -426,10 +426,10 @@ fn base_stats_schema_fields(
 ) -> Vec<StructField> {
     let mut result = Vec::new();
     for field in schema.fields() {
-        if let Some(DataSkippingNumIndexedCols::NumColumns(n_cols)) = n_columns {
-            if *added_columns >= *n_cols {
-                break;
-            }
+        if let Some(DataSkippingNumIndexedCols::NumColumns(n_cols)) = n_columns
+            && *added_columns >= *n_cols
+        {
+            break;
         }
 
         path.push(field.name.clone());
@@ -588,8 +588,8 @@ mod tests {
     use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema as ArrowSchema};
 
     use super::{
-        lookup_value_stat, parse_stats_json_array, ColumnCountStat, ColumnValueStat, StatValue,
-        Stats,
+        ColumnCountStat, ColumnValueStat, StatValue, Stats, lookup_value_stat,
+        parse_stats_json_array,
     };
     use crate::spec::fields::{
         STATS_FIELD_MAX_VALUES, STATS_FIELD_MIN_VALUES, STATS_FIELD_NULL_COUNT,

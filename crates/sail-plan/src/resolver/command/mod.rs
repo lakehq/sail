@@ -8,8 +8,8 @@ use sail_common::spec;
 use crate::catalog::CatalogCommandNode;
 use crate::error::{PlanError, PlanResult};
 use crate::function::list_built_in_function_statuses;
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 mod catalog;
 mod delete;

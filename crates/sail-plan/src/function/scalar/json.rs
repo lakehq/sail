@@ -1,15 +1,15 @@
 use chumsky::prelude::*;
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{cast, expr, lit, when, Expr, ScalarUDF};
+use datafusion_expr::{Expr, ScalarUDF, cast, expr, lit, when};
 use datafusion_functions::unicode::expr_fn as unicode_fn;
 use datafusion_spark::expr_fn::json_tuple as df_json_tuple;
 use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_function::scalar::array::spark_array::SparkArray;
 use sail_function::scalar::explode::{Explode, ExplodeKind};
 use sail_function::scalar::json::{
-    json_as_text_udf, json_length_udf, json_object_keys_udf, to_json_udf, SparkFromJson,
-    SparkSchemaOfJson,
+    SparkFromJson, SparkSchemaOfJson, json_as_text_udf, json_length_udf, json_object_keys_udf,
+    to_json_udf,
 };
 
 use crate::error::{PlanError, PlanResult};
@@ -34,8 +34,8 @@ fn parse_json_path(path: &str) -> Option<Vec<expr::Expr>> {
 /// `spark_variant_path_parser` used by `variant_get`. Each path segment maps to
 /// one literal `Expr`: a `Utf8` literal for an object key, an `Int64` literal
 /// for an array index. Any path Spark rejects fails the parse (→ `None`).
-fn json_path_parser<'src>(
-) -> impl Parser<'src, &'src str, Vec<expr::Expr>, extra::Err<Rich<'src, char>>> {
+fn json_path_parser<'src>()
+-> impl Parser<'src, &'src str, Vec<expr::Expr>, extra::Err<Rich<'src, char>>> {
     // `.key` — a run of characters other than `.` or `[`.
     let dot_key = just('.')
         .ignore_then(
@@ -84,12 +84,14 @@ fn get_json_object(expr: expr::Expr, path: expr::Expr) -> PlanResult<expr::Expr>
             }
         }
         // FIXME: json_as_text_udf for array of paths with subpaths is not implemented, so only top level keys supported
-        _ => vec![when(
-            path.clone().like(lit("$.%")),
-            unicode_fn::substr(path, lit(3)),
-        )
-        .when(lit(true), lit(""))
-        .end()?],
+        _ => vec![
+            when(
+                path.clone().like(lit("$.%")),
+                unicode_fn::substr(path, lit(3)),
+            )
+            .when(lit(true), lit(""))
+            .end()?,
+        ],
     };
     let mut args = Vec::with_capacity(1 + paths.len());
     args.push(expr);
@@ -157,7 +159,7 @@ fn json_tuple(input: ScalarFunctionInput) -> PlanResult<Expr> {
             _ => {
                 return Err(PlanError::invalid(
                     "json_tuple field names must be string literals",
-                ))
+                ));
             }
         }
     }

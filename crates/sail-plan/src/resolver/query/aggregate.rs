@@ -4,8 +4,8 @@ use datafusion_common::{
 };
 use datafusion_expr::utils::find_aggregate_exprs;
 use datafusion_expr::{
-    bitwise_and, bitwise_shift_right, cast, Aggregate, Expr, LogicalPlan, LogicalPlanBuilder,
-    Volatility,
+    Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Volatility, bitwise_and, bitwise_shift_right,
+    cast,
 };
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -14,13 +14,13 @@ use sail_python_udf::get_udf_display_name;
 use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::{AggregateState, PlanResolverState};
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
 use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 use crate::resolver::tree::window::WindowRewriter;
-use crate::resolver::PlanResolver;
 
 /// Projections resolved by index (a `None` marks a projection deferred until the
 /// grouping is materialized), paired with the indices of the deferred projections.
@@ -36,11 +36,11 @@ type GeneratorReplacements = Vec<(Expr, Expr)>;
 fn find_volatile_in_aggregate_context(expr: &Expr) -> Option<String> {
     let mut found_name: Option<String> = None;
     let _ = expr.apply(|e| {
-        if let Expr::ScalarFunction(f) = e {
-            if f.func.signature().volatility == Volatility::Volatile {
-                found_name = Some(f.func.name().to_string());
-                return Ok(TreeNodeRecursion::Stop);
-            }
+        if let Expr::ScalarFunction(f) = e
+            && f.func.signature().volatility == Volatility::Volatile
+        {
+            found_name = Some(f.func.name().to_string());
+            return Ok(TreeNodeRecursion::Stop);
         }
         Ok(TreeNodeRecursion::Continue)
     });
@@ -651,14 +651,14 @@ impl PlanResolver<'_> {
                 Ok(TreeNodeRecursion::Continue)
             });
         }
-        if let Some(udf_name) = pyspark_agg_name {
-            if has_regular_agg {
-                return Err(PlanError::AnalysisError(format!(
-                    // Spark tests expect this error message. Typo is intended.
-                    "The group aggregate pandas UDF `{udf_name}` cannot be invoked \
+        if let Some(udf_name) = pyspark_agg_name
+            && has_regular_agg
+        {
+            return Err(PlanError::AnalysisError(format!(
+                // Spark tests expect this error message. Typo is intended.
+                "The group aggregate pandas UDF `{udf_name}` cannot be invoked \
                      together with as other, non-pandas aggregate functions."
-                )));
-            }
+            )));
         }
         Ok(())
     }

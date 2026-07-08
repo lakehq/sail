@@ -21,7 +21,7 @@ use url::Url;
 use crate::datasource::provider::IcebergTableProvider;
 use crate::io::StoreContext;
 use crate::operations::Transaction;
-use crate::options::gen::IcebergReadOptions;
+use crate::options::r#gen::IcebergReadOptions;
 use crate::spec::snapshots::MAIN_BRANCH;
 use crate::spec::{PartitionSpec, Schema, Snapshot, TableMetadata};
 

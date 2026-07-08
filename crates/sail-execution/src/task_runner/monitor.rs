@@ -71,7 +71,7 @@ where
 
     /// Drains the output stream and builds a succeeded or failed status message.
     async fn execute(key: TaskKey, mut stream: SendableRecordBatchStream) -> T::Message {
-        let event = loop {
+        loop {
             let Some(batch) = stream.next().await else {
                 break T::Message::report_task_status(
                     key.clone(),
@@ -95,7 +95,6 @@ where
                     Some(cause),
                 );
             }
-        };
-        event
+        }
     }
 }

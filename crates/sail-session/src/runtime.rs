@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use datafusion::execution::DiskManager;
 use datafusion::execution::cache::cache_manager::{
     CacheManagerConfig, FileMetadataCache, FileStatisticsCache, ListFilesCache,
 };
@@ -8,7 +9,6 @@ use datafusion::execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
 };
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
-use datafusion::execution::DiskManager;
 use datafusion_common::Result;
 use log::debug;
 use sail_cache::file_listing_cache::MokaFileListingCache;

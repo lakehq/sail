@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::datatypes::{
-    DataType, Field, Fields, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DataType, Field, Fields, IntervalUnit, TimeUnit,
 };
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_common::spec::{
@@ -746,7 +746,7 @@ pub(crate) fn parse_complex_type_from_json_object(
                 _ => {
                     return Err(CatalogError::InvalidArgument(
                         "Invalid elementType format".to_string(),
-                    ))
+                    ));
                 }
             };
             Ok(DataType::List(Arc::new(
@@ -787,7 +787,7 @@ pub(crate) fn parse_complex_type_from_json_object(
                 _ => {
                     return Err(CatalogError::InvalidArgument(
                         "Invalid keyType format".to_string(),
-                    ))
+                    ));
                 }
             };
             let value_type = match value_type_json {
@@ -796,7 +796,7 @@ pub(crate) fn parse_complex_type_from_json_object(
                 _ => {
                     return Err(CatalogError::InvalidArgument(
                         "Invalid valueType format".to_string(),
-                    ))
+                    ));
                 }
             };
 
@@ -854,7 +854,7 @@ pub(crate) fn parse_complex_type_from_json_object(
                     _ => {
                         return Err(CatalogError::InvalidArgument(
                             "Invalid field type format".to_string(),
-                        ))
+                        ));
                     }
                 };
 
