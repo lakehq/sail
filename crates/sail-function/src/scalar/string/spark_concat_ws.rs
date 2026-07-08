@@ -14,9 +14,12 @@ use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, GenericListArray, LargeStringArray, OffsetSizeTrait, StringArray,
     StringBuilder, StringViewArray, new_null_array,
 };
-use datafusion::arrow::datatypes::DataType;
-use datafusion_common::Result;
-use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
+use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::{Result, ScalarValue, internal_err};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
+use datafusion_expr::{
+    ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+};
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 use crate::functions_utils::make_scalar_function;
@@ -50,7 +53,68 @@ impl ScalarUDFImpl for SparkConcatWs {
     }
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-        Ok(DataType::Utf8)
+        internal_err!(
+            "spark_concat_ws: `return_type` should not be called; `return_field_from_args` is used instead"
+        )
+    }
+
+    /// `concat_ws` is null only when the separator is null; null value arguments
+    /// are skipped, so a non-null separator always yields a (possibly empty)
+    /// string. Mirrors Spark's `ConcatWs.nullable = children.head.nullable`.
+    ///
+    /// Set here (not in the deprecated `is_nullable`, which DataFusion no longer
+    /// consults to derive the output field).
+    fn return_field_from_args(&self, args: ReturnFieldArgs) -> Result<FieldRef> {
+        let nullable = args.arg_fields.first().is_none_or(|sep| sep.is_nullable());
+        Ok(Arc::new(Field::new(self.name(), DataType::Utf8, nullable)))
+    }
+
+    /// Plan-time simplifications that mirror Spark's `concat_ws` semantics, so the
+    /// per-row kernel runs on a smaller (or no) argument set.
+    ///
+    /// concat_ws — simplify summary:
+    /// ```text
+    /// concat_ws(NULL, …)             -> NULL                  (R1: null literal separator)
+    /// concat_ws(sep, a, NULL, b)     -> concat_ws(sep, a, b)  (R2: drop null value literals)
+    /// concat_ws(<non-null literal>)  -> ''                    (R3: separator only)
+    /// ```
+    ///
+    /// * **R1** — a null separator literal makes every row null regardless of the
+    ///   value arguments (even non-literal columns), so the whole call folds to a
+    ///   typed null. Runs first: `concat_ws(NULL)` is NULL, not `''`.
+    /// * **R2** — Spark silently skips null value arguments, so a null literal among
+    ///   the values (index >= 1) is dropped. This also reaches the mixed case
+    ///   `concat_ws(col, a, NULL, b)` that constant folding cannot, since the call
+    ///   is not all-literal.
+    /// * **R3** — `concat_ws(sep)` with a non-null literal separator and no value
+    ///   arguments is always the empty string. A *column* separator is left
+    ///   untouched: the kernel still has to emit null for its null rows.
+    fn simplify(&self, args: Vec<Expr>, _info: &SimplifyContext) -> Result<ExprSimplifyResult> {
+        if matches!(args.first(), Some(Expr::Literal(scalar, _)) if scalar.is_null()) {
+            return Ok(ExprSimplifyResult::Simplified(Expr::Literal(
+                ScalarValue::Utf8(None),
+                None,
+            )));
+        }
+
+        // Keep the separator (index 0); drop null literals among the values.
+        let args: Vec<Expr> = args
+            .into_iter()
+            .enumerate()
+            .filter(|(i, arg)| {
+                *i == 0 || !matches!(arg, Expr::Literal(scalar, _) if scalar.is_null())
+            })
+            .map(|(_, arg)| arg)
+            .collect();
+
+        if matches!(args.as_slice(), [Expr::Literal(_, _)]) {
+            return Ok(ExprSimplifyResult::Simplified(Expr::Literal(
+                ScalarValue::Utf8(Some(String::new())),
+                None,
+            )));
+        }
+
+        Ok(ExprSimplifyResult::Original(args))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
