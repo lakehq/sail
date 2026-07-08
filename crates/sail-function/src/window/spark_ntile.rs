@@ -141,10 +141,10 @@ fn get_scalar_value_from_args(
     input_exprs: &[Arc<dyn datafusion_physical_expr::PhysicalExpr>],
     index: usize,
 ) -> Result<Option<ScalarValue>> {
-    if let Some(expr) = input_exprs.get(index) {
-        if let Some(literal) = expr.downcast_ref::<Literal>() {
-            return Ok(Some(literal.value().clone()));
-        }
+    if let Some(expr) = input_exprs.get(index)
+        && let Some(literal) = expr.downcast_ref::<Literal>()
+    {
+        return Ok(Some(literal.value().clone()));
     }
     Ok(None)
 }

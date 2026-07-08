@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion::common::{plan_datafusion_err, JoinType, Result};
+use datafusion::common::{JoinType, Result, plan_datafusion_err};
 use datafusion::logical_expr::execution_props::ScalarSubqueryResults;
 use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion::physical_expr::{Partitioning, PhysicalExpr};
@@ -20,7 +20,7 @@ use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion::physical_plan::windows::{BoundedWindowAggExec, WindowAggExec};
 use datafusion::physical_plan::{
-    with_new_children_if_necessary, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    ExecutionPlan, ExecutionPlanProperties, PlanProperties, with_new_children_if_necessary,
 };
 use sail_catalog_system::physical_plan::SystemTableExec;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -913,8 +913,8 @@ mod tests {
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
     use datafusion::functions_aggregate::sum::sum_udaf;
-    use datafusion::logical_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
     use datafusion::logical_expr::Operator;
+    use datafusion::logical_expr::execution_props::{ScalarSubqueryResults, SubqueryIndex};
     use datafusion::physical_expr::aggregate::AggregateExprBuilder;
     use datafusion::physical_expr::expressions::{binary, col};
     use datafusion::physical_expr::scalar_subquery::ScalarSubqueryExpr;
@@ -926,7 +926,7 @@ mod tests {
     use datafusion::physical_plan::repartition::RepartitionExec;
     use datafusion::physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
     use datafusion::physical_plan::union::UnionExec;
-    use datafusion::physical_plan::{displayable, ExecutionPlan, ExecutionPlanProperties};
+    use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, displayable};
     use sail_catalog::command::CatalogCommand;
     use sail_physical_plan::barrier::BarrierExec;
     use sail_physical_plan::catalog_command::CatalogCommandExec;
@@ -1203,9 +1203,11 @@ mod tests {
                 .partition_count(),
             1
         );
-        assert!(stage
-            .inputs
-            .iter()
-            .any(|input| matches!(input.mode, InputMode::Broadcast)));
+        assert!(
+            stage
+                .inputs
+                .iter()
+                .any(|input| matches!(input.mode, InputMode::Broadcast))
+        );
     }
 }

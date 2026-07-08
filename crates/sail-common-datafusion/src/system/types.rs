@@ -28,7 +28,7 @@ trait NumericType {
 }
 
 macro_rules! impl_numeric_type {
-    ($t:ty, $dt:expr) => {
+    ($t:ty, $dt:expr_2021) => {
         impl NumericType for $t {
             fn data_type() -> DataType {
                 $dt

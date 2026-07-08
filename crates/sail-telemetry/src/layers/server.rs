@@ -1,8 +1,8 @@
 use std::task::{Context, Poll};
 
+use fastrace::Span;
 use fastrace::collector::SpanContext;
 use fastrace::future::{FutureExt, InSpan};
-use fastrace::Span;
 use tonic::codegen::http::Request;
 use tower::{Layer, Service};
 

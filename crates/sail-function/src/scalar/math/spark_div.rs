@@ -145,7 +145,7 @@ fn interval_div_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
             return Err(generic_exec_err(
                 "spark_interval_div",
                 "unsupported interval types for division",
-            ))
+            ));
         }
     };
 

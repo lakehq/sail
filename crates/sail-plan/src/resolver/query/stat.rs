@@ -13,15 +13,15 @@ use datafusion::functions_aggregate::sum::sum_udaf;
 use datafusion_common::{Column, ExprSchema, ScalarValue};
 use datafusion_expr::expr::{AggregateFunctionParams, ScalarFunction};
 use datafusion_expr::{
-    and, col, expr, lit, or, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, ScalarUDF,
+    Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder, ScalarUDF, and, col, expr, lit, or,
 };
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::math::random::Random;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_stat_summary(
@@ -218,11 +218,10 @@ impl PlanResolver<'_> {
         let create_stat_row =
             |stat_name: &str, stats_by_column: Vec<(String, Expr)>| -> PlanResult<LogicalPlan> {
                 let stats_plan_clone = stats_plan.clone();
-                let mut projections =
-                    vec![
-                        Expr::Literal(ScalarValue::Utf8(Some(stat_name.to_string())), None)
-                            .alias(&summary_alias),
-                    ];
+                let mut projections = vec![
+                    Expr::Literal(ScalarValue::Utf8(Some(stat_name.to_string())), None)
+                        .alias(&summary_alias),
+                ];
                 for (col_name, expr) in stats_by_column {
                     let expr = expr.cast_to(&DataType::Utf8, stats_plan_clone.schema())?;
                     projections.push(expr.alias(&col_name));
@@ -339,14 +338,13 @@ impl PlanResolver<'_> {
         let right_column = self.resolve_one_column(input.schema(), right_column.as_ref(), state)?;
 
         let projected_plan = LogicalPlanBuilder::from(input.clone())
-            .project(vec![Expr::Cast(expr::Cast::new(
-                Box::new(col(right_column.clone())),
-                DataType::Utf8,
-            ))
-            .alias_qualified(
-                right_column.relation.clone(),
-                right_column.name.clone(),
-            )])?
+            .project(vec![
+                Expr::Cast(expr::Cast::new(
+                    Box::new(col(right_column.clone())),
+                    DataType::Utf8,
+                ))
+                .alias_qualified(right_column.relation.clone(), right_column.name.clone()),
+            ])?
             .build()?;
         let distinct_values = LogicalPlanBuilder::from(projected_plan)
             .project(vec![Expr::Column(right_column.clone())])?

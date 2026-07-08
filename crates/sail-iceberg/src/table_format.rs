@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::arrow::datatypes::{Field as ArrowField, Schema as ArrowSchema};
 use datafusion::catalog::{Session, TableProvider};
-use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
+use datafusion::common::{DataFusionError, Result, not_impl_err, plan_err};
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::{LogicalPlan, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
@@ -32,10 +32,9 @@ use sail_common_datafusion::catalog::{
     CatalogPartitionField, CommitAuthority, LakehouseExecutionContext, ScanAuthority,
 };
 use sail_common_datafusion::datasource::{
-    create_sort_order, find_path_in_options, BucketBy, OptionLayer, PhysicalSinkMode, SinkInfo,
-    SinkMode, SourceInfo, TableFormat, TableFormatAlterTableOperation,
-    TableFormatCreateTableColumn, TableFormatCreateTableInfo, TableFormatCreateTableResult,
-    TableFormatRegistry,
+    BucketBy, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo, TableFormat,
+    TableFormatAlterTableOperation, TableFormatCreateTableColumn, TableFormatCreateTableInfo,
+    TableFormatCreateTableResult, TableFormatRegistry, create_sort_order, find_path_in_options,
 };
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_common_datafusion::variant::with_variant_extension_if_marked_storage;
@@ -43,22 +42,22 @@ use sail_data_source::options::ResolveOptions;
 use url::Url;
 
 use crate::datasource::provider::IcebergTableProvider;
-use crate::datasource::type_converter::{arrow_schema_to_iceberg, ICEBERG_ARROW_FIELD_DOC_KEY};
+use crate::datasource::type_converter::{ICEBERG_ARROW_FIELD_DOC_KEY, arrow_schema_to_iceberg};
 use crate::io::StoreContext;
 use crate::logical::IcebergTableSource;
 use crate::operations::bootstrap::{
-    bootstrap_empty_table_metadata, replace_empty_table_metadata, NewTableMetadataStyle,
+    NewTableMetadataStyle, bootstrap_empty_table_metadata, replace_empty_table_metadata,
 };
-use crate::options::gen::{IcebergReadOptions, IcebergWriteOptions};
-use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
+use crate::options::r#gen::{IcebergReadOptions, IcebergWriteOptions};
 use crate::physical_plan::IcebergWriterExecOptions;
+use crate::physical_plan::plan_builder::{IcebergPlanBuilder, IcebergTableConfig};
 use crate::schema_evolution::SchemaEvolver;
 use crate::spec::{MetadataLog, PartitionSpec, Schema, Snapshot, TableMetadata};
 use crate::table::metadata_loader::{
     encode_metadata_file, load_metadata_file_bytes, metadata_file_extension_from_properties,
     metadata_file_version_from_path, metadata_location_to_object_path_string,
 };
-use crate::table::{find_latest_metadata_file, Table};
+use crate::table::{Table, find_latest_metadata_file};
 use crate::utils::metadata::metadata_files_for_version;
 use crate::utils::partition_transform::{
     catalog_partition_field_from_iceberg, format_partition_expr, format_partition_exprs,
@@ -443,27 +442,28 @@ pub(crate) async fn plan_iceberg_write(
         None
     };
 
-    if let Some(existing_partitions) = &existing_partition_columns {
-        if !partition_by.is_empty() && partition_by != *existing_partitions {
-            match mode {
-                PhysicalSinkMode::Append => {
-                    return plan_err!(
-                        "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
+    if let Some(existing_partitions) = &existing_partition_columns
+        && !partition_by.is_empty()
+        && partition_by != *existing_partitions
+    {
+        match mode {
+            PhysicalSinkMode::Append => {
+                return plan_err!(
+                    "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
                         Cannot change partitioning on append.",
-                        format_partition_exprs(existing_partitions),
-                        format_partition_exprs(&partition_by)
-                    );
-                }
-                PhysicalSinkMode::Overwrite if !iceberg_options.overwrite_schema => {
-                    return plan_err!(
-                        "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
-                        Set overwriteSchema=true to change partitioning.",
-                        format_partition_exprs(existing_partitions),
-                        format_partition_exprs(&partition_by)
-                    );
-                }
-                _ => {}
+                    format_partition_exprs(existing_partitions),
+                    format_partition_exprs(&partition_by)
+                );
             }
+            PhysicalSinkMode::Overwrite if !iceberg_options.overwrite_schema => {
+                return plan_err!(
+                    "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
+                        Set overwriteSchema=true to change partitioning.",
+                    format_partition_exprs(existing_partitions),
+                    format_partition_exprs(&partition_by)
+                );
+            }
+            _ => {}
         }
     }
 
@@ -937,12 +937,11 @@ fn relative_metadata_file(table_url: &Url, metadata_file: &str) -> Result<String
     if let Some(relative) = strip_path_prefix(metadata_file, &base_path) {
         return Ok(relative.to_string());
     }
-    if table_url.scheme() == "file" {
-        if let Some(base_without_drive) = strip_windows_drive_prefix(&base_path) {
-            if let Some(relative) = strip_path_prefix(metadata_file, base_without_drive) {
-                return Ok(relative.to_string());
-            }
-        }
+    if table_url.scheme() == "file"
+        && let Some(base_without_drive) = strip_windows_drive_prefix(&base_path)
+        && let Some(relative) = strip_path_prefix(metadata_file, base_without_drive)
+    {
+        return Ok(relative.to_string());
     }
     Ok(metadata_file.to_string())
 }

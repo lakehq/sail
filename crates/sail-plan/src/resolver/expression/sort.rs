@@ -3,9 +3,9 @@ use datafusion_expr::expr;
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_expression_sort_order(
@@ -54,7 +54,7 @@ impl PlanResolver<'_> {
                             expr: self.resolve_expression(*child, schema, state).await?,
                             asc,
                             nulls_first,
-                        })
+                        });
                     }
                 };
                 if position > 0 && position <= num_fields {

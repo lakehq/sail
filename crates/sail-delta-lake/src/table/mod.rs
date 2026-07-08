@@ -28,8 +28,8 @@ use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion_common::{DataFusionError, Result};
 use futures::TryStreamExt;
-use object_store::path::Path;
 use object_store::ObjectStore;
+use object_store::path::Path;
 use sail_catalog::manager::CatalogManager;
 use sail_common_datafusion::catalog::delta::{
     DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
@@ -42,32 +42,31 @@ use url::Url;
 
 use crate::catalog::coordinator::DeltaCatalogCommitCoordinator;
 use crate::catalog_managed::{
-    catalog_managed_delta_table, metadata_with_catalog_managed, protocol_with_catalog_managed,
-    CatalogManagedDeltaTable,
+    CatalogManagedDeltaTable, catalog_managed_delta_table, metadata_with_catalog_managed,
+    protocol_with_catalog_managed,
 };
-use crate::datasource::{df_logical_schema, DeltaScanConfig};
+use crate::datasource::{DeltaScanConfig, df_logical_schema};
 pub mod features;
 pub use features::{
     ChangeDataFeedSupport, ChangeDataFeedToken, ColumnMappingToken, DeletionVectorToken,
     EnabledRowTrackingToken, RowTrackingToken, SupportedRowTrackingToken,
 };
 
-use crate::delta_log::{default_logstore, resolve_version_timestamp, LogStoreRef, StorageConfig};
+use crate::delta_log::{LogStoreRef, StorageConfig, default_logstore, resolve_version_timestamp};
 use crate::logical::table_source::DeltaTableSource;
-use crate::options::gen::DeltaReadOptions;
+use crate::options::r#gen::DeltaReadOptions;
 use crate::schema::{
     metadata_for_create_with_struct_type, normalize_delta_schema, protocol_for_create,
     schema_has_column_defaults, schema_has_generated_columns, schema_has_identity_columns,
 };
 pub use crate::snapshot::DeltaSnapshot;
 use crate::snapshot::{
-    catalog_managed_commit_file_name, CatalogManagedCommitFile, CatalogManagedCommitSet,
-    DeltaSnapshotConfig,
+    CatalogManagedCommitFile, CatalogManagedCommitSet, DeltaSnapshotConfig,
+    catalog_managed_commit_file_name,
 };
 use crate::spec::{
-    contains_timestampntz_arrow, contains_variant_arrow, CommitAction, DeltaError,
-    DeltaError as DeltaTableError, DeltaOperation, DeltaResult, Protocol, SaveMode, StructType,
-    TableFeature,
+    CommitAction, DeltaError, DeltaError as DeltaTableError, DeltaOperation, DeltaResult, Protocol,
+    SaveMode, StructType, TableFeature, contains_timestampntz_arrow, contains_variant_arrow,
 };
 use crate::transaction::CommitBuilder;
 
@@ -107,10 +106,10 @@ impl DeltaTable {
 
     /// Loads the DeltaTable state for the given version.
     pub async fn load_version(&mut self, version: i64) -> Result<(), DeltaTableError> {
-        if let Some(snapshot) = &self.state {
-            if snapshot.version() > version {
-                self.state = None;
-            }
+        if let Some(snapshot) = &self.state
+            && snapshot.version() > version
+        {
+            self.state = None;
         }
         self.update_incremental(Some(version)).await
     }
@@ -550,14 +549,15 @@ where
         .await?;
 
     let latest_table_version = response.latest_table_version;
-    if let Some(version) = version_as_of {
-        if latest_table_version >= 0 && version > latest_table_version {
-            return Err(DataFusionError::External(Box::new(DeltaTableError::generic(
-                format!(
-                    "Catalog-managed Delta table latest ratified version is {latest_table_version}, but version {version} was requested"
-                ),
-            ))));
-        }
+    if let Some(version) = version_as_of
+        && latest_table_version >= 0
+        && version > latest_table_version
+    {
+        return Err(DataFusionError::External(Box::new(
+            DeltaTableError::generic(format!(
+                "Catalog-managed Delta table latest ratified version is {latest_table_version}, but version {version} was requested"
+            )),
+        )));
     }
 
     let Some(effective_end_version) =
@@ -613,9 +613,11 @@ where
         if let Some(file_name) = staged_catalog_managed_commit_file(&log_store, version).await? {
             by_version.insert(version, CatalogManagedCommitFile { version, file_name });
         } else {
-            return Err(DataFusionError::External(Box::new(DeltaTableError::generic(
-                format!("Catalog-managed Delta commit version {version} was not returned by the catalog"),
-            ))));
+            return Err(DataFusionError::External(Box::new(
+                DeltaTableError::generic(format!(
+                    "Catalog-managed Delta commit version {version} was not returned by the catalog"
+                )),
+            )));
         }
     }
 

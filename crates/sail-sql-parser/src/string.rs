@@ -277,10 +277,10 @@ enum Char<'a> {
 
 impl<'a> Char<'a> {
     fn from_str<const RADIX: u32>(value: &str, raw: &'a str) -> Char<'a> {
-        if let Ok(n) = u32::from_str_radix(value, RADIX) {
-            if let Some(c) = char::from_u32(n) {
-                return Char::One(c);
-            }
+        if let Ok(n) = u32::from_str_radix(value, RADIX)
+            && let Some(c) = char::from_u32(n)
+        {
+            return Char::One(c);
         }
         Char::Invalid(raw)
     }

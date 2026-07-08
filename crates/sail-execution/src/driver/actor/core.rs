@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::mem;
 
-use fastrace::future::FutureExt;
 use fastrace::Span;
+use fastrace::future::FutureExt;
 use log::{error, info};
 use sail_server::actor::{Actor, ActorAction, ActorContext};
 

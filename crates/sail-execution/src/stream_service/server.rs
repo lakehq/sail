@@ -12,11 +12,11 @@ use futures::{Stream, TryStreamExt};
 use log::debug;
 use prost::Message;
 use tokio::sync::oneshot;
-use tonic::{async_trait, Request, Response, Status, Streaming};
+use tonic::{Request, Response, Status, Streaming, async_trait};
 
 use crate::error::ExecutionResult;
 use crate::id::TaskStreamKey;
-use crate::stream::gen::TaskStreamTicket;
+use crate::stream::r#gen::TaskStreamTicket;
 use crate::stream::reader::TaskStreamSource;
 
 #[async_trait]

@@ -282,15 +282,13 @@ impl UnityCatalogConfig {
         for (os_key, os_value) in std::env::vars_os() {
             if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
                 let key = key.trim();
-                if key.to_ascii_uppercase().starts_with("UNITY_")
+                if (key.to_ascii_uppercase().starts_with("UNITY_")
                     || key.to_ascii_uppercase().starts_with("DATABRICKS_")
-                    || key.to_ascii_uppercase().starts_with("UC_")
-                {
-                    if let Ok(config_key) =
+                    || key.to_ascii_uppercase().starts_with("UC_"))
+                    && let Ok(config_key) =
                         UnityCatalogConfigKey::from_str(&key.to_ascii_lowercase())
-                    {
-                        self.set_option(config_key, value.to_string())?;
-                    }
+                {
+                    self.set_option(config_key, value.to_string())?;
                 }
             }
         }

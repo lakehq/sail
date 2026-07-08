@@ -5,7 +5,7 @@ use arrow::array::{
     LargeListArray, LargeStringArray, ListArray, StringArray, StringViewArray, UInt32Array,
     UInt64Array,
 };
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, exec_err};
 use datasketches::hash_value::{canonical_float, raw_bytes};
 use datasketches::theta::{CompactThetaSketch, ThetaSketch};
 
@@ -125,10 +125,10 @@ where
         }
     }
 
-    if entries.len() > nominal_entries {
-        if let Some(next_theta) = entries.pop_last() {
-            theta = theta.min(next_theta);
-        }
+    if entries.len() > nominal_entries
+        && let Some(next_theta) = entries.pop_last()
+    {
+        theta = theta.min(next_theta);
     }
     let entries: Vec<u64> = entries.into_iter().collect();
     let empty = !saw_non_empty && entries.is_empty() && theta == MAX_THETA;

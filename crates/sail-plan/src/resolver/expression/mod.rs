@@ -7,8 +7,8 @@ use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 mod attribute;
 mod cast;
@@ -215,20 +215,19 @@ impl PlanResolver<'_> {
                 // Detect multi-column IN subquery: (a, b) IN (SELECT x, y FROM ...)
                 // The SQL parser produces a Tuple which the analyzer converts to
                 // UnresolvedFunction("struct", [a, b]).
-                if let Expr::UnresolvedFunction(ref f) = *expr {
-                    if f.function_name.parts() == [spec::Identifier::from("struct")]
-                        && f.arguments.len() > 1
-                    {
-                        let arguments = match *expr {
-                            Expr::UnresolvedFunction(f) => f.arguments,
-                            _ => unreachable!(),
-                        };
-                        return self
-                            .resolve_multi_column_in_subquery(
-                                arguments, *subquery, negated, schema, state,
-                            )
-                            .await;
-                    }
+                if let Expr::UnresolvedFunction(ref f) = *expr
+                    && f.function_name.parts() == [spec::Identifier::from("struct")]
+                    && f.arguments.len() > 1
+                {
+                    let arguments = match *expr {
+                        Expr::UnresolvedFunction(f) => f.arguments,
+                        _ => unreachable!(),
+                    };
+                    return self
+                        .resolve_multi_column_in_subquery(
+                            arguments, *subquery, negated, schema, state,
+                        )
+                        .await;
                 }
                 self.resolve_expression_in_subquery(*expr, *subquery, negated, schema, state)
                     .await
@@ -424,9 +423,9 @@ mod tests {
     use crate::config::PlanConfig;
     use crate::error::PlanResult;
     use crate::formatter::SparkPlanFormatter;
+    use crate::resolver::PlanResolver;
     use crate::resolver::expression::NamedExpr;
     use crate::resolver::state::PlanResolverState;
-    use crate::resolver::PlanResolver;
 
     fn create_session() -> PlanResult<SessionContext> {
         let mut state = SessionStateBuilder::new().build();

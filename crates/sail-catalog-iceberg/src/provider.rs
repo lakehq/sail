@@ -38,7 +38,7 @@ use sail_common_datafusion::catalog::{
 };
 use sail_iceberg::utils::partition_transform::catalog_partition_field_from_iceberg;
 use sail_iceberg::{
-    arrow_type_to_iceberg, iceberg_type_to_arrow, FormatVersion, Literal, NestedField, StructType,
+    FormatVersion, Literal, NestedField, StructType, arrow_type_to_iceberg, iceberg_type_to_arrow,
 };
 use tokio::sync::OnceCell;
 
@@ -2969,12 +2969,16 @@ mod tests {
                     _ => panic!("Expected PrimaryKey constraint"),
                 }
 
-                assert!(properties
-                    .iter()
-                    .any(|(k, v)| k == "comment" && v == "test table"));
-                assert!(properties
-                    .iter()
-                    .any(|(k, v)| k == "owner" && v == "test_user"));
+                assert!(
+                    properties
+                        .iter()
+                        .any(|(k, v)| k == "comment" && v == "test table")
+                );
+                assert!(
+                    properties
+                        .iter()
+                        .any(|(k, v)| k == "owner" && v == "test_user")
+                );
             }
             _ => panic!("Expected Table kind"),
         }
@@ -3224,12 +3228,16 @@ mod tests {
                 assert_eq!(columns[1].comment, Some("filtered data".to_string()));
 
                 assert_eq!(comment, Some("test view".to_string()));
-                assert!(properties
-                    .iter()
-                    .any(|(k, v)| k == "comment" && v == "test view"));
-                assert!(properties
-                    .iter()
-                    .any(|(k, v)| k == "created_by" && v == "test_user"));
+                assert!(
+                    properties
+                        .iter()
+                        .any(|(k, v)| k == "comment" && v == "test view")
+                );
+                assert!(
+                    properties
+                        .iter()
+                        .any(|(k, v)| k == "created_by" && v == "test_user")
+                );
             }
             _ => panic!("Expected View kind"),
         }
@@ -3301,10 +3309,11 @@ mod tests {
         assert_eq!(db.database, vec!["db1".to_string()]);
         assert_eq!(db.comment, Some("test database".to_string()));
         assert_eq!(db.location, Some("s3://bucket/db1".to_string()));
-        assert!(db
-            .properties
-            .iter()
-            .any(|(k, v)| k == "custom_prop" && v == "custom_value"));
+        assert!(
+            db.properties
+                .iter()
+                .any(|(k, v)| k == "custom_prop" && v == "custom_value")
+        );
 
         Mock::given(method("POST"))
             .and(path(ctx.path("/namespaces").as_str()))
@@ -3393,10 +3402,11 @@ mod tests {
         assert_eq!(db.database, vec!["db1".to_string()]);
         assert_eq!(db.comment, Some("test database".to_string()));
         assert_eq!(db.location, Some("s3://bucket/db1".to_string()));
-        assert!(db
-            .properties
-            .iter()
-            .any(|(k, v)| k == "custom_prop" && v == "custom_value"));
+        assert!(
+            db.properties
+                .iter()
+                .any(|(k, v)| k == "custom_prop" && v == "custom_value")
+        );
     }
 
     #[tokio::test]
@@ -3428,22 +3438,30 @@ mod tests {
         assert_eq!(result.database, vec!["db1".to_string()]);
         assert_eq!(result.comment, Some("test database".to_string()));
         assert_eq!(result.location, Some("s3://bucket/db1".to_string()));
-        assert!(result
-            .properties
-            .iter()
-            .any(|(k, v)| k == "comment" && v == "test database"));
-        assert!(result
-            .properties
-            .iter()
-            .any(|(k, v)| k == "location" && v == "s3://bucket/db1"));
-        assert!(result
-            .properties
-            .iter()
-            .any(|(k, v)| k == "owner" && v == "alice"));
-        assert!(result
-            .properties
-            .iter()
-            .any(|(k, v)| k == "custom_prop" && v == "custom_value"));
+        assert!(
+            result
+                .properties
+                .iter()
+                .any(|(k, v)| k == "comment" && v == "test database")
+        );
+        assert!(
+            result
+                .properties
+                .iter()
+                .any(|(k, v)| k == "location" && v == "s3://bucket/db1")
+        );
+        assert!(
+            result
+                .properties
+                .iter()
+                .any(|(k, v)| k == "owner" && v == "alice")
+        );
+        assert!(
+            result
+                .properties
+                .iter()
+                .any(|(k, v)| k == "custom_prop" && v == "custom_value")
+        );
 
         ctx.mock_get_json(
             &ctx.path("/namespaces/db2"),
