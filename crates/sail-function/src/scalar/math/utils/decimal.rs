@@ -132,7 +132,7 @@ pub fn decimal_multiply(
 /// `result_type` carries Spark's already-adjusted `(precision, scale)` (from
 /// [`spark_decimal_divide_type`], NOT Arrow's `div` scale). The quotient at that
 /// scale is `round(a * 10^(scale + s2 - s1) / b)` with HALF_UP rounding (via
-/// [`divide_and_round`]), computed in `i256` to avoid the intermediate overflow.
+/// [`divide_half_up`]), computed in `i256` to avoid the intermediate overflow.
 /// Division by zero and a result that exceeds the target precision raise under
 /// ANSI on (`error_on_overflow`) and become per-element NULL under ANSI off /
 /// `try_divide`.

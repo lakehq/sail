@@ -3,6 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit, i256};
 use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{
     BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, try_cast,
@@ -52,6 +53,18 @@ fn is_overflow_prone(data_type: &DataType) -> bool {
 /// differs).
 fn needs_overflow_udf(left: &DataType, right: &DataType, ansi_mode: bool) -> bool {
     ansi_mode || left.is_decimal() || right.is_decimal()
+}
+
+/// Whether `expr` contains a scalar subquery. Wrapping arithmetic in the
+/// `SparkAdd`/`Subtract`/`Multiply`/`Divide` UDFs breaks the physical planner's
+/// registration of a nested uncorrelated scalar subquery inside a correlated
+/// subquery body (it stays an unplanned `Expr::ScalarSubquery`). Keep such
+/// operands on the native operator, which the planner handles, until the fork's
+/// subquery planning is fixed. (`exists` walks only the expr tree, not the
+/// subquery's inner plan, which is what we want.)
+fn has_scalar_subquery(expr: &Expr) -> bool {
+    expr.exists(|e| Ok(matches!(e, Expr::ScalarSubquery(_))))
+        .unwrap_or(false)
 }
 
 /// Rewrite an integer *literal* to its minimal-precision `DECIMAL(p, 0)` so that
@@ -176,7 +189,10 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             (Ok(left_type), Ok(right_type))
                 if is_overflow_prone(&left_type) && is_overflow_prone(&right_type) =>
             {
-                if needs_overflow_udf(&left_type, &right_type, ansi_mode) {
+                if needs_overflow_udf(&left_type, &right_type, ansi_mode)
+                    && !has_scalar_subquery(&left)
+                    && !has_scalar_subquery(&right)
+                {
                     ScalarUDF::from(SparkAdd::new(ansi_mode, false)).call(vec![left, right])
                 } else {
                     left + right
@@ -251,7 +267,10 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             (Ok(left_type), Ok(right_type))
                 if is_overflow_prone(&left_type) && is_overflow_prone(&right_type) =>
             {
-                if needs_overflow_udf(&left_type, &right_type, ansi_mode) {
+                if needs_overflow_udf(&left_type, &right_type, ansi_mode)
+                    && !has_scalar_subquery(&left)
+                    && !has_scalar_subquery(&right)
+                {
                     ScalarUDF::from(SparkSubtract::new(ansi_mode, false)).call(vec![left, right])
                 } else {
                     left - right
@@ -315,7 +334,10 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
         (Ok(left_type), Ok(right_type))
             if is_overflow_prone(&left_type) && is_overflow_prone(&right_type) =>
         {
-            if needs_overflow_udf(&left_type, &right_type, ansi_mode) {
+            if needs_overflow_udf(&left_type, &right_type, ansi_mode)
+                && !has_scalar_subquery(&left)
+                && !has_scalar_subquery(&right)
+            {
                 ScalarUDF::from(SparkMultiply::new(ansi_mode, false)).call(vec![left, right])
             } else {
                 left * right
@@ -392,19 +414,27 @@ fn make_safe_divisor(
     }
 
     if ansi_mode {
-        let zero_check = divisor.clone().eq(lit(0));
-        let raise = Expr::ScalarFunction(expr::ScalarFunction {
-            func: Arc::new(ScalarUDF::from(RaiseError::new())),
-            args: vec![lit(error_message)],
-        });
-        Expr::Case(expr::Case {
-            expr: None,
-            when_then_expr: vec![(Box::new(zero_check), Box::new(raise))],
-            else_expr: Some(Box::new(divisor)),
-        })
+        raise_on_zero_divisor(divisor, error_message)
     } else {
         expr_fn::nullif(divisor, lit(0))
     }
+}
+
+/// Wrap `divisor` so a zero value raises `error_message` **unconditionally** (both
+/// ANSI modes). Used for day-time interval division, where Spark's
+/// `DivideDTInterval` throws `INTERVAL_DIVIDED_BY_ZERO` regardless of
+/// `spark.sql.ansi.enabled`.
+fn raise_on_zero_divisor(divisor: Expr, error_message: &str) -> Expr {
+    let zero_check = divisor.clone().eq(lit(0));
+    let raise = Expr::ScalarFunction(expr::ScalarFunction {
+        func: Arc::new(ScalarUDF::from(RaiseError::new())),
+        args: vec![lit(error_message)],
+    });
+    Expr::Case(expr::Case {
+        expr: None,
+        when_then_expr: vec![(Box::new(zero_check), Box::new(raise))],
+        else_expr: Some(Box::new(divisor)),
+    })
 }
 
 /// Arguments:
@@ -438,8 +468,14 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         // Interval(*) but not Duration, so divide the microsecond count natively
         // (guarding the divisor for div-by-zero).
         (Ok(DataType::Duration(TimeUnit::Microsecond)), Ok(_)) => {
-            let effective = divisor_type.as_ref().cloned().unwrap_or(DataType::Int64);
-            let divisor = make_safe_divisor(divisor, &effective, ansi_mode, "Division by zero");
+            // Spark's DivideDTInterval throws INTERVAL_DIVIDED_BY_ZERO on a zero
+            // divisor in BOTH ANSI modes (the check is not ANSI-gated), so always
+            // raise rather than nulling under ANSI off.
+            let divisor = raise_on_zero_divisor(
+                divisor,
+                "[INTERVAL_DIVIDED_BY_ZERO] Division by zero. Use `try_divide` to \
+                 tolerate divisor being 0 and return NULL instead.",
+            );
             cast(
                 cast(dividend, DataType::Int64) / divisor,
                 DataType::Duration(TimeUnit::Microsecond),

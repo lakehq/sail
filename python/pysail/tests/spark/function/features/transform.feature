@@ -416,12 +416,8 @@ Feature: transform higher-order function
     # higherOrderFunctions.scala has no ansiEnabled branch), but arithmetic inside
     # the lambda body inherits the ANSI mode of the session.
 
-    # @sail-bug: NOT transform-specific. Sail's integer `+` does not honor
-    # `spark.sql.ansi.enabled` overflow checking — plain `SELECT 2147483647 + 1`
-    # also wraps to -2147483648 under ANSI on instead of erroring (CAST does
-    # error, arithmetic does not). The lambda body merely inherits this
-    # pre-existing general gap. Spark errors with ARITHMETIC_OVERFLOW.
-    @sail-bug
+    # The lambda body inherits the session ANSI mode: integer `+` overflow errors
+    # with ARITHMETIC_OVERFLOW under ANSI on (via SparkAdd), matching Spark.
     Scenario: Arithmetic overflow inside the lambda errors under ANSI on
       Given config spark.sql.ansi.enabled = true
       When query

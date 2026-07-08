@@ -70,6 +70,17 @@ pub fn divide_by_zero_err() -> DataFusionError {
     )
 }
 
+/// Spark's `[INTERVAL_DIVIDED_BY_ZERO]` error (SQLSTATE 22012), raised by dividing
+/// an interval by zero. `DivideYMInterval`/`DivideDTInterval` throw it
+/// unconditionally (both ANSI modes); the legacy `CalendarInterval` path throws
+/// only under ANSI. `try_divide` tolerates it as NULL.
+pub fn interval_divided_by_zero_err() -> DataFusionError {
+    exec_datafusion_err!(
+        "[INTERVAL_DIVIDED_BY_ZERO] Division by zero. Use `try_divide` to tolerate divisor \
+         being 0 and return NULL instead."
+    )
+}
+
 /// `true` when a divide operand makes the result FLOAT/DOUBLE (Spark promotes any
 /// non-decimal numeric, and `DOUBLE / DECIMAL`, to DOUBLE).
 fn is_float(data_type: &DataType) -> bool {
@@ -176,19 +187,34 @@ impl ScalarUDFImpl for SparkDivide {
         };
 
         let result: ArrayRef = match (left.data_type(), right.data_type()) {
+            // Year-month interval (Spark's `DivideYMInterval`) throws
+            // INTERVAL_DIVIDED_BY_ZERO on a zero divisor in BOTH ANSI modes; only
+            // `try_divide` (safe) tolerates it as NULL.
             (DataType::Interval(YearMonth), DataType::Int32) => {
                 let l = left.as_primitive::<IntervalYearMonthType>();
                 let r = right.as_primitive::<Int32Type>();
+                if !self.safe && r.iter().flatten().any(|v| v == 0) {
+                    return Err(interval_divided_by_zero_err());
+                }
                 Arc::new(try_op_interval_yearmonth_i32(l, r, i32::checked_div))
             }
+            // `make_interval` produces Spark's legacy `CalendarInterval`, whose
+            // divide throws only under ANSI and returns NULL otherwise
+            // (`error_on_zero`); `try_divide` always tolerates it as NULL.
             (DataType::Interval(MonthDayNano), DataType::Int32) => {
                 let l = left.as_primitive::<IntervalMonthDayNanoType>();
                 let r = right.as_primitive::<Int32Type>();
+                if self.error_on_zero() && r.iter().flatten().any(|v| v == 0) {
+                    return Err(interval_divided_by_zero_err());
+                }
                 Arc::new(try_div_interval_monthdaynano_i32(l, r)?)
             }
             (DataType::Interval(MonthDayNano), DataType::Int64) => {
                 let l = left.as_primitive::<IntervalMonthDayNanoType>();
                 let r = right.as_primitive::<Int64Type>();
+                if self.error_on_zero() && r.iter().flatten().any(|v| v == 0) {
+                    return Err(interval_divided_by_zero_err());
+                }
                 Arc::new(try_div_interval_monthdaynano_i64(l, r)?)
             }
             (DataType::Int32, DataType::Interval(MonthDayNano)) => {

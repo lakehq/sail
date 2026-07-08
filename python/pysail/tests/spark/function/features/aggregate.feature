@@ -241,7 +241,6 @@ Feature: aggregate higher-order function
 
   Rule: ANSI arithmetic inside the merge lambda
 
-    @sail-bug
     Scenario: integer overflow inside merge errors under ANSI on
       Given config spark.sql.ansi.enabled = true
       When query
