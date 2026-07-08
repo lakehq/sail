@@ -38,6 +38,10 @@ impl RustType {
     pub fn is_vec(&self) -> bool {
         matches!(self, Self::Vec(_))
     }
+
+    pub fn is_option(&self) -> bool {
+        matches!(self, Self::Option(_))
+    }
 }
 
 #[derive(Clone, Copy)]

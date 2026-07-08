@@ -7,7 +7,10 @@ use super::config::OpenApiConfig;
 use crate::error::{BuildError, BuildResult};
 use crate::openapi::generator::operation::OperationDefinition;
 use crate::openapi::generator::schema::SchemaDefinition;
-use crate::openapi::spec::{MaybeRef, OpenApi, Parameter, PathItem, Response, Schema, load_spec};
+use crate::openapi::spec::{
+    MaybeRef, OpenApi, Parameter, PathItem, RequestBody, Response, Schema, SchemaReference,
+    load_spec,
+};
 
 pub fn generate_openapi_client(
     spec_path: impl AsRef<Path>,
@@ -22,6 +25,9 @@ pub fn generate_openapi_client(
     Ok(())
 }
 
+/// OpenAPI code generator.
+///
+/// The generator supports a deliberately small OpenAPI subset used by catalog services.
 pub(super) struct OpenApiGenerator<'a> {
     pub(super) openapi: &'a OpenApi,
     pub(super) config: OpenApiConfig,
@@ -157,7 +163,36 @@ impl<'a> OpenApiGenerator<'a> {
         }
     }
 
-    pub(super) fn resolve_schema(&self, reference: &'a str) -> BuildResult<(&'a str, &'a Schema)> {
+    pub(super) fn resolve_request_body(
+        &self,
+        body: &'a MaybeRef<RequestBody>,
+    ) -> BuildResult<&'a RequestBody> {
+        match body {
+            MaybeRef::Value(value) => Ok(value),
+            MaybeRef::Ref(reference) => Err(BuildError::InvalidInput(format!(
+                "request body references are not supported: {}",
+                reference.reference
+            ))),
+        }
+    }
+
+    pub(super) fn resolve_schema(
+        &self,
+        schema: &'a MaybeRef<Schema, SchemaReference>,
+    ) -> BuildResult<&'a Schema> {
+        match schema {
+            MaybeRef::Value(value) => Ok(value),
+            MaybeRef::Ref(reference) => {
+                let (_, schema) = self.resolve_schema_reference(&reference.reference)?;
+                Ok(schema)
+            }
+        }
+    }
+
+    pub(super) fn resolve_schema_reference(
+        &self,
+        reference: &'a str,
+    ) -> BuildResult<(&'a str, &'a Schema)> {
         let name = component_name(reference, "schemas")?;
         let schema =
             self.openapi.components.schemas.get(name).ok_or_else(|| {
@@ -165,7 +200,7 @@ impl<'a> OpenApiGenerator<'a> {
             })?;
         match schema {
             MaybeRef::Value(value) => Ok((name, value)),
-            MaybeRef::Ref(reference) => self.resolve_schema(&reference.reference),
+            MaybeRef::Ref(reference) => self.resolve_schema_reference(&reference.reference),
         }
     }
 }

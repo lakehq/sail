@@ -1,7 +1,6 @@
 use crate::error::{BuildError, BuildResult};
-use crate::openapi::spec::{Operation, PathItem};
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum HttpMethod {
     Get,
     Put,
@@ -28,27 +27,7 @@ impl HttpMethod {
     }
 }
 
-pub fn operation_entries(path_item: &PathItem) -> Vec<(HttpMethod, &Operation)> {
-    [
-        (HttpMethod::Get, path_item.get.as_ref()),
-        (HttpMethod::Put, path_item.put.as_ref()),
-        (HttpMethod::Post, path_item.post.as_ref()),
-        (HttpMethod::Delete, path_item.delete.as_ref()),
-        (HttpMethod::Options, path_item.options.as_ref()),
-        (HttpMethod::Head, path_item.head.as_ref()),
-        (HttpMethod::Patch, path_item.patch.as_ref()),
-        (HttpMethod::Trace, path_item.trace.as_ref()),
-    ]
-    .into_iter()
-    .filter_map(|(method, operation)| operation.map(|operation| (method, operation)))
-    .collect()
-}
-
-pub fn is_json_media_type(media_type: &str) -> bool {
-    media_type == "application/json" || media_type.ends_with("+json")
-}
-
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum HttpStatus {
     Success(u16),
     ExactError(u16),

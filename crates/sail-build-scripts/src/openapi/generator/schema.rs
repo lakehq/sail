@@ -28,10 +28,7 @@ impl<'a> OpenApiGenerator<'a> {
     ) -> BuildResult<SchemaDefinition> {
         let mut used_inline_type_names = BTreeSet::new();
         let mut inline = InlineSchemas::new(name);
-        let schema = match schema {
-            MaybeRef::Value(value) => value,
-            MaybeRef::Ref(reference) => self.resolve_schema(&reference.reference)?.1,
-        };
+        let schema = self.resolve_schema(schema)?;
         let schema = self.schema_definition_inner(
             type_name(name),
             Some(name),
@@ -342,7 +339,7 @@ impl<'a> OpenApiGenerator<'a> {
                 "schema reference type called with schema value".to_owned(),
             ));
         };
-        let (name, _) = self.resolve_schema(&reference.reference)?;
+        let (name, _) = self.resolve_schema_reference(&reference.reference)?;
         let rust_type = RustType::Named {
             qualifier: Vec::new(),
             name: type_name(name),
@@ -426,7 +423,7 @@ impl<'a> OpenApiGenerator<'a> {
                 name,
                 identifier,
                 serde_rename,
-                is_optional: !is_required,
+                is_required,
                 rust_type,
             });
         }
@@ -440,10 +437,7 @@ impl<'a> OpenApiGenerator<'a> {
         required: &mut BTreeSet<String>,
     ) -> BuildResult<()> {
         for item in &schema.all_of {
-            let schema = match item {
-                MaybeRef::Value(value) => value,
-                MaybeRef::Ref(reference) => self.resolve_schema(&reference.reference)?.1,
-            };
+            let schema = self.resolve_schema(item)?;
             self.collect_object_fields_inner(schema, properties, required)?;
         }
         for value in &schema.required {
@@ -464,7 +458,7 @@ impl<'a> OpenApiGenerator<'a> {
         used_inline_type_names: &mut BTreeSet<String>,
     ) -> BuildResult<EnumVariant> {
         let (variant, rust_type) = if let MaybeRef::Ref(reference) = schema {
-            let (name, _) = self.resolve_schema(&reference.reference)?;
+            let (name, _) = self.resolve_schema_reference(&reference.reference)?;
             (
                 type_name(name),
                 self.schema_type(schema, TypePosition::Nested)?,
@@ -637,7 +631,7 @@ impl<'a> OpenApiGenerator<'a> {
         inline: &mut InlineSchemas,
         used_inline_type_names: &mut BTreeSet<String>,
     ) -> BuildResult<EnumVariant> {
-        let (name, schema) = self.resolve_schema(reference)?;
+        let (name, schema) = self.resolve_schema_reference(reference)?;
         let variant = type_name(name);
         let rename = values
             .first()
@@ -784,7 +778,7 @@ struct SchemaField {
     name: String,
     identifier: RustName,
     serde_rename: Option<String>,
-    is_optional: bool,
+    is_required: bool,
     rust_type: RustType,
 }
 
@@ -1011,8 +1005,7 @@ fn generate_schema_field(field: &SchemaField) -> TokenStream {
         .serde_rename
         .as_ref()
         .map(|value| quote! { #[serde(rename = #value)] });
-    let optional = field
-        .is_optional
+    let optional = (!field.is_required && field.rust_type.is_option())
         .then(|| quote! { #[serde(default, skip_serializing_if = "Option::is_none")] });
     quote! {
         #rename
@@ -1028,8 +1021,7 @@ fn generate_variant_field(field: &SchemaField) -> TokenStream {
         .serde_rename
         .as_ref()
         .map(|value| quote! { #[serde(rename = #value)] });
-    let optional = field
-        .is_optional
+    let optional = (!field.is_required && field.rust_type.is_option())
         .then(|| quote! { #[serde(default, skip_serializing_if = "Option::is_none")] });
     quote! {
         #rename

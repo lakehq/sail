@@ -9,7 +9,7 @@ use crate::openapi::spec::{
     Schema, SchemaReference, SchemaType,
 };
 use crate::openapi::utils::docs::doc_attrs;
-use crate::openapi::utils::http::{HttpMethod, HttpStatus, is_json_media_type, operation_entries};
+use crate::openapi::utils::http::{HttpMethod, HttpStatus};
 use crate::openapi::utils::name::{RustName, type_name, value_name};
 use crate::openapi::utils::types::{RustType, TypePosition};
 
@@ -18,7 +18,7 @@ impl OpenApiGenerator<'_> {
         let mut output = Vec::new();
         for (path, item) in &self.openapi.paths {
             let item = self.resolve_path_item(item)?;
-            for (method, operation) in operation_entries(item) {
+            for (method, operation) in Self::collect_operations(item) {
                 let operation_id = operation.operation_id.as_deref().ok_or_else(|| {
                     BuildError::InvalidInput(format!(
                         "operation {} {path} is missing operationId",
@@ -40,7 +40,7 @@ impl OpenApiGenerator<'_> {
         Ok(output)
     }
 
-    pub(super) fn operation_definition(
+    fn operation_definition(
         &self,
         method: HttpMethod,
         path: &str,
@@ -61,10 +61,26 @@ impl OpenApiGenerator<'_> {
             summary: operation.summary.clone(),
             description: operation.description.clone(),
             success_response: self.success_response(operation_id, operation)?,
-            error_responses: self.error_responses(operation)?,
+            error_responses: self.error_responses(operation_id, operation)?,
             parameters,
             body,
         })
+    }
+
+    fn collect_operations(path_item: &PathItem) -> Vec<(HttpMethod, &Operation)> {
+        [
+            (HttpMethod::Get, path_item.get.as_ref()),
+            (HttpMethod::Put, path_item.put.as_ref()),
+            (HttpMethod::Post, path_item.post.as_ref()),
+            (HttpMethod::Delete, path_item.delete.as_ref()),
+            (HttpMethod::Options, path_item.options.as_ref()),
+            (HttpMethod::Head, path_item.head.as_ref()),
+            (HttpMethod::Patch, path_item.patch.as_ref()),
+            (HttpMethod::Trace, path_item.trace.as_ref()),
+        ]
+        .into_iter()
+        .filter_map(|(method, operation)| operation.map(|operation| (method, operation)))
+        .collect()
     }
 
     fn collect_parameters(
@@ -81,12 +97,6 @@ impl OpenApiGenerator<'_> {
         {
             let parameter = self.resolve_parameter(parameter)?;
             let location = parameter.location.clone();
-            if matches!(location, ParameterLocation::Cookie) {
-                return Err(BuildError::InvalidInput(format!(
-                    "operation {} contains unsupported {:?} parameter {}",
-                    operation_id, parameter.location, parameter.name
-                )));
-            }
             let schema = parameter.schema.as_ref().ok_or_else(|| {
                 BuildError::InvalidInput(format!(
                     "parameter {} in operation {} is missing a schema",
@@ -95,7 +105,7 @@ impl OpenApiGenerator<'_> {
             })?;
             let required = if matches!(location, ParameterLocation::Path) {
                 // The OpenAPI standard requires path parameters to have `required: true`.
-                // The Iceberg REST catalog spec intentionally marks the `{prefix}` path
+                // The Iceberg REST catalog specification intentionally marks the `{prefix}` path
                 // parameter as `required: false`, so honor an explicit `false` here.
                 parameter.required.unwrap_or(true)
             } else {
@@ -118,7 +128,12 @@ impl OpenApiGenerator<'_> {
                     required,
                     array: is_array,
                 },
-                ParameterLocation::Cookie => unreachable!("cookie parameters handled above"),
+                ParameterLocation::Cookie => {
+                    return Err(BuildError::InvalidInput(format!(
+                        "operation {} contains unsupported {:?} parameter {}",
+                        operation_id, parameter.location, parameter.name
+                    )));
+                }
             };
             let identifier = if matches!(kind, ParameterKind::Header { .. }) {
                 parameter
@@ -144,15 +159,7 @@ impl OpenApiGenerator<'_> {
         operation_id: &str,
         body: &MaybeRef<RequestBody>,
     ) -> BuildResult<OperationBody> {
-        let body = match body {
-            MaybeRef::Value(value) => value,
-            MaybeRef::Ref(reference) => {
-                return Err(BuildError::InvalidInput(format!(
-                    "operation {operation_id} has unsupported request body reference {}",
-                    reference.reference
-                )));
-            }
-        };
+        let body = self.resolve_request_body(body)?;
         let schema = json_content_schema(&body.content)?.ok_or_else(|| {
             BuildError::InvalidInput(format!(
                 "operation {operation_id} has request body without JSON schema"
@@ -168,31 +175,34 @@ impl OpenApiGenerator<'_> {
         operation_id: &str,
         operation: &Operation,
     ) -> BuildResult<OperationResponse> {
-        let mut responses = Vec::new();
-        for (status, response) in &operation.responses {
+        let mut response = None;
+        for (status, item) in &operation.responses {
             let status = HttpStatus::parse(status)?;
             if matches!(status, HttpStatus::Success(_)) {
-                let response = self.resolve_response(response)?;
-                responses.push(OperationResponse {
+                if response.is_some() {
+                    return Err(BuildError::InvalidInput(format!(
+                        "operation {operation_id} defines multiple success responses"
+                    )));
+                }
+                let item = self.resolve_response(item)?;
+                response = Some(OperationResponse {
                     status,
-                    rust_type: self.response_type(response)?,
+                    rust_type: self.response_type(item)?,
                 });
             }
         }
-        if responses.is_empty() {
-            return Err(BuildError::InvalidInput(format!(
+        response.ok_or_else(|| {
+            BuildError::InvalidInput(format!(
                 "operation {operation_id} does not define a success response"
-            )));
-        }
-        if responses.len() > 1 {
-            return Err(BuildError::InvalidInput(format!(
-                "operation {operation_id} defines multiple success responses"
-            )));
-        }
-        Ok(responses.remove(0))
+            ))
+        })
     }
 
-    fn error_responses(&self, operation: &Operation) -> BuildResult<Vec<OperationResponse>> {
+    fn error_responses(
+        &self,
+        _operation_id: &str,
+        operation: &Operation,
+    ) -> BuildResult<Vec<OperationResponse>> {
         let mut output = Vec::new();
         for (status, response) in &operation.responses {
             let status = HttpStatus::parse(status)?;
@@ -216,13 +226,7 @@ impl OpenApiGenerator<'_> {
     }
 
     fn parameter_type(&self, schema: &MaybeRef<Schema, SchemaReference>) -> BuildResult<RustType> {
-        let schema = match schema {
-            MaybeRef::Value(value) => value,
-            MaybeRef::Ref(reference) => {
-                let (_, schema) = self.resolve_schema(&reference.reference)?;
-                schema
-            }
-        };
+        let schema = self.resolve_schema(schema)?;
 
         if has_schema_type(schema, SchemaType::Array) {
             let items = schema.items.as_deref().ok_or_else(|| {
@@ -267,6 +271,7 @@ impl OperationDefinition {
         let error_type = operation_error_type_name(&self.operation_id);
         let path = generate_path_expression(&self.path, &self.parameters)?;
         let method = RustName::new(self.method.name());
+        let docs = doc_attrs(self.summary.as_deref(), self.description.as_deref());
 
         let arguments = self.parameters.iter().map(|parameter| {
             let ident = &parameter.identifier;
@@ -323,7 +328,6 @@ impl OperationDefinition {
             }
         };
         let success_body = generate_response_body_expression(&self.success_response.rust_type);
-        let docs = doc_attrs(self.summary.as_deref(), self.description.as_deref());
         let error_body = if self.error_responses.is_empty() {
             quote! {
                 response.error_for_status_ref()?;
@@ -405,6 +409,10 @@ impl OperationDefinition {
     }
 }
 
+fn is_json_media_type(media_type: &str) -> bool {
+    media_type == "application/json" || media_type.ends_with("+json")
+}
+
 fn json_content_schema(
     content: &ObjectMap<MediaType>,
 ) -> BuildResult<Option<&MaybeRef<Schema, SchemaReference>>> {
@@ -457,43 +465,28 @@ fn generate_path_expression(
             expression.pop();
         }
         expression.push_str("{}");
-        if !required && parameter.rust_type.is_string() {
-            let prefix = if optional_segment { "/" } else { "" };
-            arguments.push(quote! {
+        let argument = if !required {
+            let format = if optional_segment { "/{}" } else { "{}" };
+            let value = if parameter.rust_type.is_string() {
+                quote! { value.as_str() }
+            } else {
+                quote! { value.to_string() }
+            };
+            quote! {
                 #ident
                     .as_ref()
-                    .map(|value| {
-                        format!(
-                            "{}{}",
-                            #prefix,
-                            eager_percent_encode(value.as_str())
-                        )
-                    })
+                    .map(|value| format!(#format, eager_percent_encode(#value)))
                     .unwrap_or_default()
-            });
-        } else if !required {
-            let prefix = if optional_segment { "/" } else { "" };
-            arguments.push(quote! {
-                #ident
-                    .as_ref()
-                    .map(|value| {
-                        format!(
-                            "{}{}",
-                            #prefix,
-                            eager_percent_encode(value.to_string())
-                        )
-                    })
-                    .unwrap_or_default()
-            });
-        } else if parameter.rust_type.is_string() {
-            arguments.push(quote! {
-                eager_percent_encode(#ident.as_str())
-            });
+            }
         } else {
-            arguments.push(quote! {
-                eager_percent_encode(#ident.to_string())
-            });
-        }
+            let value = if parameter.rust_type.is_string() {
+                quote! { #ident.as_str() }
+            } else {
+                quote! { #ident.to_string() }
+            };
+            quote! { eager_percent_encode(#value) }
+        };
+        arguments.push(argument);
         rest = &after_start[end + 1..];
     }
     expression.push_str(rest);
@@ -619,16 +612,14 @@ fn generate_error_match_arm(
         let start = Literal::u16_unsuffixed(start);
         let end = Literal::u16_unsuffixed(end);
         Ok(quote! { #start..=#end => #value, })
-    } else {
-        let status = match response.status {
-            HttpStatus::ExactError(status) => status,
-            HttpStatus::Success(_) => unreachable!("success status handled above"),
-            HttpStatus::ClientError | HttpStatus::ServerError => {
-                unreachable!("HTTP status range handled above")
-            }
-        };
+    } else if let HttpStatus::ExactError(status) = response.status {
         let status = Literal::u16_unsuffixed(status);
         Ok(quote! { #status => #value, })
+    } else {
+        Err(BuildError::InvalidInput(format!(
+            "error response must use an exact HTTP status or range, got {:?}",
+            response.status
+        )))
     }
 }
 
