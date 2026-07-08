@@ -88,6 +88,27 @@ Feature: Spark type coercion for the +, -, * operators
         | result |
         | 8      |
 
+  Rule: Interval divided by an integer stays an interval
+    # The regular `/` operator routes interval operands through SparkDivide (the
+    # same unified UDF as try_divide), scaling the interval instead of erroring.
+    Scenario: year-month interval divided by integer
+      When query
+        """
+        SELECT make_ym_interval(1, 6) / 2 AS result
+        """
+      Then query result
+        | result                       |
+        | INTERVAL '0-9' YEAR TO MONTH |
+
+    Scenario: day-time interval divided by integer
+      When query
+        """
+        SELECT make_interval(0, 0, 0, 1, 0, 0, 0) / 2 AS result
+        """
+      Then query result
+        | result   |
+        | 12 hours |
+
   Rule: DATE minus DATE yields a day-time interval
     # Sail returns a day-time interval (Duration µs); Spark renders it as
     # INTERVAL '4' DAY (DAY-only field) while Sail renders DAY TO SECOND. The

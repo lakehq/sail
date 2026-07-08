@@ -427,50 +427,31 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     } = input;
 
     let (dividend, divisor) = arguments.two()?;
-
-    // Plan-time check for literal zero divisors (fast path, better error UX).
-    if is_zero_literal(&divisor) {
-        if function_context.plan_config.ansi_mode {
-            return Err(PlanError::ArrowError(ArrowError::DivideByZero));
-        } else {
-            return Ok(Expr::Literal(ScalarValue::Null, None));
-        }
-    }
-
     let ansi_mode = function_context.plan_config.ansi_mode;
+    let (dividend, divisor) =
+        spark_arith_coerce(dividend, divisor, ansi_mode, function_context.schema);
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
 
-    // Apply runtime zero-divisor guard to the divisor before building the division expression.
-    let effective_divisor_type = divisor_type.as_ref().cloned().unwrap_or(DataType::Int32);
-    let divisor = make_safe_divisor(
-        divisor,
-        &effective_divisor_type,
-        ansi_mode,
-        "Division by zero",
-    );
-
     let div_expr = match (&dividend_type, &divisor_type) {
-        // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
-        //  Seems to be a bug in DataFusion.
-        // TODO: Cast the precision and scale that matches the Spark's behavior after the division.
-        //  See `test_divide` in python/pysail/tests/spark/test_math.py
-        (Ok(DataType::Decimal128(_, _)), Ok(_))
-        | (Ok(_), Ok(DataType::Decimal128(_, _)))
-        | (Ok(DataType::Decimal256(_, _)), Ok(_))
-        | (Ok(_), Ok(DataType::Decimal256(_, _)))
-        | (Ok(DataType::Interval(IntervalUnit::YearMonth)), Ok(_))
-        | (Ok(DataType::Interval(IntervalUnit::DayTime)), Ok(_)) => dividend / divisor,
+        // Spark's day-time interval is stored as Duration(µs); SparkDivide handles
+        // Interval(*) but not Duration, so divide the microsecond count natively
+        // (guarding the divisor for div-by-zero).
         (Ok(DataType::Duration(TimeUnit::Microsecond)), Ok(_)) => {
-            // Match duration because we cast Spark's DayTime interval to Duration.
+            let effective = divisor_type.as_ref().cloned().unwrap_or(DataType::Int64);
+            let divisor = make_safe_divisor(divisor, &effective, ansi_mode, "Division by zero");
             cast(
                 cast(dividend, DataType::Int64) / divisor,
                 DataType::Duration(TimeUnit::Microsecond),
             )
         }
-        (Ok(_), Ok(_)) => cast(dividend, DataType::Float64) / cast(divisor, DataType::Float64),
+        // Numeric / decimal / interval-by-integer: the unified SparkDivide (Spark
+        // double promotion, decimal precision rule, interval scaling, and
+        // div-by-zero → error under ANSI / NULL otherwise).
+        (Ok(_), Ok(_)) => {
+            ScalarUDF::from(SparkDivide::new(ansi_mode, false)).call(vec![dividend, divisor])
+        }
         // TODO: In case getting the type fails, we don't want to fail the query.
-        //  Future work is needed here, ideally we create something like `Operator::SparkDivide`.
         (Err(_), _) | (_, Err(_)) => dividend / divisor,
     };
 

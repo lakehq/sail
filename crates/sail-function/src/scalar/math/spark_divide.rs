@@ -1,23 +1,21 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray};
-use datafusion::arrow::compute::kernels::numeric::div;
 use datafusion::arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 use datafusion::arrow::datatypes::{
     DataType, Float64Type, Int32Type, Int64Type, IntervalMonthDayNanoType, IntervalYearMonthType,
 };
-use datafusion::arrow::error::ArrowError;
-use datafusion_common::Result;
+use datafusion_common::{DataFusionError, Result, exec_datafusion_err};
 use datafusion_expr::{
     ColumnarValue, Operator, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_types_exec_err};
+use crate::scalar::math::utils::decimal::{decimal_divide, spark_decimal_divide_type};
 use crate::scalar::math::utils::try_op::{
-    arith_input_types, arith_result_type, is_float_or_decimal, null_decimal_overflow,
-    try_arrow_arith, try_binary_op_to_float64, try_div_interval_monthdaynano_i32,
-    try_div_interval_monthdaynano_i64, try_op_interval_monthdaynano_i32,
-    try_op_interval_yearmonth_i32,
+    arith_input_types, arith_result_type, is_float_or_decimal, try_binary_op_to_float64,
+    try_div_interval_monthdaynano_i32, try_div_interval_monthdaynano_i64,
+    try_op_interval_monthdaynano_i32, try_op_interval_yearmonth_i32,
 };
 
 /// Spark `/` and `try_divide`, unified. `safe = true` is `try_divide`
@@ -63,6 +61,15 @@ impl SparkDivide {
     }
 }
 
+/// Spark's `[DIVIDE_BY_ZERO]` error, raised by `/` under ANSI mode (the message
+/// contains "Division by zero", matching Spark's `DIVIDE_BY_ZERO` error class).
+pub fn divide_by_zero_err() -> DataFusionError {
+    exec_datafusion_err!(
+        "[DIVIDE_BY_ZERO] Division by zero. Use `try_divide` to tolerate divisor being 0 \
+         and return NULL instead."
+    )
+}
+
 /// `true` when a divide operand makes the result FLOAT/DOUBLE (Spark promotes any
 /// non-decimal numeric, and `DOUBLE / DECIMAL`, to DOUBLE).
 fn is_float(data_type: &DataType) -> bool {
@@ -87,12 +94,21 @@ impl ScalarUDFImpl for SparkDivide {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match arg_types {
-            [DataType::Int32 | DataType::Int64, DataType::Int32 | DataType::Int64] => {
-                Ok(DataType::Float64)
-            }
+            [
+                DataType::Int32 | DataType::Int64,
+                DataType::Int32 | DataType::Int64,
+            ] => Ok(DataType::Float64),
             [DataType::Interval(YearMonth), DataType::Int32] => Ok(DataType::Interval(YearMonth)),
-            [DataType::Interval(MonthDayNano), DataType::Int32 | DataType::Int64] => {
-                Ok(DataType::Interval(MonthDayNano))
+            [
+                DataType::Interval(MonthDayNano),
+                DataType::Int32 | DataType::Int64,
+            ] => Ok(DataType::Interval(MonthDayNano)),
+            // Spark's decimal division precision/scale rule (Arrow's `div` scale
+            // differs); operands reach here as two decimals (int coerced in
+            // coerce_types).
+            [DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)] => {
+                let (precision, scale) = spark_decimal_divide_type(*p1, *s1, *p2, *s2);
+                Ok(DataType::Decimal128(precision, scale))
             }
             [left, right] if is_float_or_decimal(left) || is_float_or_decimal(right) => {
                 if is_float(left) || is_float(right) {
@@ -136,6 +152,12 @@ impl ScalarUDFImpl for SparkDivide {
         let has_decimal = matches!(left, DataType::Decimal128(..) | DataType::Decimal256(..))
             || matches!(right, DataType::Decimal128(..) | DataType::Decimal256(..));
         if has_decimal && !is_float(left) && !is_float(right) {
+            // Keep two decimals as-is so their individual scales reach the divide
+            // kernel; a decimal/integral pair coerces the integer to decimal.
+            if matches!(left, DataType::Decimal128(..)) && matches!(right, DataType::Decimal128(..))
+            {
+                return Ok(vec![left.clone(), right.clone()]);
+            }
             let (l, r) = arith_input_types(left, Operator::Divide, right)?;
             return Ok(vec![l, r]);
         }
@@ -182,32 +204,25 @@ impl ScalarUDFImpl for SparkDivide {
                 let l = left.as_primitive::<Float64Type>();
                 let r = right.as_primitive::<Float64Type>();
                 if self.error_on_zero() && r.iter().flatten().any(|v| v == 0.0) {
-                    return Err(ArrowError::DivideByZero.into());
+                    return Err(divide_by_zero_err());
                 }
                 Arc::new(try_binary_op_to_float64::<Float64Type, _>(l, r, |a, b| {
-                    if b == 0.0 {
-                        None
-                    } else {
-                        Some(a / b)
-                    }
+                    if b == 0.0 { None } else { Some(a / b) }
                 }))
             }
-            // Decimal / decimal (or decimal / integral coerced to decimal): reuse
-            // Arrow's checked decimal division; div-by-zero and precision overflow
-            // error (ANSI `/`) or become per-element NULL.
-            (l, r) if is_float_or_decimal(l) && is_float_or_decimal(r) => {
-                if self.error_on_zero() {
-                    null_decimal_overflow(div(left, right)?)?
-                } else {
-                    null_decimal_overflow(try_arrow_arith(left, right, &return_type, div)?)?
-                }
+            // Decimal / decimal (or decimal / integral coerced to decimal): Spark's
+            // precision/scale rule (`decimal_divide`, not Arrow's `div`);
+            // div-by-zero and precision overflow error (ANSI `/`) or become
+            // per-element NULL.
+            (DataType::Decimal128(..), DataType::Decimal128(..)) => {
+                decimal_divide(left, right, &return_type, self.error_on_zero())?
             }
             (l, r) => {
                 return Err(unsupported_data_types_exec_err(
                     "spark_divide",
                     "Int, Float, Decimal, or Interval / integer",
                     &[l.clone(), r.clone()],
-                ))
+                ));
             }
         };
 

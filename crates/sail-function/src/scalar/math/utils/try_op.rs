@@ -2,20 +2,20 @@ use std::sync::Arc;
 
 use chrono::{Duration, Months, NaiveDate};
 use datafusion::arrow::array::{
-    new_null_array, Array, ArrayRef, ArrowPrimitiveType, AsArray, Date32Array, Date32Builder,
-    Datum, DurationMicrosecondArray, Int32Array, Int64Array, IntervalMonthDayNanoArray,
+    Array, ArrayRef, ArrowPrimitiveType, Date32Array, Date32Builder, Datum,
+    DurationMicrosecondArray, Int32Array, Int64Array, IntervalMonthDayNanoArray,
     IntervalMonthDayNanoBuilder, PrimitiveArray, PrimitiveBuilder, TimestampMicrosecondArray,
-    TimestampMicrosecondBuilder,
+    TimestampMicrosecondBuilder, new_null_array,
 };
 use datafusion::arrow::compute::concat;
 use datafusion::arrow::datatypes::{
-    DataType, Date32Type, Decimal128Type, Decimal256Type, DecimalType, Float64Type, Int32Type,
-    Int64Type, IntervalMonthDayNano, IntervalMonthDayNanoType, IntervalYearMonthType,
+    DataType, Date32Type, Float64Type, Int32Type, Int64Type, IntervalMonthDayNano,
+    IntervalMonthDayNanoType, IntervalYearMonthType,
 };
 use datafusion::arrow::error::ArrowError;
 use datafusion_common::ScalarValue;
-use datafusion_expr::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_expr::Operator;
+use datafusion_expr::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 
 const DAY_NANOS_I128: i128 = 86_400_000_000_000;
@@ -102,56 +102,6 @@ fn is_arithmetic_exception(err: &ArrowError) -> bool {
         err,
         ArrowError::ArithmeticOverflow(_) | ArrowError::DivideByZero
     )
-}
-
-fn null_overflow_decimal<T: DecimalType>(
-    arr: &PrimitiveArray<T>,
-    precision: u8,
-    scale: i8,
-) -> Result<PrimitiveArray<T>, ArrowError> {
-    let mut builder = PrimitiveBuilder::<T>::with_capacity(arr.len());
-    for i in 0..arr.len() {
-        if arr.is_null(i) {
-            builder.append_null();
-        } else {
-            let v = arr.value(i);
-            if T::is_valid_decimal_precision(v, precision) {
-                builder.append_value(v);
-            } else {
-                builder.append_null();
-            }
-        }
-    }
-    builder.finish().with_precision_and_scale(precision, scale)
-}
-
-/// Null out DECIMAL values that do not fit the array's declared precision.
-///
-/// Arrow's checked arithmetic kernels only error on native (i128/i256) overflow,
-/// not when a result exceeds the *declared* decimal precision. Spark's `try_*`
-/// yields NULL in that case, so this post-pass (applied after
-/// [`try_arrow_arith`]) enforces the precision bound per element. Non-decimal
-/// arrays pass through unchanged.
-pub fn null_decimal_overflow(array: ArrayRef) -> datafusion_common::Result<ArrayRef> {
-    match array.data_type() {
-        DataType::Decimal128(p, s) => {
-            let (p, s) = (*p, *s);
-            Ok(Arc::new(null_overflow_decimal::<Decimal128Type>(
-                array.as_primitive::<Decimal128Type>(),
-                p,
-                s,
-            )?))
-        }
-        DataType::Decimal256(p, s) => {
-            let (p, s) = (*p, *s);
-            Ok(Arc::new(null_overflow_decimal::<Decimal256Type>(
-                array.as_primitive::<Decimal256Type>(),
-                p,
-                s,
-            )?))
-        }
-        _ => Ok(array),
-    }
 }
 
 pub fn binary_op_scalar_or_array<T: ArrowPrimitiveType>(
@@ -1277,22 +1227,6 @@ mod tests {
             let out = out.as_primitive::<Int32Type>();
             assert!(out.is_null(0));
             assert_eq!(out.value(1), 4);
-            Ok(())
-        }
-
-        #[test]
-        fn test_null_decimal_overflow_enforces_declared_precision() -> datafusion_common::Result<()>
-        {
-            // 10^38 fits in i128 but has 39 digits, so it exceeds the default
-            // DECIMAL(38,10) precision. `Decimal128Array::from` builds it unvalidated
-            // (exactly how Arrow's checked `mul` can leave an over-precision result),
-            // and `null_decimal_overflow` must turn it into NULL while keeping 5.
-            let over = 10i128.pow(38);
-            let arr: ArrayRef = Arc::new(Decimal128Array::from(vec![Some(over), Some(5)]));
-            let out = null_decimal_overflow(arr)?;
-            let out = out.as_primitive::<Decimal128Type>();
-            assert!(out.is_null(0));
-            assert_eq!(out.value(1), 5);
             Ok(())
         }
 

@@ -62,6 +62,89 @@ Feature: ANSI overflow semantics for the +, -, * operators
         | result |
         | -2     |
 
+  Rule: Narrow integer overflow raises under ANSI on, wraps (keeping the type) under ANSI off
+    Scenario: tinyint add overflow raises under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(127 AS TINYINT) + CAST(1 AS TINYINT) AS result
+        """
+      Then query error (?i)overflow
+
+    Scenario: tinyint add overflow wraps and stays tinyint under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(127 AS TINYINT) + CAST(1 AS TINYINT) AS result
+        """
+      Then query result
+        | result |
+        | -128   |
+      Then query schema
+        """
+        root
+         |-- result: byte (nullable = false)
+        """
+
+    Scenario: tinyint subtract overflow raises under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(-128 AS TINYINT) - CAST(1 AS TINYINT) AS result
+        """
+      Then query error (?i)overflow
+
+    Scenario: tinyint subtract overflow wraps under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(-128 AS TINYINT) - CAST(1 AS TINYINT) AS result
+        """
+      Then query result
+        | result |
+        | 127    |
+
+    Scenario: smallint multiply overflow raises under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(32767 AS SMALLINT) * CAST(2 AS SMALLINT) AS result
+        """
+      Then query error (?i)overflow
+
+    Scenario: smallint multiply overflow wraps and stays smallint under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(32767 AS SMALLINT) * CAST(2 AS SMALLINT) AS result
+        """
+      Then query result
+        | result |
+        | -2     |
+      Then query schema
+        """
+        root
+         |-- result: short (nullable = false)
+        """
+
+    Scenario: bigint add overflow raises under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(9223372036854775807 AS BIGINT) + CAST(1 AS BIGINT) AS result
+        """
+      Then query error (?i)overflow
+
+    Scenario: bigint add overflow wraps to LONG_MIN under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(9223372036854775807 AS BIGINT) + CAST(1 AS BIGINT) AS result
+        """
+      Then query result
+        | result               |
+        | -9223372036854775808 |
+
   Rule: Non-finite doubles pass through in every mode (Inf/NaN are not overflow)
     # Float Inf/NaN is a valid IEEE 754 result, not an overflow, so `+ - *` on
     # doubles never raises/NULLs — identical under ANSI on and off.

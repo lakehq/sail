@@ -114,13 +114,9 @@ Feature: try_divide with float and decimal inputs
         | result |
         | NULL   |
 
-  Rule: Decimal division keeps a DECIMAL result type, never double
-    # Sail's decimal division precision/scale follows DataFusion/Arrow, not Spark's
-    # rule (Spark: decimal(23,13) "2.5000000000000"; Sail: scale 6). Pre-existing
-    # gap shared with the regular `/` operator (see the `TODO: Cast the precision
-    # and scale that matches Spark` in spark_divide). The fix here is that decimal
-    # division stays DECIMAL (not double); the exact scale is a separate follow-up.
-    @sail-bug
+  Rule: Decimal division keeps a DECIMAL result type with Spark's precision/scale
+    # Decimal division follows Spark's rule s = max(6, s1 + p2 + 1) via
+    # `decimal_divide` (HALF_UP), not Arrow's `div` scale.
     Scenario: decimal divided by decimal stays decimal
       When query
         """

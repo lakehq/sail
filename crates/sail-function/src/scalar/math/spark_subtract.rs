@@ -14,7 +14,7 @@ use datafusion_expr::{
 };
 
 use crate::error::invalid_arg_count_exec_err;
-use crate::scalar::math::utils::decimal::{decimal_binary_op, DecimalBinaryOp};
+use crate::scalar::math::utils::decimal::{DecimalBinaryOp, decimal_binary_op};
 use crate::scalar::math::utils::try_op::{
     add_months, arith_input_types, arith_result_type, try_add_interval_monthdaynano,
     try_arrow_arith, try_binary_op_date32_i32, try_op_date32_interval_yearmonth,
@@ -82,12 +82,14 @@ impl ScalarUDFImpl for SparkSubtract {
             [DataType::Interval(YearMonth), DataType::Interval(YearMonth)] => {
                 Ok(DataType::Interval(YearMonth))
             }
-            [DataType::Interval(MonthDayNano), DataType::Interval(MonthDayNano)] => {
-                Ok(DataType::Interval(MonthDayNano))
-            }
-            [DataType::Timestamp(Microsecond, _), DataType::Duration(Microsecond)] => {
-                Ok(DataType::Timestamp(Microsecond, None))
-            }
+            [
+                DataType::Interval(MonthDayNano),
+                DataType::Interval(MonthDayNano),
+            ] => Ok(DataType::Interval(MonthDayNano)),
+            [
+                DataType::Timestamp(Microsecond, _),
+                DataType::Duration(Microsecond),
+            ] => Ok(DataType::Timestamp(Microsecond, None)),
             [left, right] => arith_result_type(left, Operator::Minus, right),
             _ => Err(invalid_arg_count_exec_err(
                 "spark_subtract",

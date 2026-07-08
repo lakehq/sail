@@ -333,3 +333,49 @@ Feature: Division by zero behavior
       Then query result
         | result |
         | 5.0    |
+
+  Rule: Per-row division by zero in a multi-row batch, both ANSI modes
+    # A batch where only some rows have a zero divisor: ANSI off nulls exactly the
+    # offending rows (per element) and computes the rest; ANSI on raises for the
+    # whole batch.
+    Scenario: mixed integer divisors null only the zero rows under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT a / b AS result FROM VALUES (6, 2), (1, 0), (8, 4) AS t(a, b)
+        """
+      Then query result ordered
+        | result |
+        | 3.0    |
+        | NULL   |
+        | 2.0    |
+
+    Scenario: mixed integer divisors raise for the whole batch under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT a / b AS result FROM VALUES (6, 2), (1, 0), (8, 4) AS t(a, b)
+        """
+      Then query error (?i)division by zero
+
+    Scenario: mixed decimal divisors null only the zero rows under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT CAST(a AS DECIMAL(10,2)) / CAST(b AS DECIMAL(10,2)) AS result
+        FROM VALUES (6, 2), (1, 0), (8, 4) AS t(a, b)
+        """
+      Then query result ordered
+        | result          |
+        | 3.0000000000000 |
+        | NULL            |
+        | 2.0000000000000 |
+
+    Scenario: mixed decimal divisors raise for the whole batch under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT CAST(a AS DECIMAL(10,2)) / CAST(b AS DECIMAL(10,2)) AS result
+        FROM VALUES (6, 2), (1, 0), (8, 4) AS t(a, b)
+        """
+      Then query error (?i)division by zero

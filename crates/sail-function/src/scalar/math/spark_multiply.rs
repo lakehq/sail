@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, AsArray};
 use datafusion::arrow::compute::kernels::numeric::{mul, mul_wrapping};
-use datafusion::arrow::compute::{cast_with_options, CastOptions};
+use datafusion::arrow::compute::{CastOptions, cast_with_options};
 use datafusion::arrow::datatypes::IntervalUnit::{MonthDayNano, YearMonth};
 use datafusion::arrow::datatypes::{
     DataType, Int32Type, Int64Type, IntervalMonthDayNanoType, IntervalYearMonthType,
@@ -74,14 +74,22 @@ impl ScalarUDFImpl for SparkMultiply {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         match arg_types {
-            [DataType::Interval(YearMonth), DataType::Int32 | DataType::Int64]
-            | [DataType::Int32 | DataType::Int64, DataType::Interval(YearMonth)] => {
-                Ok(DataType::Interval(YearMonth))
-            }
-            [DataType::Interval(MonthDayNano), DataType::Int32 | DataType::Int64]
-            | [DataType::Int32 | DataType::Int64, DataType::Interval(MonthDayNano)] => {
-                Ok(DataType::Interval(MonthDayNano))
-            }
+            [
+                DataType::Interval(YearMonth),
+                DataType::Int32 | DataType::Int64,
+            ]
+            | [
+                DataType::Int32 | DataType::Int64,
+                DataType::Interval(YearMonth),
+            ] => Ok(DataType::Interval(YearMonth)),
+            [
+                DataType::Interval(MonthDayNano),
+                DataType::Int32 | DataType::Int64,
+            ]
+            | [
+                DataType::Int32 | DataType::Int64,
+                DataType::Interval(MonthDayNano),
+            ] => Ok(DataType::Interval(MonthDayNano)),
             // Spark caps the product precision by reducing the scale
             // (adjustPrecisionScale); DataFusion caps the scale at 38.
             [DataType::Decimal128(p1, s1), DataType::Decimal128(p2, s2)] => {
