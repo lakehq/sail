@@ -16,6 +16,7 @@ use crate::listing::utils::can_be_evaluated_for_partition_pruning;
 #[derive(Clone, Debug)]
 pub struct ListingTableSourceConfig {
     pub table_paths: Vec<ListingTableUrl>,
+    pub partition_base_path: Option<ListingTableUrl>,
     pub schema: TableSchema,
     pub constraints: Constraints,
     pub file_sort_order: Vec<Vec<Sort>>,
@@ -74,6 +75,9 @@ impl TableSource for ListingTableSource {
         filters
             .iter()
             .map(|filter| {
+                if self.config.partition_base_path.is_some() {
+                    return Ok(TableProviderFilterPushDown::Inexact);
+                }
                 if can_be_evaluated_for_partition_pruning(&partition_column_names, filter) {
                     return Ok(TableProviderFilterPushDown::Exact);
                 }
