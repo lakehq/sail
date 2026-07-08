@@ -82,8 +82,8 @@ impl PlanResolver<'_> {
                 }
             },
             QueryNode::Project { input, expressions } => {
-                self.resolve_query_project(input.map(|x| *x), expressions, state)
-                    .await?
+                // Keep large helper futures out of this recursive dispatcher frame.
+                Box::pin(self.resolve_query_project(input.map(|x| *x), expressions, state)).await?
             }
             QueryNode::Filter { input, condition } => {
                 self.resolve_query_filter(*input, condition, state).await?
@@ -183,7 +183,7 @@ impl PlanResolver<'_> {
                 self.resolve_query_hint(*input, name, parameters, state)
                     .await?
             }
-            QueryNode::Pivot(pivot) => self.resolve_query_pivot(pivot, state).await?,
+            QueryNode::Pivot(pivot) => Box::pin(self.resolve_query_pivot(pivot, state)).await?,
             QueryNode::Unpivot(unpivot) => self.resolve_query_unpivot(unpivot, state).await?,
             QueryNode::ToSchema { input, schema } => {
                 self.resolve_query_to_schema(*input, schema, state).await?
@@ -231,13 +231,7 @@ impl PlanResolver<'_> {
                 return Err(PlanError::todo("cached local relation"));
             }
             QueryNode::CachedRemoteRelation { relation_id } => {
-                let registry = self.ctx.extension::<CachedRelationRegistry>()?;
-                let relation = registry.get(&relation_id)?.ok_or_else(|| {
-                    PlanError::invalid(format!("No DataFrame with id {relation_id} is found"))
-                })?;
-                let plan = relation.to_logical_plan(&relation_id).await?;
-                let names = state.register_fields(plan.schema().inner().fields());
-                rename_logical_plan(plan, &names)?
+                self.resolve_query_cached_remote_relation(relation_id, state)?
             }
             QueryNode::CommonInlineUserDefinedTableFunction(udtf) => {
                 self.resolve_query_common_inline_udtf(udtf, state).await?
@@ -315,7 +309,7 @@ impl PlanResolver<'_> {
                     .await?
             }
             QueryNode::Empty { produce_one_row } => self.resolve_query_empty(produce_one_row)?,
-            QueryNode::Values(values) => self.resolve_query_values(values, state).await?,
+            QueryNode::Values(values) => Box::pin(self.resolve_query_values(values, state)).await?,
             QueryNode::TableAlias {
                 input,
                 name,
@@ -373,6 +367,20 @@ impl PlanResolver<'_> {
         self.verify_query_plan(&plan, state)?;
         self.register_schema_with_plan_id(&plan, plan_id, state)?;
         Ok(plan)
+    }
+
+    fn resolve_query_cached_remote_relation(
+        &self,
+        relation_id: String,
+        state: &mut PlanResolverState,
+    ) -> PlanResult<LogicalPlan> {
+        let registry = self.ctx.extension::<CachedRelationRegistry>()?;
+        let relation = registry.get(&relation_id)?.ok_or_else(|| {
+            PlanError::invalid(format!("No DataFrame with id {relation_id} is found"))
+        })?;
+        let plan = relation.to_logical_plan(&relation_id)?;
+        let names = state.register_fields(plan.schema().inner().fields());
+        rename_logical_plan(plan, &names).map_err(PlanError::from)
     }
 
     fn remove_hidden_fields(
