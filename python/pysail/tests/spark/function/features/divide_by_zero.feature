@@ -401,7 +401,11 @@ Feature: Division by zero behavior
       Then query error (?i)division by zero
 
     # make_interval produces Spark's legacy CalendarInterval, whose divide throws
-    # only under ANSI and returns NULL otherwise.
+    # only under ANSI and returns NULL otherwise. @spark-4: the PySpark 3.5 client
+    # sends this as the `calendar_interval` type, which Sail rejects at analysis
+    # ("Unsupported data type calendar_interval") before the divide runs; 4.x
+    # clients send `month_day_nano_interval` and reach the divide-by-zero path.
+    @spark-4
     Scenario: calendar interval divided by zero raises under ANSI on
       Given config spark.sql.ansi.enabled = true
       When query
@@ -410,6 +414,7 @@ Feature: Division by zero behavior
         """
       Then query error (?i)division by zero
 
+    @spark-4
     Scenario: calendar interval divided by zero returns NULL under ANSI off
       Given config spark.sql.ansi.enabled = false
       When query
