@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,

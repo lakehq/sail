@@ -481,7 +481,7 @@ impl StatsScalar {
         use_min: bool,
     ) -> Result<Self, DeltaTableError> {
         macro_rules! get_stat {
-            ($val: expr) => {
+            ($val: expr_2021) => {
                 if use_min {
                     *$val.min_opt().unwrap()
                 } else {
@@ -740,7 +740,7 @@ fn get_list_field_name(column_descr: &Arc<ColumnDescriptor>) -> Option<String> {
             ("list", seen, _) if seen == max_rep_levels => return Some("list".to_string()),
             ("element", _, seen) if seen == max_rep_levels => return Some("element".to_string()),
             (SAIL_LIST_FIELD_NAME, _, seen) if seen == max_rep_levels => {
-                return Some(SAIL_LIST_FIELD_NAME.to_string())
+                return Some(SAIL_LIST_FIELD_NAME.to_string());
             }
             ("list", _, _) => lists_seen += 1,
             ("element", _, _) | (SAIL_LIST_FIELD_NAME, _, _) => items_seen += 1,

@@ -1,8 +1,8 @@
 use std::sync::{Arc, Mutex};
 
-use datafusion::common::{internal_datafusion_err, Result};
-use datafusion::execution::runtime_env::RuntimeEnvBuilder;
+use datafusion::common::{Result, internal_datafusion_err};
 use datafusion::execution::SessionStateBuilder;
+use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::prelude::SessionConfig;
 use sail_common::config::AppConfig;
 use sail_common::runtime::RuntimeHandle;

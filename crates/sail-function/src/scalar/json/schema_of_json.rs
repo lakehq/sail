@@ -5,10 +5,10 @@ use std::sync::Arc;
 use chrono::{NaiveDate, NaiveTime};
 use chrono_tz::Tz;
 use datafusion::arrow::array::{
-    downcast_array, Array, ArrayRef, MapArray, StringArray, StructArray,
+    Array, ArrayRef, MapArray, StringArray, StructArray, downcast_array,
 };
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef, Fields};
-use datafusion_common::{exec_err, plan_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, exec_err, plan_err};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -67,24 +67,25 @@ impl SparkSchemaOfJson {
     fn validate_arg_types(arg_types: &[DataType]) -> Result<()> {
         match arg_types {
             [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8] => Ok(()),
-            [DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8, DataType::Map(map_field, _)] => {
-                match map_field.data_type() {
-                    DataType::Struct(fields) => {
-                        let key = fields[0].clone();
-                        let value = fields[1].clone();
-                        if !key.data_type().is_string() || !value.data_type().is_string() {
-                            return Err(DataFusionError::Plan(format!(
-                                "For function `{}`, the options map keys/values should both be type string. Instead got key: {}, value: {}",
-                                Self::SCHEMA_OF_JSON_NAME,
-                                key.data_type(),
-                                value.data_type(),
-                            )));
-                        }
-                        Ok(())
+            [
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Map(map_field, _),
+            ] => match map_field.data_type() {
+                DataType::Struct(fields) => {
+                    let key = fields[0].clone();
+                    let value = fields[1].clone();
+                    if !key.data_type().is_string() || !value.data_type().is_string() {
+                        return Err(DataFusionError::Plan(format!(
+                            "For function `{}`, the options map keys/values should both be type string. Instead got key: {}, value: {}",
+                            Self::SCHEMA_OF_JSON_NAME,
+                            key.data_type(),
+                            value.data_type(),
+                        )));
                     }
-                    _ => unreachable!(),
+                    Ok(())
                 }
-            }
+                _ => unreachable!(),
+            },
             _ => plan_err!(
                 "For function `{:?}` found invalid arg types: {:?}",
                 Self::SCHEMA_OF_JSON_NAME,
@@ -357,7 +358,7 @@ impl<'a> JsonSchemaParser<'a> {
                     self.parse_unquoted_name()
                 }
                 Some(c) => {
-                    return exec_err!("unexpected character `{c}` when parsing a field name")
+                    return exec_err!("unexpected character `{c}` when parsing a field name");
                 }
                 None => return exec_err!("unexpected end of input when parsing a field name"),
             };
@@ -413,7 +414,7 @@ impl<'a> JsonSchemaParser<'a> {
                 Some(c) if c == quote => return Ok(value),
                 Some('\\') => value.push(self.parse_escape(quote)?),
                 Some(c) if (c as u32) < 0x20 => {
-                    return exec_err!("unescaped control character in a string")
+                    return exec_err!("unescaped control character in a string");
                 }
                 Some(c) => value.push(c),
             }
@@ -1061,16 +1062,15 @@ impl SparkSchemaOfJsonOptions {
                 } else {
                     return Err(DataFusionError::Plan(format!(
                         "Expected options to be type map<string, string> but found key type {:?} and value type {:?}",
-                        key_type,
-                        value_type
-                    )))
+                        key_type, value_type
+                    )));
                 }
-            },
+            }
             other => {
                 return Err(DataFusionError::Plan(format!(
                     "Should be unreachable: options should be a map with an inner struct but instead got {:?}",
                     other
-                )))
+                )));
             }
         };
         Ok((keys, values))

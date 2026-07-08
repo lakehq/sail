@@ -27,7 +27,7 @@ use reqwest;
 use serde::de::Error as _;
 use serde::{Deserialize, Serialize};
 
-use super::{configuration, Error};
+use super::{Error, configuration};
 use crate::apis::{ContentType, ResponseContent};
 use crate::models;
 
@@ -158,8 +158,16 @@ impl OAuth2ApiApi for OAuth2ApiApiClient {
         if !local_var_status.is_client_error() && !local_var_status.is_server_error() {
             match local_var_content_type {
                 ContentType::Json => serde_json::from_str(&local_var_content).map_err(Error::from),
-                ContentType::Text => return Err(Error::from(serde_json::Error::custom("Received `text/plain` content type response that cannot be converted to `models::OAuthTokenResponse`"))),
-                ContentType::Unsupported(local_var_unknown_type) => return Err(Error::from(serde_json::Error::custom(format!("Received `{local_var_unknown_type}` content type response that cannot be converted to `models::OAuthTokenResponse`")))),
+                ContentType::Text => {
+                    return Err(Error::from(serde_json::Error::custom(
+                        "Received `text/plain` content type response that cannot be converted to `models::OAuthTokenResponse`",
+                    )));
+                }
+                ContentType::Unsupported(local_var_unknown_type) => {
+                    return Err(Error::from(serde_json::Error::custom(format!(
+                        "Received `{local_var_unknown_type}` content type response that cannot be converted to `models::OAuthTokenResponse`"
+                    ))));
+                }
             }
         } else {
             let local_var_entity: Option<GetTokenError> =

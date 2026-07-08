@@ -23,13 +23,13 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning, PlanProperties,
     SendableRecordBatchStream,
 };
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
 use futures::stream::{self, StreamExt};
 
 use crate::physical_plan::{
-    current_timestamp_millis, decode_adds_from_batch, delta_action_schema, encode_actions,
-    meta_adds, ExecCommitMeta, COL_ACTION,
+    COL_ACTION, ExecCommitMeta, current_timestamp_millis, decode_adds_from_batch,
+    delta_action_schema, encode_actions, meta_adds,
 };
 use crate::spec::{Action, Add, Remove, RemoveOptions, Stats};
 use crate::transaction::OperationMetrics;

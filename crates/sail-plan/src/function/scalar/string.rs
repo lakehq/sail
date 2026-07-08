@@ -4,7 +4,7 @@ use datafusion::functions::regex::expr_fn as regex_fn;
 use datafusion::functions::regex::regexpcount::RegexpCountFunc;
 use datafusion::functions::regex::regexpinstr::RegexpInstrFunc;
 use datafusion_common::{DFSchema, ScalarValue};
-use datafusion_expr::{cast, expr, lit, try_cast, when, ExprSchemable, ScalarUDF};
+use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit, try_cast, when};
 use datafusion_functions_nested::expr_fn::array_element;
 use datafusion_spark::function::math::expr_fn as math_fn;
 use datafusion_spark::function::string::elt::SparkElt;

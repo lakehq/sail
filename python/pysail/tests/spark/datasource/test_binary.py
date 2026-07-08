@@ -131,3 +131,24 @@ def test_binary_read_projections(spark, tmp_path):
     large_count = large_files.count()
     expected_large = sum(1 for _, content in files.values() if len(content) > min_file_size)
     assert large_count == expected_large
+
+
+def test_binary_read_partition_columns(spark, tmp_path):
+    root = tmp_path / "binary_partitioned"
+    png_dir = root / "kind=image" / "ext=png"
+    bin_dir = root / "kind=data" / "ext=bin"
+    png_dir.mkdir(parents=True)
+    bin_dir.mkdir(parents=True)
+    png_content = b"PNG partition payload"
+    bin_content = b"BIN partition payload"
+    (png_dir / "image.png").write_bytes(png_content)
+    (bin_dir / "payload.bin").write_bytes(bin_content)
+
+    read_df = spark.read.format("binaryFile").load(str(root)).select("path", "length", "content", "kind", "ext")
+
+    rows = {(row.path.split("/")[-1], row.length, bytes(row.content), row.kind, row.ext) for row in read_df.collect()}
+    assert rows == {
+        ("image.png", len(png_content), png_content, "image", "png"),
+        ("payload.bin", len(bin_content), bin_content, "data", "bin"),
+    }
+    assert read_df.filter("kind = 'image'").count() == 1

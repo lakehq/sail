@@ -14,7 +14,7 @@ use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int32Array, OffsetSizeT
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::utils::{adjust_offsets_for_slice, list_values, take_function_args};
-use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ValueOrLambda};
 
 use crate::error::generic_exec_err;

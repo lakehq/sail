@@ -30,16 +30,16 @@ use sail_catalog::provider::{
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
 use sail_common::http::SAIL_USER_AGENT;
 use sail_common_datafusion::catalog::delta::{
-    unity_table_id_value, DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
+    DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
 };
 use sail_common_datafusion::catalog::{
-    identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
+    DatabaseStatus, TableColumnStatus, TableKind, TableStatus, identity_partition_fields,
 };
 
 use crate::data_type::{
     data_type_to_unity_type, unity_struct_field_type_json, unity_type_to_data_type,
 };
-use crate::unity::{types, Client};
+use crate::unity::{Client, types};
 
 pub(crate) const DEFAULT_URI: &str = "http://localhost:8080/api/2.1/unity-catalog";
 
@@ -116,6 +116,32 @@ impl UnityCatalogProvider {
         }
     }
 
+    async fn create_managed_staging_location(
+        &self,
+        client: &Client,
+        catalog_name: &str,
+        schema_name: &str,
+        table: &str,
+    ) -> CatalogResult<String> {
+        let request = types::CreateStagingTable::builder()
+            .name(self.object_name(table))
+            .catalog_name(self.object_name(catalog_name))
+            .schema_name(self.object_name(schema_name));
+        let response = match client.create_staging_table().body(request).send().await {
+            Ok(response) => response,
+            Err(e) => {
+                return Err(CatalogError::External(format!(
+                    "Failed to create staging table: {e}"
+                )));
+            }
+        };
+        response.into_inner().staging_location.ok_or_else(|| {
+            CatalogError::External(
+                "Unity Catalog staging table response is missing a staging location".to_string(),
+            )
+        })
+    }
+
     fn qualified_object_name(&self, names: &[&str]) -> String {
         names
             .iter()
@@ -140,35 +166,35 @@ impl UnityCatalogProvider {
 
         let mut properties: HashMap<String, String> =
             schema_info.properties.map(|p| p.0).unwrap_or_default();
-        if let Some(created_at) = schema_info.created_at {
-            if !properties.contains_key("created_at") {
-                properties.insert("created_at".to_string(), created_at.to_string());
-            }
+        if let Some(created_at) = schema_info.created_at
+            && !properties.contains_key("created_at")
+        {
+            properties.insert("created_at".to_string(), created_at.to_string());
         }
-        if let Some(created_by) = schema_info.created_by {
-            if !properties.contains_key("created_by") {
-                properties.insert("created_by".to_string(), created_by);
-            }
+        if let Some(created_by) = schema_info.created_by
+            && !properties.contains_key("created_by")
+        {
+            properties.insert("created_by".to_string(), created_by);
         }
-        if let Some(owner) = schema_info.owner {
-            if !properties.contains_key("owner") {
-                properties.insert("owner".to_string(), owner);
-            }
+        if let Some(owner) = schema_info.owner
+            && !properties.contains_key("owner")
+        {
+            properties.insert("owner".to_string(), owner);
         }
-        if let Some(schema_id) = schema_info.schema_id {
-            if !properties.contains_key("schema_id") {
-                properties.insert("schema_id".to_string(), schema_id);
-            }
+        if let Some(schema_id) = schema_info.schema_id
+            && !properties.contains_key("schema_id")
+        {
+            properties.insert("schema_id".to_string(), schema_id);
         }
-        if let Some(updated_at) = schema_info.updated_at {
-            if !properties.contains_key("updated_at") {
-                properties.insert("updated_at".to_string(), updated_at.to_string());
-            }
+        if let Some(updated_at) = schema_info.updated_at
+            && !properties.contains_key("updated_at")
+        {
+            properties.insert("updated_at".to_string(), updated_at.to_string());
         }
-        if let Some(updated_by) = schema_info.updated_by {
-            if !properties.contains_key("updated_by") {
-                properties.insert("updated_by".to_string(), updated_by);
-            }
+        if let Some(updated_by) = schema_info.updated_by
+            && !properties.contains_key("updated_by")
+        {
+            properties.insert("updated_by".to_string(), updated_by);
         }
 
         DatabaseStatus {
@@ -236,10 +262,10 @@ impl UnityCatalogProvider {
                 } else {
                     partition_index
                 };
-                if partition_index.is_some() {
-                    if let Some(col_name) = &name {
-                        partition_by.push(col_name.to_string());
-                    }
+                if partition_index.is_some()
+                    && let Some(col_name) = &name
+                {
+                    partition_by.push(col_name.to_string());
                 }
                 Ok(TableColumnStatus {
                     name: name.unwrap_or_default(),
@@ -432,7 +458,7 @@ impl CatalogProvider for UnityCatalogProvider {
                 return Err(CatalogError::InvalidArgument(format!(
                     "invalid prefix: {}",
                     quote_namespace_if_needed(x)
-                )))
+                )));
             }
         };
         let result = client
@@ -517,7 +543,7 @@ impl CatalogProvider for UnityCatalogProvider {
             mode,
             properties,
             is_external,
-            is_write_precondition: _,
+            is_write_precondition,
         } = options;
 
         if mode.is_replace() {
@@ -644,27 +670,20 @@ impl CatalogProvider for UnityCatalogProvider {
                     "Storage location is required for external Unity Catalog tables".to_string(),
                 )
             })?
-        } else {
-            // The SQL planner supplies generated default locations for managed tables. Unity
-            // managed table creation must use a staging location allocated by the catalog.
-            let request = types::CreateStagingTable::builder()
-                .name(self.object_name(table))
-                .catalog_name(self.object_name(&catalog_name))
-                .schema_name(self.object_name(&schema_name));
-            let response = match client.create_staging_table().body(request).send().await {
-                Ok(response) => response,
-                Err(e) => {
-                    return Err(CatalogError::External(format!(
-                        "Failed to create staging table: {e}"
-                    )));
-                }
-            };
-            response.into_inner().staging_location.ok_or_else(|| {
+        } else if is_write_precondition {
+            // CTAS/data-write preconditions run before the writer, so they must use
+            // the staging location already returned by plan_lakehouse_create.
+            location.ok_or_else(|| {
                 CatalogError::External(
-                    "Unity Catalog staging table response is missing a staging location"
+                    "Unity Catalog managed table write precondition is missing a planned staging location"
                         .to_string(),
                 )
             })?
+        } else {
+            // The SQL planner supplies generated default locations for managed tables. Unity
+            // managed table creation must use a staging location allocated by the catalog.
+            self.create_managed_staging_location(&client, &catalog_name, &schema_name, table)
+                .await?
         };
 
         let request = types::CreateTable::builder()
@@ -843,11 +862,22 @@ impl CatalogProvider for UnityCatalogProvider {
             sail_catalog::provider::CreateTableMetadataRequirement::None,
             &self.lakehouse_capabilities(),
         );
-        let _ = (database, table);
         if request.options.format.eq_ignore_ascii_case("delta") && !request.options.is_external {
             plan.materialization = LakehouseCreateMaterialization::AfterCatalogTableFormat {
                 mode: TableFormatCreateMetadataMode::CatalogCoordinated,
             };
+            if request.options.is_write_precondition {
+                let client = self
+                    .get_client()
+                    .await
+                    .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
+                let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
+                let location = self
+                    .create_managed_staging_location(&client, &catalog_name, &schema_name, table)
+                    .await?;
+                plan.table.status.location = Some(location.clone());
+                plan.table.execution.table_identity.table_uri = Some(location);
+            }
         }
         Ok(plan)
     }

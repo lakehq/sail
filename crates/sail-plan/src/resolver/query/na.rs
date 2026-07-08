@@ -3,16 +3,16 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::DataType;
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{
-    cast, col, is_false, lit, when, Expr, ExprSchemable, Filter, LogicalPlan, Projection, TryCast,
+    Expr, ExprSchemable, Filter, LogicalPlan, Projection, TryCast, cast, col, is_false, lit, when,
 };
 use datafusion_functions::expr_fn::isnan;
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_fill_na(

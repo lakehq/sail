@@ -734,9 +734,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-glue"
-version = "1.152.0"
+version = "1.153.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "267d3459c708985a1c1472bb2eb8def3b8673abbcdb3e8057d73e40fa5a7f5b4"
+checksum = "48b33661f9c0b02b6c23d42646f43ea9eab6db37fdcbd80f85fabe72a70b9d8e"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -2885,7 +2885,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -3016,9 +3016,9 @@ dependencies = [
 
 [[package]]
 name = "env_filter"
-version = "1.0.1"
+version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32e90c2accc4b07a8456ea0debdc2e7587bdd890680d71173a15d4ae604f6eef"
+checksum = "900d271a03799a1ee8d1ca9b19893b48ca674a9284fefcfb85f05e74ed314217"
 dependencies = [
  "log",
  "regex",
@@ -3026,9 +3026,9 @@ dependencies = [
 
 [[package]]
 name = "env_logger"
-version = "0.11.10"
+version = "0.11.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0621c04f2196ac3f488dd583365b9c09be011a4ab8b9f37248ffcc8f6198b56a"
+checksum = "de671bd27a75a797dc9ae289ba1e77276e75e2026408aab65185384e2d5cd3f6"
 dependencies = [
  "anstream",
  "anstyle",
@@ -3050,7 +3050,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4612,7 +4612,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5388,7 +5388,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6756,7 +6756,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7348,7 +7348,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7424,7 +7424,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "sail-build-scripts"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "lazy_static",
  "prettyplease",
@@ -7438,7 +7438,7 @@ dependencies = [
 
 [[package]]
 name = "sail-cache"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "chrono",
  "datafusion",
@@ -7451,7 +7451,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -7472,11 +7472,12 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-glue"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "arrow",
  "async-trait",
  "aws-config",
+ "aws-credential-types",
  "aws-sdk-glue",
  "aws-smithy-types",
  "sail-catalog",
@@ -7487,7 +7488,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-hms"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "arrow",
  "async-trait",
@@ -7511,7 +7512,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-iceberg"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "arrow",
  "async-trait",
@@ -7534,7 +7535,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-memory"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "async-trait",
  "dashmap",
@@ -7544,7 +7545,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-onelake"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "async-trait",
  "object_store",
@@ -7558,7 +7559,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-system"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "async-trait",
  "datafusion",
@@ -7572,7 +7573,7 @@ dependencies = [
 
 [[package]]
 name = "sail-catalog-unity"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "arrow",
  "async-trait",
@@ -7597,7 +7598,7 @@ dependencies = [
 
 [[package]]
 name = "sail-cli"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "clap",
  "log",
@@ -7615,7 +7616,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "arrow",
  "arrow-buffer",
@@ -7637,7 +7638,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common-datafusion"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "arrow-schema",
  "async-trait",
@@ -7673,7 +7674,7 @@ dependencies = [
 
 [[package]]
 name = "sail-common-hms"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "pilota",
  "volo",
@@ -7683,7 +7684,7 @@ dependencies = [
 
 [[package]]
 name = "sail-data-source"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -7723,7 +7724,7 @@ dependencies = [
 
 [[package]]
 name = "sail-delta-lake"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "arrow-schema",
  "async-trait",
@@ -7768,7 +7769,7 @@ dependencies = [
 
 [[package]]
 name = "sail-execution"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "arrow-flight",
  "chrono",
@@ -7813,7 +7814,7 @@ dependencies = [
 
 [[package]]
 name = "sail-flight"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "arrow",
  "arrow-flight",
@@ -7842,7 +7843,7 @@ dependencies = [
 
 [[package]]
 name = "sail-function"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -7888,7 +7889,7 @@ dependencies = [
 
 [[package]]
 name = "sail-gold-test"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "clap",
  "lazy_static",
@@ -7900,7 +7901,7 @@ dependencies = [
 
 [[package]]
 name = "sail-iceberg"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "apache-avro",
  "arrow-schema",
@@ -7938,7 +7939,7 @@ dependencies = [
 
 [[package]]
 name = "sail-logical-optimizer"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "datafusion",
  "datafusion-common",
@@ -7947,7 +7948,7 @@ dependencies = [
 
 [[package]]
 name = "sail-logical-plan"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "comfy-table",
  "datafusion",
@@ -7963,7 +7964,7 @@ dependencies = [
 
 [[package]]
 name = "sail-object-store"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -7997,7 +7998,7 @@ dependencies = [
 
 [[package]]
 name = "sail-physical-optimizer"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "datafusion",
  "datafusion-physical-expr",
@@ -8007,7 +8008,7 @@ dependencies = [
 
 [[package]]
 name = "sail-physical-plan"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "datafusion",
  "datafusion-common",
@@ -8023,7 +8024,7 @@ dependencies = [
 
 [[package]]
 name = "sail-plan"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "arrow",
  "arrow-schema",
@@ -8061,6 +8062,7 @@ dependencies = [
  "sail-sql-analyzer",
  "serde",
  "serde_json",
+ "serde_yaml",
  "thiserror 2.0.18",
  "tokio",
  "tonic",
@@ -8069,7 +8071,7 @@ dependencies = [
 
 [[package]]
 name = "sail-pyarrow"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "arrow-array",
  "arrow-data",
@@ -8079,7 +8081,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "fastrace",
  "log",
@@ -8094,7 +8096,7 @@ dependencies = [
 
 [[package]]
 name = "sail-python-udf"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "datafusion",
  "datafusion-common",
@@ -8114,7 +8116,7 @@ dependencies = [
 
 [[package]]
 name = "sail-server"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "axum",
  "fastrace",
@@ -8130,7 +8132,7 @@ dependencies = [
 
 [[package]]
 name = "sail-session"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "async-trait",
  "chrono",
@@ -8175,7 +8177,7 @@ dependencies = [
 
 [[package]]
 name = "sail-spark-connect"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "arrow-schema",
  "async-stream",
@@ -8221,7 +8223,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-analyzer"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "chrono",
  "chumsky 0.12.0",
@@ -8235,7 +8237,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-macro"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -8244,7 +8246,7 @@ dependencies = [
 
 [[package]]
 name = "sail-sql-parser"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "chumsky 0.12.0",
  "either",
@@ -8261,7 +8263,7 @@ dependencies = [
 
 [[package]]
 name = "sail-telemetry"
-version = "0.6.4"
+version = "0.6.6"
 dependencies = [
  "datafusion",
  "env_logger",
@@ -8462,7 +8464,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b55fb86dfd3a2f5f76ea78310a88f96c4ea21a3031f8d212443d56123fd0521"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -9056,7 +9058,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -10172,7 +10174,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

@@ -5,9 +5,9 @@ use object_store::path::Path;
 use object_store::{Error as ObjectStoreError, ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use crate::spec::{
-    delta_log_prefix_path, delta_log_root_path, last_checkpoint_path, parse_checkpoint_version,
-    parse_checksum_version, parse_commit_version, parse_compacted_json_versions, DeltaResult,
-    LastCheckpointHint,
+    DeltaResult, LastCheckpointHint, delta_log_prefix_path, delta_log_root_path,
+    last_checkpoint_path, parse_checkpoint_version, parse_checksum_version, parse_commit_version,
+    parse_compacted_json_versions,
 };
 
 pub(crate) fn parse_delta_log_entry_version(meta: &ObjectMeta) -> Option<i64> {

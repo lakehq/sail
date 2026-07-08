@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{i256, DataType, IntervalUnit, TimeUnit};
+use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit, i256};
 use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::{
-    cast, expr, lit, try_cast, BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF,
+    BinaryExpr, Expr, ExprSchemable, Operator, ScalarUDF, cast, expr, lit, try_cast,
 };
 use datafusion_spark::function::math::expr_fn as math_fn;
 use half::f16;

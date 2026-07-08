@@ -3,8 +3,8 @@ use std::sync::Arc;
 use datafusion::arrow::array::{ArrayRef, ArrowNativeTypeOp, AsArray, Float32Array, Float64Array};
 use datafusion::arrow::compute::CastOptions;
 use datafusion::arrow::datatypes::{
-    DataType, Decimal128Type, Field, FieldRef, Float32Type, Float64Type, Int16Type, Int32Type,
-    Int64Type, Int8Type, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
+    DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DataType, Decimal128Type, Field, FieldRef,
+    Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
 };
 use datafusion::arrow::util::display::FormatOptions;
 use datafusion_common::{Result, ScalarValue};
@@ -12,8 +12,8 @@ use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::preimage::PreimageResult;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
-    expr, ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    ColumnarValue, Expr, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
+    expr,
 };
 use num::integer::{div_ceil, div_floor};
 use num::traits::CheckedAdd;
@@ -211,10 +211,11 @@ fn ceil_floor_simplify<T: ScalarUDFImpl + 'static>(
         _ => {}
     }
     // Idempotence: floor(floor(x)) = floor(x), ceil(ceil(x)) = ceil(x).
-    if let Expr::ScalarFunction(ref func) = arg {
-        if func.func.inner().is::<T>() && func.args.len() == 1 {
-            return Ok(ExprSimplifyResult::Simplified(arg));
-        }
+    if let Expr::ScalarFunction(ref func) = arg
+        && func.func.inner().is::<T>()
+        && func.args.len() == 1
+    {
+        return Ok(ExprSimplifyResult::Simplified(arg));
     }
     Ok(ExprSimplifyResult::Original(vec![arg]))
 }
@@ -850,11 +851,7 @@ fn lit_as_integer(v: &ScalarValue) -> Option<i128> {
         ScalarValue::Decimal128(Some(n), _, 0) => Some(*n),
         ScalarValue::Decimal128(Some(n), _, scale) if *scale > 0 => {
             let pow = 10_i128.checked_pow(*scale as u32)?;
-            if n % pow == 0 {
-                Some(n / pow)
-            } else {
-                None
-            }
+            if n % pow == 0 { Some(n / pow) } else { None }
         }
         _ => None,
     }

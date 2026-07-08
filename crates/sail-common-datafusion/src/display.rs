@@ -6,14 +6,14 @@ use chrono::{Duration, NaiveDate, SecondsFormat, TimeZone, Utc};
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::{
-    ArrowDictionaryKeyType, ArrowNativeType, DataType, Date32Type, Date64Type, Decimal128Type,
-    Decimal256Type, Decimal32Type, Decimal64Type, DecimalType, DurationMicrosecondType,
+    ArrowDictionaryKeyType, ArrowNativeType, DataType, Date32Type, Date64Type, Decimal32Type,
+    Decimal64Type, Decimal128Type, Decimal256Type, DecimalType, DurationMicrosecondType,
     DurationMillisecondType, DurationNanosecondType, DurationSecondType, Float16Type, Float32Type,
-    Float64Type, Int16Type, Int32Type, Int64Type, Int8Type, IntervalDayTimeType,
+    Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, IntervalDayTimeType,
     IntervalMonthDayNanoType, IntervalYearMonthType, RunEndIndexType, Time32MillisecondType,
     Time32SecondType, Time64MicrosecondType, Time64NanosecondType, TimestampMicrosecondType,
-    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type,
-    UInt64Type, UInt8Type, UnionMode,
+    TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type,
+    UInt32Type, UInt64Type, UnionMode,
 };
 use datafusion::arrow::error::ArrowError;
 use datafusion::arrow::temporal_conversions::{
@@ -546,7 +546,7 @@ macro_rules! decimal_display {
 decimal_display!(Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type);
 
 macro_rules! try_convert {
-    ($value:expr, $f:expr, $t:expr $(,)?) => {
+    ($value:expr_2021, $f:expr_2021, $t:expr_2021 $(,)?) => {
         $f($value).ok_or_else(|| {
             ArrowError::CastError(format!(concat!("invalid ", $t, " value: {}"), $value))
         })
@@ -554,7 +554,7 @@ macro_rules! try_convert {
 }
 
 macro_rules! timestamp_display {
-    ($t:ty, $formatter:expr $(,)?) => {
+    ($t:ty, $formatter:expr_2021 $(,)?) => {
         impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
             type State = (Option<Tz>, TimeFormat<'a>);
 

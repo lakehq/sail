@@ -57,12 +57,14 @@ impl ScalarUDFImpl for SparkTryAdd {
             | [DataType::Int32, DataType::Interval(MonthDayNano)]
             | [DataType::Interval(MonthDayNano), DataType::Int64]
             | [DataType::Int64, DataType::Interval(MonthDayNano)]
-            | [DataType::Interval(MonthDayNano), DataType::Interval(MonthDayNano)] => {
-                Ok(DataType::Interval(MonthDayNano))
-            }
-            [DataType::Timestamp(Microsecond, _), DataType::Duration(Microsecond)] => {
-                Ok(DataType::Timestamp(Microsecond, None))
-            }
+            | [
+                DataType::Interval(MonthDayNano),
+                DataType::Interval(MonthDayNano),
+            ] => Ok(DataType::Interval(MonthDayNano)),
+            [
+                DataType::Timestamp(Microsecond, _),
+                DataType::Duration(Microsecond),
+            ] => Ok(DataType::Timestamp(Microsecond, None)),
 
             _ => Err(unsupported_data_types_exec_err(
                 "try_add",

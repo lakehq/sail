@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
 use serde::{Deserialize, Serialize};
 
-use crate::options::gen::DeltaWriteOptions;
+use crate::options::r#gen::DeltaWriteOptions;
 
 /// Options for the Delta Lake writer execution plan.
 ///
