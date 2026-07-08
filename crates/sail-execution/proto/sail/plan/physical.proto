@@ -181,6 +181,7 @@ message ExtendedScalarUdf {
     SparkToXmlUdf spark_to_xml = 29;
     SparkBinUdf spark_bin = 30;
     SparkNegativeUdf spark_negative = 31;
+    SparkFromXmlUdf spark_from_xml = 32;
   }
 }
 
@@ -244,6 +245,10 @@ message XpathTypedUdf {
 
 message SparkToXmlUdf {
     string session_timezone = 1;
+}
+
+message SparkFromXmlUdf {
+  string session_timezone = 1;
 }
 
 message SparkUnixTimestampUdf {
