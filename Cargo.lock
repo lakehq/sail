@@ -7529,6 +7529,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "testcontainers",
+ "thiserror 2.0.18",
  "tokio",
  "url",
  "uuid",
@@ -7596,6 +7597,7 @@ dependencies = [
  "syn 2.0.118",
  "tempfile",
  "testcontainers",
+ "thiserror 2.0.18",
  "tokio",
  "wiremock",
 ]

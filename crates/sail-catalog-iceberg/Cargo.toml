@@ -31,6 +31,7 @@ percent-encoding = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_with = { workspace = true }
+thiserror = { workspace = true }
 uuid = { workspace = true }
 tokio = { workspace = true }
 log = { workspace = true }

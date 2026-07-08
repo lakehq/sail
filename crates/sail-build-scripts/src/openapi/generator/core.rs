@@ -69,16 +69,14 @@ impl<'a> OpenApiGenerator<'a> {
                 pub headers: reqwest::header::HeaderMap,
             }
 
-            #[derive(Debug)]
+            #[derive(Debug, thiserror::Error)]
             pub enum ApiError<E> {
-                Unknown(reqwest::Error),
+                #[error("request error: {0}")]
+                Request(#[from] reqwest::Error),
+                #[error("unknown error: {0}")]
+                Unknown(String),
+                #[error("response error: status code {}", .0.status)]
                 Response(Response<E>),
-            }
-
-            impl<E> From<reqwest::Error> for ApiError<E> {
-                fn from(error: reqwest::Error) -> Self {
-                    Self::Unknown(error)
-                }
             }
 
             fn eager_percent_encode(value: impl AsRef<str>) -> String {

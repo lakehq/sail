@@ -331,7 +331,7 @@ impl OperationDefinition {
         let error_body = if self.error_responses.is_empty() {
             quote! {
                 response.error_for_status_ref()?;
-                unreachable!("unexpected non-error HTTP status: {status}")
+                Err(ApiError::Unknown(format!("unexpected non-error HTTP status: {status}")))
             }
         } else {
             let arms = self
@@ -344,7 +344,9 @@ impl OperationDefinition {
                     #(#arms)*
                     _ => {
                         response.error_for_status_ref()?;
-                        unreachable!("unexpected non-error HTTP status: {status}")
+                        return Err(ApiError::Unknown(format!(
+                            "unexpected non-error HTTP status: {status}"
+                        )));
                     }
                 };
                 Err(ApiError::Response(Response {

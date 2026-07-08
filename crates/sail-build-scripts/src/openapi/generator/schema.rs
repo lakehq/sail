@@ -457,28 +457,28 @@ impl<'a> OpenApiGenerator<'a> {
         inline: &mut InlineSchemas,
         used_inline_type_names: &mut BTreeSet<String>,
     ) -> BuildResult<EnumVariant> {
-        let (variant, rust_type) = if let MaybeRef::Ref(reference) = schema {
-            let (name, _) = self.resolve_schema_reference(&reference.reference)?;
-            (
-                type_name(name),
-                self.schema_type(schema, TypePosition::Nested)?,
-            )
-        } else {
-            let MaybeRef::Value(schema) = schema else {
-                unreachable!("schema reference handled above");
-            };
-            let mut rust_type = self.schema_type_inner_with_inline(
-                schema,
-                TypePosition::Nested,
-                inline,
-                used_inline_type_names,
-                true,
-                &format!("Value{index}"),
-            )?;
-            if is_nullable(schema) {
-                rust_type = RustType::Option(Box::new(rust_type));
+        let (variant, rust_type) = match schema {
+            MaybeRef::Ref(reference) => {
+                let (name, _) = self.resolve_schema_reference(&reference.reference)?;
+                (
+                    type_name(name),
+                    self.schema_type(schema, TypePosition::Nested)?,
+                )
             }
-            (RustName::new(format!("Value{index}")), rust_type)
+            MaybeRef::Value(schema) => {
+                let mut rust_type = self.schema_type_inner_with_inline(
+                    schema,
+                    TypePosition::Nested,
+                    inline,
+                    used_inline_type_names,
+                    true,
+                    &format!("Value{index}"),
+                )?;
+                if is_nullable(schema) {
+                    rust_type = RustType::Option(Box::new(rust_type));
+                }
+                (RustName::new(format!("Value{index}")), rust_type)
+            }
         };
         Ok(EnumVariant {
             name: variant,
