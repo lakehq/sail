@@ -5,7 +5,7 @@ use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use datafusion::arrow::datatypes::*;
-use datafusion_common::{exec_err, plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
 };
@@ -177,22 +177,15 @@ impl ScalarUDFImpl for SparkFromXml {
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         match arg_types {
-            [DataType::Null
-            | DataType::Utf8
-            | DataType::Utf8View
-            | DataType::LargeUtf8, DataType::Utf8
-            | DataType::Utf8View
-            | DataType::LargeUtf8] => Ok(vec![DataType::Utf8, DataType::Utf8]),
-            [DataType::Null
-            | DataType::Utf8
-            | DataType::Utf8View
-            | DataType::LargeUtf8, DataType::Utf8
-            | DataType::Utf8View
-            | DataType::LargeUtf8, DataType::Map(_, _)] => Ok(vec![
-                DataType::Utf8,
-                DataType::Utf8,
-                arg_types[2].clone(),
-            ]),
+            [
+                DataType::Null | DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+            ] => Ok(vec![DataType::Utf8, DataType::Utf8]),
+            [
+                DataType::Null | DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Utf8 | DataType::Utf8View | DataType::LargeUtf8,
+                DataType::Map(_, _),
+            ] => Ok(vec![DataType::Utf8, DataType::Utf8, arg_types[2].clone()]),
             _ => plan_err!(
                 "`{}` requires 2 or 3 arguments: xml STRING, schema STRING, options MAP (optional), got {:?}",
                 Self::FROM_XML_NAME,
@@ -774,10 +767,10 @@ fn append_text(
         Some(s) => s,
     };
 
-    if let Some(nv) = &options.null_value {
-        if raw == nv.as_str() {
-            return append_null_to_field(builder);
-        }
+    if let Some(nv) = &options.null_value
+        && raw == nv.as_str()
+    {
+        return append_null_to_field(builder);
     }
 
     match builder {
@@ -1225,17 +1218,21 @@ mod tests {
     #[test]
     fn test_boolean() -> Result<()> {
         let r = run("<p><flag>true</flag></p>", "flag BOOLEAN")?;
-        assert!(col(&r, "flag")
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .unwrap()
-            .value(0));
+        assert!(
+            col(&r, "flag")
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .unwrap()
+                .value(0)
+        );
         let r = run("<p><flag>false</flag></p>", "flag BOOLEAN")?;
-        assert!(!col(&r, "flag")
-            .as_any()
-            .downcast_ref::<BooleanArray>()
-            .unwrap()
-            .value(0));
+        assert!(
+            !col(&r, "flag")
+                .as_any()
+                .downcast_ref::<BooleanArray>()
+                .unwrap()
+                .value(0)
+        );
         Ok(())
     }
 }

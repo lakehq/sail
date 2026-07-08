@@ -6,7 +6,7 @@ use datafusion::arrow::array::{Array, ArrayRef, AsArray, Int64Array, UInt64Array
 use datafusion::arrow::compute::kernels::{cast, numeric, take};
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::error::DataFusionError;
-use datafusion_common::{exec_err, plan_err, Result};
+use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Volatility};
 use datafusion_expr_common::signature::Signature;
@@ -147,12 +147,18 @@ fn convert_tz_inner(args: &[ArrayRef], classic: bool) -> Result<ArrayRef> {
     let ts_arr = &args[2];
 
     let results: Int64Array = {
-        let (from_tz_strs, to_tz_strs) = match (from_tz_strs_arr.as_string_opt::<i32>(), to_tz_strs_arr.as_string_opt::<i32>()) {
+        let (from_tz_strs, to_tz_strs) = match (
+            from_tz_strs_arr.as_string_opt::<i32>(),
+            to_tz_strs_arr.as_string_opt::<i32>(),
+        ) {
             (Some(f), Some(t)) => (f, t),
-            _ => return exec_err!(
-                "`convert_timezone` first and second arguments must be string literal or array, received {:?}, {:?}",
-                args[0], args[1]
-            ),
+            _ => {
+                return exec_err!(
+                    "`convert_timezone` first and second arguments must be string literal or array, received {:?}, {:?}",
+                    args[0],
+                    args[1]
+                );
+            }
         };
 
         let arr_lens = args.iter().map(|a| a.len()).collect::<Vec<_>>();

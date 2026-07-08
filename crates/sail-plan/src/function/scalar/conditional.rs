@@ -1,7 +1,7 @@
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion::functions::expr_fn;
 use datafusion_common::ScalarValue;
-use datafusion_expr::{cast, expr, lit, ExprSchemable, ScalarUDF};
+use datafusion_expr::{ExprSchemable, ScalarUDF, cast, expr, lit};
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::datetime::spark_date::SparkDate;
 use sail_function::scalar::datetime::spark_timestamp::SparkTimestamp;
@@ -15,11 +15,14 @@ fn case(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     let mut when_then_expr = Vec::new();
     let mut iter = arguments.into_iter();
     while let Some(condition) = iter.next() {
-        if let Some(result) = iter.next() {
-            when_then_expr.push((Box::new(condition), Box::new(result)));
-        } else {
-            when_then_expr.push((Box::new(lit(true)), Box::new(condition)));
-            break;
+        match iter.next() {
+            Some(result) => {
+                when_then_expr.push((Box::new(condition), Box::new(result)));
+            }
+            _ => {
+                when_then_expr.push((Box::new(lit(true)), Box::new(condition)));
+                break;
+            }
         }
     }
     Ok(expr::Expr::Case(expr::Case {

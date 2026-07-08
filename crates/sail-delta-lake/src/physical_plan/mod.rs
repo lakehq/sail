@@ -24,7 +24,7 @@ use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::{ExecutionPlan, Partitioning};
-use datafusion_physical_expr::expressions::{lit, Column as PhysicalColumn};
+use datafusion_physical_expr::expressions::{Column as PhysicalColumn, lit};
 
 mod action_schema;
 mod commit_exec;
@@ -41,8 +41,8 @@ mod writer_exec;
 mod writer_options;
 
 pub use action_schema::{
-    decode_actions_and_meta_from_batch, decode_adds_from_batch, delta_action_schema,
-    encode_actions, ExecCommitMeta, COL_ACTION,
+    COL_ACTION, ExecCommitMeta, decode_actions_and_meta_from_batch, decode_adds_from_batch,
+    delta_action_schema, encode_actions,
 };
 pub use commit_exec::DeltaCommitExec;
 pub use discovery_exec::DeltaDiscoveryExec;
@@ -51,14 +51,14 @@ pub use log_replay_exec::DeltaLogReplayExec;
 pub use metadata_stats_exec::DeltaMetadataStatsExec;
 pub mod planner;
 pub use planner::{
-    plan_delete, plan_delete_mor, plan_merge, plan_merge_mor, plan_update, DeltaPhysicalPlanner,
-    DeltaPlannerConfig, PlannerContext,
+    DeltaPhysicalPlanner, DeltaPlannerConfig, PlannerContext, plan_delete, plan_delete_mor,
+    plan_merge, plan_merge_mor, plan_update,
 };
 pub use relaxed_tz_exec::RelaxedTzCastExec;
 pub use remove_actions_exec::DeltaRemoveActionsExec;
 pub use scan_by_adds_exec::DeltaScanByAddsExec;
 pub use write_context::{
-    prepare_delta_write_context, DeltaCommitContext, DeltaSnapshotContext, DeltaWriteContext,
+    DeltaCommitContext, DeltaSnapshotContext, DeltaWriteContext, prepare_delta_write_context,
 };
 pub use writer_exec::DeltaWriterExec;
 pub use writer_options::DeltaWriterExecOptions;

@@ -1,15 +1,15 @@
 use std::sync::Arc;
 
-use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig, STANDARD};
 use base64::engine::DecodePaddingMode;
-use base64::{alphabet, Engine as _};
+use base64::engine::general_purpose::{GeneralPurpose, GeneralPurposeConfig, STANDARD};
+use base64::{Engine as _, alphabet};
 use datafusion::arrow::array::{
     Array, BinaryArray, BinaryViewArray, FixedSizeBinaryArray, GenericBinaryArray,
     GenericBinaryBuilder, GenericStringArray, GenericStringBuilder, LargeBinaryArray,
     LargeStringArray, OffsetSizeTrait, StringArray, StringViewArray,
 };
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 const SPARK_BASE64_DECODE: GeneralPurpose = GeneralPurpose::new(
@@ -242,7 +242,9 @@ impl ScalarUDFImpl for SparkBase64 {
                     |_| &[],
                 )))),
                 other => {
-                    exec_err!("Spark `base64`: Expr array must be BINARY or STRING, got array of type {other}")
+                    exec_err!(
+                        "Spark `base64`: Expr array must be BINARY or STRING, got array of type {other}"
+                    )
                 }
             },
             other => exec_err!("Spark `base64`: Expr must be BINARY or STRING, got {other:?}"),

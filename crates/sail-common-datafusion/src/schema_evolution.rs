@@ -1,21 +1,21 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    new_null_array, Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, MapArray,
-    StructArray,
+    Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, MapArray, StructArray,
+    new_null_array,
 };
-use datafusion::arrow::compute::{can_cast_types, cast_with_options, CastOptions};
+use datafusion::arrow::compute::{CastOptions, can_cast_types, cast_with_options};
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion::common::{exec_err, DataFusionError, Result, ScalarValue};
+use datafusion::common::{DataFusionError, Result, ScalarValue, exec_err};
 use datafusion::functions::core::getfield::GetFieldFunc;
 use datafusion::physical_expr::expressions::{self, Column, Literal};
 use datafusion::physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion::physical_expr_adapter::{PhysicalExprAdapter, PhysicalExprAdapterFactory};
 use datafusion::physical_plan::ColumnarValue;
 use datafusion_common::format::DEFAULT_CAST_OPTIONS;
-use parquet_variant_compute::{unshred_variant, VariantArray};
+use parquet_variant_compute::{VariantArray, unshred_variant};
 
 use crate::variant::{is_binary_variant_field, is_variant_arrow_field, is_variant_storage_type};
 
@@ -228,7 +228,10 @@ impl<'a> SchemaEvolutionPhysicalExprRewriter<'a> {
                     let null_value = ScalarValue::Null.cast_to(logical_field.data_type())?;
                     Ok(Transformed::yes(Arc::new(Literal::new(null_value))))
                 } else {
-                    exec_err!("Non-nullable column '{}' is missing from physical schema and no default value provided", column.name())
+                    exec_err!(
+                        "Non-nullable column '{}' is missing from physical schema and no default value provided",
+                        column.name()
+                    )
                 }
             }
             None => exec_err!(
@@ -712,7 +715,7 @@ fn cast_struct_array_to_fields(
 mod tests {
     use datafusion::arrow::array::{BinaryViewArray, Int64Array, StringArray};
     use datafusion::arrow::buffer::OffsetBuffer;
-    use parquet_variant_compute::{json_to_variant, shred_variant, variant_to_json, VariantType};
+    use parquet_variant_compute::{VariantType, json_to_variant, shred_variant, variant_to_json};
 
     use super::*;
 

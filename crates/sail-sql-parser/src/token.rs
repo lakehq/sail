@@ -236,7 +236,7 @@ macro_rules! punctuation_enum {
 for_all_punctuations!(punctuation_enum);
 
 macro_rules! keyword_enum {
-    ([$(($string:expr, $identifier:ident),)* $(,)?]) => {
+    ([$(($string:expr_2021, $identifier:ident),)* $(,)?]) => {
         /// A SQL keyword.
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
         pub enum Keyword {
@@ -471,7 +471,7 @@ impl Keyword {
 #[cfg(test)]
 mod tests {
     macro_rules! keyword_values {
-        ([$(($string:expr, $_:ident),)* $(,)?]) => {
+        ([$(($string:expr_2021, $_:ident),)* $(,)?]) => {
             static KEYWORD_VALUES: &[&str] = &[ $($string,)* ];
         };
     }

@@ -8,9 +8,9 @@ use arrow::array::{
 use arrow::buffer::{NullBuffer, ScalarBuffer};
 use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Date32Type, Decimal128Type, Field, Float32Type, Float64Type,
-    Int16Type, Int32Type, Int64Type, Int8Type, TimestampMicrosecondType,
+    Int8Type, Int16Type, Int32Type, Int64Type, TimestampMicrosecondType,
 };
-use datafusion::common::{exec_err, DataFusionError, Result as DataFusionResult, ScalarValue};
+use datafusion::common::{DataFusionError, Result as DataFusionResult, ScalarValue, exec_err};
 use datafusion::logical_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
 };

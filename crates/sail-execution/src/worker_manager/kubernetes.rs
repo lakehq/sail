@@ -7,10 +7,10 @@ use k8s_openapi::api::core::v1::{
 };
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, OwnerReference};
 use k8s_openapi::{DeepMerge, Resource};
-use kube::api::{DeleteParams, ListParams};
 use kube::Api;
-use rand::distr::Uniform;
+use kube::api::{DeleteParams, ListParams};
 use rand::RngExt;
+use rand::distr::Uniform;
 use sail_common::config::ClusterConfigEnv;
 use sail_server::RetryStrategy;
 use sail_telemetry::common::ContextPropagationEnv;
@@ -255,10 +255,10 @@ impl WorkerManager for KubernetesWorkerManager {
                         "failed to parse worker pod template: {e}",
                     ))
                 })?;
-            if let Some(metadata) = &template.metadata {
-                if let Some(template_labels) = &metadata.labels {
-                    labels.extend(template_labels.clone());
-                }
+            if let Some(metadata) = &template.metadata
+                && let Some(template_labels) = &metadata.labels
+            {
+                labels.extend(template_labels.clone());
             }
             if let Some(s) = template.spec {
                 spec.merge_from(s);
@@ -324,10 +324,10 @@ mod tests {
         let mut labels = BTreeMap::new();
         let parsed_template: PodTemplateSpec = serde_json::from_str(&template_json).unwrap();
 
-        if let Some(metadata) = &parsed_template.metadata {
-            if let Some(template_labels) = &metadata.labels {
-                labels.extend(template_labels.clone());
-            }
+        if let Some(metadata) = &parsed_template.metadata
+            && let Some(template_labels) = &metadata.labels
+        {
+            labels.extend(template_labels.clone());
         }
 
         // Add default labels (simulating build_pod_labels)

@@ -39,16 +39,15 @@ impl From<Status> for TaskStreamError {
     fn from(status: Status) -> Self {
         if status.code() == Code::Internal {
             let details = status.get_error_details();
-            if let Some(info) = details.error_info() {
-                if let ("task stream", "sail", Some(cause)) = (
+            if let Some(info) = details.error_info()
+                && let ("task stream", "sail", Some(cause)) = (
                     info.reason.as_str(),
                     info.domain.as_str(),
                     info.metadata.get("cause"),
-                ) {
-                    if let Ok(cause) = serde_json::from_str::<CommonErrorCause>(cause) {
-                        return cause.into();
-                    }
-                }
+                )
+                && let Ok(cause) = serde_json::from_str::<CommonErrorCause>(cause)
+            {
+                return cause.into();
             }
         }
         Self::Unknown(status.message().to_string())

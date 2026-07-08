@@ -22,11 +22,11 @@
 
 use std::collections::HashSet;
 
-use crate::delta_log::{get_actions, LogStore};
+use crate::delta_log::{LogStore, get_actions};
 use crate::spec::{
-    logical_file_key, Action, Add, CommitAction, CommitConflictError, CommitInfo, DeltaError,
-    DeltaOperation, DeltaResult, IsolationLevel, LogicalFileKey, Metadata, Protocol, Remove,
-    Transaction,
+    Action, Add, CommitAction, CommitConflictError, CommitInfo, DeltaError, DeltaOperation,
+    DeltaResult, IsolationLevel, LogicalFileKey, Metadata, Protocol, Remove, Transaction,
+    logical_file_key,
 };
 use crate::table::DeltaSnapshot;
 
@@ -342,9 +342,9 @@ impl<'a> ConflictChecker<'a> {
                 self.txn_info.read_snapshot.protocol().min_writer_version(),
             );
             if curr_read < win_read || win_write < curr_write {
-                return Err(CommitConflictError::ProtocolChanged(
-                    format!("required read/write {win_read}/{win_write}, current read/write {curr_read}/{curr_write}"),
-                ));
+                return Err(CommitConflictError::ProtocolChanged(format!(
+                    "required read/write {win_read}/{win_write}, current read/write {curr_read}/{curr_write}"
+                )));
             };
         }
         if !self.winning_commit_summary.protocol().is_empty() {

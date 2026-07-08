@@ -5,7 +5,7 @@ use datafusion::arrow::compute::try_binary;
 use datafusion::arrow::datatypes::{DataType, Int32Type, IntervalUnit};
 use datafusion::arrow::error::ArrowError;
 use datafusion_common::types::NativeType;
-use datafusion_common::{plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::error::invalid_arg_count_exec_err;
