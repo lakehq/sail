@@ -2327,12 +2327,12 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
                 let udf = SparkToXml::new(Arc::from(session_timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
-            UdfKind::SparkUnixTimestamp(r#gen::SparkUnixTimestampUdf { timezone }) => {
-                let udf = SparkUnixTimestamp::new(Arc::from(timezone));
-                return Ok(Arc::new(ScalarUDF::from(udf)));
-            }
             UdfKind::SparkFromXml(r#gen::SparkFromXmlUdf { session_timezone }) => {
                 let udf = SparkFromXml::new(Arc::from(session_timezone));
+                return Ok(Arc::new(ScalarUDF::from(udf)));
+            }
+            UdfKind::SparkUnixTimestamp(r#gen::SparkUnixTimestampUdf { timezone }) => {
+                let udf = SparkUnixTimestamp::new(Arc::from(timezone));
                 return Ok(Arc::new(ScalarUDF::from(udf)));
             }
             UdfKind::StructFunction(r#gen::StructFunctionUdf { field_names }) => {
