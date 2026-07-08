@@ -1,7 +1,7 @@
 use std::fmt::{Display, Formatter};
 
 use proc_macro2::{Ident, TokenStream};
-use quote::{format_ident, TokenStreamExt};
+use quote::{TokenStreamExt, format_ident};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RustName(String);
@@ -37,10 +37,9 @@ pub fn lowercase_parts(value: &str) -> Vec<String> {
                     || character.is_ascii_digit()
                     || character.is_ascii_uppercase()
                         && next.is_some_and(|character| character.is_ascii_lowercase())
-            }) {
-                if !part.is_empty() {
-                    output.push(std::mem::take(&mut part));
-                }
+            }) && !part.is_empty()
+            {
+                output.push(std::mem::take(&mut part));
             }
             part.push(character.to_ascii_lowercase());
         } else if character.is_ascii_alphanumeric() {

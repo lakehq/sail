@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::Path;
 
-use serde::de::{self, IgnoredAny, Visitor};
 use serde::Deserialize;
+use serde::de::{self, IgnoredAny, Visitor};
 
 use crate::error::BuildResult;
 

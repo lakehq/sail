@@ -20,7 +20,7 @@ pub mod unity {
     include!(concat!(env!("OUT_DIR"), "/unity_catalog.rs"));
 }
 
-pub mod gen {
+pub mod r#gen {
     #![expect(unused_imports)]
     #![expect(clippy::enum_variant_names)]
     include!(concat!(env!("OUT_DIR"), "/unity_catalog_gen.rs"));

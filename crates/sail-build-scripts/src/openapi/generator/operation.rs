@@ -9,8 +9,8 @@ use crate::openapi::spec::{
     Schema, SchemaReference, SchemaType,
 };
 use crate::openapi::utils::docs::doc_attrs;
-use crate::openapi::utils::http::{is_json_media_type, operation_entries, HttpMethod, HttpStatus};
-use crate::openapi::utils::name::{type_name, value_name, RustName};
+use crate::openapi::utils::http::{HttpMethod, HttpStatus, is_json_media_type, operation_entries};
+use crate::openapi::utils::name::{RustName, type_name, value_name};
 use crate::openapi::utils::types::{RustType, TypePosition};
 
 impl OpenApiGenerator<'_> {

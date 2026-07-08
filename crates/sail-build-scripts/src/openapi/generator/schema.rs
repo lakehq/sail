@@ -7,7 +7,7 @@ use super::core::OpenApiGenerator;
 use crate::error::{BuildError, BuildResult};
 use crate::openapi::spec::{AdditionalProperties, MaybeRef, Schema, SchemaReference, SchemaType};
 use crate::openapi::utils::docs::doc_attrs;
-use crate::openapi::utils::name::{type_name, value_name, RustName};
+use crate::openapi::utils::name::{RustName, type_name, value_name};
 use crate::openapi::utils::types::{RustType, TypePosition};
 
 impl<'a> OpenApiGenerator<'a> {

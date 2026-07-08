@@ -10,7 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use sail_build_scripts::openapi::generator::{generate_openapi_client, OpenApiConfig};
+use sail_build_scripts::openapi::generator::{OpenApiConfig, generate_openapi_client};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
