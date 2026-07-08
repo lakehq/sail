@@ -2591,8 +2591,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             }
             "spark_to_chrono_fmt" => Ok(Arc::new(ScalarUDF::from(SparkToChronoFmt::new()))),
             "spark_expm1" | "expm1" => Ok(Arc::new(ScalarUDF::from(SparkExpm1::new()))),
-            "spark_ceil" | "ceil" => Ok(Arc::new(ScalarUDF::from(SparkCeil::new(false)))),
-            "spark_floor" | "floor" => Ok(Arc::new(ScalarUDF::from(SparkFloor::new(false)))),
             "spark_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8::new()))),
             "spark_to_large_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToLargeUtf8::new()))),
             "spark_to_utf8_view" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8View::new()))),
