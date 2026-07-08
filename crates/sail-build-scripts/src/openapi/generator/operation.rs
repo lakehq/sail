@@ -286,20 +286,16 @@ impl OperationDefinition {
         let headers = generate_headers(&self.parameters);
         let has_query = !query.is_empty();
         let has_headers = !headers.is_empty();
-        let request = if has_query || has_headers || self.body.is_some() {
-            quote! {
-                let mut request = self
-                    .client
-                    .request(reqwest::Method::#method, url)
-                    .headers(self.headers.clone());
-            }
+        let mutability = if has_query || has_headers || self.body.is_some() {
+            quote! { mut }
         } else {
-            quote! {
-                let request = self
-                    .client
-                    .request(reqwest::Method::#method, url)
-                    .headers(self.headers.clone());
-            }
+            quote! {}
+        };
+        let request = quote! {
+            let #mutability request = self
+                .client
+                .request(reqwest::Method::#method, url)
+                .headers(self.headers.clone());
         };
         let query_request = has_query.then(|| {
             quote! {

@@ -27,7 +27,8 @@ pub fn generate_openapi_client(
 
 /// OpenAPI code generator.
 ///
-/// The generator supports a deliberately small OpenAPI subset used by catalog services.
+/// The generator supports a deliberately small OpenAPI subset to cover services
+/// used in the codebase.
 pub(super) struct OpenApiGenerator<'a> {
     pub(super) openapi: &'a OpenApi,
     pub(super) config: OpenApiConfig,
