@@ -183,12 +183,12 @@ use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
 use sail_function::scalar::math::spark_div::SparkIntervalDiv;
 use sail_function::scalar::math::spark_divide::SparkDivide;
+use sail_function::scalar::math::spark_modulo::SparkModulo;
 use sail_function::scalar::math::spark_multiply::SparkMultiply;
 use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
 use sail_function::scalar::math::spark_subtract::SparkSubtract;
-use sail_function::scalar::math::spark_try_mod::SparkTryMod;
 use sail_function::scalar::math::spark_unhex::SparkUnHex;
 use sail_function::scalar::math::spark_uniform::SparkUniform;
 use sail_function::scalar::misc::hll_sketch::{HllSketchEstimateFunction, HllUnionFunction};
@@ -2434,6 +2434,9 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             UdfKind::SparkDivide(r#gen::SparkDivideUdf { ansi_mode, safe }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkDivide::new(ansi_mode, safe))));
             }
+            UdfKind::SparkModulo(r#gen::SparkModuloUdf { ansi_mode, safe }) => {
+                return Ok(Arc::new(ScalarUDF::from(SparkModulo::new(ansi_mode, safe))));
+            }
             UdfKind::SparkMakeTimestampNtz(r#gen::SparkMakeTimestampNtzUdf { is_try }) => {
                 return Ok(Arc::new(ScalarUDF::from(SparkMakeTimestampNtz::new(
                     is_try,
@@ -2606,7 +2609,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             "spark_to_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8::new()))),
             "spark_to_large_utf8" => Ok(Arc::new(ScalarUDF::from(SparkToLargeUtf8::new()))),
             "spark_to_utf8_view" => Ok(Arc::new(ScalarUDF::from(SparkToUtf8View::new()))),
-            "spark_try_mod" | "try_mod" => Ok(Arc::new(ScalarUDF::from(SparkTryMod::new()))),
             "spark_version" | "version" => Ok(Arc::new(ScalarUDF::from(SparkVersion::new()))),
             "spark_to_json" | "to_json" => Ok(Arc::new(ScalarUDF::from(SparkToJson::new()))),
             "spark_uniform" | "uniform" => Ok(Arc::new(ScalarUDF::from(SparkUniform::new()))),
@@ -2718,7 +2720,6 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             || node_inner.is::<SparkToUtf8View>()
             || node_inner.is::<SparkTryAESDecrypt>()
             || node_inner.is::<SparkTryAESEncrypt>()
-            || node_inner.is::<SparkTryMod>()
             || node_inner.is::<SparkTryParseUrl>()
             || node_inner.is::<SparkTryToBinary>()
             || node_inner.is::<HllSketchEstimateFunction>()
@@ -2899,6 +2900,11 @@ impl PhysicalExtensionCodec for RemoteExecutionCodec {
             })
         } else if let Some(func) = node.inner().downcast_ref::<SparkDivide>() {
             UdfKind::SparkDivide(r#gen::SparkDivideUdf {
+                ansi_mode: func.ansi_mode(),
+                safe: func.safe(),
+            })
+        } else if let Some(func) = node.inner().downcast_ref::<SparkModulo>() {
+            UdfKind::SparkModulo(r#gen::SparkModuloUdf {
                 ansi_mode: func.ansi_mode(),
                 safe: func.safe(),
             })

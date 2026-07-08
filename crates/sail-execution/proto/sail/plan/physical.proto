@@ -186,6 +186,7 @@ message ExtendedScalarUdf {
     SparkSubtractUdf spark_subtract = 34;
     SparkMultiplyUdf spark_multiply = 35;
     SparkDivideUdf spark_divide = 36;
+    SparkModuloUdf spark_modulo = 37;
   }
 }
 
@@ -336,6 +337,11 @@ message SparkMultiplyUdf {
 }
 
 message SparkDivideUdf {
+  bool ansi_mode = 1;
+  bool safe = 2;
+}
+
+message SparkModuloUdf {
   bool ansi_mode = 1;
   bool safe = 2;
 }

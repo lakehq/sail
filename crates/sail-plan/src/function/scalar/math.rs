@@ -24,12 +24,12 @@ use sail_function::scalar::math::spark_ceil_floor::{SparkCeil, SparkFloor};
 use sail_function::scalar::math::spark_conv::SparkConv;
 use sail_function::scalar::math::spark_div::SparkIntervalDiv;
 use sail_function::scalar::math::spark_divide::SparkDivide;
+use sail_function::scalar::math::spark_modulo::SparkModulo;
 use sail_function::scalar::math::spark_multiply::SparkMultiply;
 use sail_function::scalar::math::spark_negative::SparkNegative;
 use sail_function::scalar::math::spark_pmod::SparkPmod;
 use sail_function::scalar::math::spark_signum::SparkSignum;
 use sail_function::scalar::math::spark_subtract::SparkSubtract;
-use sail_function::scalar::math::spark_try_mod::SparkTryMod;
 use sail_function::scalar::math::spark_unhex::SparkUnHex;
 use sail_function::scalar::math::spark_uniform::SparkUniform;
 use sail_function::scalar::misc::raise_error::RaiseError;
@@ -715,35 +715,27 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
     } = input;
 
     let (dividend, divisor) = arguments.two()?;
-
-    // Plan-time check for literal zero divisors.
-    if is_zero_literal(&divisor) {
-        if function_context.plan_config.ansi_mode {
-            return Err(PlanError::ArrowError(ArrowError::ArithmeticOverflow(
-                "Remainder by zero".to_string(),
-            )));
-        } else {
-            return Ok(Expr::Literal(ScalarValue::Null, None));
-        }
-    }
-
     let ansi_mode = function_context.plan_config.ansi_mode;
-    let divisor_type = divisor.get_type(function_context.schema);
+    let (dividend, divisor) =
+        spark_arith_coerce(dividend, divisor, ansi_mode, function_context.schema);
 
-    // Apply runtime zero-divisor guard to the divisor before building the modulo expression.
-    let effective_divisor_type = divisor_type.unwrap_or(DataType::Int32);
-    let divisor = make_safe_divisor(
-        divisor,
-        &effective_divisor_type,
-        ansi_mode,
-        "Remainder by zero",
-    );
+    // Native `%` errors on a zero divisor (never NULLs), so — unlike `+`/`-`/`*`
+    // — modulo always needs SparkModulo, except when a scalar-subquery operand
+    // would break the planner's count-bug check (see `has_scalar_subquery`).
+    if has_scalar_subquery(&dividend) || has_scalar_subquery(&divisor) {
+        return Ok(Expr::BinaryExpr(BinaryExpr {
+            left: Box::new(dividend),
+            op: Operator::Modulo,
+            right: Box::new(divisor),
+        }));
+    }
+    Ok(ScalarUDF::from(SparkModulo::new(ansi_mode, false)).call(vec![dividend, divisor]))
+}
 
-    Ok(Expr::BinaryExpr(BinaryExpr {
-        left: Box::new(dividend),
-        op: Operator::Modulo,
-        right: Box::new(divisor),
-    }))
+/// `try_mod` — the `safe = true` face of [`SparkModulo`]. ANSI-invariant:
+/// remainder by zero becomes NULL regardless of `spark.sql.ansi.enabled`.
+fn try_mod(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    Ok(ScalarUDF::from(SparkModulo::new(false, true)).call(input.arguments))
 }
 
 fn spark_abs(input: ScalarFunctionInput) -> PlanResult<Expr> {
@@ -920,7 +912,7 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("try_add", F::custom(try_add)),
         ("try_divide", F::custom(try_divide)),
         ("try_multiply", F::custom(try_multiply)),
-        ("try_mod", F::udf(SparkTryMod::new())),
+        ("try_mod", F::custom(try_mod)),
         ("try_subtract", F::custom(try_subtract)),
         ("unhex", F::udf(SparkUnHex::new())),
         ("uniform", F::udf(SparkUniform::new())),

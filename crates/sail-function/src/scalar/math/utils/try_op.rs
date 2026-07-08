@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use chrono::{Duration, Months, NaiveDate};
 use datafusion::arrow::array::{
     Array, ArrayRef, ArrowPrimitiveType, Date32Array, Date32Builder, Datum,
@@ -13,10 +11,8 @@ use datafusion::arrow::datatypes::{
     IntervalMonthDayNanoType, IntervalYearMonthType,
 };
 use datafusion::arrow::error::ArrowError;
-use datafusion_common::ScalarValue;
 use datafusion_expr::Operator;
 use datafusion_expr::type_coercion::binary::BinaryTypeCoercer;
-use datafusion_expr_common::columnar_value::ColumnarValue;
 
 const DAY_NANOS_I128: i128 = 86_400_000_000_000;
 
@@ -104,20 +100,6 @@ fn is_arithmetic_exception(err: &ArrowError) -> bool {
     )
 }
 
-pub fn binary_op_scalar_or_array<T: ArrowPrimitiveType>(
-    left: &ColumnarValue,
-    right: &ColumnarValue,
-    result: PrimitiveArray<T>,
-) -> datafusion_common::Result<ColumnarValue> {
-    if matches!(left, ColumnarValue::Scalar(_)) && matches!(right, ColumnarValue::Scalar(_)) {
-        Ok(ColumnarValue::Scalar(ScalarValue::try_from_array(
-            &result, 0,
-        )?))
-    } else {
-        Ok(ColumnarValue::Array(Arc::new(result)))
-    }
-}
-
 pub fn try_op_interval_yearmonth<F>(
     left: &PrimitiveArray<IntervalYearMonthType>,
     right: &PrimitiveArray<IntervalYearMonthType>,
@@ -144,6 +126,10 @@ where
     builder.finish()
 }
 
+/// Per-element `op` with Spark `try_*` NULL semantics, kept for the unit tests
+/// that exercise the checked integer kernels directly; production paths use
+/// [`try_arrow_arith`].
+#[cfg(test)]
 pub fn try_binary_op_primitive<T, F>(
     left: &PrimitiveArray<T>,
     right: &PrimitiveArray<T>,
@@ -550,6 +536,8 @@ pub fn try_div_interval_monthdaynano_i64(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use datafusion_common::DataFusionError;
 
     use super::*;
