@@ -1,24 +1,27 @@
 use std::sync::Arc;
 
-use datafusion::optimizer::{Analyzer, AnalyzerRule, Optimizer, OptimizerRule};
+use datafusion::optimizer::analyzer::resolve_grouping_function::ResolveGroupingFunction;
+use datafusion::optimizer::{AnalyzerRule, Optimizer, OptimizerRule};
 
 mod lateral_join;
 mod resolve_lambda_variables;
+mod type_coercion;
 
 use lateral_join::DecorrelateLateralProjection;
 use resolve_lambda_variables::ResolveLambdaVariables;
 
+use crate::type_coercion::TypeCoercion;
+
 pub fn default_analyzer_rules() -> Vec<Arc<dyn AnalyzerRule + Send + Sync>> {
-    // FIXME: Create analyzer rule for TypeCoercion in Sail
-    //  so we don't have to depend on DataFusion's implementation which is incorrect for Spark.
-    let Analyzer {
-        function_rewrites: _,
-        rules: built_in_rules,
-    } = Analyzer::default();
-    let mut rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> =
-        vec![Arc::new(ResolveLambdaVariables)];
-    rules.extend(built_in_rules);
-    rules
+    // Sail's own Spark-compatible `TypeCoercion` (adapted from DataFusion's, which
+    // is incorrect for Spark). DataFusion's default analyzer is just
+    // `ResolveGroupingFunction` + `TypeCoercion`, so this list mirrors it with our
+    // TypeCoercion plus Sail's `ResolveLambdaVariables`.
+    vec![
+        Arc::new(ResolveLambdaVariables),
+        Arc::new(ResolveGroupingFunction::new()),
+        Arc::new(TypeCoercion::new()),
+    ]
 }
 
 pub fn default_optimizer_rules() -> Vec<Arc<dyn OptimizerRule + Send + Sync>> {
