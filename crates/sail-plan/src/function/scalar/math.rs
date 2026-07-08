@@ -55,13 +55,29 @@ fn needs_overflow_udf(left: &DataType, right: &DataType, ansi_mode: bool) -> boo
     ansi_mode || left.is_decimal() || right.is_decimal()
 }
 
-/// Whether `expr` contains a scalar subquery. Wrapping arithmetic in the
-/// `SparkAdd`/`Subtract`/`Multiply`/`Divide` UDFs breaks the physical planner's
-/// registration of a nested uncorrelated scalar subquery inside a correlated
-/// subquery body (it stays an unplanned `Expr::ScalarSubquery`). Keep such
-/// operands on the native operator, which the planner handles, until the fork's
-/// subquery planning is fixed. (`exists` walks only the expr tree, not the
-/// subquery's inner plan, which is what we want.)
+/// Whether `expr` contains a scalar subquery, used to keep such an operand of
+/// `+`/`-`/`*` on the native operator instead of wrapping it in the ANSI-aware
+/// `SparkAdd`/`Subtract`/`Multiply` UDF.
+///
+/// Why the guard exists: the `scalar_subquery_to_join` optimizer rule detects
+/// the "count bug" by calling `evaluates_to_null` on a decorrelated subquery's
+/// projected expression, which tries to build a physical expression for it with
+/// an empty `ExecutionProps` (no subquery results registered). A native `+`
+/// (`BinaryExpr`) never reaches that build, but a `ScalarFunction` (our UDF)
+/// does, and if it wraps a scalar subquery the build fails with "Physical plan
+/// does not support logical expression ScalarSubquery".
+///
+/// When it breaks (exact case): a `ScalarFunction` whose argument is an
+/// *uncorrelated* scalar subquery, sitting in the projection of a *correlated*
+/// subquery body — e.g. `SELECT max(x) + (SELECT min(y) FROM u) FROM t WHERE
+/// t.k = outer.k`. The top-level `(SELECT ...) + col` case does not break.
+///
+/// Cost: arithmetic with a subquery operand no longer raises on ANSI overflow
+/// (it wraps, as before this PR) — an exotic combination. The root fix lives in
+/// the DataFusion fork's `evaluates_to_null`; drop this guard once it lands.
+///
+/// (`exists` walks only the expr tree, not the subquery's inner plan, which is
+/// exactly the scope we want.)
 fn has_scalar_subquery(expr: &Expr) -> bool {
     expr.exists(|e| Ok(matches!(e, Expr::ScalarSubquery(_))))
         .unwrap_or(false)

@@ -235,3 +235,90 @@ Feature: ANSI overflow semantics for the +, -, * operators
       Then query result
         | result |
         | NULL   |
+
+  # ANSI `+`/`-`/`*` normally route through the SparkAdd/Subtract/Multiply UDFs.
+  # When an operand contains a scalar subquery the builder falls back to the
+  # native operator (see `has_scalar_subquery` in math.rs), because wrapping a
+  # subquery in the UDF breaks the physical planner's count-bug check inside a
+  # correlated subquery body. The two scenarios below demonstrate both sides:
+  # the guarded case keeps a native `+`, plain arithmetic keeps `spark_add`.
+  # @sail-only: these assert the physical plan, which differs under distributed
+  # (server) execution, so they run only against the in-process engine.
+  @sail-only
+  Rule: Arithmetic with a scalar subquery operand (subquery guard)
+    # Breaking case (guarded): a correlated outer subquery whose body adds an
+    # UNCORRELATED nested subquery. Without the guard this fails to plan with
+    # "does not support logical expression ScalarSubquery" under ANSI on. With
+    # the guard the arithmetic stays a native `+` (see the plan) and computes.
+    Scenario: correlated subquery adding a nested subquery stays native under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT outer_t.k, (
+          SELECT max(inner_t.x) + (SELECT min(y) FROM VALUES (1) AS u(y))
+          FROM VALUES (1, 4), (2, 3) AS inner_t(k, x)
+          WHERE inner_t.k = outer_t.k
+        ) AS s
+        FROM VALUES (1, 2), (2, 3) AS outer_t(k, v)
+        ORDER BY outer_t.k
+        """
+      Then query result ordered
+        | k | s |
+        | 1 | 5 |
+        | 2 | 4 |
+      When query
+        """
+        EXPLAIN SELECT outer_t.k, (
+          SELECT max(inner_t.x) + (SELECT min(y) FROM VALUES (1) AS u(y))
+          FROM VALUES (1, 4), (2, 3) AS inner_t(k, x)
+          WHERE inner_t.k = outer_t.k
+        ) AS s
+        FROM VALUES (1, 2), (2, 3) AS outer_t(k, v)
+        ORDER BY outer_t.k
+        """
+      Then query plan matches snapshot
+
+    # Normal case (contrast): plain ANSI integer `+` with no subquery operand —
+    # the guard does not fire, so the plan keeps the `spark_add` UDF that carries
+    # the ANSI overflow check.
+    Scenario: plain ANSI integer add keeps the spark_add UDF under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT v + 1 AS result FROM VALUES (1), (2) AS t(v) ORDER BY v
+        """
+      Then query result ordered
+        | result |
+        | 2      |
+        | 3      |
+      When query
+        """
+        EXPLAIN SELECT v + 1 AS result FROM VALUES (1), (2) AS t(v) ORDER BY v
+        """
+      Then query plan matches snapshot
+
+  # The subquery guard drops the arithmetic to the native operator, which wraps
+  # on overflow instead of raising. Spark still raises ARITHMETIC_OVERFLOW even
+  # when an operand is a scalar subquery (the subquery only defers the check to
+  # runtime). This is the guard's one cost — a real divergence under ANSI on.
+  # The root fix lives in the DataFusion fork (`evaluates_to_null`); once it
+  # lands the guard can be dropped and this @sail-bug removed.
+  Rule: Overflow with a scalar subquery operand is undetected under ANSI (guard cost)
+    @sail-bug
+    Scenario: integer overflow with a subquery operand raises under ANSI on
+      Given config spark.sql.ansi.enabled = true
+      When query
+        """
+        SELECT (SELECT max(v) FROM VALUES (CAST(2147483647 AS INT)) AS u(v)) + CAST(1 AS INT) AS result
+        """
+      Then query error (?i)overflow
+
+    Scenario: integer overflow with a subquery operand wraps under ANSI off
+      Given config spark.sql.ansi.enabled = false
+      When query
+        """
+        SELECT (SELECT max(v) FROM VALUES (CAST(2147483647 AS INT)) AS u(v)) + CAST(1 AS INT) AS result
+        """
+      Then query result
+        | result      |
+        | -2147483648 |
