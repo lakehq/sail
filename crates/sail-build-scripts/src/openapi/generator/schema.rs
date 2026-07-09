@@ -74,13 +74,27 @@ impl<'a> OpenApiGenerator<'a> {
                     "anyOf or oneOf schemas with sibling properties are unsupported: {type_name}"
                 )));
             }
-            // OpenAPI `anyOf` can legitimately match more than one variant, so a discriminator is
-            // not always enough to make it equivalent to a Rust enum. Keep this fallback untagged
-            // unless a schema uses the narrower `oneOf` form or an explicit discriminator mapping.
-            let variants = schema
+            let schemas = schema
                 .one_of
                 .iter()
                 .chain(schema.any_of.iter())
+                .collect::<Vec<_>>();
+            if let Some((tag, variants)) = self.inferred_tagged_enum_variants(&schemas, inline)? {
+                return Ok(SchemaDefinition::new(
+                    type_name,
+                    schema,
+                    SchemaKind::Enum {
+                        tag: Some(tag),
+                        untagged: false,
+                        variants,
+                    },
+                ));
+            }
+            // OpenAPI `anyOf` can legitimately match more than one variant, so a discriminator is
+            // not always enough to make it equivalent to a Rust enum. Keep this fallback untagged
+            // unless the variants can be proven to inherit a common discriminator.
+            let variants = schemas
+                .iter()
                 .map(|schema| self.schema_enum_variant(schema, None))
                 .collect::<Result<Vec<_>, _>>()?;
             return Ok(SchemaDefinition::new(
@@ -514,6 +528,76 @@ impl<'a> OpenApiGenerator<'a> {
             aliases,
             kind,
         })
+    }
+
+    fn inferred_tagged_enum_variants(
+        &self,
+        schemas: &[&'a MaybeRef<Schema, SchemaReference>],
+        inline: &mut InlineSchemas,
+    ) -> BuildResult<Option<(String, Vec<EnumVariant>)>> {
+        if schemas.is_empty() {
+            return Ok(None);
+        }
+
+        let mut inherited_discriminator = None;
+        let mut references = Vec::new();
+        for schema in schemas {
+            let MaybeRef::Ref(reference) = *schema else {
+                return Ok(None);
+            };
+            let (_, schema) = self.resolve_schema_reference(&reference.reference)?;
+            let Some((base_reference, discriminator)) = self.inherited_discriminator(schema)?
+            else {
+                return Ok(None);
+            };
+            match inherited_discriminator {
+                None => inherited_discriminator = Some((base_reference, discriminator)),
+                Some((existing, _)) if existing == base_reference => {}
+                Some(_) => return Ok(None),
+            }
+            references.push(reference.reference.as_str());
+        }
+
+        let Some((_, discriminator)) = inherited_discriminator else {
+            return Ok(None);
+        };
+        let tag = discriminator.property_name.as_str();
+        let mut variants = Vec::new();
+        for reference in references {
+            let values = discriminator
+                .mapping
+                .iter()
+                .filter_map(|(value, candidate)| (candidate == reference).then_some(value.clone()))
+                .collect::<Vec<_>>();
+            if values.is_empty() {
+                return Ok(None);
+            }
+            variants.push(self.discriminator_variant(reference, values, tag, inline)?);
+        }
+
+        Ok(Some((tag.to_owned(), variants)))
+    }
+
+    fn inherited_discriminator(
+        &self,
+        schema: &'a Schema,
+    ) -> BuildResult<Option<(&'a str, &'a crate::openapi::spec::Discriminator)>> {
+        let mut output = None;
+        for item in &schema.all_of {
+            let MaybeRef::Ref(reference) = item else {
+                continue;
+            };
+            let (_, schema) = self.resolve_schema_reference(&reference.reference)?;
+            if discriminator_tag(schema).is_some() {
+                if output.is_some() {
+                    return Ok(None);
+                }
+                output = Some((reference.reference.as_str(), schema.discriminator.as_ref()));
+            }
+        }
+        Ok(output.and_then(|(reference, discriminator)| {
+            discriminator.map(|discriminator| (reference, discriminator))
+        }))
     }
 }
 

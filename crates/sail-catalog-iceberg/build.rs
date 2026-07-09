@@ -21,7 +21,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         OpenApiConfig {
             excluded_operations: ["getToken".to_owned()].into_iter().collect(),
             excluded_schemas: ["ReportMetricsRequest".to_owned()].into_iter().collect(),
-            ..OpenApiConfig::new()
         },
     )?;
 

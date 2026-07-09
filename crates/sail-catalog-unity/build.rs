@@ -140,8 +140,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "spec/unity-catalog-all.yaml",
         std::path::Path::new(&std::env::var("OUT_DIR")?).join("unity_catalog_gen.rs"),
         OpenApiConfig {
+            excluded_operations: [].into_iter().collect(),
             excluded_schemas: ["ColumnTypeName".to_owned()].into_iter().collect(),
-            ..OpenApiConfig::new()
         },
     )?;
 
