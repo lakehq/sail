@@ -25,18 +25,19 @@ pub(crate) fn resolve_data_dir_from_property_value(
 
     let base_path = crate::utils::url_to_object_path(table_url).ok();
     if let Some(prop_url) = crate::utils::parse_absolute_url(raw) {
-        if prop_url.scheme() == table_url.scheme() && prop_url.host_str() == table_url.host_str() {
-            if let (Ok(prop_path), Some(base_path)) = (
+        if prop_url.scheme() == table_url.scheme()
+            && prop_url.host_str() == table_url.host_str()
+            && let (Ok(prop_path), Some(base_path)) = (
                 crate::utils::url_to_object_path(&prop_url),
                 base_path.as_ref(),
-            ) {
-                let prop_str = prop_path.as_ref();
-                let base_str = base_path.as_ref();
-                if let Some(stripped) = prop_str.strip_prefix(base_str) {
-                    let rel = stripped.trim_start_matches('/').trim_matches('/');
-                    if !rel.is_empty() {
-                        return Some(rel.to_string());
-                    }
+            )
+        {
+            let prop_str = prop_path.as_ref();
+            let base_str = base_path.as_ref();
+            if let Some(stripped) = prop_str.strip_prefix(base_str) {
+                let rel = stripped.trim_start_matches('/').trim_matches('/');
+                if !rel.is_empty() {
+                    return Some(rel.to_string());
                 }
             }
         }

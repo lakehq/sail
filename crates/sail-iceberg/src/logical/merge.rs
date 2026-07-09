@@ -46,12 +46,10 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         if !target_fields.iter().any(|n| n == MERGE_FILE_COLUMN) {
             exprs.push(Expr::Column(Column::from_name(MERGE_FILE_COLUMN)).alias(MERGE_FILE_COLUMN));
         }
-        if let Some(row_index_column) = row_index_column {
-            if !target_fields.iter().any(|n| n == row_index_column) {
-                exprs.push(
-                    Expr::Column(Column::from_name(row_index_column)).alias(row_index_column),
-                );
-            }
+        if let Some(row_index_column) = row_index_column
+            && !target_fields.iter().any(|n| n == row_index_column)
+        {
+            exprs.push(Expr::Column(Column::from_name(row_index_column)).alias(row_index_column));
         }
         target_plan = LogicalPlanBuilder::from(target_plan)
             .project(exprs)?
@@ -127,11 +125,10 @@ fn try_enable_merge_metadata_columns(
     if let (Some(row_index_col), Some(iceberg_source)) = (
         row_index_col,
         new_source.downcast_ref::<IcebergTableSource>(),
-    ) {
-        if iceberg_source.row_index_column_name().is_none() {
-            new_source = iceberg_source.with_row_index_column(row_index_col)?;
-            changed = true;
-        }
+    ) && iceberg_source.row_index_column_name().is_none()
+    {
+        new_source = iceberg_source.with_row_index_column(row_index_col)?;
+        changed = true;
     }
     if changed {
         let schema = new_source.schema();
@@ -152,33 +149,32 @@ fn ensure_merge_metadata_columns(
 
     let transformed = plan
         .transform_up(|plan| {
-            if let LogicalPlan::TableScan(scan) = &plan {
-                if let Some((new_source, schema)) =
+            if let LogicalPlan::TableScan(scan) = &plan
+                && let Some((new_source, schema)) =
                     try_enable_merge_metadata_columns(&scan.source, file_col, row_index_col)?
-                {
-                    let mut projection: Option<Vec<usize>> = scan.projection.clone();
-                    if projection.is_none() {
-                        projection = Some((0..schema.fields().len()).collect::<Vec<usize>>());
-                    }
-                    if let Some(proj) = projection.as_mut() {
-                        for col in &metadata_cols {
-                            if let Some(idx) = schema.column_with_name(col).map(|(idx, _)| idx) {
-                                if !proj.contains(&idx) {
-                                    proj.push(idx);
-                                }
-                            }
+            {
+                let mut projection: Option<Vec<usize>> = scan.projection.clone();
+                if projection.is_none() {
+                    projection = Some((0..schema.fields().len()).collect::<Vec<usize>>());
+                }
+                if let Some(proj) = projection.as_mut() {
+                    for col in &metadata_cols {
+                        if let Some(idx) = schema.column_with_name(col).map(|(idx, _)| idx)
+                            && !proj.contains(&idx)
+                        {
+                            proj.push(idx);
                         }
                     }
-
-                    let new_scan = LogicalPlan::TableScan(TableScan::try_new(
-                        scan.table_name.clone(),
-                        new_source,
-                        projection,
-                        scan.filters.clone(),
-                        scan.fetch,
-                    )?);
-                    return Ok(Transformed::yes(new_scan));
                 }
+
+                let new_scan = LogicalPlan::TableScan(TableScan::try_new(
+                    scan.table_name.clone(),
+                    new_source,
+                    projection,
+                    scan.filters.clone(),
+                    scan.fetch,
+                )?);
+                return Ok(Transformed::yes(new_scan));
             }
 
             if let LogicalPlan::Projection(proj) = &plan {
