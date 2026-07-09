@@ -1394,14 +1394,29 @@ mod tests {
     }
 
     #[test]
-    fn delta_table_source_rejects_unsupported_reader_features() {
-        // VacuumProtocolCheck is a reader-writer feature that we does not yet support.
-        // Use it to verify that the source correctly rejects tables with unsupported features.
+    fn delta_table_source_accepts_vacuum_protocol_check_feature() {
         let protocol = Protocol::new(
             3,
             7,
             Some(vec![TableFeature::VacuumProtocolCheck]),
             Some(vec![TableFeature::VacuumProtocolCheck]),
+        );
+        let snapshot = Arc::new(test_snapshot(protocol, test_metadata([]), Vec::new()));
+
+        assert!(
+            DeltaTableSource::try_new(snapshot, test_log_store(), DeltaScanConfig::default())
+                .is_ok(),
+            "ordinary table reads should accept vacuumProtocolCheck"
+        );
+    }
+
+    #[test]
+    fn delta_table_source_rejects_unsupported_reader_features() {
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::Unknown]),
+            Some(vec![TableFeature::AppendOnly, TableFeature::Unknown]),
         );
         let snapshot = Arc::new(test_snapshot(protocol, test_metadata([]), Vec::new()));
 
@@ -1418,22 +1433,22 @@ mod tests {
 
         assert!(matches!(
             err,
-            crate::spec::DeltaError::Unsupported(message) if message.contains("VacuumProtocolCheck")
+            crate::spec::DeltaError::Unsupported(message) if message.contains("Unknown")
         ));
     }
 
     #[test]
     #[expect(clippy::unwrap_used)]
-    fn version_checksum_skips_explicitly_known_but_unsupported_features() {
-        // TODO: support VacuumProtocolCheck
-        let protocol = Protocol::new(1, 7, None, Some(vec![TableFeature::VacuumProtocolCheck]));
-        let snapshot = test_snapshot(protocol, test_metadata([]), Vec::new());
-
-        assert!(
-            snapshot
-                .build_version_checksum(None, None)
-                .unwrap()
-                .is_none()
+    fn version_checksum_includes_vacuum_protocol_check_feature() {
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::VacuumProtocolCheck]),
+            Some(vec![TableFeature::VacuumProtocolCheck]),
         );
+        let snapshot = test_snapshot(protocol.clone(), test_metadata([]), Vec::new());
+
+        let checksum = snapshot.build_version_checksum(None, None).unwrap();
+        assert_eq!(checksum.map(|checksum| checksum.protocol), Some(protocol));
     }
 }

@@ -2453,16 +2453,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_commit_rejects_unsupported_reader_features() {
+    async fn create_commit_accepts_vacuum_protocol_check_feature() -> DeltaResult<()> {
         let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
         let log_store = test_log_store(store);
-        // VacuumProtocolCheck is a reader-writer feature that we does not yet support.
-        // Use it to verify that the commit pipeline correctly rejects unsupported features.
         let protocol = Protocol::new(
             3,
             7,
             Some(vec![TableFeature::VacuumProtocolCheck]),
             Some(vec![TableFeature::VacuumProtocolCheck]),
+        );
+        let metadata = test_metadata([]);
+
+        let result = CommitBuilder::default()
+            .with_actions(vec![
+                CommitAction::Protocol(protocol.clone()),
+                CommitAction::Metadata(metadata.clone()),
+            ])
+            .build(
+                None,
+                log_store,
+                DeltaOperation::Create {
+                    mode: SaveMode::ErrorIfExists,
+                    location: "memory:///".to_string(),
+                    protocol: Box::new(protocol),
+                    metadata: Box::new(metadata),
+                },
+            )
+            .await?;
+        assert!(result.snapshot.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn create_commit_rejects_unsupported_reader_features() {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let log_store = test_log_store(store);
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::Unknown]),
+            Some(vec![TableFeature::AppendOnly, TableFeature::Unknown]),
         );
         let metadata = test_metadata([]);
 
@@ -2494,7 +2524,7 @@ mod tests {
         assert!(matches!(
             err,
             DeltaError::Transaction(TransactionError::UnsupportedTableFeatures(features))
-                if features.contains(&TableFeature::VacuumProtocolCheck)
+                if features.contains(&TableFeature::Unknown)
         ));
     }
 

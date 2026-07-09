@@ -117,10 +117,47 @@ impl ProtocolChecker {
         }
     }
 
+    fn validate_feature_lists(&self, protocol: &Protocol) -> Result<(), TransactionError> {
+        let reader_features = protocol.reader_features().unwrap_or(&[]);
+        let writer_features = protocol.writer_features().unwrap_or(&[]);
+
+        for feature in reader_features {
+            if !feature.is_reader_feature() && !matches!(feature, TableFeature::Unknown) {
+                return Err(TransactionError::InvalidProtocol(format!(
+                    "writer-only feature {} must not be listed in readerFeatures",
+                    feature.as_str()
+                )));
+            }
+            if !writer_features.contains(feature) {
+                return Err(TransactionError::InvalidProtocol(format!(
+                    "reader-writer feature {} must be listed in both readerFeatures and writerFeatures",
+                    feature.as_str()
+                )));
+            }
+        }
+
+        for feature in writer_features {
+            let legacy_column_mapping =
+                protocol.min_reader_version() == 2 && feature == &TableFeature::ColumnMapping;
+            if feature.is_reader_feature()
+                && !legacy_column_mapping
+                && !reader_features.contains(feature)
+            {
+                return Err(TransactionError::InvalidProtocol(format!(
+                    "reader-writer feature {} must be listed in both readerFeatures and writerFeatures",
+                    feature.as_str()
+                )));
+            }
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn unsupported_reader_features(
         &self,
         protocol: &Protocol,
     ) -> Result<Vec<TableFeature>, TransactionError> {
+        self.validate_feature_lists(protocol)?;
         let Some(features) = self.required_reader_features(protocol)? else {
             return Ok(vec![]);
         };
@@ -134,6 +171,7 @@ impl ProtocolChecker {
         &self,
         protocol: &Protocol,
     ) -> Result<Vec<TableFeature>, TransactionError> {
+        self.validate_feature_lists(protocol)?;
         let Some(features) = self.required_writer_features(protocol)? else {
             return Ok(vec![]);
         };
@@ -309,6 +347,7 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     reader_features.insert(TableFeature::VariantShredding);
     reader_features.insert(TableFeature::VariantShreddingPreview);
     reader_features.insert(TableFeature::CatalogManaged);
+    reader_features.insert(TableFeature::VacuumProtocolCheck);
     let mut writer_features = HashSet::new();
     // Keep this list aligned with end-to-end behavior, not just protocol parsing.
     // These features are only checked against the explicit `writerFeatures` list on
@@ -335,6 +374,7 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
     writer_features.insert(TableFeature::VariantTypePreview);
     writer_features.insert(TableFeature::VariantShredding);
     writer_features.insert(TableFeature::VariantShreddingPreview);
+    writer_features.insert(TableFeature::VacuumProtocolCheck);
 
     ProtocolChecker::new(reader_features, writer_features)
 });
@@ -343,6 +383,66 @@ pub static INSTANCE: LazyLock<ProtocolChecker> = LazyLock::new(|| {
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn global_checker_accepts_vacuum_protocol_check_feature() {
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::VacuumProtocolCheck]),
+            Some(vec![TableFeature::VacuumProtocolCheck]),
+        );
+
+        INSTANCE.can_read_from_protocol(&protocol).unwrap();
+        INSTANCE.can_write_to_protocol(&protocol).unwrap();
+    }
+
+    #[test]
+    fn global_checker_rejects_vacuum_protocol_check_reader_only() {
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::VacuumProtocolCheck]),
+            Some(vec![TableFeature::AppendOnly]),
+        );
+
+        for error in [
+            INSTANCE.can_read_from_protocol(&protocol).unwrap_err(),
+            INSTANCE.can_write_to_protocol(&protocol).unwrap_err(),
+        ] {
+            assert!(
+                matches!(
+                    &error,
+                    TransactionError::InvalidProtocol(message)
+                        if message.contains("vacuumProtocolCheck")
+                            && message.contains("readerFeatures")
+                            && message.contains("writerFeatures")
+                ),
+                "unexpected protocol error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn global_checker_rejects_vacuum_protocol_check_writer_only() {
+        let protocol = Protocol::new(3, 7, None, Some(vec![TableFeature::VacuumProtocolCheck]));
+
+        for error in [
+            INSTANCE.can_read_from_protocol(&protocol).unwrap_err(),
+            INSTANCE.can_write_to_protocol(&protocol).unwrap_err(),
+        ] {
+            assert!(
+                matches!(
+                    &error,
+                    TransactionError::InvalidProtocol(message)
+                        if message.contains("vacuumProtocolCheck")
+                            && message.contains("readerFeatures")
+                            && message.contains("writerFeatures")
+                ),
+                "unexpected protocol error: {error}"
+            );
+        }
+    }
 
     #[test]
     fn global_checker_accepts_variant_shredding_features() {
@@ -531,15 +631,15 @@ mod tests {
         let protocol = Protocol::new(
             3,
             7,
-            Some(vec![TableFeature::RowTracking]),
-            Some(vec![TableFeature::AppendOnly]),
+            Some(vec![TableFeature::Unknown]),
+            Some(vec![TableFeature::AppendOnly, TableFeature::Unknown]),
         );
 
         let err = INSTANCE.can_read_from_protocol(&protocol).unwrap_err();
         assert!(matches!(
             err,
             TransactionError::UnsupportedTableFeatures(features)
-                if features.contains(&TableFeature::RowTracking)
+                if features.contains(&TableFeature::Unknown)
         ));
     }
 
