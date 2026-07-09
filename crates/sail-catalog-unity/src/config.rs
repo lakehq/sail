@@ -352,19 +352,21 @@ impl UnityCatalogConfig {
             ));
         }
 
-        if let (Some(client_id), Some(client_secret)) = (&self.client_id, &self.client_secret) {
-            if let Some(authority_id) = &self.authority_id {
-                return Some(CredentialProvider::TokenCredential(
-                    TokenCache::default(),
-                    Box::new(ClientSecretOAuthProvider::new(
-                        client_id,
-                        client_secret.expose_secret(),
-                        authority_id,
-                        self.authority_host.as_ref(),
-                    )),
-                ));
-            }
+        if let (Some(client_id), Some(client_secret), Some(authority_id)) =
+            (&self.client_id, &self.client_secret, &self.authority_id)
+        {
+            return Some(CredentialProvider::TokenCredential(
+                TokenCache::default(),
+                Box::new(ClientSecretOAuthProvider::new(
+                    client_id,
+                    client_secret.expose_secret(),
+                    authority_id,
+                    self.authority_host.as_ref(),
+                )),
+            ));
+        }
 
+        if let (Some(client_id), Some(client_secret)) = (&self.client_id, &self.client_secret) {
             return Some(CredentialProvider::TokenCredential(
                 TokenCache::default(),
                 Box::new(WorkspaceOAuthProvider::new(

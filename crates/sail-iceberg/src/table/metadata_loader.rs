@@ -212,17 +212,16 @@ pub async fn find_latest_metadata_file(
                     .then_with(|| left.1.cmp(&right.1))
             });
 
-            if let Some(fname) = hinted_filename {
-                if let Some((version, path, _)) =
+            if let Some(fname) = hinted_filename
+                && let Some((version, path, _)) =
                     files.iter().rev().find(|(_, p, _)| p.ends_with(&fname))
-                {
-                    log::trace!(
-                        "find_latest_metadata_file: selected by filename hint version {} path={}",
-                        version,
-                        path
-                    );
-                    return Ok(path.clone());
-                }
+            {
+                log::trace!(
+                    "find_latest_metadata_file: selected by filename hint version {} path={}",
+                    version,
+                    path
+                );
+                return Ok(path.clone());
             } else if let Some(hint) = hinted_version
                 && let Some((version, path, _)) = files.iter().rev().find(|(v, _, _)| *v == hint)
             {
