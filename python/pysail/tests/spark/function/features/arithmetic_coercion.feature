@@ -625,3 +625,41 @@ Feature: Spark type coercion for the +, -, * operators
       Then query result
         | t      |
         | bigint |
+
+    # `pmod` is a UDF (SparkPmod) and does not go through the arithmetic coercion,
+    # so it diverges from Spark. `div` (integer division) matches Spark and needs no
+    # coercion (its result is always BIGINT). Follow-up: route pmod through the same
+    # operand coercion the operators use, and fix the UDF's NULL handling.
+
+    @sail-bug
+    Scenario: pmod narrows an integer literal like the remainder rule
+      # Spark narrows literal 3 to Decimal(1,0) => decimal(3,2); Sail produces decimal(12,2).
+      When query
+        """
+        SELECT typeof(pmod(CAST(10.5 AS DECIMAL(10,2)), 3)) AS t
+        """
+      Then query result
+        | t            |
+        | decimal(3,2) |
+
+    @sail-bug
+    Scenario: pmod with a NULL operand returns NULL
+      # Spark returns NULL; Sail errors ("Null and Int32 are not coercible").
+      When query
+        """
+        SELECT pmod(NULL, 3) AS r
+        """
+      Then query result
+        | r    |
+        | NULL |
+
+    @sail-bug
+    Scenario: pmod of a double and a decimal promotes to double
+      # Spark promotes both to double; Sail produces decimal(30,15).
+      When query
+        """
+        SELECT typeof(pmod(CAST(1.5 AS DOUBLE), CAST(2.0 AS DECIMAL(10,2)))) AS t
+        """
+      Then query result
+        | t      |
+        | double |
