@@ -31,6 +31,7 @@ percent-encoding = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_with = { workspace = true }
+thiserror = { workspace = true }
 uuid = { workspace = true }
 tokio = { workspace = true }
 log = { workspace = true }
@@ -40,3 +41,6 @@ tokio = { workspace = true }
 wiremock = { workspace = true }
 testcontainers = { workspace = true }
 arrow = { workspace = true }
+
+[build-dependencies]
+sail-build-scripts = { path = "../sail-build-scripts" }

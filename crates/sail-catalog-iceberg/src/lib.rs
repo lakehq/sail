@@ -18,6 +18,24 @@ pub mod apis;
 mod models;
 mod provider;
 
+#[expect(unused_imports)]
+#[expect(clippy::enum_variant_names)]
+pub mod r#gen {
+    include!(concat!(env!("OUT_DIR"), "/iceberg_rest_catalog_gen.rs"));
+
+    // The discriminator is missing for `ReportMetricsRequest` in the OpenAPI specification,
+    // so this schema is excluded from generation and defined manually.
+    // See also: https://github.com/apache/iceberg/issues/12696
+    #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+    #[serde(tag = "report-type")]
+    pub enum ReportMetricsRequest {
+        #[serde(rename = "scan-report")]
+        ScanReport(Box<ScanReport>),
+        #[serde(rename = "commit-report")]
+        CommitReport(Box<CommitReport>),
+    }
+}
+
 pub use provider::{
     IcebergRestCatalogOptions, IcebergRestCatalogProvider, REST_CATALOG_PROP_PREFIX,
     REST_CATALOG_PROP_URI, REST_CATALOG_PROP_WAREHOUSE,
