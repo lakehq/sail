@@ -302,7 +302,9 @@ def test_merge_advances_rest_catalog_metadata_location_with_position_delete(
         SELECT * FROM VALUES
           (1, 'keep-a', 'keep'),
           (2, 'old-b', 'update'),
-          (3, 'drop-c', 'delete')
+          (3, 'drop-c', 'delete'),
+          (5, 'old-e', 'expire'),
+          (6, 'drop-f', 'purge')
         """
     )
     spark.sql(
@@ -330,6 +332,10 @@ def test_merge_advances_rest_catalog_metadata_location_with_position_delete(
           DELETE
         WHEN NOT MATCHED THEN
           INSERT (id, name, flag) VALUES (s.id, s.name, s.flag)
+        WHEN NOT MATCHED BY SOURCE AND t.flag = 'expire' THEN
+          UPDATE SET name = 'expired-e'
+        WHEN NOT MATCHED BY SOURCE AND t.flag = 'purge' THEN
+          DELETE
         """
     )
 
@@ -345,18 +351,21 @@ def test_merge_advances_rest_catalog_metadata_location_with_position_delete(
     summary = snapshot["summary"]
     assert summary["added-delete-files"] == "1"
     assert summary["added-position-delete-files"] == "1"
-    assert summary["added-position-deletes"] == "2"
+    assert summary["added-position-deletes"] == "4"
     assert "deleted-records" not in summary
     assert summary["added-data-files"] == "1"
+    assert summary["added-records"] == "3"
     assert summary["total-data-files"] == "2"
     assert summary["total-delete-files"] == "1"
-    assert summary["total-records"] == "5"
+    assert summary["total-position-deletes"] == "4"
+    assert summary["total-records"] == "8"
 
     rows = spark.sql("SELECT id, name, flag FROM iceberg_commit_test.merge_t ORDER BY id").collect()
     assert [(row["id"], row["name"], row["flag"]) for row in rows] == [
         (1, "keep-a", "keep"),
         (2, "new-b", "update"),
         (4, "new-d", "insert"),
+        (5, "expired-e", "expire"),
     ]
 
 
