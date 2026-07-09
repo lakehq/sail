@@ -204,12 +204,12 @@ def test_sqlalchemy_staging_create_is_retry_safe(tmp_path):
     writer = SqlAlchemyWriteEngine(
         url=url, dbtable="t", columns=["id"], overwrite=True, batch_size=1000, run_id="run"
     )
-    engine = writer._create_engine()
+    engine = writer._create_engine()  # noqa: SLF001
     try:
-        staging = writer._staging(0)
-        writer._create_staging_like_target(engine, staging)
+        staging = writer._staging(0)  # noqa: SLF001
+        writer._create_staging_like_target(engine, staging)  # noqa: SLF001
         # Simulated retry: same deterministic staging name, must not raise.
-        writer._create_staging_like_target(engine, staging)
+        writer._create_staging_like_target(engine, staging)  # noqa: SLF001
     finally:
         engine.dispose()
 
