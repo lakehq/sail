@@ -492,8 +492,8 @@ pub fn expand_merge(
                 .collect()
         })
     };
-    trace!("resolved target names: {:?}", &desired_target_names);
-    trace!("resolved source names: {:?}", &desired_source_names);
+    trace!("resolved target names: {:?}", desired_target_names);
+    trace!("resolved source names: {:?}", desired_source_names);
 
     let _target_relation = options.target_alias.as_ref().map(|a| TableReference::Bare {
         table: a.clone().into(),
@@ -510,7 +510,7 @@ pub fn expand_merge(
         .collect();
     trace!(
         "target scan fields pre-projection: {:?}",
-        &target_scan_fields
+        target_scan_fields
     );
 
     let mut target_proj_exprs: Vec<Expr> = target_plan
@@ -686,11 +686,11 @@ pub fn expand_merge(
         .collect::<Result<Vec<_>>>()?;
     trace!(
         "expand_merge options after rewrite - join_key_pairs: {:?}, matched_clauses: {:?}, not_matched_by_source_clauses: {:?}, not_matched_by_target_clauses: {:?}, on_condition: {:?}",
-        &options.join_key_pairs,
-        &options.matched_clauses,
-        &options.not_matched_by_source_clauses,
-        &options.not_matched_by_target_clauses,
-        &options.on_condition
+        options.join_key_pairs,
+        options.matched_clauses,
+        options.not_matched_by_source_clauses,
+        options.not_matched_by_target_clauses,
+        options.on_condition
     );
 
     // Detect insert-only MERGE that can use fast append (no touched files).
@@ -904,7 +904,7 @@ fn build_default_merge_expansion(
         path_column,
         row_index_column,
     )?;
-    trace!("projection exprs: {:?}", &projection_exprs);
+    trace!("projection exprs: {:?}", projection_exprs);
     let projected = LogicalPlanBuilder::from(filtered)
         .project(projection_exprs.clone())?
         .build()?;
