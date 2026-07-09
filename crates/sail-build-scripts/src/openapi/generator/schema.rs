@@ -470,7 +470,7 @@ impl<'a> OpenApiGenerator<'a> {
                     ));
                 };
                 let reference = &reference.reference;
-                let values = self.discriminator_values(discriminator, reference)?;
+                let values = self.discriminator_values(discriminator, reference);
                 self.discriminator_variant(reference, values, &discriminator.property_name, inline)
             })
             .collect()
@@ -480,18 +480,12 @@ impl<'a> OpenApiGenerator<'a> {
         &self,
         discriminator: &crate::openapi::spec::Discriminator,
         reference: &str,
-    ) -> BuildResult<Vec<String>> {
-        let values = discriminator
+    ) -> Vec<String> {
+        discriminator
             .mapping
             .iter()
             .filter_map(|(value, candidate)| (candidate == reference).then_some(value.clone()))
-            .collect::<Vec<_>>();
-        if values.is_empty() {
-            return Err(BuildError::InvalidInput(format!(
-                "discriminator mapping is missing an entry for {reference}"
-            )));
-        }
-        Ok(values)
+            .collect()
     }
 
     fn discriminator_variant(
@@ -564,11 +558,7 @@ impl<'a> OpenApiGenerator<'a> {
         let tag = discriminator.property_name.as_str();
         let mut variants = Vec::new();
         for reference in references {
-            let values = discriminator
-                .mapping
-                .iter()
-                .filter_map(|(value, candidate)| (candidate == reference).then_some(value.clone()))
-                .collect::<Vec<_>>();
+            let values = self.discriminator_values(discriminator, reference);
             if values.is_empty() {
                 return Ok(None);
             }
@@ -598,6 +588,18 @@ impl<'a> OpenApiGenerator<'a> {
         Ok(output.and_then(|(reference, discriminator)| {
             discriminator.map(|discriminator| (reference, discriminator))
         }))
+    }
+
+    pub(super) fn is_named_parameter_schema(&self, schema: &Schema) -> BuildResult<bool> {
+        if string_enum_variants(schema)?.is_some() || primitive_schema_type(schema).is_some() {
+            return Ok(true);
+        }
+        if let Some(schema) = transparent_all_of(schema) {
+            return self
+                .resolve_schema(schema)
+                .and_then(|schema| self.is_named_parameter_schema(schema));
+        }
+        Ok(false)
     }
 }
 
@@ -802,6 +804,12 @@ impl SchemaDefinition {
                     .as_ref()
                     .map(|tag| quote! { #[serde(tag = #tag)] })
                     .or_else(|| untagged.then(|| quote! { #[serde(untagged)] }));
+                let display = (tag.is_none()
+                    && !*untagged
+                    && variants
+                        .iter()
+                        .all(|x| matches!(x.kind, EnumVariantKind::Unit)))
+                .then(|| generate_enum_display_impl(type_name, variants));
                 let variants = variants.iter().map(generate_enum_variant);
                 Ok(quote! {
                     #(#docs)*
@@ -810,6 +818,8 @@ impl SchemaDefinition {
                     pub enum #type_name {
                         #(#variants)*
                     }
+
+                    #display
                 })
             }
             SchemaKind::Struct { fields } => {
@@ -822,13 +832,68 @@ impl SchemaDefinition {
                     }
                 })
             }
-            SchemaKind::Transparent { rust_type } => Ok(quote! {
-                #(#docs)*
-                #derives
-                #[serde(transparent)]
-                pub struct #type_name(pub #rust_type);
-            }),
+            SchemaKind::Transparent { rust_type } => {
+                let display = generate_transparent_display_impl(type_name, rust_type);
+                Ok(quote! {
+                    #(#docs)*
+                    #derives
+                    #[serde(transparent)]
+                    pub struct #type_name(pub #rust_type);
+
+                    #display
+                })
+            }
         }
+    }
+}
+
+fn generate_enum_display_impl(type_name: &RustName, variants: &[EnumVariant]) -> TokenStream {
+    let arms = variants.iter().map(|variant| {
+        let name = &variant.name;
+        let value = variant
+            .rename
+            .clone()
+            .unwrap_or_else(|| variant.name.to_string());
+        quote! {
+            Self::#name => f.write_str(#value),
+        }
+    });
+    quote! {
+        impl ::std::fmt::Display for #type_name {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                match self {
+                    #(#arms)*
+                }
+            }
+        }
+    }
+}
+
+fn generate_transparent_display_impl(
+    type_name: &RustName,
+    rust_type: &RustType,
+) -> Option<TokenStream> {
+    rust_type_is_displayable(rust_type).then(|| {
+        quote! {
+            impl ::std::fmt::Display for #type_name {
+                fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                    self.0.fmt(f)
+                }
+            }
+        }
+    })
+}
+
+fn rust_type_is_displayable(rust_type: &RustType) -> bool {
+    match rust_type {
+        RustType::Bool | RustType::I32 | RustType::I64 | RustType::F64 | RustType::String => true,
+        RustType::Unit
+        | RustType::JsonValue
+        | RustType::Named { .. }
+        | RustType::Box(_)
+        | RustType::Option(_)
+        | RustType::Vec(_)
+        | RustType::Map(_) => false,
     }
 }
 

@@ -226,7 +226,17 @@ impl OpenApiGenerator<'_> {
     }
 
     fn parameter_type(&self, schema: &MaybeRef<Schema, SchemaReference>) -> BuildResult<RustType> {
-        let schema = self.resolve_schema(schema)?;
+        let schema = match schema {
+            MaybeRef::Value(schema) => schema,
+            MaybeRef::Ref(reference) => {
+                let (_, schema) = self.resolve_schema_reference(&reference.reference)?;
+                if self.is_named_parameter_schema(schema)? {
+                    return self
+                        .schema_type(&MaybeRef::Ref(reference.clone()), TypePosition::Normal);
+                }
+                schema
+            }
+        };
 
         if has_schema_type(schema, SchemaType::Array) {
             let items = schema.items.as_deref().ok_or_else(|| {
