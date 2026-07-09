@@ -358,7 +358,7 @@ impl<'a> OpenApiGenerator<'a> {
                 in_module,
                 &type_name(&name).to_string(),
             )?;
-            let rust_type = if is_required {
+            let rust_type = if is_required || rust_type.is_option() {
                 rust_type
             } else {
                 RustType::Option(Box::new(rust_type))
