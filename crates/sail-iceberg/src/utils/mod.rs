@@ -11,6 +11,7 @@
 // limitations under the License.
 
 pub mod conversions;
+pub mod metadata;
 pub mod partition_transform;
 pub mod snapshot_id;
 pub mod timestamp;
@@ -32,12 +33,11 @@ pub enum WritePathMode {
 
 impl WritePathMode {
     pub fn from_properties(props: Option<&std::collections::HashMap<String, String>>) -> Self {
-        if let Some(p) = props {
-            if let Some(v) = p.get(WRITE_RELATIVE_PROP) {
-                if v.eq_ignore_ascii_case("true") || v == "1" {
-                    return WritePathMode::Relative;
-                }
-            }
+        if let Some(p) = props
+            && let Some(v) = p.get(WRITE_RELATIVE_PROP)
+            && (v.eq_ignore_ascii_case("true") || v == "1")
+        {
+            return WritePathMode::Relative;
         }
         WritePathMode::Absolute
     }
@@ -48,6 +48,10 @@ pub fn join_table_uri(table_uri: &str, rel: &str, mode: &WritePathMode) -> Strin
         WritePathMode::Absolute => format!("{}{}", table_uri, rel),
         WritePathMode::Relative => rel.to_string(),
     }
+}
+
+pub fn parse_absolute_url(raw: &str) -> Option<Url> {
+    Url::parse(raw).ok().filter(|url| url.scheme().len() > 1)
 }
 
 pub fn url_to_object_path(url: &Url) -> Result<object_store::path::Path> {

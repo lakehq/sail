@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import doctest
 import os
+import platform
+import re
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
 from _pytest.doctest import DoctestItem
-from pyspark.sql import SparkSession
 
+from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 
 # This doctest option flag is used to annotate tests involving
@@ -17,44 +20,41 @@ from pysail.testing.spark.utils.common import is_jvm_spark, pyspark_version
 # The test will be skipped when running on JVM Spark.
 SAIL_ONLY = doctest.register_optionflag("SAIL_ONLY")
 
+INTEGRATION_TEST_PATHS = [
+    Path(__file__).parent / "catalog" / "glue",
+    Path(__file__).parent / "catalog" / "hms",
+    Path(__file__).parent / "catalog" / "iceberg_rest",
+    Path(__file__).parent / "catalog" / "unity",
+]
+
 
 def pytest_configure(config):
     # Register custom markers.
-    # Note: pytest-bdd converts @sail-only tag to "sail-only" marker (preserves hyphen)
     config.addinivalue_line(
         "markers",
-        "sail-only: mark test as Sail-only (skipped when running against Spark JVM)",
+        "integration: mark test as requiring external services and deselected by default",
     )
     # Load all pytest-bdd step modules.
-    config.pluginmanager.import_plugin("pysail.testing.spark.steps.file_tree")
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.files")
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.sql")
     config.pluginmanager.import_plugin("pysail.testing.spark.steps.plan")
-    config.pluginmanager.import_plugin("pysail.testing.spark.steps.delta_log")
-    config.pluginmanager.import_plugin("pysail.testing.spark.steps.iceberg_metadata")
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.delta")
+    config.pluginmanager.import_plugin("pysail.testing.spark.steps.iceberg")
 
 
 if TYPE_CHECKING:
-    import pyspark.sql.connect.session
     from _pytest.mark import MarkDecorator
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="package")
 def remote():
     """Creates a Spark Connect server if there is not one already running
     whose address is set in the `SPARK_REMOTE` environment variable.
 
     :yields: The remote address of the Spark Connect server to connect to.
     """
-    if r := os.environ.get("SPARK_REMOTE"):
-        yield r
-    else:
-        from pysail.spark import SparkConnectServer
-
-        server = SparkConnectServer("127.0.0.1", 0)
-        server.start(background=True)
-        _, port = server.listening_address
-        yield f"sc://localhost:{port}"
-        server.stop()
+    with spark_connect_server() as server:
+        yield server.remote
 
 
 @pytest.fixture(scope="module")
@@ -65,71 +65,8 @@ def spark(remote):
     :param remote: The remote address of the Spark Connect server to connect to.
     :yields: A Spark Session configured for the tests.
     """
-    spark = SparkSession.builder.remote(remote).getOrCreate()
-    configure_spark_session(spark)
-    patch_spark_connect_session(spark)
-    yield spark
-    spark.stop()
-
-
-@pytest.fixture
-def spark_session_factory(remote):
-    """Factory for creating independent SparkSessions.
-
-    Each call to the factory creates a new SparkSession with a unique session ID,
-    allowing tests to verify session isolation behavior.
-
-    :param remote: The remote address of the Spark Connect server.
-    :yields: A factory function that creates new SparkSessions.
-    """
-    import contextlib
-    import uuid
-
-    sessions = []
-
-    def create_session():
-        # Use a unique app name to ensure we get a fresh session
-        # The session ID is generated internally by Spark Connect
-        unique_app = f"test_session_{uuid.uuid4().hex[:8]}"
-        session = (
-            SparkSession.builder.appName(unique_app).remote(remote).create()
-        )  # Use create() instead of getOrCreate() to force new session
-        configure_spark_session(session)
-        patch_spark_connect_session(session)
-        sessions.append(session)
-        return session
-
-    yield create_session
-
-    # Cleanup all created sessions
-    for session in sessions:
-        # Best-effort cleanup: ignore errors while stopping Spark sessions during test teardown.
-        with contextlib.suppress(Exception):
-            session.stop()
-
-
-def configure_spark_session(session):
-    # Set the Spark session time zone to UTC by default.
-    # Some test data (e.g. TPC-DS data) may generate timestamps that is invalid
-    # in some local time zones. This would result in `pytz.exceptions.NonExistentTimeError`
-    # when converting such timestamps from the local time zone to UTC.
-    session.conf.set("spark.sql.session.timeZone", "UTC")
-    # Enable Arrow to avoid data type errors when creating Spark DataFrame from Pandas.
-    session.conf.set("spark.sql.execution.arrow.pyspark.enabled", "true")
-
-
-def patch_spark_connect_session(session: pyspark.sql.connect.session.SparkSession):
-    """
-    Patch the Spark Connect session to avoid deadlock when closing the session.
-    """
-    f = session._client.close  # noqa: SLF001
-
-    def close():
-        if session._client._closed:  # noqa: SLF001
-            return
-        return f()
-
-    session._client.close = close  # noqa: SLF001
+    with spark_session_factory(remote) as sessions:
+        yield sessions.create()
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -149,6 +86,9 @@ def session_timezone(spark, request):
 
 @pytest.fixture
 def local_timezone(request):
+    if platform.system() == "Windows":
+        pytest.skip("`time.tzset()` is not available on Windows")
+
     tz = os.environ.get("TZ")
     os.environ["TZ"] = request.param
     time.tzset()
@@ -175,7 +115,72 @@ DOCTEST_MARKERS = [
         keywords=["test_python_read_arrow.txt"],
         markers=[pytest.mark.skipif(pyspark_version() < (4,), reason="Python data source requires Spark 4+")],
     ),
+    DoctestMarker(
+        keywords=["test_arrow_scalar_udf.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="arrow_udf requires PySpark 4.1+")],
+    ),
+    DoctestMarker(
+        keywords=["test_arrow_agg_udf.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="arrow_udf requires PySpark 4.1+")],
+    ),
+    DoctestMarker(
+        keywords=["test_arrow_grouped_map_udf.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4,), reason="applyInArrow requires PySpark 4+")],
+    ),
+    DoctestMarker(
+        keywords=["test_arrow_cogrouped_map_udf.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4,), reason="applyInArrow requires PySpark 4+")],
+    ),
+    DoctestMarker(
+        keywords=["test_arrow_udtf.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="arrow_udtf requires PySpark 4.1+")],
+    ),
+    DoctestMarker(
+        keywords=["test_pandas_grouped_map_iter_udf.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="applyInPandas iterator requires PySpark 4.1+")],
+    ),
+    DoctestMarker(
+        keywords=["test_arrow_grouped_map_iter_udf.txt"],
+        markers=[pytest.mark.skipif(pyspark_version() < (4, 1), reason="applyInArrow iterator requires PySpark 4.1+")],
+    ),
+    DoctestMarker(
+        keywords=["test_ipython_key_completions.txt"],
+        markers=[
+            pytest.mark.skipif(
+                pyspark_version() < (4,),
+                reason="_ipython_key_completions_ is not defined on the PySpark 3.x Connect DataFrame",
+            )
+        ],
+    ),
 ]
+
+
+def pytest_bdd_apply_tag(tag: str, function):
+    if tag == "sail-only":
+        pytest.mark.skipif(is_jvm_spark(), reason="Sail-only feature not supported by JVM Spark")(function)
+        return True
+
+    if tag == "sail-bug":
+        # We set `strict=True` so that outdated markers are reported as errors so that we can remove them timely.
+        pytest.mark.xfail(not is_jvm_spark(), reason="Known Sail bug", strict=True)(function)
+        return True
+
+    if tag.startswith("spark-"):
+        match = re.fullmatch(r"spark-(\d+(?:\.\d+)*)", tag)
+        if match is None:
+            msg = f"invalid Spark version tag: {tag}"
+            raise ValueError(msg)
+        s = match.group(1)
+        version = tuple(int(part) for part in s.split("."))
+        pytest.mark.skipif(pyspark_version() < version, reason=f"Requires Spark {s}+")(function)
+        return True
+
+    return None
+
+
+def _is_integration_test(item: pytest.Item) -> bool:
+    item_path = Path(str(item.fspath)).resolve()
+    return any(item_path.is_relative_to(path.resolve()) for path in INTEGRATION_TEST_PATHS)
 
 
 def pytest_collection_modifyitems(session, config, items):  # noqa: ARG001
@@ -186,29 +191,20 @@ def pytest_collection_modifyitems(session, config, items):  # noqa: ARG001
                     for marker in test.markers:
                         item.add_marker(marker)
 
-    # Mark @sail-bug scenarios as xfail when running against Sail
-    if not is_jvm_spark():
-        for item in items:
-            marker = item.get_closest_marker("sail-bug")
-            if marker:
-                reason = marker.kwargs.get("reason", "Known Sail bug")
-                item.add_marker(pytest.mark.xfail(reason=reason, strict=False))
-
-    # Skip @spark-4 scenarios on PySpark < 4.x (e.g., Variant type not supported)
-    if pyspark_version() < (4,):
-        skip_spark4 = pytest.mark.skip(reason="Requires PySpark 4+ (e.g., Variant type)")
-        for item in items:
-            if item.get_closest_marker("spark-4"):
-                item.add_marker(skip_spark4)
-
     if is_jvm_spark():
-        skip_sail_only = pytest.mark.skip(reason="Sail-only feature, not supported by Spark")
         for item in items:
             if isinstance(item, DoctestItem):
                 for example in item.dtest.examples:
                     if example.options.get(SAIL_ONLY):
                         example.options[doctest.SKIP] = True
-            # Skip pytest-bdd scenarios with @sail-only tag
-            # Note: pytest-bdd preserves the hyphen in marker names
-            elif item.get_closest_marker("sail-only"):
-                item.add_marker(skip_sail_only)
+
+    for item in items:
+        if _is_integration_test(item):
+            item.add_marker(pytest.mark.integration)
+
+    if not config.getoption("markexpr"):
+        deselected = [item for item in items if item.get_closest_marker("integration")]
+        if deselected:
+            remaining = [item for item in items if item not in deselected]
+            config.hook.pytest_deselected(items=deselected)
+            items[:] = remaining

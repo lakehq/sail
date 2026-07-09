@@ -12,8 +12,8 @@
 
 use std::collections::BTreeMap;
 
-use apache_avro::schema::{ArraySchema, Name, RecordField as AvroRecordField, RecordSchema};
 use apache_avro::Schema as AvroSchema;
+use apache_avro::schema::{ArraySchema, Name, RecordField as AvroRecordField, RecordSchema};
 use once_cell::sync::Lazy;
 use serde_json::{Number, Value as JsonValue};
 
@@ -59,9 +59,8 @@ fn partitions_field() -> AvroRecordField {
     record_field("partitions", array, 507, false)
 }
 
-/// Typed Avro schema for manifest list V2 entries (record name: manifest_file)
-pub static MANIFEST_LIST_AVRO_SCHEMA_V2: Lazy<AvroSchema> = Lazy::new(|| {
-    let fields = vec![
+fn manifest_list_schema(include_first_row_id: bool) -> AvroSchema {
+    let mut fields = vec![
         record_field("manifest_path", AvroSchema::String, 500, true),
         record_field("manifest_length", AvroSchema::Long, 501, true),
         record_field("partition_spec_id", AvroSchema::Int, 502, true),
@@ -80,6 +79,10 @@ pub static MANIFEST_LIST_AVRO_SCHEMA_V2: Lazy<AvroSchema> = Lazy::new(|| {
         record_field("key_metadata", AvroSchema::Bytes, 519, false),
     ];
 
+    if include_first_row_id {
+        fields.push(record_field("first_row_id", AvroSchema::Long, 520, false));
+    }
+
     let mut lookup = BTreeMap::new();
     for (idx, f) in fields.iter().enumerate() {
         lookup.insert(f.name.clone(), idx);
@@ -94,6 +97,14 @@ pub static MANIFEST_LIST_AVRO_SCHEMA_V2: Lazy<AvroSchema> = Lazy::new(|| {
         lookup,
         attributes: Default::default(),
     })
-});
+}
+
+/// Typed Avro schema for manifest list V2 entries (record name: manifest_file)
+pub static MANIFEST_LIST_AVRO_SCHEMA_V2: Lazy<AvroSchema> =
+    Lazy::new(|| manifest_list_schema(false));
+
+/// Typed Avro schema for manifest list V3 entries (record name: manifest_file)
+pub static MANIFEST_LIST_AVRO_SCHEMA_V3: Lazy<AvroSchema> =
+    Lazy::new(|| manifest_list_schema(true));
 
 // TODO(V1): Add MANIFEST_LIST_AVRO_SCHEMA_V1 when implementing typed V1 writer

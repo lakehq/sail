@@ -4,7 +4,7 @@ pub mod binary;
 pub mod console;
 pub mod csv;
 pub mod json;
-pub mod listing;
+pub mod noop;
 pub mod parquet;
 pub mod python;
 pub mod rate;

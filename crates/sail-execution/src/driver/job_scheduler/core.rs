@@ -5,28 +5,25 @@ use chrono::Utc;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
-use datafusion_proto::physical_plan::to_proto::serialize_physical_expr;
-use datafusion_proto::physical_plan::AsExecutionPlan;
-use datafusion_proto::protobuf::PhysicalPlanNode;
 use indexmap::{IndexMap, IndexSet};
 use log::{debug, warn};
-use prost::Message;
 use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::ActorContext;
 
+use crate::driver::DriverActor;
 use crate::driver::job_scheduler::state::{
     JobDescriptor, JobState, StageState, TaskAttemptDescriptor, TaskRegionState, TaskState,
 };
 use crate::driver::job_scheduler::topology::TaskRegionTopology;
 use crate::driver::job_scheduler::{JobAction, JobScheduler, JobSchedulerOptions};
 use crate::driver::output::build_job_output;
-use crate::driver::DriverActor;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey};
 use crate::job_graph::{
     InputMode, JobGraph, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
 };
+use crate::proto::{encode_remote_physical_expr, encode_remote_physical_plan};
 use crate::task::definition::{
     TaskDefinition, TaskInput, TaskInputKey, TaskInputLocator, TaskOutput, TaskOutputDistribution,
     TaskOutputLocator,
@@ -172,12 +169,11 @@ impl JobScheduler {
         for (r, region) in job.topology.regions.iter().enumerate() {
             let failed = region.tasks.iter().any(|t| {
                 let attempts = &job.stages[t.stage].tasks[t.partition].attempts;
-                if let Some(attempt) = attempts.last() {
-                    if matches!(attempt.state, TaskState::Failed | TaskState::Canceled)
-                        && attempts.len() >= options.task_max_attempts
-                    {
-                        return true;
-                    }
+                if let Some(attempt) = attempts.last()
+                    && matches!(attempt.state, TaskState::Failed | TaskState::Canceled)
+                    && attempts.len() >= options.task_max_attempts
+                {
+                    return true;
                 }
                 false
             });
@@ -207,10 +203,10 @@ impl JobScheduler {
 
             for t in &region.tasks {
                 let attempts = &job.stages[t.stage].tasks[t.partition].attempts;
-                if let Some(attempt) = attempts.last() {
-                    if matches!(attempt.state, TaskState::Failed) {
-                        failed = true;
-                    }
+                if let Some(attempt) = attempts.last()
+                    && matches!(attempt.state, TaskState::Failed)
+                {
+                    failed = true;
                 }
             }
 
@@ -434,10 +430,10 @@ impl JobScheduler {
         for (s, stage) in job.stages.iter().enumerate() {
             for (t, task) in stage.tasks.iter().enumerate() {
                 for attempt in task.attempts.iter() {
-                    if matches!(attempt.state, TaskState::Failed) {
-                        if let Some(cause) = &attempt.cause {
-                            causes.entry((s, t)).or_default().push(cause);
-                        }
+                    if matches!(attempt.state, TaskState::Failed)
+                        && let Some(cause) = &attempt.cause
+                    {
+                        causes.entry((s, t)).or_default().push(cause);
                     }
                 }
             }
@@ -528,9 +524,7 @@ impl JobScheduler {
             )));
         };
 
-        let plan =
-            PhysicalPlanNode::try_from_physical_plan(stage.plan.clone(), self.codec.as_ref())?
-                .encode_to_vec();
+        let plan = encode_remote_physical_plan(self.codec.as_ref(), stage.plan.clone())?;
         let inputs = stage
             .inputs
             .iter()
@@ -600,50 +594,15 @@ impl JobScheduler {
         };
         let partitions = producer.plan.output_partitioning().partition_count();
         let channels = producer.distribution.channels();
-        let keys = match input.mode {
-            InputMode::Forward | InputMode::Merge => (0..partitions)
-                .map(|partition| {
-                    (0..channels)
-                        .map(|channel| {
-                            Ok(TaskInputKey {
-                                partition,
-                                attempt: latest_attempt(input.stage, partition)?,
-                                channel,
-                            })
-                        })
-                        .collect::<ExecutionResult<Vec<_>>>()
-                })
-                .collect::<ExecutionResult<Vec<Vec<_>>>>()?,
-            // Enumerate channels in the outer loop and partitions in the inner loop.
-            // This is the whole point of shuffle!
-            InputMode::Shuffle => (0..channels)
-                .map(|channel| {
-                    (0..partitions)
-                        .map(|partition| {
-                            Ok(TaskInputKey {
-                                partition,
-                                attempt: latest_attempt(input.stage, partition)?,
-                                channel,
-                            })
-                        })
-                        .collect::<ExecutionResult<Vec<_>>>()
-                })
-                .collect::<ExecutionResult<Vec<Vec<_>>>>()?,
-            InputMode::Broadcast => {
-                let keys = (0..partitions)
-                    .flat_map(|partition| {
-                        (0..channels).map(move |channel| {
-                            Ok(TaskInputKey {
-                                partition,
-                                attempt: latest_attempt(input.stage, partition)?,
-                                channel,
-                            })
-                        })
-                    })
-                    .collect::<ExecutionResult<Vec<_>>>()?;
-                vec![keys]
-            }
-        };
+        let consumer_stage = &job.graph.stages()[key.stage];
+        let output_partitions = consumer_stage.plan.output_partitioning().partition_count();
+        let keys = build_task_input_keys(
+            input.mode,
+            partitions,
+            channels,
+            output_partitions,
+            |partition| latest_attempt(input.stage, partition),
+        )?;
         let locator = match producer.mode {
             OutputMode::Pipelined => match producer.placement {
                 TaskPlacement::Driver => {
@@ -717,8 +676,7 @@ impl JobScheduler {
                 let keys = keys
                     .iter()
                     .map(|expr| {
-                        let expr =
-                            serialize_physical_expr(expr, self.codec.as_ref())?.encode_to_vec();
+                        let expr = encode_remote_physical_expr(self.codec.as_ref(), expr)?;
                         Ok(Arc::from(expr))
                     })
                     .collect::<ExecutionResult<Vec<Arc<[u8]>>>>()?;
@@ -730,6 +688,11 @@ impl JobScheduler {
             OutputDistribution::RoundRobin { channels } => TaskOutputDistribution::RoundRobin {
                 channels: *channels,
             },
+            OutputDistribution::RoundRobinRow { channels } => {
+                TaskOutputDistribution::RoundRobinRow {
+                    channels: *channels,
+                }
+            }
         };
         let locator = match stage.mode {
             OutputMode::Pipelined => TaskOutputLocator::Local { replicas },
@@ -753,6 +716,86 @@ impl JobScheduler {
             .get(stage)
             .and_then(|stage| stage.tasks.get(partition))
             .and_then(|task| task.attempts.split_last().map(|(_, head)| head.len()))
+    }
+}
+
+fn build_task_input_keys(
+    mode: InputMode,
+    input_partitions: usize,
+    input_channels: usize,
+    output_partitions: usize,
+    mut latest_attempt: impl FnMut(usize) -> ExecutionResult<usize>,
+) -> ExecutionResult<Vec<Vec<TaskInputKey>>> {
+    match mode {
+        InputMode::Forward | InputMode::Merge => {
+            let mut groups = Vec::with_capacity(input_partitions);
+            for partition in 0..input_partitions {
+                let attempt = latest_attempt(partition)?;
+                let mut group = Vec::with_capacity(input_channels);
+                for channel in 0..input_channels {
+                    group.push(TaskInputKey {
+                        partition,
+                        attempt,
+                        channel,
+                    });
+                }
+                groups.push(group);
+            }
+            Ok(groups)
+        }
+        // Enumerate channels in the outer loop and partitions in the inner loop.
+        // This is the whole point of shuffle!
+        InputMode::Shuffle => {
+            let mut groups = Vec::with_capacity(input_channels);
+            for channel in 0..input_channels {
+                let mut group = Vec::with_capacity(input_partitions);
+                for partition in 0..input_partitions {
+                    group.push(TaskInputKey {
+                        partition,
+                        attempt: latest_attempt(partition)?,
+                        channel,
+                    });
+                }
+                groups.push(group);
+            }
+            Ok(groups)
+        }
+        InputMode::Broadcast => {
+            let mut keys = Vec::with_capacity(input_partitions * input_channels);
+            for partition in 0..input_partitions {
+                let attempt = latest_attempt(partition)?;
+                for channel in 0..input_channels {
+                    keys.push(TaskInputKey {
+                        partition,
+                        attempt,
+                        channel,
+                    });
+                }
+            }
+            Ok(vec![keys])
+        }
+        InputMode::Rescale => {
+            // Keep rescale input expansion aligned with CoalesceExec's contiguous partition
+            // grouping, where each output partition consumes an evenly divided input range.
+            let mut groups = Vec::with_capacity(output_partitions);
+            for output_partition in 0..output_partitions {
+                let start = output_partition * input_partitions / output_partitions;
+                let end = (output_partition + 1) * input_partitions / output_partitions;
+                let mut group = Vec::with_capacity((end.saturating_sub(start)) * input_channels);
+                for partition in start..end {
+                    let attempt = latest_attempt(partition)?;
+                    for channel in 0..input_channels {
+                        group.push(TaskInputKey {
+                            partition,
+                            attempt,
+                            channel,
+                        });
+                    }
+                }
+                groups.push(group);
+            }
+            Ok(groups)
+        }
     }
 }
 

@@ -284,6 +284,27 @@ but they are still supported in Sail. You can work with these types in Python UD
       <td>Struct</td>
     </tr>
     <tr>
+      <td>
+        <code><SyntaxText raw="'VARIANT'" /></code>
+      </td>
+      <td><strong>VariantType</strong></td>
+      <td>-</td>
+    </tr>
+    <tr>
+      <td>
+        <code><SyntaxText raw="'GEOGRAPHY('(<srid>|'ANY')')'" /></code>
+      </td>
+      <td><strong>GeographyType</strong></td>
+      <td>-</td>
+    </tr>
+    <tr>
+      <td>
+        <code><SyntaxText raw="'GEOMETRY('(<srid>|'ANY')')'" /></code>
+      </td>
+      <td><strong>GeometryType</strong></td>
+      <td>-</td>
+    </tr>
+    <tr>
       <td>-</td>
       <td>-</td>
       <td>Union</td>

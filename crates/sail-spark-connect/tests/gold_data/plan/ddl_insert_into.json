@@ -545,15 +545,7 @@
                         }
                       }
                     },
-                    {
-                      "unresolvedAttribute": {
-                        "name": [
-                          "DEFAULT"
-                        ],
-                        "planId": null,
-                        "isMetadataColumn": false
-                      }
-                    }
+                    "defaultColumnValue"
                   ]
                 ],
                 "planId": null

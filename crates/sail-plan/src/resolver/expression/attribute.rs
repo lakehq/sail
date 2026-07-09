@@ -1,14 +1,17 @@
-use arrow::datatypes::DataType;
+use std::sync::Arc;
+
+use arrow::datatypes::{DataType, Field};
 use datafusion_common::{Column, DFSchemaRef, TableReference};
-use datafusion_expr::expr::ScalarFunction;
-use datafusion_expr::{col, expr, lit};
+use datafusion_expr::expr::{LambdaVariable, ScalarFunction};
+use datafusion_expr::{ScalarUDF, col, expr, lit};
 use datafusion_functions::core::get_field;
 use sail_common::spec;
+use sail_function::scalar::array_struct_field::ArrayStructField;
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     pub(super) fn resolve_expression_attribute(
@@ -21,6 +24,30 @@ impl PlanResolver<'_> {
     ) -> PlanResult<NamedExpr> {
         if is_metadata_column {
             return Err(PlanError::todo("resolve metadata column"));
+        }
+        // Lambda parameters shadow columns inside a lambda function body. SQL lambda
+        // bodies reference parameters as plain attributes, so the lambda scope stack
+        // is consulted first. A `plan_id` indicates an explicit DataFrame column
+        // reference, which never refers to a lambda parameter.
+        if plan_id.is_none()
+            && let [first, rest @ ..] = name.parts()
+            && let Some((declared, field)) = state
+                .resolve_lambda_parameter(first.as_ref())
+                .map(|(param, field)| (param.to_string(), field.cloned()))
+        {
+            let display = rest
+                .last()
+                .map(|x| x.as_ref())
+                .unwrap_or(declared.as_str())
+                .to_string();
+            let mut expr = expr::Expr::LambdaVariable(LambdaVariable::new(declared, field));
+            for part in rest {
+                expr = expr::Expr::ScalarFunction(ScalarFunction::new_udf(
+                    get_field(),
+                    vec![expr, lit(part.as_ref().to_string())],
+                ));
+            }
+            return Ok(NamedExpr::new(vec![display], expr));
         }
         if let Some((name, expr)) =
             self.resolve_aggregate_field(&name, state.get_grouping_for_having())?
@@ -47,13 +74,15 @@ impl PlanResolver<'_> {
         }
         let Some(outer_schema) = state.get_outer_query_schema().cloned() else {
             return Err(PlanError::AnalysisError(format!(
-                "cannot resolve attribute: {name:?}"
+                // Spark tests expect the error message to start with: "attribute {name:?} is missing"
+                "attribute {name:?} is missing from the schema: cannot resolve attribute"
             )));
         };
         match self.resolve_outer_field(&name, &outer_schema, state)? {
             Some((name, expr)) => Ok(NamedExpr::new(vec![name], expr)),
             None => Err(PlanError::AnalysisError(format!(
-                "cannot resolve attribute or outer attribute: {name:?}"
+                // Spark tests expect the error message to start with: "attribute {name:?} is missing"
+                "attribute {name:?} is missing from the schema: cannot resolve attribute or outer attribute"
             ))),
         }
     }
@@ -232,6 +261,33 @@ impl PlanResolver<'_> {
                             expr::Expr::ScalarFunction(ScalarFunction::new_udf(get_field(), args));
                         Self::resolve_potentially_nested_field(expr, field.data_type(), remaining)
                     }),
+                DataType::List(field)
+                | DataType::LargeList(field)
+                | DataType::FixedSizeList(field, _) => {
+                    let DataType::Struct(fields) = field.data_type() else {
+                        return None;
+                    };
+                    fields
+                        .iter()
+                        .find(|x| x.name().eq_ignore_ascii_case(name.as_ref()))
+                        .and_then(|child| {
+                            let expr = ScalarUDF::from(ArrayStructField::new())
+                                .call(vec![expr, lit(child.name().to_string())]);
+                            let item = Arc::new(Field::new_list_field(
+                                child.data_type().clone(),
+                                field.is_nullable() || child.is_nullable(),
+                            ));
+                            let data_type = match data_type {
+                                DataType::List(_) => DataType::List(item),
+                                DataType::LargeList(_) => DataType::LargeList(item),
+                                DataType::FixedSizeList(_, size) => {
+                                    DataType::FixedSizeList(item, *size)
+                                }
+                                _ => unreachable!("list data type matched above"),
+                            };
+                            Self::resolve_potentially_nested_field(expr, &data_type, remaining)
+                        })
+                }
                 _ => None,
             },
         }

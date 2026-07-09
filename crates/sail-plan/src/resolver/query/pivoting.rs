@@ -2,26 +2,286 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
-use datafusion_expr::{col, expr, lit, ExprSchemable, LogicalPlan, Projection, ScalarUDF};
+use datafusion::functions_aggregate::count::count_udaf;
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, ScalarValue};
+use datafusion_expr::expr::{AggregateFunctionParams, NullTreatment};
+use datafusion_expr::{
+    ExprSchemable, LogicalPlan, LogicalPlanBuilder, Projection, ScalarUDF, col, expr, lit, when,
+};
 use datafusion_functions_nested::expr_fn as nested_fn;
 use sail_common::spec;
+use sail_common_datafusion::display::{ArrayFormatter, FormatOptions};
+use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_function::scalar::explode;
 use sail_function::scalar::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
-use crate::resolver::PlanResolver;
+use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_pivot(
         &self,
-        _pivot: spec::Pivot,
-        _state: &mut PlanResolverState,
+        pivot: spec::Pivot,
+        state: &mut PlanResolverState,
     ) -> PlanResult<LogicalPlan> {
-        Err(PlanError::todo("pivot"))
+        let spec::Pivot {
+            input,
+            grouping,
+            aggregate,
+            columns,
+            values,
+        } = pivot;
+
+        let input = self.resolve_query_plan(*input, state).await?;
+        let schema = input.schema().clone();
+
+        let mut pivot_columns = self.resolve_expressions(columns, &schema, state).await?;
+        let column_arity = pivot_columns.len();
+        let pivot_column = match column_arity {
+            0 => {
+                return Err(PlanError::AnalysisError(
+                    "pivot column required".to_string(),
+                ));
+            }
+            1 => pivot_columns.swap_remove(0),
+            _ => make_pivot_struct(pivot_columns),
+        };
+
+        let aggregates = self
+            .resolve_named_expressions(aggregate, &schema, state)
+            .await?;
+
+        // Spark allows aggregate expressions and pure literals, but rejects columns outside an
+        // aggregate function.
+        for agg in &aggregates {
+            check_valid_pivot_aggregate(&agg.expr, state)?;
+        }
+
+        // For SQL pivots the grouping list is empty; the implicit grouping columns are
+        // all input columns not referenced by the pivot column or the aggregates.
+        let grouping = self
+            .resolve_named_expressions(grouping, &schema, state)
+            .await?;
+        let grouping = if grouping.is_empty() {
+            Self::implicit_pivot_grouping(&schema, &pivot_column, &aggregates, state)?
+        } else {
+            grouping
+        };
+
+        // Each pivot value becomes one output column per aggregate. Values may be
+        // given explicitly (`... IN (v1, v2)`); otherwise infer the distinct values
+        // from the data (matching Spark's `pivot(column)`).
+        let pivot_values: Vec<(ScalarValue, Option<String>)> = if values.is_empty() {
+            let pivot_column_name = pivot_column_display_name(&pivot_column, state)?;
+            self.infer_pivot_values(&input, &pivot_column, &pivot_column_name)
+                .await?
+                .into_iter()
+                .map(|scalar| (scalar, None))
+                .collect()
+        } else {
+            // Each pivot value is a foldable expression (literal, typed literal such as
+            // `DATE'...'`, or cast). Resolve it against an empty schema and fold it to a scalar
+            // with `LiteralEvaluator`, mirroring how SHOW PARTITIONS resolves partition values.
+            let empty_schema = Arc::new(DFSchema::empty());
+            let evaluator = LiteralEvaluator::new();
+            let mut resolved = Vec::with_capacity(values.len());
+            for value in values {
+                let spec::PivotValue {
+                    values: exprs,
+                    alias,
+                } = value;
+                if exprs.len() != column_arity {
+                    return Err(PlanError::AnalysisError(format!(
+                        "pivot value has {} expressions, but pivot column has {}",
+                        exprs.len(),
+                        column_arity
+                    )));
+                }
+                let mut exprs = self
+                    .resolve_expressions(exprs, &empty_schema, state)
+                    .await?;
+                let expr = if column_arity == 1 {
+                    exprs.swap_remove(0)
+                } else {
+                    make_pivot_struct(exprs)
+                };
+                let scalar = evaluator
+                    .evaluate(&expr)
+                    .map_err(|e| PlanError::invalid(e.to_string()))?;
+                resolved.push((scalar, alias.map(String::from)));
+            }
+            resolved
+        };
+
+        // Spark casts each pivot value to the pivot column's type before comparing
+        // (`Cast(value, pivotColumn.dataType)`), so an `int` literal matches a `bigint` column and
+        // a struct value matches the struct column's field types. The output name still uses the
+        // raw value (Spark casts the original value to string), so it is taken from `scalar` below
+        // before the cast.
+        let column_type = pivot_column.get_type(&schema)?;
+        let spark_uses_pivot_first = aggregates
+            .iter()
+            .map(|agg| agg.expr.get_type(&schema))
+            .collect::<Result<Vec<_>, _>>()?
+            .iter()
+            .all(spark_pivot_first_supports_data_type);
+        let force_first_last_ignore_nulls = !spark_uses_pivot_first;
+        let single_aggregate = aggregates.len() == 1;
+        let mut projections = grouping.clone();
+        for (scalar, alias) in pivot_values {
+            // A NULL pivot value forms its own group in Spark: match rows where the
+            // pivot column IS NULL (equality with NULL never holds) and name the
+            // output column `null`.
+            let is_null = scalar.is_null();
+            let value_name = match alias {
+                Some(alias) => alias,
+                None if is_null => "null".to_string(),
+                None => pivot_value_name(&scalar)?,
+            };
+            let predicate = if is_null {
+                pivot_column.clone().is_null()
+            } else {
+                let scalar = scalar
+                    .cast_to(&column_type)
+                    .map_err(|e| PlanError::invalid(e.to_string()))?;
+                // Spark's PivotFirst fast path creates a NaN column but does not match NaN rows into it.
+                if spark_uses_pivot_first && scalar_is_nan(&scalar) {
+                    lit(false)
+                } else {
+                    pivot_column.clone().eq(lit(scalar))
+                }
+            };
+            // On the PivotFirst path, an absent (group, pivot-value) combination is NULL even
+            // for `count` (Spark only computes the aggregate over (group, value) pairs that
+            // occur in the data). The aggregate FILTER below makes `count` return 0 for such a
+            // group, so gate each cell on whether any row matched the pivot value. This is a
+            // no-op for sum/avg/min/max (already NULL on empty) and corrects the counting
+            // family (count, count(DISTINCT), approx_count_distinct). On the general path
+            // (`spark_uses_pivot_first == false`) Spark itself returns 0 there, matching the
+            // unguarded FILTER, so no guard is applied.
+            let row_present = if spark_uses_pivot_first {
+                Some(count_rows_matching(&predicate).gt(lit(0i64)))
+            } else {
+                None
+            };
+            for agg in &aggregates {
+                let expr = inject_pivot_filter(
+                    agg.expr.clone(),
+                    &predicate,
+                    force_first_last_ignore_nulls,
+                )?;
+                let expr = match &row_present {
+                    Some(condition) => {
+                        when(condition.clone(), expr).otherwise(lit(ScalarValue::Null))?
+                    }
+                    None => expr,
+                };
+                let name = if single_aggregate {
+                    value_name.clone()
+                } else {
+                    format!("{value_name}_{}", agg.name.join("_"))
+                };
+                projections.push(NamedExpr {
+                    name: vec![name],
+                    expr,
+                    metadata: vec![],
+                });
+            }
+        }
+
+        self.rewrite_aggregate(input, projections, grouping, None, false, state)
+    }
+
+    /// Infer pivot values by collecting the distinct values of the pivot column
+    /// from the input, sorted ascending (matching Spark's `pivot(column)`).
+    async fn infer_pivot_values(
+        &self,
+        input: &LogicalPlan,
+        pivot_column: &expr::Expr,
+        pivot_column_name: &str,
+    ) -> PlanResult<Vec<ScalarValue>> {
+        // Spark rejects pivots whose distinct-value count exceeds the configured maximum
+        // (`spark.sql.pivotMaxValues`, default 10000), defined as `DATAFRAME_PIVOT_MAX_VALUES`
+        // in `SQLConf`. Its `collectPivotValues` bounds the distinct-value scan with
+        // `.limit(maxValues + 1)` before collecting, which is what the LIMIT below mirrors:
+        //   https://github.com/apache/spark/blob/v4.0.0/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala#L1951
+        //   https://github.com/apache/spark/blob/v4.0.0/sql/core/src/main/scala/org/apache/spark/sql/classic/RelationalGroupedDataset.scala#L637-L655
+        let max_pivot_values = self.config.pivot_max_values;
+        // `GROUP BY pivot_column` with no aggregates is equivalent to
+        // `SELECT DISTINCT pivot_column`. Apply a LIMIT of one past the cap so a
+        // high-cardinality pivot column never pulls an unbounded number of distinct
+        // values into the planner process; the extra row still lets us detect overflow.
+        let plan = LogicalPlanBuilder::from(input.clone())
+            .aggregate(vec![pivot_column.clone()], Vec::<expr::Expr>::new())?
+            .limit(0, Some(max_pivot_values.saturating_add(1)))?
+            .build()?;
+        let batches = self.ctx.execute_logical_plan(plan).await?.collect().await?;
+        let mut values = Vec::new();
+        for batch in &batches {
+            let column = batch.column(0);
+            for row in 0..batch.num_rows() {
+                values.push(ScalarValue::try_from_array(column, row)?);
+            }
+        }
+        // The plan is limited to `max_pivot_values + 1` rows, so report "more than" rather than
+        // an exact count (which would be capped and misleading) — mirroring Spark's message.
+        if values.len() > max_pivot_values {
+            return Err(PlanError::AnalysisError(format!(
+                "The pivot column {pivot_column_name} has more than {max_pivot_values} distinct \
+                 values, this could indicate an error. If this was intended, set \
+                 spark.sql.pivotMaxValues to at least the number of distinct values of the pivot \
+                 column."
+            )));
+        }
+        // `partial_cmp` returns `None` only for incomparable values such as float `NaN`.
+        // Fall back to a deterministic tiebreaker so the inferred pivot column order is stable
+        // across runs (the distinct values arrive in non-deterministic aggregate order). The
+        // string form also places `NaN` last, matching Spark's "NaN is greatest" ordering.
+        values.sort_by(|a, b| {
+            a.partial_cmp(b)
+                .unwrap_or_else(|| a.to_string().cmp(&b.to_string()))
+        });
+        Ok(values)
+    }
+
+    /// Compute the implicit grouping columns for a SQL `PIVOT` with no explicit
+    /// grouping: every input column that is not referenced by the pivot column or
+    /// any of the aggregate expressions.
+    fn implicit_pivot_grouping(
+        schema: &DFSchemaRef,
+        pivot_column: &expr::Expr,
+        aggregates: &[NamedExpr],
+        state: &PlanResolverState,
+    ) -> PlanResult<Vec<NamedExpr>> {
+        let mut referenced: HashSet<Column> = HashSet::new();
+        for column in pivot_column.column_refs() {
+            referenced.insert(column.clone());
+        }
+        for agg in aggregates {
+            for column in agg.expr.column_refs() {
+                referenced.insert(column.clone());
+            }
+        }
+        // The schema field names are internal ids (e.g. `#6`); map each to its
+        // user-facing name so the grouping columns keep their original names.
+        let names = Self::get_field_names(schema, state)?;
+        Ok(schema
+            .columns()
+            .into_iter()
+            .zip(names)
+            .filter(|(column, _)| !referenced.contains(column))
+            .map(|(column, name)| NamedExpr {
+                name: vec![name],
+                expr: expr::Expr::Column(column),
+                metadata: vec![],
+            })
+            .collect())
     }
 
     pub(super) async fn resolve_query_unpivot(
@@ -167,6 +427,8 @@ impl PlanResolver<'_> {
 
         let (input, expr) =
             self.rewrite_projection::<MonotonicIdRewriter>(input.clone(), projections, state)?;
+        let (input, expr) =
+            self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
 
         let expr = self.rewrite_multi_expr(expr)?;
@@ -177,6 +439,136 @@ impl PlanResolver<'_> {
             Arc::new(input),
         )?))
     }
+}
+
+/// Formats a pivot value into its output column name via Sail's `CAST(... AS STRING)` arrow
+/// formatter (keeps `.0` on whole doubles, formats decimals) rather than `ScalarValue::Display`.
+fn pivot_value_name(scalar: &ScalarValue) -> PlanResult<String> {
+    let array = scalar
+        .to_array()
+        .map_err(|e| PlanError::invalid(e.to_string()))?;
+    let formatter = ArrayFormatter::try_new(array.as_ref(), &FormatOptions::default())
+        .map_err(|e| PlanError::invalid(e.to_string()))?;
+    formatter
+        .value(0)
+        .try_to_string()
+        .map_err(|e| PlanError::invalid(e.to_string()))
+}
+
+fn make_pivot_struct(exprs: Vec<expr::Expr>) -> expr::Expr {
+    ScalarUDF::from(StructFunction::new(
+        (0..exprs.len()).map(|i| format!("col{}", i + 1)).collect(),
+    ))
+    .call(exprs)
+}
+
+fn pivot_column_display_name(expr: &expr::Expr, state: &PlanResolverState) -> PlanResult<String> {
+    if let expr::Expr::Column(column) = expr {
+        Ok(state.get_field_info(column.name())?.name().to_string())
+    } else {
+        Ok(expr.to_string())
+    }
+}
+
+fn check_valid_pivot_aggregate(expr: &expr::Expr, state: &PlanResolverState) -> PlanResult<()> {
+    let mut bare_column = None;
+
+    expr.apply(|e| match e {
+        expr::Expr::AggregateFunction(_) => Ok(TreeNodeRecursion::Jump),
+        expr::Expr::Column(column) => {
+            bare_column = Some(column.clone());
+            Ok(TreeNodeRecursion::Stop)
+        }
+        _ => Ok(TreeNodeRecursion::Continue),
+    })?;
+
+    if let Some(column) = bare_column {
+        let name = state
+            .get_field_info(column.name())
+            .map(|info| info.name().to_string())
+            .unwrap_or_else(|_| column.name().to_string());
+        return Err(PlanError::AnalysisError(format!(
+            "Aggregate expression required for pivot, but '{name}' did not appear in any \
+             aggregate function."
+        )));
+    }
+
+    Ok(())
+}
+
+fn spark_pivot_first_supports_data_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Boolean
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Float16
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Decimal32(_, _)
+            | DataType::Decimal64(_, _)
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _)
+    )
+}
+
+fn scalar_is_nan(scalar: &ScalarValue) -> bool {
+    match scalar {
+        ScalarValue::Float16(Some(value)) => value.is_nan(),
+        ScalarValue::Float32(Some(value)) => value.is_nan(),
+        ScalarValue::Float64(Some(value)) => value.is_nan(),
+        _ => false,
+    }
+}
+
+/// Build `count(1) FILTER (WHERE predicate)`: the number of rows in the group that match
+/// the pivot value. Used to distinguish an absent (group, pivot-value) combination (zero
+/// matching rows -> NULL cell) from a present one whose aggregate happens to be `0`.
+fn count_rows_matching(predicate: &expr::Expr) -> expr::Expr {
+    expr::Expr::AggregateFunction(expr::AggregateFunction {
+        func: count_udaf(),
+        params: AggregateFunctionParams {
+            args: vec![lit(1i64)],
+            distinct: false,
+            filter: Some(Box::new(predicate.clone())),
+            order_by: vec![],
+            null_treatment: None,
+        },
+    })
+}
+
+/// Add `predicate` as a FILTER to every aggregate function inside `expr`,
+/// AND-combining with any existing filter. Implements Spark's pivot semantics:
+/// each aggregate is computed only over rows matching the pivot value.
+fn inject_pivot_filter(
+    expr: expr::Expr,
+    predicate: &expr::Expr,
+    force_first_last_ignore_nulls: bool,
+) -> PlanResult<expr::Expr> {
+    Ok(expr
+        .transform(|e| match e {
+            expr::Expr::AggregateFunction(mut func) => {
+                let filter = match func.params.filter.take() {
+                    Some(existing) => (*existing).and(predicate.clone()),
+                    None => predicate.clone(),
+                };
+                func.params.filter = Some(Box::new(filter));
+                if force_first_last_ignore_nulls
+                    && matches!(func.func.name(), "first_value" | "last_value")
+                {
+                    func.params.null_treatment = Some(NullTreatment::IgnoreNulls);
+                }
+                Ok(Transformed::yes(expr::Expr::AggregateFunction(func)))
+            }
+            other => Ok(Transformed::no(other)),
+        })?
+        .data)
 }
 
 fn types_are_coercible(data_types: &[DataType]) -> bool {

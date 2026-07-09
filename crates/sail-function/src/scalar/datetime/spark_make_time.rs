@@ -1,10 +1,9 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, PrimitiveBuilder};
 use datafusion::arrow::datatypes::{DataType, Time64MicrosecondType, TimeUnit};
 use datafusion_common::types::NativeType;
-use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::scalar::datetime::utils::{to_decimal128_array, to_int32_array};
@@ -41,10 +40,6 @@ impl SparkMakeTime {
 }
 
 impl ScalarUDFImpl for SparkMakeTime {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_make_time"
     }

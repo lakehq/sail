@@ -19,11 +19,12 @@
 
 use std::sync::Arc;
 
-use apache_avro::{to_value, Writer as AvroWriter};
+use apache_avro::{Writer as AvroWriter, to_value};
 
 use super::{
     DataFile, Manifest, ManifestEntry, ManifestEntryRef, ManifestMetadata, ManifestStatus,
 };
+use crate::spec::FormatVersion;
 use crate::spec::manifest_list::{ManifestContentType, ManifestFile};
 
 #[derive(Debug, Clone)]
@@ -106,6 +107,24 @@ impl ManifestWriter {
             .iter()
             .filter(|e| matches!(e.status, ManifestStatus::Deleted))
             .count() as i32;
+        let added_rows = self
+            .entries
+            .iter()
+            .filter(|e| matches!(e.status, ManifestStatus::Added))
+            .map(|e| e.data_file.record_count as i64)
+            .sum();
+        let existing_rows = self
+            .entries
+            .iter()
+            .filter(|e| matches!(e.status, ManifestStatus::Existing))
+            .map(|e| e.data_file.record_count as i64)
+            .sum();
+        let deleted_rows = self
+            .entries
+            .iter()
+            .filter(|e| matches!(e.status, ManifestStatus::Deleted))
+            .map(|e| e.data_file.record_count as i64)
+            .sum();
         ManifestFile {
             manifest_path,
             manifest_length: 0,
@@ -117,11 +136,12 @@ impl ManifestWriter {
             added_files_count: Some(added),
             existing_files_count: Some(existing),
             deleted_files_count: Some(deleted),
-            added_rows_count: None,
-            existing_rows_count: None,
-            deleted_rows_count: None,
+            added_rows_count: Some(added_rows),
+            existing_rows_count: Some(existing_rows),
+            deleted_rows_count: Some(deleted_rows),
             partitions: None,
             key_metadata: self.key_metadata,
+            first_row_id: None,
         }
     }
 
@@ -161,7 +181,7 @@ impl ManifestWriter {
                 (self.metadata.format_version as u8).to_string(),
             )
             .map_err(|e| format!("Avro add_user_metadata error: {e}"))?;
-        if self.metadata.format_version as u8 == 2 {
+        if self.metadata.format_version >= FormatVersion::V2 {
             let content_str = match self.metadata.content {
                 ManifestContentType::Data => "data",
                 ManifestContentType::Deletes => "deletes",

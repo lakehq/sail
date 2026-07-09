@@ -15,8 +15,8 @@ use std::sync::Arc;
 use datafusion::arrow::compute::can_cast_types;
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::common::Result;
-use datafusion::physical_expr::expressions::CastExpr;
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::expressions::CastExpr;
 use datafusion_common::DataFusionError;
 use indexmap::IndexMap;
 
@@ -43,7 +43,7 @@ impl DeltaTypeConverter {
                 DataType::Decimal128(from_precision, from_scale)
                 | DataType::Decimal256(from_precision, from_scale),
                 DataType::Decimal128(to_precision, to_scale),
-            ) => from_precision <= to_precision && from_scale <= to_scale,
+            ) => decimal_widening_supported(*from_precision, *from_scale, *to_precision, *to_scale),
             (from_dt, to_dt) => can_cast_types(from_dt, to_dt) || can_cast_types(to_dt, from_dt),
         }
     }
@@ -115,7 +115,7 @@ impl DeltaTypeConverter {
                             "Unexpected map child layout for field '{}': {:?}",
                             table_field.name(),
                             t_kv_dt
-                        )))
+                        )));
                     }
                 };
                 let (i_key, i_val) = match i_kv_dt {
@@ -127,19 +127,12 @@ impl DeltaTypeConverter {
                             "Unexpected map child layout for input field '{}': {:?}",
                             table_field.name(),
                             i_kv_dt
-                        )))
+                        )));
                     }
                 };
-                if t_key.data_type() != i_key.data_type() {
-                    return Err(DataFusionError::Plan(format!(
-                        "Schema evolution failed: incompatible map key types for field '{}': {:?} vs {:?}",
-                        table_field.name(),
-                        t_key.data_type(),
-                        i_key.data_type()
-                    )));
-                }
+                let merged_key = Self::promote_field_types(t_key, i_key)?;
                 let merged_val = Self::promote_field_types(t_val, i_val)?;
-                let kv_struct = DataType::Struct(vec![t_key.as_ref().clone(), merged_val].into());
+                let kv_struct = DataType::Struct(vec![merged_key, merged_val].into());
                 let kv_field = Field::new(table_kv.name(), kv_struct, false);
                 let _ = i_sorted;
                 Some(DataType::Map(Arc::new(kv_field), *t_sorted))
@@ -157,8 +150,20 @@ impl DeltaTypeConverter {
                 | DataType::Decimal256(table_precision, table_scale),
                 DataType::Decimal128(input_precision, input_scale),
             ) => {
-                if input_precision <= table_precision && input_scale <= table_scale {
+                if decimal_widening_supported(
+                    *input_precision,
+                    *input_scale,
+                    *table_precision,
+                    *table_scale,
+                ) {
                     Some(table_type.clone())
+                } else if decimal_widening_supported(
+                    *table_precision,
+                    *table_scale,
+                    *input_precision,
+                    *input_scale,
+                ) {
+                    Some(input_type.clone())
                 } else {
                     return Err(DataFusionError::Plan(format!(
                         "Cannot merge field {} from {} to {}. Decimal precision/scale mismatch.",
@@ -214,12 +219,10 @@ impl DeltaTypeConverter {
             (
                 DataType::Decimal128(from_precision, from_scale),
                 DataType::Decimal128(to_precision, to_scale),
-            ) => {
-                if from_precision > to_precision || from_scale > to_scale {
-                    return Err(DataFusionError::Plan(format!(
-                        "Potential precision loss in decimal cast for field '{field_name}': from Decimal({from_precision},{from_scale}) to Decimal({to_precision},{to_scale})"
-                    )));
-                }
+            ) if (from_precision > to_precision || from_scale > to_scale) => {
+                return Err(DataFusionError::Plan(format!(
+                    "Potential precision loss in decimal cast for field '{field_name}': from Decimal({from_precision},{from_scale}) to Decimal({to_precision},{to_scale})"
+                )));
             }
             (DataType::Int64, DataType::Int32)
             | (DataType::Int32, DataType::Int16)
@@ -261,6 +264,17 @@ impl DeltaTypeConverter {
             _ => None,
         }
     }
+}
+
+fn decimal_widening_supported(
+    from_precision: u8,
+    from_scale: i8,
+    to_precision: u8,
+    to_scale: i8,
+) -> bool {
+    let precision_diff = i16::from(to_precision) - i16::from(from_precision);
+    let scale_diff = i16::from(to_scale) - i16::from(from_scale);
+    precision_diff >= scale_diff && scale_diff >= 0
 }
 
 #[cfg(test)]
@@ -324,16 +338,6 @@ mod tests {
 
         assert!(result.is_nullable());
         assert_eq!(result.data_type(), &DataType::Decimal128(12, 2));
-    }
-
-    #[test]
-    fn test_incompatible_decimal_promotion() {
-        let table_field = Field::new("test", DataType::Decimal128(10, 2), false);
-        let input_field = Field::new("test", DataType::Decimal128(12, 3), true);
-
-        let result = DeltaTypeConverter::promote_field_types(&table_field, &input_field);
-
-        assert!(result.is_err());
     }
 
     #[test]

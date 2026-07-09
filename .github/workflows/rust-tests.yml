@@ -20,13 +20,13 @@ jobs:
       RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
       LLVM_PROFILE_FILE: ${{ github.workspace }}/target/llvm-profiles/rust-unit/sail-%p-%m.profraw
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/adjust-swap-space
 
       - uses: ./.github/actions/mount-target-directory
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -58,7 +58,7 @@ jobs:
         # separately, we skip coverage upload for Dependabot to avoid failures,
         # since coverage reports from Dependabot runs are not useful.
         if: ${{ github.actor != 'dependabot[bot]' }}
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage-rust-unit.info
@@ -66,6 +66,14 @@ jobs:
           name: rust-unit-tests
           fail_ci_if_error: true
           env_vars: OS
+
+      - name: Install Kerberos client tools
+        if: ${{ inputs.run_catalog_tests == 'true' }}
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            krb5-user \
+            libgssapi-krb5-2
 
       - name: Run Cargo Test (Ignored)
         if: ${{ inputs.run_catalog_tests == 'true' }}
@@ -85,7 +93,7 @@ jobs:
 
       - name: Upload Rust slow coverage to Codecov
         if: ${{ inputs.run_catalog_tests == 'true' && github.actor != 'dependabot[bot]' }}
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: coverage-rust-slow.info

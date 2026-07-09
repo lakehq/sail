@@ -16,6 +16,7 @@ sail-catalog-iceberg = { path = "../sail-catalog-iceberg" }
 sail-catalog-unity = { path = "../sail-catalog-unity" }
 sail-catalog-onelake = { path = "../sail-catalog-onelake" }
 sail-catalog-glue = { path = "../sail-catalog-glue" }
+sail-catalog-hms = { path = "../sail-catalog-hms" }
 sail-data-source = { path = "../sail-data-source" }
 sail-delta-lake = { path = "../sail-delta-lake" }
 sail-iceberg = { path = "../sail-iceberg" }
@@ -26,7 +27,6 @@ sail-physical-optimizer = { path = "../sail-physical-optimizer" }
 sail-plan = { path = "../sail-plan" }
 sail-execution = { path = "../sail-execution" }
 sail-object-store = { path = "../sail-object-store" }
-sail-plan-lakehouse = { path = "../sail-plan-lakehouse" }
 sail-server = { path = "../sail-server" }
 sail-cache = { path = "../sail-cache" }
 sail-telemetry = { path = "../sail-telemetry" }
@@ -47,4 +47,3 @@ tokio = { workspace = true }
 chrono = { workspace = true }
 indexmap = { workspace = true }
 futures = { workspace = true }
-

@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use datafusion::arrow::datatypes::SchemaRef;
-use fastrace::collector::SpanContext;
 use fastrace::Span;
+use fastrace::collector::SpanContext;
 use futures::TryStreamExt;
 use log::{error, info, warn};
 use sail_common_datafusion::error::CommonErrorCause;
@@ -171,6 +171,20 @@ impl WorkerPool {
             }
             WorkerState::Completed | WorkerState::Failed => {}
         }
+    }
+
+    /// Returns true if any worker is still launching (pending registration).
+    ///
+    /// A task stuck in `Created` should wait for such a worker rather than
+    /// failing with a scheduling timeout: once the worker registers,
+    /// `handle_register_worker` runs the pending tasks and can assign it. A
+    /// worker that never registers is bounded by `worker_launch_timeout`
+    /// (`fail_worker_if_pending`), after which it leaves the `Pending` state, so
+    /// this cannot keep a task alive forever.
+    pub fn has_pending_workers(&self) -> bool {
+        self.workers
+            .values()
+            .any(|worker| matches!(worker.state, WorkerState::Pending))
     }
 
     fn list_running_workers(&self) -> Vec<WorkerLocation> {

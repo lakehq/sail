@@ -8,14 +8,14 @@ use std::time::{Duration, Instant};
 use datafusion::arrow::array::RecordBatch;
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion::common::{plan_err, Result, Statistics};
+use datafusion::common::{Result, Statistics, plan_err};
 use datafusion::config::ConfigOptions;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{
     Distribution, OrderingRequirements, PhysicalExpr, PhysicalSortExpr,
 };
 use datafusion::physical_plan::execution_plan::{
-    check_default_invariants, CardinalityEffect, InvariantLevel,
+    CardinalityEffect, InvariantLevel, check_default_invariants,
 };
 use datafusion::physical_plan::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase, FilterPushdownPropagation,
@@ -102,15 +102,15 @@ impl ExecutionPlan for TracingExec {
         Self::static_name()
     }
 
+    fn downcast_delegate(&self) -> Option<&dyn ExecutionPlan> {
+        Some(self.inner.as_ref())
+    }
+
     fn static_name() -> &'static str
     where
         Self: Sized,
     {
         "TracingExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn schema(&self) -> SchemaRef {
@@ -204,7 +204,7 @@ impl ExecutionPlan for TracingExec {
         self.inner.metrics()
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.inner.partition_statistics(partition)
     }
 

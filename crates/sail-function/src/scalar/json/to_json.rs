@@ -1,14 +1,13 @@
-use std::any::Any;
 use std::sync::{Arc, OnceLock};
 
-use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
+use base64::prelude::BASE64_STANDARD;
 use chrono::{TimeZone, Utc};
 use datafusion::arrow::array::{
     Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
-    FixedSizeBinaryArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-    Int8Array, LargeListArray, LargeStringArray, ListArray, MapArray, StringArray, StringBuilder,
-    StringViewArray, StructArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    FixedSizeBinaryArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
+    Int64Array, LargeListArray, LargeStringArray, ListArray, MapArray, StringArray, StringBuilder,
+    StringViewArray, StructArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
 use datafusion::arrow::datatypes::DataType;
 use datafusion_common::{Result, ScalarValue};
@@ -21,10 +20,11 @@ use serde_json::{Map, Value};
 
 use crate::functions_nested_utils::opt_downcast_arg;
 use crate::functions_utils::make_scalar_function;
+use crate::scalar::datetime::utils::spark_datetime_format_to_chrono_strftime;
 
 /// Macro to simplify downcasting arrays and extracting values as JSON
 macro_rules! downcast_and_convert {
-    ($array:expr, $index:expr, $array_type:ty, $convert:expr) => {{
+    ($array:expr_2021, $index:expr_2021, $array_type:ty, $convert:expr_2021) => {{
         let arr = $array
             .as_any()
             .downcast_ref::<$array_type>()
@@ -53,34 +53,23 @@ impl ToJsonOptions {
     pub const DATE_FORMAT_DEFAULT: &'static str = "%Y-%m-%d";
 
     /// Build ToJsonOptions from a DataFusion MapArray of key-value pairs.
-    fn from_map(map: &MapArray) -> Self {
+    fn from_map(map: &MapArray) -> Result<Self> {
         let timestamp_format = find_key_value(map, Self::TIMESTAMP_FORMAT_OPTION)
             .as_deref()
-            .map(Self::convert_format)
+            .map(spark_datetime_format_to_chrono_strftime)
+            .transpose()?
             .unwrap_or_else(|| Self::TIMESTAMP_FORMAT_DEFAULT.to_string());
 
         let date_format = find_key_value(map, Self::DATE_FORMAT_OPTION)
             .as_deref()
-            .map(Self::convert_format)
+            .map(spark_datetime_format_to_chrono_strftime)
+            .transpose()?
             .unwrap_or_else(|| Self::DATE_FORMAT_DEFAULT.to_string());
 
-        Self {
+        Ok(Self {
             timestamp_format,
             date_format,
-        }
-    }
-
-    /// Converts a Spark/Java-style format string (e.g., "yyyy-MM-dd")
-    /// into a format compatible with the `chrono` crate (e.g., "%Y-%m-%d").
-    fn convert_format(fmt: &str) -> String {
-        fmt.replace("yyyy", "%Y")
-            .replace("MM", "%m")
-            .replace("dd", "%d")
-            .replace("HH", "%H")
-            .replace("mm", "%M")
-            .replace("ss", "%S")
-            .replace("SSS", "%.3f")
-            .replace("SSSSSS", "%.6f")
+        })
     }
 }
 
@@ -118,10 +107,6 @@ impl SparkToJson {
 }
 
 impl ScalarUDFImpl for SparkToJson {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         self.aliases[0].as_str()
     }
@@ -141,26 +126,24 @@ impl ScalarUDFImpl for SparkToJson {
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
         // If input is a Variant struct, use the shared variant-to-JSON conversion
         // (Spark's to_json supports Variant input and ignores options for it)
-        if let Some(field) = args.arg_fields.first() {
-            if matches!(field.data_type(), DataType::Struct(_))
-                && crate::scalar::variant::utils::helper::try_field_as_variant_array(field).is_ok()
-            {
-                let result =
-                    crate::scalar::variant::spark_variant_to_json::variant_to_json_columnar(
-                        &args.args[0],
-                    )?;
-                // variant_to_json_columnar returns Utf8View, but to_json promises Utf8
-                return match result {
-                    ColumnarValue::Scalar(ScalarValue::Utf8View(v)) => {
-                        Ok(ColumnarValue::Scalar(ScalarValue::Utf8(v)))
-                    }
-                    ColumnarValue::Array(arr) => Ok(ColumnarValue::Array(arrow::compute::cast(
-                        &arr,
-                        &DataType::Utf8,
-                    )?)),
-                    other => Ok(other),
-                };
-            }
+        if let Some(field) = args.arg_fields.first()
+            && matches!(field.data_type(), DataType::Struct(_))
+            && crate::scalar::variant::utils::helper::try_field_as_variant_array(field).is_ok()
+        {
+            let result = crate::scalar::variant::spark_variant_to_json::variant_to_json_columnar(
+                &args.args[0],
+            )?;
+            // variant_to_json_columnar returns Utf8View, but to_json promises Utf8
+            return match result {
+                ColumnarValue::Scalar(ScalarValue::Utf8View(v)) => {
+                    Ok(ColumnarValue::Scalar(ScalarValue::Utf8(v)))
+                }
+                ColumnarValue::Array(arr) => Ok(ColumnarValue::Array(arrow::compute::cast(
+                    &arr,
+                    &DataType::Utf8,
+                )?)),
+                other => Ok(other),
+            };
         }
         make_scalar_function(to_json_inner, vec![])(&args.args)
     }
@@ -192,7 +175,7 @@ fn to_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
                 "[INVALID_OPTIONS.NON_MAP_FUNCTION] Invalid options: Must use the `map()` function for options.".to_string(),
             )
         })?;
-        ToJsonOptions::from_map(map_array)
+        ToJsonOptions::from_map(map_array)?
     } else {
         ToJsonOptions::default()
     };
@@ -201,7 +184,7 @@ fn to_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn array_to_json_strings(array: &ArrayRef, options: &ToJsonOptions) -> Result<ArrayRef> {
-    let mut builder = StringBuilder::with_capacity(array.len(), array.len() * 64);
+    let mut builder = StringBuilder::with_capacity(array.len(), array.get_buffer_memory_size());
 
     for i in 0..array.len() {
         if array.is_null(i) {
@@ -492,11 +475,11 @@ fn struct_to_values_array(
 fn format_timestamp(value: i64, tz: Option<&str>, format: &str) -> String {
     if let Some(tz_str) = tz {
         // Try to parse the timezone and format with offset
-        if let Ok(tz) = tz_str.parse::<chrono_tz::Tz>() {
-            if let Some(dt_utc) = Utc.timestamp_micros(value).single() {
-                let local_dt = dt_utc.with_timezone(&tz);
-                return local_dt.format(format).to_string();
-            }
+        if let Ok(tz) = tz_str.parse::<chrono_tz::Tz>()
+            && let Some(dt_utc) = Utc.timestamp_micros(value).single()
+        {
+            let local_dt = dt_utc.with_timezone(&tz);
+            return local_dt.format(format).to_string();
         }
     }
 

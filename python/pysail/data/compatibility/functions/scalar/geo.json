@@ -1,0 +1,27 @@
+[
+  {
+    "module": "pyspark.sql.functions",
+    "function": "st_asbinary",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "st_geogfromwkb",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "st_geomfromwkb",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "st_setsrid",
+    "status": "planned"
+  },
+  {
+    "module": "pyspark.sql.functions",
+    "function": "st_srid",
+    "status": "planned"
+  }
+]

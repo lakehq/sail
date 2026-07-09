@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use datafusion::common::{DFSchema, TableReference};
 use datafusion::logical_expr::{LogicalPlan, TableScan};
-use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
 use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewOptions,
-    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableOptions,
+    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{DatabaseStatus, TableColumnStatus, TableKind, TableStatus};
@@ -46,6 +46,7 @@ impl SystemCatalogProvider {
                 comment: Some(col.description.to_string()),
                 default: None,
                 generated_always_as: None,
+                identity: None,
                 is_partition: false,
                 is_bucket: false,
                 is_cluster: false,
@@ -72,6 +73,7 @@ impl SystemCatalogProvider {
                 columns,
                 comment: Some(t.description().to_string()),
                 properties: vec![],
+                source: None,
             },
         };
         Ok(status)
@@ -96,13 +98,13 @@ impl CatalogProvider for SystemCatalogProvider {
 
     async fn get_database(&self, database: &Namespace) -> CatalogResult<DatabaseStatus> {
         let Namespace { head, tail } = database;
-        if tail.is_empty() {
-            if let Some(db) = SystemDatabase::get(head) {
-                return Self::get_database_status(database, &db);
-            }
+        if tail.is_empty()
+            && let Some(db) = SystemDatabase::get(head)
+        {
+            return Self::get_database_status(database, &db);
         }
         Err(CatalogError::NotFound(
-            "database",
+            CatalogObject::Database,
             quote_namespace_if_needed(database),
         ))
     }
@@ -148,36 +150,39 @@ impl CatalogProvider for SystemCatalogProvider {
 
     async fn get_table(&self, database: &Namespace, table: &str) -> CatalogResult<TableStatus> {
         let Namespace { head, tail } = database;
-        if tail.is_empty() {
-            if let Some(db) = SystemDatabase::get(head) {
-                for t in db.tables() {
-                    if table.eq_ignore_ascii_case(t.name()) {
-                        return Self::get_table_status(database, table, *t);
-                    }
+        if tail.is_empty()
+            && let Some(db) = SystemDatabase::get(head)
+        {
+            for t in db.tables() {
+                if table.eq_ignore_ascii_case(t.name()) {
+                    return Self::get_table_status(database, table, *t);
                 }
-                return Err(CatalogError::NotFound("table", table.to_string()));
             }
+            return Err(CatalogError::NotFound(
+                CatalogObject::Table,
+                table.to_string(),
+            ));
         }
         Err(CatalogError::NotFound(
-            "database",
+            CatalogObject::Database,
             quote_namespace_if_needed(database),
         ))
     }
 
     async fn list_tables(&self, database: &Namespace) -> CatalogResult<Vec<TableStatus>> {
         let Namespace { head, tail } = database;
-        if tail.is_empty() {
-            if let Some(db) = SystemDatabase::get(head) {
-                let mut result = vec![];
-                for t in db.tables() {
-                    let status = Self::get_table_status(database, t.name(), *t)?;
-                    result.push(status);
-                }
-                return Ok(result);
+        if tail.is_empty()
+            && let Some(db) = SystemDatabase::get(head)
+        {
+            let mut result = vec![];
+            for t in db.tables() {
+                let status = Self::get_table_status(database, t.name(), *t)?;
+                result.push(status);
             }
+            return Ok(result);
         }
         Err(CatalogError::NotFound(
-            "database",
+            CatalogObject::Database,
             quote_namespace_if_needed(database),
         ))
     }
@@ -190,6 +195,17 @@ impl CatalogProvider for SystemCatalogProvider {
     ) -> CatalogResult<()> {
         Err(CatalogError::NotSupported(
             "drop table in system catalog".to_string(),
+        ))
+    }
+
+    async fn alter_table(
+        &self,
+        _database: &Namespace,
+        _table: &str,
+        _options: AlterTableOptions,
+    ) -> CatalogResult<()> {
+        Err(CatalogError::NotSupported(
+            "alter table in system catalog".to_string(),
         ))
     }
 
@@ -207,10 +223,13 @@ impl CatalogProvider for SystemCatalogProvider {
     async fn get_view(&self, database: &Namespace, view: &str) -> CatalogResult<TableStatus> {
         let Namespace { head, tail } = database;
         if tail.is_empty() && SystemDatabase::get(head).is_some() {
-            return Err(CatalogError::NotFound("view", view.to_string()));
+            return Err(CatalogError::NotFound(
+                CatalogObject::View,
+                view.to_string(),
+            ));
         }
         Err(CatalogError::NotFound(
-            "database",
+            CatalogObject::Database,
             quote_namespace_if_needed(database),
         ))
     }
@@ -221,7 +240,7 @@ impl CatalogProvider for SystemCatalogProvider {
             return Ok(vec![]);
         }
         Err(CatalogError::NotFound(
-            "database",
+            CatalogObject::Database,
             quote_namespace_if_needed(database),
         ))
     }

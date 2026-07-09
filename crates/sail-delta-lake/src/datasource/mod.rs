@@ -29,8 +29,8 @@ pub use sail_common_datafusion::datasource::MERGE_FILE_COLUMN as PATH_COLUMN;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::kernel::snapshot::SnapshotPruningStats;
-use crate::options::{default_delta_log_replay_hash_threshold, DeltaLogReplayStrategy};
+use crate::options::{DeltaLogReplayStrategy, default_delta_log_replay_hash_threshold};
+use crate::snapshot::SnapshotPruningStats;
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult};
 use crate::table::DeltaSnapshot;
 pub const COMMIT_VERSION_COLUMN: &str = "_commit_version";
@@ -38,7 +38,6 @@ pub const COMMIT_TIMESTAMP_COLUMN: &str = "_commit_timestamp";
 
 pub mod actions;
 pub mod expressions;
-pub mod provider;
 pub mod pruning;
 pub mod scan;
 pub mod schema;
@@ -46,10 +45,9 @@ pub mod schema;
 // Re-exports
 pub use actions::{adds_to_remove_actions, partitioned_file_from_action};
 pub use expressions::{
-    collect_physical_columns, get_pushdown_filters, simplify_expr, PredicateProperties,
+    PredicateProperties, collect_physical_columns, get_pushdown_filters, simplify_expr,
 };
-pub use provider::DeltaTableProvider;
-pub use pruning::{prune_files, PruningResult};
+pub use pruning::{PruningResult, prune_files};
 pub use scan::build_file_scan_config;
 pub use schema::df_logical_schema;
 
@@ -242,6 +240,7 @@ impl DeltaScanConfigBuilder {
 
         Ok(DeltaScanConfig {
             file_column_name,
+            row_index_column_name: None,
             wrap_partition_values: self.wrap_partition_values,
             enable_parquet_pushdown: self.enable_parquet_pushdown,
             schema: self.schema.clone(),
@@ -258,6 +257,8 @@ impl DeltaScanConfigBuilder {
 pub struct DeltaScanConfig {
     /// Include the source path for each record
     pub file_column_name: Option<String>,
+    /// Include the file-local row index for each record.
+    pub row_index_column_name: Option<String>,
     /// Wrap partition values in a dictionary encoding
     pub wrap_partition_values: bool,
     /// Allow pushdown of the scan filter
@@ -272,6 +273,10 @@ pub struct DeltaScanConfig {
     #[serde(default)]
     pub delta_log_replay_strategy: DeltaLogReplayStrategy,
     /// Threshold for `Auto` replay strategy.
-    #[serde(default = "default_delta_log_replay_hash_threshold")]
+    #[serde(default = "default_delta_log_replay_hash_threshold_usize")]
     pub delta_log_replay_hash_threshold: usize,
+}
+
+fn default_delta_log_replay_hash_threshold_usize() -> usize {
+    default_delta_log_replay_hash_threshold().get()
 }

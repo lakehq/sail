@@ -10,10 +10,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub(crate) mod catalog_support;
 pub mod datasource;
+pub mod error;
 pub mod io;
+pub mod logical;
 pub mod operations;
+pub mod options;
+pub mod physical;
 pub mod physical_plan;
+pub(crate) mod properties;
 pub mod schema_evolution;
 pub mod spec;
 pub mod table;
@@ -22,14 +28,19 @@ pub mod utils;
 
 pub use datasource::type_converter::*;
 pub use datasource::*;
+pub use logical::IcebergTableSource;
+pub use operations::Transaction;
 pub use operations::action::*;
 pub use operations::append::*;
 pub use operations::snapshot::*;
 pub use operations::write::base_writer::*;
 pub use operations::write::file_writer::*;
 pub use operations::write::{IcebergWriter, WriteOutcome};
-pub use operations::Transaction;
+pub use physical::IcebergPhysicalPlanner;
 pub use physical_plan::IcebergWriterExecOptions;
+pub use physical_plan::discovery_exec::IcebergDiscoveryExec;
+pub use physical_plan::manifest_scan_exec::{IcebergManifestScanExec, manifest_scan_schema};
+pub use physical_plan::scan_by_data_files_exec::IcebergScanByDataFilesExec;
 pub use schema_evolution::*;
 pub use spec::*;
 pub use table_format::*;

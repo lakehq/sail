@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt;
 
 use aes::cipher::block_padding::Pkcs7;
@@ -14,7 +13,7 @@ use datafusion::arrow::array::{
     StringArray, StringViewArray,
 };
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{exec_datafusion_err, exec_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 pub type Aes192Gcm = AesGcm<Aes192, U12>;
@@ -109,10 +108,6 @@ impl SparkAESEncrypt {
 
 // TODO: Support array batch
 impl ScalarUDFImpl for SparkAESEncrypt {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_aes_encrypt"
     }
@@ -156,41 +151,53 @@ impl ScalarUDFImpl for SparkAESEncrypt {
                 }
                 match array.data_type() {
                     DataType::Binary => {
-                        let array = array.as_any().downcast_ref::<BinaryArray>()
-                            .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast Expr to BinaryArray"))?;
+                        let array = array.as_any().downcast_ref::<BinaryArray>().ok_or_else(
+                            || {
+                                exec_datafusion_err!(
+                                    "Spark `aes_encrypt`: Failed to downcast Expr to BinaryArray"
+                                )
+                            },
+                        )?;
                         Ok(array.value(0))
-                    },
+                    }
                     DataType::BinaryView => {
                         let array = array.as_any().downcast_ref::<BinaryViewArray>()
                             .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast Expr to LargeBinaryArray"))?;
                         Ok(array.value(0))
-                    },
+                    }
                     DataType::FixedSizeBinary(_) => {
                         let array = array.as_any().downcast_ref::<FixedSizeBinaryArray>()
                             .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast Expr to FixedSizeBinaryArray"))?;
                         Ok(array.value(0))
-                    },
+                    }
                     DataType::LargeBinary => {
                         let array = array.as_any().downcast_ref::<LargeBinaryArray>()
                             .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast Expr to LargeBinaryArray"))?;
                         Ok(array.value(0))
-                    },
+                    }
                     DataType::Utf8 => {
-                        let array = array.as_any().downcast_ref::<StringArray>()
-                            .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast Expr to StringArray"))?;
+                        let array = array.as_any().downcast_ref::<StringArray>().ok_or_else(
+                            || {
+                                exec_datafusion_err!(
+                                    "Spark `aes_encrypt`: Failed to downcast Expr to StringArray"
+                                )
+                            },
+                        )?;
                         Ok(array.value(0).as_bytes())
-                    },
+                    }
                     DataType::LargeUtf8 => {
                         let array = array.as_any().downcast_ref::<LargeStringArray>()
                             .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast Expr to LargeStringArray"))?;
                         Ok(array.value(0).as_bytes())
-                    },
+                    }
                     DataType::Utf8View => {
                         let array = array.as_any().downcast_ref::<StringViewArray>()
                             .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast Expr to StringViewArray"))?;
                         Ok(array.value(0).as_bytes())
-                    },
-                    other => exec_err!("Spark `aes_encrypt`: Expr array must be BINARY or STRING, got array of type {other}")
+                    }
+                    other => exec_err!(
+                        "Spark `aes_encrypt`: Expr array must be BINARY or STRING, got array of type {other}"
+                    ),
                 }
             }
             other => exec_err!("Spark `aes_encrypt`: Expr must be BINARY or STRING, got {other:?}"),
@@ -212,41 +219,63 @@ impl ScalarUDFImpl for SparkAESEncrypt {
                 }
                 match array.data_type() {
                     DataType::Binary => {
-                        let array = array.as_any().downcast_ref::<BinaryArray>()
-                            .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast Key to BinaryArray"))?;
+                        let array =
+                            array
+                                .as_any()
+                                .downcast_ref::<BinaryArray>()
+                                .ok_or_else(|| {
+                                    exec_datafusion_err!(
+                                        "Spark `aes_encrypt`: Failed to downcast Key to BinaryArray"
+                                    )
+                                })?;
                         Ok(array.value(0))
-                    },
+                    }
                     DataType::BinaryView => {
                         let array = array.as_any().downcast_ref::<BinaryViewArray>()
                             .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast Key to LargeBinaryArray"))?;
                         Ok(array.value(0))
-                    },
+                    }
                     DataType::FixedSizeBinary(_) => {
                         let array = array.as_any().downcast_ref::<FixedSizeBinaryArray>()
                             .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast Key to FixedSizeBinaryArray"))?;
                         Ok(array.value(0))
-                    },
+                    }
                     DataType::LargeBinary => {
                         let array = array.as_any().downcast_ref::<LargeBinaryArray>()
                             .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast Key to LargeBinaryArray"))?;
                         Ok(array.value(0))
-                    },
+                    }
                     DataType::Utf8 => {
-                        let array = array.as_any().downcast_ref::<StringArray>()
-                            .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast Key to StringArray"))?;
+                        let array =
+                            array
+                                .as_any()
+                                .downcast_ref::<StringArray>()
+                                .ok_or_else(|| {
+                                    exec_datafusion_err!(
+                                        "Spark `aes_encrypt`: Failed to downcast Key to StringArray"
+                                    )
+                                })?;
                         Ok(array.value(0).as_bytes())
-                    },
+                    }
                     DataType::LargeUtf8 => {
                         let array = array.as_any().downcast_ref::<LargeStringArray>()
                             .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast Key to LargeStringArray"))?;
                         Ok(array.value(0).as_bytes())
-                    },
+                    }
                     DataType::Utf8View => {
-                        let array = array.as_any().downcast_ref::<StringViewArray>()
-                            .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast Key to StringViewArray"))?;
+                        let array = array
+                            .as_any()
+                            .downcast_ref::<StringViewArray>()
+                            .ok_or_else(|| {
+                                exec_datafusion_err!(
+                                    "Spark `aes_encrypt`: Failed to downcast Key to StringViewArray"
+                                )
+                            })?;
                         Ok(array.value(0).as_bytes())
-                    },
-                    other => exec_err!("Spark `aes_encrypt`: Key array must be BINARY or STRING, got array of type {other}")
+                    }
+                    other => exec_err!(
+                        "Spark `aes_encrypt`: Key array must be BINARY or STRING, got array of type {other}"
+                    ),
                 }
             }
             other => exec_err!("Spark `aes_encrypt`: Key must be BINARY, got {other:?}"),
@@ -270,18 +299,20 @@ impl ScalarUDFImpl for SparkAESEncrypt {
                             let array = array.as_any().downcast_ref::<StringArray>()
                                 .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast Mode to StringArray"))?;
                             encryption_name_to_mode(array.value(0))
-                        },
+                        }
                         DataType::LargeUtf8 => {
                             let array = array.as_any().downcast_ref::<LargeStringArray>()
                                 .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast Mode to LargeStringArray"))?;
                             encryption_name_to_mode(array.value(0))
-                        },
+                        }
                         DataType::Utf8View => {
                             let array = array.as_any().downcast_ref::<StringViewArray>()
                                 .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast Mode to StringViewArray"))?;
                             encryption_name_to_mode(array.value(0))
-                        },
-                        other => exec_err!("Spark `aes_encrypt`: Mode array must be STRING, got array of type {other}")
+                        }
+                        other => exec_err!(
+                            "Spark `aes_encrypt`: Mode array must be STRING, got array of type {other}"
+                        ),
                     }
                 }
                 other => exec_err!("Spark `aes_encrypt`: Mode must be a STRING, got {other:?}"),
@@ -307,41 +338,53 @@ impl ScalarUDFImpl for SparkAESEncrypt {
                     }
                     match array.data_type() {
                         DataType::Binary => {
-                            let array = array.as_any().downcast_ref::<BinaryArray>()
-                                .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast IV to BinaryArray"))?;
+                            let array = array.as_any().downcast_ref::<BinaryArray>().ok_or_else(
+                                || {
+                                    exec_datafusion_err!(
+                                        "Spark `aes_encrypt`: Failed to downcast IV to BinaryArray"
+                                    )
+                                },
+                            )?;
                             Ok(array.value(0))
-                        },
+                        }
                         DataType::BinaryView => {
                             let array = array.as_any().downcast_ref::<BinaryViewArray>()
                                 .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast IV to LargeBinaryArray"))?;
                             Ok(array.value(0))
-                        },
+                        }
                         DataType::FixedSizeBinary(_) => {
                             let array = array.as_any().downcast_ref::<FixedSizeBinaryArray>()
                                 .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast IV to FixedSizeBinaryArray"))?;
                             Ok(array.value(0))
-                        },
+                        }
                         DataType::LargeBinary => {
                             let array = array.as_any().downcast_ref::<LargeBinaryArray>()
                                 .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast IV to LargeBinaryArray"))?;
                             Ok(array.value(0))
-                        },
+                        }
                         DataType::Utf8 => {
-                            let array = array.as_any().downcast_ref::<StringArray>()
-                                .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast Key to StringArray"))?;
+                            let array = array.as_any().downcast_ref::<StringArray>().ok_or_else(
+                                || {
+                                    exec_datafusion_err!(
+                                        "Spark `aes_encrypt`: Failed to downcast Key to StringArray"
+                                    )
+                                },
+                            )?;
                             Ok(array.value(0).as_bytes())
-                        },
+                        }
                         DataType::LargeUtf8 => {
                             let array = array.as_any().downcast_ref::<LargeStringArray>()
                                 .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast Key to LargeStringArray"))?;
                             Ok(array.value(0).as_bytes())
-                        },
+                        }
                         DataType::Utf8View => {
                             let array = array.as_any().downcast_ref::<StringViewArray>()
                                 .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast Key to StringViewArray"))?;
                             Ok(array.value(0).as_bytes())
-                        },
-                        other => exec_err!("Spark `aes_encrypt`: IV must be BINARY or STRING, got array of type {other}")
+                        }
+                        other => exec_err!(
+                            "Spark `aes_encrypt`: IV must be BINARY or STRING, got array of type {other}"
+                        ),
                     }
                 }
                 other => {
@@ -400,21 +443,28 @@ impl ScalarUDFImpl for SparkAESEncrypt {
                     }
                     let aad = match array.data_type() {
                         DataType::Utf8 => {
-                            let array = array.as_any().downcast_ref::<StringArray>()
-                                .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast AAD to StringArray"))?;
+                            let array = array.as_any().downcast_ref::<StringArray>().ok_or_else(
+                                || {
+                                    exec_datafusion_err!(
+                                        "Spark `aes_encrypt`: Failed to downcast AAD to StringArray"
+                                    )
+                                },
+                            )?;
                             Ok(array.value(0))
-                        },
+                        }
                         DataType::LargeUtf8 => {
                             let array = array.as_any().downcast_ref::<LargeStringArray>()
                                 .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast AAD to LargeStringArray"))?;
                             Ok(array.value(0))
-                        },
+                        }
                         DataType::Utf8View => {
                             let array = array.as_any().downcast_ref::<StringViewArray>()
                                 .ok_or_else(|| exec_datafusion_err!("Spark `aes_encrypt`: Failed to downcast AAD to StringViewArray"))?;
                             Ok(array.value(0))
-                        },
-                        other => exec_err!("Spark `aes_encrypt`: AAD array must be STRING, got array of type {other}")
+                        }
+                        other => exec_err!(
+                            "Spark `aes_encrypt`: AAD array must be STRING, got array of type {other}"
+                        ),
                     }?;
                     if aad.is_empty() {
                         // If none is provided, Spark passes up an empty string.
@@ -560,10 +610,6 @@ impl SparkAESDecrypt {
 
 // TODO: Support array batch
 impl ScalarUDFImpl for SparkAESDecrypt {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_aes_decrypt"
     }
@@ -607,41 +653,53 @@ impl ScalarUDFImpl for SparkAESDecrypt {
                 }
                 match array.data_type() {
                     DataType::Binary => {
-                        let array = array.as_any().downcast_ref::<BinaryArray>()
-                            .ok_or_else(|| exec_datafusion_err!("Spark `aes_decrypt`: Failed to downcast Expr to BinaryArray"))?;
+                        let array = array.as_any().downcast_ref::<BinaryArray>().ok_or_else(
+                            || {
+                                exec_datafusion_err!(
+                                    "Spark `aes_decrypt`: Failed to downcast Expr to BinaryArray"
+                                )
+                            },
+                        )?;
                         Ok(array.value(0))
-                    },
+                    }
                     DataType::BinaryView => {
                         let array = array.as_any().downcast_ref::<BinaryViewArray>()
                             .ok_or_else(|| exec_datafusion_err!("Spark `aes_decrypt`: Failed to downcast Expr to LargeBinaryArray"))?;
                         Ok(array.value(0))
-                    },
+                    }
                     DataType::FixedSizeBinary(_) => {
                         let array = array.as_any().downcast_ref::<FixedSizeBinaryArray>()
                             .ok_or_else(|| exec_datafusion_err!("Spark `aes_decrypt`: Failed to downcast Expr to FixedSizeBinaryArray"))?;
                         Ok(array.value(0))
-                    },
+                    }
                     DataType::LargeBinary => {
                         let array = array.as_any().downcast_ref::<LargeBinaryArray>()
                             .ok_or_else(|| exec_datafusion_err!("Spark `aes_decrypt`: Failed to downcast Expr to LargeBinaryArray"))?;
                         Ok(array.value(0))
-                    },
+                    }
                     DataType::Utf8 => {
-                        let array = array.as_any().downcast_ref::<StringArray>()
-                            .ok_or_else(|| exec_datafusion_err!("Spark `aes_decrypt`: Failed to downcast Expr to StringArray"))?;
+                        let array = array.as_any().downcast_ref::<StringArray>().ok_or_else(
+                            || {
+                                exec_datafusion_err!(
+                                    "Spark `aes_decrypt`: Failed to downcast Expr to StringArray"
+                                )
+                            },
+                        )?;
                         Ok(array.value(0).as_bytes())
-                    },
+                    }
                     DataType::LargeUtf8 => {
                         let array = array.as_any().downcast_ref::<LargeStringArray>()
                             .ok_or_else(|| exec_datafusion_err!("Spark `aes_decrypt`: Failed to downcast Expr to LargeStringArray"))?;
                         Ok(array.value(0).as_bytes())
-                    },
+                    }
                     DataType::Utf8View => {
                         let array = array.as_any().downcast_ref::<StringViewArray>()
                             .ok_or_else(|| exec_datafusion_err!("Spark `aes_decrypt`: Failed to downcast Expr to StringViewArray"))?;
                         Ok(array.value(0).as_bytes())
-                    },
-                    other => exec_err!("Spark `aes_decrypt`: Expr array must be BINARY or STRING, got array of type {other}")
+                    }
+                    other => exec_err!(
+                        "Spark `aes_decrypt`: Expr array must be BINARY or STRING, got array of type {other}"
+                    ),
                 }
             }
             other => exec_err!("Spark `aes_decrypt`: Expr must be BINARY or STRING, got {other:?}"),
@@ -663,41 +721,63 @@ impl ScalarUDFImpl for SparkAESDecrypt {
                 }
                 match array.data_type() {
                     DataType::Binary => {
-                        let array = array.as_any().downcast_ref::<BinaryArray>()
-                            .ok_or_else(|| exec_datafusion_err!("Spark `aes_decrypt`: Failed to downcast Key to BinaryArray"))?;
+                        let array =
+                            array
+                                .as_any()
+                                .downcast_ref::<BinaryArray>()
+                                .ok_or_else(|| {
+                                    exec_datafusion_err!(
+                                        "Spark `aes_decrypt`: Failed to downcast Key to BinaryArray"
+                                    )
+                                })?;
                         Ok(array.value(0))
-                    },
+                    }
                     DataType::BinaryView => {
                         let array = array.as_any().downcast_ref::<BinaryViewArray>()
                             .ok_or_else(|| exec_datafusion_err!("Spark `aes_decrypt`: Failed to downcast Key to LargeBinaryArray"))?;
                         Ok(array.value(0))
-                    },
+                    }
                     DataType::FixedSizeBinary(_) => {
                         let array = array.as_any().downcast_ref::<FixedSizeBinaryArray>()
                             .ok_or_else(|| exec_datafusion_err!("Spark `aes_decrypt`: Failed to downcast Key to FixedSizeBinaryArray"))?;
                         Ok(array.value(0))
-                    },
+                    }
                     DataType::LargeBinary => {
                         let array = array.as_any().downcast_ref::<LargeBinaryArray>()
                             .ok_or_else(|| exec_datafusion_err!("Spark `aes_decrypt`: Failed to downcast Key to LargeBinaryArray"))?;
                         Ok(array.value(0))
-                    },
+                    }
                     DataType::Utf8 => {
-                        let array = array.as_any().downcast_ref::<StringArray>()
-                            .ok_or_else(|| exec_datafusion_err!("Spark `aes_decrypt`: Failed to downcast Key to StringArray"))?;
+                        let array =
+                            array
+                                .as_any()
+                                .downcast_ref::<StringArray>()
+                                .ok_or_else(|| {
+                                    exec_datafusion_err!(
+                                        "Spark `aes_decrypt`: Failed to downcast Key to StringArray"
+                                    )
+                                })?;
                         Ok(array.value(0).as_bytes())
-                    },
+                    }
                     DataType::LargeUtf8 => {
                         let array = array.as_any().downcast_ref::<LargeStringArray>()
                             .ok_or_else(|| exec_datafusion_err!("Spark `aes_decrypt`: Failed to downcast Key to LargeStringArray"))?;
                         Ok(array.value(0).as_bytes())
-                    },
+                    }
                     DataType::Utf8View => {
-                        let array = array.as_any().downcast_ref::<StringViewArray>()
-                            .ok_or_else(|| exec_datafusion_err!("Spark `aes_decrypt`: Failed to downcast Key to StringViewArray"))?;
+                        let array = array
+                            .as_any()
+                            .downcast_ref::<StringViewArray>()
+                            .ok_or_else(|| {
+                                exec_datafusion_err!(
+                                    "Spark `aes_decrypt`: Failed to downcast Key to StringViewArray"
+                                )
+                            })?;
                         Ok(array.value(0).as_bytes())
-                    },
-                    other => exec_err!("Spark `aes_decrypt`: Key array must be BINARY or STRING, got array of type {other}")
+                    }
+                    other => exec_err!(
+                        "Spark `aes_decrypt`: Key array must be BINARY or STRING, got array of type {other}"
+                    ),
                 }
             }
             other => exec_err!("Spark `aes_decrypt`: Key must be BINARY, got {other:?}"),
@@ -721,18 +801,20 @@ impl ScalarUDFImpl for SparkAESDecrypt {
                             let array = array.as_any().downcast_ref::<StringArray>()
                                 .ok_or_else(|| exec_datafusion_err!("Spark `aes_decrypt`: Failed to downcast Mode to StringArray"))?;
                             encryption_name_to_mode(array.value(0))
-                        },
+                        }
                         DataType::LargeUtf8 => {
                             let array = array.as_any().downcast_ref::<LargeStringArray>()
                                 .ok_or_else(|| exec_datafusion_err!("Spark `aes_decrypt`: Failed to downcast Mode to LargeStringArray"))?;
                             encryption_name_to_mode(array.value(0))
-                        },
+                        }
                         DataType::Utf8View => {
                             let array = array.as_any().downcast_ref::<StringViewArray>()
                                 .ok_or_else(|| exec_datafusion_err!("Spark `aes_decrypt`: Failed to downcast Mode to StringViewArray"))?;
                             encryption_name_to_mode(array.value(0))
-                        },
-                        other => exec_err!("Spark `aes_decrypt`: Mode array must be STRING, got array of type {other}")
+                        }
+                        other => exec_err!(
+                            "Spark `aes_decrypt`: Mode array must be STRING, got array of type {other}"
+                        ),
                     }
                 }
                 other => exec_err!("Spark `aes_decrypt`: Mode must be a STRING, got {other:?}"),
@@ -761,21 +843,28 @@ impl ScalarUDFImpl for SparkAESDecrypt {
                     }
                     let aad = match array.data_type() {
                         DataType::Utf8 => {
-                            let array = array.as_any().downcast_ref::<StringArray>()
-                                .ok_or_else(|| exec_datafusion_err!("Spark `aes_decrypt`: Failed to downcast AAD to StringArray"))?;
+                            let array = array.as_any().downcast_ref::<StringArray>().ok_or_else(
+                                || {
+                                    exec_datafusion_err!(
+                                        "Spark `aes_decrypt`: Failed to downcast AAD to StringArray"
+                                    )
+                                },
+                            )?;
                             Ok(array.value(0))
-                        },
+                        }
                         DataType::LargeUtf8 => {
                             let array = array.as_any().downcast_ref::<LargeStringArray>()
                                 .ok_or_else(|| exec_datafusion_err!("Spark `aes_decrypt`: Failed to downcast AAD to LargeStringArray"))?;
                             Ok(array.value(0))
-                        },
+                        }
                         DataType::Utf8View => {
                             let array = array.as_any().downcast_ref::<StringViewArray>()
                                 .ok_or_else(|| exec_datafusion_err!("Spark `aes_decrypt`: Failed to downcast AAD to StringViewArray"))?;
                             Ok(array.value(0))
-                        },
-                        other => exec_err!("Spark `aes_decrypt`: AAD array must be STRING, got array of type {other}")
+                        }
+                        other => exec_err!(
+                            "Spark `aes_decrypt`: AAD array must be STRING, got array of type {other}"
+                        ),
                     }?;
                     if aad.is_empty() {
                         // If none is provided, Spark passes up an empty string.
@@ -946,10 +1035,6 @@ impl SparkTryAESEncrypt {
 }
 
 impl ScalarUDFImpl for SparkTryAESEncrypt {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_try_aes_encrypt"
     }
@@ -991,10 +1076,6 @@ impl SparkTryAESDecrypt {
 }
 
 impl ScalarUDFImpl for SparkTryAESDecrypt {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_try_aes_decrypt"
     }

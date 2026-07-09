@@ -3,16 +3,16 @@ use std::sync::Arc;
 use datafusion::arrow::datatypes::DataType;
 use datafusion_expr::utils::conjunction;
 use datafusion_expr::{
-    cast, col, is_false, lit, when, Expr, ExprSchemable, Filter, LogicalPlan, Projection, TryCast,
+    Expr, ExprSchemable, Filter, LogicalPlan, Projection, TryCast, cast, col, is_false, lit, when,
 };
 use datafusion_functions::expr_fn::isnan;
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_fill_na(
@@ -52,8 +52,7 @@ impl PlanResolver<'_> {
                     "fill na number of values does not match number of columns",
                 ));
             }
-            let columns: Vec<(String, Expr)> =
-                columns.into_iter().zip(values.into_iter()).collect();
+            let columns: Vec<(String, Expr)> = columns.into_iter().zip(values).collect();
             Strategy::EachColumn { columns }
         };
 
@@ -75,11 +74,13 @@ impl PlanResolver<'_> {
                 let expr = if let Some(value) = value {
                     let value_type = value.get_type(schema)?;
                     if self.can_cast_fill_na_types(&value_type, field.data_type()) {
-                        let value = Expr::TryCast(TryCast {
-                            expr: Box::new(value),
-                            data_type: field.data_type().clone(),
-                        });
-                        when(column_expr.clone().is_null(), value).otherwise(column_expr)?
+                        let value =
+                            Expr::TryCast(TryCast::new(Box::new(value), field.data_type().clone()));
+                        let is_null_or_nan = column_expr
+                            .clone()
+                            .is_null()
+                            .or(self.is_nan_float(column_expr.clone(), field.data_type()));
+                        when(is_null_or_nan, value).otherwise(column_expr)?
                     } else {
                         column_expr
                     }
@@ -131,13 +132,7 @@ impl PlanResolver<'_> {
                 })
                 .then(|| {
                     col(column.clone()).get_type(schema).ok().map(|col_type| {
-                        let is_nan = match col_type {
-                            DataType::Float16 => {
-                                isnan(cast(col(column.clone()), DataType::Float32))
-                            }
-                            DataType::Float32 | DataType::Float64 => isnan(col(column.clone())),
-                            _ => lit(false),
-                        };
+                        let is_nan = self.is_nan_float(col(column.clone()), &col_type);
                         col(column).is_not_null().and(is_false(is_nan))
                     })
                 })
@@ -163,5 +158,13 @@ impl PlanResolver<'_> {
             filter_expr,
             Arc::new(input),
         )?))
+    }
+
+    fn is_nan_float(&self, expr: Expr, data_type: &DataType) -> Expr {
+        match data_type {
+            DataType::Float16 => isnan(cast(expr, DataType::Float32)),
+            DataType::Float32 | DataType::Float64 => isnan(expr),
+            _ => lit(false),
+        }
     }
 }

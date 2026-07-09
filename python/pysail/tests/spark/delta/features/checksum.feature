@@ -1,6 +1,5 @@
 Feature: Delta Lake Version Checksum
 
-  @sail-only
   Rule: Delta log writes version checksum files after successful commits
 
     Background:
@@ -53,10 +52,11 @@ Feature: Delta Lake Version Checksum
         📄 00000000000000000000.json
         📄 00000000000000000001.crc
         📄 00000000000000000001.json
+        📄 00000000000000000002.crc
+        📄 00000000000000000002.json
         """
-      Then delta log JSON file 00000000000000000001.crc in delta_log matches snapshot
+      Then delta log JSON file 00000000000000000002.crc in delta_log matches snapshot
 
-  @sail-only
   Rule: Delta log checksum writing can be explicitly enabled by table property
 
     Background:
@@ -109,10 +109,11 @@ Feature: Delta Lake Version Checksum
         📄 00000000000000000000.json
         📄 00000000000000000001.crc
         📄 00000000000000000001.json
+        📄 00000000000000000002.crc
+        📄 00000000000000000002.json
         """
-      Then delta log JSON file 00000000000000000001.crc in delta_log matches snapshot
+      Then delta log JSON file 00000000000000000002.crc in delta_log matches snapshot
 
-  @sail-only
   Rule: Delta log checksum writing can be disabled by table property
 
     Background:
@@ -163,4 +164,170 @@ Feature: Delta Lake Version Checksum
         """
         📄 00000000000000000000.json
         📄 00000000000000000001.json
+        📄 00000000000000000002.json
         """
+
+  Rule: Incremental CRC correctly tracks file counts across multiple commits
+
+    Background:
+      Given variable location for temporary directory delta_incremental_crc
+      Given variable delta_log for delta log of location
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_incremental_crc_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_incremental_crc_test (
+          id INT,
+          value STRING
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_incremental_crc_test VALUES (1, 'one'), (2, 'two')
+        """
+      Given statement
+        """
+        INSERT INTO delta_incremental_crc_test VALUES (3, 'three')
+        """
+      Given statement
+        """
+        INSERT INTO delta_incremental_crc_test VALUES (4, 'four')
+        """
+
+    Scenario: CRC numFiles accumulates correctly across sequential inserts
+      When query
+        """
+        SELECT COUNT(*) AS cnt FROM delta_incremental_crc_test
+        """
+      Then query result
+        | cnt |
+        | 4   |
+      Then file tree in delta_log matches
+        """
+        📄 00000000000000000000.crc
+        📄 00000000000000000000.json
+        📄 00000000000000000001.crc
+        📄 00000000000000000001.json
+        📄 00000000000000000002.crc
+        📄 00000000000000000002.json
+        📄 00000000000000000003.crc
+        📄 00000000000000000003.json
+        """
+      Then delta log JSON file 00000000000000000000.crc in delta_log contains
+        | path     | value |
+        | numFiles | 0     |
+      Then delta log JSON file 00000000000000000001.crc in delta_log contains
+        | path     | value |
+        | numFiles | 1     |
+      Then delta log JSON file 00000000000000000002.crc in delta_log contains
+        | path     | value |
+        | numFiles | 2     |
+      Then delta log JSON file 00000000000000000003.crc in delta_log contains
+        | path     | value |
+        | numFiles | 3     |
+
+  Rule: Incremental CRC correctly tracks file counts when files are replaced
+
+    Background:
+      Given variable location for temporary directory delta_incremental_crc_replace
+      Given variable delta_log for delta log of location
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_incremental_crc_replace_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_incremental_crc_replace_test (
+          id INT,
+          value STRING
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_incremental_crc_replace_test VALUES (1, 'one'), (2, 'two'), (3, 'three')
+        """
+
+    Scenario: CRC numFiles stays correct after a DELETE that rewrites a file
+      Given statement
+        """
+        DELETE FROM delta_incremental_crc_replace_test WHERE id = 1
+        """
+      When query
+        """
+        SELECT COUNT(*) AS cnt FROM delta_incremental_crc_replace_test
+        """
+      Then query result
+        | cnt |
+        | 2   |
+      Then file tree in delta_log matches
+        """
+        📄 00000000000000000000.crc
+        📄 00000000000000000000.json
+        📄 00000000000000000001.crc
+        📄 00000000000000000001.json
+        📄 00000000000000000002.crc
+        📄 00000000000000000002.json
+        """
+      Then delta log JSON file 00000000000000000000.crc in delta_log contains
+        | path     | value |
+        | numFiles | 0     |
+      Then delta log JSON file 00000000000000000001.crc in delta_log contains
+        | path     | value |
+        | numFiles | 1     |
+      Then delta log JSON file 00000000000000000002.crc in delta_log contains
+        | path     | value |
+        | numFiles | 1     |
+
+  Rule: Broken CRC chain is healed via full-snapshot fallback on next commit
+
+    Background:
+      Given variable location for temporary directory delta_crc_fallback
+      Given variable delta_log for delta log of location
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_crc_fallback_test
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_crc_fallback_test (
+          id INT,
+          value STRING
+        )
+        USING DELTA
+        LOCATION {{ location.sql }}
+        """
+      Given statement
+        """
+        INSERT INTO delta_crc_fallback_test VALUES (1, 'one'), (2, 'two')
+        """
+
+    Scenario: CRC is regenerated via full-snapshot fallback when prev CRC is missing
+      Given file 00000000000000000001.crc in delta_log is deleted
+      Given statement
+        """
+        INSERT INTO delta_crc_fallback_test VALUES (3, 'three')
+        """
+      When query
+        """
+        SELECT COUNT(*) AS cnt FROM delta_crc_fallback_test
+        """
+      Then query result
+        | cnt |
+        | 3   |
+      Then file tree in delta_log matches
+        """
+        📄 00000000000000000000.crc
+        📄 00000000000000000000.json
+        📄 00000000000000000001.json
+        📄 00000000000000000002.crc
+        📄 00000000000000000002.json
+        """
+      Then delta log JSON file 00000000000000000002.crc in delta_log contains
+        | path     | value |
+        | numFiles | 2     |

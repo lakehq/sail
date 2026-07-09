@@ -5,12 +5,11 @@ use datafusion::arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::kernel::transaction::OperationMetrics;
-use crate::kernel::DeltaOperation;
 use crate::spec::{
-    add_struct_type, metadata_struct_type, protocol_struct_type, remove_struct_type, Action, Add,
-    Metadata, Protocol, Remove,
+    Action, Add, DeltaOperation, Metadata, Protocol, Remove, add_struct_type, metadata_struct_type,
+    protocol_struct_type, remove_struct_type,
 };
+use crate::transaction::OperationMetrics;
 
 pub const COL_ACTION: &str = "action";
 
@@ -68,17 +67,7 @@ fn action_union_type() -> ArrowDataType {
 struct ExecCommitMetaTransport {
     commit_row_count: u64,
     operation_json: Option<String>,
-    num_files: Option<u64>,
-    num_output_rows: Option<u64>,
-    num_output_bytes: Option<u64>,
-    execution_time_ms: Option<u64>,
-    num_removed_files: Option<u64>,
-    num_added_files: Option<u64>,
-    num_output_files: Option<u64>,
-    num_added_bytes: Option<u64>,
-    num_removed_bytes: Option<u64>,
-    write_time_ms: Option<u64>,
-    operation_metrics_extra_json: Option<String>,
+    operation_metrics_json: Option<String>,
 }
 
 impl ExecCommitMetaTransport {
@@ -87,17 +76,7 @@ impl ExecCommitMetaTransport {
             vec![
                 action_field("commit_row_count", ArrowDataType::UInt64, false),
                 action_field("operation_json", ArrowDataType::Utf8, true),
-                action_field("num_files", ArrowDataType::UInt64, true),
-                action_field("num_output_rows", ArrowDataType::UInt64, true),
-                action_field("num_output_bytes", ArrowDataType::UInt64, true),
-                action_field("execution_time_ms", ArrowDataType::UInt64, true),
-                action_field("num_removed_files", ArrowDataType::UInt64, true),
-                action_field("num_added_files", ArrowDataType::UInt64, true),
-                action_field("num_output_files", ArrowDataType::UInt64, true),
-                action_field("num_added_bytes", ArrowDataType::UInt64, true),
-                action_field("num_removed_bytes", ArrowDataType::UInt64, true),
-                action_field("write_time_ms", ArrowDataType::UInt64, true),
-                action_field("operation_metrics_extra_json", ArrowDataType::Utf8, true),
+                action_field("operation_metrics_json", ArrowDataType::Utf8, true),
             ]
             .into(),
         )
@@ -110,25 +89,19 @@ impl ExecCommitMetaTransport {
             .map(serde_json::to_string)
             .transpose()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let operation_metrics_extra_json = (!meta.operation_metrics.extra.is_empty())
-            .then(|| serde_json::to_string(&meta.operation_metrics.extra))
-            .transpose()
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+        let operation_metrics_json = if meta.operation_metrics == OperationMetrics::default() {
+            None
+        } else {
+            Some(
+                serde_json::to_string(&meta.operation_metrics)
+                    .map_err(|e| DataFusionError::External(Box::new(e)))?,
+            )
+        };
 
         Ok(Self {
             commit_row_count: meta.row_count,
             operation_json,
-            num_files: meta.operation_metrics.num_files,
-            num_output_rows: meta.operation_metrics.num_output_rows,
-            num_output_bytes: meta.operation_metrics.num_output_bytes,
-            execution_time_ms: meta.operation_metrics.execution_time_ms,
-            num_removed_files: meta.operation_metrics.num_removed_files,
-            num_added_files: meta.operation_metrics.num_added_files,
-            num_output_files: meta.operation_metrics.num_output_files,
-            num_added_bytes: meta.operation_metrics.num_added_bytes,
-            num_removed_bytes: meta.operation_metrics.num_removed_bytes,
-            write_time_ms: meta.operation_metrics.write_time_ms,
-            operation_metrics_extra_json,
+            operation_metrics_json,
         })
     }
 
@@ -139,10 +112,10 @@ impl ExecCommitMetaTransport {
             .map(serde_json::from_str::<DeltaOperation>)
             .transpose()
             .map_err(|e| DataFusionError::External(Box::new(e)))?;
-        let extra = self
-            .operation_metrics_extra_json
+        let operation_metrics = self
+            .operation_metrics_json
             .as_deref()
-            .map(serde_json::from_str)
+            .map(serde_json::from_str::<OperationMetrics>)
             .transpose()
             .map_err(|e| DataFusionError::External(Box::new(e)))?
             .unwrap_or_default();
@@ -150,19 +123,7 @@ impl ExecCommitMetaTransport {
         Ok(ExecCommitMeta {
             row_count: self.commit_row_count,
             operation,
-            operation_metrics: OperationMetrics {
-                num_files: self.num_files,
-                num_output_rows: self.num_output_rows,
-                num_output_bytes: self.num_output_bytes,
-                execution_time_ms: self.execution_time_ms,
-                num_removed_files: self.num_removed_files,
-                num_added_files: self.num_added_files,
-                num_output_files: self.num_output_files,
-                num_added_bytes: self.num_added_bytes,
-                num_removed_bytes: self.num_removed_bytes,
-                write_time_ms: self.write_time_ms,
-                extra,
-            },
+            operation_metrics,
         })
     }
 }
@@ -288,8 +249,8 @@ mod tests {
     use datafusion::arrow::datatypes::DataType as ArrowDataType;
 
     use super::*;
-    use crate::kernel::transaction::OperationMetrics;
     use crate::spec::{DeletionVectorDescriptor, StorageType, StructType};
+    use crate::transaction::OperationMetrics;
 
     #[test]
     fn encode_actions_produces_action_column() -> Result<()> {
@@ -367,6 +328,43 @@ mod tests {
             DataFusionError::Internal("expected CommitMeta to be present in roundtrip batch".into())
         })?;
         assert_eq!(decoded_meta.row_count, 10);
+        Ok(())
+    }
+
+    #[test]
+    fn exec_commit_meta_transport_uses_compact_operation_metrics_json() -> Result<()> {
+        let meta = ExecCommitMeta {
+            row_count: 10,
+            operation: None,
+            operation_metrics: OperationMetrics {
+                num_removed_files: Some(2),
+                num_touched_rows: Some(5),
+                ..Default::default()
+            },
+        };
+
+        let transport = ExecCommitMetaTransport::from_exec_meta(meta)?;
+        let metrics_json = transport
+            .operation_metrics_json
+            .as_deref()
+            .ok_or_else(|| DataFusionError::Internal("expected operation metrics json".into()))?;
+        let metrics_value = serde_json::from_str::<serde_json::Value>(metrics_json)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?;
+
+        assert_eq!(
+            metrics_value.get("numRemovedFiles"),
+            Some(&serde_json::Value::from(2))
+        );
+        assert_eq!(
+            metrics_value.get("numTouchedRows"),
+            Some(&serde_json::Value::from(5))
+        );
+        assert!(metrics_value.get("num_removed_files").is_none());
+        assert!(!metrics_json.contains("null"));
+
+        let decoded = transport.into_exec_meta()?;
+        assert_eq!(decoded.operation_metrics.num_removed_files, Some(2));
+        assert_eq!(decoded.operation_metrics.num_touched_rows, Some(5));
         Ok(())
     }
 

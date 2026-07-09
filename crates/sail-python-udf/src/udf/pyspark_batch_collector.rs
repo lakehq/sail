@@ -1,12 +1,11 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, StructArray};
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion::logical_expr::{Accumulator, Signature, Volatility};
 use datafusion_common::Result;
-use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::AggregateUDFImpl;
+use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 
 use crate::accumulator::{BatchAggregateAccumulator, BatchAggregator};
 use crate::array::{build_singleton_list_array, get_fields, get_struct_array_type};
@@ -40,10 +39,6 @@ impl PySparkBatchCollectorUDF {
 }
 
 impl AggregateUDFImpl for PySparkBatchCollectorUDF {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "collect_batch"
     }

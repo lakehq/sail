@@ -12,13 +12,14 @@ use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::scalar::multi_expr::MultiExpr;
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
+use crate::resolver::tree::PlanRewriter;
 use crate::resolver::tree::explode::ExplodeRewriter;
 use crate::resolver::tree::monotonic_id::MonotonicIdRewriter;
+use crate::resolver::tree::spark_partition_id::SparkPartitionIdRewriter;
 use crate::resolver::tree::window::WindowRewriter;
-use crate::resolver::tree::PlanRewriter;
-use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_project(
@@ -35,6 +36,8 @@ impl PlanResolver<'_> {
         let expr = self.resolve_named_expressions(expr, schema, state).await?;
         let (input, expr) = self.rewrite_wildcard(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<MonotonicIdRewriter>(input, expr, state)?;
+        let (input, expr) =
+            self.rewrite_projection::<SparkPartitionIdRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<ExplodeRewriter>(input, expr, state)?;
         let (input, expr) = self.rewrite_projection::<WindowRewriter>(input, expr, state)?;
         let expr = self.rewrite_multi_expr(expr)?;
@@ -100,10 +103,10 @@ impl PlanResolver<'_> {
 
             if let Some(outer_schema) = state.get_outer_query_schema() {
                 for (qualifier, field) in outer_schema.iter() {
-                    if let Some(expected) = qualifier_filter {
-                        if qualifier.is_none_or(|q| expected != q) {
-                            continue;
-                        }
+                    if let Some(expected) = qualifier_filter
+                        && qualifier.is_none_or(|q| expected != q)
+                    {
+                        continue;
                     }
                     let info = state.get_field_info(field.name())?;
                     if info.is_hidden() {
@@ -202,7 +205,7 @@ impl PlanResolver<'_> {
             } = e;
             match expr {
                 Expr::ScalarFunction(ScalarFunction { func, args }) => {
-                    if func.inner().as_any().is::<MultiExpr>() {
+                    if func.inner().is::<MultiExpr>() {
                         // The metadata from the original expression are ignored.
                         if name.len() == args.len() {
                             for (name, arg) in name.into_iter().zip(args) {

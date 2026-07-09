@@ -1,15 +1,15 @@
 use std::sync::Arc;
 
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::DFSchemaRef;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_expr::logical_plan::{Filter, Projection};
-use datafusion_expr::{expr_fn, Expr, LogicalPlan};
+use datafusion_expr::{Expr, LogicalPlan, expr_fn};
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_expression_in_subquery(
@@ -130,7 +130,7 @@ impl PlanResolver<'_> {
         }
         let filter_expr = outer_refs
             .into_iter()
-            .zip(subquery_cols.into_iter())
+            .zip(subquery_cols)
             .map(|(outer, inner_col)| Expr::eq(Expr::Column(inner_col), outer))
             .reduce(Expr::and)
             .ok_or_else(|| PlanError::invalid("empty IN subquery values"))?;

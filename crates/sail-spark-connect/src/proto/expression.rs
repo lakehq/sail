@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use sail_common::spec;
 use sail_sql_analyzer::data_type::from_ast_data_type;
 use sail_sql_analyzer::expression::{
@@ -14,18 +12,18 @@ use sail_sql_analyzer::query::from_ast_named_expression;
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::spark::connect::expression::cast::{CastToType, EvalMode};
 use crate::spark::connect::expression::sort_order::{NullOrdering, SortDirection};
+use crate::spark::connect::expression::window::WindowFrame;
 use crate::spark::connect::expression::window::window_frame::frame_boundary::Boundary;
 use crate::spark::connect::expression::window::window_frame::{FrameBoundary, FrameType};
-use crate::spark::connect::expression::window::WindowFrame;
 use crate::spark::connect::expression::{
     Alias, Cast, ExprType, ExpressionString, LambdaFunction, SortOrder, UnresolvedAttribute,
     UnresolvedExtractValue, UnresolvedFunction, UnresolvedNamedLambdaVariable, UnresolvedRegex,
     UnresolvedStar, UpdateFields, Window,
 };
 use crate::spark::connect::{
-    common_inline_user_defined_function as udf, common_inline_user_defined_table_function as udtf,
     CallFunction, CommonInlineUserDefinedFunction, CommonInlineUserDefinedTableFunction,
     Expression, JavaUdf, PythonUdf, PythonUdtf, ScalarScalaUdf, SubqueryExpression,
+    common_inline_user_defined_function as udf, common_inline_user_defined_table_function as udtf,
 };
 
 impl TryFrom<Expression> for spec::Expr {
@@ -106,28 +104,13 @@ impl TryFrom<Expression> for spec::Expr {
                     metadata,
                 } = *alias;
                 let expr = expr.required("alias expression")?;
-                let metadata: Option<HashMap<String, String>> = metadata
-                    .map(|x| {
-                        serde_json::from_str(&x)
-                            .map_err(SparkError::from)
-                            .and_then(|x: serde_json::Value| {
-                                x.as_object()
-                                    .ok_or_else(|| SparkError::invalid("alias metadata"))
-                                    .map(|x| {
-                                        x.into_iter()
-                                            .map(|(k, v)| {
-                                                Ok((k.clone(), serde_json::to_string(v)?))
-                                            })
-                                            .collect::<SparkResult<_>>()
-                                    })
-                            })?
-                    })
-                    .transpose()?;
+                let metadata =
+                    metadata.map(|x| vec![(spec::SPARK_METADATA_JSON_KEY.to_string(), x)]);
                 let name: Vec<spec::Identifier> = name.into_iter().map(|x| x.into()).collect();
                 Ok(spec::Expr::Alias {
                     expr: Box::new((*expr).try_into()?),
                     name,
-                    metadata: metadata.map(|x| x.into_iter().collect()),
+                    metadata,
                 })
             }
             ExprType::Cast(cast) => {
@@ -524,9 +507,9 @@ impl TryFrom<udtf::Function> for spec::TableFunctionDefinition {
                 command,
                 python_ver,
             }) => {
-                let return_type = return_type.required("Python UDTF return type")?;
+                let return_type = return_type.map(|rt| rt.try_into()).transpose()?;
                 Ok(spec::TableFunctionDefinition::PythonUdtf {
-                    return_type: return_type.try_into()?,
+                    return_type,
                     eval_type: spec::PySparkUdfType::try_from(eval_type)?,
                     command,
                     python_version: python_ver,

@@ -47,26 +47,105 @@ message ExtendedPhysicalPlanNode {
     StreamSourceAdapterExecNode stream_source_adapter = 32;
     IcebergWriterExecNode iceberg_writer = 33;
     IcebergCommitExecNode iceberg_commit = 34;
-    MergeCardinalityCheckExecNode merge_cardinality_check = 35;
-    PythonDataSourceExecNode python_data_source = 36;
-    MonotonicIdExecNode monotonic_id = 37;
-    PythonDataSourceWriteExecNode python_data_source_write = 38;
-    PythonDataSourceWriteCommitExecNode python_data_source_write_commit = 39;
-    CatalogCommandExecNode catalog_command = 40;
-    BarrierExecNode barrier = 41;
-    RelaxedTzCastExecNode relaxed_tz_cast = 42;
+    IcebergManifestScanExecNode iceberg_manifest_scan = 35;
+    IcebergDiscoveryExecNode iceberg_discovery = 36;
+    IcebergScanByDataFilesExecNode iceberg_scan_by_data_files = 37;
+    IcebergDeleteApplyExecNode iceberg_delete_apply = 38;
+    MergeCardinalityCheckExecNode merge_cardinality_check = 39;
+    PythonDataSourceExecNode python_data_source = 40;
+    MonotonicIdExecNode monotonic_id = 41;
+    PythonDataSourceWriteExecNode python_data_source_write = 42;
+    PythonDataSourceWriteCommitExecNode python_data_source_write_commit = 43;
+    CatalogCommandExecNode catalog_command = 44;
+    BarrierExecNode barrier = 45;
+    RelaxedTzCastExecNode relaxed_tz_cast = 46;
+    SparkPartitionIdExecNode spark_partition_id = 47;
+    DeletionVectorWriterExecNode deletion_vector_writer = 48;
+    DeletionVectorRowsWriterExecNode deletion_vector_rows_writer = 49;
+    CoalesceExecNode coalesce = 50;
+    FileDeleteExecNode file_delete = 51;
+    NoopSinkExecNode noop_sink = 52;
+    CsvExecNode csv = 53;
+    ParquetExecNode parquet = 54;
   }
 }
 
 message ExtendedPhysicalExprNode {
   oneof ExprKind {
-    DeltaCastColumnExprNode delta_cast = 1;
+    CastColumnExprNode schema_evolution_cast = 1;
+    HigherOrderUdfExprNode higher_order_udf = 2;
+    LambdaExprNode lambda = 3;
+    LambdaVariableExprNode lambda_variable = 4;
   }
 }
 
-message DeltaCastColumnExprNode {
+message CastColumnExprNode {
   bytes input_schema = 1;
   bytes target_schema = 2;
+}
+
+message LambdaExprNode {
+  repeated string params = 1;
+}
+
+message LambdaVariableExprNode {
+  uint32 index = 1;
+  bytes field = 2;
+}
+
+message HigherOrderUdfExprNode {
+  HigherOrderUdf udf = 1;
+}
+
+message HigherOrderUdf {
+  oneof HigherOrderUdfKind {
+    SparkArrayFilterUdf filter = 1;
+    SparkArrayTransformUdf transform = 2;
+    SparkArrayExistsUdf exists = 3;
+    SparkArrayForallUdf forall = 4;
+    SparkArrayAggregateUdf aggregate = 5;
+    SparkArraySortUdf sort = 6;
+  }
+}
+
+message SparkArrayAggregateUdf {
+  bool element_first = 1;
+}
+
+message SparkArrayExistsUdf {}
+
+message SparkArrayForallUdf {}
+
+message SparkArrayFilterUdf {
+  // True when the lambda parameters are `[index, element]` (an index-only
+  // lambda rewritten by the planner) instead of `[element, index]`.
+  //
+  // TODO: this flag exists only to work around a DataFusion 54 physical lambda
+  // alignment bug. `LambdaExpr::new` (datafusion-physical-expr 54,
+  // src/expressions/lambda.rs) collects the body's used column/variable indices,
+  // sorts them, and remaps the body to compact positions; the eval batch is
+  // built as `[captures..., all declared params]` and projected to those used
+  // indices. When an earlier declared param is unused and a later one is used
+  // (e.g. `(x, i) -> i % 2 = 0`), the remap misaligns and evaluation fails with
+  // "Field of physical LambdaVariable ... doesn't match batch field". No
+  // dedicated upstream issue exists yet (worth filing). Once fixed upstream, the
+  // `index_first` rewrite and this field can be removed.
+  bool index_first = 1;
+}
+
+message SparkArrayTransformUdf {
+  // True when the lambda parameters are `[index, element]` (an index-only
+  // lambda rewritten by the planner) instead of `[element, index]`. See the
+  // identical workaround documented on `SparkArrayFilterUdf.index_first`.
+  bool index_first = 1;
+}
+
+message SparkArraySortUdf {
+  // True when the comparator columns are fed in `[right, left]` order (a
+  // right-only comparator `(l, r) -> f(r)` rewritten by the planner to a
+  // single-parameter lambda). See the identical workaround documented on
+  // `SparkArrayFilterUdf.index_first`.
+  bool swapped = 1;
 }
 
 message ExtendedScalarUdf {
@@ -85,6 +164,26 @@ message ExtendedScalarUdf {
     SparkFromCsvUdf spark_from_csv = 12;
     XpathTypedUdf xpath_typed = 13;
     SparkVariantGetUdf spark_variant_get = 14;
+    SparkNextDayUdf spark_next_day = 15;
+    SparkTimeUdf spark_time = 16;
+    SparkFromJsonUdf spark_from_json = 17;
+    ArraysZipUdf arrays_zip = 18;
+    SparkToNumberUdf spark_to_number = 19;
+    SparkAbsUdf spark_abs = 20;
+    SparkMakeTimestampNtzUdf spark_make_timestamp_ntz = 21;
+    ConvertTzUdf convert_tz = 22;
+    SparkToCsvUdf spark_to_csv = 23;
+    SparkPmodUdf spark_pmod = 24;
+    SparkParseJsonUdf spark_parse_json = 25;
+    SparkStructRenameUdf spark_struct_rename = 26;
+    SparkWindowBucketsUdf spark_window_buckets = 27;
+    SparkToCharUdf spark_to_char = 28;
+    SparkToXmlUdf spark_to_xml = 29;
+    SparkBinUdf spark_bin = 30;
+    SparkNegativeUdf spark_negative = 31;
+    SparkFromXmlUdf spark_from_xml = 32;
+    SparkCeilUdf spark_ceil = 33;
+    SparkFloorUdf spark_floor = 34;
   }
 }
 
@@ -101,7 +200,12 @@ message ExtendedAggregateUdf {
     PySparkGroupAggUdaf py_spark_group_agg = 2;
     PySparkGroupMapUdaf py_spark_group_map = 3;
     PySparkBatchCollectorUdaf py_spark_batch_collector = 4;
+    PercentileDiscUdaf percentile_disc = 5;
   }
+}
+
+message PercentileDiscUdaf {
+  bool ansi_mode = 1;
 }
 
 message StandardUdf {}
@@ -141,11 +245,23 @@ message XpathTypedUdf {
   string name = 1;
 }
 
+message SparkToXmlUdf {
+    string session_timezone = 1;
+}
+
+message SparkFromXmlUdf {
+  string session_timezone = 1;
+}
+
 message SparkUnixTimestampUdf {
   string timezone = 1;
 }
 
 message StructFunctionUdf {
+  repeated string field_names = 1;
+}
+
+message ArraysZipUdf {
   repeated string field_names = 1;
 }
 
@@ -161,6 +277,7 @@ message TimestampNowUdf {
 message SparkTimestampUdf {
   optional string timezone = 1;
   bool is_try = 2;
+  bool ansi_mode = 3;
 }
 
 message SparkDateUdf {
@@ -171,11 +288,97 @@ message SparkVariantGetUdf {
   bool safe = 1;
 }
 
+message SparkCeilUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkFloorUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkNextDayUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkWindowBucketsUdf {
+  int64 window_duration = 1;
+  int64 slide_duration = 2;
+  int64 start_time = 3;
+}
+
+message SparkAbsUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkBinUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkParseJsonUdf {
+  bool safe = 1;
+}
+
+message SparkPmodUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkNegativeUdf {
+  bool ansi_mode = 1;
+}
+
 message SparkFromCsvUdf {
   string session_timezone = 1;
 }
 
+message SparkStructRenameUdf {
+  // The target data type (struct or container-of-struct), encoded as Arrow
+  // ArrowType protobuf bytes.
+  bytes target_type = 1;
+}
+
+message SparkToCsvUdf {
+  string session_timezone = 1;
+}
+
+message SparkTimeUdf {
+  bool is_try = 1;
+}
+
+message SparkFromJsonUdf {
+  string session_timezone = 1;
+}
+
+message SparkToNumberUdf {
+  bool safe = 1;
+}
+
+message SparkToCharUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkMakeTimestampNtzUdf {
+  bool is_try = 1;
+}
+
+message ConvertTzUdf {
+  bool classic = 1;
+}
+
 message StandardUdaf {}
+
+message ExtendedWindowUdf {
+  oneof UdwfKind {
+    StandardUdwf standard = 1;
+    SparkFirstLastValueUdwf spark_first_last_value = 2;
+  }
+}
+
+message StandardUdwf {}
+
+message SparkFirstLastValueUdwf {
+  bool first = 1;
+  bool ignore_nulls = 2;
+}
 
 // Distinguishes Pandas (202) vs Arrow-native (252) grouped aggregate UDFs
 enum PySparkGroupAggKind {
@@ -207,6 +410,7 @@ message PySparkGroupMapUdaf {
   bytes output_type = 6;
   bool is_pandas = 7;
   PySparkUdfConfig config = 8;
+  bool is_iter = 9;
 }
 
 message PySparkBatchCollectorUdaf {
@@ -262,6 +466,10 @@ message PySparkUdfConfig {
   bool pandas_grouped_map_assign_columns_by_name = 3;
   bool pandas_convert_to_arrow_array_safely = 4;
   uint64 arrow_max_records_per_batch = 5;
+  bool python_udf_pandas_conversion_enabled = 6;
+  bool python_udtf_pandas_conversion_enabled = 7;
+  bool python_udf_pandas_int_to_decimal_coercion_enabled = 8;
+  bool binary_as_bytes = 9;
 }
 
 message EquivalenceProperties {
@@ -391,6 +599,17 @@ message NdJsonExecNode {
   CompressionTypeVariant file_compression_type = 2;
 }
 
+message CsvExecNode {
+  bytes base_config = 1;
+  bytes options = 2;
+}
+
+message ParquetExecNode {
+  bytes base_config = 1;
+  bytes options = 2;
+  optional bytes predicate = 3;
+}
+
 message ArrowExecNode {
   bytes base_config = 1;
 }
@@ -459,6 +678,36 @@ message PhysicalSinkMode {
   }
 }
 
+enum DeltaColumnMappingMode {
+  DELTA_COLUMN_MAPPING_MODE_NONE = 0;
+  DELTA_COLUMN_MAPPING_MODE_NAME = 1;
+  DELTA_COLUMN_MAPPING_MODE_ID = 2;
+}
+
+message DeltaSnapshotContext {
+  int64 version = 1;
+  string protocol_json = 2;
+  string metadata_json = 3;
+  string txns_json = 4;
+  string domain_metadata_json = 5;
+  string commit_timestamps_json = 6;
+}
+
+message DeltaCommitContext {
+  optional DeltaSnapshotContext base_snapshot = 1;
+}
+
+message DeltaWriteContext {
+  DeltaCommitContext commit_context = 1;
+  string final_schema_json = 2;
+  DeltaColumnMappingMode effective_column_mapping_mode = 3;
+  repeated string initial_actions_json = 4;
+  repeated string schema_actions_json = 5;
+  optional string operation_json = 6;
+  optional string logical_kernel_for_mapping_json = 7;
+  repeated string physical_partition_columns = 8;
+}
+
 message DeltaWriterExecNode {
   bytes input = 1;
   string table_url = 2;
@@ -467,8 +716,9 @@ message DeltaWriterExecNode {
   repeated string partition_columns = 5;
   bool table_exists = 6;
   PhysicalSinkMode sink_mode = 7;
-  optional string operation_override_json = 8;
-  string metadata_configuration = 9;
+  map<string, string> metadata_configuration = 8;
+  DeltaWriteContext write_context = 9;
+  string lakehouse_table_json = 10;
 }
 
 message DeltaCommitExecNode {
@@ -478,6 +728,9 @@ message DeltaCommitExecNode {
   bool table_exists = 4;
   bytes sink_schema = 5;
   PhysicalSinkMode sink_mode = 6;
+  optional string user_metadata = 7;
+  DeltaCommitContext commit_context = 8;
+  string lakehouse_table_json = 9;
 }
 
 message DeltaScanByAddsExecNode {
@@ -491,6 +744,8 @@ message DeltaScanByAddsExecNode {
   optional bytes pushdown_filter = 8;
   int64 version = 9;
   optional bytes statistics = 10;
+  string lakehouse_table_json = 11;
+  string catalog_managed_commits_json = 12;
   // TODO: Consider snapshot hints (partition columns, kernel schema) to avoid worker log reads.
 }
 
@@ -511,9 +766,14 @@ message DeltaMetadataStatsExecNode {
 
 message DeltaRemoveActionsExecNode {
   bytes input = 1;
+  optional string partition_value_columns_json = 2;
 }
 
 message ConsoleSinkExecNode {
+  bytes input = 1;
+}
+
+message NoopSinkExecNode {
   bytes input = 1;
 }
 
@@ -540,6 +800,11 @@ message TextSinkExecNode {
   bytes line_sep = 4;
   CompressionTypeVariant compression_type_variant = 5;
   optional PhysicalSortExprNodeCollection sort_order = 6;
+}
+
+message FileDeleteExecNode {
+  string object_store_url = 1;
+  string path = 2;
 }
 
 message StreamCollectorExecNode {
@@ -572,6 +837,17 @@ message MonotonicIdExecNode {
   bytes input = 1;
   string column_name = 2;
   bytes schema = 3;
+}
+
+message SparkPartitionIdExecNode {
+  bytes input = 1;
+  string column_name = 2;
+  bytes schema = 3;
+}
+
+message CoalesceExecNode {
+  bytes input = 1;
+  uint64 output_partitions = 2;
 }
 
 message RelaxedTzCastExecNode {
@@ -636,11 +912,42 @@ message IcebergWriterExecNode {
   PhysicalSinkMode sink_mode = 4;
   bool table_exists = 5;
   string options = 6;
+  bytes logical_input_schema = 7;
+  string lakehouse_table_json = 8;
 }
 
 message IcebergCommitExecNode {
   bytes input = 1;
   string table_url = 2;
+  string lakehouse_table_json = 3;
+}
+
+message IcebergManifestScanExecNode {
+  string table_url = 1;
+  // Iceberg Snapshot serialized as JSON.
+  string snapshot_json = 2;
+}
+
+message IcebergDiscoveryExecNode {
+  bytes input = 1;
+  string table_url = 2;
+  int64 snapshot_id = 3;
+  bool input_partition_scan = 4;
+}
+
+message IcebergScanByDataFilesExecNode {
+  bytes input = 1;
+  string table_url = 2;
+  bytes output_schema = 3;
+}
+
+message IcebergDeleteApplyExecNode {
+  bytes input = 1;
+  string data_file_path = 2;
+  string positional_deletes_json = 3;
+  string equality_deletes_json = 4;
+  string table_url = 5;
+  string iceberg_schema_json = 6;
 }
 
 message DeltaLogReplayExecNode {
@@ -654,6 +961,27 @@ message DeltaLogReplayExecNode {
   // Preferred encoding for hash replay mode.
   optional bytes checkpoint_input = 7;
   optional bytes commits_input = 8;
+}
+
+message DeletionVectorWriterExecNode {
+  bytes input = 1;
+  string table_url = 2;
+  bytes condition = 3;
+  bytes table_schema = 4;
+  int64 version = 5;
+  optional string operation_json = 6;
+  optional string partition_value_columns_json = 7;
+}
+
+message DeletionVectorRowsWriterExecNode {
+  bytes input = 1;
+  string table_url = 2;
+  string path_column = 3;
+  string row_index_column = 4;
+  int64 version = 5;
+  optional string operation_json = 6;
+  bytes adds_input = 7;
+  optional string partition_value_columns_json = 8;
 }
 
 message PythonDataSourceInputPartition {

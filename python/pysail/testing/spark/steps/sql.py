@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import io
 import json
 import time
+from contextlib import redirect_stdout
 from pathlib import Path
 
 import pytest
 from jinja2 import Template
+from pyspark.sql import functions as F  # noqa: N812
 from pytest_bdd import given, parsers, then, when
 
 from pysail.testing.spark.utils.sql import escape_sql_string_literal, parse_show_string
@@ -124,7 +127,64 @@ def query(template, docstring, variables):
 def query_schema(docstring, query, spark):
     """Analyze the SQL query and compare schema with expected schema tree string."""
     df = spark.sql(query)
-    assert docstring.strip() == df.schema.treeString().strip()
+    assert_schema_tree(df, docstring)
+
+
+@when(parsers.parse("dataframe for {case}"), target_fixture="dataframe")
+def dataframe_for(case, spark):
+    """Builds a DataFrame for a named BDD case."""
+    cases = {
+        "null literal": lambda: spark.range(1).select(F.lit(None).alias("result")),
+        "null literal alias projection": lambda: (
+            spark.range(1).select(F.lit(None).alias("value")).select(F.col("value").alias("result"))
+        ),
+        "null literal with column": lambda: spark.range(1).withColumn("result", F.lit(None)).select("result"),
+        "to_timestamp null literal": lambda: spark.range(1).select(F.to_timestamp(F.lit(None)).alias("result")),
+        "to_timestamp null literal with format": lambda: spark.range(1).select(
+            F.to_timestamp(F.lit(None), "yyyy-MM-dd").alias("result")
+        ),
+        "try_to_timestamp null literal with format": lambda: spark.range(1).select(
+            F.try_to_timestamp(F.lit(None), F.lit("yyyy-MM-dd")).alias("result")
+        ),
+        "try_to_timestamp value with null format": lambda: spark.range(1).select(
+            F.try_to_timestamp(F.lit("2024-01-02"), F.lit(None)).alias("result")
+        ),
+        "to_timestamp_ltz null literal with format": lambda: spark.range(1).select(
+            F.to_timestamp_ltz(F.lit(None), F.lit("yyyy-MM-dd")).alias("result")
+        ),
+        "to_timestamp_ltz value with null format": lambda: spark.range(1).select(
+            F.to_timestamp_ltz(F.lit("2024-01-02"), F.lit(None)).alias("result")
+        ),
+        "to_timestamp_ntz null literal with format": lambda: spark.range(1).select(
+            F.to_timestamp_ntz(F.lit(None), F.lit("yyyy-MM-dd")).alias("result")
+        ),
+        "to_timestamp_ntz value with null format": lambda: spark.range(1).select(
+            F.to_timestamp_ntz(F.lit("2024-01-02"), F.lit(None)).alias("result")
+        ),
+    }
+    try:
+        return cases[case]()
+    except KeyError:
+        pytest.fail(f"Unknown DataFrame case: {case}")
+
+
+@then("dataframe schema")
+def dataframe_schema(docstring, dataframe):
+    """Compare a DataFrame schema with expected schema tree string."""
+    assert_schema_tree(dataframe, docstring)
+
+
+def assert_schema_tree(df, docstring):
+    """Compare a DataFrame schema with expected schema tree string."""
+    if hasattr(df.schema, "treeString"):
+        actual = df.schema.treeString()
+    else:
+        # PySpark < 4.x has no StructType.treeString(); capture printSchema() output instead.
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            df.printSchema()
+        actual = buf.getvalue()
+    assert docstring.strip() == actual.strip()
 
 
 @then(parsers.re("query result(?P<ordered>( ordered)?)"))
@@ -140,8 +200,73 @@ def query_result(datatable, ordered, query, spark):
         assert sorted(rows) == sorted(r)
 
 
+def _format_collected_value(value) -> str:
+    if value is None:
+        return "NULL"
+    if isinstance(value, bool):
+        return str(value).lower()
+    return str(value)
+
+
+@then(parsers.re("query result collected(?P<ordered>( ordered)?)"))
+def query_result_collected(datatable, ordered, query, spark):
+    """Execute the SQL query with collect() and compare result with expected data table."""
+    expected_header, *expected_rows = datatable
+    df = spark.sql(query)
+    actual = [[_format_collected_value(value) for value in row] for row in df.collect()]
+    assert expected_header == df.schema.names
+    if ordered:
+        assert expected_rows == actual
+    else:
+        assert sorted(expected_rows) == sorted(actual)
+
+
 @then(parsers.parse("query error {error}"))
 def query_error(error, query, spark):
     """Executes the SQL query and expects it to fail with an error (regex match)."""
     with pytest.raises(Exception, match=error):
         _ = spark.sql(query).collect()
+
+
+@then(parsers.parse('query result has row where "{match_column}" is "{match_value}"'))
+def query_result_has_row(match_column: str, match_value: str, query: str, spark) -> None:
+    rows = spark.sql(query).collect()
+    assert any(str(row[match_column]) == match_value for row in rows)
+
+
+@then(
+    parsers.parse(
+        'query result row where "{match_column}" is "{match_value}" has "{value_column}" containing "{substring}"'
+    )
+)
+def query_result_row_value_contains(
+    match_column: str,
+    match_value: str,
+    value_column: str,
+    substring: str,
+    query: str,
+    spark,
+) -> None:
+    rows = spark.sql(query).collect()
+    matches = [row for row in rows if str(row[match_column]) == match_value]
+    assert matches
+    assert substring in str(matches[0][value_column])
+
+
+@then(
+    parsers.parse(
+        'query result row where "{match_column}" is "{match_value}" has "{value_column}" equal to "{expected}"'
+    )
+)
+def query_result_row_value_equals(
+    match_column: str,
+    match_value: str,
+    value_column: str,
+    expected: str,
+    query: str,
+    spark,
+) -> None:
+    rows = spark.sql(query).collect()
+    matches = [row for row in rows if str(row[match_column]) == match_value]
+    assert matches
+    assert str(matches[0][value_column]) == expected

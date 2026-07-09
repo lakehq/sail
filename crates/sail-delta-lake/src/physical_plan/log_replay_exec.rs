@@ -1,11 +1,10 @@
-use std::any::Any;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::array::{Array, ArrayRef, BooleanArray, Int64Array, StringArray};
-use datafusion::arrow::compute::{cast, concat, SortOptions};
+use datafusion::arrow::compute::{SortOptions, cast, concat};
 use datafusion::arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion::execution::context::TaskContext;
@@ -17,9 +16,9 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
-use futures::{stream, TryStreamExt};
+use futures::{TryStreamExt, stream};
 use url::Url;
 
 use crate::physical_plan::{COL_LOG_IS_REMOVE, COL_LOG_VERSION, COL_REPLAY_PATH};
@@ -562,10 +561,6 @@ impl ExecutionPlan for DeltaLogReplayExec {
         "DeltaLogReplayExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.cache
     }
@@ -894,10 +889,6 @@ mod tests {
     impl ExecutionPlan for OneBatchExec {
         fn name(&self) -> &'static str {
             "OneBatchExec"
-        }
-
-        fn as_any(&self) -> &dyn Any {
-            self
         }
 
         fn properties(&self) -> &Arc<PlanProperties> {

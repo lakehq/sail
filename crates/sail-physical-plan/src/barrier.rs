@@ -1,10 +1,9 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use futures::{StreamExt, TryStreamExt};
 
 /// A physical plan node that enforces a barrier between preconditions and the actual plan.
@@ -63,10 +62,6 @@ impl DisplayAs for BarrierExec {
 impl ExecutionPlan for BarrierExec {
     fn name(&self) -> &'static str {
         Self::static_name()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

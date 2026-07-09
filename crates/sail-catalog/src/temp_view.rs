@@ -3,9 +3,9 @@ use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use datafusion_expr::LogicalPlan;
 use lazy_static::lazy_static;
-use sail_common_datafusion::catalog::TableColumnStatus;
+use sail_common_datafusion::catalog::{TableColumnStatus, TemporaryViewSource};
 
-use crate::error::{CatalogError, CatalogResult};
+use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::provider::{CreateTemporaryViewColumnOptions, CreateTemporaryViewOptions};
 use crate::utils::match_pattern;
 
@@ -20,6 +20,7 @@ pub struct TemporaryView {
     columns: Vec<TableColumnStatus>,
     comment: Option<String>,
     properties: Vec<(String, String)>,
+    source: Option<TemporaryViewSource>,
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +43,10 @@ impl TemporaryView {
 
     pub fn properties(&self) -> &[(String, String)] {
         &self.properties
+    }
+
+    pub fn source(&self) -> &Option<TemporaryViewSource> {
+        &self.source
     }
 }
 
@@ -87,13 +92,17 @@ impl TemporaryViewManager {
             replace,
             comment,
             properties,
+            source,
         } = options;
         let mut views = self.write()?;
         if views.contains_key(&name) {
             if if_not_exists {
                 return Ok(());
             } else if !replace {
-                return Err(CatalogError::AlreadyExists("temporary view", name.clone()));
+                return Err(CatalogError::AlreadyExists(
+                    CatalogObject::TemporaryView,
+                    name.clone(),
+                ));
             }
         }
         let comments = if columns.is_empty() {
@@ -115,7 +124,7 @@ impl TemporaryViewManager {
             .schema()
             .fields()
             .iter()
-            .zip(comments.into_iter())
+            .zip(comments)
             .map(|(field, comment)| {
                 Ok(TableColumnStatus {
                     name: field.name().clone(),
@@ -124,6 +133,7 @@ impl TemporaryViewManager {
                     comment,
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                     is_partition: false,
                     is_bucket: false,
                     is_cluster: false,
@@ -135,6 +145,7 @@ impl TemporaryViewManager {
             columns,
             comment,
             properties,
+            source,
         };
         views.insert(name, Arc::new(view));
         Ok(())
@@ -143,7 +154,10 @@ impl TemporaryViewManager {
     pub fn drop_view(&self, name: &str, if_exists: bool) -> CatalogResult<()> {
         let mut views = self.write()?;
         if !views.contains_key(name) && !if_exists {
-            return Err(CatalogError::NotFound("temporary view", name.to_string()));
+            return Err(CatalogError::NotFound(
+                CatalogObject::TemporaryView,
+                name.to_string(),
+            ));
         }
         views.remove(name);
         Ok(())
@@ -151,9 +165,9 @@ impl TemporaryViewManager {
 
     pub fn get_view(&self, name: &str) -> CatalogResult<Arc<TemporaryView>> {
         let views = self.read()?;
-        let view = views
-            .get(name)
-            .ok_or_else(|| CatalogError::NotFound("temporary view", name.to_string()))?;
+        let view = views.get(name).ok_or_else(|| {
+            CatalogError::NotFound(CatalogObject::TemporaryView, name.to_string())
+        })?;
         Ok(Arc::clone(view))
     }
 

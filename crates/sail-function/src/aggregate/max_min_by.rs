@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::ops::Deref;
@@ -13,7 +12,7 @@ use datafusion::logical_expr::expr::{AggregateFunction, Sort};
 use datafusion::logical_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion::logical_expr::simplify::SimplifyContext;
 use datafusion::logical_expr::utils::format_state_name;
-use datafusion::logical_expr::{function, Accumulator, AggregateUDFImpl, Signature, Volatility};
+use datafusion::logical_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility, function};
 use datafusion::prelude::Expr;
 
 #[derive(Debug)]
@@ -120,10 +119,6 @@ fn get_min_max_by_result_type(input_types: &[DataType]) -> Result<Vec<DataType>,
 }
 
 impl AggregateUDFImpl for MaxByFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "max_by"
     }
@@ -226,10 +221,6 @@ impl MinByFunction {
 }
 
 impl AggregateUDFImpl for MinByFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "min_by"
     }

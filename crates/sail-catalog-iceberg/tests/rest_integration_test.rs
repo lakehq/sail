@@ -13,14 +13,19 @@
 #![expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use arrow::datatypes::DataType;
+use sail_catalog::credentials::EmptyCatalogCredentials;
 use sail_catalog::provider::{
     CatalogPartitionField, CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions,
-    CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
-    DropTableOptions, DropViewOptions, Namespace, PartitionTransform, RuntimeAwareCatalogProvider,
+    CreateTableMode, CreateTableOptions, CreateViewColumnOptions, CreateViewOptions,
+    DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace, PartitionTransform,
+    RuntimeAwareCatalogProvider,
 };
-use sail_catalog_iceberg::{IcebergRestCatalogProvider, REST_CATALOG_PROP_URI};
+use sail_catalog_iceberg::{
+    IcebergRestCatalogOptions, IcebergRestCatalogProvider, REST_CATALOG_PROP_URI,
+};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::catalog::{
     CatalogTableConstraint, CatalogTableSort, TableColumnStatus, TableKind,
@@ -107,7 +112,13 @@ async fn setup_catalog(
     let catalog = RuntimeAwareCatalogProvider::try_new(
         || {
             let props = HashMap::from([(REST_CATALOG_PROP_URI.to_string(), rest_url)]);
-            let provider = IcebergRestCatalogProvider::new("test".to_string(), props);
+            let provider = IcebergRestCatalogProvider::new(
+                "test".to_string(),
+                IcebergRestCatalogOptions {
+                    credentials: Arc::new(EmptyCatalogCredentials),
+                    properties: props,
+                },
+            );
             Ok(provider)
         },
         runtime.io().clone(),
@@ -140,10 +151,12 @@ async fn test_create_namespace() {
     assert_eq!(created_db.database, Vec::<String>::from(namespace.clone()));
     assert_eq!(created_db.comment, Some("test comment".to_string()));
     assert_eq!(created_db.location, Some("s3://bucket/path".to_string()));
-    assert!(created_db
-        .properties
-        .iter()
-        .any(|(k, v)| k == "key1" && v == "value1"));
+    assert!(
+        created_db
+            .properties
+            .iter()
+            .any(|(k, v)| k == "key1" && v == "value1")
+    );
 
     let result = rest_catalog
         .create_database(
@@ -247,19 +260,23 @@ async fn test_get_namespace() {
 
     assert_eq!(created_db.database, Vec::<String>::from(namespace.clone()));
     for (key, value) in &properties {
-        assert!(created_db
-            .properties
-            .iter()
-            .any(|(k, v)| k == key && v == value));
+        assert!(
+            created_db
+                .properties
+                .iter()
+                .any(|(k, v)| k == key && v == value)
+        );
     }
 
     let get_db = rest_catalog.get_database(&namespace).await.unwrap();
     assert_eq!(get_db.database, Vec::<String>::from(namespace));
     for (key, value) in &properties {
-        assert!(get_db
-            .properties
-            .iter()
-            .any(|(k, v)| k == key && v == value));
+        assert!(
+            get_db
+                .properties
+                .iter()
+                .any(|(k, v)| k == key && v == value)
+        );
     }
 }
 
@@ -315,12 +332,14 @@ async fn test_list_namespaces() {
     let dbs = rest_catalog.list_databases(Some(&parent)).await.unwrap();
 
     assert_eq!(dbs.len(), 2);
-    assert!(dbs
-        .iter()
-        .any(|db| db.database == Vec::<String>::from(ns1.clone())));
-    assert!(dbs
-        .iter()
-        .any(|db| db.database == Vec::<String>::from(ns2.clone())));
+    assert!(
+        dbs.iter()
+            .any(|db| db.database == Vec::<String>::from(ns1.clone()))
+    );
+    assert!(
+        dbs.iter()
+            .any(|db| db.database == Vec::<String>::from(ns2.clone()))
+    );
 }
 
 #[tokio::test]
@@ -557,6 +576,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
         },
         CreateTableColumnOptions {
             name: "bar".to_string(),
@@ -565,6 +585,7 @@ async fn test_create_table() {
             comment: Some("meow".to_string()),
             default: None,
             generated_always_as: None,
+            identity: None,
         },
         CreateTableColumnOptions {
             name: "baz".to_string(),
@@ -573,6 +594,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
         },
     ];
 
@@ -589,10 +611,10 @@ async fn test_create_table() {
                 partition_by: vec![],
                 sort_by: vec![],
                 bucket_by: None,
-                if_not_exists: false,
-                replace: false,
-                options: vec![],
+                mode: CreateTableMode::Create,
                 properties: vec![],
+                is_external: true,
+                is_write_precondition: false,
             },
         )
         .await
@@ -607,8 +629,8 @@ async fn test_create_table() {
         partition_by,
         sort_by,
         bucket_by,
-        options,
         properties,
+        is_external: _,
     } = table.kind
     else {
         panic!("Expected TableKind::Table");
@@ -657,12 +679,16 @@ async fn test_create_table() {
     assert_eq!(static_properties, expected_properties);
     assert!(properties.iter().any(|(k, v)| k == "metadata-location"
         && v.starts_with("s3://icebergdata/demo/test_create_table/apple/ios/t1/metadata/")));
-    assert!(properties
-        .iter()
-        .any(|(k, v)| k == "metadata.last-updated-ms" && !v.is_empty()));
-    assert!(properties
-        .iter()
-        .any(|(k, v)| k == "metadata.table-uuid" && !v.is_empty()));
+    assert!(
+        properties
+            .iter()
+            .any(|(k, v)| k == "metadata.last-updated-ms" && !v.is_empty())
+    );
+    assert!(
+        properties
+            .iter()
+            .any(|(k, v)| k == "metadata.table-uuid" && !v.is_empty())
+    );
 
     assert_eq!(table.name, "t1".to_string());
     assert_eq!(table.catalog, Some("test".to_string()));
@@ -677,7 +703,6 @@ async fn test_create_table() {
     assert_eq!(partition_by, Vec::<CatalogPartitionField>::new());
     assert_eq!(sort_by, vec![]);
     assert_eq!(bucket_by, None);
-    assert_eq!(options, Vec::<(String, String)>::new());
     assert_eq!(columns.len(), 3);
     assert!(
         columns.contains(&sail_common_datafusion::catalog::TableColumnStatus {
@@ -687,6 +712,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: false,
             is_bucket: false,
             is_cluster: false,
@@ -700,6 +726,7 @@ async fn test_create_table() {
             comment: Some("meow".to_string()),
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: false,
             is_bucket: false,
             is_cluster: false,
@@ -713,6 +740,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: false,
             is_bucket: false,
             is_cluster: false,
@@ -732,10 +760,10 @@ async fn test_create_table() {
                 partition_by: vec![],
                 sort_by: vec![],
                 bucket_by: None,
-                if_not_exists: false,
-                replace: false,
-                options: vec![],
+                mode: CreateTableMode::Create,
                 properties: vec![],
+                is_external: true,
+                is_write_precondition: false,
             },
         )
         .await;
@@ -754,10 +782,10 @@ async fn test_create_table() {
                 partition_by: vec![],
                 sort_by: vec![],
                 bucket_by: None,
-                if_not_exists: true,
-                replace: false,
-                options: vec![],
+                mode: CreateTableMode::CreateIfNotExists,
                 properties: vec![],
+                is_external: true,
+                is_write_precondition: false,
             },
         )
         .await;
@@ -791,13 +819,14 @@ async fn test_create_table() {
                     },
                 ],
                 bucket_by: None,
-                if_not_exists: false,
-                replace: false,
-                options: vec![("key1".to_string(), "value1".to_string())],
+                mode: CreateTableMode::Create,
                 properties: vec![
+                    ("option.key1".to_string(), "value1".to_string()),
                     ("owner".to_string(), "mr. meow".to_string()),
                     ("team".to_string(), "data-eng".to_string()),
                 ],
+                is_external: true,
+                is_write_precondition: false,
             },
         )
         .await
@@ -812,8 +841,8 @@ async fn test_create_table() {
         partition_by,
         sort_by,
         bucket_by,
-        options,
         properties,
+        is_external: _,
     } = table.kind
     else {
         panic!("Expected TableKind::Table");
@@ -850,8 +879,8 @@ async fn test_create_table() {
         ascending: true,
     }));
     assert_eq!(bucket_by, None);
-    assert_eq!(options, vec![("key1".to_string(), "value1".to_string())]);
-    assert_eq!(properties.len(), 17);
+    assert_eq!(properties.len(), 18);
+    assert!(properties.contains(&("option.key1".to_string(), "value1".to_string())));
     assert!(properties.contains(&("owner".to_string(), "mr. meow".to_string())));
     assert!(properties.contains(&("team".to_string(), "data-eng".to_string())));
     assert_eq!(columns.len(), 3);
@@ -863,6 +892,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: false,
             is_bucket: false,
             is_cluster: false,
@@ -876,6 +906,7 @@ async fn test_create_table() {
             comment: Some("meow".to_string()),
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: false,
             is_bucket: false,
             is_cluster: false,
@@ -889,6 +920,7 @@ async fn test_create_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: true,
             is_bucket: false,
             is_cluster: false,
@@ -933,6 +965,7 @@ async fn test_get_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
         },
         CreateTableColumnOptions {
             name: "bar".to_string(),
@@ -941,6 +974,7 @@ async fn test_get_table() {
             comment: Some("meow".to_string()),
             default: None,
             generated_always_as: None,
+            identity: None,
         },
         CreateTableColumnOptions {
             name: "baz".to_string(),
@@ -949,6 +983,7 @@ async fn test_get_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
         },
     ];
 
@@ -980,13 +1015,14 @@ async fn test_get_table() {
                     },
                 ],
                 bucket_by: None,
-                if_not_exists: false,
-                replace: false,
-                options: vec![("key1".to_string(), "value1".to_string())],
+                mode: CreateTableMode::Create,
                 properties: vec![
+                    ("option.key1".to_string(), "value1".to_string()),
                     ("owner".to_string(), "mr. meow".to_string()),
                     ("team".to_string(), "data-eng".to_string()),
                 ],
+                is_external: true,
+                is_write_precondition: false,
             },
         )
         .await
@@ -1002,8 +1038,8 @@ async fn test_get_table() {
         partition_by,
         sort_by,
         bucket_by,
-        options,
         properties,
+        is_external: _,
     } = table.kind
     else {
         panic!("Expected TableKind::Table");
@@ -1045,21 +1081,26 @@ async fn test_get_table() {
             "write.parquet.compression-codec".to_string(),
             "zstd".to_string(),
         ),
+        ("option.key1".to_string(), "value1".to_string()),
         ("owner".to_string(), "mr. meow".to_string()),
         ("team".to_string(), "data-eng".to_string()),
     ];
     expected_properties.sort();
 
-    assert_eq!(properties.len(), 17);
+    assert_eq!(properties.len(), 18);
     assert_eq!(static_properties, expected_properties);
     assert!(properties.iter().any(|(k, v)| k == "metadata-location"
         && v.starts_with("s3://icebergdata/custom/path/meow/metadata/")));
-    assert!(properties
-        .iter()
-        .any(|(k, v)| k == "metadata.last-updated-ms" && !v.is_empty()));
-    assert!(properties
-        .iter()
-        .any(|(k, v)| k == "metadata.table-uuid" && !v.is_empty()));
+    assert!(
+        properties
+            .iter()
+            .any(|(k, v)| k == "metadata.last-updated-ms" && !v.is_empty())
+    );
+    assert!(
+        properties
+            .iter()
+            .any(|(k, v)| k == "metadata.table-uuid" && !v.is_empty())
+    );
 
     assert_eq!(table.name, "t2".to_string());
     assert_eq!(table.catalog, Some("test".to_string()));
@@ -1092,7 +1133,6 @@ async fn test_get_table() {
         ascending: true,
     }));
     assert_eq!(bucket_by, None);
-    assert_eq!(options, vec![("key1".to_string(), "value1".to_string())]);
     assert_eq!(columns.len(), 3);
     assert!(
         columns.contains(&sail_common_datafusion::catalog::TableColumnStatus {
@@ -1102,6 +1142,7 @@ async fn test_get_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: false,
             is_bucket: false,
             is_cluster: false,
@@ -1115,6 +1156,7 @@ async fn test_get_table() {
             comment: Some("meow".to_string()),
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: false,
             is_bucket: false,
             is_cluster: false,
@@ -1128,6 +1170,7 @@ async fn test_get_table() {
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
             is_partition: true,
             is_bucket: false,
             is_cluster: false,
@@ -1162,6 +1205,7 @@ async fn test_list_tables() {
         comment: None,
         default: None,
         generated_always_as: None,
+        identity: None,
     }];
 
     let tables = rest_catalog.list_tables(&ns).await.unwrap();
@@ -1180,10 +1224,10 @@ async fn test_list_tables() {
                 partition_by: vec![],
                 sort_by: vec![],
                 bucket_by: None,
-                if_not_exists: false,
-                replace: false,
-                options: vec![],
+                mode: CreateTableMode::Create,
                 properties: vec![],
+                is_external: true,
+                is_write_precondition: false,
             },
         )
         .await
@@ -1202,10 +1246,10 @@ async fn test_list_tables() {
                 partition_by: vec![],
                 sort_by: vec![],
                 bucket_by: None,
-                if_not_exists: false,
-                replace: false,
-                options: vec![],
+                mode: CreateTableMode::Create,
                 properties: vec![],
+                is_external: true,
+                is_write_precondition: false,
             },
         )
         .await
@@ -1252,6 +1296,7 @@ async fn test_drop_table() {
         comment: None,
         default: None,
         generated_always_as: None,
+        identity: None,
     }];
 
     rest_catalog
@@ -1267,10 +1312,10 @@ async fn test_drop_table() {
                 partition_by: vec![],
                 sort_by: vec![],
                 bucket_by: None,
-                if_not_exists: false,
-                replace: false,
-                options: vec![],
+                mode: CreateTableMode::Create,
                 properties: vec![],
+                is_external: true,
+                is_write_precondition: false,
             },
         )
         .await
@@ -1331,10 +1376,10 @@ async fn test_drop_table() {
                 partition_by: vec![],
                 sort_by: vec![],
                 bucket_by: None,
-                if_not_exists: false,
-                replace: false,
-                options: vec![],
+                mode: CreateTableMode::Create,
                 properties: vec![],
+                is_external: true,
+                is_write_precondition: false,
             },
         )
         .await
@@ -1441,9 +1486,11 @@ async fn test_create_view() {
     assert_eq!(properties.len(), 6);
     assert!(properties.iter().any(|(k, v)| k == "metadata-location"
         && v.starts_with("s3://icebergdata/demo/test_create_view/view1/metadata/")));
-    assert!(properties
-        .iter()
-        .any(|(k, v)| k == "metadata.view-uuid" && !v.is_empty()));
+    assert!(
+        properties
+            .iter()
+            .any(|(k, v)| k == "metadata.view-uuid" && !v.is_empty())
+    );
     assert_eq!(static_properties, expected_properties);
 
     assert_eq!(view.name, "view1".to_string());
@@ -1459,6 +1506,7 @@ async fn test_create_view() {
         comment: None,
         default: None,
         generated_always_as: None,
+        identity: None,
         is_partition: false,
         is_bucket: false,
         is_cluster: false,
@@ -1470,6 +1518,7 @@ async fn test_create_view() {
         comment: Some("important column".to_string()),
         default: None,
         generated_always_as: None,
+        identity: None,
         is_partition: false,
         is_bucket: false,
         is_cluster: false,
@@ -1547,6 +1596,7 @@ async fn test_create_view() {
         comment: None,
         default: None,
         generated_always_as: None,
+        identity: None,
         is_partition: false,
         is_bucket: false,
         is_cluster: false,
@@ -1558,6 +1608,7 @@ async fn test_create_view() {
         comment: Some("important column".to_string()),
         default: None,
         generated_always_as: None,
+        identity: None,
         is_partition: false,
         is_bucket: false,
         is_cluster: false,
@@ -1650,6 +1701,7 @@ async fn test_get_view() {
         comment: None,
         default: None,
         generated_always_as: None,
+        identity: None,
         is_partition: false,
         is_bucket: false,
         is_cluster: false,
@@ -1661,6 +1713,7 @@ async fn test_get_view() {
         comment: Some("meow".to_string()),
         default: None,
         generated_always_as: None,
+        identity: None,
         is_partition: false,
         is_bucket: false,
         is_cluster: false,
@@ -1827,6 +1880,7 @@ async fn create_partitioned_table(
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
         },
         CreateTableColumnOptions {
             name: "ts".to_string(),
@@ -1835,6 +1889,7 @@ async fn create_partitioned_table(
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
         },
         CreateTableColumnOptions {
             name: "name".to_string(),
@@ -1843,6 +1898,7 @@ async fn create_partitioned_table(
             comment: None,
             default: None,
             generated_always_as: None,
+            identity: None,
         },
     ];
 
@@ -1859,10 +1915,10 @@ async fn create_partitioned_table(
                 partition_by,
                 sort_by: vec![],
                 bucket_by: None,
-                if_not_exists: false,
-                replace: false,
-                options: vec![],
+                mode: CreateTableMode::Create,
                 properties: vec![],
+                is_external: true,
+                is_write_precondition: false,
             },
         )
         .await

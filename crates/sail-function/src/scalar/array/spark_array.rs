@@ -1,15 +1,15 @@
 /// [Credit]: <https://github.com/apache/datafusion/blob/c21d025df463ce623f9193c4b24d86141fce81ca/datafusion/functions-nested/src/make_array.rs>
 /// Spark defaults to DataType::Int32 while DataFusion defaults to DataType::Int64.
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    make_array, new_empty_array, new_null_array, Array, ArrayData, ArrayRef, Capacities,
-    GenericListArray, MutableArrayData, NullArray, OffsetSizeTrait,
+    Array, ArrayData, ArrayRef, Capacities, GenericListArray, MutableArrayData, NullArray,
+    OffsetSizeTrait, make_array, new_empty_array, new_null_array,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::utils::SingleRowListArrayBuilder;
-use datafusion_common::{plan_datafusion_err, plan_err, Result};
+use datafusion_common::{Result, plan_datafusion_err, plan_err};
 use datafusion_expr::type_coercion::binary::comparison_coercion;
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature,
@@ -43,10 +43,6 @@ impl SparkArray {
 }
 
 impl ScalarUDFImpl for SparkArray {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_array"
     }
@@ -79,13 +75,28 @@ impl ScalarUDFImpl for SparkArray {
             .map(|f| f.data_type())
             .cloned()
             .collect::<Vec<_>>();
-        let return_type = self.return_type(&data_types)?;
+        let contains_null = args.arg_fields.iter().any(|f| f.is_nullable());
+        let return_type = match self.return_type(&data_types)? {
+            DataType::List(field) => DataType::List(Arc::new(
+                field.as_ref().clone().with_nullable(contains_null),
+            )),
+            data_type => data_type,
+        };
         Ok(Arc::new(Field::new(self.name(), return_type, false)))
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs { args, .. } = args;
-        make_scalar_function(make_array_inner)(args.as_slice())
+        let ScalarFunctionArgs {
+            args, return_field, ..
+        } = args;
+        let value_nullable = match return_field.data_type() {
+            DataType::List(field) | DataType::LargeList(field) => field.is_nullable(),
+            _ => true,
+        };
+        let func = make_scalar_function(move |arrays| {
+            make_array_inner_with_nullable(arrays, value_nullable)
+        });
+        func(args.as_slice())
     }
 
     fn aliases(&self) -> &[String] {
@@ -96,6 +107,30 @@ impl ScalarUDFImpl for SparkArray {
         let first_type = arg_types.first().ok_or_else(|| {
             plan_datafusion_err!("Spark array function requires at least one argument")
         })?;
+        // Spark non-ANSI semantics: when mixing strings with other (non-null) types,
+        // coerce everything to string. DataFusion's `comparison_coercion` prefers
+        // numeric types, which would break Spark's string-wins behavior and cause
+        // runtime cast failures for values like `array('a', 1)`.
+        let is_string_like = |dt: &DataType| {
+            matches!(
+                dt,
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+            )
+        };
+        let has_string = arg_types.iter().any(is_string_like);
+        let has_non_string_non_null = arg_types
+            .iter()
+            .any(|dt| !is_string_like(dt) && !dt.is_null());
+        if has_string && has_non_string_non_null {
+            let string_type = if arg_types.iter().any(|dt| matches!(dt, DataType::LargeUtf8)) {
+                DataType::LargeUtf8
+            } else if arg_types.iter().any(|dt| matches!(dt, DataType::Utf8View)) {
+                DataType::Utf8View
+            } else {
+                DataType::Utf8
+            };
+            return Ok(vec![string_type; arg_types.len()]);
+        }
         let new_type = arg_types
             .iter()
             .skip(1)
@@ -134,6 +169,10 @@ pub(crate) fn empty_array_type() -> DataType {
 /// Constructs an array using the input `data` as `ArrayRef`.
 /// Returns a reference-counted `Array` instance result.
 pub fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
+    make_array_inner_with_nullable(arrays, true)
+}
+
+fn make_array_inner_with_nullable(arrays: &[ArrayRef], value_nullable: bool) -> Result<ArrayRef> {
     if arrays.is_empty() {
         let array = new_empty_array(&DataType::Null);
         return Ok(Arc::new(
@@ -157,12 +196,12 @@ pub fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
             let array = new_null_array(&DataType::Null, length);
             Ok(Arc::new(
                 SingleRowListArrayBuilder::new(array)
-                    .with_nullable(true)
+                    .with_nullable(value_nullable)
                     .build_list_array(),
             ))
         }
-        DataType::LargeList(..) => array_array::<i64>(arrays, data_type),
-        _ => array_array::<i32>(arrays, data_type),
+        DataType::LargeList(..) => array_array::<i64>(arrays, data_type, value_nullable),
+        _ => array_array::<i32>(arrays, data_type, value_nullable),
     }
 }
 
@@ -206,7 +245,11 @@ pub fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
 /// └──────────────┘   └──────────────┘        └─────────────────────────────┘
 ///      col1               col2                         output
 /// ```
-fn array_array<O: OffsetSizeTrait>(args: &[ArrayRef], data_type: DataType) -> Result<ArrayRef> {
+fn array_array<O: OffsetSizeTrait>(
+    args: &[ArrayRef],
+    data_type: DataType,
+    value_nullable: bool,
+) -> Result<ArrayRef> {
     // do not accept 0 arguments.
     if args.is_empty() {
         return plan_err!("Array requires at least one argument");
@@ -245,7 +288,7 @@ fn array_array<O: OffsetSizeTrait>(args: &[ArrayRef], data_type: DataType) -> Re
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::new(Field::new_list_field(data_type, true)),
+        Arc::new(Field::new_list_field(data_type, value_nullable)),
         OffsetBuffer::new(offsets.into()),
         make_array(data),
         None,

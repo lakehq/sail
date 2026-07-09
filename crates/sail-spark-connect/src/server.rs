@@ -15,12 +15,12 @@ use crate::spark::connect::interrupt_request::{Interrupt, InterruptType};
 use crate::spark::connect::release_execute_request::{Release, ReleaseAll, ReleaseUntil};
 use crate::spark::connect::spark_connect_service_server::SparkConnectService;
 use crate::spark::connect::{
-    config_request, plan, AddArtifactsRequest, AddArtifactsResponse, AnalyzePlanRequest,
-    AnalyzePlanResponse, ArtifactStatusesRequest, ArtifactStatusesResponse, CloneSessionRequest,
-    CloneSessionResponse, Command, ConfigRequest, ConfigResponse, ExecutePlanRequest,
-    FetchErrorDetailsRequest, FetchErrorDetailsResponse, InterruptRequest, InterruptResponse, Plan,
-    ReattachExecuteRequest, ReleaseExecuteRequest, ReleaseExecuteResponse, ReleaseSessionRequest,
-    ReleaseSessionResponse,
+    AddArtifactsRequest, AddArtifactsResponse, AnalyzePlanRequest, AnalyzePlanResponse,
+    ArtifactStatusesRequest, ArtifactStatusesResponse, CloneSessionRequest, CloneSessionResponse,
+    Command, ConfigRequest, ConfigResponse, ExecutePlanRequest, FetchErrorDetailsRequest,
+    FetchErrorDetailsResponse, InterruptRequest, InterruptResponse, Plan, ReattachExecuteRequest,
+    ReleaseExecuteRequest, ReleaseExecuteResponse, ReleaseSessionRequest, ReleaseSessionResponse,
+    config_request, plan,
 };
 
 #[derive(Debug)]

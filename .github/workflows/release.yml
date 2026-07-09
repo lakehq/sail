@@ -26,9 +26,9 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       is_pre_release: ${{ steps.version.outputs.pre_release }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -46,7 +46,7 @@ jobs:
 
       - name: Get Previous Version
         id: previous
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const script = require('./.github/workflows/release/get-previous-version.cjs');
@@ -83,7 +83,7 @@ jobs:
 
       - name: Generate Release Notes
         id: notes
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.version }}
           PREVIOUS_RELEASE_VERSION: ${{ steps.previous.outputs.version }}
@@ -102,7 +102,7 @@ jobs:
           cat "$output" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Release Notes
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-notes
           path: /tmp/release-notes
@@ -114,9 +114,9 @@ jobs:
     needs:
       - setup
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -127,7 +127,7 @@ jobs:
           args: --out dist
 
       - name: Upload sdist
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: package-sdist
           path: dist/*.tar.gz
@@ -149,19 +149,19 @@ jobs:
           - runner: ubuntu-24.04-x64-8-core
             target: aarch64
             os: linux
-          - runner: macos-15-intel
+          - runner: macos-26-intel
             target: x86_64
             os: macos
-          - runner: macos-14
+          - runner: macos-26
             target: aarch64
             os: macos
-          - runner: windows-2022
+          - runner: windows-2025
             target: x64
             os: windows
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -190,6 +190,7 @@ jobs:
           # This is to avoid unexpected PyPy wheels when building inside containers.
           # https://github.com/PyO3/maturin/issues/2852
           args: --release --out dist --interpreter python3.11
+          rustup-components: rustfmt
           # https://github.com/briansmith/ring/issues/1728
           # https://github.com/PyO3/maturin-action/issues/222
           manylinux: ${{ matrix.platform.target == 'aarch64' && matrix.platform.os == 'linux' && '2_24' || 'auto' }}
@@ -221,7 +222,7 @@ jobs:
             protoc --version
 
       - name: Upload Wheels
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: package-wheel-${{ matrix.platform.os }}-${{ matrix.platform.target }}
           path: dist/*.whl
@@ -250,19 +251,19 @@ jobs:
         platform:
           - runner: ubuntu-24.04-x64-8-core
           - runner: ubuntu-24.04-arm-8-core
-          - runner: macos-15-intel
-          - runner: macos-14
-          - runner: windows-2022
+          - runner: macos-26-intel
+          - runner: macos-26
+          - runner: windows-2025
     needs:
       - setup
       - build-sdist
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: package-sdist
           path: dist
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -311,20 +312,20 @@ jobs:
         platform:
           - runner: ubuntu-24.04
           - runner: ubuntu-24.04-arm
-          - runner: macos-15-intel
-          - runner: macos-14
-          - runner: windows-2022
+          - runner: macos-26-intel
+          - runner: macos-26
+          - runner: windows-2025
     needs:
       - setup
       - build-wheel
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: "package-wheel-*"
           path: dist
           merge-multiple: true
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -350,19 +351,21 @@ jobs:
       - test-sdist
       - test-wheel
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v7
         with:
           pattern: "package-*"
           path: dist
           merge-multiple: true
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
       - name: Show Release Artifacts
         shell: bash
-        run: |
-          find dist -name '*.tar.gz' -exec echo '{}' \; -exec tar -tvf '{}' \;
-          find dist -name '*.whl' -exec unzip -l '{}' \;
-          ls -lah dist
-          md5sum dist/*
+        run: scripts/release/review_packages.py --path dist >> "$GITHUB_STEP_SUMMARY"
 
   release-pypi:
     name: Release to PyPI
@@ -377,7 +380,7 @@ jobs:
       - setup
       - review
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           pattern: "package-*"
           path: dist
@@ -403,7 +406,7 @@ jobs:
       - release-pypi
     steps:
       - name: Download Release Notes
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: release-notes
           path: /tmp/release-notes

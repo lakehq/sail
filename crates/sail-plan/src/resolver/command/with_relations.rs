@@ -5,8 +5,8 @@ use datafusion_expr::{LogicalPlan, SubqueryAlias};
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
     /// Resolves a command `WithRelations` node by storing references in state, then resolving

@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use sail_common::spec;
@@ -8,7 +7,7 @@ use sail_sql_analyzer::parser::parse_data_type;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::proto::data_type_json::parse_spark_json_data_type;
-use crate::spark::connect::{data_type as sdt, DataType};
+use crate::spark::connect::{DataType, data_type as sdt};
 
 pub(crate) const DEFAULT_FIELD_NAME: &str = "value";
 
@@ -57,16 +56,15 @@ impl TryFrom<sdt::StructField> for spec::FieldRef {
         } = field;
         let data_type = data_type.required("data type")?;
         let data_type = spec::DataType::try_from(data_type)?;
-        let metadata: HashMap<String, String> = metadata
-            .map(|m| -> SparkResult<_> { Ok(serde_json::from_str(m.as_str())?) })
-            .transpose()?
+        let metadata = metadata
+            .filter(|m| !m.trim().is_empty())
+            .map(|m| vec![(spec::SPARK_METADATA_JSON_KEY.to_string(), m)])
             .unwrap_or_default();
         Ok(Arc::new(spec::Field {
             name,
             data_type,
             nullable,
-            // TODO: preserve metadata order in serde
-            metadata: metadata.into_iter().collect(),
+            metadata,
         }))
     }
 }
@@ -306,7 +304,7 @@ mod tests {
     use sail_common::spec;
     use sail_common::tests::test_gold_set;
 
-    use super::{parse_spark_data_type, DEFAULT_FIELD_NAME};
+    use super::{DEFAULT_FIELD_NAME, parse_spark_data_type};
     use crate::error::{SparkError, SparkResult};
 
     #[test]

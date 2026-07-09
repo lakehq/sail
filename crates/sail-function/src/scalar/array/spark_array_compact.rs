@@ -1,14 +1,13 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    as_large_list_array, as_list_array, Array, ArrayRef, BooleanArray, GenericListArray,
-    OffsetSizeTrait,
+    Array, ArrayRef, BooleanArray, GenericListArray, OffsetSizeTrait, as_large_list_array,
+    as_list_array,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::compute;
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{exec_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::functions_nested_utils::make_scalar_function;
@@ -38,10 +37,6 @@ impl SparkArrayCompact {
 }
 
 impl ScalarUDFImpl for SparkArrayCompact {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_array_compact"
     }

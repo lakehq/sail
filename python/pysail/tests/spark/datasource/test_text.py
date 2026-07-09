@@ -93,3 +93,25 @@ def test_text_read_projections(spark, sample_df, tmp_path):
     values = [r.value for r in projected_df.collect()]
     expected = [r["col1"] if r["col1"] is not None else "" for r in sample_df.collect()]
     assert sorted(values) == sorted(expected)
+
+
+def test_text_read_partition_columns(spark, tmp_path):
+    root = tmp_path / "text_partitioned"
+    (root / "country=us" / "city=sf").mkdir(parents=True)
+    (root / "country=us" / "city=ny").mkdir(parents=True)
+    (root / "country=ca" / "city=to").mkdir(parents=True)
+    (root / "country=us" / "city=sf" / "part-0.txt").write_text("golden\nbridge\n", encoding="utf-8")
+    (root / "country=us" / "city=ny" / "part-0.txt").write_text("hudson\n", encoding="utf-8")
+    (root / "country=ca" / "city=to" / "part-0.txt").write_text("harbour\n", encoding="utf-8")
+
+    read_df = spark.read.text(str(root)).select("value", "country", "city")
+
+    rows = {(row.value, row.country, row.city) for row in read_df.collect()}
+    assert rows == {
+        ("golden", "us", "sf"),
+        ("bridge", "us", "sf"),
+        ("hudson", "us", "ny"),
+        ("harbour", "ca", "to"),
+    }
+    expected_us_rows = 3
+    assert read_df.filter("country = 'us'").count() == expected_us_rows

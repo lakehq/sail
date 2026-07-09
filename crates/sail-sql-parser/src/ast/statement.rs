@@ -4,24 +4,28 @@ use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
 use crate::ast;
 use crate::ast::data_type::DataType;
 use crate::ast::expression::{BooleanLiteral, Expr, OrderDirection};
-use crate::ast::identifier::{table_ident, Ident, ObjectName};
+use crate::ast::identifier::{Ident, ObjectName, table_ident};
 use crate::ast::keywords::{
     Add, After, All, Alter, Always, Analyze, And, As, Buckets, By, Cache, Cascade, Catalog,
-    Catalogs, Change, Clear, Cluster, Clustered, Codegen, Collection, Column, Columns, Comment,
-    Compute, Cost, Create, Data, Database, Databases, Dbproperties, Default, Defined, Delete,
-    Delimited, Desc, Describe, Directory, Distributed, Drop, Escaped, Evolution, Exists, Explain,
-    Extended, External, Fields, Fileformat, First, For, Format, Formatted, From, Function,
-    Functions, Generated, Global, If, In, Inpath, Inputformat, Insert, Into, Is, Items, Keys, Lazy,
-    Like, Lines, Load, Local, Location, Map, Matched, Merge, Name, Noscan, Not, Null, On, Options,
-    Or, Outputformat, Overwrite, Partition, Partitioned, Partitions, Properties, Purge, Recover,
-    Refresh, Rename, Replace, Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show,
-    Sorted, Source, Statistics, Stored, Table, Tables, Target, Tblproperties, Temp, Temporary,
-    Terminated, Then, Time, To, Type, Uncache, Unset, Update, Use, Using, Values, Verbose, View,
-    Views, When, With, Zone,
+    Catalogs, Change, Check, Clear, Cluster, Clustered, Codegen, Collection, Column, Columns,
+    Comment, Compute, Constraint, Cost, Create, Data, Database, Databases, Dbproperties, Default,
+    Defined, Delete, Delimited, Desc, Describe, Directory, Distributed, Drop, Escaped, Evolution,
+    Exists, Explain, Extended, External, Fields, Fileformat, First, For, Format, Formatted, From,
+    Function, Functions, Generated, Global, Identity, If, In, Increment, Inpath, Inputformat,
+    Insert, Into, Is, Items, Keys, Lazy, Like, Lines, Load, Local, Location, Map, Matched, Merge,
+    Name, Namespace, Namespaces, Noscan, Not, Null, On, Options, Or, Outputformat, Overwrite,
+    Partition, Partitioned, Partitions, Properties, Purge, Recover, Refresh, Rename, Replace,
+    Restrict, Row, Schema, Schemas, Serde, Serdeproperties, Set, Show, Sorted, Source, Start,
+    Statistics, Stored, System, Table, Tables, Target, Tblproperties, Temp, Temporary, Terminated,
+    Then, Time, To, Type, Uncache, Unset, Update, Use, User, Using, Values, Verbose, View, Views,
+    When, With, Zone,
 };
 use crate::ast::literal::{IntegerLiteral, NumberLiteral, StringLiteral};
 use crate::ast::operator::{
-    Asterisk, Colon, Comma, Equals, ExclamationMark, LeftParenthesis, Minus, Plus, RightParenthesis,
+    Ampersand, Asterisk, Caret, Colon, Comma, DoubleEquals, DoubleGreaterThan, DoubleLessThan,
+    DoubleVerticalBar, Equals, ExclamationMark, GreaterThan, GreaterThanEquals, LeftParenthesis,
+    LessThan, LessThanEquals, LessThanGreaterThan, Minus, NotEquals, Percent, Plus,
+    RightParenthesis, Slash, Spaceship, Tilde, TripleGreaterThan, VerticalBar,
 };
 use crate::ast::query::{AliasClause, IdentList, Query, WhereClause};
 use crate::combinator::{boxed, compose, sequence, unit};
@@ -39,7 +43,7 @@ pub enum Statement {
     },
     UseDatabase {
         r#use: Use,
-        database: Either<Database, Schema>,
+        database: DatabaseKeyword,
         name: ObjectName,
     },
     UseCatalog {
@@ -49,27 +53,27 @@ pub enum Statement {
     },
     CreateDatabase {
         create: Create,
-        database: Either<Database, Schema>,
+        database: DatabaseKeyword,
         if_not_exists: Option<(If, Not, Exists)>,
         name: ObjectName,
         clauses: Vec<CreateDatabaseClause>,
     },
     AlterDatabase {
         alter: Alter,
-        database: Either<Database, Schema>,
+        database: DatabaseKeyword,
         name: ObjectName,
         operation: AlterDatabaseOperation,
     },
     DropDatabase {
         drop: Drop,
-        database: Either<Database, Schema>,
+        database: DatabaseKeyword,
         if_exists: Option<(If, Exists)>,
         name: ObjectName,
         specifier: Option<Either<Restrict, Cascade>>,
     },
     ShowDatabases {
         show: Show,
-        databases: Either<Databases, Schemas>,
+        databases: DatabasesKeyword,
         from: Option<(Either<From, In>, ObjectName)>,
         like: Option<(Option<Like>, StringLiteral)>,
     },
@@ -97,6 +101,7 @@ pub enum Statement {
     },
     ReplaceTable {
         replace: Replace,
+        external: Option<External>,
         table: Table,
         name: ObjectName,
         #[parser(function = |(_, _, e, d), o| compose((e, d), o))]
@@ -155,19 +160,8 @@ pub enum Statement {
     CreateView {
         create: Create,
         or_replace: Option<(Or, Replace)>,
-        global_temporary: Option<(Option<Global>, Either<Temp, Temporary>)>,
-        view: View,
-        if_not_exists: Option<(If, Not, Exists)>,
-        name: ObjectName,
-        columns: Option<(
-            LeftParenthesis,
-            Sequence<ViewColumn, Comma>,
-            RightParenthesis,
-        )>,
-        clauses: Vec<CreateViewClause>,
-        r#as: As,
-        #[parser(function = |(_, q, _, _), _| q)]
-        query: Query,
+        #[parser(function = |(_, q, _, d), o| compose((q, d), o))]
+        definition: CreateViewDefinition,
     },
     AlterView {
         alter: Alter,
@@ -202,7 +196,9 @@ pub enum Statement {
     },
     ShowFunctions {
         show: Show,
+        scope: Option<ShowFunctionScope>,
         functions: Functions,
+        clause: Option<ShowFunctionsClause>,
     },
     Explain {
         explain: Explain,
@@ -335,7 +331,7 @@ pub enum Statement {
         value: CommentValue,
     },
     CommentOnDatabase {
-        comment: (Comment, On, Either<Database, Schema>),
+        comment: (Comment, On, DatabaseKeyword),
         name: ObjectName,
         is: Is,
         value: CommentValue,
@@ -412,6 +408,44 @@ pub struct AsQueryClause {
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub struct ViewUsingClause {
+    pub using: Using,
+    pub format: Ident,
+    pub options: Option<(Options, PropertyList)>,
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub struct TemporaryViewClause {
+    pub global: Option<Global>,
+    pub temporary: Either<Temp, Temporary>,
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "(Query, DataType)")]
+pub enum CreateViewDefinition {
+    Query {
+        temporary: Option<TemporaryViewClause>,
+        view: View,
+        if_not_exists: Option<(If, Not, Exists)>,
+        name: ObjectName,
+        #[parser(function = |(_, d), o| compose(d, o))]
+        columns: Option<ViewColumnList>,
+        clauses: Vec<CreateViewClause>,
+        r#as: As,
+        #[parser(function = |(q, _), _| q)]
+        query: Query,
+    },
+    Using {
+        temporary: TemporaryViewClause,
+        view: View,
+        name: ObjectName,
+        #[parser(function = |(_, d), o| compose(d, o))]
+        columns: Option<ViewColumnList>,
+        using: ViewUsingClause,
+    },
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "(Expr, DataType)")]
 pub struct ColumnDefinitionList {
     pub left: LeftParenthesis,
@@ -435,6 +469,21 @@ pub struct ColumnDefinition {
 pub enum ColumnDefinitionOption {
     NotNull(Not, Null),
     Default(Default, #[parser(function = |e, _| e)] Expr),
+    GeneratedAlwaysIdentity(
+        Generated,
+        Always,
+        As,
+        Identity,
+        Option<TableColumnIdentityOptions>,
+    ),
+    GeneratedByDefaultIdentity(
+        Generated,
+        By,
+        Default,
+        As,
+        Identity,
+        Option<TableColumnIdentityOptions>,
+    ),
     Generated(
         Generated,
         Always,
@@ -444,6 +493,19 @@ pub enum ColumnDefinitionOption {
         RightParenthesis,
     ),
     Comment(Comment, StringLiteral),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub struct TableColumnIdentityOptions {
+    pub left: LeftParenthesis,
+    pub options: Vec<TableColumnIdentityOption>,
+    pub right: RightParenthesis,
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum TableColumnIdentityOption {
+    StartWith(Start, With, Option<Either<Plus, Minus>>, NumberLiteral),
+    IncrementBy(Increment, By, Option<Either<Plus, Minus>>, NumberLiteral),
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
@@ -508,6 +570,40 @@ pub enum CreateDatabaseClause {
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum DatabaseKeyword {
+    Database(Database),
+    Schema(Schema),
+    Namespace(Namespace),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum ShowFunctionScope {
+    All(All),
+    User(User),
+    System(System),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum ShowFunctionsClause {
+    NamespacePattern(Either<From, In>, ObjectName, Like, StringLiteral),
+    Namespace(Either<From, In>, ObjectName),
+    Pattern(Option<Like>, ShowFunctionsPattern),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum ShowFunctionsPattern {
+    String(StringLiteral),
+    Name(ObjectName),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum DatabasesKeyword {
+    Databases(Databases),
+    Schemas(Schemas),
+    Namespaces(Namespaces),
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
 #[parser(dependency = "(Expr, Query, DataType)")]
 pub enum CreateTableClause {
     /// The `PARTITIONED BY` clause for table.
@@ -522,7 +618,8 @@ pub enum CreateTableClause {
         Either<Clustered, Distributed>,
         By,
         IdentList,
-        Option<(Sorted, By, SortColumnList)>,
+        #[parser(function = |(e, q, d), o| compose((e, q, d), o).or_not())]
+        Option<SortColumnClause>,
         Into,
         IntegerLiteral,
         Buckets,
@@ -544,15 +641,28 @@ pub enum CreateTableClause {
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "(Expr, Query, DataType)")]
+pub struct SortColumnClause {
+    pub sorted: Sorted,
+    pub by: By,
+    #[parser(function = |(e, q, d), o| compose((e, q, d), o))]
+    pub columns: SortColumnList,
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "(Expr, Query, DataType)")]
 pub struct SortColumnList {
     pub left: LeftParenthesis,
+    #[parser(function = |(e, q, d), o| sequence(compose((e, q, d), o), unit(o)))]
     pub columns: Sequence<SortColumn, Comma>,
     pub right: RightParenthesis,
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "(Expr, Query, DataType)")]
 pub struct SortColumn {
-    pub column: Ident,
+    #[parser(function = |(e, q, d), o| compose((e, q, d), o))]
+    pub column: Expr,
     pub direction: Option<OrderDirection>,
 }
 
@@ -597,8 +707,21 @@ pub enum CreateViewClause {
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "DataType")]
+pub struct ViewColumnList {
+    pub left: LeftParenthesis,
+    #[parser(function = |d, o| sequence(compose(d, o), unit(o)))]
+    pub columns: Sequence<ViewColumn, Comma>,
+    pub right: RightParenthesis,
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+#[parser(dependency = "DataType")]
 pub struct ViewColumn {
     pub name: Ident,
+    #[parser(function = |d, o| compose(d, o))]
+    pub data_type: Option<DataType>,
+    pub not_null: Option<(Not, Null)>,
     pub comment: Option<(Comment, StringLiteral)>,
 }
 
@@ -623,6 +746,16 @@ pub enum AlterTableOperation {
         columns: Either<Column, Columns>,
         #[parser(function = |(e, d), o| compose((e, d), o))]
         items: ColumnAlterationList,
+    },
+    AddConstraint {
+        add: Add,
+        constraint: Constraint,
+        name: Ident,
+        check: Check,
+        left: LeftParenthesis,
+        #[parser(function = |(e, _), _| e)]
+        expression: Expr,
+        right: RightParenthesis,
     },
     DropColumns {
         drop: Drop,
@@ -947,7 +1080,7 @@ pub enum DescribeItem {
     Function {
         function: Function,
         extended: Option<Extended>,
-        item: Either<ObjectName, StringLiteral>,
+        item: DescribeFunctionName,
     },
     Catalog {
         catalog: Catalog,
@@ -955,7 +1088,7 @@ pub enum DescribeItem {
         item: ObjectName,
     },
     Database {
-        database: Either<Database, Schema>,
+        database: DatabaseKeyword,
         extended: Option<Extended>,
         item: ObjectName,
     },
@@ -982,6 +1115,35 @@ pub enum DescribeItem {
         #[parser(function = |(q, _), _| q)]
         item: Query,
     },
+}
+
+#[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]
+pub enum DescribeFunctionName {
+    Name(ObjectName),
+    String(StringLiteral),
+    TripleGreaterThan(TripleGreaterThan),
+    DoubleVerticalBar(DoubleVerticalBar),
+    DoubleGreaterThan(DoubleGreaterThan),
+    DoubleLessThan(DoubleLessThan),
+    GreaterThanEquals(GreaterThanEquals),
+    LessThanEquals(LessThanEquals),
+    LessThanGreaterThan(LessThanGreaterThan),
+    Spaceship(Spaceship),
+    NotEquals(NotEquals),
+    DoubleEquals(DoubleEquals),
+    ExclamationMark(ExclamationMark),
+    GreaterThan(GreaterThan),
+    LessThan(LessThan),
+    Plus(Plus),
+    Minus(Minus),
+    Asterisk(Asterisk),
+    Slash(Slash),
+    Percent(Percent),
+    Ampersand(Ampersand),
+    VerticalBar(VerticalBar),
+    Caret(Caret),
+    Tilde(Tilde),
+    Equals(Equals),
 }
 
 #[derive(Debug, Clone, TreeParser, TreeSyntax, TreeText)]

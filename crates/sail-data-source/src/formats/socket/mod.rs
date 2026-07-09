@@ -6,16 +6,17 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
-use datafusion::catalog::{Session, TableProvider};
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion::catalog::Session;
+use datafusion::datasource::provider_as_source;
+use datafusion::logical_expr::{LogicalPlan, TableSource};
+use datafusion_common::{Result, not_impl_err, plan_err};
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 use sail_common_datafusion::streaming::source::StreamSourceTableProvider;
 
-use crate::formats::socket::options::resolve_socket_read_options;
 pub use crate::formats::socket::reader::SocketSourceExec;
 use crate::formats::socket::reader::SocketStreamSource;
-pub use crate::options::gen::SocketReadOptions;
+use crate::options::ResolveOptions;
+pub use crate::options::r#gen::SocketReadOptions;
 
 /// Read test data from a TCP socket for testing purposes.
 /// The record batches contain a single string column corresponding to lines read from the socket.
@@ -28,19 +29,21 @@ impl TableFormat for SocketTableFormat {
         "socket"
     }
 
-    async fn create_provider(
+    async fn create_source(
         &self,
-        _ctx: &dyn Session,
+        ctx: &dyn Session,
         info: SourceInfo,
-    ) -> Result<Arc<dyn TableProvider>> {
+    ) -> Result<Arc<dyn TableSource>> {
         let SourceInfo {
             paths: _,
+            lakehouse_table: _,
             schema,
             constraints,
             partition_by,
             bucket_by,
             sort_order,
             options,
+            read_case_sensitive: _,
         } = info;
         if !constraints.deref().is_empty() {
             return plan_err!("the socket table format does not support constraints");
@@ -55,16 +58,14 @@ impl TableFormat for SocketTableFormat {
             Some(schema) if !schema.fields.is_empty() => schema,
             _ => Schema::new(vec![Arc::new(Field::new("value", DataType::Utf8, false))]),
         };
-        let options = resolve_socket_read_options(options)?;
+        let options = SocketReadOptions::resolve(ctx, options)?;
         let source = SocketStreamSource::try_new(options, Arc::new(schema))?;
-        Ok(Arc::new(StreamSourceTableProvider::new(Arc::new(source))))
+        Ok(provider_as_source(Arc::new(
+            StreamSourceTableProvider::new(Arc::new(source)),
+        )))
     }
 
-    async fn create_writer(
-        &self,
-        _ctx: &dyn Session,
-        _info: SinkInfo,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
+    async fn create_writer(&self, _ctx: &dyn Session, _info: SinkInfo) -> Result<LogicalPlan> {
         not_impl_err!("socket table format writer")
     }
 }

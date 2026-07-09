@@ -1,14 +1,13 @@
-use std::any::Any;
 use std::fmt::Formatter;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::common::{exec_datafusion_err, internal_err, Result};
+use datafusion::common::{Result, exec_datafusion_err, internal_err};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
-use futures::future::try_join_all;
 use futures::TryStreamExt;
+use futures::future::try_join_all;
 use log::warn;
 
 use crate::plan::ListListDisplay;
@@ -51,10 +50,6 @@ impl DisplayAs for ShuffleReadExec {
 impl ExecutionPlan for ShuffleReadExec {
     fn name(&self) -> &str {
         "ShuffleReadExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

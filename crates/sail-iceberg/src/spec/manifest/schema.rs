@@ -12,14 +12,14 @@
 
 use std::collections::BTreeMap;
 
+use apache_avro::Schema as AvroSchema;
 use apache_avro::schema::{
     ArraySchema, DecimalSchema, FixedSchema, Name, RecordField as AvroRecordField,
     RecordFieldOrder, RecordSchema,
 };
-use apache_avro::Schema as AvroSchema;
 use serde_json::{Number, Value as JsonValue};
 
-use crate::spec::avro_utils::{optional, record_field, FIELD_ID_ATTR};
+use crate::spec::avro_utils::{FIELD_ID_ATTR, optional, record_field};
 use crate::spec::types::{PrimitiveType, StructType, Type};
 
 const ELEMENT_ID: &str = "element-id";
@@ -28,6 +28,7 @@ const MAP_LOGICAL_TYPE: &str = "map";
 
 fn avro_primitive(prim: &PrimitiveType) -> AvroSchema {
     match prim {
+        PrimitiveType::Unknown => AvroSchema::Null,
         PrimitiveType::Boolean => AvroSchema::Boolean,
         PrimitiveType::Int => AvroSchema::Int,
         PrimitiveType::Long => AvroSchema::Long,
@@ -51,7 +52,45 @@ fn avro_primitive(prim: &PrimitiveType) -> AvroSchema {
             attributes: Default::default(),
             default: None,
         }),
-        PrimitiveType::Binary => AvroSchema::Bytes,
+        PrimitiveType::Binary
+        | PrimitiveType::Geometry { .. }
+        | PrimitiveType::Geography { .. } => AvroSchema::Bytes,
+        PrimitiveType::Variant => {
+            let fields = vec![
+                AvroRecordField {
+                    name: "metadata".to_string(),
+                    doc: None,
+                    default: None,
+                    aliases: None,
+                    order: RecordFieldOrder::Ignore,
+                    position: 0,
+                    schema: AvroSchema::Bytes,
+                    custom_attributes: BTreeMap::new(),
+                },
+                AvroRecordField {
+                    name: "value".to_string(),
+                    doc: None,
+                    default: None,
+                    aliases: None,
+                    order: RecordFieldOrder::Ignore,
+                    position: 1,
+                    schema: AvroSchema::Bytes,
+                    custom_attributes: BTreeMap::new(),
+                },
+            ];
+            AvroSchema::Record(RecordSchema {
+                #[expect(clippy::unwrap_used)]
+                name: Name::new("variant").unwrap_or_else(|_| Name::new("variant_record").unwrap()),
+                aliases: None,
+                doc: None,
+                fields,
+                lookup: BTreeMap::from([
+                    ("metadata".to_string(), 0_usize),
+                    ("value".to_string(), 1_usize),
+                ]),
+                attributes: Default::default(),
+            })
+        }
         PrimitiveType::Decimal { precision, scale } => AvroSchema::Decimal(DecimalSchema {
             precision: *precision as usize,
             scale: *scale as usize,
@@ -208,11 +247,7 @@ fn array_of_longs(element_id: i32, required: bool) -> AvroSchema {
         items: Box::new(AvroSchema::Long),
         attributes: attrs,
     });
-    if required {
-        array
-    } else {
-        optional(array)
-    }
+    if required { array } else { optional(array) }
 }
 
 fn array_of_ints(element_id: i32, required: bool) -> AvroSchema {
@@ -225,11 +260,64 @@ fn array_of_ints(element_id: i32, required: bool) -> AvroSchema {
         items: Box::new(AvroSchema::Int),
         attributes: attrs,
     });
-    if required {
-        array
-    } else {
-        optional(array)
+    if required { array } else { optional(array) }
+}
+
+fn int_key_map(
+    item_name: &str,
+    key_id: i32,
+    value_schema: AvroSchema,
+    value_id: i32,
+) -> AvroSchema {
+    let key_field = AvroRecordField {
+        name: "key".to_string(),
+        doc: None,
+        default: None,
+        aliases: None,
+        order: RecordFieldOrder::Ascending,
+        position: 0,
+        schema: AvroSchema::Int,
+        custom_attributes: BTreeMap::from([(
+            FIELD_ID_ATTR.to_string(),
+            JsonValue::Number(Number::from(key_id)),
+        )]),
+    };
+    let value_field = AvroRecordField {
+        name: "value".to_string(),
+        doc: None,
+        default: None,
+        aliases: None,
+        order: RecordFieldOrder::Ignore,
+        position: 1,
+        schema: value_schema,
+        custom_attributes: BTreeMap::from([(
+            FIELD_ID_ATTR.to_string(),
+            JsonValue::Number(Number::from(value_id)),
+        )]),
+    };
+    let fields = vec![key_field, value_field];
+    let mut lookup = BTreeMap::new();
+    for (idx, field) in fields.iter().enumerate() {
+        lookup.insert(field.name.clone(), idx);
     }
+    let item_record = AvroSchema::Record(RecordSchema {
+        #[expect(clippy::unwrap_used)]
+        name: Name::new(item_name).unwrap_or_else(|_| Name::new("map_item").unwrap()),
+        aliases: None,
+        doc: None,
+        fields,
+        lookup,
+        attributes: Default::default(),
+    });
+    let mut attrs = BTreeMap::new();
+    attrs.insert(
+        LOGICAL_TYPE.to_string(),
+        JsonValue::String(MAP_LOGICAL_TYPE.to_string()),
+    );
+    AvroSchema::Array(ArraySchema {
+        items: Box::new(item_record),
+        attributes: attrs,
+    })
 }
 
 pub fn data_file_schema_v2(partition_type: &StructType) -> AvroSchema {
@@ -245,6 +333,42 @@ pub fn data_file_schema_v2(partition_type: &StructType) -> AvroSchema {
         ),
         record_field("record_count", AvroSchema::Long, 103, true),
         record_field("file_size_in_bytes", AvroSchema::Long, 104, true),
+        record_field(
+            "column_sizes",
+            int_key_map("column_sizes_k117_v118", 117, AvroSchema::Long, 118),
+            108,
+            false,
+        ),
+        record_field(
+            "value_counts",
+            int_key_map("value_counts_k119_v120", 119, AvroSchema::Long, 120),
+            109,
+            false,
+        ),
+        record_field(
+            "null_value_counts",
+            int_key_map("null_value_counts_k121_v122", 121, AvroSchema::Long, 122),
+            110,
+            false,
+        ),
+        record_field(
+            "nan_value_counts",
+            int_key_map("nan_value_counts_k138_v139", 138, AvroSchema::Long, 139),
+            137,
+            false,
+        ),
+        record_field(
+            "lower_bounds",
+            int_key_map("lower_bounds_k126_v127", 126, AvroSchema::Bytes, 127),
+            125,
+            false,
+        ),
+        record_field(
+            "upper_bounds",
+            int_key_map("upper_bounds_k129_v130", 129, AvroSchema::Bytes, 130),
+            128,
+            false,
+        ),
         record_field("key_metadata", AvroSchema::Bytes, 131, false),
         // split_offsets: array<long> element-id 133
         AvroRecordField {

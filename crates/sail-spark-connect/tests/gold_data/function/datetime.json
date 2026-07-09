@@ -39,7 +39,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"session_window\"), Identifier(\"start\")])"
+        "failure": "not implemented: function: session_window"
       }
     },
     {
@@ -82,7 +82,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"session_window\"), Identifier(\"start\")])"
+        "failure": "not implemented: function: session_window"
       }
     },
     {
@@ -130,7 +130,7 @@
         }
       },
       "output": {
-        "failure": "invalid argument: found end at 47:50 expected identifier, or '('"
+        "success": "ok"
       }
     },
     {
@@ -174,7 +174,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"window\"), Identifier(\"start\")])"
+        "success": "ok"
       }
     },
     {
@@ -216,7 +216,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"window\"), Identifier(\"start\")])"
+        "success": "ok"
       }
     },
     {
@@ -458,7 +458,7 @@
         }
       },
       "output": {
-        "failure": "analysis error: cannot resolve attribute: ObjectName([Identifier(\"current_time\")])"
+        "failure": "analysis error: attribute ObjectName([Identifier(\"current_time\")]) is missing from the schema: cannot resolve attribute"
       }
     },
     {
@@ -2856,7 +2856,7 @@
         }
       },
       "output": {
-        "failure": "error in DataFusion: Execution error: Error parsing '12.10.05' as time. Tried formats: [\"HH.mm.ss\"]"
+        "success": "ok"
       }
     },
     {
@@ -3758,7 +3758,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_to_time"
+        "success": "ok"
       }
     },
     {
@@ -3780,7 +3780,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_to_time"
+        "success": "ok"
       }
     },
     {
@@ -3802,7 +3802,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: try_to_time"
+        "success": "ok"
       }
     },
     {

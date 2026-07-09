@@ -13,6 +13,12 @@ if TYPE_CHECKING:
 def normalize_plan_text(plan_text: str) -> str:
     """Normalize plan text by scrubbing non-deterministic fields."""
     text = textwrap.dedent(plan_text).strip()
+
+    # Add an explicit marker at the end of line for lines ending with whitespaces.
+    # Otherwise, PyYAML would force quoted style (instead of using multi-line style)
+    # for the text which makes the plan less readable.
+    text = re.sub(r"([ \t]+)(?=\n|$)", r"\1<eol>", text)
+
     # Make Windows paths match the regexes and snapshots early, so the
     # raw-text substitutions below also work cross-platform.
     text = text.replace("\\", "/")
@@ -97,9 +103,31 @@ def normalize_plan_text(plan_text: str) -> str:
         text,
         flags=re.IGNORECASE,
     )
+    # Normalize Sail default CTAS parquet filenames: <16-char random>_<partition>.<codec>.parquet
+    # Preserve partition number so multi-file plans stay distinguishable.
+    text = re.sub(
+        r"[A-Za-z0-9]{16}_(\d+)\.(zst|snappy|gzip|lz4|brotli)\.parquet",
+        r"<id>_\1.\2.parquet",
+        text,
+    )
 
     # Normalize file_groups ordering: group ordering is not guaranteed (e.g. parallel listing / async head).
     # TODO: consider sorting the file groups during planner.
+
+    # Normalize IcebergManifestScanExec metadata:
+    # - table_url with temp paths
+    # - snapshot_id (non-deterministic)
+    text = re.sub(
+        r"table_url=file://[^\s,]+",
+        r"table_url=file://<table_url>",
+        text,
+    )
+    text = re.sub(
+        r"snapshot_id=\d+",
+        r"snapshot_id=<snapshot_id>",
+        text,
+    )
+
     def _normalize_file_groups_block(match: re.Match[str]) -> str:
         block = match.group(0)  # e.g. "file_groups={2 groups: [[...], [...]]}"
         # Extract the group list between the first "[" and the last "]"

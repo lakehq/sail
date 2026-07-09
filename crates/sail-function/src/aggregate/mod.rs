@@ -15,7 +15,7 @@
 /// let scalar = match_string_type!(DataType::Utf8View, Some("hello".to_string()))?;
 /// ```
 macro_rules! match_string_type {
-    ($data_type:expr, $value:expr) => {
+    ($data_type:expr_2021, $value:expr_2021) => {
         match $data_type {
             DataType::Utf8View => Ok(ScalarValue::Utf8View($value)),
             DataType::LargeUtf8 => Ok(ScalarValue::LargeUtf8($value)),
@@ -40,7 +40,7 @@ macro_rules! match_string_type {
 /// let scalar = interval_none!(IntervalUnit::YearMonth)?;
 /// ```
 macro_rules! interval_none {
-    ($unit:expr) => {
+    ($unit:expr_2021) => {
         match $unit {
             datafusion::arrow::datatypes::IntervalUnit::YearMonth => {
                 Ok(ScalarValue::IntervalYearMonth(None))
@@ -57,7 +57,7 @@ macro_rules! interval_none {
 
 /// Macro to handle Duration type matching for None values
 macro_rules! duration_none {
-    ($unit:expr) => {
+    ($unit:expr_2021) => {
         match $unit {
             datafusion::arrow::datatypes::TimeUnit::Second => Ok(ScalarValue::DurationSecond(None)),
             datafusion::arrow::datatypes::TimeUnit::Millisecond => {
@@ -73,15 +73,23 @@ macro_rules! duration_none {
     };
 }
 
+pub mod bitmap_and_agg;
 pub mod bitmap_construct_agg;
 pub mod bitmap_or_agg;
+pub mod count_min_sketch;
+pub mod grouping_id;
 pub mod histogram_numeric;
+pub mod hll_sketch;
 pub mod kurtosis;
 pub mod max_min_by;
 pub mod mode;
 pub mod percentile;
 pub mod percentile_disc;
 pub mod percentile_disc_groups;
+pub mod product;
+pub mod regr;
+pub mod schema_of_variant_agg;
 pub mod skewness;
+pub mod theta_sketch;
 pub mod try_avg;
 pub mod utils;

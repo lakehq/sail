@@ -3,24 +3,26 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use datafusion::common::parquet_config::DFParquetWriterVersion;
-use datafusion::common::{internal_datafusion_err, Result};
+use datafusion::common::{Result, internal_datafusion_err};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::{SessionState, SessionStateBuilder};
 use datafusion::functions_aggregate::first_last::first_value_udaf;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_expr::registry::FunctionRegistry;
+use sail_catalog::provider::CatalogCacheManager;
 use sail_catalog_system::service::SystemTableService;
 use sail_common::config::{AppConfig, ExecutionMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_common_datafusion::session::activity::ActivityTracker;
 use sail_common_datafusion::session::job::{JobRunner, JobService};
+use sail_common_datafusion::session::repartition::RepartitionBufferConfig;
 use sail_delta_lake::session_extension::DeltaTableCache;
 use sail_execution::driver::DriverOptions;
 use sail_execution::job_runner::{ClusterJobRunner, LocalJobRunner};
 use sail_execution::worker_manager::{
     KubernetesWorkerManager, KubernetesWorkerManagerOptions, LocalWorkerManager,
 };
-use sail_physical_optimizer::{get_physical_optimizers, PhysicalOptimizerOptions};
+use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers};
 use sail_server::actor::{ActorHandle, ActorSystem};
 
 use crate::catalog::create_catalog_manager;
@@ -62,6 +64,7 @@ pub struct ServerSessionFactory {
     system: Arc<Mutex<ActorSystem>>,
     mutator: Box<dyn ServerSessionMutator>,
     runtime_env: RuntimeEnvFactory,
+    catalog_cache_manager: Arc<CatalogCacheManager>,
 }
 
 impl ServerSessionFactory {
@@ -78,6 +81,7 @@ impl ServerSessionFactory {
             system,
             mutator,
             runtime_env,
+            catalog_cache_manager: Arc::new(CatalogCacheManager::new()),
         }
     }
 }
@@ -114,13 +118,18 @@ impl ServerSessionFactory {
             .with_extension(Arc::new(create_catalog_manager(
                 &self.config,
                 self.runtime.clone(),
+                self.catalog_cache_manager.clone(),
             )?))
             .with_extension(Arc::new(ActivityTracker::new()))
             .with_extension(Arc::new(JobService::new(job_runner)))
+            .with_extension(Arc::new(RepartitionBufferConfig::new(
+                self.config.cluster.task_stream_buffer,
+            )))
             .with_extension(Arc::new(self.create_system_table_service(info)?))
             .with_extension(Arc::new(DeltaTableCache::default()));
         self.apply_execution_config(&mut config);
         self.apply_execution_parquet_config(&mut config);
+        self.apply_optimizer_config(&mut config);
         let config = self.mutator.mutate_config(config, info)?;
         Ok(config)
     }
@@ -139,6 +148,7 @@ impl ServerSessionFactory {
             .with_optimizer_rules(default_optimizer_rules())
             .with_physical_optimizer_rules(get_physical_optimizers(PhysicalOptimizerOptions {
                 enable_join_reorder: self.config.optimizer.enable_join_reorder,
+                ..Default::default()
             }))
             .with_query_planner(new_query_planner());
         let builder = self.mutator.mutate_state(builder, info)?;
@@ -210,6 +220,11 @@ impl ServerSessionFactory {
         execution.listing_table_ignore_subdirectory = false;
     }
 
+    fn apply_optimizer_config(&mut self, config: &mut SessionConfig) {
+        let optimizer = &mut config.options_mut().optimizer;
+        optimizer.expand_views_at_output = self.config.optimizer.expand_views_at_output;
+    }
+
     fn apply_execution_parquet_config(&mut self, config: &mut SessionConfig) {
         let parquet = &mut config.options_mut().execution.parquet;
 
@@ -250,5 +265,13 @@ impl ServerSessionFactory {
             .config
             .parquet
             .maximum_buffered_record_batches_per_stream;
+        parquet.content_defined_chunking.enabled =
+            self.config.parquet.content_defined_chunking.enabled;
+        parquet.content_defined_chunking.min_chunk_size =
+            self.config.parquet.content_defined_chunking.min_chunk_size;
+        parquet.content_defined_chunking.max_chunk_size =
+            self.config.parquet.content_defined_chunking.max_chunk_size;
+        parquet.content_defined_chunking.norm_level =
+            self.config.parquet.content_defined_chunking.norm_level;
     }
 }

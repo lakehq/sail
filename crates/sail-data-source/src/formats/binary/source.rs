@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::physical_expr::projection::ProjectionExprs;
@@ -68,10 +67,6 @@ impl FileSource for BinarySource {
         )?;
 
         Ok(opener)
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn table_schema(&self) -> &TableSchema {

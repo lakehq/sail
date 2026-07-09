@@ -1,9 +1,8 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
 use datafusion::functions::datetime::to_timestamp::ToTimestampSecondsFunc;
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::scalar::datetime::utils::validate_data_types;
@@ -28,10 +27,6 @@ impl SparkUnixTimestamp {
 }
 
 impl ScalarUDFImpl for SparkUnixTimestamp {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "spark_unix_timestamp"
     }

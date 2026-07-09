@@ -5,7 +5,7 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use crate::config::loader::{
-    deserialize_non_empty_string, deserialize_non_zero, deserialize_unknown_unit, ConfigDefinition,
+    ConfigDefinition, deserialize_non_empty_string, deserialize_non_zero, deserialize_unknown_unit,
 };
 use crate::config::observer::{
     serialize_non_empty_string, serialize_non_zero, serialize_optional_secret,
@@ -368,8 +368,18 @@ pub struct ParquetConfig {
     pub allow_single_file_parallelism: bool,
     pub maximum_parallel_row_group_writers: usize,
     pub maximum_buffered_record_batches_per_stream: usize,
+    pub content_defined_chunking: ParquetCdcConfig,
     pub file_statistics_cache: FileStatisticsCacheConfig,
     pub file_metadata_cache: FileMetadataCacheConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ParquetCdcConfig {
+    pub enabled: bool,
+    pub min_chunk_size: usize,
+    pub max_chunk_size: usize,
+    pub norm_level: i32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -412,6 +422,73 @@ pub enum CacheType {
     Session,
 }
 
+fn default_catalog_cache_type() -> CacheType {
+    CacheType::None
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CatalogCacheConfig {
+    #[serde(default = "default_catalog_cache_type")]
+    pub database_cache_type: CacheType,
+    #[serde(
+        default,
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub database_cache_size: Option<usize>,
+    #[serde(
+        default,
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub database_cache_ttl_secs: Option<u64>,
+    #[serde(default = "default_catalog_cache_type")]
+    pub table_cache_type: CacheType,
+    #[serde(
+        default,
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub table_cache_size: Option<usize>,
+    #[serde(
+        default,
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub table_cache_ttl_secs: Option<u64>,
+    #[serde(default = "default_catalog_cache_type")]
+    pub view_cache_type: CacheType,
+    #[serde(
+        default,
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub view_cache_size: Option<usize>,
+    #[serde(
+        default,
+        serialize_with = "serialize_non_zero",
+        deserialize_with = "deserialize_non_zero"
+    )]
+    pub view_cache_ttl_secs: Option<u64>,
+}
+
+impl Default for CatalogCacheConfig {
+    fn default() -> Self {
+        Self {
+            database_cache_type: CacheType::None,
+            database_cache_size: None,
+            database_cache_ttl_secs: None,
+            table_cache_type: CacheType::None,
+            table_cache_size: None,
+            table_cache_ttl_secs: None,
+            view_cache_type: CacheType::None,
+            view_cache_size: None,
+            view_cache_ttl_secs: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CatalogConfig {
@@ -429,6 +506,15 @@ pub struct CatalogConfig {
 #[serde(deny_unknown_fields)]
 pub struct OptimizerConfig {
     pub enable_join_reorder: bool,
+    pub expand_views_at_output: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OneLakeApi {
+    Delta,
+    #[default]
+    Iceberg,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -451,6 +537,8 @@ pub enum CatalogType {
         warehouse: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         prefix: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        namespace_separator: Option<String>,
         #[serde(
             skip_serializing_if = "Option::is_none",
             serialize_with = "serialize_optional_secret"
@@ -461,6 +549,8 @@ pub enum CatalogType {
             serialize_with = "serialize_optional_secret"
         )]
         bearer_access_token: Option<SecretString>,
+        #[serde(flatten)]
+        cache: CatalogCacheConfig,
     },
     Unity {
         name: String,
@@ -473,16 +563,22 @@ pub enum CatalogType {
             serialize_with = "serialize_optional_secret"
         )]
         token: Option<SecretString>,
+        #[serde(flatten)]
+        cache: CatalogCacheConfig,
     },
     #[serde(alias = "onelake")]
     OneLake {
         name: String,
         url: String,
+        #[serde(default)]
+        api: OneLakeApi,
         #[serde(
             skip_serializing_if = "Option::is_none",
             serialize_with = "serialize_optional_secret"
         )]
         bearer_token: Option<SecretString>,
+        #[serde(flatten)]
+        cache: CatalogCacheConfig,
     },
     Glue {
         name: String,
@@ -490,6 +586,20 @@ pub enum CatalogType {
         region: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         endpoint_url: Option<String>,
+        #[serde(flatten)]
+        cache: CatalogCacheConfig,
+    },
+    #[serde(alias = "hms", alias = "hive-metastore")]
+    HiveMetastore {
+        name: String,
+        uris: Vec<String>,
+        thrift_transport: Option<String>,
+        auth: Option<String>,
+        kerberos_service_principal: Option<String>,
+        min_sasl_qop: Option<String>,
+        connect_timeout_secs: Option<u64>,
+        #[serde(flatten)]
+        cache: CatalogCacheConfig,
     },
 }
 

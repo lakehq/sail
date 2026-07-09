@@ -16,6 +16,7 @@ from pyiceberg.partitioning import (
     YearTransform,
 )
 from pyiceberg.schema import Schema
+from pyiceberg.table import StaticTable
 from pyiceberg.types import DateType, IntegerType, NestedField, StringType, TimestampType
 
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
@@ -171,7 +172,7 @@ def test_partitioned_write_then_pyiceberg_read_all(spark, tmp_path, table_name, 
         df = spark.createDataFrame(rows, schema="number INT, letter STRING, ts TIMESTAMP, dt DATE")
         df.write.format("iceberg").mode("overwrite").save(table.location())
 
-        py_tbl = catalog.load_table(table_name)
+        py_tbl = StaticTable.from_metadata(table.location())
         actual = pyiceberg_to_pandas(py_tbl, sort_by="number")
 
         expected_letters = [
@@ -199,7 +200,7 @@ def test_partitioned_write_then_pyiceberg_read_all(spark, tmp_path, table_name, 
 def test_iceberg_partition_writes_sql(spark, tmp_path):
     warehouse = tmp_path / "warehouse"
     warehouse.mkdir(parents=True, exist_ok=True)
-    path_single = f"file://{warehouse / 'ice_single'}"
+    path_single = (warehouse / "ice_single").as_uri()
     spark.sql(
         f"""
         CREATE TABLE tmp_ice_single (
@@ -221,7 +222,7 @@ def test_iceberg_partition_writes_sql(spark, tmp_path):
     finally:
         spark.sql("DROP TABLE IF EXISTS tmp_ice_single")
 
-    path_multi = f"file://{warehouse / 'ice_multi'}"
+    path_multi = (warehouse / "ice_multi").as_uri()
     spark.sql(
         f"""
         CREATE TABLE tmp_ice_multi (

@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt;
 use std::fmt::Debug;
 use std::io::Write;
@@ -16,9 +15,9 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::sink::DataSink;
+use datafusion_datasource::write::BatchSerializer;
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 use datafusion_datasource::write::orchestration::spawn_writer_tasks_and_join;
-use datafusion_datasource::write::BatchSerializer;
 use object_store::ObjectStore;
 
 use crate::formats::text::TableTextOptions;
@@ -202,10 +201,6 @@ impl FileSink for TextSink {
 
 #[async_trait::async_trait]
 impl DataSink for TextSink {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> &SchemaRef {
         self.config.output_schema()
     }

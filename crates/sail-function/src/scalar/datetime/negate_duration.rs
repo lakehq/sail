@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{ArrayRef, AsArray};
@@ -6,7 +5,7 @@ use datafusion::arrow::datatypes::{
     DataType, DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
     DurationSecondType, TimeUnit,
 };
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -29,10 +28,6 @@ impl NegateDuration {
 }
 
 impl ScalarUDFImpl for NegateDuration {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "negate_duration"
     }
@@ -91,7 +86,7 @@ impl ScalarUDFImpl for NegateDuration {
                     other => {
                         return exec_err!(
                             "Unsupported data type {other:?} for function negate_duration"
-                        )
+                        );
                     }
                 };
                 Ok(ColumnarValue::Array(result))

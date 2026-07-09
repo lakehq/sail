@@ -15,8 +15,8 @@ def flight_uri():
 
     server = FlightSqlServer(ip="127.0.0.1", port=0)
     server.start(background=True)
-    addr = server.listening_address
-    uri = f"grpc://{addr[0]}:{addr[1]}"
+    host, port = server.listening_address
+    uri = f"grpc://{host}:{port}"
     yield uri
     server.stop()
 

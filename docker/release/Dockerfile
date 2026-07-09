@@ -1,5 +1,5 @@
 ARG RELEASE_TAG
-ARG RUST_VERSION=1.91.1
+ARG RUST_VERSION=1.95.0
 ARG RUST_PROFILE=release
 ARG RUSTFLAGS=""
 ARG PYSPARK_VERSION=4.1.1
@@ -26,7 +26,7 @@ RUN apt-get update && \
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs > /tmp/rustup-init && \
     chmod a+x /tmp/rustup-init && \
-    /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain ${RUST_VERSION}
+    /tmp/rustup-init -y --no-modify-path --profile default --default-toolchain ${RUST_VERSION}
 
 ENV PATH="/root/.cargo/bin:${PATH}"
 

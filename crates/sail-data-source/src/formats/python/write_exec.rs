@@ -10,7 +10,6 @@
 //! Each phase (write, commit, abort) deserializes a fresh Python writer from
 //! pickled bytes. Writers must not rely on in-memory state across the
 //! write -> commit/abort boundary.
-use std::any::Any;
 use std::fmt;
 use std::sync::Arc;
 
@@ -21,7 +20,7 @@ use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use futures::StreamExt;
 
 use super::executor::{InProcessExecutor, PythonExecutor};
@@ -120,12 +119,12 @@ impl ExecutionPlan for PythonDataSourceWriteExec {
         "PythonDataSourceWriteExec"
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn properties(&self) -> &Arc<PlanProperties> {
         &self.properties
+    }
+
+    fn benefits_from_input_partitioning(&self) -> Vec<bool> {
+        vec![false]
     }
 
     fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
@@ -258,7 +257,11 @@ mod tests {
 
         let new_exec = exec.clone().with_new_children(vec![input2]).unwrap();
 
-        assert!(new_exec.as_any().is::<PythonDataSourceWriteExec>());
+        assert!(
+            new_exec
+                .downcast_ref::<PythonDataSourceWriteExec>()
+                .is_some()
+        );
     }
 
     #[test]
@@ -272,17 +275,18 @@ mod tests {
         let exec = Arc::new(PythonDataSourceWriteExec::new(input, vec![], true));
 
         assert!(exec.clone().with_new_children(vec![]).is_err());
-        assert!(exec
-            .clone()
-            .with_new_children(vec![
-                Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
-                    schema.clone()
-                )),
-                Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
-                    schema.clone()
-                ))
-            ])
-            .is_err());
+        assert!(
+            exec.clone()
+                .with_new_children(vec![
+                    Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
+                        schema.clone()
+                    )),
+                    Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
+                        schema.clone()
+                    ))
+                ])
+                .is_err()
+        );
     }
 
     #[test]

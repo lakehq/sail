@@ -2,15 +2,15 @@ use std::str::FromStr;
 
 use datafusion::catalog::Session;
 use datafusion::parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
-use datafusion_common::config::{ParquetOptions, TableParquetOptions};
+use datafusion_common::config::{ParquetCdcOptions, ParquetOptions, TableParquetOptions};
 use datafusion_common::parquet_config::DFParquetWriterVersion;
 use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::error::{DataSourceError, DataSourceResult};
-use crate::options::gen::{
+use crate::options::r#gen::{
     ParquetReadOptions, ParquetReadPartialOptions, ParquetWriteOptions, ParquetWritePartialOptions,
 };
-use crate::options::{BuildPartialOptions, PartialOptions};
+use crate::options::{BuildPartialOptions, PartialOptions, ResolveOptions};
 use crate::utils::split_parquet_compression_string;
 
 fn check_parquet_level_is_none(codec: &str, level: &Option<u32>) -> DataSourceResult<()> {
@@ -27,6 +27,7 @@ fn check_parquet_level_is_none(codec: &str, level: &Option<u32>) -> DataSourceRe
 impl BuildPartialOptions<ParquetReadPartialOptions> for TableParquetOptions {
     fn build_partial_options(self) -> DataSourceResult<ParquetReadPartialOptions> {
         Ok(ParquetReadPartialOptions {
+            extension: None,
             enable_page_index: Some(self.global.enable_page_index),
             pruning: Some(self.global.pruning),
             skip_metadata: Some(self.global.skip_metadata),
@@ -46,6 +47,7 @@ impl BuildPartialOptions<ParquetReadPartialOptions> for TableParquetOptions {
 impl ParquetReadOptions {
     pub fn into_table_options(self) -> TableParquetOptions {
         let ParquetReadOptions {
+            extension: _,
             enable_page_index,
             pruning,
             skip_metadata,
@@ -105,6 +107,16 @@ impl BuildPartialOptions<ParquetWritePartialOptions> for TableParquetOptions {
             maximum_buffered_record_batches_per_stream: Some(
                 self.global.maximum_buffered_record_batches_per_stream,
             ),
+            content_defined_chunking_enabled: Some(self.global.content_defined_chunking.enabled),
+            content_defined_chunking_min_chunk_size: Some(
+                self.global.content_defined_chunking.min_chunk_size,
+            ),
+            content_defined_chunking_max_chunk_size: Some(
+                self.global.content_defined_chunking.max_chunk_size,
+            ),
+            content_defined_chunking_norm_level: Some(
+                self.global.content_defined_chunking.norm_level,
+            ),
         })
     }
 }
@@ -131,6 +143,10 @@ impl ParquetWriteOptions {
             allow_single_file_parallelism,
             maximum_parallel_row_group_writers,
             maximum_buffered_record_batches_per_stream,
+            content_defined_chunking_enabled,
+            content_defined_chunking_min_chunk_size,
+            content_defined_chunking_max_chunk_size,
+            content_defined_chunking_norm_level,
         } = self;
         let writer_version =
             DFParquetWriterVersion::from_str(writer_version.as_str()).map_err(|e| {
@@ -244,6 +260,12 @@ impl ParquetWriteOptions {
             allow_single_file_parallelism,
             maximum_parallel_row_group_writers,
             maximum_buffered_record_batches_per_stream,
+            content_defined_chunking: ParquetCdcOptions {
+                enabled: content_defined_chunking_enabled,
+                min_chunk_size: content_defined_chunking_min_chunk_size,
+                max_chunk_size: content_defined_chunking_max_chunk_size,
+                norm_level: content_defined_chunking_norm_level,
+            },
             ..ParquetOptions::default()
         };
         Ok(TableParquetOptions {
@@ -253,36 +275,34 @@ impl ParquetWriteOptions {
     }
 }
 
-pub fn resolve_parquet_read_options(
-    ctx: &dyn Session,
-    options: Vec<OptionLayer>,
-) -> DataSourceResult<ParquetReadOptions> {
-    let mut partial = ParquetReadPartialOptions::initialize();
-    partial.merge(
-        ctx.default_table_options()
-            .parquet
-            .build_partial_options()?,
-    );
-    for layer in options {
-        partial.merge(layer.build_partial_options()?);
+impl ResolveOptions for ParquetReadOptions {
+    fn resolve(ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
+        let mut partial = ParquetReadPartialOptions::initialize();
+        partial.merge(
+            ctx.default_table_options()
+                .parquet
+                .build_partial_options()?,
+        );
+        for layer in options {
+            partial.merge(layer.build_partial_options()?);
+        }
+        partial.finalize()
     }
-    partial.finalize()
 }
 
-pub fn resolve_parquet_write_options(
-    ctx: &dyn Session,
-    options: Vec<OptionLayer>,
-) -> DataSourceResult<ParquetWriteOptions> {
-    let mut partial = ParquetWritePartialOptions::initialize();
-    partial.merge(
-        ctx.default_table_options()
-            .parquet
-            .build_partial_options()?,
-    );
-    for layer in options {
-        partial.merge(layer.build_partial_options()?);
+impl ResolveOptions for ParquetWriteOptions {
+    fn resolve(ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
+        let mut partial = ParquetWritePartialOptions::initialize();
+        partial.merge(
+            ctx.default_table_options()
+                .parquet
+                .build_partial_options()?,
+        );
+        for layer in options {
+            partial.merge(layer.build_partial_options()?);
+        }
+        partial.finalize()
     }
-    partial.finalize()
 }
 
 #[cfg(test)]
@@ -292,10 +312,8 @@ mod tests {
     use datafusion::prelude::SessionContext;
     use datafusion_common::parquet_config::DFParquetWriterVersion;
 
-    use crate::formats::parquet::options::{
-        resolve_parquet_read_options, resolve_parquet_write_options,
-    };
-    use crate::options::option_list;
+    use crate::options::r#gen::{ParquetReadOptions, ParquetWriteOptions};
+    use crate::options::{ResolveOptions, option_list};
 
     #[test]
     fn test_resolve_parquet_read_options() -> datafusion_common::Result<()> {
@@ -315,7 +333,7 @@ mod tests {
             ("bloom_filter_on_read", "true"),
             ("max_predicate_cache_size", "0"),
         ]);
-        let options = resolve_parquet_read_options(&state, vec![kv])
+        let options = ParquetReadOptions::resolve(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options();
         assert!(options.global.enable_page_index);
@@ -334,17 +352,47 @@ mod tests {
         // metadata_size_hint = "0": parse_optional_non_zero_usize("0") returns None
         // which explicitly clears the value (overrides session default)
         let kv = option_list(&[("metadata_size_hint", "0")]);
-        let options = resolve_parquet_read_options(&state, vec![kv])
+        let options = ParquetReadOptions::resolve(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options();
         assert_eq!(options.global.metadata_size_hint, None);
 
         // metadata_size_hint = "": parse_optional_non_zero_usize("") returns None
         let kv = option_list(&[("metadata_size_hint", "")]);
-        let options = resolve_parquet_read_options(&state, vec![kv])
+        let options = ParquetReadOptions::resolve(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options();
         assert_eq!(options.global.metadata_size_hint, None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_parquet_read_extension() -> datafusion_common::Result<()> {
+        let ctx = SessionContext::default();
+        let state = ctx.state();
+
+        // default: no option layer → ".parquet"
+        let opts = ParquetReadOptions::resolve(&state, vec![option_list(&[])])
+            .map_err(datafusion_common::DataFusionError::from)?;
+        assert_eq!(opts.extension, ".parquet");
+
+        // snake_case override
+        let opts =
+            ParquetReadOptions::resolve(&state, vec![option_list(&[("extension", ".hive")])])
+                .map_err(datafusion_common::DataFusionError::from)?;
+        assert_eq!(opts.extension, ".hive");
+
+        // camelCase alias
+        let opts =
+            ParquetReadOptions::resolve(&state, vec![option_list(&[("fileExtension", ".pq")])])
+                .map_err(datafusion_common::DataFusionError::from)?;
+        assert_eq!(opts.extension, ".pq");
+
+        // empty string disables filtering
+        let opts = ParquetReadOptions::resolve(&state, vec![option_list(&[("extension", "")])])
+            .map_err(datafusion_common::DataFusionError::from)?;
+        assert_eq!(opts.extension, "");
 
         Ok(())
     }
@@ -364,14 +412,14 @@ mod tests {
 
         // When metadata_size_hint is not provided, the session value is used
         let kv = option_list(&[]);
-        let options = resolve_parquet_read_options(&state, vec![kv])
+        let options = ParquetReadOptions::resolve(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options();
         assert_eq!(options.global.metadata_size_hint, Some(123));
 
         // When metadata_size_hint = "0" is provided, the value is explicitly cleared
         let kv = option_list(&[("metadata_size_hint", "0")]);
-        let options = resolve_parquet_read_options(&state, vec![kv])
+        let options = ParquetReadOptions::resolve(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options();
         assert_eq!(options.global.metadata_size_hint, None);
@@ -404,8 +452,12 @@ mod tests {
             ("allow_single_file_parallelism", "false"),
             ("maximum_parallel_row_group_writers", "4"),
             ("maximum_buffered_record_batches_per_stream", "10"),
+            ("content_defined_chunking_enabled", "true"),
+            ("content_defined_chunking_min_chunk_size", "4096"),
+            ("content_defined_chunking_max_chunk_size", "8192"),
+            ("content_defined_chunking_norm_level", "-1"),
         ]);
-        let options = resolve_parquet_write_options(&state, vec![kv])
+        let options = ParquetWriteOptions::resolve(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;
@@ -437,13 +489,17 @@ mod tests {
             options.global.maximum_buffered_record_batches_per_stream,
             10
         );
+        assert!(options.global.content_defined_chunking.enabled);
+        assert_eq!(options.global.content_defined_chunking.min_chunk_size, 4096);
+        assert_eq!(options.global.content_defined_chunking.max_chunk_size, 8192);
+        assert_eq!(options.global.content_defined_chunking.norm_level, -1);
 
         let kv = option_list(&[
             ("column_index_truncate_length", "0"),
             ("statistics_truncate_length", "0"),
             ("encoding", ""),
         ]);
-        let options = resolve_parquet_write_options(&state, vec![kv])
+        let options = ParquetWriteOptions::resolve(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;
@@ -486,10 +542,42 @@ mod tests {
             .execution
             .parquet
             .encoding = Some("bit_packed".to_string());
+        state
+            .write()
+            .config_mut()
+            .options_mut()
+            .execution
+            .parquet
+            .content_defined_chunking
+            .enabled = true;
+        state
+            .write()
+            .config_mut()
+            .options_mut()
+            .execution
+            .parquet
+            .content_defined_chunking
+            .min_chunk_size = 4096;
+        state
+            .write()
+            .config_mut()
+            .options_mut()
+            .execution
+            .parquet
+            .content_defined_chunking
+            .max_chunk_size = 8192;
+        state
+            .write()
+            .config_mut()
+            .options_mut()
+            .execution
+            .parquet
+            .content_defined_chunking
+            .norm_level = -2;
         let state = ctx.state();
 
         let kv = option_list(&[]);
-        let options = resolve_parquet_write_options(&state, vec![kv])
+        let options = ParquetWriteOptions::resolve(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;
@@ -497,13 +585,17 @@ mod tests {
         assert_eq!(options.global.column_index_truncate_length, Some(32));
         assert_eq!(options.global.statistics_truncate_length, Some(99));
         assert_eq!(options.global.encoding, Some("bit_packed".to_string()));
+        assert!(options.global.content_defined_chunking.enabled);
+        assert_eq!(options.global.content_defined_chunking.min_chunk_size, 4096);
+        assert_eq!(options.global.content_defined_chunking.max_chunk_size, 8192);
+        assert_eq!(options.global.content_defined_chunking.norm_level, -2);
 
         let kv = option_list(&[
             ("column_index_truncate_length", "0"),
             ("statistics_truncate_length", "0"),
             ("encoding", ""),
         ]);
-        let options = resolve_parquet_write_options(&state, vec![kv])
+        let options = ParquetWriteOptions::resolve(&state, vec![kv])
             .map_err(datafusion_common::DataFusionError::from)?
             .into_table_options()
             .map_err(datafusion_common::DataFusionError::from)?;

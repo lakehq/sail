@@ -21,11 +21,12 @@
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use reqwest::header::{HeaderValue, ACCEPT};
+use reqwest::header::{ACCEPT, HeaderValue};
 use reqwest::{Client, Method, Response};
+use sail_catalog::credentials::CatalogCredentials;
 use sail_catalog::error::{CatalogError, CatalogResult};
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
 use crate::token::{TemporaryToken, TokenCache};
 
@@ -67,6 +68,24 @@ pub enum CredentialProvider {
 
     /// a credential to fetch expiring auth tokens
     TokenCredential(TokenCache<String>, Box<dyn TokenCredential>),
+}
+
+#[async_trait::async_trait]
+impl CatalogCredentials for CredentialProvider {
+    async fn retrieve(&self) -> CatalogResult<Option<String>> {
+        match self {
+            CredentialProvider::BearerToken(token) => Ok(Some(token.clone())),
+            CredentialProvider::TokenCredential(cache, cred) => {
+                let oauth_client = Client::builder().build().map_err(|e| {
+                    CatalogError::External(format!("Failed to build OAuth client: {e}"))
+                })?;
+                let token = cache
+                    .get_or_insert_with(|| cred.fetch_token(&oauth_client))
+                    .await?;
+                Ok(Some(token))
+            }
+        }
+    }
 }
 
 #[derive(Deserialize, Debug)]
@@ -424,12 +443,12 @@ impl ImdsManagedIdentityOAuthProvider {
             msi_res_id,
         }
     }
-}
 
-#[async_trait::async_trait]
-impl TokenCredential for ImdsManagedIdentityOAuthProvider {
-    /// Fetch a token
-    async fn fetch_token(&self, client: &Client) -> Result<TemporaryToken<String>, CatalogError> {
+    async fn fetch_token_with_identity_header(
+        &self,
+        client: &Client,
+        identity_header: Option<&str>,
+    ) -> Result<TemporaryToken<String>, CatalogError> {
         let resource_scope = format!("{DATABRICKS_RESOURCE_SCOPE}/.default");
         let mut query_items = vec![
             ("api-version", MSI_API_VERSION),
@@ -455,8 +474,8 @@ impl TokenCredential for ImdsManagedIdentityOAuthProvider {
             .header("metadata", "true")
             .query(&query_items);
 
-        if let Ok(val) = std::env::var(MSI_SECRET_ENV_KEY) {
-            builder = builder.header("x-identity-header", val);
+        if let Some(value) = identity_header {
+            builder = builder.header("x-identity-header", value);
         };
 
         let response = builder
@@ -473,6 +492,16 @@ impl TokenCredential for ImdsManagedIdentityOAuthProvider {
     }
 }
 
+#[async_trait::async_trait]
+impl TokenCredential for ImdsManagedIdentityOAuthProvider {
+    /// Fetch a token
+    async fn fetch_token(&self, client: &Client) -> Result<TemporaryToken<String>, CatalogError> {
+        let identity_header = std::env::var(MSI_SECRET_ENV_KEY).ok();
+        self.fetch_token_with_identity_header(client, identity_header.as_deref())
+            .await
+    }
+}
+
 #[expect(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
@@ -486,9 +515,6 @@ mod tests {
     #[tokio::test]
     async fn test_managed_identity() {
         let server = MockServer::start().await;
-
-        std::env::set_var(MSI_SECRET_ENV_KEY, "env-secret");
-
         let client = Client::new();
 
         Mock::given(method("GET"))
@@ -515,7 +541,10 @@ mod tests {
             Some(format!("{}/metadata/identity/oauth2/token", server.uri())),
         );
 
-        let token = credential.fetch_token(&client).await.unwrap();
+        let token = credential
+            .fetch_token_with_identity_header(&client, Some("env-secret"))
+            .await
+            .unwrap();
 
         assert_eq!(&token.token, "TOKEN");
     }

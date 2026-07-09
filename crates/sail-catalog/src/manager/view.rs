@@ -26,6 +26,7 @@ impl CatalogManager {
                     columns: view.columns().to_vec(),
                     comment: view.comment().clone(),
                     properties: view.properties().to_vec(),
+                    source: view.source().clone(),
                 },
             })
             .collect();
@@ -49,6 +50,7 @@ impl CatalogManager {
                     columns: view.columns().to_vec(),
                     comment: view.comment().clone(),
                     properties: view.properties().to_vec(),
+                    source: view.source().clone(),
                 },
             })
             .collect();
@@ -78,11 +80,17 @@ impl CatalogManager {
         database: &[T],
         pattern: Option<&str>,
     ) -> CatalogResult<Vec<TableStatus>> {
-        // See `list_tables_and_temporary_views()` for how the (global) temporary views are handled.
+        // See `list_tables_and_views()` for how the (global) temporary views are handled.
         let mut output = if self.state()?.is_global_temporary_view_database(database) {
             self.list_global_temporary_views(pattern).await?
         } else {
-            vec![]
+            // Catalogs like OneLake and open-source Unity return NotSupported here;
+            // treat that as "no views" so ListViews keeps working on those catalogs.
+            match self.list_views(database, pattern).await {
+                Ok(v) => v,
+                Err(CatalogError::NotSupported(_)) => vec![],
+                Err(e) => return Err(e),
+            }
         };
         output.extend(self.list_temporary_views(pattern).await?);
         Ok(output)
@@ -118,13 +126,13 @@ impl CatalogManager {
                 Err(e) => return Err(e),
             }
         }
-        if let [x @ .., name] = view {
-            if self.state()?.is_global_temporary_view_database(x) {
-                match GLOBAL_TEMPORARY_VIEW_MANAGER.drop_view(name.as_ref(), false) {
-                    Ok(_) => return Ok(()),
-                    Err(CatalogError::NotFound(_, _)) => {}
-                    Err(e) => return Err(e),
-                }
+        if let [x @ .., name] = view
+            && self.state()?.is_global_temporary_view_database(x)
+        {
+            match GLOBAL_TEMPORARY_VIEW_MANAGER.drop_view(name.as_ref(), false) {
+                Ok(_) => return Ok(()),
+                Err(CatalogError::NotFound(_, _)) => {}
+                Err(e) => return Err(e),
             }
         }
         self.drop_view(view, options).await
@@ -167,6 +175,7 @@ impl CatalogManager {
                 columns: view.columns().to_vec(),
                 comment: view.comment().clone(),
                 properties: view.properties().to_vec(),
+                source: view.source().clone(),
             },
         })
     }
@@ -182,6 +191,7 @@ impl CatalogManager {
                 columns: view.columns().to_vec(),
                 comment: view.comment().clone(),
                 properties: view.properties().to_vec(),
+                source: view.source().clone(),
             },
         })
     }

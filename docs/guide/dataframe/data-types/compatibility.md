@@ -235,6 +235,24 @@ The table below shows how Spark data types are mapped to Python types and Arrow 
       <td>Struct</td>
     </tr>
     <tr>
+      <td><strong>VariantType</strong></td>
+      <td><code>VariantType()</code></td>
+      <td>-</td>
+      <td>-</td>
+    </tr>
+    <tr>
+      <td><strong>GeographyType</strong></td>
+      <td><code>GeographyType(<em>srid</em>)</code></td>
+      <td>-</td>
+      <td>-</td>
+    </tr>
+    <tr>
+      <td><strong>GeometryType</strong></td>
+      <td><code>GeometryType(<em>srid</em>)</code></td>
+      <td>-</td>
+      <td>-</td>
+    </tr>
+    <tr>
       <td>-</td>
       <td>-</td>
       <td>-</td>

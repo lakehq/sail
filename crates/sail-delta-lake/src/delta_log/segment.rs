@@ -6,12 +6,13 @@ use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
 
 use super::timestamps::version_uses_in_commit_timestamps;
 use super::{list_delta_log_entries_from, read_last_checkpoint_version_from_store};
+use crate::delta_log::LogStore;
+use crate::snapshot::{CatalogManagedCommitSet, catalog_managed_commit_path};
 use crate::spec::{
+    DeltaError, DeltaResult, DomainMetadata, Metadata, Protocol, Transaction, VersionChecksum,
     checksum_path, parse_checkpoint_version, parse_checksum_version, parse_commit_version,
-    parse_compacted_json_versions, DeltaError, DeltaResult, DomainMetadata, Metadata, Protocol,
-    Transaction, VersionChecksum,
+    parse_compacted_json_versions,
 };
-use crate::storage::LogStore;
 
 const CHECKSUM_LOOKBACK_WINDOW: i64 = 100;
 
@@ -49,6 +50,7 @@ pub(crate) struct LogSegmentResolver<'a> {
     log_store: &'a dyn LogStore,
     target_version: i64,
     replay_hint: Option<&'a ReplayedTableHeader>,
+    catalog_managed_commits: Option<&'a CatalogManagedCommitSet>,
 }
 
 impl<'a> LogSegmentResolver<'a> {
@@ -56,19 +58,64 @@ impl<'a> LogSegmentResolver<'a> {
         log_store: &'a dyn LogStore,
         target_version: i64,
         replay_hint: Option<&'a ReplayedTableHeader>,
+        catalog_managed_commits: Option<&'a CatalogManagedCommitSet>,
     ) -> Self {
         Self {
             log_store,
             target_version,
             replay_hint,
+            catalog_managed_commits,
         }
+    }
+
+    fn has_catalog_managed_commits_in_range(&self, start_version: i64, end_version: i64) -> bool {
+        self.catalog_managed_commits
+            .map(|commits| {
+                commits
+                    .commits
+                    .iter()
+                    .any(|commit| commit.version >= start_version && commit.version <= end_version)
+            })
+            .unwrap_or(false)
+    }
+
+    async fn resolve_catalog_managed_commit_files(
+        &self,
+        store: Arc<dyn ObjectStore>,
+        start_version: i64,
+        end_version: i64,
+    ) -> DeltaResult<Vec<(i64, ObjectMeta)>> {
+        let Some(commits) = self.catalog_managed_commits else {
+            return Ok(Vec::new());
+        };
+
+        let mut files = Vec::new();
+        for commit in commits
+            .commits
+            .iter()
+            .filter(|commit| commit.version >= start_version && commit.version <= end_version)
+        {
+            let path = catalog_managed_commit_path(&commit.file_name);
+            let mut meta = store.head(&path).await.map_err(|e| {
+                DeltaError::generic(format!(
+                    "Catalog-managed Delta commit file `{path}` for version {} is not readable: {e}",
+                    commit.version
+                ))
+            })?;
+            meta.location = path;
+            files.push((commit.version, meta));
+        }
+        files.sort_by_key(|(version, _)| *version);
+        Ok(files)
     }
 
     pub(crate) async fn resolve_for_header(&self) -> DeltaResult<ResolvedLogSegment> {
         let version = self.target_version;
 
         let store = self.log_store.object_store(None);
-        if let Some(header) = try_read_checksum_header(store.clone(), version).await {
+        if !self.has_catalog_managed_commits_in_range(0, version)
+            && let Some(header) = try_read_checksum_header(store.clone(), version).await
+        {
             debug!("crc-header: exact checksum hit target_version={version}");
             return Ok(ResolvedLogSegment::ExactChecksum { header });
         }
@@ -157,8 +204,15 @@ impl<'a> LogSegmentResolver<'a> {
                     .into_iter()
                     .filter(|(v, _)| *v >= start_version && *v <= version)
                     .collect();
+                let catalog_commit_files = self
+                    .resolve_catalog_managed_commit_files(store.clone(), start_version, version)
+                    .await?;
                 let compaction_files =
                     filter_compactions_for_range(&all_compactions, start_version, version);
+                let compaction_files =
+                    filter_compactions_for_catalog_commits(compaction_files, &catalog_commit_files);
+                let commit_files =
+                    merge_catalog_managed_commits(commit_files, catalog_commit_files);
                 let (commit_files, compaction_files) =
                     resolve_compactions(commit_files, compaction_files);
                 return Ok(ResolvedLogSegment::FullReplay {
@@ -196,8 +250,14 @@ impl<'a> LogSegmentResolver<'a> {
             (None, commits, start)
         };
 
+        let catalog_commit_files = self
+            .resolve_catalog_managed_commit_files(store.clone(), start_version, version)
+            .await?;
         let compaction_files =
             filter_compactions_for_range(&all_compactions, start_version, version);
+        let compaction_files =
+            filter_compactions_for_catalog_commits(compaction_files, &catalog_commit_files);
+        let commit_files = merge_catalog_managed_commits(commit_files, catalog_commit_files);
         let (commit_files, compaction_files) = resolve_compactions(commit_files, compaction_files);
 
         validate_commit_contiguity_with_compactions(
@@ -226,7 +286,7 @@ impl<'a> LogSegmentResolver<'a> {
             .unwrap_or(0);
 
         let (_, checkpoint, all_commits, all_compactions) =
-            list_log_files(store, last_cp_hint_version, version).await?;
+            list_log_files(store.clone(), last_cp_hint_version, version).await?;
 
         let start_version = match &checkpoint {
             Some(cp_meta) => cp_meta_version(cp_meta)?.saturating_add(1),
@@ -236,8 +296,14 @@ impl<'a> LogSegmentResolver<'a> {
             .into_iter()
             .filter(|(v, _)| *v >= start_version && *v <= version)
             .collect();
+        let catalog_commit_files = self
+            .resolve_catalog_managed_commit_files(store.clone(), start_version, version)
+            .await?;
         let compaction_files =
             filter_compactions_for_range(&all_compactions, start_version, version);
+        let compaction_files =
+            filter_compactions_for_catalog_commits(compaction_files, &catalog_commit_files);
+        let commit_files = merge_catalog_managed_commits(commit_files, catalog_commit_files);
         let (commit_files, compaction_files) = resolve_compactions(commit_files, compaction_files);
         validate_commit_contiguity_with_compactions(
             &commit_files,
@@ -390,10 +456,10 @@ pub(crate) async fn list_log_files(
         files.remove(0)
     });
 
-    commit_candidates.sort_by(|(av, _), (bv, _)| av.cmp(bv));
+    commit_candidates.sort_by_key(|(av, _)| *av);
     checksum_candidates.sort_by(|(av, _), (bv, _)| bv.cmp(av));
     // Sort compaction candidates by start_version (ascending).
-    compaction_candidates.sort_by(|((a_start, _), _), ((b_start, _), _)| a_start.cmp(b_start));
+    compaction_candidates.sort_by_key(|((a_start, _), _)| *a_start);
 
     Ok((
         checksum_candidates,
@@ -445,6 +511,34 @@ fn filter_compactions_for_range(
         .collect()
 }
 
+fn merge_catalog_managed_commits(
+    commit_files: Vec<(i64, ObjectMeta)>,
+    catalog_commit_files: Vec<(i64, ObjectMeta)>,
+) -> Vec<(i64, ObjectMeta)> {
+    let mut by_version = commit_files.into_iter().collect::<BTreeMap<_, _>>();
+    for (version, meta) in catalog_commit_files {
+        by_version.insert(version, meta);
+    }
+    by_version.into_iter().collect()
+}
+
+fn filter_compactions_for_catalog_commits(
+    compaction_files: Vec<((i64, i64), ObjectMeta)>,
+    catalog_commit_files: &[(i64, ObjectMeta)],
+) -> Vec<((i64, i64), ObjectMeta)> {
+    if catalog_commit_files.is_empty() {
+        return compaction_files;
+    }
+    compaction_files
+        .into_iter()
+        .filter(|((start, end), _)| {
+            !catalog_commit_files
+                .iter()
+                .any(|(version, _)| version >= start && version <= end)
+        })
+        .collect()
+}
+
 /// Resolve which compaction files to use, removing covered individual commits.
 /// Returns the remaining commit files and the selected compaction files.
 #[expect(clippy::type_complexity)]
@@ -465,10 +559,10 @@ fn resolve_compactions(
 
     for ((start, end), meta) in compaction_files {
         // Skip if this compaction overlaps with an already-selected one.
-        if let Some(boundary) = covered_up_to {
-            if end >= boundary {
-                continue;
-            }
+        if let Some(boundary) = covered_up_to
+            && end >= boundary
+        {
+            continue;
         }
         selected_compactions.push(((start, end), meta));
         covered_up_to = Some(start);
@@ -483,7 +577,7 @@ fn resolve_compactions(
     commit_files.retain(|(v, _)| !is_covered(*v));
 
     // Sort selected compactions by start_version ascending for ordered replay.
-    selected_compactions.sort_by(|((a_start, _), _), ((b_start, _), _)| a_start.cmp(b_start));
+    selected_compactions.sort_by_key(|((a_start, _), _)| *a_start);
 
     (commit_files, selected_compactions)
 }
@@ -656,6 +750,121 @@ mod tests {
             e_tag: None,
             version: None,
         }
+    }
+
+    fn dummy_meta_path(path: &str) -> ObjectMeta {
+        use object_store::path::Path;
+
+        ObjectMeta {
+            location: Path::from(path),
+            last_modified: chrono::Utc::now(),
+            size: 0,
+            e_tag: None,
+            version: None,
+        }
+    }
+
+    #[test]
+    fn catalog_managed_commit_path_normalizes_uc_filenames() {
+        assert_eq!(
+            catalog_managed_commit_path("00000000000000000001.uuid.json").as_ref(),
+            "_delta_log/_staged_commits/00000000000000000001.uuid.json"
+        );
+        assert_eq!(
+            catalog_managed_commit_path("_staged_commits/00000000000000000001.uuid.json").as_ref(),
+            "_delta_log/_staged_commits/00000000000000000001.uuid.json"
+        );
+        assert_eq!(
+            catalog_managed_commit_path(
+                "_delta_log/_staged_commits/00000000000000000001.uuid.json"
+            )
+            .as_ref(),
+            "_delta_log/_staged_commits/00000000000000000001.uuid.json"
+        );
+        assert_eq!(
+            catalog_managed_commit_path(
+                "/tmp/table/_delta_log/_staged_commits/00000000000000000001.uuid.json"
+            )
+            .as_ref(),
+            "_delta_log/_staged_commits/00000000000000000001.uuid.json"
+        );
+    }
+
+    #[test]
+    fn catalog_managed_commits_override_published_files_and_sort_by_version() {
+        let published_v1 = dummy_meta_path("_delta_log/00000000000000000001.json");
+        let published_v2 = dummy_meta_path("_delta_log/00000000000000000002.json");
+        let staged_v2 =
+            dummy_meta_path("_delta_log/_staged_commits/00000000000000000002.uuid.json");
+        let staged_v3 =
+            dummy_meta_path("_delta_log/_staged_commits/00000000000000000003.uuid.json");
+
+        let merged = merge_catalog_managed_commits(
+            vec![(2, published_v2), (1, published_v1.clone())],
+            vec![(3, staged_v3.clone()), (2, staged_v2.clone())],
+        );
+
+        assert_eq!(
+            merged
+                .iter()
+                .map(|(version, _)| *version)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert_eq!(merged[0].1.location, published_v1.location);
+        assert_eq!(merged[1].1.location, staged_v2.location);
+        assert_eq!(merged[2].1.location, staged_v3.location);
+    }
+
+    #[test]
+    fn catalog_managed_commits_remove_overlapping_compactions() {
+        let compactions = vec![
+            (
+                (0, 3),
+                dummy_meta_path(
+                    "_delta_log/00000000000000000000.00000000000000000003.compacted.json",
+                ),
+            ),
+            (
+                (4, 5),
+                dummy_meta_path(
+                    "_delta_log/00000000000000000004.00000000000000000005.compacted.json",
+                ),
+            ),
+        ];
+        let catalog_commits = vec![(
+            2,
+            dummy_meta_path("_delta_log/_staged_commits/00000000000000000002.uuid.json"),
+        )];
+
+        let filtered = filter_compactions_for_catalog_commits(compactions, &catalog_commits);
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].0, (4, 5));
+    }
+
+    #[test]
+    fn catalog_managed_compaction_removal_exposes_missing_versions() {
+        let commit_files = merge_catalog_managed_commits(
+            vec![(0, dummy_meta(0)), (1, dummy_meta(1))],
+            vec![(
+                2,
+                dummy_meta_path("_delta_log/_staged_commits/00000000000000000002.uuid.json"),
+            )],
+        );
+        let compactions = vec![(
+            (0, 3),
+            dummy_meta_path("_delta_log/00000000000000000000.00000000000000000003.compacted.json"),
+        )];
+        let catalog_commits = vec![(
+            2,
+            dummy_meta_path("_delta_log/_staged_commits/00000000000000000002.uuid.json"),
+        )];
+        let compactions = filter_compactions_for_catalog_commits(compactions, &catalog_commits);
+
+        let err = validate_commit_contiguity_with_compactions(&commit_files, &compactions, 0, 3)
+            .unwrap_err();
+        assert!(err.to_string().contains("Missing commit file"));
     }
 
     #[test]

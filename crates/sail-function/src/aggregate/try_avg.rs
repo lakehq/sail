@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::fmt::{Debug, Formatter};
 
 use datafusion::arrow::array::{
@@ -9,10 +8,10 @@ use datafusion::arrow::datatypes::{
     DataType, Decimal128Type, Field, FieldRef, Int64Type, IntervalUnit, IntervalYearMonthType,
 };
 use datafusion_common::arrow::datatypes::Float64Type;
-use datafusion_common::{downcast_value, DataFusionError, ScalarValue};
+use datafusion_common::{DataFusionError, ScalarValue, downcast_value};
+use datafusion_expr::AggregateUDFImpl;
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
-use datafusion_expr::AggregateUDFImpl;
 use datafusion_expr_common::accumulator::Accumulator;
 use datafusion_expr_common::signature::{Signature, Volatility};
 
@@ -142,11 +141,11 @@ impl TryAvgAccumulator {
                     }
                 },
             };
-            if let Some(sum) = self.sum_dec128 {
-                if exceeds_decimal128_precision(sum, p) {
-                    self.failed = true;
-                    return;
-                }
+            if let Some(sum) = self.sum_dec128
+                && exceeds_decimal128_precision(sum, p)
+            {
+                self.failed = true;
+                return;
             }
             self.inc_count();
             if self.failed {
@@ -239,12 +238,11 @@ impl TryAvgAccumulator {
                         total.checked_sub(half)
                     };
 
-                    if let Some(adj) = adjusted {
-                        if let Some(avg) = adj.checked_div(denom) {
-                            if fits_i32(avg) {
-                                return ScalarValue::IntervalYearMonth(Some(avg as i32));
-                            }
-                        }
+                    if let Some(adj) = adjusted
+                        && let Some(avg) = adj.checked_div(denom)
+                        && fits_i32(avg)
+                    {
+                        return ScalarValue::IntervalYearMonth(Some(avg as i32));
                     }
                     ScalarValue::IntervalYearMonth(None)
                 } else {
@@ -290,7 +288,7 @@ impl Accumulator for TryAvgAccumulator {
             ref dt => {
                 return Err(DataFusionError::Execution(format!(
                     "try_avg: type not supported update_batch: {dt:?}"
-                )))
+                )));
             }
         }
         Ok(())
@@ -426,7 +424,7 @@ impl Accumulator for TryAvgAccumulator {
             ref dt => {
                 return Err(DataFusionError::Execution(format!(
                     "try_avg: type not supported in merge_batch: {dt:?}"
-                )))
+                )));
             }
         }
 
@@ -452,10 +450,6 @@ fn exceeds_decimal128_precision(sum: i128, p: u8) -> bool {
 }
 
 impl AggregateUDFImpl for TryAvgFunction {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "try_avg"
     }
@@ -480,7 +474,7 @@ impl AggregateUDFImpl for TryAvgFunction {
             ref other => {
                 return Err(DataFusionError::Plan(format!(
                     "try_avg: unsupported type: {other:?}"
-                )))
+                )));
             }
         };
 
@@ -533,7 +527,7 @@ impl AggregateUDFImpl for TryAvgFunction {
             other => {
                 return Err(DataFusionError::Plan(format!(
                     "try_avg: unsupported type: {other:?}"
-                )))
+                )));
             }
         };
         Ok(vec![coerced])
@@ -550,8 +544,8 @@ mod tests {
 
     use datafusion::arrow::array::{Int32Array, Int64Array};
     use datafusion::arrow::datatypes::IntervalUnit;
-    use datafusion_common::arrow::array::Float64Array;
     use datafusion_common::ScalarValue;
+    use datafusion_common::arrow::array::Float64Array;
 
     use super::*;
 

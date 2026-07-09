@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use datafusion_expr::{LogicalPlan, ScalarUDF};
 use serde::{Deserialize, Serialize};
 
-use crate::error::{CatalogError, CatalogResult};
+use crate::error::{CatalogError, CatalogObject, CatalogResult};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
 pub struct CatalogFunctionId(u64);
@@ -50,7 +50,7 @@ impl CatalogObjectTracker {
             .functions
             .get(&id.0)
             .cloned()
-            .ok_or_else(|| CatalogError::NotFound("function", id.0.to_string()))
+            .ok_or_else(|| CatalogError::NotFound(CatalogObject::Function, id.0.to_string()))
     }
 
     pub fn track_logical_plan(
@@ -73,6 +73,6 @@ impl CatalogObjectTracker {
             .logical_plans
             .get(&id.0)
             .cloned()
-            .ok_or_else(|| CatalogError::NotFound("logical plan", id.0.to_string()))
+            .ok_or_else(|| CatalogError::NotFound(CatalogObject::LogicalPlan, id.0.to_string()))
     }
 }

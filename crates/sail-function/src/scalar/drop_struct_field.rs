@@ -1,10 +1,9 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{Array, ArrayRef, StructArray};
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_struct_array;
-use datafusion_common::{exec_err, plan_err, Result};
+use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -34,11 +33,9 @@ impl DropStructField {
 
                 let current_field = &field_names[0];
                 let mut new_fields = Vec::new();
-                let mut field_found = false;
 
                 for field in fields.iter() {
                     if field.name() == current_field {
-                        field_found = true;
                         if field_names.len() == 1 {
                             continue;
                         } else {
@@ -55,8 +52,11 @@ impl DropStructField {
                     }
                 }
 
-                if !field_found {
-                    plan_err!("Field `{current_field}` not found")
+                // Spark's `dropFields` silently ignores field names that do not
+                // exist (the struct is returned unchanged), but raises when every
+                // field would be dropped.
+                if new_fields.is_empty() {
+                    plan_err!("[CANNOT_DROP_ALL_FIELDS] Cannot drop all fields in struct")
                 } else {
                     Ok(DataType::Struct(new_fields.into()))
                 }
@@ -100,10 +100,6 @@ impl DropStructField {
 }
 
 impl ScalarUDFImpl for DropStructField {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "drop_struct_field"
     }

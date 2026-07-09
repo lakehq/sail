@@ -793,7 +793,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: hll_sketch_agg"
+        "success": "ok"
       }
     },
     {
@@ -815,7 +815,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: unknown aggregate function: hll_sketch_agg"
+        "success": "ok"
       }
     },
     {
@@ -1268,7 +1268,7 @@
         }
       },
       "output": {
-        "failure": "not implemented: function: spark_partition_id"
+        "success": "ok"
       }
     },
     {
@@ -1290,7 +1290,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: theta_sketch_agg"
+        "success": "ok"
       }
     },
     {
@@ -1312,7 +1312,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: theta_sketch_agg"
+        "success": "ok"
       }
     },
     {
@@ -1334,7 +1334,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: theta_sketch_agg"
+        "success": "ok"
       }
     },
     {
@@ -1356,7 +1356,7 @@
         }
       },
       "output": {
-        "failure": "not supported: unknown function: theta_sketch_agg"
+        "success": "ok"
       }
     },
     {

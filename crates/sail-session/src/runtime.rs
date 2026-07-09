@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use datafusion::execution::DiskManager;
 use datafusion::execution::cache::cache_manager::{
     CacheManagerConfig, FileMetadataCache, FileStatisticsCache, ListFilesCache,
 };
@@ -8,7 +9,6 @@ use datafusion::execution::memory_pool::{
     FairSpillPool, GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
 };
 use datafusion::execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
-use datafusion::execution::DiskManager;
 use datafusion_common::Result;
 use log::debug;
 use sail_cache::file_listing_cache::MokaFileListingCache;
@@ -45,7 +45,7 @@ impl RuntimeEnvFactory {
     {
         let registry = DynamicObjectStoreRegistry::new(self.runtime.clone());
         let cache_config = CacheManagerConfig::default()
-            .with_files_statistics_cache(Some(self.create_file_statistics_cache()))
+            .with_file_statistics_cache(Some(self.create_file_statistics_cache()))
             .with_list_files_cache(Some(self.create_file_listing_cache()))
             .with_file_metadata_cache(Some(self.create_file_metadata_cache()));
         let builder = RuntimeEnvBuilder::default()

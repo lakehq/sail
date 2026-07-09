@@ -1,0 +1,31 @@
+Spark-parity directory listing — exact-output snapshot tests.
+
+The `MIXED_DIR` variable is injected by `conftest.py` and points at the
+same fixture used by `test_mixed_directory.py`:
+
+  - lower.csv
+  - upper.CSV
+  - lower.json
+  - upper.JSON
+  - test.txt
+  - _SUCCESS              (hidden)
+  - _random               (hidden)
+  - .something            (hidden)
+
+# TODO: Sail strips a leading `"` from a CSV field; Spark keeps it (e.g. `value:"A"}` vs `"value":"A"}`).
+>>> sorted(spark.read.format("csv").option("header", "false").load(MIXED_DIR).collect(), key=str)
+[Row(_c0='Lower', _c1='30'), Row(_c0='Test', _c1='50'), Row(_c0='Upper', _c1='50'), Row(_c0='name', _c1='age'), Row(_c0='name', _c1='age'), Row(_c0='name', _c1='age'), Row(_c0='{"id":1', _c1='value:"A"}'), Row(_c0='{"id":1', _c1='value:"a"}'), Row(_c0='{"id":2', _c1='value:"B"}'), Row(_c0='{"id":2', _c1='value:"b"}')]
+
+# TODO: Sail strips a leading `"` from a CSV field; Spark keeps it (e.g. `value:"A"}` vs `"value":"A"}`).
+# NOTE: Column NAMES come from whichever file the listing visits first.
+#       Sail behaves the same as Spark here. We project to tuples to assert only the row VALUES, which are deterministic.
+>>> sorted(tuple(r) for r in spark.read.format("csv").option("header", "true").load(MIXED_DIR).collect())
+[('Lower', '30'), ('Test', '50'), ('Upper', '50'), ('{"id":2', 'value:"B"}'), ('{"id":2', 'value:"b"}')]
+
+# TODO: Sail strips a leading `"` from a CSV field; Spark keeps it (e.g. `value:"A"}` vs `"value":"A"}`).
+>>> sorted(spark.read.format("csv").schema("k STRING, v STRING").option("header", "false").load(MIXED_DIR).collect(), key=str)
+[Row(k='Lower', v='30'), Row(k='Test', v='50'), Row(k='Upper', v='50'), Row(k='name', v='age'), Row(k='name', v='age'), Row(k='name', v='age'), Row(k='{"id":1', v='value:"A"}'), Row(k='{"id":1', v='value:"a"}'), Row(k='{"id":2', v='value:"B"}'), Row(k='{"id":2', v='value:"b"}')]
+
+# TODO: Sail strips a leading `"` from a CSV field; Spark keeps it (e.g. `value:"A"}` vs `"value":"A"}`).
+>>> sorted(spark.read.format("csv").schema("k STRING, v STRING").option("header", "true").load(MIXED_DIR).collect(), key=str)
+[Row(k='Lower', v='30'), Row(k='Test', v='50'), Row(k='Upper', v='50'), Row(k='{"id":2', v='value:"B"}'), Row(k='{"id":2', v='value:"b"}')]

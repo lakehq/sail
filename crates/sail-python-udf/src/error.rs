@@ -1,6 +1,6 @@
 use datafusion_common::DataFusionError;
 use pyo3::prelude::{PyAnyMethods, PyModule};
-use pyo3::{intern, PyErr, PyResult, Python};
+use pyo3::{PyErr, PyResult, Python, intern};
 use sail_common_datafusion::error::{PythonErrorCause, PythonErrorCauseExtractor};
 use thiserror::Error;
 
@@ -16,6 +16,8 @@ pub enum PyUdfError {
     InvalidArgument(String),
     #[error("internal error: {0}")]
     InternalError(String),
+    #[error("analysis error: {0}")]
+    AnalysisError(String),
 }
 
 impl PyUdfError {
@@ -26,6 +28,10 @@ impl PyUdfError {
     pub fn internal(message: impl Into<String>) -> Self {
         PyUdfError::InternalError(message.into())
     }
+
+    pub fn analysis(message: impl Into<String>) -> Self {
+        PyUdfError::AnalysisError(message.into())
+    }
 }
 
 impl From<PyUdfError> for DataFusionError {
@@ -35,6 +41,7 @@ impl From<PyUdfError> for DataFusionError {
             PyUdfError::IoError(e) => DataFusionError::External(e.into()),
             PyUdfError::InvalidArgument(message) => DataFusionError::Plan(message),
             PyUdfError::InternalError(message) => DataFusionError::Internal(message),
+            PyUdfError::AnalysisError(message) => DataFusionError::Plan(message),
         }
     }
 }

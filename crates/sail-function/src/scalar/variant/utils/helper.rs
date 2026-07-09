@@ -1,13 +1,13 @@
-use arrow_schema::extension::ExtensionType;
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-variant/blob/51e0d4be62d7675e9b7b56ed1c0b0a10ae4a28d7/src/shared.rs>
+use arrow_schema::extension::ExtensionType;
 use arrow_schema::{DataType, Field};
-use datafusion_common::{exec_err, ScalarValue};
+use datafusion_common::{ScalarValue, exec_err};
 use parquet_variant_compute::{VariantArray, VariantType};
-use sail_common::spec::VARIANT_EXTENSION_NAME;
+use sail_common_datafusion::variant::{is_variant_arrow_field, is_variant_storage_field};
 
 /// Returns `true` if the field has Variant extension metadata.
 pub fn is_variant_field(field: &Field) -> bool {
-    field.extension_type_name() == Some(VARIANT_EXTENSION_NAME)
+    is_variant_arrow_field(field) && field.try_extension_type::<VariantType>().is_ok()
 }
 
 pub fn try_field_as_variant_array(field: &Field) -> datafusion_common::Result<()> {
@@ -16,20 +16,11 @@ pub fn try_field_as_variant_array(field: &Field) -> datafusion_common::Result<()
         return Ok(());
     }
 
-    ensure(
-        is_variant_field(field),
-        "field does not have extension type VariantType",
-    )?;
-
-    let variant_type = VariantType;
-    variant_type.supports_data_type(field.data_type())?;
-
-    Ok(())
-}
-pub fn ensure(pred: bool, err_msg: &str) -> datafusion_common::Result<()> {
-    if !pred {
-        return exec_err!("{}", err_msg);
+    if !is_variant_storage_field(field) {
+        return exec_err!("field does not have extension type VariantType");
     }
+
+    VariantType.supports_data_type(field.data_type())?;
 
     Ok(())
 }

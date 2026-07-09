@@ -1,10 +1,10 @@
 use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 
-use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::Array;
+use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit};
-use datafusion_common::{not_impl_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, not_impl_err, plan_err};
 use half::f16;
 use sail_common_datafusion::formatter::{
     Date32Formatter, Date64Formatter, DurationMicrosecondFormatter, DurationMillisecondFormatter,
@@ -57,6 +57,10 @@ impl PlanFormatter for SparkPlanFormatter {
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => Ok("string".to_string()),
             DataType::Date32 => Ok("date".to_string()),
             DataType::Date64 => Ok("date64".to_string()),
+            DataType::Time32(TimeUnit::Second) => Ok("time(0)".to_string()),
+            DataType::Time32(TimeUnit::Millisecond) => Ok("time(3)".to_string()),
+            DataType::Time64(TimeUnit::Microsecond) => Ok("time(6)".to_string()),
+            DataType::Time64(TimeUnit::Nanosecond) => Ok("time(9)".to_string()),
             DataType::Time32(time_unit) => Ok(format!(
                 "time32({})",
                 Self::time_unit_to_simple_string(time_unit)
@@ -341,6 +345,14 @@ impl PlanFormatter for SparkPlanFormatter {
                 let values = values.iter().collect::<Vec<_>>().one()?;
                 literal_list_to_string("array", values.as_deref())
             }
+            ScalarValue::ListView(values) => {
+                let values = values.iter().collect::<Vec<_>>().one()?;
+                literal_list_to_string("array", values.as_deref())
+            }
+            ScalarValue::LargeListView(values) => {
+                let values = values.iter().collect::<Vec<_>>().one()?;
+                literal_list_to_string("array", values.as_deref())
+            }
             ScalarValue::Struct(values) => {
                 let fields = values
                     .fields()
@@ -424,6 +436,14 @@ impl PlanFormatter for SparkPlanFormatter {
     ) -> Result<String> {
         match name.to_lowercase().as_str() {
             "!" | "not" => Ok(format!("(NOT {})", arguments.one()?)),
+            "assert_true" => {
+                let (col, rest) = arguments.at_least_one()?;
+                if let Some(err_msg) = rest.first() {
+                    Ok(format!("assert_true({col}, {err_msg})"))
+                } else {
+                    Ok(format!("assert_true({col}, '{col}' is not true!)"))
+                }
+            }
             "~" => Ok(format!("{name}{}", arguments.one()?)),
             "+" | "-" => {
                 if arguments.len() < 2 {
@@ -472,6 +492,8 @@ impl PlanFormatter for SparkPlanFormatter {
                 Ok(result)
             }
             "timestamp" | "date" => Ok(arguments.one()?.to_string()),
+            // Spark always names the time window column `window`.
+            "window" => Ok("window".to_string()),
             "to_unix_timestamp" => {
                 let mut argv = arguments.clone();
                 if argv.len() == 1 {
@@ -480,6 +502,18 @@ impl PlanFormatter for SparkPlanFormatter {
                 let args = argv.join(", ");
                 Ok(format!("{name}({args})"))
             }
+            "hll_sketch_agg" | "theta_sketch_agg" | "theta_union_agg" => Ok(
+                format_function_with_default_argument(name, arguments, 1, "12"),
+            ),
+            "hll_union" => Ok(format_function_with_default_argument(
+                name, arguments, 2, "false",
+            )),
+            "hll_union_agg" => Ok(format_function_with_default_argument(
+                name, arguments, 1, "false",
+            )),
+            "theta_union" => Ok(format_function_with_default_argument(
+                name, arguments, 2, "12",
+            )),
             "dateadd" => {
                 let arguments = arguments.join(", ");
                 Ok(format!("date_add({arguments})"))
@@ -496,7 +530,46 @@ impl PlanFormatter for SparkPlanFormatter {
                 let (arg, _) = arguments.at_least_one()?;
                 Ok(format!("{name}({arg})"))
             }
-            "any_value" | "first_value" | "last_value" => {
+            "mode" => {
+                let name = name.to_lowercase();
+                // Spark hides the optional `deterministic` flag in the column name:
+                // `mode(col)` when it is false or absent, and the WITHIN GROUP form
+                // when it is true.
+                // The "lowest"/"highest" sentinels come from the plan resolver rewrite
+                // of `mode() WITHIN GROUP (ORDER BY col)`. Spark displays its internal
+                // reverse flag rather than the original sort direction, so an ascending
+                // query is named DESC and a descending query is named without a
+                // direction.
+                let (arg, rest) = arguments.at_least_one()?;
+                match rest.first() {
+                    Some(&"true") | Some(&"lowest") => {
+                        Ok(format!("{name}() WITHIN GROUP (ORDER BY {arg} DESC)"))
+                    }
+                    Some(&"highest") => Ok(format!("{name}() WITHIN GROUP (ORDER BY {arg})")),
+                    _ => Ok(format!("{name}({arg})")),
+                }
+            }
+            "from_json" => {
+                let (arg, rest) = arguments.at_least_one()?;
+                // In Spark, from_json with a MAP schema uses "entries" as the display name.
+                if let Some(schema) = rest.first() {
+                    let s = schema.trim();
+                    let upper = s.to_uppercase();
+                    let is_map = upper.starts_with("MAP<")
+                        || upper == "MAP"
+                        || (s.starts_with('{')
+                            && serde_json::from_str::<serde_json::Value>(s)
+                                .ok()
+                                .and_then(|v| v.get("type")?.as_str().map(|t| t == "map"))
+                                .unwrap_or(false));
+                    if is_map {
+                        return Ok("entries".to_string());
+                    }
+                }
+                Ok(format!("{name}({arg})"))
+            }
+            "from_csv" | "schema_of_csv" | "schema_of_json" | "to_csv" | "to_json"
+            | "any_value" | "first_value" | "last_value" => {
                 let (arg, _) = arguments.at_least_one()?;
                 Ok(format!("{name}({arg})"))
             }
@@ -585,21 +658,26 @@ impl PlanFormatter for SparkPlanFormatter {
                 let sep = *list.first().unwrap_or(&"0");
                 Ok(format!("{name}({value}, {sep})"))
             }
-            "startsWith" | "endsWith" => {
+            "startswith" | "endswith" => {
                 let arguments = arguments.join(", ");
                 Ok(format!("{}({arguments})", name.to_lowercase()))
             }
             "position" | "locate" => Ok(append_start_pos_if_arglen_eq(2, 1, name, arguments)),
+            "regexp_extract_all" => Ok(append_start_pos_if_arglen_eq(2, 1, name, arguments)),
             "regexp_instr" => Ok(append_start_pos_if_arglen_eq(2, 0, name, arguments)),
             "regexp_replace" => Ok(append_start_pos_if_arglen_eq(3, 1, name, arguments)),
             // When the data type being exploded is `ExplodeDataType::List`, use "col" as the column name.
             "explode" | "explode_outer" => Ok("col".to_string()),
             "stack" => Ok("col0".to_string()),
             "current_database" => Ok("current_schema()".to_string()),
+            "spark_partition_id" => {
+                let arguments = arguments.join(", ");
+                Ok(format!("{}({arguments})", name.to_uppercase()))
+            }
             "acos" | "acosh" | "asin" | "asinh" | "atan" | "atan2" | "atanh" | "cbrt" | "exp"
-            | "log" | "log10" | "log1p" | "log2" | "regexp" | "regexp_like" | "signum" | "sqrt"
-            | "cos" | "cosh" | "cot" | "degrees" | "power" | "radians" | "sin" | "sinh" | "tan"
-            | "tanh" | "pi" | "expm1" | "hypot" | "e" | "sec" | "csc" => {
+            | "log" | "log10" | "log1p" | "log2" | "regexp" | "regexp_like" | "rlike"
+            | "signum" | "sqrt" | "cos" | "cosh" | "cot" | "degrees" | "power" | "radians"
+            | "sin" | "sinh" | "tan" | "tanh" | "pi" | "expm1" | "hypot" | "e" | "sec" | "csc" => {
                 let name = name.to_uppercase();
                 let arguments = arguments.join(", ");
                 Ok(format!("{name}({arguments})"))
@@ -654,6 +732,19 @@ fn append_start_pos_if_arglen_eq(
     format!("{name}({args}{start_pos_str})")
 }
 
+fn format_function_with_default_argument(
+    name: &str,
+    mut arguments: Vec<&str>,
+    default_argument_count: usize,
+    default_argument: &'static str,
+) -> String {
+    if arguments.len() == default_argument_count {
+        arguments.push(default_argument);
+    }
+    let arguments = arguments.join(", ");
+    format!("{name}({arguments})")
+}
+
 fn format_decimal(value: &str, scale: i8) -> String {
     let mut result = String::new();
     let start = if value.starts_with('-') {
@@ -684,7 +775,7 @@ mod tests {
     };
     use datafusion::arrow::buffer::OffsetBuffer;
     use datafusion::arrow::datatypes::{
-        i256, DataType, Field, Int32Type, IntervalDayTime, IntervalMonthDayNano,
+        DataType, Field, Int32Type, IntervalDayTime, IntervalMonthDayNano, i256,
     };
     use datafusion_common::arrow::array::ArrayRef;
     use sail_common::spec::SAIL_MAP_FIELD_NAME;
@@ -955,19 +1046,35 @@ mod tests {
 
         assert_eq!(
             formatter.data_type_to_simple_string(&DataType::Time32(TimeUnit::Second))?,
-            "time32(second)"
+            "time(0)"
         );
         assert_eq!(
             formatter.data_type_to_simple_string(&DataType::Time32(TimeUnit::Millisecond))?,
-            "time32(millisecond)"
+            "time(3)"
         );
         assert_eq!(
             formatter.data_type_to_simple_string(&DataType::Time64(TimeUnit::Microsecond))?,
-            "time64(microsecond)"
+            "time(6)"
         );
         assert_eq!(
             formatter.data_type_to_simple_string(&DataType::Time64(TimeUnit::Nanosecond))?,
-            "time64(nanosecond)"
+            "time(9)"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_csv_function_to_string_omits_options() -> PlanResult<()> {
+        let formatter = SparkPlanFormatter;
+
+        assert_eq!(
+            formatter.function_to_string(
+                "to_csv",
+                vec!["named_struct(a, 1, b, 2)", "map(sep, |)"],
+                false,
+            )?,
+            "to_csv(named_struct(a, 1, b, 2))"
         );
 
         Ok(())

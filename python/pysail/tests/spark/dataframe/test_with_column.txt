@@ -1,0 +1,13 @@
+>>> from pyspark.sql import functions as F, types as T
+
+>>> schema = T.StructType([
+...     T.StructField("id", T.IntegerType(), False),
+...     T.StructField(
+...         "struct_col",
+...         T.StructType([T.StructField("nested_field", T.StringType(), True)]),
+...         True,
+...     ),
+... ])
+>>> df = spark.createDataFrame([(1, ("x",))], schema)
+>>> df.withColumn("struct_col.nested_field", F.lit("y")).collect()
+[Row(id=1, struct_col=Row(nested_field='x'), struct_col.nested_field='y')]

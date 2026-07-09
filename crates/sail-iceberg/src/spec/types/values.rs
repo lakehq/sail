@@ -18,6 +18,7 @@
 // [CREDIT]: https://raw.githubusercontent.com/apache/iceberg-rust/dc349284a4204c1a56af47fb3177ace6f9e899a0/crates/iceberg/src/spec/values.rs
 
 use ordered_float::OrderedFloat;
+use sail_common::spec as sail_spec;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
@@ -105,7 +106,318 @@ impl Datum {
     }
 }
 
+fn sail_literal_from_str(
+    value: &str,
+    data_type: &crate::spec::types::Type,
+) -> Result<sail_spec::Literal, String> {
+    use std::str::FromStr;
+
+    use chrono::{NaiveDate, NaiveTime, Timelike};
+    use datafusion::arrow::array::timezone::Tz;
+    use sail_common_datafusion::utils::datetime::localize_with_fallback;
+    use sail_sql_analyzer::expression::from_ast_expression;
+    use sail_sql_analyzer::literal::numeric::{
+        parse_decimal_128_string, parse_f32_string, parse_f64_string, parse_i32_string,
+        parse_i64_string,
+    };
+    use sail_sql_analyzer::parser::{parse_date, parse_expression, parse_time, parse_timestamp};
+
+    use crate::spec::types::{PrimitiveType, Type};
+
+    let value = value.trim();
+    if value.eq_ignore_ascii_case("null") {
+        return Ok(sail_spec::Literal::Null);
+    }
+
+    fn parse_error(e: impl std::fmt::Display) -> String {
+        e.to_string()
+    }
+    fn parse_bool(value: &str) -> Result<bool, String> {
+        if value.eq_ignore_ascii_case("true") {
+            Ok(true)
+        } else if value.eq_ignore_ascii_case("false") {
+            Ok(false)
+        } else {
+            value.parse::<bool>().map_err(parse_error)
+        }
+    }
+
+    match data_type {
+        Type::Primitive(PrimitiveType::Boolean)
+        | Type::Primitive(PrimitiveType::Int)
+        | Type::Primitive(PrimitiveType::Long)
+        | Type::Primitive(PrimitiveType::Float)
+        | Type::Primitive(PrimitiveType::Double)
+        | Type::Primitive(PrimitiveType::Decimal { .. }) => {
+            let literal = match data_type {
+                Type::Primitive(PrimitiveType::Boolean) => sail_spec::Literal::Boolean {
+                    value: Some(parse_bool(value)?),
+                },
+                Type::Primitive(PrimitiveType::Int) => {
+                    parse_i32_string(value).map_err(parse_error)?
+                }
+                Type::Primitive(PrimitiveType::Long) => {
+                    parse_i64_string(value).map_err(parse_error)?
+                }
+                Type::Primitive(PrimitiveType::Float) => {
+                    parse_f32_string(value).map_err(parse_error)?
+                }
+                Type::Primitive(PrimitiveType::Double) => {
+                    parse_f64_string(value).map_err(parse_error)?
+                }
+                Type::Primitive(PrimitiveType::Decimal { .. }) => {
+                    parse_decimal_128_string(value).map_err(parse_error)?
+                }
+                _ => unreachable!(),
+            };
+            Ok(literal)
+        }
+        Type::Primitive(PrimitiveType::Date) => {
+            let date = parse_date(value)
+                .or_else(|_| parse_date(unquote_str(value)))
+                .map_err(parse_error)?;
+            let date = NaiveDate::try_from(date).map_err(parse_error)?;
+            let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).ok_or("Bad epoch")?;
+            Ok(sail_spec::Literal::Date32 {
+                days: Some((date - epoch).num_days() as i32),
+            })
+        }
+        Type::Primitive(PrimitiveType::Time) => {
+            let time = parse_time(value)
+                .or_else(|_| parse_time(unquote_str(value)))
+                .map_err(parse_error)?;
+            let time = NaiveTime::try_from(time).map_err(parse_error)?;
+            let microseconds = time.num_seconds_from_midnight() as i64 * 1_000_000
+                + time.nanosecond() as i64 / 1_000;
+            Ok(sail_spec::Literal::Time64Microsecond {
+                microseconds: Some(microseconds),
+            })
+        }
+        Type::Primitive(PrimitiveType::Timestamp) => {
+            let timestamp = parse_timestamp(value)
+                .or_else(|_| parse_timestamp(unquote_str(value)))
+                .map_err(parse_error)?;
+            let (timestamp, _) = timestamp.into_naive().map_err(parse_error)?;
+            Ok(sail_spec::Literal::TimestampMicrosecond {
+                microseconds: Some(timestamp.and_utc().timestamp_micros()),
+                timestamp_type: sail_spec::TimestampType::WithoutTimeZone,
+            })
+        }
+        Type::Primitive(PrimitiveType::Timestamptz) => {
+            let timestamp = parse_timestamp(value)
+                .or_else(|_| parse_timestamp(unquote_str(value)))
+                .map_err(parse_error)?;
+            let (timestamp, timezone) = timestamp.into_naive().map_err(parse_error)?;
+            let timestamp = if timezone.is_empty() {
+                timestamp.and_utc()
+            } else {
+                let timezone = Tz::from_str(timezone).map_err(parse_error)?;
+                localize_with_fallback(&timezone, &timestamp).map_err(parse_error)?
+            };
+            Ok(sail_spec::Literal::TimestampMicrosecond {
+                microseconds: Some(timestamp.timestamp_micros()),
+                timestamp_type: sail_spec::TimestampType::WithLocalTimeZone,
+            })
+        }
+        Type::Primitive(PrimitiveType::TimestampNs) => {
+            let timestamp = parse_timestamp(value)
+                .or_else(|_| parse_timestamp(unquote_str(value)))
+                .map_err(parse_error)?;
+            let (timestamp, _) = timestamp.into_naive().map_err(parse_error)?;
+            Ok(sail_spec::Literal::TimestampNanosecond {
+                nanoseconds: Some(
+                    timestamp
+                        .and_utc()
+                        .timestamp_nanos_opt()
+                        .ok_or("timestamp nanoseconds out of range")?,
+                ),
+                timestamp_type: sail_spec::TimestampType::WithoutTimeZone,
+            })
+        }
+        Type::Primitive(PrimitiveType::TimestamptzNs) => {
+            let timestamp = parse_timestamp(value)
+                .or_else(|_| parse_timestamp(unquote_str(value)))
+                .map_err(parse_error)?;
+            let (timestamp, timezone) = timestamp.into_naive().map_err(parse_error)?;
+            let timestamp = if timezone.is_empty() {
+                timestamp.and_utc()
+            } else {
+                let timezone = Tz::from_str(timezone).map_err(parse_error)?;
+                localize_with_fallback(&timezone, &timestamp).map_err(parse_error)?
+            };
+            Ok(sail_spec::Literal::TimestampNanosecond {
+                nanoseconds: Some(
+                    timestamp
+                        .timestamp_nanos_opt()
+                        .ok_or("timestamp nanoseconds out of range")?,
+                ),
+                timestamp_type: sail_spec::TimestampType::WithLocalTimeZone,
+            })
+        }
+        Type::Primitive(PrimitiveType::String | PrimitiveType::Uuid) => {
+            match parse_expression(value)
+                .and_then(from_ast_expression)
+                .map_err(parse_error)?
+            {
+                sail_spec::Expr::Literal(sail_spec::Literal::Utf8 { value }) => {
+                    Ok(sail_spec::Literal::Utf8 { value })
+                }
+                other => Err(format!("expected string literal, got {other:?}")),
+            }
+        }
+        Type::Primitive(PrimitiveType::Binary) => {
+            match parse_expression(value)
+                .and_then(from_ast_expression)
+                .map_err(parse_error)?
+            {
+                sail_spec::Expr::Literal(sail_spec::Literal::Binary { value }) => {
+                    Ok(sail_spec::Literal::Binary { value })
+                }
+                sail_spec::Expr::Literal(sail_spec::Literal::Utf8 { value }) => {
+                    Ok(sail_spec::Literal::Binary {
+                        value: value.map(String::into_bytes),
+                    })
+                }
+                other => Err(format!("expected binary literal, got {other:?}")),
+            }
+        }
+        Type::Primitive(PrimitiveType::Fixed(size)) => {
+            let size = i32::try_from(*size).map_err(parse_error)?;
+            match parse_expression(value)
+                .and_then(from_ast_expression)
+                .map_err(parse_error)?
+            {
+                sail_spec::Expr::Literal(sail_spec::Literal::Binary { value }) => {
+                    Ok(sail_spec::Literal::FixedSizeBinary { size, value })
+                }
+                sail_spec::Expr::Literal(sail_spec::Literal::Utf8 { value }) => {
+                    Ok(sail_spec::Literal::FixedSizeBinary {
+                        size,
+                        value: value.map(String::into_bytes),
+                    })
+                }
+                other => Err(format!("expected fixed-size binary literal, got {other:?}")),
+            }
+        }
+        Type::Primitive(PrimitiveType::Unknown) => {
+            Err("string defaults for Iceberg unknown type are not supported".to_string())
+        }
+        Type::Primitive(PrimitiveType::Variant) => {
+            Err("string defaults for Iceberg variant type are not supported".to_string())
+        }
+        Type::Primitive(PrimitiveType::Geometry { .. }) => {
+            Err("string defaults for Iceberg geometry type are not supported".to_string())
+        }
+        Type::Primitive(PrimitiveType::Geography { .. }) => {
+            Err("string defaults for Iceberg geography type are not supported".to_string())
+        }
+        Type::Struct(_) | Type::List(_) | Type::Map(_) => {
+            Err("string defaults for complex Iceberg types are not supported".to_string())
+        }
+    }
+}
+
+fn unquote_str(value: &str) -> &str {
+    value
+        .strip_prefix('\'')
+        .and_then(|value| value.strip_suffix('\''))
+        .unwrap_or(value)
+}
+
+fn parse_uuid_to_u128(s: &str) -> Result<u128, String> {
+    let u = uuid::Uuid::parse_str(s).map_err(|e| e.to_string())?;
+    let bytes = u.as_bytes();
+    let mut acc: u128 = 0;
+    for b in bytes.iter() {
+        acc = (acc << 8) | (*b as u128);
+    }
+    Ok(acc)
+}
+
 impl Literal {
+    pub fn try_from_str(
+        value: &str,
+        data_type: &crate::spec::types::Type,
+    ) -> Result<Option<Self>, String> {
+        let literal = sail_literal_from_str(value, data_type)?;
+        Self::try_from_sail_literal(literal, data_type)
+    }
+
+    pub fn try_from_sail_literal(
+        literal: sail_spec::Literal,
+        data_type: &crate::spec::types::Type,
+    ) -> Result<Option<Self>, String> {
+        use crate::spec::types::{PrimitiveType, Type};
+
+        Ok(match (data_type, literal) {
+            (_, sail_spec::Literal::Null) => None,
+            (Type::Primitive(PrimitiveType::Boolean), sail_spec::Literal::Boolean { value }) => {
+                value.map(|v| Literal::Primitive(PrimitiveLiteral::Boolean(v)))
+            }
+            (Type::Primitive(PrimitiveType::Int), sail_spec::Literal::Int32 { value }) => {
+                value.map(|v| Literal::Primitive(PrimitiveLiteral::Int(v)))
+            }
+            (Type::Primitive(PrimitiveType::Long), sail_spec::Literal::Int64 { value }) => {
+                value.map(|v| Literal::Primitive(PrimitiveLiteral::Long(v)))
+            }
+            (Type::Primitive(PrimitiveType::Float), sail_spec::Literal::Float32 { value }) => {
+                value.map(|v| Literal::Primitive(PrimitiveLiteral::Float(OrderedFloat(v))))
+            }
+            (Type::Primitive(PrimitiveType::Double), sail_spec::Literal::Float64 { value }) => {
+                value.map(|v| Literal::Primitive(PrimitiveLiteral::Double(OrderedFloat(v))))
+            }
+            (Type::Primitive(PrimitiveType::Date), sail_spec::Literal::Date32 { days }) => {
+                days.map(|v| Literal::Primitive(PrimitiveLiteral::Int(v)))
+            }
+            (
+                Type::Primitive(PrimitiveType::Time),
+                sail_spec::Literal::Time64Microsecond { microseconds },
+            ) => microseconds.map(|v| Literal::Primitive(PrimitiveLiteral::Long(v))),
+            (
+                Type::Primitive(PrimitiveType::Timestamp | PrimitiveType::Timestamptz),
+                sail_spec::Literal::TimestampMicrosecond { microseconds, .. },
+            ) => microseconds.map(|v| Literal::Primitive(PrimitiveLiteral::Long(v))),
+            (
+                Type::Primitive(PrimitiveType::TimestampNs | PrimitiveType::TimestamptzNs),
+                sail_spec::Literal::TimestampNanosecond { nanoseconds, .. },
+            ) => nanoseconds.map(|v| Literal::Primitive(PrimitiveLiteral::Long(v))),
+            (Type::Primitive(PrimitiveType::String), sail_spec::Literal::Utf8 { value }) => {
+                value.map(|v| Literal::Primitive(PrimitiveLiteral::String(v)))
+            }
+            (Type::Primitive(PrimitiveType::Uuid), sail_spec::Literal::Utf8 { value }) => value
+                .map(|v| parse_uuid_to_u128(&v).map(PrimitiveLiteral::UInt128))
+                .transpose()?
+                .map(Literal::Primitive),
+            (Type::Primitive(PrimitiveType::Binary), sail_spec::Literal::Binary { value }) => {
+                value.map(|v| Literal::Primitive(PrimitiveLiteral::Binary(v)))
+            }
+            (
+                Type::Primitive(PrimitiveType::Fixed(size)),
+                sail_spec::Literal::FixedSizeBinary { value, .. },
+            ) => value
+                .map(|v| {
+                    if v.len() == *size as usize {
+                        Ok(Literal::Primitive(PrimitiveLiteral::Binary(v)))
+                    } else {
+                        Err(format!(
+                            "Fixed literal length {} does not match Iceberg fixed length {size}",
+                            v.len()
+                        ))
+                    }
+                })
+                .transpose()?,
+            (
+                Type::Primitive(PrimitiveType::Decimal { .. }),
+                sail_spec::Literal::Decimal128 { value, .. },
+            ) => value.map(|v| Literal::Primitive(PrimitiveLiteral::Int128(v))),
+            (expected, literal) => {
+                return Err(format!(
+                    "Sail literal {literal:?} is not supported for Iceberg type {expected:?}"
+                ));
+            }
+        })
+    }
+
     pub fn try_from_json(
         value: JsonValue,
         data_type: &crate::spec::types::Type,
@@ -332,7 +644,7 @@ impl Literal {
                     return Err("Keys and values length mismatch".to_string());
                 }
                 let mut out = Vec::with_capacity(keys.len());
-                for (k, v) in keys.into_iter().zip(vals.into_iter()) {
+                for (k, v) in keys.into_iter().zip(vals) {
                     let key = Literal::try_from_json(k, &map_ty.key_field.field_type)
                         .and_then(|opt| opt.ok_or_else(|| "Map key cannot be null".to_string()))?;
                     let val = Literal::try_from_json(v, &map_ty.value_field.field_type)?;
@@ -599,6 +911,30 @@ impl<'de> Deserialize<'de> for RawLiteral {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::spec::types::{PrimitiveType, Type};
+
+    #[test]
+    fn test_boolean_string_defaults_are_case_insensitive() {
+        let data_type = Type::Primitive(PrimitiveType::Boolean);
+
+        assert_eq!(
+            Literal::try_from_str("TRUE", &data_type),
+            Ok(Some(Literal::Primitive(PrimitiveLiteral::Boolean(true))))
+        );
+        assert_eq!(
+            Literal::try_from_str("FALSE", &data_type),
+            Ok(Some(Literal::Primitive(PrimitiveLiteral::Boolean(false))))
+        );
+        assert_eq!(
+            Literal::try_from_str("TrUe", &data_type),
+            Ok(Some(Literal::Primitive(PrimitiveLiteral::Boolean(true))))
+        );
+        assert_eq!(
+            Literal::try_from_str(" true ", &data_type),
+            Ok(Some(Literal::Primitive(PrimitiveLiteral::Boolean(true))))
+        );
+        assert!(Literal::try_from_str("not_bool", &data_type).is_err());
+    }
 
     #[test]
     fn test_primitive_literal_ordering_same_type() {

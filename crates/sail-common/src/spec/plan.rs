@@ -9,7 +9,7 @@ use crate::spec::expression::{
     SortOrder,
 };
 use crate::spec::literal::Literal;
-use crate::spec::{DataType, FunctionDefinition, Identifier};
+use crate::spec::{DataType, FunctionDefinition, Identifier, Window};
 
 /// Unresolved logical plan node for Sail.
 /// As a starting point, the definition matches the structure of the `Relation` message
@@ -257,6 +257,10 @@ pub enum QueryNode {
         recursive: bool,
         ctes: Vec<(Identifier, QueryPlan)>,
     },
+    NamedWindows {
+        input: Box<QueryPlan>,
+        windows: Vec<(Identifier, Window)>,
+    },
     /// A relation that wraps a root plan with referenced subquery plans.
     WithRelations {
         root: Box<QueryPlan>,
@@ -312,6 +316,12 @@ pub enum CommandNode {
     ShowTableExtended {
         database: Option<ObjectName>,
         pattern: String,
+    },
+    ShowFunctions {
+        database: Option<ObjectName>,
+        pattern: Option<String>,
+        show_user_functions: bool,
+        show_system_functions: bool,
     },
     ListTables {
         database: Option<ObjectName>,
@@ -779,7 +789,10 @@ pub struct Pivot {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PivotValue {
-    pub values: Vec<Literal>,
+    /// The value expressions for a single pivot output column. Each is a foldable expression
+    /// (a literal, typed literal such as `DATE'...'`, or a cast) that the resolver evaluates to a
+    /// scalar. A single-element list is the common case; multiple elements form a struct pivot.
+    pub values: Vec<Expr>,
     pub alias: Option<Identifier>,
 }
 
@@ -879,6 +892,10 @@ pub struct HtmlString {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TableDefinition {
+    /// Whether the table is explicitly marked as external.
+    /// Note that the table may still be considered external semantically
+    /// when the location or path is specified, even when this field is `false`.
+    pub external: bool,
     pub columns: Vec<TableColumnDefinition>,
     pub comment: Option<String>,
     pub constraints: Vec<TableConstraint>,
@@ -889,10 +906,45 @@ pub struct TableDefinition {
     pub sort_by: Vec<SortOrder>,
     pub bucket_by: Option<SaveBucketBy>,
     pub cluster_by: Vec<ObjectName>,
-    pub if_not_exists: bool,
-    pub replace: bool,
+    pub mode: CreateTableMode,
     pub options: Vec<(String, String)>,
     pub properties: Vec<(String, String)>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CreateTableMode {
+    #[default]
+    Create,
+    CreateIfNotExists,
+    CreateOrReplace,
+    Replace,
+}
+
+impl CreateTableMode {
+    pub fn ignore_if_exists(self) -> bool {
+        matches!(self, Self::CreateIfNotExists)
+    }
+
+    pub fn is_replace(self) -> bool {
+        matches!(self, Self::CreateOrReplace | Self::Replace)
+    }
+
+    pub fn replace_requires_existing(self) -> bool {
+        matches!(self, Self::Replace)
+    }
+}
+
+/// Returns whether a non-empty path or location is specified,
+/// either via the `location` argument or via `"path"` / `"location"` keys in options.
+/// Key comparison is case-insensitive and empty-string values are ignored.
+pub fn has_path_or_location(location: Option<&str>, options: &[(String, String)]) -> bool {
+    let has_location = location.is_some_and(|s| !s.trim().is_empty());
+    let has_path_in_options = options.iter().any(|(k, v)| {
+        !v.trim().is_empty()
+            && (k.eq_ignore_ascii_case("path") || k.eq_ignore_ascii_case("location"))
+    });
+    has_location || has_path_in_options
 }
 
 /// A column reference or typed column definition used in a `PARTITIONED BY` clause.
@@ -917,6 +969,16 @@ pub struct TableColumnDefinition {
     pub default: Option<String>,
     /// An optional SQL expression string to calculate the generated value.
     pub generated_always_as: Option<String>,
+    /// Delta identity column metadata.
+    pub identity: Option<TableColumnIdentity>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, Hash, PartialOrd, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableColumnIdentity {
+    pub start: Option<i64>,
+    pub step: Option<i64>,
+    pub allow_explicit_insert: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -939,6 +1001,7 @@ pub struct CatalogDefinition {
 pub struct ViewDefinition {
     /// The corresponding SQL query that defines the view.
     pub definition: String,
+    pub input: Box<QueryPlan>,
     pub columns: Option<Vec<ViewColumnDefinition>>,
     pub if_not_exists: bool,
     pub replace: bool,
@@ -1305,6 +1368,25 @@ pub enum ExplainMode {
 #[serde(rename_all = "camelCase")]
 pub enum AlterTableOperation {
     Unknown,
+    SetTableProperties {
+        properties: Vec<(String, String)>,
+    },
+    UnsetTableProperties {
+        keys: Vec<String>,
+        if_exists: bool,
+    },
+    AlterColumnType {
+        name: ObjectName,
+        data_type: DataType,
+    },
+    AlterColumnDefault {
+        name: ObjectName,
+        default: Option<String>,
+    },
+    AddCheckConstraint {
+        name: Identifier,
+        expression: ExprWithSource,
+    },
     // TODO: add all the alter table operations
 }
 

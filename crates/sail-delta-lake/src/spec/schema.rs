@@ -87,6 +87,7 @@ pub enum ColumnMetadataKey {
     ColumnMappingPhysicalName,
     ParquetFieldId,
     GenerationExpression,
+    CurrentDefault,
     IdentityStart,
     IdentityStep,
     IdentityHighWaterMark,
@@ -94,6 +95,7 @@ pub enum ColumnMetadataKey {
     InternalColumn,
     Invariants,
     MetadataSpec,
+    TypeChanges,
 }
 
 impl AsRef<str> for ColumnMetadataKey {
@@ -103,6 +105,7 @@ impl AsRef<str> for ColumnMetadataKey {
             Self::ColumnMappingPhysicalName => "delta.columnMapping.physicalName",
             Self::ParquetFieldId => "parquet.field.id",
             Self::GenerationExpression => "delta.generationExpression",
+            Self::CurrentDefault => "CURRENT_DEFAULT",
             Self::IdentityAllowExplicitInsert => "delta.identity.allowExplicitInsert",
             Self::IdentityHighWaterMark => "delta.identity.highWaterMark",
             Self::IdentityStart => "delta.identity.start",
@@ -110,6 +113,7 @@ impl AsRef<str> for ColumnMetadataKey {
             Self::InternalColumn => "delta.isInternalColumn",
             Self::Invariants => "delta.invariants",
             Self::MetadataSpec => "delta.metadataSpec",
+            Self::TypeChanges => "delta.typeChanges",
         }
     }
 }

@@ -1,5 +1,8 @@
-use datafusion_expr::{expr, Expr, ScalarUDF};
+use datafusion_expr::{Expr, ScalarUDF, expr};
+use sail_common_datafusion::literal::LiteralEvaluator;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::scalar::xml::from_xml::SparkFromXml;
+use sail_function::scalar::xml::to_xml::SparkToXml;
 use sail_function::scalar::xml::xpath::Xpath;
 use sail_function::scalar::xml::xpath_typed::{XpathTyped, XpathTypedKind};
 
@@ -26,13 +29,43 @@ fn xpath_typed(kind: XpathTypedKind) -> impl Fn(ScalarFunctionInput) -> PlanResu
     }
 }
 
+fn to_xml(input: ScalarFunctionInput) -> PlanResult<Expr> {
+    let tz = input.function_context.plan_config.session_timezone.clone();
+    let udf = ScalarUDF::from(SparkToXml::new(tz));
+    Ok(udf.call(input.arguments))
+}
+
+fn from_xml(
+    ScalarFunctionInput {
+        mut arguments,
+        function_context,
+    }: ScalarFunctionInput,
+) -> PlanResult<Expr> {
+    let tz = function_context.plan_config.session_timezone.clone();
+    if arguments.len() >= 2 && !matches!(&arguments[1], expr::Expr::Literal(_, _)) {
+        let evaluator = LiteralEvaluator::new();
+        if let Ok(scalar) = evaluator.evaluate(&arguments[1]) {
+            let scalar = match scalar {
+                datafusion_common::ScalarValue::Utf8View(v)
+                | datafusion_common::ScalarValue::LargeUtf8(v) => {
+                    datafusion_common::ScalarValue::Utf8(v)
+                }
+                other => other,
+            };
+            arguments[1] = expr::Expr::Literal(scalar, None);
+        }
+    }
+    let udf = ScalarUDF::from(SparkFromXml::new(tz));
+    Ok(udf.call(arguments))
+}
+
 pub(super) fn list_built_in_xml_functions() -> Vec<(&'static str, ScalarFunction)> {
     use crate::function::common::ScalarFunctionBuilder as F;
 
     vec![
-        ("from_xml", F::unknown("from_xml")),
+        ("from_xml", F::custom(from_xml)),
         ("schema_of_xml", F::unknown("schema_of_xml")),
-        ("to_xml", F::unknown("to_xml")),
+        ("to_xml", F::custom(to_xml)),
         ("xpath", F::custom(xpath)),
         (
             "xpath_boolean",

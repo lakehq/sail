@@ -1,25 +1,27 @@
 use std::collections::HashMap;
 
 use aws_config::BehaviorVersion;
+use aws_credential_types::Credentials;
+use aws_sdk_glue::Client;
 use aws_sdk_glue::config::Region;
 use aws_sdk_glue::types::{
-    StorageDescriptor, TableInput, ViewDefinitionInput, ViewRepresentationInput,
+    StorageDescriptor, Table, TableInput, ViewDefinitionInput, ViewRepresentationInput,
 };
-use aws_sdk_glue::Client;
-use sail_catalog::error::{CatalogError, CatalogResult};
+use sail_catalog::error::{CatalogError, CatalogObject, CatalogResult};
+use sail_catalog::hive_format::HiveDetectedFormat;
 use sail_catalog::provider::{
-    CatalogProvider, CreateDatabaseOptions, CreateTableOptions, CreateViewColumnOptions,
-    CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropViewOptions, Namespace,
+    AlterTableOptions, CatalogProvider, CreateDatabaseOptions, CreateTableMetadataRequirement,
+    CreateTableOptions, CreateViewColumnOptions, CreateViewOptions, DropDatabaseOptions,
+    DropTableOptions, DropViewOptions, Namespace, TableFormatCreateMetadataMode,
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::{
-    identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
+    DatabaseStatus, TableColumnStatus, TableKind, TableStatus, identity_partition_fields,
 };
 use tokio::sync::OnceCell;
 
 use crate::data_type::{arrow_to_glue_type, glue_type_to_arrow};
-use crate::format::GlueStorageFormat;
-use crate::{hive, iceberg};
+use crate::{hive, iceberg, managed_table};
 
 /// Configuration for AWS Glue Data Catalog.
 #[derive(Debug, Clone, Default)]
@@ -34,6 +36,7 @@ pub struct GlueCatalogConfig {
 pub struct GlueCatalogProvider {
     name: String,
     config: GlueCatalogConfig,
+    credentials: Option<Credentials>,
     client: OnceCell<Client>,
 }
 
@@ -42,6 +45,29 @@ impl GlueCatalogProvider {
         Self {
             name,
             config,
+            credentials: None,
+            client: OnceCell::new(),
+        }
+    }
+
+    #[doc(hidden)]
+    pub fn new_with_static_credentials(
+        name: String,
+        config: GlueCatalogConfig,
+        access_key_id: String,
+        secret_access_key: String,
+        session_token: Option<String>,
+    ) -> Self {
+        Self {
+            name,
+            config,
+            credentials: Some(Credentials::new(
+                access_key_id,
+                secret_access_key,
+                session_token,
+                None,
+                "sail-glue-catalog-config",
+            )),
             client: OnceCell::new(),
         }
     }
@@ -59,10 +85,18 @@ impl GlueCatalogProvider {
                     config_loader = config_loader.endpoint_url(endpoint);
                 }
 
+                if let Some(credentials) = &self.credentials {
+                    config_loader = config_loader.credentials_provider(credentials.clone());
+                }
+
                 let sdk_config = config_loader.load().await;
                 Ok(Client::new(&sdk_config))
             })
             .await
+    }
+
+    pub(super) fn has_custom_endpoint(&self) -> bool {
+        self.config.endpoint_url.is_some()
     }
 
     pub(super) fn database_name(database: &Namespace) -> CatalogResult<String> {
@@ -109,13 +143,21 @@ impl GlueCatalogProvider {
         // Extract location
         let location = storage.and_then(|sd| sd.location()).map(|s| s.to_string());
 
-        // Detect format from serde info and table parameters
-        let format = storage
-            .and_then(|sd| sd.serde_info())
-            .and_then(|si| si.serialization_library())
-            .map(|lib| GlueStorageFormat::detect_format_from_serde(Some(lib)))
-            .or_else(|| GlueStorageFormat::detect_iceberg_format(table.parameters()))
-            .unwrap_or_else(|| "unknown".to_string());
+        let format = if iceberg::is_iceberg_parameters(table.parameters()) {
+            "iceberg".to_string()
+        } else if let Some(provider) = table_provider_format(table.parameters()) {
+            provider
+        } else {
+            HiveDetectedFormat::detect(
+                storage
+                    .and_then(|sd| sd.serde_info())
+                    .and_then(|si| si.serialization_library()),
+                storage.and_then(|sd| sd.input_format()),
+                storage.and_then(|sd| sd.output_format()),
+            )
+            .as_str()
+            .to_string()
+        };
 
         // Extract columns from storage descriptor
         let mut columns: Vec<TableColumnStatus> = storage
@@ -133,6 +175,7 @@ impl GlueCatalogProvider {
                     comment: col.comment().map(|s| s.to_string()),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                     is_partition: false,
                     is_bucket: false,
                     is_cluster: false,
@@ -149,20 +192,21 @@ impl GlueCatalogProvider {
 
         // Add partition columns
         for pk in table.partition_keys() {
-            if let Some(type_str) = pk.r#type() {
-                if let Ok(data_type) = glue_type_to_arrow(type_str) {
-                    columns.push(TableColumnStatus {
-                        name: pk.name().to_string(),
-                        data_type,
-                        nullable: true,
-                        comment: pk.comment().map(|s| s.to_string()),
-                        default: None,
-                        generated_always_as: None,
-                        is_partition: true,
-                        is_bucket: false,
-                        is_cluster: false,
-                    });
-                }
+            if let Some(type_str) = pk.r#type()
+                && let Ok(data_type) = glue_type_to_arrow(type_str)
+            {
+                columns.push(TableColumnStatus {
+                    name: pk.name().to_string(),
+                    data_type,
+                    nullable: true,
+                    comment: pk.comment().map(|s| s.to_string()),
+                    default: None,
+                    generated_always_as: None,
+                    identity: None,
+                    is_partition: true,
+                    is_bucket: false,
+                    is_cluster: false,
+                });
             }
         }
 
@@ -185,8 +229,8 @@ impl GlueCatalogProvider {
                 partition_by: identity_partition_fields(&partition_keys),
                 sort_by: vec![],
                 bucket_by: None,
-                options: vec![],
                 properties,
+                is_external: true,
             },
         })
     }
@@ -222,6 +266,7 @@ impl GlueCatalogProvider {
                     comment: col.comment().map(|s| s.to_string()),
                     default: None,
                     generated_always_as: None,
+                    identity: None,
                     is_partition: false,
                     is_bucket: false,
                     is_cluster: false,
@@ -245,6 +290,30 @@ impl GlueCatalogProvider {
                 properties,
             },
         })
+    }
+
+    fn table_input_with_parameters(
+        table: &Table,
+        parameters: HashMap<String, String>,
+    ) -> CatalogResult<TableInput> {
+        TableInput::builder()
+            .name(table.name())
+            .set_description(table.description.clone())
+            .set_owner(table.owner.clone())
+            .set_last_access_time(table.last_access_time)
+            .set_last_analyzed_time(table.last_analyzed_time)
+            .retention(table.retention)
+            .set_storage_descriptor(table.storage_descriptor.clone())
+            .set_partition_keys(table.partition_keys.clone())
+            .set_view_original_text(table.view_original_text.clone())
+            .set_view_expanded_text(table.view_expanded_text.clone())
+            .set_table_type(table.table_type.clone())
+            .set_parameters(Some(parameters))
+            .set_target_table(table.target_table.clone())
+            .build()
+            .map_err(|e| {
+                CatalogError::InvalidArgument(format!("Failed to build table update input: {e}"))
+            })
     }
 
     /// Builds Glue columns from CreateViewColumnOptions.
@@ -311,6 +380,17 @@ impl GlueCatalogProvider {
     }
 }
 
+fn table_provider_format(parameters: Option<&HashMap<String, String>>) -> Option<String> {
+    let provider = parameters?
+        .get(hive::SPARK_DATASOURCE_PROVIDER_KEY)?
+        .trim()
+        .to_ascii_lowercase();
+    Some(match provider.as_str() {
+        "deltalake" => "delta".to_string(),
+        _ => provider,
+    })
+}
+
 #[async_trait::async_trait]
 impl CatalogProvider for GlueCatalogProvider {
     fn get_name(&self) -> &str {
@@ -368,7 +448,10 @@ impl CatalogProvider for GlueCatalogProvider {
                     if if_not_exists {
                         self.get_database(database).await
                     } else {
-                        Err(CatalogError::AlreadyExists("database", database_name))
+                        Err(CatalogError::AlreadyExists(
+                            CatalogObject::Database,
+                            database_name,
+                        ))
                     }
                 } else {
                     Err(CatalogError::External(format!(
@@ -395,7 +478,10 @@ impl CatalogProvider for GlueCatalogProvider {
             Err(sdk_err) => {
                 let service_err = sdk_err.into_service_error();
                 if service_err.is_entity_not_found_exception() {
-                    Err(CatalogError::NotFound("database", database_name))
+                    Err(CatalogError::NotFound(
+                        CatalogObject::Database,
+                        database_name,
+                    ))
                 } else {
                     Err(CatalogError::External(format!(
                         "Failed to get database: {service_err}"
@@ -459,7 +545,10 @@ impl CatalogProvider for GlueCatalogProvider {
                     if if_exists {
                         Ok(())
                     } else {
-                        Err(CatalogError::NotFound("database", database_name))
+                        Err(CatalogError::NotFound(
+                            CatalogObject::Database,
+                            database_name,
+                        ))
                     }
                 } else {
                     Err(CatalogError::External(format!(
@@ -474,21 +563,40 @@ impl CatalogProvider for GlueCatalogProvider {
         &self,
         database: &Namespace,
         table: &str,
-        mut options: CreateTableOptions,
+        options: CreateTableOptions,
     ) -> CatalogResult<TableStatus> {
         let client = self.get_client().await?;
         let format_lower = options.format.to_lowercase();
-
-        // Skip location or path options since the location is available in
-        // the `location` field in `CreateTableOptions`.
-        options
-            .options
-            .retain(|(k, _)| k != "location" && k != "path");
 
         if format_lower == "iceberg" {
             iceberg::create_iceberg_table(self, client, database, table, options).await
         } else {
             hive::create_hive_table(self, client, database, table, options).await
+        }
+    }
+
+    fn create_table_metadata_requirement(
+        &self,
+        options: &CreateTableOptions,
+    ) -> CatalogResult<CreateTableMetadataRequirement> {
+        if options.format.eq_ignore_ascii_case("iceberg") {
+            iceberg::validate_iceberg_create_table_options(options)?;
+        } else {
+            hive::validate_hive_create_table_options(options)?;
+        }
+        if self.has_custom_endpoint()
+            && options.format.eq_ignore_ascii_case("iceberg")
+            && !options.is_write_precondition
+        {
+            Ok(CreateTableMetadataRequirement::TableFormat {
+                mode: TableFormatCreateMetadataMode::CatalogCoordinated,
+            })
+        } else if options.format.eq_ignore_ascii_case("delta") && !options.is_write_precondition {
+            Ok(CreateTableMetadataRequirement::TableFormat {
+                mode: TableFormatCreateMetadataMode::PathManaged,
+            })
+        } else {
+            Ok(CreateTableMetadataRequirement::None)
         }
     }
 
@@ -511,7 +619,10 @@ impl CatalogProvider for GlueCatalogProvider {
 
                 // Reject views - they should be accessed via get_view
                 if matches!(tbl.table_type(), Some(t) if t == "VIRTUAL_VIEW") {
-                    return Err(CatalogError::NotFound("table", table.to_string()));
+                    return Err(CatalogError::NotFound(
+                        CatalogObject::Table,
+                        table.to_string(),
+                    ));
                 }
 
                 self.table_to_status(database, tbl)
@@ -519,7 +630,10 @@ impl CatalogProvider for GlueCatalogProvider {
             Err(sdk_err) => {
                 let service_err = sdk_err.into_service_error();
                 if service_err.is_entity_not_found_exception() {
-                    Err(CatalogError::NotFound("table", table.to_string()))
+                    Err(CatalogError::NotFound(
+                        CatalogObject::Table,
+                        table.to_string(),
+                    ))
                 } else {
                     Err(CatalogError::External(format!(
                         "Failed to get table: {service_err}"
@@ -589,10 +703,84 @@ impl CatalogProvider for GlueCatalogProvider {
                 if service_err.is_entity_not_found_exception() && if_exists {
                     Ok(())
                 } else if service_err.is_entity_not_found_exception() {
-                    Err(CatalogError::NotFound("table", table.to_string()))
+                    Err(CatalogError::NotFound(
+                        CatalogObject::Table,
+                        table.to_string(),
+                    ))
                 } else {
                     Err(CatalogError::External(format!(
                         "Failed to drop table: {service_err}"
+                    )))
+                }
+            }
+        }
+    }
+
+    async fn alter_table(
+        &self,
+        database: &Namespace,
+        table: &str,
+        options: AlterTableOptions,
+    ) -> CatalogResult<()> {
+        let client = self.get_client().await?;
+        let database_name = Self::database_name(database)?;
+        let result = client
+            .get_table()
+            .database_name(&database_name)
+            .name(table)
+            .send()
+            .await;
+        let table_value = match result {
+            Ok(output) => output
+                .table()
+                .ok_or_else(|| CatalogError::External("Table response is empty".to_string()))?
+                .clone(),
+            Err(sdk_err) => {
+                let service_err = sdk_err.into_service_error();
+                if service_err.is_entity_not_found_exception() {
+                    return Err(CatalogError::NotFound(
+                        CatalogObject::Table,
+                        table.to_string(),
+                    ));
+                }
+                return Err(CatalogError::External(format!(
+                    "Failed to get table for update: {service_err}"
+                )));
+            }
+        };
+
+        let parameters = table_value.parameters().cloned().unwrap_or_default();
+        let parameters =
+            managed_table::apply_alter_table_options(&database_name, table, parameters, options)?;
+        let table_input = Self::table_input_with_parameters(&table_value, parameters)?;
+        let mut update_table = client
+            .update_table()
+            .database_name(&database_name)
+            .table_input(table_input);
+        if let Some(version_id) = table_value.version_id() {
+            // TODO: Promote Glue optimistic version conflicts and Lake Formation
+            // governance/credential modes into typed lakehouse commit outcomes.
+            update_table = update_table.version_id(version_id.to_string());
+        }
+        let result = update_table.send().await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(sdk_err) => {
+                let service_err = sdk_err.into_service_error();
+                if service_err.is_entity_not_found_exception() {
+                    Err(CatalogError::NotFound(
+                        CatalogObject::Table,
+                        table.to_string(),
+                    ))
+                } else if service_err.is_concurrent_modification_exception() {
+                    Err(CatalogError::Conflict(format!(
+                        "Concurrent Glue update for table '{}.{}': {service_err}",
+                        database_name, table
+                    )))
+                } else {
+                    Err(CatalogError::External(format!(
+                        "Failed to update table: {service_err}"
                     )))
                 }
             }
@@ -647,7 +835,10 @@ impl CatalogProvider for GlueCatalogProvider {
                     if if_not_exists {
                         self.get_view(database, view).await
                     } else {
-                        Err(CatalogError::AlreadyExists("view", view.to_string()))
+                        Err(CatalogError::AlreadyExists(
+                            CatalogObject::View,
+                            view.to_string(),
+                        ))
                     }
                 } else {
                     Err(CatalogError::External(format!(
@@ -677,7 +868,10 @@ impl CatalogProvider for GlueCatalogProvider {
 
                 let table_type = tbl.table_type().unwrap_or_default();
                 if table_type != "VIRTUAL_VIEW" {
-                    return Err(CatalogError::NotFound("view", view.to_string()));
+                    return Err(CatalogError::NotFound(
+                        CatalogObject::View,
+                        view.to_string(),
+                    ));
                 }
 
                 self.view_to_status(database, tbl)
@@ -685,7 +879,10 @@ impl CatalogProvider for GlueCatalogProvider {
             Err(sdk_err) => {
                 let service_err = sdk_err.into_service_error();
                 if service_err.is_entity_not_found_exception() {
-                    Err(CatalogError::NotFound("view", view.to_string()))
+                    Err(CatalogError::NotFound(
+                        CatalogObject::View,
+                        view.to_string(),
+                    ))
                 } else {
                     Err(CatalogError::External(format!(
                         "Failed to get view: {service_err}"
@@ -747,7 +944,10 @@ impl CatalogProvider for GlueCatalogProvider {
                 if service_err.is_entity_not_found_exception() && if_exists {
                     Ok(())
                 } else if service_err.is_entity_not_found_exception() {
-                    Err(CatalogError::NotFound("view", view.to_string()))
+                    Err(CatalogError::NotFound(
+                        CatalogObject::View,
+                        view.to_string(),
+                    ))
                 } else {
                     Err(CatalogError::External(format!(
                         "Failed to drop view: {service_err}"
@@ -755,5 +955,52 @@ impl CatalogProvider for GlueCatalogProvider {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::panic, clippy::unwrap_used)]
+
+    use std::collections::HashMap;
+
+    use aws_sdk_glue::types::{SerDeInfo, StorageDescriptor, Table};
+    use sail_common_datafusion::catalog::TableKind;
+
+    use super::{GlueCatalogConfig, GlueCatalogProvider};
+    use crate::hive;
+
+    #[test]
+    fn table_to_status_prefers_delta_provider_over_parquet_storage() {
+        let provider = GlueCatalogProvider::new("glue".to_string(), GlueCatalogConfig::default());
+        let storage = StorageDescriptor::builder()
+            .input_format("org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat")
+            .output_format("org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat")
+            .serde_info(
+                SerDeInfo::builder()
+                    .serialization_library(
+                        "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe",
+                    )
+                    .build(),
+            )
+            .location("s3://bucket/delta_t")
+            .build();
+        let table = Table::builder()
+            .name("delta_t")
+            .storage_descriptor(storage)
+            .set_parameters(Some(HashMap::from([(
+                hive::SPARK_DATASOURCE_PROVIDER_KEY.to_string(),
+                "deltalake".to_string(),
+            )])))
+            .build()
+            .unwrap();
+
+        let status = provider
+            .table_to_status(&vec!["db".to_string()].try_into().unwrap(), &table)
+            .unwrap();
+        let TableKind::Table { format, .. } = status.kind else {
+            panic!("expected table");
+        };
+        assert_eq!(format, "delta");
     }
 }

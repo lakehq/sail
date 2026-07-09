@@ -24,17 +24,17 @@ use datafusion::arrow::array::{ArrayRef, UInt64Array};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::common::{Result, ToDFSchema};
-use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::Expr;
+use datafusion::logical_expr::utils::conjunction;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError};
 
-use crate::conversion::{parse_optional_partition_value, ScalarConverter};
-use crate::spec::statistics::Stats;
+use crate::conversion::{ScalarConverter, parse_optional_partition_value};
+use crate::delta_log::LogStoreRef;
 use crate::spec::Add;
-use crate::storage::LogStoreRef;
+use crate::spec::statistics::Stats;
 use crate::table::DeltaSnapshot;
 
 /// Result of file pruning operation
@@ -113,10 +113,10 @@ pub async fn prune_files(
     }
 
     // Add files without stats if we haven't reached the limit
-    if let Some(limit) = limit {
-        if rows_collected < limit as i64 {
-            files.extend(pruned_without_stats);
-        }
+    if let Some(limit) = limit
+        && rows_collected < limit as i64
+    {
+        files.extend(pruned_without_stats);
     }
 
     Ok(PruningResult {
@@ -149,7 +149,6 @@ struct MaterializedColumnStats {
     min_values: Option<ArrayRef>,
     max_values: Option<ArrayRef>,
     null_counts: Option<ArrayRef>,
-    row_counts: Option<ArrayRef>,
 }
 
 #[derive(Debug)]
@@ -198,7 +197,6 @@ impl AddStatsPruningStatistics {
                             min_values: self.compute_min_values(&column),
                             max_values: self.compute_max_values(&column),
                             null_counts: self.compute_null_counts(&column),
-                            row_counts: self.compute_row_counts(&column),
                         },
                     )
                 })
@@ -400,13 +398,13 @@ impl AddStatsPruningStatistics {
             if let Some(pv) = a.partition_values.get(name) {
                 return Self::scalar_from_partition_value(dt, pv);
             }
-            if let Some(s) = s {
-                if let Some(v) = s.min_value(name) {
-                    return ScalarConverter::stat_value_to_arrow_scalar_value(v, dt)
-                        .ok()
-                        .flatten()
-                        .unwrap_or_else(|| Self::null_scalar(dt));
-                }
+            if let Some(s) = s
+                && let Some(v) = s.min_value(name)
+            {
+                return ScalarConverter::stat_value_to_arrow_scalar_value(v, dt)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| Self::null_scalar(dt));
             }
             Self::null_scalar(dt)
         })
@@ -426,13 +424,13 @@ impl AddStatsPruningStatistics {
             if let Some(pv) = a.partition_values.get(name) {
                 return Self::scalar_from_partition_value(dt, pv);
             }
-            if let Some(s) = s {
-                if let Some(v) = s.max_value(name) {
-                    return ScalarConverter::stat_value_to_arrow_scalar_value(v, dt)
-                        .ok()
-                        .flatten()
-                        .unwrap_or_else(|| Self::null_scalar(dt));
-                }
+            if let Some(s) = s
+                && let Some(v) = s.max_value(name)
+            {
+                return ScalarConverter::stat_value_to_arrow_scalar_value(v, dt)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| Self::null_scalar(dt));
             }
             Self::null_scalar(dt)
         })
@@ -450,10 +448,6 @@ impl AddStatsPruningStatistics {
             s.and_then(|s| s.null_count_value(name))
                 .map(|v| v.max(0) as u64)
         })
-    }
-
-    fn compute_row_counts(&self, column: &Column) -> Option<ArrayRef> {
-        self.build_count_array(column, |_a, s| s.map(|s| s.num_records.max(0) as u64))
     }
 }
 
@@ -480,10 +474,21 @@ impl PruningStatistics for AddStatsPruningStatistics {
             .and_then(|stats| stats.null_counts.clone())
     }
 
-    fn row_counts(&self, column: &Column) -> Option<datafusion::arrow::array::ArrayRef> {
-        self.materialized_columns
-            .get(column.name())
-            .and_then(|stats| stats.row_counts.clone())
+    fn row_counts(&self) -> Option<datafusion::arrow::array::ArrayRef> {
+        let mut has_value = false;
+        let values: Vec<Option<u64>> = self
+            .stats
+            .iter()
+            .map(|s| {
+                let v = s.as_ref().map(|s| s.num_records.max(0) as u64);
+                has_value |= v.is_some();
+                v
+            })
+            .collect();
+        use datafusion::arrow::array::UInt64Array;
+        has_value.then(|| {
+            std::sync::Arc::new(UInt64Array::from(values)) as datafusion::arrow::array::ArrayRef
+        })
     }
 
     fn contained(
@@ -556,11 +561,9 @@ mod tests {
         referenced_columns.insert("dec_col".to_string());
 
         let stats = AddStatsPruningStatistics::try_new(table_schema, adds, referenced_columns)?;
-        let array = stats
-            .row_counts(&Column::from_name("dec_col"))
-            .ok_or_else(|| {
-                DataFusionError::Internal("row count stats should be available".to_string())
-            })?;
+        let array = stats.row_counts().ok_or_else(|| {
+            DataFusionError::Internal("row count stats should be available".to_string())
+        })?;
 
         assert_eq!(array.data_type(), &DataType::UInt64);
         let values = array

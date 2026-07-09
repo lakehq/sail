@@ -193,6 +193,11 @@
   },
   {
     "module": "pyspark.sql.functions",
+    "function": "quote",
+    "status": "supported"
+  },
+  {
+    "module": "pyspark.sql.functions",
     "function": "randstr",
     "status": "supported"
   },
@@ -209,8 +214,7 @@
   {
     "module": "pyspark.sql.functions",
     "function": "regexp_extract_all",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/508"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
@@ -255,8 +259,7 @@
   {
     "module": "pyspark.sql.functions",
     "function": "sentences",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/508"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
@@ -312,8 +315,7 @@
   {
     "module": "pyspark.sql.functions",
     "function": "to_char",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/508"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",
@@ -323,8 +325,7 @@
   {
     "module": "pyspark.sql.functions",
     "function": "to_varchar",
-    "status": "planned",
-    "ref": "https://github.com/lakehq/sail/issues/508"
+    "status": "supported"
   },
   {
     "module": "pyspark.sql.functions",

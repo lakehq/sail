@@ -22,9 +22,9 @@ jobs:
       run_spark_tests: ${{ ((github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.message.outputs.run_spark_tests == 'true' || steps.label.outputs.run_spark_tests == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
       run_ibis_tests: ${{ ((github.event_name == 'pull_request' && (github.event.action == 'opened' || steps.message.outputs.run_ibis_tests == 'true' || steps.label.outputs.run_ibis_tests == 'true')) || github.event_name == 'push') && 'true' || 'false' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -49,7 +49,7 @@ jobs:
           workflow_name: Build
           artifact_name: python-package
 
-      - uses: actions/github-script@v7
+      - uses: actions/github-script@v9
         id: message
         with:
           script: |
@@ -70,7 +70,7 @@ jobs:
                 core.setOutput(p.name, commit.message.match(regex) !== null ? 'true' : 'false');
             }
 
-      - uses: actions/github-script@v7
+      - uses: actions/github-script@v9
         id: label
         with:
           script: |
@@ -141,6 +141,16 @@ jobs:
       - setup
       - rust-build
 
+  catalog-tests:
+    name: Catalog Integration Tests
+    if: ${{ needs.setup.outputs.build_package == 'true' && needs.setup.outputs.run_catalog_tests == 'true' }}
+    uses: ./.github/workflows/catalog-tests.yml
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+    needs:
+      - setup
+      - rust-build
+
   codecov-notify:
     name: Codecov Notify
     if: ${{ !cancelled() && github.actor != 'dependabot[bot]' }}
@@ -150,13 +160,14 @@ jobs:
       - python-tests
       - spark-tests
       - ibis-tests
+      - catalog-tests
     env:
       CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           run_command: send-notifications
           token: ${{ env.CODECOV_TOKEN }}

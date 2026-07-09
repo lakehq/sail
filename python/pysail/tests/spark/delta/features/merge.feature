@@ -280,6 +280,111 @@ Feature: Delta Lake Merge
         | 2  | keep     |
         | 3  | inserted |
 
+  Rule: Merge-on-Read MERGE on deletion-vector tables
+    Background:
+      Given variable location for temporary directory merge_dv
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_dv
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_dv
+        USING DELTA LOCATION {{ location.sql }}
+        TBLPROPERTIES (
+          'delta.enableDeletionVectors' = 'true'
+        )
+        AS SELECT * FROM VALUES
+          (1, 'keep',   'target'),
+          (2, 'remove', 'target'),
+          (3, 'stay',   'target')
+        AS t(id, value, flag)
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_merge_dv AS
+        SELECT * FROM VALUES
+          (2, 'remove',   'delete'),
+          (4, 'inserted', 'insert')
+        AS src(id, value, flag)
+        """
+
+    Scenario: EXPLAIN for insert-only MERGE on a DV table does not request row indices
+      When query
+        """
+        EXPLAIN
+        MERGE INTO delta_merge_dv AS t
+        USING src_merge_dv AS s
+        ON t.id = s.id
+        WHEN NOT MATCHED THEN
+          INSERT (id, value, flag)
+          VALUES (s.id, s.value, s.flag)
+        """
+      Then query plan matches snapshot
+
+    Scenario: EXPLAIN for MERGE delete on a DV table uses sorted partitioned DV rows
+      When query
+        """
+        EXPLAIN
+        MERGE INTO delta_merge_dv AS t
+        USING src_merge_dv AS s
+        ON t.id = s.id
+        WHEN MATCHED AND s.flag = 'delete' THEN
+          DELETE
+        WHEN NOT MATCHED THEN
+          INSERT (id, value, flag)
+          VALUES (s.id, s.value, s.flag)
+        """
+      Then query plan matches snapshot
+
+    Scenario: Matched deletes use deletion vectors while unmatched rows are inserted
+      Given statement
+        """
+        MERGE INTO delta_merge_dv AS t
+        USING src_merge_dv AS s
+        ON t.id = s.id
+        WHEN MATCHED AND s.flag = 'delete' THEN
+          DELETE
+        WHEN NOT MATCHED THEN
+          INSERT (id, value, flag)
+          VALUES (s.id, s.value, s.flag)
+        """
+      Then delta log latest commit info matches snapshot
+      Then delta log latest commit info contains
+        | path                                               | value                  |
+        | operation                                          | "MERGE"                |
+        | operationParameters.mergePredicate                 | "t . id = s . id " |
+        | operationParameters.matchedPredicates[0].actionType | "delete"               |
+        | operationParameters.matchedPredicates[0].predicate  | "s . flag = 'delete' " |
+        | operationParameters.notMatchedPredicates[0].actionType | "insert"            |
+      Then file tree in location matches
+        """
+        📂 <hex-prefix>
+          📄 deletion_vector_<uuid>.bin
+        📄 part-<id>.<codec>.parquet
+        📄 part-<id>.<codec>.parquet
+        """
+      When query
+        """
+        SELECT id, value, flag FROM delta_merge_dv ORDER BY id
+        """
+      Then query result ordered
+        | id | value    | flag   |
+        | 1  | keep     | target |
+        | 3  | stay     | target |
+        | 4  | inserted | insert |
+
+    Scenario: Matched updates are rejected for Merge-on-Read MERGE
+      When query
+        """
+        MERGE INTO delta_merge_dv AS t
+        USING src_merge_dv AS s
+        ON t.id = s.id
+        WHEN MATCHED THEN
+          UPDATE SET value = s.value
+        """
+      Then query error Merge-on-Read strategy for MERGE UPDATE clauses
+
 
   Rule: Updates for rows not matched by source and explicit insert columns
     Background:
@@ -664,6 +769,7 @@ Feature: Delta Lake Merge
           value STRING
         )
         USING DELTA LOCATION {{ location.sql }}
+        TBLPROPERTIES ('delta.constraints.positive_id' = 'id > 0')
         """
       Given statement
         """
@@ -684,7 +790,7 @@ Feature: Delta Lake Merge
     Scenario: MERGE INTO with delta.`path` target using a temp view as source
       Given statement template
         """
-        MERGE INTO delta.`{{ location }}` AS tgt
+        MERGE INTO delta.`{{ location.string }}` AS tgt
         USING src_merge_path_target AS src
         ON tgt.id = src.id
         WHEN MATCHED THEN UPDATE SET tgt.value = src.value
@@ -699,3 +805,20 @@ Feature: Delta Lake Merge
         | 1  | new    |
         | 2  | keep   |
         | 3  | insert |
+
+    Scenario: MERGE INTO with delta.`path` target enforces CHECK constraints
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_merge_path_target_bad AS
+        SELECT * FROM VALUES
+          (0, 'bad')
+        AS src(id, value)
+        """
+      When query template
+        """
+        MERGE INTO delta.`{{ location.string }}` AS tgt
+        USING src_merge_path_target_bad AS src
+        ON tgt.id = src.id
+        WHEN NOT MATCHED THEN INSERT *
+        """
+      Then query error DELTA_VIOLATE_CONSTRAINT_WITH_VALUES

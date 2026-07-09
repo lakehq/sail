@@ -26,7 +26,7 @@ use std::sync::{Arc, OnceLock};
 
 use ordered_float::OrderedFloat;
 use serde::de::{Error, IntoDeserializer, MapAccess, Visitor};
-use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 use serde_json::Value as JsonValue;
 pub use values::*;
 
@@ -176,6 +176,46 @@ impl Type {
             Type::Primitive(PrimitiveType::Float) | Type::Primitive(PrimitiveType::Double)
         )
     }
+
+    pub fn contains_variant(&self) -> bool {
+        match self {
+            Type::Primitive(PrimitiveType::Variant) => true,
+            Type::Primitive(_) => false,
+            Type::Struct(struct_type) => struct_type
+                .fields()
+                .iter()
+                .any(|field| field.field_type.contains_variant()),
+            Type::List(list_type) => list_type.element_field.field_type.contains_variant(),
+            Type::Map(map_type) => {
+                map_type.key_field.field_type.contains_variant()
+                    || map_type.value_field.field_type.contains_variant()
+            }
+        }
+    }
+
+    pub fn requires_format_v3(&self) -> bool {
+        match self {
+            Type::Primitive(primitive) => primitive.requires_format_v3(),
+            Type::Struct(struct_type) => struct_type.fields().iter().any(|field| {
+                field.field_type.requires_format_v3()
+                    || field.initial_default.is_some()
+                    || field.write_default.is_some()
+            }),
+            Type::List(list_type) => {
+                list_type.element_field.field_type.requires_format_v3()
+                    || list_type.element_field.initial_default.is_some()
+                    || list_type.element_field.write_default.is_some()
+            }
+            Type::Map(map_type) => {
+                map_type.key_field.field_type.requires_format_v3()
+                    || map_type.value_field.field_type.requires_format_v3()
+                    || map_type.key_field.initial_default.is_some()
+                    || map_type.value_field.initial_default.is_some()
+                    || map_type.key_field.write_default.is_some()
+                    || map_type.value_field.write_default.is_some()
+            }
+        }
+    }
 }
 
 impl From<PrimitiveType> for Type {
@@ -206,6 +246,8 @@ impl From<MapType> for Type {
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, Clone, Hash)]
 #[serde(rename_all = "lowercase", remote = "Self")]
 pub enum PrimitiveType {
+    /// Null-only primitive introduced in Iceberg v3.
+    Unknown,
     /// True or False
     Boolean,
     /// 32-bit signed integer
@@ -245,9 +287,36 @@ pub enum PrimitiveType {
     Fixed(u64),
     /// Arbitrary-length byte array.
     Binary,
+    /// Semi-structured data encoded using the Parquet Variant encoding.
+    /// TODO(V3): Iceberg models variant as a nested logical type; Sail currently keeps it as a primitive wrapper.
+    Variant,
+    /// Geometry encoded as Well-Known Binary.
+    Geometry {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        crs: Option<String>,
+    },
+    /// Geography encoded as Well-Known Binary.
+    Geography {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        crs: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        algorithm: Option<String>,
+    },
 }
 
 impl PrimitiveType {
+    pub fn requires_format_v3(&self) -> bool {
+        matches!(
+            self,
+            PrimitiveType::Unknown
+                | PrimitiveType::TimestampNs
+                | PrimitiveType::TimestamptzNs
+                | PrimitiveType::Variant
+                | PrimitiveType::Geometry { .. }
+                | PrimitiveType::Geography { .. }
+        )
+    }
+
     /// Check whether literal is compatible with the type.
     pub fn compatible(&self, literal: &PrimitiveLiteral) -> bool {
         matches!(
@@ -268,6 +337,9 @@ impl PrimitiveType {
                 | (PrimitiveType::Uuid, PrimitiveLiteral::UInt128(_))
                 | (PrimitiveType::Fixed(_), PrimitiveLiteral::Binary(_))
                 | (PrimitiveType::Binary, PrimitiveLiteral::Binary(_))
+                | (PrimitiveType::Variant, PrimitiveLiteral::Binary(_))
+                | (PrimitiveType::Geometry { .. }, PrimitiveLiteral::Binary(_))
+                | (PrimitiveType::Geography { .. }, PrimitiveLiteral::Binary(_))
         )
     }
 
@@ -342,9 +414,16 @@ impl PrimitiveType {
             PrimitiveType::Uuid => {
                 return Err("uuid bound decoding not supported".to_string());
             }
-            PrimitiveType::Fixed(_) | PrimitiveType::Binary => PL::Binary(bytes.to_vec()),
+            PrimitiveType::Fixed(_)
+            | PrimitiveType::Binary
+            | PrimitiveType::Variant
+            | PrimitiveType::Geometry { .. }
+            | PrimitiveType::Geography { .. } => PL::Binary(bytes.to_vec()),
             PrimitiveType::Decimal { .. } => {
                 return Err("decimal bound decoding not supported".to_string());
+            }
+            PrimitiveType::Unknown => {
+                return Err("unknown bound decoding is only valid for null values".to_string());
             }
         };
 
@@ -382,6 +461,10 @@ impl<'de> Deserialize<'de> for PrimitiveType {
             deserialize_decimal(s.into_deserializer())
         } else if s.starts_with("fixed") {
             deserialize_fixed(s.into_deserializer())
+        } else if s.starts_with("geometry") {
+            Ok(deserialize_geometry(&s))
+        } else if s.starts_with("geography") {
+            Ok(deserialize_geography(&s))
         } else {
             PrimitiveType::deserialize(s.into_deserializer())
         }
@@ -398,8 +481,71 @@ impl Serialize for PrimitiveType {
                 serialize_decimal(precision, scale, serializer)
             }
             PrimitiveType::Fixed(l) => serialize_fixed(l, serializer),
+            PrimitiveType::Geometry { crs } => serialize_geometry(crs.as_deref(), serializer),
+            PrimitiveType::Geography { crs, algorithm } => {
+                serialize_geography(crs.as_deref(), algorithm.as_deref(), serializer)
+            }
             _ => PrimitiveType::serialize(self, serializer),
         }
+    }
+}
+
+fn parse_parameterized_type(value: &str, prefix: &str) -> Vec<String> {
+    value
+        .strip_prefix(prefix)
+        .and_then(|rest| rest.strip_prefix('('))
+        .and_then(|rest| rest.strip_suffix(')'))
+        .map(|inner| {
+            inner
+                .split(',')
+                .map(str::trim)
+                .filter(|part| !part.is_empty())
+                .map(ToString::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn deserialize_geometry(value: &str) -> PrimitiveType {
+    PrimitiveType::Geometry {
+        crs: parse_parameterized_type(value, "geometry")
+            .into_iter()
+            .next(),
+    }
+}
+
+fn deserialize_geography(value: &str) -> PrimitiveType {
+    let mut parts = parse_parameterized_type(value, "geography").into_iter();
+    PrimitiveType::Geography {
+        crs: parts.next(),
+        algorithm: parts.next(),
+    }
+}
+
+fn serialize_geometry<S>(crs: Option<&str>, serializer: S) -> std::result::Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match crs {
+        Some(crs) => serializer.serialize_str(&format!("geometry({crs})")),
+        None => serializer.serialize_str("geometry"),
+    }
+}
+
+fn serialize_geography<S>(
+    crs: Option<&str>,
+    algorithm: Option<&str>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match (crs, algorithm) {
+        (Some(crs), Some(algorithm)) => {
+            serializer.serialize_str(&format!("geography({crs},{algorithm})"))
+        }
+        (Some(crs), None) => serializer.serialize_str(&format!("geography({crs})")),
+        _ => serializer.serialize_str("geography"),
     }
 }
 
@@ -456,6 +602,7 @@ where
 impl fmt::Display for PrimitiveType {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
+            PrimitiveType::Unknown => write!(f, "unknown"),
             PrimitiveType::Boolean => write!(f, "boolean"),
             PrimitiveType::Int => write!(f, "int"),
             PrimitiveType::Long => write!(f, "long"),
@@ -474,6 +621,16 @@ impl fmt::Display for PrimitiveType {
             PrimitiveType::Uuid => write!(f, "uuid"),
             PrimitiveType::Fixed(size) => write!(f, "fixed({})", size),
             PrimitiveType::Binary => write!(f, "binary"),
+            PrimitiveType::Variant => write!(f, "variant"),
+            PrimitiveType::Geometry { crs } => match crs {
+                Some(crs) => write!(f, "geometry({crs})"),
+                None => write!(f, "geometry"),
+            },
+            PrimitiveType::Geography { crs, algorithm } => match (crs, algorithm) {
+                (Some(crs), Some(algorithm)) => write!(f, "geography({crs},{algorithm})"),
+                (Some(crs), None) => write!(f, "geography({crs})"),
+                _ => write!(f, "geography"),
+            },
         }
     }
 }
@@ -655,6 +812,7 @@ struct SerdeNestedField {
 
 impl From<SerdeNestedField> for NestedField {
     fn from(value: SerdeNestedField) -> Self {
+        // TODO(V3): Preserve explicit JSON null defaults separately from absent defaults.
         NestedField {
             id: value.id,
             name: value.name,

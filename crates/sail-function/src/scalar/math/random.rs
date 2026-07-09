@@ -1,11 +1,10 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::array::Float64Array;
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
-use rand::{rng, RngExt};
+use rand::{RngExt, rng};
 
 use super::xorshift::SparkXorShiftRandom;
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_types_exec_err};
@@ -30,10 +29,6 @@ impl Random {
 }
 
 impl ScalarUDFImpl for Random {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "random"
     }
@@ -67,7 +62,7 @@ impl ScalarUDFImpl for Random {
                     ScalarValue::Int64(Some(value)) => *value,
                     ScalarValue::UInt64(Some(value)) => *value as i64,
                     ScalarValue::Int64(None) | ScalarValue::UInt64(None) | ScalarValue::Null => {
-                        return invoke_no_seed(number_rows)
+                        return invoke_no_seed(number_rows);
                     }
                     _ => return exec_err!("`random` expects an integer seed, got {scalar}"),
                 };

@@ -5,10 +5,10 @@ use std::sync::Arc;
 use datafusion::common::Result;
 use datafusion::logical_expr::logical_plan::Window;
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
-use datafusion_expr::{ident, Expr, LogicalPlan};
+use datafusion_expr::{Expr, LogicalPlan, ident};
 
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::tree::{empty_logical_plan, PlanRewriter};
+use crate::resolver::tree::{PlanRewriter, empty_logical_plan};
 
 pub(crate) struct WindowRewriter<'s> {
     plan: LogicalPlan,

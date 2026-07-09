@@ -28,6 +28,14 @@ pub struct PlanConfig {
     pub default_warehouse_directory: String,
     pub session_user_id: String,
     pub ansi_mode: bool,
+    /// Whether to allow cartesian products (cross joins) without explicit `CROSS JOIN` syntax.
+    pub cross_join_enabled: bool,
+    /// Whether identifiers (e.g. column names) are matched case-sensitively.
+    /// Spark defaults to case-insensitive matching (`spark.sql.caseSensitive=false`).
+    pub case_sensitive: bool,
+    /// The maximum number of distinct values collected for a pivot without an explicit
+    /// value list (`spark.sql.pivotMaxValues`, default 10000). Exceeding it is an error.
+    pub pivot_max_values: usize,
 }
 
 impl PlanConfig {
@@ -49,7 +57,10 @@ impl Default for PlanConfig {
             default_table_file_format: "PARQUET".to_string(),
             default_warehouse_directory: "spark-warehouse".to_string(),
             session_user_id: "".to_string(),
-            ansi_mode: false,
+            ansi_mode: true,
+            cross_join_enabled: true,
+            case_sensitive: false,
+            pivot_max_values: 10000,
         }
     }
 }

@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use datafusion::execution::cache::CacheAccessor;
 use datafusion::execution::cache::cache_manager::{
     CachedFileMetadataEntry, FileMetadataCache, FileMetadataCacheEntry,
 };
-use datafusion::execution::cache::CacheAccessor;
 use log::debug;
 use moka::policy::EvictionPolicy;
 use moka::sync::Cache;
@@ -116,8 +116,8 @@ mod tests {
 
     use chrono::DateTime;
     use datafusion::execution::cache::cache_manager::FileMetadata;
-    use object_store::path::Path;
     use object_store::ObjectMeta;
+    use object_store::path::Path;
 
     use super::*;
 

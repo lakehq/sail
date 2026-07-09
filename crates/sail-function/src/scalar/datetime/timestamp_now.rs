@@ -1,8 +1,7 @@
-use std::any::Any;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
-use datafusion_common::{internal_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -34,10 +33,6 @@ impl TimestampNow {
 }
 
 impl ScalarUDFImpl for TimestampNow {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn name(&self) -> &str {
         "timestamp_now"
     }
@@ -65,10 +60,10 @@ impl ScalarUDFImpl for TimestampNow {
             TimeUnit::Microsecond => Some(now.timestamp_micros()),
             TimeUnit::Nanosecond => now.timestamp_nanos_opt(),
         };
-        let expr = Expr::Cast(datafusion_expr::Cast {
-            expr: Box::new(Expr::Literal(ScalarValue::Int64(now), None)),
-            data_type: DataType::Timestamp(*self.time_unit(), Some(self.timezone().into())),
-        });
+        let expr = Expr::Cast(datafusion_expr::Cast::new(
+            Box::new(Expr::Literal(ScalarValue::Int64(now), None)),
+            DataType::Timestamp(*self.time_unit(), Some(self.timezone().into())),
+        ));
         Ok(ExprSimplifyResult::Simplified(expr))
     }
 }

@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::collections::HashSet;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -11,7 +10,7 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result, Statistics};
+use datafusion_common::{DataFusionError, Result, Statistics, internal_err};
 use futures::Stream;
 
 #[derive(Debug)]
@@ -73,10 +72,6 @@ impl DisplayAs for MergeCardinalityCheckExec {
 impl ExecutionPlan for MergeCardinalityCheckExec {
     fn name(&self) -> &'static str {
         "MergeCardinalityCheckExec"
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {
@@ -156,7 +151,7 @@ impl ExecutionPlan for MergeCardinalityCheckExec {
         Ok(Box::pin(stream))
     }
 
-    fn partition_statistics(&self, partition: Option<usize>) -> Result<Statistics> {
+    fn partition_statistics(&self, partition: Option<usize>) -> Result<Arc<Statistics>> {
         self.input.partition_statistics(partition)
     }
 }
@@ -235,12 +230,10 @@ impl Stream for MergeCardinalityCheckStream {
                     }
                     let id = row_id_values.key(i);
                     if !self.seen.insert(id.clone()) {
-                        return Poll::Ready(Some(Err(DataFusionError::Execution(
-                            format!(
-                                "MERGE_CARDINALITY_VIOLATION: Multiple source rows matched target row '{}'",
-                                id
-                            ),
-                        ))));
+                        return Poll::Ready(Some(Err(DataFusionError::Execution(format!(
+                            "MERGE_CARDINALITY_VIOLATION: Multiple source rows matched target row '{}'",
+                            id
+                        )))));
                     }
                 }
 

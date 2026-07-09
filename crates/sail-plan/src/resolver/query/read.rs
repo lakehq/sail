@@ -2,13 +2,14 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Schema};
-use datafusion::datasource::{provider_as_source, source_as_provider, TableProvider};
+use datafusion::catalog::TableFunctionArgs;
+use datafusion::datasource::{TableProvider, provider_as_source, source_as_provider};
 use datafusion_common::{DFSchema, ScalarValue, TableReference};
 use datafusion_expr::{Expr, LogicalPlan, SubqueryAlias, TableScan, TableSource, UNNAMED_TABLE};
-use rand::{rng, RngExt};
+use rand::{RngExt, rng};
 use sail_catalog::manager::CatalogManager;
 use sail_common::spec;
-use sail_common_datafusion::catalog::{TableColumnStatus, TableKind};
+use sail_common_datafusion::catalog::{LakehouseOperation, TableColumnStatus, TableKind};
 use sail_common_datafusion::datasource::{OptionLayer, SourceInfo, TableFormatRegistry};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::literal::LiteralEvaluator;
@@ -19,9 +20,9 @@ use sail_python_udf::udf::pyspark_unresolved_udf::PySparkUnresolvedUDF;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::{get_built_in_table_function, is_built_in_generator_function};
+use crate::resolver::PlanResolver;
 use crate::resolver::function::PythonUdtf;
 use crate::resolver::state::PlanResolverState;
-use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     /// Resolves a named table or view reference into a logical plan node.
@@ -95,37 +96,66 @@ impl PlanResolver<'_> {
                 partition_by,
                 sort_by,
                 bucket_by,
-                options: table_options,
-                properties: table_properties,
+                properties,
+                is_external: _,
             } => {
-                self.resolve_table_kind_table(
-                    columns,
+                let schema = Schema::new(columns.iter().map(|x| x.field()).collect::<Vec<_>>());
+                let constraints = self.resolve_catalog_table_constraints(constraints, &schema)?;
+                let temporal_options = self
+                    .resolve_time_travel_options(&format, temporal, state)
+                    .await?;
+                let info = SourceInfo {
+                    paths: location.map(|x| vec![x]).unwrap_or_default(),
+                    lakehouse_table: Some(
+                        self.resolve_lakehouse_table_context(
+                            &reference,
+                            LakehouseOperation::Read,
+                            Some(&format),
+                            vec![],
+                        )
+                        .await?,
+                    ),
+                    schema: Some(schema),
                     constraints,
-                    format,
-                    location,
-                    partition_by,
-                    sort_by,
-                    bucket_by,
-                    table_options,
-                    table_properties,
-                    temporal,
-                    options,
+                    partition_by: partition_by.into_iter().map(|field| field.column).collect(),
+                    bucket_by: bucket_by.map(|x| x.into()),
+                    sort_order: sort_by.into_iter().map(|x| x.into()).collect(),
+                    // TODO: detect duplicated keys in each set of options
+                    options: vec![
+                        OptionLayer::TablePropertyList { items: properties },
+                        OptionLayer::OptionList { items: options },
+                        OptionLayer::OptionList {
+                            items: temporal_options,
+                        },
+                    ],
+                    read_case_sensitive: self.config.case_sensitive,
+                };
+                let registry = self.ctx.extension::<TableFormatRegistry>()?;
+                let table_source = registry
+                    .get(&format)?
+                    .create_source(&self.ctx.state(), info)
+                    .await?;
+                self.resolve_table_source_with_rename(
+                    table_source,
                     table_reference,
+                    None,
+                    vec![],
+                    None,
                     state,
-                )
-                .await?
+                )?
             }
             TableKind::View {
                 definition,
                 columns,
-                ..
+                comment: _,
+                properties: _,
             } => {
                 if temporal.is_some() {
                     return Err(PlanError::unsupported(
                         "SQL time travel is not supported for views",
                     ));
                 }
-                self.resolve_table_kind_view(definition, columns, table_reference.clone(), state)
+                self.resolve_table_view(definition, columns, table_reference.clone(), state)
                     .await?
             }
             TableKind::TemporaryView { plan, .. } | TableKind::GlobalTemporaryView { plan, .. } => {
@@ -174,64 +204,8 @@ impl PlanResolver<'_> {
         .await
     }
 
-    /// Resolves a physical table into a TableScan logical plan node.
-    #[expect(clippy::too_many_arguments)]
-    async fn resolve_table_kind_table(
-        &self,
-        columns: Vec<TableColumnStatus>,
-        constraints: Vec<sail_common_datafusion::catalog::CatalogTableConstraint>,
-        format: String,
-        location: Option<String>,
-        partition_by: Vec<sail_common_datafusion::catalog::CatalogPartitionField>,
-        sort_by: Vec<sail_common_datafusion::catalog::CatalogTableSort>,
-        bucket_by: Option<sail_common_datafusion::catalog::CatalogTableBucketBy>,
-        table_options: Vec<(String, String)>,
-        table_properties: Vec<(String, String)>,
-        temporal: Option<spec::TableTemporal>,
-        options: Vec<(String, String)>,
-        table_reference: impl Into<TableReference>,
-        state: &mut PlanResolverState,
-    ) -> PlanResult<LogicalPlan> {
-        let schema = Schema::new(columns.iter().map(|x| x.field()).collect::<Vec<_>>());
-        let constraints = self.resolve_catalog_table_constraints(constraints, &schema)?;
-        let temporal_options = self
-            .resolve_time_travel_options(&format, temporal, state)
-            .await?;
-        let info = SourceInfo {
-            paths: location.map(|x| vec![x]).unwrap_or_default(),
-            schema: Some(schema),
-            constraints,
-            partition_by: partition_by.into_iter().map(|field| field.column).collect(),
-            bucket_by: bucket_by.map(|x| x.into()),
-            sort_order: sort_by.into_iter().map(|x| x.into()).collect(),
-            // TODO: detect duplicated keys in each set of options
-            options: vec![
-                OptionLayer::TablePropertyList {
-                    items: table_options.into_iter().chain(table_properties).collect(),
-                },
-                OptionLayer::OptionList { items: options },
-                OptionLayer::OptionList {
-                    items: temporal_options,
-                },
-            ],
-        };
-        let registry = self.ctx.extension::<TableFormatRegistry>()?;
-        let table_source = registry
-            .get(&format)?
-            .create_source(&self.ctx.state(), info)
-            .await?;
-        self.resolve_table_source_with_rename(
-            table_source,
-            table_reference,
-            None,
-            vec![],
-            None,
-            state,
-        )
-    }
-
     /// Resolves a persistent view by re-parsing its SQL definition into a logical plan.
-    async fn resolve_table_kind_view(
+    async fn resolve_table_view(
         &self,
         definition: String,
         columns: Vec<TableColumnStatus>,
@@ -316,10 +290,10 @@ impl PlanResolver<'_> {
     ) -> PlanResult<f64> {
         let schema = Arc::new(DFSchema::empty());
         let resolved = self.resolve_expression(expr, &schema, state).await?;
-        let cast_expr = Expr::Cast(datafusion_expr::expr::Cast {
-            expr: Box::new(resolved),
-            data_type: DataType::Float64,
-        });
+        let cast_expr = Expr::Cast(datafusion_expr::expr::Cast::new(
+            Box::new(resolved),
+            DataType::Float64,
+        ));
         let evaluator = LiteralEvaluator::new();
         let scalar = evaluator
             .evaluate(&cast_expr)
@@ -371,25 +345,65 @@ impl PlanResolver<'_> {
             let udf = catalog_manager.get_function(&canonical_function_name)?;
             if let Some(f) = udf
                 .as_ref()
-                .and_then(|x| x.inner().as_any().downcast_ref::<PySparkUnresolvedUDF>())
+                .and_then(|x| x.inner().downcast_ref::<PySparkUnresolvedUDF>())
             {
                 if f.eval_type().is_table_function() {
                     let udtf = PythonUdtf {
                         python_version: f.python_version().to_string(),
                         eval_type: f.eval_type(),
                         command: f.command().to_vec(),
-                        return_type: f.output_type().clone(),
+                        return_type: f.output_type().cloned(),
                     };
                     let input = self.resolve_query_empty(true)?;
+                    // Combine positional arguments with named_arguments (SQL kwargs like a => 10).
+                    // Named arguments are appended after positional ones, wrapped as NamedArgument
+                    // expressions so that extract_kwargs can process them uniformly.
+                    let all_arguments: Vec<spec::Expr> = arguments
+                        .into_iter()
+                        .chain(named_arguments.into_iter().map(|(key, value)| {
+                            spec::Expr::NamedArgument {
+                                key: key.into(),
+                                value: Box::new(value),
+                            }
+                        }))
+                        .collect();
+                    let (positional_args, kwarg_names) = Self::extract_kwargs(all_arguments);
+                    // Validate: no duplicate kwarg names and no positional arg after a named arg.
+                    {
+                        let mut seen_kwarg_names = std::collections::HashSet::new();
+                        let mut seen_named = false;
+                        for kwarg in &kwarg_names {
+                            match kwarg {
+                                Some(name) => {
+                                    if !seen_kwarg_names.insert(name.as_str()) {
+                                        return Err(PlanError::AnalysisError(format!(
+                                            "[DUPLICATE_ROUTINE_PARAMETER_ASSIGNMENT.DOUBLE_NAMED_ARGUMENT_REFERENCE] \
+                                             Duplicate named argument: '{name}' is assigned more than once."
+                                        )));
+                                    }
+                                    seen_named = true;
+                                }
+                                None => {
+                                    if seen_named {
+                                        return Err(PlanError::AnalysisError(
+                                            "[UNEXPECTED_POSITIONAL_ARGUMENT] \
+                                             Positional argument follows a named (keyword) argument."
+                                                .to_string(),
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
                     let arguments = self
-                        .resolve_named_expressions(arguments, input.schema(), state)
+                        .resolve_named_expressions(positional_args, input.schema(), state)
                         .await?;
                     self.resolve_python_udtf_plan(
                         udtf,
                         &function_name,
                         input,
                         arguments,
-                        &[], // ReadUdtf kwargs come via named_arguments, not NamedArgument exprs
+                        &kwarg_names,
                         None,
                         None,
                         f.deterministic(),
@@ -403,17 +417,21 @@ impl PlanResolver<'_> {
             } else {
                 let schema = Arc::new(DFSchema::empty());
                 let arguments = self.resolve_expressions(arguments, &schema, state).await?;
-                let table_function =
-                    if let Ok(f) = self.ctx.table_function(&canonical_function_name) {
-                        f
-                    } else if let Ok(f) = get_built_in_table_function(&canonical_function_name) {
-                        f
-                    } else {
-                        return Err(PlanError::unsupported(format!(
-                            "unknown table function: {function_name}"
-                        )));
-                    };
-                let table_provider = table_function.create_table_provider(&arguments)?;
+                let table_function = match self.ctx.table_function(&canonical_function_name) {
+                    Ok(f) => f,
+                    _ => match get_built_in_table_function(&canonical_function_name) {
+                        Ok(f) => f,
+                        _ => {
+                            return Err(PlanError::unsupported(format!(
+                                "unknown table function: {function_name}"
+                            )));
+                        }
+                    },
+                };
+                let session_state = self.ctx.state();
+                let table_provider = table_function.create_table_provider_with_args(
+                    TableFunctionArgs::new(&arguments, &session_state),
+                )?;
                 self.resolve_table_provider_with_rename(
                     table_provider,
                     function_name,
@@ -450,15 +468,17 @@ impl PlanResolver<'_> {
         };
         let info = SourceInfo {
             paths,
+            lakehouse_table: None,
             schema,
-            // TODO: detect duplicated keys in the set of options
             constraints: Default::default(),
             partition_by: vec![],
             bucket_by: None,
             sort_order: vec![],
+            // TODO: detect duplicated keys in the set of options
             options: vec![OptionLayer::OptionList {
                 items: options.into_iter().collect(),
             }],
+            read_case_sensitive: self.config.case_sensitive,
         };
         let registry = self.ctx.extension::<TableFormatRegistry>()?;
         let table_source = registry
@@ -513,6 +533,7 @@ impl PlanResolver<'_> {
         let table_source: Arc<dyn TableSource> = if has_duplicates {
             // Preserve existing behavior by wrapping the underlying TableProvider with renaming,
             // but only if this TableSource is DataFusion's DefaultTableSource.
+            // TODO: support duplicate column names for other `TableSource` implementations
             let provider = source_as_provider(&table_source).map_err(|e| {
                 PlanError::unsupported(format!(
                     "duplicate column names require DefaultTableSource-backed TableProvider: {e}"

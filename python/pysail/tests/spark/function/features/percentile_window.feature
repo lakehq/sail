@@ -197,8 +197,8 @@ Feature: percentile() window function computes running percentiles
       SELECT
         category,
         value,
-        percentile(value, 0.5) OVER (PARTITION BY category ORDER BY value) AS p50,
-        percentile(value, 0.9) OVER (PARTITION BY category ORDER BY value) AS p90
+        ROUND(percentile(value, 0.5) OVER (PARTITION BY category ORDER BY value), 6) AS p50,
+        ROUND(percentile(value, 0.9) OVER (PARTITION BY category ORDER BY value), 6) AS p90
       FROM (VALUES
         ('A', 1), ('A', 2), ('A', 3), ('A', 4), ('A', 5),
         ('B', 10), ('B', 20), ('B', 30)

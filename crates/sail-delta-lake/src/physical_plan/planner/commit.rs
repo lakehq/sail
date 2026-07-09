@@ -12,32 +12,32 @@
 //! This module eliminates duplication by providing:
 //!
 //! - [`assemble_commit_plan`]: builds the writer → (∪ remover) → coalesce → commit tail.
-//! - [`build_remove_from_touched_files`]: joins a touched-file plan with the log replay
-//!   pipeline to produce the Add-action stream consumed by `DeltaRemoveActionsExec`.
+//! - [`build_adds_from_touched_files`]: joins a touched-file plan with the log replay
+//!   pipeline to produce the Add-action stream consumed by row-level writers.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::common::{DataFusionError, Result};
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::execution_plan::reset_plan_states;
 use datafusion::physical_plan::joins::{HashJoinExec, PartitionMode};
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion_common::{JoinType, NullEquality};
 use datafusion_physical_expr::expressions::Column;
+use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::PhysicalSinkMode;
 use url::Url;
 
 use super::context::PlannerContext;
-use super::utils::{build_log_replay_pipeline_with_options, LogReplayOptions};
+use super::utils::{LogReplayOptions, build_log_replay_pipeline_with_options};
 use crate::datasource::PATH_COLUMN;
-use crate::kernel::DeltaOperation;
 use crate::physical_plan::{
-    DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaWriterExec,
-    DeltaWriterExecOptions,
+    DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaWriteContext,
+    DeltaWriterExec, DeltaWriterExecOptions,
 };
 use crate::table::DeltaSnapshot;
 
@@ -56,13 +56,16 @@ use crate::table::DeltaSnapshot;
 pub fn assemble_commit_plan(
     writer_input: Arc<dyn ExecutionPlan>,
     remove_source: Option<Arc<dyn ExecutionPlan>>,
+    remove_partition_value_columns: Option<Vec<(String, String)>>,
     table_url: Url,
     options: DeltaWriterExecOptions,
     metadata_configuration: HashMap<String, String>,
     partition_columns: Vec<String>,
     table_exists: bool,
     table_schema: SchemaRef,
-    operation: Option<DeltaOperation>,
+    user_metadata: Option<String>,
+    write_context: DeltaWriteContext,
+    lakehouse_table: Option<LakehouseExecutionContext>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let writer: Arc<dyn ExecutionPlan> = Arc::new(DeltaWriterExec::new(
         writer_input,
@@ -73,11 +76,15 @@ pub fn assemble_commit_plan(
         PhysicalSinkMode::Append,
         table_exists,
         table_schema.clone(),
-        operation,
+        write_context.clone(),
+        lakehouse_table.clone(),
     )?);
 
     let commit_input: Arc<dyn ExecutionPlan> = if let Some(remove_src) = remove_source {
-        let remover: Arc<dyn ExecutionPlan> = Arc::new(DeltaRemoveActionsExec::new(remove_src)?);
+        let remover: Arc<dyn ExecutionPlan> = Arc::new(DeltaRemoveActionsExec::try_new(
+            remove_src,
+            remove_partition_value_columns,
+        )?);
         UnionExec::try_new(vec![writer, remover])?
     } else {
         writer
@@ -90,26 +97,29 @@ pub fn assemble_commit_plan(
         table_exists,
         table_schema,
         PhysicalSinkMode::Append,
+        user_metadata,
+        write_context.commit_context.clone(),
+        lakehouse_table,
     )))
 }
 
-/// Build a remove-action source from a set of touched file paths.
+/// Build an Add-action metadata source from a set of touched file paths.
 ///
 /// Joins the `touched_file_plan` (which yields `PATH_COLUMN` values for files that
 /// were modified) with a log replay pipeline to retrieve the full Add-action metadata.
-/// The output is suitable for feeding into [`DeltaRemoveActionsExec`].
-pub async fn build_remove_from_touched_files(
+pub async fn build_adds_from_touched_files(
     ctx: &PlannerContext<'_>,
     snapshot: &DeltaSnapshot,
     touched_file_plan: Arc<dyn ExecutionPlan>,
     table_url: &Url,
     version: i64,
     partition_columns: &[String],
+    log_replay_options: LogReplayOptions,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let touched_plan = reset_plan_states(touched_file_plan)?;
 
     let meta_scan: Arc<dyn ExecutionPlan> =
-        build_log_replay_pipeline_with_options(ctx, snapshot, LogReplayOptions::default()).await?;
+        build_log_replay_pipeline_with_options(ctx, snapshot, log_replay_options).await?;
 
     let touched_schema = touched_plan.schema();
     let touched_idx = touched_schema
@@ -160,4 +170,27 @@ pub async fn build_remove_from_touched_files(
     )?);
 
     Ok(touched_adds)
+}
+
+/// Build a remove-action source from a set of touched file paths.
+///
+/// The output is suitable for feeding into [`DeltaRemoveActionsExec`].
+pub async fn build_remove_from_touched_files(
+    ctx: &PlannerContext<'_>,
+    snapshot: &DeltaSnapshot,
+    touched_file_plan: Arc<dyn ExecutionPlan>,
+    table_url: &Url,
+    version: i64,
+    partition_columns: &[String],
+) -> Result<Arc<dyn ExecutionPlan>> {
+    build_adds_from_touched_files(
+        ctx,
+        snapshot,
+        touched_file_plan,
+        table_url,
+        version,
+        partition_columns,
+        LogReplayOptions::default(),
+    )
+    .await
 }

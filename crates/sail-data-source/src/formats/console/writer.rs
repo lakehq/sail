@@ -1,4 +1,3 @@
-use std::any::Any;
 use std::io::Write;
 use std::sync::Arc;
 
@@ -9,7 +8,7 @@ use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, ExecutionPlan, PlanProperties};
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{Result, plan_err};
 use futures::StreamExt;
 
 #[derive(Debug)]
@@ -50,10 +49,6 @@ impl DisplayAs for ConsoleSinkExec {
 impl ExecutionPlan for ConsoleSinkExec {
     fn name(&self) -> &str {
         Self::static_name()
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
     }
 
     fn properties(&self) -> &Arc<PlanProperties> {

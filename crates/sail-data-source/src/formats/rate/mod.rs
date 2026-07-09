@@ -6,15 +6,17 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
-use datafusion::catalog::{Session, TableProvider};
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion_common::{plan_err, Result};
+use datafusion::catalog::Session;
+use datafusion::datasource::provider_as_source;
+use datafusion::logical_expr::{LogicalPlan, TableSource};
+use datafusion_common::{Result, plan_err};
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 use sail_common_datafusion::streaming::source::StreamSourceTableProvider;
 
-use crate::formats::rate::options::resolve_rate_read_options;
 pub use crate::formats::rate::reader::RateSourceExec;
 use crate::formats::rate::reader::RateStreamSource;
+use crate::options::ResolveOptions;
+use crate::options::r#gen::RateReadOptions;
 
 /// Generate record batches at a fixed rate for testing purposes.
 /// The record batches contain two columns, a timestamp and an integer value.
@@ -27,19 +29,21 @@ impl TableFormat for RateTableFormat {
         "rate"
     }
 
-    async fn create_provider(
+    async fn create_source(
         &self,
         ctx: &dyn Session,
         info: SourceInfo,
-    ) -> Result<Arc<dyn TableProvider>> {
+    ) -> Result<Arc<dyn TableSource>> {
         let SourceInfo {
             paths: _,
+            lakehouse_table: _,
             schema,
             constraints,
             partition_by,
             bucket_by,
             sort_order,
             options,
+            read_case_sensitive: _,
         } = info;
         if !constraints.deref().is_empty() {
             return plan_err!("the rate table format does not support constraints");
@@ -72,16 +76,14 @@ impl TableFormat for RateTableFormat {
                 ])
             }
         };
-        let options = resolve_rate_read_options(options)?;
+        let options = RateReadOptions::resolve(ctx, options)?;
         let source = RateStreamSource::try_new(options, Arc::new(schema))?;
-        Ok(Arc::new(StreamSourceTableProvider::new(Arc::new(source))))
+        Ok(provider_as_source(Arc::new(
+            StreamSourceTableProvider::new(Arc::new(source)),
+        )))
     }
 
-    async fn create_writer(
-        &self,
-        _ctx: &dyn Session,
-        _info: SinkInfo,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
+    async fn create_writer(&self, _ctx: &dyn Session, _info: SinkInfo) -> Result<LogicalPlan> {
         plan_err!("the rate table format does not support writing")
     }
 }

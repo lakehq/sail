@@ -1,16 +1,16 @@
+use chumsky::Parser;
 use chumsky::extra::ParserExtra;
 use chumsky::input::{Input, ValueInput};
 use chumsky::label::LabelError;
 use chumsky::pratt::{infix, left};
 use chumsky::prelude::choice;
-use chumsky::Parser;
 use either::Either;
 use sail_sql_macro::{TreeParser, TreeSyntax, TreeText};
 
 use crate::ast::expression::{
     DuplicateTreatment, Expr, FunctionArgument, GroupingExpr, OrderByExpr, WindowSpec,
 };
-use crate::ast::identifier::{column_ident, object_name, table_ident, Ident, ObjectName};
+use crate::ast::identifier::{Ident, ObjectName, column_ident, object_name, table_ident};
 use crate::ast::keywords::{
     All, Anti, As, Bucket, By, Cluster, Cross, Cube, Distinct, Distribute, Except, Exclude, For,
     From, Full, Group, Having, Identifier, In, Include, Inner, Intersect, Join, Lateral, Left,
@@ -217,10 +217,17 @@ pub struct SelectClause {
 pub struct NamedExpr {
     #[parser(function = |(e, _), _| e)]
     pub expr: Expr,
-    // If the alias is an identifier list, it will be parsed by the default `Ident` parser
-    // rather than the restricted `Ident` parser passed as a dependency.
-    // This is because the identifier list is inside the parentheses so there will be no ambiguity.
-    #[parser(function = |(_, i), o| unit(o).or_not().then(either_or(i, unit(o))).or_not())]
+    // The restricted `Ident` parser passed as a dependency only applies when the `AS`
+    // keyword is omitted: keywords are restricted as implicit column aliases to keep
+    // parsing unambiguous (e.g. so that `CASE WHEN a THEN b END` does not parse `b END`
+    // as an aliased expression). With an explicit `AS` there is no ambiguity, so the
+    // default `Ident` parser is used and Spark queries such as `SELECT 1 AS end` are
+    // accepted. An identifier list is always parsed by the default `Ident` parser since
+    // it is inside parentheses where no ambiguity arises.
+    #[parser(function = |(_, i), o| choice((
+        unit(o).then(either_or(unit(o), unit(o))).map(|(r#as, alias)| (Some(r#as), alias)),
+        either_or(i, unit(o)).map(|alias| (None, alias)),
+    )).or_not())]
     pub alias: Option<(Option<As>, Either<Ident, IdentList>)>,
 }
 

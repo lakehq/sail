@@ -10,10 +10,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use sail_data_source::options::gen::DeltaWriteOptions;
+use std::collections::HashMap;
+
+use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
 use serde::{Deserialize, Serialize};
 
+use crate::options::r#gen::DeltaWriteOptions;
+
 /// Options for the Delta Lake writer execution plan.
+///
 /// This is a subset of `DeltaWriteOptions` containing only the fields used
 /// during physical writing. It derives serde for use in the physical plan.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,6 +28,14 @@ pub struct DeltaWriterExecOptions {
     pub merge_schema: bool,
     pub overwrite_schema: bool,
     pub replace_where: Option<String>,
+    #[serde(default)]
+    pub generation_expressions: HashMap<String, String>,
+    #[serde(default)]
+    pub default_expressions: HashMap<String, String>,
+    #[serde(default)]
+    pub target_nullability: HashMap<String, bool>,
+    #[serde(default)]
+    pub identity_columns: HashMap<String, CatalogTableColumnIdentity>,
 }
 
 impl From<DeltaWriteOptions> for DeltaWriterExecOptions {
@@ -33,6 +46,45 @@ impl From<DeltaWriteOptions> for DeltaWriterExecOptions {
             merge_schema: options.merge_schema,
             overwrite_schema: options.overwrite_schema,
             replace_where: options.replace_where,
+            generation_expressions: HashMap::new(),
+            default_expressions: HashMap::new(),
+            target_nullability: HashMap::new(),
+            identity_columns: HashMap::new(),
         }
+    }
+}
+
+impl DeltaWriterExecOptions {
+    /// Attach column-level generation expressions resolved from the write input's
+    /// logical schema.
+    pub fn with_generation_expressions(
+        mut self,
+        generation_expressions: HashMap<String, String>,
+    ) -> Self {
+        self.generation_expressions = generation_expressions;
+        self
+    }
+
+    /// Attach column-level default expressions resolved from the write input's
+    /// logical schema.
+    pub fn with_default_expressions(
+        mut self,
+        default_expressions: HashMap<String, String>,
+    ) -> Self {
+        self.default_expressions = default_expressions;
+        self
+    }
+
+    pub fn with_target_nullability(mut self, target_nullability: HashMap<String, bool>) -> Self {
+        self.target_nullability = target_nullability;
+        self
+    }
+
+    pub fn with_identity_columns(
+        mut self,
+        identity_columns: HashMap<String, CatalogTableColumnIdentity>,
+    ) -> Self {
+        self.identity_columns = identity_columns;
+        self
     }
 }

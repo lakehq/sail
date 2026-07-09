@@ -18,6 +18,7 @@
 
 // [Credit]: <https://github.com/delta-io/delta-rs/blob/3607c314cbdd2ad06c6ee0677b92a29f695c71f3/crates/core/src/delta_datafusion/mod.rs>
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -28,19 +29,19 @@ use datafusion::common::{DataFusionError, Result, ScalarValue};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{
-    wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileGroup, FileScanConfig,
-    FileScanConfigBuilder, ParquetSource,
+    FileGroup, FileScanConfig, FileScanConfigBuilder, ParquetSource, wrap_partition_type_in_dict,
+    wrap_partition_value_in_dict,
 };
 use datafusion::datasource::table_schema::TableSchema;
 use datafusion::physical_expr::{LexOrdering, PhysicalExpr};
 use object_store::path::Path;
+use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 
 use crate::conversion::ScalarConverter;
-use crate::datasource::{create_object_store_url, partitioned_file_from_action, DeltaScanConfig};
-use crate::physical_plan::DeltaPhysicalExprAdapterFactory;
+use crate::datasource::{DeltaScanConfig, create_object_store_url, partitioned_file_from_action};
+use crate::delta_log::LogStoreRef;
 use crate::schema::arrow_field_physical_name;
 use crate::spec::{Add, MaxStat, MinStat};
-use crate::storage::LogStoreRef;
 use crate::table::DeltaSnapshot;
 
 /// Parameters for building file scan configuration
@@ -67,6 +68,70 @@ pub enum TableStatsMode {
     Unknown,
 }
 
+pub(crate) fn physical_to_logical_name_map(snapshot: &DeltaSnapshot) -> HashMap<String, String> {
+    let column_mapping_mode = snapshot.effective_column_mapping_mode();
+    let mut physical_to_logical = HashMap::new();
+    for field in snapshot.schema().fields() {
+        let logical = field.name().clone();
+        let physical = arrow_field_physical_name(field, column_mapping_mode).to_string();
+        physical_to_logical.entry(physical).or_insert(logical);
+    }
+    physical_to_logical
+}
+
+pub(crate) fn file_scan_logical_names(
+    snapshot: &DeltaSnapshot,
+    scan_config: &DeltaScanConfig,
+    file_schema: &SchemaRef,
+) -> Vec<String> {
+    let physical_to_logical = physical_to_logical_name_map(snapshot);
+    let mut names = file_schema
+        .fields()
+        .iter()
+        .map(|field| {
+            physical_to_logical
+                .get(field.name())
+                .cloned()
+                .unwrap_or_else(|| field.name().clone())
+        })
+        .collect::<Vec<_>>();
+    names.extend(snapshot.metadata().partition_columns().iter().cloned());
+    if let Some(file_column_name) = &scan_config.file_column_name {
+        names.push(file_column_name.clone());
+    }
+    if let Some(commit_version_column_name) = &scan_config.commit_version_column_name {
+        names.push(commit_version_column_name.clone());
+    }
+    if let Some(commit_timestamp_column_name) = &scan_config.commit_timestamp_column_name {
+        names.push(commit_timestamp_column_name.clone());
+    }
+    names
+}
+
+pub(crate) fn file_scan_projection_for_schema(
+    snapshot: &DeltaSnapshot,
+    scan_config: &DeltaScanConfig,
+    file_schema: &SchemaRef,
+    output_schema: &SchemaRef,
+) -> Result<Vec<usize>> {
+    let scan_names = file_scan_logical_names(snapshot, scan_config, file_schema);
+    output_schema
+        .fields()
+        .iter()
+        .map(|field| {
+            scan_names
+                .iter()
+                .position(|name| name == field.name())
+                .ok_or_else(|| {
+                    DataFusionError::Plan(format!(
+                        "Column '{}' is not available in Delta file scan schema",
+                        field.name()
+                    ))
+                })
+        })
+        .collect()
+}
+
 /// Build a FileScanConfig from pruned files and scan configuration
 pub fn build_file_scan_config(
     snapshot: &DeltaSnapshot,
@@ -80,22 +145,12 @@ pub fn build_file_scan_config(
     // Get the complete schema that includes partition columns
     let complete_schema = match scan_config.schema.clone() {
         Some(schema) => schema,
-        None => snapshot.input_schema()?,
+        None => Arc::new(snapshot.schema().clone()),
     };
     let config = scan_config.clone();
     let table_partition_cols = snapshot.metadata().partition_columns();
-    let column_mapping_mode = snapshot.effective_column_mapping_mode();
-    let kernel_schema = snapshot.schema();
     let partition_columns_mapped = snapshot.physical_partition_columns();
-    let mut physical_to_logical = HashMap::new();
-    for field in complete_schema.fields() {
-        let logical = field.name().clone();
-        let physical = kernel_schema
-            .field_with_name(&logical)
-            .map(|f| arrow_field_physical_name(f, column_mapping_mode).to_string())
-            .unwrap_or_else(|_| logical.clone());
-        physical_to_logical.entry(physical).or_insert(logical);
-    }
+    let physical_to_logical = physical_to_logical_name_map(snapshot);
 
     // Build file groups by partition values
     let mut file_groups: HashMap<
@@ -108,13 +163,10 @@ pub fn build_file_scan_config(
     let mut per_file_stats: Vec<Arc<Statistics>> = Vec::new();
 
     for action in files.iter() {
-        if action.deletion_vector.is_some() {
-            // TODO: Implement deletion-vector-aware scans by excluding masked row ids during file
-            // reads instead of rejecting the file at planning time.
-            return Err(DataFusionError::NotImplemented(
-                "Reading Delta tables with Deletion Vectors is not yet supported".to_string(),
-            ));
-        }
+        // Files with deletion vectors are accepted: DV filtering is applied post-scan
+        // by DeltaScanByAddsExec which tracks row indices and excludes deleted rows.
+        // Note: the physical numRecords in stats is the total file record count
+        // (not accounting for DV deletions), which is correct for scan planning.
 
         let mut part =
             partitioned_file_from_action(action, &partition_columns_mapped, &complete_schema)?;
@@ -228,13 +280,24 @@ pub fn build_file_scan_config(
     // projection statistics can panic when encountering a `Column` referring to a partition
     // column.
     let mut stats = match params.table_stats_mode {
-        TableStatsMode::Snapshot => snapshot
-            .datafusion_table_statistics(params.pruning_mask)
-            .unwrap_or_else(|| {
-                datafusion::common::stats::Statistics::new_unknown(
-                    table_schema.table_schema().as_ref(),
-                )
-            }),
+        TableStatsMode::Snapshot => {
+            let snapshot_schema = Arc::new(snapshot.schema().clone());
+            snapshot
+                .datafusion_table_statistics(params.pruning_mask)
+                .map(|stats| {
+                    map_statistics_to_schema_with_name_mapping(
+                        &stats,
+                        &snapshot_schema,
+                        table_schema.table_schema(),
+                        Some(&physical_to_logical),
+                    )
+                })
+                .unwrap_or_else(|| {
+                    datafusion::common::stats::Statistics::new_unknown(
+                        table_schema.table_schema().as_ref(),
+                    )
+                })
+        }
         TableStatsMode::AddsOnly => {
             // Compute stats only for the current `files` slice to match chunked execution.
             // If any file is missing stats, fall back to unknown rather than mixing partial
@@ -267,10 +330,10 @@ pub fn build_file_scan_config(
     let mut parquet_source =
         ParquetSource::new(table_schema).with_table_parquet_options(parquet_options);
 
-    if let Some(predicate) = params.pushdown_filter {
-        if config.enable_parquet_pushdown {
-            parquet_source = parquet_source.with_predicate(predicate);
-        }
+    if let Some(predicate) = params.pushdown_filter
+        && config.enable_parquet_pushdown
+    {
+        parquet_source = parquet_source.with_predicate(predicate);
     }
 
     let file_source: Arc<dyn datafusion::datasource::physical_plan::FileSource> =
@@ -301,7 +364,7 @@ pub fn build_file_scan_config(
         .with_statistics(stats)
         .with_projection_indices(params.projection.cloned())?
         .with_limit(params.limit)
-        .with_expr_adapter(Some(Arc::new(DeltaPhysicalExprAdapterFactory {})))
+        .with_expr_adapter(Some(Arc::new(SchemaEvolutionPhysicalExprAdapterFactory {})))
         .build();
 
     Ok(file_scan_config)
@@ -346,7 +409,7 @@ fn add_column_statistics(a: &ColumnStatistics, b: &ColumnStatistics) -> ColumnSt
     }
 }
 
-fn sanitize_statistics_for_schema(schema: &SchemaRef, stats: &mut Statistics) {
+pub(crate) fn sanitize_statistics_for_schema(schema: &SchemaRef, stats: &mut Statistics) {
     for (idx, field) in schema.fields().iter().enumerate() {
         if let Some(column_stats) = stats.column_statistics.get_mut(idx) {
             sanitize_column_statistics_for_field(column_stats, field.name(), field.data_type());
@@ -370,11 +433,61 @@ fn sanitize_column_statistics_for_field(
         .max_value
         .get_value()
         .map(ScalarValue::data_type);
-    if let (Some(min_type), Some(max_type)) = (min_type, max_type) {
-        if min_type != max_type {
-            column_stats.min_value = Precision::Absent;
-            column_stats.max_value = Precision::Absent;
-        }
+    if let (Some(min_type), Some(max_type)) = (min_type, max_type)
+        && min_type != max_type
+    {
+        column_stats.min_value = Precision::Absent;
+        column_stats.max_value = Precision::Absent;
+        return;
+    }
+    if let (Some(min), Some(max)) = (
+        column_stats.min_value.get_value(),
+        column_stats.max_value.get_value(),
+    ) && matches!(min.partial_cmp(max), Some(Ordering::Greater))
+    {
+        column_stats.min_value = Precision::Absent;
+        column_stats.max_value = Precision::Absent;
+    }
+}
+
+pub(crate) fn map_statistics_to_schema(
+    statistics: &Statistics,
+    source_schema: &SchemaRef,
+    target_schema: &SchemaRef,
+) -> Statistics {
+    map_statistics_to_schema_with_name_mapping(statistics, source_schema, target_schema, None)
+}
+
+pub(crate) fn map_statistics_to_schema_with_name_mapping(
+    statistics: &Statistics,
+    source_schema: &SchemaRef,
+    target_schema: &SchemaRef,
+    target_to_source_names: Option<&HashMap<String, String>>,
+) -> Statistics {
+    let column_statistics = target_schema
+        .fields()
+        .iter()
+        .map(|field| {
+            let source_index = target_to_source_names
+                .and_then(|names| names.get(field.name()))
+                .and_then(|name| source_schema.index_of(name).ok())
+                .or_else(|| source_schema.index_of(field.name()).ok());
+            let mut column_statistics = source_index
+                .and_then(|idx| statistics.column_statistics.get(idx).cloned())
+                .unwrap_or_else(ColumnStatistics::new_unknown);
+            sanitize_column_statistics_for_field(
+                &mut column_statistics,
+                field.name(),
+                field.data_type(),
+            );
+            column_statistics
+        })
+        .collect();
+
+    Statistics {
+        num_rows: statistics.num_rows,
+        total_byte_size: statistics.total_byte_size,
+        column_statistics,
     }
 }
 
@@ -450,12 +563,7 @@ fn rewrite_data_file_location(table_root: Path, location: Path) -> Path {
         return location;
     }
 
-    Path::from(format!(
-        "{}{}{}",
-        table_root,
-        object_store::path::DELIMITER,
-        location
-    ))
+    table_root.parts().chain(location.parts()).collect()
 }
 
 fn looks_like_absolute_uri(path: &str) -> bool {
@@ -500,14 +608,13 @@ fn stats_for_add(
                     ScalarConverter::stat_value_to_arrow_scalar_value(v, field.data_type())
                         .ok()
                         .flatten()
-                }) {
-                    if !value.is_null() {
-                        min_value = match min_stat {
-                            MinStat::Exact(_) => Precision::Exact(value),
-                            MinStat::LowerBound(_) => Precision::Inexact(value),
-                            MinStat::Absent => Precision::Absent,
-                        };
-                    }
+                }) && !value.is_null()
+                {
+                    min_value = match min_stat {
+                        MinStat::Exact(_) => Precision::Exact(value),
+                        MinStat::LowerBound(_) => Precision::Inexact(value),
+                        MinStat::Absent => Precision::Absent,
+                    };
                 }
             }
             if max_value == Precision::Absent {
@@ -516,24 +623,23 @@ fn stats_for_add(
                     ScalarConverter::stat_value_to_arrow_scalar_value(v, field.data_type())
                         .ok()
                         .flatten()
-                }) {
-                    if !value.is_null() {
-                        max_value = match max_stat {
-                            MaxStat::Exact(_) => Precision::Exact(value),
-                            MaxStat::UpperBound(_) => Precision::Inexact(value),
-                            MaxStat::Absent => Precision::Absent,
-                        };
-                    }
-                }
-            }
-            if null_count == Precision::Absent {
-                if let Some(value) = stats.null_count_value(name) {
-                    null_count = if stats.tight_bounds {
-                        Precision::Exact(value.max(0) as usize)
-                    } else {
-                        Precision::Inexact(value.max(0) as usize)
+                }) && !value.is_null()
+                {
+                    max_value = match max_stat {
+                        MaxStat::Exact(_) => Precision::Exact(value),
+                        MaxStat::UpperBound(_) => Precision::Inexact(value),
+                        MaxStat::Absent => Precision::Absent,
                     };
                 }
+            }
+            if null_count == Precision::Absent
+                && let Some(value) = stats.null_count_value(name)
+            {
+                null_count = if stats.tight_bounds {
+                    Precision::Exact(value.max(0) as usize)
+                } else {
+                    Precision::Inexact(value.max(0) as usize)
+                };
             }
         }
 
@@ -566,13 +672,14 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
     use datafusion::common::ScalarValue;
+    use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
     use object_store::path::Path;
 
     use super::{
-        add_column_statistics, rewrite_data_file_location, sanitize_statistics_for_schema,
-        stats_for_add,
+        add_column_statistics, map_statistics_to_schema,
+        map_statistics_to_schema_with_name_mapping, rewrite_data_file_location,
+        sanitize_statistics_for_schema, stats_for_add,
     };
     use crate::conversion::ScalarConverter;
     use crate::spec::Add;
@@ -636,6 +743,147 @@ mod tests {
     }
 
     #[test]
+    fn test_sanitize_statistics_for_schema_removes_invalid_min_max() {
+        let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Utf8, true)]));
+        let mut stats = Statistics {
+            num_rows: Precision::Exact(2),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(0),
+                max_value: Precision::Exact(ScalarValue::Int32(Some(22))),
+                min_value: Precision::Exact(ScalarValue::Int32(Some(3))),
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Absent,
+                byte_size: Precision::Absent,
+            }],
+        };
+
+        sanitize_statistics_for_schema(&schema, &mut stats);
+
+        assert_eq!(stats.column_statistics[0].min_value, Precision::Absent);
+        assert_eq!(stats.column_statistics[0].max_value, Precision::Absent);
+    }
+
+    #[test]
+    fn test_map_statistics_to_schema_reorders_partition_columns_by_name() {
+        let source_schema = Arc::new(Schema::new(vec![
+            Field::new("load_date", DataType::Date32, true),
+            Field::new("id", DataType::Utf8, true),
+            Field::new("payload_column_1", DataType::Int32, true),
+            Field::new("some_col", DataType::Utf8, true),
+        ]));
+        let target_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Utf8, true),
+            Field::new("payload_column_1", DataType::Int32, true),
+            Field::new("some_col", DataType::Utf8, true),
+            Field::new("load_date", DataType::Date32, true),
+        ]));
+        let statistics = Statistics {
+            num_rows: Precision::Exact(2),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![
+                ColumnStatistics::new_unknown(),
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Utf8(Some("3".to_string()))),
+                    min_value: Precision::Exact(ScalarValue::Utf8(Some("2".to_string()))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Absent,
+                },
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(22))),
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(3))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Absent,
+                },
+                ColumnStatistics {
+                    null_count: Precision::Exact(0),
+                    max_value: Precision::Exact(ScalarValue::Utf8(Some("foo".to_string()))),
+                    min_value: Precision::Exact(ScalarValue::Utf8(Some("foo".to_string()))),
+                    sum_value: Precision::Absent,
+                    distinct_count: Precision::Absent,
+                    byte_size: Precision::Absent,
+                },
+            ],
+        };
+
+        let mapped = map_statistics_to_schema(&statistics, &source_schema, &target_schema);
+
+        assert_eq!(mapped.num_rows, Precision::Exact(2));
+        assert_eq!(mapped.column_statistics.len(), 4);
+        assert_eq!(
+            mapped.column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::Utf8(Some("2".to_string())))
+        );
+        assert_eq!(
+            mapped.column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Utf8(Some("3".to_string())))
+        );
+        assert_eq!(
+            mapped.column_statistics[1].min_value,
+            Precision::Exact(ScalarValue::Int32(Some(3)))
+        );
+        assert_eq!(
+            mapped.column_statistics[1].max_value,
+            Precision::Exact(ScalarValue::Int32(Some(22)))
+        );
+        assert_eq!(
+            mapped.column_statistics[2].min_value,
+            Precision::Exact(ScalarValue::Utf8(Some("foo".to_string())))
+        );
+        assert_eq!(mapped.column_statistics[3], ColumnStatistics::new_unknown());
+    }
+
+    #[test]
+    fn test_map_statistics_to_schema_supports_physical_column_names() {
+        let source_schema = Arc::new(Schema::new(vec![Field::new(
+            "payload_column_1",
+            DataType::Int32,
+            true,
+        )]));
+        let target_schema = Arc::new(Schema::new(vec![Field::new(
+            "col-physical-payload",
+            DataType::Int32,
+            true,
+        )]));
+        let statistics = Statistics {
+            num_rows: Precision::Exact(2),
+            total_byte_size: Precision::Absent,
+            column_statistics: vec![ColumnStatistics {
+                null_count: Precision::Exact(0),
+                max_value: Precision::Exact(ScalarValue::Int32(Some(22))),
+                min_value: Precision::Exact(ScalarValue::Int32(Some(3))),
+                sum_value: Precision::Absent,
+                distinct_count: Precision::Absent,
+                byte_size: Precision::Absent,
+            }],
+        };
+        let physical_to_logical = HashMap::from([(
+            "col-physical-payload".to_string(),
+            "payload_column_1".to_string(),
+        )]);
+
+        let mapped = map_statistics_to_schema_with_name_mapping(
+            &statistics,
+            &source_schema,
+            &target_schema,
+            Some(&physical_to_logical),
+        );
+
+        assert_eq!(
+            mapped.column_statistics[0].min_value,
+            Precision::Exact(ScalarValue::Int32(Some(3)))
+        );
+        assert_eq!(
+            mapped.column_statistics[0].max_value,
+            Precision::Exact(ScalarValue::Int32(Some(22)))
+        );
+    }
+
+    #[test]
     fn test_rewrite_data_file_location_preserves_absolute_uri_paths() {
         let table_root = Path::from("bucket/table");
         let absolute = Path::from("s3://other-bucket/path/part-000.parquet");
@@ -655,6 +903,21 @@ mod tests {
         assert_eq!(
             rewritten,
             Path::from("bucket/table/part=1/part-000.parquet")
+        );
+    }
+
+    #[test]
+    fn test_rewrite_data_file_location_preserves_percent_encoded_partition_dirs() {
+        #[expect(clippy::expect_used)]
+        let location =
+            Path::parse("ts_utc=2024-01-15%2010%3A30%3A00.123456/part-00000-abc.snappy.parquet")
+                .expect("valid path");
+
+        let rewritten = rewrite_data_file_location(Path::from("bucket/table"), location);
+
+        assert_eq!(
+            rewritten.as_ref(),
+            "bucket/table/ts_utc=2024-01-15%2010%3A30%3A00.123456/part-00000-abc.snappy.parquet"
         );
     }
 

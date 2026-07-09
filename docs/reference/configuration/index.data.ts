@@ -34,6 +34,11 @@ export default {
           pattern: /^spark\./,
         },
         {
+          id: "flight",
+          title: "Arrow Flight Options",
+          pattern: /^flight\./,
+        },
+        {
           id: "execution",
           title: "Execution Options",
           pattern: /^execution\./,
@@ -57,6 +62,11 @@ export default {
           id: "telemetry",
           title: "Telemetry Options",
           pattern: /^telemetry\./,
+        },
+        {
+          id: "python",
+          title: "Python Options",
+          pattern: /^python\./,
         },
       ],
       fallbackGroup: {

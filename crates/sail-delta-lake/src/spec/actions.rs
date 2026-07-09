@@ -23,8 +23,8 @@ use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
 use chrono::DateTime;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::spec::statistics::Stats;
@@ -83,6 +83,44 @@ pub struct DeletionVectorDescriptor {
     pub offset: Option<i32>,
     pub size_in_bytes: i32,
     pub cardinality: i64,
+}
+
+impl DeletionVectorDescriptor {
+    /// Compute the derived `uniqueId` field as specified by the Delta protocol.
+    ///
+    /// ```text
+    /// uniqueId = <storageType><pathOrInlineDv>          (when offset is None)
+    ///          = <storageType><pathOrInlineDv>@<offset>  (when offset is Some)
+    /// ```
+    ///
+    /// This value is used as a component of the logical file primary key `(path, uniqueId)`
+    /// during action reconciliation (log replay / snapshot construction).
+    pub fn unique_id(&self) -> String {
+        match self.offset {
+            None => format!("{}{}", self.storage_type, self.path_or_inline_dv),
+            Some(offset) => {
+                format!("{}{}@{}", self.storage_type, self.path_or_inline_dv, offset)
+            }
+        }
+    }
+}
+
+/// Primary key for a logical file in the Delta log: `(path, deletion_vector_unique_id)`.
+///
+/// The Delta protocol identifies a logical file by the data-file path combined
+/// with the `uniqueId` of its deletion vector, when one is present.
+pub(crate) type LogicalFileKey = (String, Option<String>);
+
+/// Compute the logical file key for an `Add` or `Remove` action.
+#[inline]
+pub(crate) fn logical_file_key(
+    path: &str,
+    deletion_vector: Option<&DeletionVectorDescriptor>,
+) -> LogicalFileKey {
+    (
+        path.to_string(),
+        deletion_vector.map(DeletionVectorDescriptor::unique_id),
+    )
 }
 
 /// Delta Lake action envelope.
@@ -398,11 +436,9 @@ impl TryFrom<Action> for CommitAction {
             Action::Txn(t) => Ok(Self::Txn(t)),
             Action::CommitInfo(c) => Ok(Self::CommitInfo(c)),
             Action::DomainMetadata(d) => Ok(Self::DomainMetadata(d)),
-            Action::CheckpointMetadata(_) | Action::Sidecar(_) => Err(
-                DeltaTableError::generic(
-                    "checkpoint-only actions (CheckpointMetadata, Sidecar) are not allowed in commit files",
-                ),
-            ),
+            Action::CheckpointMetadata(_) | Action::Sidecar(_) => Err(DeltaTableError::generic(
+                "checkpoint-only actions (CheckpointMetadata, Sidecar) are not allowed in commit files",
+            )),
         }
     }
 }
