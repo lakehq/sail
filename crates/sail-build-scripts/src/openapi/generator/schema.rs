@@ -90,8 +90,7 @@ impl<'a> OpenApiGenerator<'a> {
                 .one_of
                 .iter()
                 .chain(schema.any_of.iter())
-                .enumerate()
-                .map(|(index, schema)| self.enum_schema_variant(index, schema, None, inline))
+                .map(|schema| self.schema_enum_variant(schema, None))
                 .collect::<Result<Vec<_>, _>>()?;
             return Ok(SchemaDefinition::new(
                 type_name,
@@ -115,7 +114,7 @@ impl<'a> OpenApiGenerator<'a> {
             ));
         }
 
-        if let Some(map_type) = self.map_type(schema, inline, in_module, "Value")? {
+        if let Some(map_type) = self.map_type_with_inline(schema, inline, in_module, "Value")? {
             return Ok(SchemaDefinition::new(
                 type_name,
                 schema,
@@ -174,7 +173,7 @@ impl<'a> OpenApiGenerator<'a> {
             let item = self.schema_type(items, TypePosition::Normal)?;
             return Ok(RustType::Vec(Box::new(item)));
         }
-        if let Some(map_type) = self.map_type_plain(schema)? {
+        if let Some(map_type) = self.map_type(schema)? {
             return Ok(map_type);
         }
         if let Some(rust_type) = primitive_schema_type(schema) {
@@ -242,10 +241,12 @@ impl<'a> OpenApiGenerator<'a> {
             )?;
             return Ok(RustType::Vec(Box::new(item)));
         }
-        if should_generate_inline_schema(schema)? {
+        if should_define_inline_schemas(schema)? {
             return self.define_inline_schemas(schema, inline, suggested_name, in_module);
         }
-        if let Some(map_type) = self.map_type(schema, inline, in_module, suggested_name)? {
+        if let Some(map_type) =
+            self.map_type_with_inline(schema, inline, in_module, suggested_name)?
+        {
             return Ok(map_type);
         }
         if let Some(rust_type) = primitive_schema_type(schema) {
@@ -255,6 +256,22 @@ impl<'a> OpenApiGenerator<'a> {
             return Ok(RustType::JsonValue);
         }
         Ok(RustType::Unit)
+    }
+
+    fn schema_reference_type(
+        &self,
+        reference: &str,
+        position: TypePosition,
+    ) -> BuildResult<RustType> {
+        let (name, _) = self.resolve_schema_reference(reference)?;
+        let rust_type = RustType::Named {
+            qualifier: Vec::new(),
+            name: type_name(name),
+        };
+        Ok(match position {
+            TypePosition::Normal => rust_type,
+            TypePosition::Nested => RustType::Box(Box::new(rust_type)),
+        })
     }
 
     fn define_inline_schemas(
@@ -281,23 +298,7 @@ impl<'a> OpenApiGenerator<'a> {
         }
     }
 
-    fn schema_reference_type(
-        &self,
-        reference: &str,
-        position: TypePosition,
-    ) -> BuildResult<RustType> {
-        let (name, _) = self.resolve_schema_reference(reference)?;
-        let rust_type = RustType::Named {
-            qualifier: Vec::new(),
-            name: type_name(name),
-        };
-        Ok(match position {
-            TypePosition::Normal => rust_type,
-            TypePosition::Nested => RustType::Box(Box::new(rust_type)),
-        })
-    }
-
-    fn map_type_plain(&self, schema: &'a Schema) -> BuildResult<Option<RustType>> {
+    fn map_type(&self, schema: &'a Schema) -> BuildResult<Option<RustType>> {
         let Some(additional_properties) = &schema.additional_properties else {
             return Ok(None);
         };
@@ -311,7 +312,7 @@ impl<'a> OpenApiGenerator<'a> {
         Ok(Some(RustType::Map(Box::new(value_type))))
     }
 
-    fn map_type(
+    fn map_type_with_inline(
         &self,
         schema: &'a Schema,
         inline: &mut InlineSchemas,
@@ -392,35 +393,19 @@ impl<'a> OpenApiGenerator<'a> {
         Ok(())
     }
 
-    fn enum_schema_variant(
+    fn schema_enum_variant(
         &self,
-        index: usize,
         schema: &'a MaybeRef<Schema, SchemaReference>,
         rename: Option<String>,
-        inline: &mut InlineSchemas,
     ) -> BuildResult<EnumVariant> {
-        let (variant, rust_type) = match schema {
-            MaybeRef::Ref(reference) => {
-                let (name, _) = self.resolve_schema_reference(&reference.reference)?;
-                (
-                    type_name(name),
-                    self.schema_type(schema, TypePosition::Nested)?,
-                )
-            }
-            MaybeRef::Value(schema) => {
-                let mut rust_type = self.schema_type_inner_with_inline(
-                    schema,
-                    TypePosition::Nested,
-                    inline,
-                    true,
-                    &format!("Value{index}"),
-                )?;
-                if is_nullable(schema) {
-                    rust_type = RustType::Option(Box::new(rust_type));
-                }
-                (RustName::new(format!("Value{index}")), rust_type)
-            }
+        let MaybeRef::Ref(reference) = schema else {
+            return Err(BuildError::InvalidInput(
+                "enum variant with inline schema is unsupported".to_string(),
+            ));
         };
+        let (name, _) = self.resolve_schema_reference(&reference.reference)?;
+        let variant = type_name(name);
+        let rust_type = self.schema_type(schema, TypePosition::Nested)?;
         Ok(EnumVariant {
             name: variant,
             rename,
@@ -437,21 +422,13 @@ impl<'a> OpenApiGenerator<'a> {
         let discriminator = schema.discriminator.as_ref().ok_or_else(|| {
             BuildError::InvalidInput("schema is missing discriminator".to_owned())
         })?;
+        if !schema.any_of.is_empty() {
+            return Err(BuildError::InvalidInput(
+                "discriminator anyOf variants are unsupported".to_owned(),
+            ));
+        }
         let variants = if !schema.one_of.is_empty() {
-            schema
-                .one_of
-                .iter()
-                .map(|schema| self.discriminator_variant_from_schema(schema, discriminator, inline))
-                .collect::<Result<Vec<_>, _>>()?
-        } else if !schema.any_of.is_empty() {
-            schema
-                .any_of
-                .iter()
-                .enumerate()
-                .map(|(index, schema)| {
-                    self.discriminator_any_of_variant(index, schema, discriminator, inline)
-                })
-                .collect::<Result<Vec<_>, _>>()?
+            self.discriminator_variants_from_schemas(discriminator, &schema.one_of, inline)?
         } else {
             self.discriminator_variants_from_mapping(discriminator, inline)?
         };
@@ -478,48 +455,31 @@ impl<'a> OpenApiGenerator<'a> {
             .collect()
     }
 
-    fn discriminator_variant_from_schema(
+    fn discriminator_variants_from_schemas(
         &self,
-        schema: &'a MaybeRef<Schema, SchemaReference>,
         discriminator: &crate::openapi::spec::Discriminator,
+        schemas: &'a [MaybeRef<Schema, SchemaReference>],
         inline: &mut InlineSchemas,
-    ) -> BuildResult<EnumVariant> {
-        let MaybeRef::Ref(reference) = schema else {
-            return Err(BuildError::InvalidInput(
-                "discriminator variants must be schema references".to_owned(),
-            ));
-        };
-        let reference = &reference.reference;
-        let values = self.discriminator_values(reference, discriminator)?;
-        self.discriminator_variant(reference, values, &discriminator.property_name, inline)
-    }
-
-    fn discriminator_any_of_variant(
-        &self,
-        index: usize,
-        schema: &'a MaybeRef<Schema, SchemaReference>,
-        discriminator: &crate::openapi::spec::Discriminator,
-        inline: &mut InlineSchemas,
-    ) -> BuildResult<EnumVariant> {
-        let MaybeRef::Ref(reference) = schema else {
-            return Err(BuildError::InvalidInput(
-                "discriminator anyOf variants must be schema references".to_owned(),
-            ));
-        };
-        let values = self.discriminator_values(&reference.reference, discriminator)?;
-        let rename = values.into_iter().next().ok_or_else(|| {
-            BuildError::InvalidInput(format!(
-                "discriminator mapping is missing an entry for {}",
-                reference.reference
-            ))
-        })?;
-        self.enum_schema_variant(index, schema, Some(rename), inline)
+    ) -> BuildResult<Vec<EnumVariant>> {
+        schemas
+            .iter()
+            .map(|schema| {
+                let MaybeRef::Ref(reference) = schema else {
+                    return Err(BuildError::InvalidInput(
+                        "discriminator variants must be schema references".to_owned(),
+                    ));
+                };
+                let reference = &reference.reference;
+                let values = self.discriminator_values(discriminator, reference)?;
+                self.discriminator_variant(reference, values, &discriminator.property_name, inline)
+            })
+            .collect()
     }
 
     fn discriminator_values(
         &self,
-        reference: &str,
         discriminator: &crate::openapi::spec::Discriminator,
+        reference: &str,
     ) -> BuildResult<Vec<String>> {
         let values = discriminator
             .mapping
@@ -597,6 +557,10 @@ fn primitive_schema_type(schema: &Schema) -> Option<RustType> {
     None
 }
 
+fn is_nullable(schema: &Schema) -> bool {
+    schema.nullable == Some(true) || has_schema_type(schema, SchemaType::Null)
+}
+
 fn string_enum_variants(schema: &Schema) -> BuildResult<Option<Vec<EnumVariant>>> {
     if schema.enum_values.is_empty() || !has_schema_type(schema, SchemaType::String) {
         return Ok(None);
@@ -622,22 +586,6 @@ fn discriminator_tag(schema: &Schema) -> Option<&str> {
     }
 }
 
-fn should_generate_inline_schema(schema: &Schema) -> BuildResult<bool> {
-    Ok(transparent_all_of(schema).is_none()
-        && (!schema.enum_values.is_empty() && has_schema_type(schema, SchemaType::String)
-            || discriminator_tag(schema).is_some()
-            || any_of_tag(schema)?.is_some()
-            || !schema.one_of.is_empty()
-            || !schema.any_of.is_empty()
-            || !schema.properties.is_empty()
-            || schema.all_of.iter().any(|schema| match schema {
-                MaybeRef::Value(schema) => {
-                    !schema.properties.is_empty() || !schema.required.is_empty()
-                }
-                MaybeRef::Ref(_) => false,
-            })))
-}
-
 fn any_of_tag(schema: &Schema) -> BuildResult<Option<&str>> {
     if schema.any_of.is_empty() || !schema.one_of.is_empty() || schema.properties.is_empty() {
         return Ok(None);
@@ -648,10 +596,6 @@ fn any_of_tag(schema: &Schema) -> BuildResult<Option<&str>> {
         ));
     }
     Ok(schema.properties.keys().next().map(String::as_str))
-}
-
-fn is_nullable(schema: &Schema) -> bool {
-    schema.nullable == Some(true) || has_schema_type(schema, SchemaType::Null)
 }
 
 fn transparent_all_of(schema: &Schema) -> Option<&MaybeRef<Schema, SchemaReference>> {
@@ -668,6 +612,22 @@ fn transparent_all_of(schema: &Schema) -> Option<&MaybeRef<Schema, SchemaReferen
         && schema.enum_values.is_empty()
         && schema.const_value.is_none())
     .then_some(item)
+}
+
+fn should_define_inline_schemas(schema: &Schema) -> BuildResult<bool> {
+    Ok(transparent_all_of(schema).is_none()
+        && (!schema.enum_values.is_empty() && has_schema_type(schema, SchemaType::String)
+            || discriminator_tag(schema).is_some()
+            || any_of_tag(schema)?.is_some()
+            || !schema.one_of.is_empty()
+            || !schema.any_of.is_empty()
+            || !schema.properties.is_empty()
+            || schema.all_of.iter().any(|schema| match schema {
+                MaybeRef::Value(schema) => {
+                    !schema.properties.is_empty() || !schema.required.is_empty()
+                }
+                MaybeRef::Ref(_) => false,
+            })))
 }
 
 pub(super) struct SchemaDefinition {
