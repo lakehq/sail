@@ -375,8 +375,8 @@ fn validate_thousands_separator_positions(numbers: &str) -> Result<()> {
             "The format is invalid: '{numbers}'. Thousands separators (, or G) must have digits on both sides."
         );
     }
-    for w in bytes.windows(2) {
-        if is_sep(w[0]) && is_sep(w[1]) {
+    for &[left, right] in bytes.array_windows::<2>() {
+        if is_sep(left) && is_sep(right) {
             return exec_err!(
                 "The format is invalid: '{numbers}'. Thousands separators (, or G) must have digits between them."
             );
