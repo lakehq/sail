@@ -252,7 +252,11 @@ impl OpenApiGenerator<'_> {
                 _ => RustType::I32,
             })
         } else if has_schema_type(schema, SchemaType::Number) {
-            Ok(RustType::F64)
+            Ok(match schema.format.as_deref() {
+                Some("float") => RustType::F32,
+                Some("double") | None => RustType::F64,
+                _ => RustType::F64,
+            })
         } else if has_schema_type(schema, SchemaType::String) {
             Ok(RustType::String)
         } else {

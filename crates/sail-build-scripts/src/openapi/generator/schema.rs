@@ -56,7 +56,7 @@ impl<'a> OpenApiGenerator<'a> {
         }
 
         if let Some(tag) = discriminator_tag(schema) {
-            let variants = self.discriminator_variants(schema, inline)?;
+            let variants = self.discriminator_variants(schema, inline, in_module)?;
             return Ok(SchemaDefinition::new(
                 type_name,
                 schema,
@@ -79,7 +79,9 @@ impl<'a> OpenApiGenerator<'a> {
                 .iter()
                 .chain(schema.any_of.iter())
                 .collect::<Vec<_>>();
-            if let Some((tag, variants)) = self.inferred_tagged_enum_variants(&schemas, inline)? {
+            if let Some((tag, variants)) =
+                self.inferred_tagged_enum_variants(&schemas, inline, in_module)?
+            {
                 return Ok(SchemaDefinition::new(
                     type_name,
                     schema,
@@ -418,6 +420,7 @@ impl<'a> OpenApiGenerator<'a> {
         &self,
         schema: &'a Schema,
         inline: &mut InlineSchemas,
+        in_module: bool,
     ) -> BuildResult<Vec<EnumVariant>> {
         let discriminator = schema.discriminator.as_ref().ok_or_else(|| {
             BuildError::InvalidInput("schema is missing discriminator".to_owned())
@@ -428,9 +431,14 @@ impl<'a> OpenApiGenerator<'a> {
             ));
         }
         let variants = if !schema.one_of.is_empty() {
-            self.discriminator_variants_from_schemas(discriminator, &schema.one_of, inline)?
+            self.discriminator_variants_from_schemas(
+                discriminator,
+                &schema.one_of,
+                inline,
+                in_module,
+            )?
         } else {
-            self.discriminator_variants_from_mapping(discriminator, inline)?
+            self.discriminator_variants_from_mapping(discriminator, inline, in_module)?
         };
         Ok(variants)
     }
@@ -439,6 +447,7 @@ impl<'a> OpenApiGenerator<'a> {
         &self,
         discriminator: &crate::openapi::spec::Discriminator,
         inline: &mut InlineSchemas,
+        in_module: bool,
     ) -> BuildResult<Vec<EnumVariant>> {
         let mut references = BTreeMap::<String, Vec<String>>::new();
         for (value, reference) in &discriminator.mapping {
@@ -450,7 +459,13 @@ impl<'a> OpenApiGenerator<'a> {
         references
             .into_iter()
             .map(|(reference, values)| {
-                self.discriminator_variant(&reference, values, &discriminator.property_name, inline)
+                self.discriminator_variant(
+                    &reference,
+                    values,
+                    &discriminator.property_name,
+                    inline,
+                    in_module,
+                )
             })
             .collect()
     }
@@ -460,6 +475,7 @@ impl<'a> OpenApiGenerator<'a> {
         discriminator: &crate::openapi::spec::Discriminator,
         schemas: &'a [MaybeRef<Schema, SchemaReference>],
         inline: &mut InlineSchemas,
+        in_module: bool,
     ) -> BuildResult<Vec<EnumVariant>> {
         schemas
             .iter()
@@ -471,7 +487,13 @@ impl<'a> OpenApiGenerator<'a> {
                 };
                 let reference = &reference.reference;
                 let values = self.discriminator_values(discriminator, reference);
-                self.discriminator_variant(reference, values, &discriminator.property_name, inline)
+                self.discriminator_variant(
+                    reference,
+                    values,
+                    &discriminator.property_name,
+                    inline,
+                    in_module,
+                )
             })
             .collect()
     }
@@ -494,6 +516,7 @@ impl<'a> OpenApiGenerator<'a> {
         values: Vec<String>,
         tag: &str,
         inline: &mut InlineSchemas,
+        in_module: bool,
     ) -> BuildResult<EnumVariant> {
         let (name, schema) = self.resolve_schema_reference(reference)?;
         let variant = type_name(name);
@@ -507,7 +530,7 @@ impl<'a> OpenApiGenerator<'a> {
             .clone();
         let aliases = values.iter().skip(1).cloned().collect::<Vec<_>>();
         let fields = self
-            .collect_object_fields(schema, inline, true)?
+            .collect_object_fields(schema, inline, in_module)?
             .into_iter()
             .filter(|field| field.name != tag)
             .collect::<Vec<_>>();
@@ -528,6 +551,7 @@ impl<'a> OpenApiGenerator<'a> {
         &self,
         schemas: &[&'a MaybeRef<Schema, SchemaReference>],
         inline: &mut InlineSchemas,
+        in_module: bool,
     ) -> BuildResult<Option<(String, Vec<EnumVariant>)>> {
         if schemas.is_empty() {
             return Ok(None);
@@ -562,7 +586,7 @@ impl<'a> OpenApiGenerator<'a> {
             if values.is_empty() {
                 return Ok(None);
             }
-            variants.push(self.discriminator_variant(reference, values, tag, inline)?);
+            variants.push(self.discriminator_variant(reference, values, tag, inline, in_module)?);
         }
 
         Ok(Some((tag.to_owned(), variants)))
@@ -621,7 +645,11 @@ fn primitive_schema_type(schema: &Schema) -> Option<RustType> {
         });
     }
     if has_schema_type(schema, SchemaType::Number) {
-        return Some(RustType::F64);
+        return Some(match schema.format.as_deref() {
+            Some("float") => RustType::F32,
+            Some("double") | None => RustType::F64,
+            _ => RustType::F64,
+        });
     }
     if has_schema_type(schema, SchemaType::String) {
         return Some(RustType::String);
@@ -886,7 +914,12 @@ fn generate_transparent_display_impl(
 
 fn rust_type_is_displayable(rust_type: &RustType) -> bool {
     match rust_type {
-        RustType::Bool | RustType::I32 | RustType::I64 | RustType::F64 | RustType::String => true,
+        RustType::Bool
+        | RustType::I32
+        | RustType::I64
+        | RustType::F32
+        | RustType::F64
+        | RustType::String => true,
         RustType::Unit
         | RustType::JsonValue
         | RustType::Named { .. }
