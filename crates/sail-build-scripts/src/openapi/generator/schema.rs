@@ -677,7 +677,10 @@ fn is_empty_object_schema(schema: &Schema) -> bool {
         && schema.properties.is_empty()
         && schema.required.is_empty()
         && schema.items.is_none()
-        && matches!(schema.additional_properties, Some(AdditionalProperties::Bool(false)))
+        && matches!(
+            schema.additional_properties,
+            Some(AdditionalProperties::Bool(false))
+        )
         && schema.one_of.is_empty()
         && schema.any_of.is_empty()
         && schema.all_of.is_empty()
