@@ -9,6 +9,9 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
+use sail_build_scripts::openapi::generator::{OpenApiConfig, generate_openapi_client};
+
 fn build_unity_catalog() -> Result<(), Box<dyn std::error::Error>> {
     let src = "spec/unity-catalog-all.yaml";
     println!("cargo:rerun-if-changed={src}");
@@ -132,5 +135,15 @@ fn add_table_info_columns_deserializer(content: String) -> String {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
     build_unity_catalog()?;
+
+    generate_openapi_client(
+        "spec/unity-catalog-all.yaml",
+        std::path::Path::new(&std::env::var("OUT_DIR")?).join("unity_catalog_gen.rs"),
+        OpenApiConfig {
+            excluded_operations: [].into_iter().collect(),
+            excluded_schemas: ["ColumnTypeName".to_owned()].into_iter().collect(),
+        },
+    )?;
+
     Ok(())
 }

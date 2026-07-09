@@ -7431,6 +7431,7 @@ dependencies = [
  "serde",
  "serde_yaml",
  "syn 2.0.118",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -7516,6 +7517,7 @@ dependencies = [
  "log",
  "percent-encoding",
  "reqwest 0.12.28",
+ "sail-build-scripts",
  "sail-catalog",
  "sail-common",
  "sail-common-datafusion",
@@ -7524,6 +7526,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "testcontainers",
+ "thiserror 2.0.18",
  "tokio",
  "url",
  "uuid",
@@ -7575,10 +7578,12 @@ dependencies = [
  "arrow",
  "async-trait",
  "chrono",
+ "percent-encoding",
  "prettyplease",
  "progenitor",
  "progenitor-client",
  "reqwest 0.12.28",
+ "sail-build-scripts",
  "sail-catalog",
  "sail-common",
  "sail-common-datafusion",
@@ -7589,6 +7594,7 @@ dependencies = [
  "syn 2.0.118",
  "tempfile",
  "testcontainers",
+ "thiserror 2.0.18",
  "tokio",
  "wiremock",
 ]
