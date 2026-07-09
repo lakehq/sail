@@ -22,7 +22,7 @@ use sail_catalog::provider::{
     CreateTableMode, CreateTableOptions, DropDatabaseOptions, DropTableOptions, Namespace,
     RuntimeAwareCatalogProvider,
 };
-use sail_catalog_unity::unity::{Client, types};
+use sail_catalog_unity::r#gen::{self, ApiClient};
 use sail_catalog_unity::{UnityCatalogOptions, UnityCatalogProvider};
 use sail_common::runtime::RuntimeHandle;
 use sail_common::spec::{
@@ -73,7 +73,7 @@ async fn setup_catalog(
     RuntimeAwareCatalogProvider<UnityCatalogProvider>,
     ContainerAsync<GenericImage>,
     ContainerAsync<GenericImage>,
-    Client,
+    ApiClient,
 ) {
     let network = format!("unity_{}", network_name);
 
@@ -158,16 +158,19 @@ async fn setup_catalog(
     )
     .expect("Failed to create runtime-aware catalog");
 
-    let client = Client::new(&rest_url).unwrap();
+    let client = ApiClient::new(
+        rest_url.clone(),
+        reqwest::Client::new(),
+        reqwest::header::HeaderMap::new(),
+    );
     for attempt in 1..=5 {
         match client
-            .create_catalog()
-            .body(
-                types::CreateCatalog::builder()
-                    .name(DEFAULT_CATALOG)
-                    .comment(Some("Main catalog for testing".to_string())),
-            )
-            .send()
+            .create_catalog(r#gen::CreateCatalog {
+                name: DEFAULT_CATALOG.to_string(),
+                comment: Some("Main catalog for testing".to_string()),
+                properties: None,
+                storage_root: None,
+            })
             .await
         {
             Ok(_) => break,

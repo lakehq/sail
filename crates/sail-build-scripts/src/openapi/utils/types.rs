@@ -72,7 +72,7 @@ impl quote::ToTokens for RustType {
             Self::Box(value) => quote! { Box<#value> },
             Self::Option(value) => quote! { Option<#value> },
             Self::Vec(value) => quote! { Vec<#value> },
-            Self::Map(value) => quote! { std::collections::BTreeMap<String, #value> },
+            Self::Map(value) => quote! { std::collections::HashMap<String, #value> },
         };
         tokens.extend(value);
     }

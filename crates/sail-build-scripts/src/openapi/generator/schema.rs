@@ -182,6 +182,9 @@ impl<'a> OpenApiGenerator<'a> {
         if let Some(rust_type) = primitive_schema_type(schema) {
             return Ok(rust_type);
         }
+        if is_empty_object_schema(schema) {
+            return Ok(RustType::Unit);
+        }
         if has_schema_type(schema, SchemaType::Object) {
             return Ok(RustType::JsonValue);
         }
@@ -255,6 +258,9 @@ impl<'a> OpenApiGenerator<'a> {
         if let Some(rust_type) = primitive_schema_type(schema) {
             return Ok(rust_type);
         }
+        if is_empty_object_schema(schema) {
+            return Ok(RustType::Unit);
+        }
         if has_schema_type(schema, SchemaType::Object) {
             return Ok(RustType::JsonValue);
         }
@@ -266,7 +272,10 @@ impl<'a> OpenApiGenerator<'a> {
         reference: &str,
         position: TypePosition,
     ) -> BuildResult<RustType> {
-        let (name, _) = self.resolve_schema_reference(reference)?;
+        let (name, schema) = self.resolve_schema_reference(reference)?;
+        if is_empty_object_schema(schema) {
+            return Ok(RustType::Unit);
+        }
         let rust_type = RustType::Named {
             qualifier: Vec::new(),
             name: type_name(name),
@@ -659,6 +668,19 @@ fn primitive_schema_type(schema: &Schema) -> Option<RustType> {
 
 fn is_nullable(schema: &Schema) -> bool {
     schema.nullable == Some(true) || has_schema_type(schema, SchemaType::Null)
+}
+
+fn is_empty_object_schema(schema: &Schema) -> bool {
+    has_schema_type(schema, SchemaType::Object)
+        && schema.properties.is_empty()
+        && schema.required.is_empty()
+        && schema.items.is_none()
+        && schema.additional_properties.is_none()
+        && schema.one_of.is_empty()
+        && schema.any_of.is_empty()
+        && schema.all_of.is_empty()
+        && schema.enum_values.is_empty()
+        && schema.const_value.is_none()
 }
 
 fn string_enum_variants(schema: &Schema) -> BuildResult<Option<Vec<EnumVariant>>> {
