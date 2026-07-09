@@ -77,7 +77,13 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             }
             (Ok(left_type), Ok(right_type)) => {
                 let (left, right) =
-                    coerce_spark_arithmetic_operands(left, right, &left_type, &right_type);
+                    coerce_spark_arithmetic_operands(
+                    left,
+                    right,
+                    &left_type,
+                    &right_type,
+                    function_context.plan_config.ansi_mode,
+                );
                 left + right
             }
             // TODO: In case getting the type fails, we don't want to fail the query.
@@ -133,7 +139,13 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
             }
             (Ok(left_type), Ok(right_type)) => {
                 let (left, right) =
-                    coerce_spark_arithmetic_operands(left, right, &left_type, &right_type);
+                    coerce_spark_arithmetic_operands(
+                    left,
+                    right,
+                    &left_type,
+                    &right_type,
+                    function_context.plan_config.ansi_mode,
+                );
                 left - right
             }
             // TODO: In case getting the type fails, we don't want to fail the query.
@@ -188,7 +200,13 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
         }
         (Ok(left_type), Ok(right_type)) => {
             let (left, right) =
-                coerce_spark_arithmetic_operands(left, right, &left_type, &right_type);
+                coerce_spark_arithmetic_operands(
+                    left,
+                    right,
+                    &left_type,
+                    &right_type,
+                    function_context.plan_config.ansi_mode,
+                );
             left * right
         }
         // TODO: In case getting the type fails, we don't want to fail the query.
@@ -211,7 +229,43 @@ fn coerce_spark_arithmetic_operands(
     right: Expr,
     left_type: &DataType,
     right_type: &DataType,
+    ansi_mode: bool,
 ) -> (Expr, Expr) {
+    // STRING operands. DataFusion rejects string arithmetic; Spark coerces
+    // (validated vs Spark 4.1.1):
+    //   ANSI off -> a string paired with a string or numeric promotes BOTH to DOUBLE.
+    //   ANSI on  -> a string paired with a non-decimal numeric is cast to that
+    //               numeric's exact type (strict cast); string+DECIMAL promotes both
+    //               to DOUBLE; string+string is left as-is (Spark rejects it).
+    // https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/TypeCoercion.scala (PromoteStrings)
+    // https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/AnsiTypeCoercion.scala
+    let left_string = is_string_type(left_type);
+    let right_string = is_string_type(right_type);
+    if left_string || right_string {
+        let left_ok = left_string || left_type.is_numeric();
+        let right_ok = right_string || right_type.is_numeric();
+        if left_ok && right_ok {
+            let has_decimal = matches!(
+                left_type,
+                DataType::Decimal128(_, _) | DataType::Decimal256(_, _)
+            ) || matches!(
+                right_type,
+                DataType::Decimal128(_, _) | DataType::Decimal256(_, _)
+            );
+            // ANSI off (any pairing) and ANSI-on string+decimal -> both to DOUBLE.
+            if !ansi_mode || has_decimal {
+                return (cast(left, DataType::Float64), cast(right, DataType::Float64));
+            }
+            // ANSI on, non-decimal: cast the string to the other numeric operand's type.
+            if left_string && right_type.is_numeric() {
+                return (cast(left, right_type.clone()), right);
+            }
+            if right_string && left_type.is_numeric() {
+                return (left, cast(right, left_type.clone()));
+            }
+            // string + string under ANSI: leave unchanged; Spark rejects it too.
+        }
+    }
     // FLOAT/DOUBLE x DECIMAL -> DOUBLE.
     // https://github.com/apache/spark/blob/v4.1.1/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/analysis/DecimalPrecision.scala
     if is_float_decimal_pair(left_type, right_type) {
@@ -231,6 +285,14 @@ fn coerce_spark_arithmetic_operands(
         None => right,
     };
     (left, right)
+}
+
+/// True for the Spark string types coerced in arithmetic.
+fn is_string_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+    )
 }
 
 /// True when one operand is a floating-point type and the other a decimal (either
@@ -898,7 +960,7 @@ mod tests {
         // `dec(10,2) * 3` -> literal narrowed to Decimal(1,0) (=> result decimal(12,2)).
         let dec = DataType::Decimal128(10, 2);
         let (left, right) =
-            coerce_spark_arithmetic_operands(col("a"), lit(3_i32), &dec, &DataType::Int32);
+            coerce_spark_arithmetic_operands(col("a"), lit(3_i32), &dec, &DataType::Int32, true);
         assert_eq!(left.to_string(), "a");
         assert_eq!(right.to_string(), "CAST(Int32(3) AS Decimal128(1, 0))");
     }
@@ -908,8 +970,117 @@ mod tests {
         // `dec(10,2) * float` -> both promoted to Double.
         let dec = DataType::Decimal128(10, 2);
         let (left, right) =
-            coerce_spark_arithmetic_operands(col("a"), lit(2.0_f32), &dec, &DataType::Float32);
+            coerce_spark_arithmetic_operands(col("a"), lit(2.0_f32), &dec, &DataType::Float32, true);
         assert_eq!(left.to_string(), "CAST(a AS Float64)");
         assert_eq!(right.to_string(), "CAST(Float32(2) AS Float64)");
+    }
+
+    #[test]
+    fn coerce_string_numeric_ansi_off_promotes_both_to_double() {
+        // ANSI off: `'5' + 3` -> both operands to double.
+        let (left, right) = coerce_spark_arithmetic_operands(
+            lit("5"),
+            lit(3_i32),
+            &DataType::Utf8,
+            &DataType::Int32,
+            false,
+        );
+        assert_eq!(left.to_string(), "CAST(Utf8(\"5\") AS Float64)");
+        assert_eq!(right.to_string(), "CAST(Int32(3) AS Float64)");
+    }
+
+    #[test]
+    fn coerce_string_numeric_ansi_on_casts_string_to_numeric_type() {
+        // ANSI on: `'5' + 3` -> the string is cast to the numeric operand's type.
+        let (left, right) = coerce_spark_arithmetic_operands(
+            lit("5"),
+            lit(3_i32),
+            &DataType::Utf8,
+            &DataType::Int32,
+            true,
+        );
+        assert_eq!(left.to_string(), "CAST(Utf8(\"5\") AS Int32)");
+        assert_eq!(right.to_string(), "Int32(3)");
+    }
+
+    #[test]
+    fn coerce_string_on_right_ansi_on_casts_to_left_numeric_type() {
+        // ANSI on: `3 + '5'` -> the right string is cast to the left numeric's type.
+        let (left, right) = coerce_spark_arithmetic_operands(
+            lit(3_i32),
+            lit("5"),
+            &DataType::Int32,
+            &DataType::Utf8,
+            true,
+        );
+        assert_eq!(left.to_string(), "Int32(3)");
+        assert_eq!(right.to_string(), "CAST(Utf8(\"5\") AS Int32)");
+    }
+
+    #[test]
+    fn coerce_string_and_decimal_ansi_on_promotes_to_double() {
+        // ANSI on: string + DECIMAL is the exception -> both to double, not decimal.
+        let (left, right) = coerce_spark_arithmetic_operands(
+            lit("5"),
+            col("d"),
+            &DataType::Utf8,
+            &DataType::Decimal128(10, 2),
+            true,
+        );
+        assert_eq!(left.to_string(), "CAST(Utf8(\"5\") AS Float64)");
+        assert_eq!(right.to_string(), "CAST(d AS Float64)");
+    }
+
+    #[test]
+    fn coerce_string_and_string_ansi_off_promotes_both_to_double() {
+        // ANSI off: `'5' + '3'` -> both to double.
+        let (left, right) = coerce_spark_arithmetic_operands(
+            lit("5"),
+            lit("3"),
+            &DataType::Utf8,
+            &DataType::Utf8,
+            false,
+        );
+        assert_eq!(left.to_string(), "CAST(Utf8(\"5\") AS Float64)");
+        assert_eq!(right.to_string(), "CAST(Utf8(\"3\") AS Float64)");
+    }
+
+    #[test]
+    fn coerce_string_and_string_ansi_on_left_unchanged() {
+        // ANSI on: `'5' + '3'` has no numeric operand -> left unchanged (Spark rejects it).
+        let (left, right) = coerce_spark_arithmetic_operands(
+            lit("5"),
+            lit("3"),
+            &DataType::Utf8,
+            &DataType::Utf8,
+            true,
+        );
+        assert_eq!(left.to_string(), "Utf8(\"5\")");
+        assert_eq!(right.to_string(), "Utf8(\"3\")");
+    }
+
+    #[test]
+    fn coerce_negative_integer_literal_narrows_ignoring_sign() {
+        // `dec(10,2) * -3` -> literal narrows to Decimal(1,0) (sign does not add a digit).
+        let dec = DataType::Decimal128(10, 2);
+        let (left, right) =
+            coerce_spark_arithmetic_operands(col("a"), lit(-3_i32), &dec, &DataType::Int32, true);
+        assert_eq!(left.to_string(), "a");
+        assert_eq!(right.to_string(), "CAST(Int32(-3) AS Decimal128(1, 0))");
+    }
+
+    #[test]
+    fn coerce_ten_digit_literal_narrows_to_ten_precision() {
+        // `dec(10,2) * 1000000000` (10 digits) -> Decimal(10,0).
+        let dec = DataType::Decimal128(10, 2);
+        let (left, right) = coerce_spark_arithmetic_operands(
+            col("a"),
+            lit(1_000_000_000_i64),
+            &dec,
+            &DataType::Int64,
+            true,
+        );
+        assert_eq!(left.to_string(), "a");
+        assert_eq!(right.to_string(), "CAST(Int64(1000000000) AS Decimal128(10, 0))");
     }
 }

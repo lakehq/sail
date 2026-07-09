@@ -77,3 +77,55 @@ Feature: Spark type coercion for the +, -, * operators
         root
          |-- result: decimal(12,2) (nullable = true)
         """
+
+  Rule: Further Spark coercion divergences beyond + - * (bug-hunt, not yet implemented)
+    # Validated against Spark 4.1.1. Division/modulo/precision-cap cases the current
+    # plan-builder coercion does not cover yet.
+
+    @sail-bug
+    Scenario: decimal divided by decimal uses Spark's division scale rule
+      # Spark: scale = max(6, s1 + p2 + 1), precision = p1 - s1 + s2 + scale => decimal(23,13).
+      # Sail currently produces decimal(16,6).
+      When query
+        """
+        SELECT typeof(CAST(10.00 AS DECIMAL(10,2)) / CAST(3.00 AS DECIMAL(10,2))) AS t
+        """
+      Then query result
+        | t              |
+        | decimal(23,13) |
+
+    @sail-bug
+    Scenario: decimal modulo an integer literal uses Spark's remainder rule
+      # Spark: scale = max(s1,s2), precision = min(p1-s1, p2-s2) + scale => decimal(3,2).
+      # Sail currently produces decimal(10,2).
+      When query
+        """
+        SELECT typeof(CAST(10.5 AS DECIMAL(10,2)) % 3) AS t
+        """
+      Then query result
+        | t            |
+        | decimal(3,2) |
+
+    @sail-bug
+    Scenario: decimal multiply capped at precision 38 uses adjustPrecisionScale
+      # Spark caps precision at 38: adjustedScale = max(38 - intDigits, min(scale, 6)) => decimal(38,6).
+      # Sail currently produces decimal(38,15).
+      When query
+        """
+        SELECT typeof(CAST(1.0 AS DECIMAL(38,10)) * CAST(2.0 AS DECIMAL(10,5))) AS t
+        """
+      Then query result
+        | t             |
+        | decimal(38,6) |
+
+    @sail-bug
+    Scenario: ANSI string plus integer widens to bigint like Spark
+      Given config spark.sql.ansi.enabled = true
+      # Spark casts the string operand so the result is BIGINT; Sail casts to INT.
+      When query
+        """
+        SELECT typeof('5' + 3) AS t
+        """
+      Then query result
+        | t      |
+        | bigint |
