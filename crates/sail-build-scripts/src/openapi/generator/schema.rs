@@ -76,13 +76,12 @@ impl<'a> OpenApiGenerator<'a> {
             ));
         }
 
-        if let (Some(tag), None) = (any_of_tag(schema)?, serde_type.as_ref()) {
-            return Err(BuildError::InvalidInput(format!(
-                "tagged anyOf schema {type_name} using {tag} must define discriminator mapping"
-            )));
-        }
-
         if !schema.one_of.is_empty() || !schema.any_of.is_empty() {
+            if !schema.properties.is_empty() && serde_type.is_none() {
+                return Err(BuildError::InvalidInput(format!(
+                    "anyOf or oneOf schemas with sibling properties are unsupported: {type_name}"
+                )));
+            }
             // OpenAPI `anyOf` can legitimately match more than one variant, so a discriminator is
             // not always enough to make it equivalent to a Rust enum. Keep this fallback untagged
             // unless a schema uses the narrower `oneOf` form or an explicit discriminator mapping.
@@ -241,7 +240,7 @@ impl<'a> OpenApiGenerator<'a> {
             )?;
             return Ok(RustType::Vec(Box::new(item)));
         }
-        if should_define_inline_schemas(schema)? {
+        if should_define_inline_schemas(schema) {
             return self.define_inline_schemas(schema, inline, suggested_name, in_module);
         }
         if let Some(map_type) =
@@ -586,18 +585,6 @@ fn discriminator_tag(schema: &Schema) -> Option<&str> {
     }
 }
 
-fn any_of_tag(schema: &Schema) -> BuildResult<Option<&str>> {
-    if schema.any_of.is_empty() || !schema.one_of.is_empty() || schema.properties.is_empty() {
-        return Ok(None);
-    }
-    if schema.properties.len() != 1 {
-        return Err(BuildError::InvalidInput(
-            "anyOf schemas with sibling properties must have exactly one property".to_owned(),
-        ));
-    }
-    Ok(schema.properties.keys().next().map(String::as_str))
-}
-
 fn transparent_all_of(schema: &Schema) -> Option<&MaybeRef<Schema, SchemaReference>> {
     let [item] = schema.all_of.as_slice() else {
         return None;
@@ -614,11 +601,10 @@ fn transparent_all_of(schema: &Schema) -> Option<&MaybeRef<Schema, SchemaReferen
     .then_some(item)
 }
 
-fn should_define_inline_schemas(schema: &Schema) -> BuildResult<bool> {
-    Ok(transparent_all_of(schema).is_none()
+fn should_define_inline_schemas(schema: &Schema) -> bool {
+    transparent_all_of(schema).is_none()
         && (!schema.enum_values.is_empty() && has_schema_type(schema, SchemaType::String)
             || discriminator_tag(schema).is_some()
-            || any_of_tag(schema)?.is_some()
             || !schema.one_of.is_empty()
             || !schema.any_of.is_empty()
             || !schema.properties.is_empty()
@@ -627,7 +613,7 @@ fn should_define_inline_schemas(schema: &Schema) -> BuildResult<bool> {
                     !schema.properties.is_empty() || !schema.required.is_empty()
                 }
                 MaybeRef::Ref(_) => false,
-            })))
+            }))
 }
 
 pub(super) struct SchemaDefinition {
@@ -824,7 +810,7 @@ fn generate_enum_variant(variant: &EnumVariant) -> TokenStream {
             }
         }
         EnumVariantKind::Struct { fields } => {
-            let fields = fields.iter().map(generate_variant_field);
+            let fields = fields.iter().map(generate_enum_variant_field);
             quote! {
                 #rename
                 #(#aliases)*
@@ -836,12 +822,12 @@ fn generate_enum_variant(variant: &EnumVariant) -> TokenStream {
     }
 }
 
-fn generate_schema_field(field: &SchemaField) -> TokenStream {
-    generate_field(field, quote! { pub })
+fn generate_enum_variant_field(field: &SchemaField) -> TokenStream {
+    generate_field(field, quote! {})
 }
 
-fn generate_variant_field(field: &SchemaField) -> TokenStream {
-    generate_field(field, quote! {})
+fn generate_schema_field(field: &SchemaField) -> TokenStream {
+    generate_field(field, quote! { pub })
 }
 
 fn generate_field(field: &SchemaField, visibility: TokenStream) -> TokenStream {
