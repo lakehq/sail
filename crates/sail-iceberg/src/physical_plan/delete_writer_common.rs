@@ -1,7 +1,7 @@
 use datafusion::execution::context::TaskContext;
 use datafusion_common::{DataFusionError, Result};
-use object_store::path::Path as ObjectPath;
 use object_store::ObjectStoreExt;
+use object_store::path::Path as ObjectPath;
 use url::Url;
 
 use crate::io::StoreContext;
@@ -195,8 +195,10 @@ mod tests {
             ensure_position_delete_file_writes(&v1),
             Err(DataFusionError::Plan(_))
         ));
-        assert!(ensure_position_delete_file_writes(&v1)
-            .is_err_and(|err| err.to_string().contains("position delete writes")));
+        assert!(
+            ensure_position_delete_file_writes(&v1)
+                .is_err_and(|err| err.to_string().contains("position delete writes"))
+        );
 
         let v2 = table_metadata_with_format_version(FormatVersion::V2);
         assert!(ensure_position_delete_file_writes(&v2).is_ok());
@@ -206,8 +208,10 @@ mod tests {
             ensure_position_delete_file_writes(&v3),
             Err(DataFusionError::NotImplemented(_))
         ));
-        assert!(ensure_position_delete_file_writes(&v3)
-            .is_err_and(|err| err.to_string().contains("requires deletion vectors")));
+        assert!(
+            ensure_position_delete_file_writes(&v3)
+                .is_err_and(|err| err.to_string().contains("requires deletion vectors"))
+        );
     }
 
     #[test]
@@ -217,8 +221,10 @@ mod tests {
             ensure_equality_delete_writes(&v1),
             Err(DataFusionError::Plan(_))
         ));
-        assert!(ensure_equality_delete_writes(&v1)
-            .is_err_and(|err| err.to_string().contains("equality delete writes")));
+        assert!(
+            ensure_equality_delete_writes(&v1)
+                .is_err_and(|err| err.to_string().contains("equality delete writes"))
+        );
 
         let v2 = table_metadata_with_format_version(FormatVersion::V2);
         assert!(ensure_equality_delete_writes(&v2).is_ok());

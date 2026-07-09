@@ -6,7 +6,7 @@ use datafusion_datasource::file_compression_type::FileCompressionType;
 use sail_common_datafusion::datasource::OptionLayer;
 
 use crate::error::{DataSourceError, DataSourceResult};
-use crate::options::gen::{
+use crate::options::r#gen::{
     CsvReadOptions, CsvReadPartialOptions, CsvWriteOptions, CsvWritePartialOptions,
 };
 use crate::options::{BuildPartialOptions, PartialOptions, ResolveOptions};
@@ -235,8 +235,8 @@ mod tests {
     use datafusion::prelude::SessionContext;
     use datafusion_common::parsers::CompressionTypeVariant;
 
-    use crate::options::gen::{CsvReadOptions, CsvWriteOptions};
-    use crate::options::{option_list, ResolveOptions};
+    use crate::options::r#gen::{CsvReadOptions, CsvWriteOptions};
+    use crate::options::{ResolveOptions, option_list};
 
     #[test]
     fn test_resolve_csv_read_options() -> datafusion_common::Result<()> {

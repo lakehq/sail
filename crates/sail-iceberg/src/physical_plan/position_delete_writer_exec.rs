@@ -13,15 +13,15 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
-use futures::stream::once;
+use datafusion_common::{DataFusionError, Result, internal_err};
 use futures::StreamExt;
+use futures::stream::once;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet::file::properties::WriterProperties;
 use url::Url;
 
 use crate::io::{
-    load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list, StoreContext,
+    StoreContext, load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list,
 };
 use crate::operations::write::arrow_parquet::ArrowParquetWriter;
 use crate::physical_plan::action_schema::{encode_delete_data_files, iceberg_action_schema};

@@ -33,20 +33,19 @@ impl ServerSession {
         let (tx, rx) = oneshot::channel();
         let observer = observer(tx);
         if let ServerSessionState::Running { context } = &self.state {
-            if let Ok(service) = context.extension::<JobService>() {
-                async move {
+            match context.extension::<JobService>() {
+                Ok(service) => async move {
                     service.runner().observe(observer).await;
                     rx.await
                         .map_err(|_| exec_datafusion_err!("failed to observe job runner"))?
                 }
-                .boxed()
-            } else {
-                async {
+                .boxed(),
+                _ => async {
                     Err(exec_datafusion_err!(
                         "job service not found in session context"
                     ))
                 }
-                .boxed()
+                .boxed(),
             }
         } else if let ServerSessionState::Deleted { history } = &self.state {
             let history = history.clone();

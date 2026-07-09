@@ -23,8 +23,8 @@ use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
 use chrono::DateTime;
-use object_store::path::Path;
 use object_store::ObjectMeta;
+use object_store::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::spec::statistics::Stats;
@@ -436,11 +436,9 @@ impl TryFrom<Action> for CommitAction {
             Action::Txn(t) => Ok(Self::Txn(t)),
             Action::CommitInfo(c) => Ok(Self::CommitInfo(c)),
             Action::DomainMetadata(d) => Ok(Self::DomainMetadata(d)),
-            Action::CheckpointMetadata(_) | Action::Sidecar(_) => Err(
-                DeltaTableError::generic(
-                    "checkpoint-only actions (CheckpointMetadata, Sidecar) are not allowed in commit files",
-                ),
-            ),
+            Action::CheckpointMetadata(_) | Action::Sidecar(_) => Err(DeltaTableError::generic(
+                "checkpoint-only actions (CheckpointMetadata, Sidecar) are not allowed in commit files",
+            )),
         }
     }
 }

@@ -24,9 +24,9 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
-use futures::stream::once;
+use datafusion_common::{DataFusionError, Result, internal_err};
 use futures::StreamExt;
+use futures::stream::once;
 use parquet::file::properties::WriterProperties;
 use sail_common_datafusion::catalog::{CatalogPartitionField, LakehouseExecutionContext};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
@@ -36,7 +36,7 @@ use crate::datasource::type_converter::{arrow_schema_to_iceberg, iceberg_schema_
 use crate::operations::write::config::WriterConfig;
 use crate::operations::write::table_writer::IcebergTableWriter;
 use crate::physical_plan::action_schema::{
-    encode_add_data_files, encode_commit_meta, iceberg_action_schema, CommitMeta,
+    CommitMeta, encode_add_data_files, encode_commit_meta, iceberg_action_schema,
 };
 use crate::physical_plan::write_location;
 use crate::physical_plan::writer_options::IcebergWriterExecOptions;

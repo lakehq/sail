@@ -18,8 +18,8 @@ use datafusion::physical_plan::{
 use datafusion_common::{DataFusionError, Result};
 use futures::stream::TryStreamExt;
 use sail_common_datafusion::datasource::{
-    RowLevelOperationType, MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, MERGE_SOURCE_METRIC_COLUMN,
-    OPERATION_COLUMN,
+    MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN,
+    RowLevelOperationType,
 };
 
 #[derive(Debug, Clone)]

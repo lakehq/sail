@@ -24,17 +24,17 @@ use datafusion::arrow::array::{ArrayRef, UInt64Array};
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
 use datafusion::common::{Result, ToDFSchema};
-use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::Expr;
+use datafusion::logical_expr::utils::conjunction;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
 use datafusion_common::pruning::PruningStatistics;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError};
 
-use crate::conversion::{parse_optional_partition_value, ScalarConverter};
+use crate::conversion::{ScalarConverter, parse_optional_partition_value};
 use crate::delta_log::LogStoreRef;
-use crate::spec::statistics::Stats;
 use crate::spec::Add;
+use crate::spec::statistics::Stats;
 use crate::table::DeltaSnapshot;
 
 /// Result of file pruning operation
@@ -113,10 +113,10 @@ pub async fn prune_files(
     }
 
     // Add files without stats if we haven't reached the limit
-    if let Some(limit) = limit {
-        if rows_collected < limit as i64 {
-            files.extend(pruned_without_stats);
-        }
+    if let Some(limit) = limit
+        && rows_collected < limit as i64
+    {
+        files.extend(pruned_without_stats);
     }
 
     Ok(PruningResult {
@@ -398,13 +398,13 @@ impl AddStatsPruningStatistics {
             if let Some(pv) = a.partition_values.get(name) {
                 return Self::scalar_from_partition_value(dt, pv);
             }
-            if let Some(s) = s {
-                if let Some(v) = s.min_value(name) {
-                    return ScalarConverter::stat_value_to_arrow_scalar_value(v, dt)
-                        .ok()
-                        .flatten()
-                        .unwrap_or_else(|| Self::null_scalar(dt));
-                }
+            if let Some(s) = s
+                && let Some(v) = s.min_value(name)
+            {
+                return ScalarConverter::stat_value_to_arrow_scalar_value(v, dt)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| Self::null_scalar(dt));
             }
             Self::null_scalar(dt)
         })
@@ -424,13 +424,13 @@ impl AddStatsPruningStatistics {
             if let Some(pv) = a.partition_values.get(name) {
                 return Self::scalar_from_partition_value(dt, pv);
             }
-            if let Some(s) = s {
-                if let Some(v) = s.max_value(name) {
-                    return ScalarConverter::stat_value_to_arrow_scalar_value(v, dt)
-                        .ok()
-                        .flatten()
-                        .unwrap_or_else(|| Self::null_scalar(dt));
-                }
+            if let Some(s) = s
+                && let Some(v) = s.max_value(name)
+            {
+                return ScalarConverter::stat_value_to_arrow_scalar_value(v, dt)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| Self::null_scalar(dt));
             }
             Self::null_scalar(dt)
         })

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{Result, plan_err};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RowLevelMetadataColumns<'a> {
@@ -94,9 +94,10 @@ mod tests {
             Err(e) => e,
         };
 
-        assert!(err
-            .to_string()
-            .contains("conflicts with an existing table column"));
+        assert!(
+            err.to_string()
+                .contains("conflicts with an existing table column")
+        );
         Ok(())
     }
 }

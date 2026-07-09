@@ -1,15 +1,15 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use datafusion::execution::context::QueryPlanner;
 use datafusion::execution::SessionState;
+use datafusion::execution::context::QueryPlanner;
 use datafusion::physical_expr::LexOrdering;
-use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::sorts::sort::SortExec;
 use datafusion::physical_planner::{DefaultPhysicalPlanner, ExtensionPlanner, PhysicalPlanner};
-use datafusion_common::{internal_err, DFSchema};
+use datafusion_common::{DFSchema, internal_err};
 use datafusion_expr::{Expr, LogicalPlan, UserDefinedLogicalNode};
-use datafusion_physical_expr::{create_physical_sort_exprs, Partitioning};
+use datafusion_physical_expr::{Partitioning, create_physical_sort_exprs};
 use sail_catalog_system::planner::SystemTablePhysicalPlanner;
 use sail_common_datafusion::logical_rewriter::LogicalRewriter;
 use sail_common_datafusion::rename::physical_plan::rename_projected_physical_plan;
@@ -400,9 +400,11 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error
-            .to_string()
-            .contains("number of explicit partitions cannot be zero"));
+        assert!(
+            error
+                .to_string()
+                .contains("number of explicit partitions cannot be zero")
+        );
     }
 
     #[test]
@@ -419,9 +421,11 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error
-            .to_string()
-            .contains("explicit round-robin repartition requires a target partition count"));
+        assert!(
+            error
+                .to_string()
+                .contains("explicit round-robin repartition requires a target partition count")
+        );
     }
 
     #[test]

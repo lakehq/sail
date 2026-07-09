@@ -13,21 +13,21 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
-use futures::stream::once;
+use datafusion_common::{DataFusionError, Result, internal_err};
 use futures::StreamExt;
+use futures::stream::once;
 use parquet::file::properties::WriterProperties;
 use url::Url;
 
 use crate::datasource::type_converter::iceberg_field_to_arrow;
 use crate::operations::write::arrow_parquet::ArrowParquetWriter;
 use crate::physical_plan::action_schema::{
-    encode_commit_meta, encode_delete_data_files, iceberg_action_schema, CommitMeta,
+    CommitMeta, encode_commit_meta, encode_delete_data_files, iceberg_action_schema,
 };
 use crate::physical_plan::delete_writer_common::{self, IcebergDeleteWriterConfig};
 use crate::spec::types::{PrimitiveType, Type};
 use crate::spec::{
-    DataContentType, DataFile, Operation, TableMetadata, TableRequirement, MAIN_BRANCH,
+    DataContentType, DataFile, MAIN_BRANCH, Operation, TableMetadata, TableRequirement,
 };
 
 #[derive(Debug, Clone)]
@@ -359,11 +359,11 @@ fn validate_equality_delete_type(name: &str, ty: &Type) -> Result<()> {
         ))),
         Type::Primitive(_) => Ok(()),
         // TODO: Support nested equality fields once projection preserves nested field IDs.
-        Type::Struct(_) | Type::List(_) | Type::Map(_) => Err(DataFusionError::NotImplemented(
-            format!(
+        Type::Struct(_) | Type::List(_) | Type::Map(_) => {
+            Err(DataFusionError::NotImplemented(format!(
                 "Iceberg equality delete writes for nested column '{name}' with type {ty} are not supported yet"
-            ),
-        )),
+            )))
+        }
     }
 }
 

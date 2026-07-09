@@ -17,8 +17,8 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::common::{
     Column as LogicalColumn, DataFusionError, Result, ScalarValue, ToDFSchema,
 };
-use datafusion::logical_expr::expr::{Case, Cast, ScalarFunction};
 use datafusion::logical_expr::Expr;
+use datafusion::logical_expr::expr::{Case, Cast, ScalarFunction};
 use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::{LexOrdering, LexRequirement, PhysicalExpr, PhysicalSortExpr};
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
@@ -36,15 +36,15 @@ use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapter
 use url::Url;
 
 use super::context::PlannerContext;
-use super::log_scan::{build_delta_log_datasource_scans_with_options, LogScanOptions};
-use super::log_segment::{resolve_log_segment_files, LogSegmentResolveOptions};
+use super::log_scan::{LogScanOptions, build_delta_log_datasource_scans_with_options};
+use super::log_segment::{LogSegmentResolveOptions, resolve_log_segment_files};
 use crate::datasource::{
-    simplify_expr, COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, PATH_COLUMN,
+    COMMIT_TIMESTAMP_COLUMN, COMMIT_VERSION_COLUMN, PATH_COLUMN, simplify_expr,
 };
 use crate::options::DeltaLogReplayStrategy;
 use crate::physical_plan::{
-    create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaLogReplayExec,
-    DeltaWriterExec, DeltaWriterExecOptions, COL_LOG_IS_REMOVE, COL_LOG_VERSION, COL_REPLAY_PATH,
+    COL_LOG_IS_REMOVE, COL_LOG_VERSION, COL_REPLAY_PATH, DeltaCommitExec, DeltaLogReplayExec,
+    DeltaWriterExec, DeltaWriterExecOptions, create_projection, create_repartition, create_sort,
 };
 use crate::spec::fields::{
     FIELD_NAME_MODIFICATION_TIME, FIELD_NAME_PATH, FIELD_NAME_SIZE, FIELD_NAME_STATS,
@@ -391,7 +391,7 @@ async fn build_log_replay_pipeline_with_files(
         other => {
             return Err(DataFusionError::Plan(format!(
                 "log replay expects 'add' to be Struct, got {other}"
-            )))
+            )));
         }
     };
     let has_add_field = |name: &str| add_struct_fields.iter().any(|f| f.name() == name);

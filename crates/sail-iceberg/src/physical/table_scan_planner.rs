@@ -13,7 +13,7 @@ use sail_physical_plan::merge_cardinality_check::MergeCardinalityCheckExec;
 
 use crate::logical::IcebergTableSource;
 use crate::physical::row_level_planner::plan_iceberg_row_level_write;
-use crate::table_format::{plan_iceberg_write, IcebergWriteNode};
+use crate::table_format::{IcebergWriteNode, plan_iceberg_write};
 
 pub struct IcebergPhysicalPlanner;
 

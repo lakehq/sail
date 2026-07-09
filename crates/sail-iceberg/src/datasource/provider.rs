@@ -16,11 +16,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::Schema as ArrowSchema;
-use datafusion::catalog::memory::DataSourceExec;
 use datafusion::catalog::Session;
+use datafusion::catalog::memory::DataSourceExec;
 use datafusion::common::scalar::ScalarValue;
 use datafusion::common::stats::{ColumnStatistics, Precision, Statistics};
-use datafusion::common::{plan_err, Result, ToDFSchema};
+use datafusion::common::{Result, ToDFSchema, plan_err};
 use datafusion::config::TableParquetOptions;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::{FileGroup, FileScanConfigBuilder, ParquetSource};
@@ -30,15 +30,15 @@ use datafusion::logical_expr::utils::conjunction;
 use datafusion::logical_expr::{
     BinaryExpr, Expr, LogicalPlan, Operator, TableProviderFilterPushDown,
 };
-use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr::PhysicalExpr;
+use datafusion::physical_expr::expressions::Column;
 use datafusion::physical_expr_adapter::PhysicalExprAdapterFactory;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::GlobalLimitExec;
 use datafusion::physical_plan::projection::ProjectionExec;
 use datafusion::physical_plan::union::UnionExec;
-use datafusion::physical_plan::ExecutionPlan;
 use object_store::ObjectMeta;
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 use url::Url;
@@ -49,7 +49,7 @@ use crate::datasource::pruning::{
 };
 use crate::datasource::type_converter::iceberg_schema_to_arrow;
 use crate::io::{
-    load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list, StoreContext,
+    StoreContext, load_manifest as io_load_manifest, load_manifest_list as io_load_manifest_list,
 };
 use crate::physical_plan::delete_apply_exec::IcebergDeleteApplyExec;
 use crate::physical_plan::discovery_exec::IcebergDiscoveryExec;
@@ -231,10 +231,10 @@ impl IcebergTableProvider {
 
         let mut identity_cols: Vec<String> = Vec::new();
         for pf in spec.fields().iter() {
-            if matches!(pf.transform, Transform::Identity) {
-                if let Some(field) = schema.field_by_id(pf.source_id) {
-                    identity_cols.push(field.name.clone());
-                }
+            if matches!(pf.transform, Transform::Identity)
+                && let Some(field) = schema.field_by_id(pf.source_id)
+            {
+                identity_cols.push(field.name.clone());
             }
         }
         if identity_cols.is_empty() {
@@ -570,10 +570,10 @@ impl IcebergTableProvider {
             let mut cols: Vec<usize> = used.clone();
             if let Some(expr) = conjunction(filters.iter().cloned()) {
                 for c in expr.column_refs() {
-                    if let Ok(idx) = self.arrow_schema.index_of(c.name.as_str()) {
-                        if !cols.contains(&idx) {
-                            cols.push(idx);
-                        }
+                    if let Ok(idx) = self.arrow_schema.index_of(c.name.as_str())
+                        && !cols.contains(&idx)
+                    {
+                        cols.push(idx);
                     }
                 }
             }
@@ -1171,30 +1171,30 @@ impl IcebergTableProvider {
                     Operator::Eq => {
                         if let (Some(col), true) =
                             (self.expr_as_column_name(l), self.expr_is_literal(r))
+                            && let Some(pushdown) = self.eq_in_pushdown_for_partition_col(&col)
                         {
-                            if let Some(pushdown) = self.eq_in_pushdown_for_partition_col(&col) {
-                                return pushdown;
-                            }
+                            return pushdown;
                         }
                         if let (Some(col), true) =
                             (self.expr_as_column_name(r), self.expr_is_literal(l))
+                            && let Some(pushdown) = self.eq_in_pushdown_for_partition_col(&col)
                         {
-                            if let Some(pushdown) = self.eq_in_pushdown_for_partition_col(&col) {
-                                return pushdown;
-                            }
+                            return pushdown;
                         }
                         FP::Unsupported
                     }
                     Operator::Gt | Operator::GtEq | Operator::Lt | Operator::LtEq => {
-                        if let Some(col) = self.expr_as_column_name(l) {
-                            if self.expr_is_literal(r) && self.is_partition_source_col(&col) {
-                                return FP::Inexact;
-                            }
+                        if let Some(col) = self.expr_as_column_name(l)
+                            && self.expr_is_literal(r)
+                            && self.is_partition_source_col(&col)
+                        {
+                            return FP::Inexact;
                         }
-                        if let Some(col) = self.expr_as_column_name(r) {
-                            if self.expr_is_literal(l) && self.is_partition_source_col(&col) {
-                                return FP::Inexact;
-                            }
+                        if let Some(col) = self.expr_as_column_name(r)
+                            && self.expr_is_literal(l)
+                            && self.is_partition_source_col(&col)
+                        {
+                            return FP::Inexact;
                         }
                         FP::Unsupported
                     }
@@ -1294,11 +1294,11 @@ impl IcebergTableProvider {
                 if matches!(pf.transform, Transform::Void | Transform::Unknown) {
                     continue;
                 }
-                if let Some(field) = self.schema.field_by_id(pf.source_id) {
-                    if field.name == col_name {
-                        found = true;
-                        only_identity &= matches!(pf.transform, Transform::Identity);
-                    }
+                if let Some(field) = self.schema.field_by_id(pf.source_id)
+                    && field.name == col_name
+                {
+                    found = true;
+                    only_identity &= matches!(pf.transform, Transform::Identity);
                 }
             }
         }
@@ -1317,12 +1317,11 @@ impl IcebergTableProvider {
             }
             if let Some(expr) = conjunction(filters.iter().cloned()) {
                 for c in expr.column_refs() {
-                    if let Ok(idx) = self.arrow_schema.index_of(c.name.as_str()) {
-                        if !used.contains(&idx)
-                            && !fields.iter().any(|f| f.name() == c.name.as_str())
-                        {
-                            fields.push(Arc::new(self.arrow_schema.field(idx).clone()));
-                        }
+                    if let Ok(idx) = self.arrow_schema.index_of(c.name.as_str())
+                        && !used.contains(&idx)
+                        && !fields.iter().any(|f| f.name() == c.name.as_str())
+                    {
+                        fields.push(Arc::new(self.arrow_schema.field(idx).clone()));
                     }
                 }
             }

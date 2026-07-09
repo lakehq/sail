@@ -11,7 +11,7 @@ use sail_sql_parser::ast::expression::{
 };
 
 use crate::error::{SqlError, SqlResult};
-use crate::literal::utils::{extract_fraction_match, extract_match, parse_signed_value, Signed};
+use crate::literal::utils::{Signed, extract_fraction_match, extract_match, parse_signed_value};
 use crate::parser::parse_interval_literal;
 use crate::value::from_ast_string;
 

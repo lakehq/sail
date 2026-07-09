@@ -11,7 +11,7 @@ use datafusion::functions_aggregate::{
 use datafusion::functions_nested::string::array_to_string;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
-use datafusion_expr::{cast, expr, lit, when, AggregateUDF, ExprSchemable, ScalarUDF};
+use datafusion_expr::{AggregateUDF, ExprSchemable, ScalarUDF, cast, expr, lit, when};
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use lazy_static::lazy_static;
 use sail_common::spec::SAIL_LIST_FIELD_NAME;
@@ -40,9 +40,9 @@ use sail_function::scalar::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};
 use crate::function::common::{
-    count_min_sketch_args, get_arguments_and_null_treatment, get_null_treatment,
-    hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
-    theta_args_with_default_lg, AggFunction, AggFunctionInput,
+    AggFunction, AggFunctionInput, count_min_sketch_args, get_arguments_and_null_treatment,
+    get_null_treatment, hll_args_with_default_lg, hll_union_args_with_default_allow_different_lg,
+    theta_args_with_default_lg,
 };
 use crate::function::transform_count_star_wildcard_expr;
 

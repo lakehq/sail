@@ -156,8 +156,8 @@ fn map_type_i32_u64() -> DataType {
     DataType::Map(entries_field, false)
 }
 
-fn iceberg_action_tracing_options(
-) -> std::result::Result<serde_arrow::schema::TracingOptions, String> {
+fn iceberg_action_tracing_options()
+-> std::result::Result<serde_arrow::schema::TracingOptions, String> {
     use serde_arrow::schema::TracingOptions;
 
     TracingOptions::default()
@@ -331,7 +331,7 @@ impl TryFrom<AddFileAction> for DataFile {
             other => {
                 return Err(DataFusionError::Plan(format!(
                     "unknown DataContentType string '{other}'"
-                )))
+                )));
             }
         };
         let file_format = match a.file_format.as_str() {
@@ -342,7 +342,7 @@ impl TryFrom<AddFileAction> for DataFile {
             other => {
                 return Err(DataFusionError::Plan(format!(
                     "unknown DataFileFormat string '{other}'"
-                )))
+                )));
             }
         };
 

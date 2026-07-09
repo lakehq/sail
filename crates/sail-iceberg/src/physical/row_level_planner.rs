@@ -1,27 +1,27 @@
 use std::sync::Arc;
 
-use datafusion::common::{not_impl_err, plan_err, DataFusionError, Result};
+use datafusion::common::{DataFusionError, Result, not_impl_err, plan_err};
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::logical_plan::builder::LogicalPlanBuilder;
+use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::union::UnionExec;
-use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::PhysicalPlanner;
 use sail_common_datafusion::datasource::{
-    PhysicalSinkMode, RowLevelCommand, MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN,
+    MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, PhysicalSinkMode, RowLevelCommand,
 };
 use sail_data_source::options::ResolveOptions;
 use sail_logical_plan::merge::RowLevelWriteNode;
 
-use crate::options::gen::IcebergWriteOptions;
+use crate::options::r#gen::IcebergWriteOptions;
 use crate::physical_plan::{
     IcebergCommitExec, IcebergEqualityDeleteWriterExec, IcebergMergeDataRowsExec,
     IcebergPositionDeleteWriterExec, IcebergWriterExec, IcebergWriterExecOptions,
 };
 use crate::table::Table;
 use crate::table_format::{
-    catalog_managed_iceberg_from_options, metadata_location_from_options,
-    split_iceberg_write_options_and_table_properties, IcebergTableFormat,
+    IcebergTableFormat, catalog_managed_iceberg_from_options, metadata_location_from_options,
+    split_iceberg_write_options_and_table_properties,
 };
 
 pub(crate) async fn plan_iceberg_row_level_write(

@@ -1,6 +1,6 @@
 use datafusion::arrow::datatypes::DataType;
 use datafusion::functions::expr_fn::abs;
-use datafusion_expr::{cast, expr, lit, when, ExprSchemable, Operator};
+use datafusion_expr::{ExprSchemable, Operator, cast, expr, lit, when};
 use datafusion_spark::function::bitwise::expr_fn as bitwise_fn;
 use sail_common_datafusion::utils::items::ItemTaker;
 

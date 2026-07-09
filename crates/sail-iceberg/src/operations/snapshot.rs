@@ -18,9 +18,8 @@ use crate::io::StoreContext;
 use crate::spec::manifest::ManifestWriterBuilder;
 use crate::spec::manifest_list::ManifestListWriter;
 use crate::spec::{
-    DataFile, FormatVersion, ManifestContentType, Operation, PartitionSpec, Schema,
+    DataFile, FormatVersion, MAIN_BRANCH, ManifestContentType, Operation, PartitionSpec, Schema,
     SnapshotBuilder, SnapshotReference, SnapshotRetention, TableRequirement, TableUpdate,
-    MAIN_BRANCH,
 };
 use crate::utils::join_table_uri;
 
@@ -217,23 +216,24 @@ impl<'a> SnapshotProducer<'a> {
 
         // Build manifest metadata: prefer caller-provided metadata derived from table schema/spec
         // Fall back to deriving from the current transaction snapshot if not provided
-        let metadata = if let Some(meta) = self.manifest_metadata.clone() {
-            meta
-        } else {
-            let schema_id = self.tx.snapshot().schema_id().unwrap_or_default();
-            let schema = Schema::builder()
-                .with_schema_id(schema_id)
-                .with_fields(vec![])
-                .build()
-                .map_err(|e| format!("schema build error: {e}"))?;
-            let partition_spec = PartitionSpec::builder().with_spec_id(0).build();
-            crate::spec::manifest::ManifestMetadata::new(
-                std::sync::Arc::new(schema.clone()),
-                schema_id,
-                partition_spec,
-                FormatVersion::V2,
-                ManifestContentType::Data,
-            )
+        let metadata = match self.manifest_metadata.clone() {
+            Some(meta) => meta,
+            _ => {
+                let schema_id = self.tx.snapshot().schema_id().unwrap_or_default();
+                let schema = Schema::builder()
+                    .with_schema_id(schema_id)
+                    .with_fields(vec![])
+                    .build()
+                    .map_err(|e| format!("schema build error: {e}"))?;
+                let partition_spec = PartitionSpec::builder().with_spec_id(0).build();
+                crate::spec::manifest::ManifestMetadata::new(
+                    std::sync::Arc::new(schema.clone()),
+                    schema_id,
+                    partition_spec,
+                    FormatVersion::V2,
+                    ManifestContentType::Data,
+                )
+            }
         };
         let format_version = metadata.format_version;
 

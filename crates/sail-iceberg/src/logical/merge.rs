@@ -7,10 +7,10 @@ use datafusion_expr::logical_plan::Extension;
 use datafusion_expr::{Expr, LogicalPlan, TableScan, TableSource};
 use log::trace;
 use sail_common_datafusion::datasource::{
-    MergeCapableSource, MergeInfo, MergeMatchedAction, MergeNotMatchedBySourceAction,
-    MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN,
+    MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN, MergeCapableSource, MergeInfo, MergeMatchedAction,
+    MergeNotMatchedBySourceAction,
 };
-use sail_logical_plan::merge::{expand_merge, RowLevelWriteNode};
+use sail_logical_plan::merge::{RowLevelWriteNode, expand_merge};
 
 use crate::logical::table_source::IcebergTableSource;
 

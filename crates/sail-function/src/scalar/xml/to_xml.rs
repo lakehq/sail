@@ -5,7 +5,7 @@ use chrono::prelude::*;
 use datafusion::arrow::array::timezone::Tz;
 use datafusion::arrow::array::*;
 use datafusion::arrow::datatypes::*;
-use datafusion_common::{exec_err, plan_err, DataFusionError, Result, ScalarValue};
+use datafusion_common::{DataFusionError, Result, ScalarValue, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::Volatility;
 use sail_common::spec::{SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME};
@@ -205,7 +205,7 @@ impl ScalarUDFImpl for SparkToXml {
                 match &arg_types[0] {
                     DataType::Struct(_) => {}
                     other => {
-                        return plan_err!("`to_xml` first argument must be a struct, got {other}")
+                        return plan_err!("`to_xml` first argument must be a struct, got {other}");
                     }
                 }
                 match &arg_types[1] {
@@ -213,7 +213,7 @@ impl ScalarUDFImpl for SparkToXml {
                     other => {
                         return plan_err!(
                             "`to_xml` second argument must be a map of options, got {other}"
-                        )
+                        );
                     }
                 }
                 Ok(arg_types.to_vec())
@@ -557,7 +557,7 @@ fn write_map(
             other => {
                 return exec_err!(
                     "to_xml: map keys must be strings to be valid XML tag names, got {other:?}"
-                )
+                );
             }
         };
         if key.is_empty() {

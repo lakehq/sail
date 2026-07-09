@@ -12,7 +12,7 @@ use sail_common_hms::hms::{
 };
 use volo_thrift::MaybeException;
 
-use crate::provider::{apply_alter_table_options, HmsCatalogProvider};
+use crate::provider::{HmsCatalogProvider, apply_alter_table_options};
 
 const HMS_LOCK_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(30);
 const HMS_LOCK_CHECK_INTERVAL: Duration = Duration::from_millis(200);

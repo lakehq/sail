@@ -113,8 +113,8 @@ mod tests {
     }
 
     #[test]
-    fn data_dir_uses_folder_storage_path_option_before_table_properties(
-    ) -> std::result::Result<(), url::ParseError> {
+    fn data_dir_uses_folder_storage_path_option_before_table_properties()
+    -> std::result::Result<(), url::ParseError> {
         let properties =
             HashMap::from([("write.data.path".to_string(), "property-data".to_string())]);
         let table_url = table_url()?;
@@ -131,8 +131,8 @@ mod tests {
     }
 
     #[test]
-    fn data_dir_falls_back_to_table_properties_then_default(
-    ) -> std::result::Result<(), url::ParseError> {
+    fn data_dir_falls_back_to_table_properties_then_default()
+    -> std::result::Result<(), url::ParseError> {
         let table_url = table_url()?;
         let properties = HashMap::from([(
             "write.folder-storage.path".to_string(),
@@ -150,8 +150,8 @@ mod tests {
     }
 
     #[test]
-    fn data_dir_normalizes_absolute_paths_under_table_root(
-    ) -> std::result::Result<(), url::ParseError> {
+    fn data_dir_normalizes_absolute_paths_under_table_root()
+    -> std::result::Result<(), url::ParseError> {
         let table_url = table_url()?;
         let actual = resolve_data_dir_from_property_value(
             Some("file:///tmp/iceberg/table/custom/data/"),

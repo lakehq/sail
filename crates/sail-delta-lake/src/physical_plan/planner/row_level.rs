@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion::catalog::Session;
-use datafusion::common::{internal_err, not_impl_err, DataFusionError, Result};
+use datafusion::common::{DataFusionError, Result, internal_err, not_impl_err};
 use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::execution::SessionState;
 use datafusion::physical_plan::ExecutionPlan;
@@ -13,13 +13,13 @@ use sail_data_source::resolve_listing_urls;
 use sail_logical_plan::merge::RowLevelWriteNode;
 use url::Url;
 
-use crate::options::gen::DeltaWriteOptions;
+use crate::options::r#gen::DeltaWriteOptions;
 use crate::physical_plan::planner::{
-    plan_delete, plan_delete_mor, plan_merge, plan_merge_mor, DeltaPlannerConfig,
-    MergePredicateInfo, OperationOverride, PlannerContext, RowLevelTargetInfo, RowLevelWriteInfo,
+    DeltaPlannerConfig, MergePredicateInfo, OperationOverride, PlannerContext, RowLevelTargetInfo,
+    RowLevelWriteInfo, plan_delete, plan_delete_mor, plan_merge, plan_merge_mor,
 };
 use crate::table::open_table_with_object_store;
-use crate::table_format::{split_delta_write_options_and_table_properties, DeltaTableFormat};
+use crate::table_format::{DeltaTableFormat, split_delta_write_options_and_table_properties};
 
 /// Creates a Delta physical execution plan for a unified `RowLevelWriteNode`.
 pub async fn create_row_level_write_physical_plan(

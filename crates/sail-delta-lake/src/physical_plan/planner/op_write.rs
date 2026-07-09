@@ -28,12 +28,12 @@ use sail_common_datafusion::logical_expr::ExprWithSource;
 use super::context::PlannerContext;
 use super::metadata_predicate::{build_metadata_filter, predicate_requires_stats};
 use super::utils::{
-    align_schemas_for_union, build_log_replay_pipeline_with_options, build_standard_write_layers,
-    LogReplayOptions,
+    LogReplayOptions, align_schemas_for_union, build_log_replay_pipeline_with_options,
+    build_standard_write_layers,
 };
 use crate::physical_plan::{
-    create_projection, create_repartition, create_sort, DeltaCommitExec, DeltaDiscoveryExec,
-    DeltaRemoveActionsExec, DeltaScanByAddsExec, DeltaWriterExec, DeltaWriterExecOptions,
+    DeltaCommitExec, DeltaDiscoveryExec, DeltaRemoveActionsExec, DeltaScanByAddsExec,
+    DeltaWriterExec, DeltaWriterExecOptions, create_projection, create_repartition, create_sort,
 };
 use crate::spec::{DeltaOperation, SaveMode};
 use crate::table::DeltaSnapshot;

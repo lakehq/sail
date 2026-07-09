@@ -105,9 +105,11 @@ async fn test_create_table() {
                     transform: None,
                 }]
             );
-            assert!(properties
-                .iter()
-                .any(|(k, v)| k == "owner" && v == "test_user"));
+            assert!(
+                properties
+                    .iter()
+                    .any(|(k, v)| k == "owner" && v == "test_user")
+            );
         }
         _ => panic!("Expected Table kind"),
     }

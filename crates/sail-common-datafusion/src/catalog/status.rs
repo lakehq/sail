@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{DataType, Field, Fields};
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{Result, plan_err};
 use datafusion_expr::LogicalPlan;
 use serde::{Deserialize, Serialize};
 
