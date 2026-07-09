@@ -595,9 +595,11 @@ fn decode(bytes: &[u8], char_set: &str) -> Result<String> {
             if !bytes.len().is_multiple_of(2) {
                 exec_err!("Spark `decode` function: Invalid UTF-16BE byte sequence: {bytes:?}")
             } else {
-                let u16_words: Vec<u16> = bytes
-                    .chunks_exact(2)
-                    .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+                let (chunks, remainder) = bytes.as_chunks::<2>();
+                debug_assert!(remainder.is_empty());
+                let u16_words: Vec<u16> = chunks
+                    .iter()
+                    .map(|chunk| u16::from_be_bytes(*chunk))
                     .collect();
                 String::from_utf16(&u16_words).map_err(|e| {
                     exec_datafusion_err!(
@@ -611,9 +613,11 @@ fn decode(bytes: &[u8], char_set: &str) -> Result<String> {
             if !bytes.len().is_multiple_of(2) {
                 exec_err!("Spark `decode` function: Invalid UTF-16LE byte sequence: {bytes:?}")
             } else {
-                let u16_words: Vec<u16> = bytes
-                    .chunks_exact(2)
-                    .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+                let (chunks, remainder) = bytes.as_chunks::<2>();
+                debug_assert!(remainder.is_empty());
+                let u16_words: Vec<u16> = chunks
+                    .iter()
+                    .map(|chunk| u16::from_le_bytes(*chunk))
                     .collect();
                 String::from_utf16(&u16_words).map_err(|e| {
                     exec_datafusion_err!(
@@ -636,13 +640,15 @@ fn decode(bytes: &[u8], char_set: &str) -> Result<String> {
                 if !content.len().is_multiple_of(2) {
                     exec_err!("Spark `decode` function: Invalid UTF-16 byte sequence: {bytes:?}")
                 } else {
-                    let u16_words: Vec<u16> = content
-                        .chunks_exact(2)
+                    let (chunks, remainder) = content.as_chunks::<2>();
+                    debug_assert!(remainder.is_empty());
+                    let u16_words: Vec<u16> = chunks
+                        .iter()
                         .map(|chunk| {
                             if bom {
-                                u16::from_be_bytes([chunk[0], chunk[1]])
+                                u16::from_be_bytes(*chunk)
                             } else {
-                                u16::from_le_bytes([chunk[0], chunk[1]])
+                                u16::from_le_bytes(*chunk)
                             }
                         })
                         .collect();

@@ -364,8 +364,8 @@ fn apply_variant_stats_from_footer(
 }
 
 fn contains_variant_array_path(path: &[String]) -> bool {
-    path.windows(2)
-        .any(|parts| parts[0] == "list" && parts[1] == "element")
+    path.array_windows::<2>()
+        .any(|[left, right]| left == "list" && right == "element")
 }
 
 fn normalized_variant_stats_path(path: &[String]) -> Result<String, DeltaTableError> {

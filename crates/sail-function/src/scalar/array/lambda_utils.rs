@@ -120,8 +120,8 @@ fn offsets_to_indices<O: OffsetSizeTrait>(
         .unwrap_or(0)
         .saturating_sub(offsets.first().map(|o| o.as_usize()).unwrap_or(0));
     let mut out: Vec<i32> = Vec::with_capacity(total);
-    for w in offsets.windows(2) {
-        let len = w[1].as_usize() - w[0].as_usize();
+    for &[start, end] in offsets.array_windows::<2>() {
+        let len = end.as_usize() - start.as_usize();
         let len = i32::try_from(len)
             .map_err(|_| generic_exec_err(name, "array too large for Int32 index"))?;
         out.extend(0..len);

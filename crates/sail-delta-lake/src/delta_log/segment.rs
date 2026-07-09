@@ -417,22 +417,22 @@ pub(crate) async fn list_log_files(
             Some(f) => f,
             None => continue,
         };
-        if let Some(v) = parse_checkpoint_version(filename) {
-            if v <= max_version {
-                checkpoint_candidates.push((v, meta));
-            }
+        if let Some(v) = parse_checkpoint_version(filename)
+            && v <= max_version
+        {
+            checkpoint_candidates.push((v, meta));
             continue;
         }
-        if let Some(v) = parse_commit_version(filename) {
-            if v <= max_version {
-                commit_candidates.push((v, meta));
-            }
+        if let Some(v) = parse_commit_version(filename)
+            && v <= max_version
+        {
+            commit_candidates.push((v, meta));
             continue;
         }
-        if let Some(v) = parse_checksum_version(filename) {
-            if v <= max_version {
-                checksum_candidates.push((v, meta));
-            }
+        if let Some(v) = parse_checksum_version(filename)
+            && v <= max_version
+        {
+            checksum_candidates.push((v, meta));
             continue;
         }
         if let Some(versions) = parse_compacted_json_versions(filename) {

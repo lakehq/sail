@@ -24,10 +24,11 @@ fn map(input: ScalarFunctionInput) -> PlanResult<expr::Expr> {
     }
 
     let schema = input.function_context.schema;
-    let (keys, values): (Vec<_>, Vec<_>) = input
-        .arguments
-        .chunks(2)
-        .map(|key_value| (key_value[0].clone(), key_value[1].clone()))
+    let (pairs, remainder) = input.arguments.as_chunks::<2>();
+    debug_assert!(remainder.is_empty());
+    let (keys, values): (Vec<_>, Vec<_>) = pairs
+        .iter()
+        .map(|[key, value]| (key.clone(), value.clone()))
         .unzip();
     let value_contains_null = values.iter().try_fold(false, |nullable, value| {
         Ok::<_, PlanError>(nullable || value.nullable(schema.as_ref())?)
