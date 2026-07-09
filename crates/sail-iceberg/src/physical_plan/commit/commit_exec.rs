@@ -150,9 +150,9 @@ impl IcebergCommitExec {
             table_meta.partition_specs.push(new_spec.clone());
         }
         table_meta.default_spec_id = spec_id;
-        if let Some(highest) = new_spec.highest_field_id() {
-            table_meta.last_partition_id = table_meta.last_partition_id.max(highest);
-        }
+        table_meta.last_partition_id = table_meta
+            .last_partition_id
+            .max(new_spec.last_assigned_field_id());
     }
 
     fn validate_requirements(
@@ -934,7 +934,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     }
                 }
 
-                log::trace!("commit_exec: applying updates: {:?}", &action_updates);
+                log::trace!("commit_exec: applying updates: {:?}", action_updates);
                 let mut newest_snapshot_seq: Option<i64> = None;
                 let mut newest_snapshot_added_rows: Option<i64> = None;
                 let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
@@ -1000,9 +1000,9 @@ impl ExecutionPlan for IcebergCommitExec {
 
                 log::trace!(
                     "Writing metadata: {} snapshot_id={:?} table_url={}",
-                    &new_meta_rel,
+                    new_meta_rel,
                     table_meta.current_snapshot_id,
-                    &table_url
+                    table_url
                 );
 
                 let new_meta_path = object_store::path::Path::from(new_meta_rel.as_str());

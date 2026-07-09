@@ -233,7 +233,7 @@ pub async fn bootstrap_new_table_with_style(
         current_schema_id: iceberg_schema.schema_id(),
         partition_specs: vec![partition_spec.clone()],
         default_spec_id: partition_spec.spec_id(),
-        last_partition_id: partition_spec.highest_field_id().unwrap_or(0),
+        last_partition_id: partition_spec.last_assigned_field_id(),
         properties: table_properties,
         current_snapshot_id: Some(snapshot.snapshot_id()),
         next_row_id: snapshot.added_rows.and_then(|added_rows| {
@@ -331,7 +331,7 @@ pub async fn bootstrap_empty_table_metadata(
         current_schema_id: iceberg_schema.schema_id(),
         partition_specs: vec![partition_spec.clone()],
         default_spec_id: partition_spec.spec_id(),
-        last_partition_id: partition_spec.highest_field_id().unwrap_or(0),
+        last_partition_id: partition_spec.last_assigned_field_id(),
         properties: table_properties,
         current_snapshot_id: Some(-1),
         next_row_id: (format_version >= FormatVersion::V3).then_some(0),
@@ -415,7 +415,7 @@ pub async fn replace_empty_table_metadata(
         .max(iceberg_schema.highest_field_id());
     let last_partition_id = previous_metadata
         .last_partition_id
-        .max(partition_spec.highest_field_id().unwrap_or(0));
+        .max(partition_spec.last_assigned_field_id());
     let mut schemas = previous_metadata.schemas.clone();
     schemas.push(iceberg_schema.clone());
     let mut partition_specs = previous_metadata.partition_specs.clone();

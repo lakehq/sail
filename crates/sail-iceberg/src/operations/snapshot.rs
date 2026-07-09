@@ -24,6 +24,74 @@ use crate::spec::{
 };
 use crate::utils::join_table_uri;
 
+fn active_file_count(manifest: &crate::spec::manifest_list::ManifestFile) -> i64 {
+    i64::from(manifest.added_files_count.unwrap_or(0))
+        + i64::from(manifest.existing_files_count.unwrap_or(0))
+}
+
+fn active_row_count(manifest: &crate::spec::manifest_list::ManifestFile) -> i64 {
+    manifest.added_rows_count.unwrap_or(0) + manifest.existing_rows_count.unwrap_or(0)
+}
+
+fn previous_total(
+    parent_summary: &crate::spec::snapshots::Summary,
+    key: &str,
+    is_bootstrap: bool,
+) -> Option<u64> {
+    if is_bootstrap {
+        Some(0)
+    } else {
+        parent_summary.additional_properties.get(key)?.parse().ok()
+    }
+}
+
+fn with_manifest_totals<'a>(
+    mut summary: crate::spec::snapshots::Summary,
+    parent_summary: &crate::spec::snapshots::Summary,
+    is_bootstrap: bool,
+    manifests: impl IntoIterator<Item = &'a crate::spec::manifest_list::ManifestFile>,
+    added_position_deletes: u64,
+    added_equality_deletes: u64,
+) -> crate::spec::snapshots::Summary {
+    let mut total_data_files = 0;
+    let mut total_delete_files = 0;
+    let mut total_records = 0;
+    for manifest in manifests {
+        match manifest.content {
+            ManifestContentType::Data => {
+                total_data_files += active_file_count(manifest);
+                total_records += active_row_count(manifest);
+            }
+            ManifestContentType::Deletes => {
+                total_delete_files += active_file_count(manifest);
+            }
+        }
+    }
+
+    summary = summary
+        .with_property("total-data-files", total_data_files.to_string())
+        .with_property("total-delete-files", total_delete_files.to_string())
+        .with_property("total-records", total_records.to_string());
+
+    if let Some(previous_position_deletes) =
+        previous_total(parent_summary, "total-position-deletes", is_bootstrap)
+    {
+        summary = summary.with_property(
+            "total-position-deletes",
+            (previous_position_deletes + added_position_deletes).to_string(),
+        );
+    }
+    if let Some(previous_equality_deletes) =
+        previous_total(parent_summary, "total-equality-deletes", is_bootstrap)
+    {
+        summary = summary.with_property(
+            "total-equality-deletes",
+            (previous_equality_deletes + added_equality_deletes).to_string(),
+        );
+    }
+    summary
+}
+
 pub trait SnapshotProduceOperation: Send + Sync {
     fn operation(&self) -> &'static str;
 }
@@ -95,44 +163,40 @@ impl<'a> SnapshotProducer<'a> {
             "delete" => Operation::Delete,
             _ => Operation::Append,
         };
+        let added_data_file_count = self.added_data_files.len();
+        let added_records = self
+            .added_data_files
+            .iter()
+            .map(|df| df.record_count)
+            .sum::<u64>();
+        let mut added_position_delete_files = 0usize;
+        let mut added_position_deletes = 0u64;
+        let mut added_equality_delete_files = 0usize;
+        let mut added_equality_deletes = 0u64;
+        for df in &self.added_delete_files {
+            match df.content {
+                crate::spec::DataContentType::PositionDeletes => {
+                    added_position_delete_files += 1;
+                    added_position_deletes += df.record_count;
+                }
+                crate::spec::DataContentType::EqualityDeletes => {
+                    added_equality_delete_files += 1;
+                    added_equality_deletes += df.record_count;
+                }
+                crate::spec::DataContentType::Data => {}
+            }
+        }
         let mut summary = crate::spec::snapshots::Summary::new(operation.clone());
-        if !self.added_data_files.is_empty() {
+        if added_data_file_count > 0 {
             summary = summary
-                .with_property("added-data-files", self.added_data_files.len().to_string())
-                .with_property(
-                    "added-records",
-                    self.added_data_files
-                        .iter()
-                        .map(|df| df.record_count)
-                        .sum::<u64>()
-                        .to_string(),
-                );
+                .with_property("added-data-files", added_data_file_count.to_string())
+                .with_property("added-records", added_records.to_string());
         }
         if !self.added_delete_files.is_empty() {
-            let mut added_position_delete_files = 0usize;
-            let mut added_position_deletes = 0u64;
-            let mut added_equality_delete_files = 0usize;
-            let mut added_equality_deletes = 0u64;
-            for df in &self.added_delete_files {
-                match df.content {
-                    crate::spec::DataContentType::PositionDeletes => {
-                        added_position_delete_files += 1;
-                        added_position_deletes += df.record_count;
-                    }
-                    crate::spec::DataContentType::EqualityDeletes => {
-                        added_equality_delete_files += 1;
-                        added_equality_deletes += df.record_count;
-                    }
-                    crate::spec::DataContentType::Data => {}
-                }
-            }
-            let deleted_records = added_position_deletes + added_equality_deletes;
-            summary = summary
-                .with_property(
-                    "added-delete-files",
-                    self.added_delete_files.len().to_string(),
-                )
-                .with_property("deleted-records", deleted_records.to_string());
+            summary = summary.with_property(
+                "added-delete-files",
+                self.added_delete_files.len().to_string(),
+            );
             if added_position_delete_files > 0 {
                 summary = summary
                     .with_property(
@@ -200,7 +264,7 @@ impl<'a> SnapshotProducer<'a> {
 
             log::trace!(
                 "snapshot producer: loading parent manifest list: {}",
-                &manifest_list_path
+                manifest_list_path
             );
             let manifest_list_data = store_ref
                 .get(&manifest_list_path)
@@ -329,6 +393,19 @@ impl<'a> SnapshotProducer<'a> {
                     .with_file_counts(added_delete_files.len() as i32, 0, 0)
                     .with_row_counts(added_delete_rows, 0, 0)
                     .build()?,
+            );
+        }
+
+        if !is_overwrite || is_row_delta {
+            summary = with_manifest_totals(
+                summary,
+                parent_snapshot.summary(),
+                self.is_bootstrap,
+                parent_manifest_entries
+                    .iter()
+                    .chain(new_manifest_files.iter()),
+                added_position_deletes,
+                added_equality_deletes,
             );
         }
 

@@ -25,10 +25,9 @@ use crate::io::{
 };
 use crate::operations::write::arrow_parquet::ArrowParquetWriter;
 use crate::physical_plan::action_schema::{encode_delete_data_files, iceberg_action_schema};
-use crate::physical_plan::{delete_writer_common, write_location};
+use crate::physical_plan::delete_writer_common::{self, IcebergDeleteWriterConfig};
 use crate::spec::{
-    DataContentType, DataFile, FormatVersion, ManifestContentType, ManifestList, ManifestStatus,
-    TableMetadata,
+    DataContentType, DataFile, ManifestContentType, ManifestList, ManifestStatus, TableMetadata,
 };
 
 const POSITION_DELETE_FILE_PATH_COL: &str = "file_path";
@@ -39,10 +38,7 @@ const POSITION_DELETE_POS_ID: &str = "2147483545";
 #[derive(Debug, Clone)]
 pub struct IcebergPositionDeleteWriterExec {
     input: Arc<dyn ExecutionPlan>,
-    table_url: Url,
-    table_properties: Vec<(String, String)>,
-    write_data_path: Option<String>,
-    write_folder_storage_path: Option<String>,
+    writer_config: IcebergDeleteWriterConfig,
     file_column_name: String,
     row_index_column_name: String,
     cache: Arc<PlanProperties>,
@@ -70,10 +66,12 @@ impl IcebergPositionDeleteWriterExec {
         ));
         Self {
             input,
-            table_url,
-            table_properties,
-            write_data_path,
-            write_folder_storage_path,
+            writer_config: IcebergDeleteWriterConfig::new(
+                table_url,
+                table_properties,
+                write_data_path,
+                write_folder_storage_path,
+            ),
             file_column_name: file_column_name.into(),
             row_index_column_name: row_index_column_name.into(),
             cache,
@@ -85,19 +83,19 @@ impl IcebergPositionDeleteWriterExec {
     }
 
     pub fn table_url(&self) -> &Url {
-        &self.table_url
+        self.writer_config.table_url()
     }
 
     pub fn table_properties(&self) -> &[(String, String)] {
-        &self.table_properties
+        self.writer_config.table_properties()
     }
 
     pub fn write_data_path(&self) -> Option<&str> {
-        self.write_data_path.as_deref()
+        self.writer_config.write_data_path()
     }
 
     pub fn write_folder_storage_path(&self) -> Option<&str> {
-        self.write_folder_storage_path.as_deref()
+        self.writer_config.write_folder_storage_path()
     }
 
     pub fn file_column_name(&self) -> &str {
@@ -136,10 +134,14 @@ impl ExecutionPlan for IcebergPositionDeleteWriterExec {
         }
         Ok(Arc::new(Self::new(
             Arc::clone(&children[0]),
-            self.table_url.clone(),
-            self.table_properties.clone(),
-            self.write_data_path.clone(),
-            self.write_folder_storage_path.clone(),
+            self.writer_config.table_url().clone(),
+            self.writer_config.table_properties().to_vec(),
+            self.writer_config
+                .write_data_path()
+                .map(ToString::to_string),
+            self.writer_config
+                .write_folder_storage_path()
+                .map(ToString::to_string),
             self.file_column_name.clone(),
             self.row_index_column_name.clone(),
         )))
@@ -163,17 +165,15 @@ impl ExecutionPlan for IcebergPositionDeleteWriterExec {
         }
 
         let input = self.input.execute(0, Arc::clone(&context))?;
-        let table_url = self.table_url.clone();
-        let table_properties = self.table_properties.clone();
-        let write_data_path = self.write_data_path.clone();
-        let write_folder_storage_path = self.write_folder_storage_path.clone();
+        let writer_config = self.writer_config.clone();
         let file_column_name = self.file_column_name.clone();
         let row_index_column_name = self.row_index_column_name.clone();
         let output_schema = self.schema();
         let schema_for_adapter = output_schema.clone();
 
         let future = async move {
-            let store_ctx = delete_writer_common::store_context(&context, &table_url)?;
+            let store_ctx =
+                delete_writer_common::store_context(&context, writer_config.table_url())?;
 
             let mut positions_by_file: BTreeMap<String, BTreeSet<i64>> = BTreeMap::new();
             let mut stream = input;
@@ -191,28 +191,11 @@ impl ExecutionPlan for IcebergPositionDeleteWriterExec {
                 return encode_delete_data_files(vec![]);
             }
 
-            let table_meta = delete_writer_common::load_current_table_metadata(
-                &store_ctx,
-                &table_url,
-                &table_properties,
-            )
-            .await?;
-            if table_meta.format_version < FormatVersion::V2 {
-                return Err(DataFusionError::Plan(
-                    "Iceberg position delete writes require table format-version 2".to_string(),
-                ));
-            }
-            if table_meta.format_version >= FormatVersion::V3 {
-                return Err(DataFusionError::NotImplemented(
-                    "Iceberg v3 MERGE MOR position delete writes are not supported; v3 requires deletion vectors".to_string(),
-                ));
-            }
-            let data_dir = write_location::resolve_data_dir_from_options_and_properties(
-                write_data_path.as_deref(),
-                write_folder_storage_path.as_deref(),
-                &table_meta.properties,
-                &table_url,
-            );
+            let table_meta = writer_config
+                .load_current_table_metadata(&store_ctx)
+                .await?;
+            delete_writer_common::ensure_position_delete_file_writes(&table_meta)?;
+            let data_dir = writer_config.resolve_data_dir(&table_meta);
             let data_files = load_current_data_files(&store_ctx, &table_meta).await?;
             let data_file_by_path = data_files
                 .into_iter()
@@ -228,7 +211,7 @@ impl ExecutionPlan for IcebergPositionDeleteWriterExec {
                 })?;
                 let delete_file = write_position_delete_file(
                     &store_ctx,
-                    &table_url,
+                    writer_config.table_url(),
                     &data_dir,
                     target_file,
                     &positions,
@@ -256,7 +239,7 @@ impl DisplayAs for IcebergPositionDeleteWriterExec {
                 write!(
                     f,
                     "IcebergPositionDeleteWriterExec(table_path={})",
-                    self.table_url
+                    self.writer_config.table_url()
                 )
             }
         }

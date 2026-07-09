@@ -24,20 +24,16 @@ use crate::operations::write::arrow_parquet::ArrowParquetWriter;
 use crate::physical_plan::action_schema::{
     encode_commit_meta, encode_delete_data_files, iceberg_action_schema, CommitMeta,
 };
-use crate::physical_plan::{delete_writer_common, write_location};
+use crate::physical_plan::delete_writer_common::{self, IcebergDeleteWriterConfig};
 use crate::spec::types::{PrimitiveType, Type};
 use crate::spec::{
-    DataContentType, DataFile, FormatVersion, Operation, TableMetadata, TableRequirement,
-    MAIN_BRANCH,
+    DataContentType, DataFile, Operation, TableMetadata, TableRequirement, MAIN_BRANCH,
 };
 
 #[derive(Debug, Clone)]
 pub struct IcebergEqualityDeleteWriterExec {
     input: Arc<dyn ExecutionPlan>,
-    table_url: Url,
-    table_properties: Vec<(String, String)>,
-    write_data_path: Option<String>,
-    write_folder_storage_path: Option<String>,
+    writer_config: IcebergDeleteWriterConfig,
     lakehouse_table: Option<sail_common_datafusion::catalog::LakehouseExecutionContext>,
     cache: Arc<PlanProperties>,
 }
@@ -63,10 +59,12 @@ impl IcebergEqualityDeleteWriterExec {
         ));
         Self {
             input,
-            table_url,
-            table_properties,
-            write_data_path,
-            write_folder_storage_path,
+            writer_config: IcebergDeleteWriterConfig::new(
+                table_url,
+                table_properties,
+                write_data_path,
+                write_folder_storage_path,
+            ),
             lakehouse_table,
             cache,
         }
@@ -77,19 +75,19 @@ impl IcebergEqualityDeleteWriterExec {
     }
 
     pub fn table_url(&self) -> &Url {
-        &self.table_url
+        self.writer_config.table_url()
     }
 
     pub fn table_properties(&self) -> &[(String, String)] {
-        &self.table_properties
+        self.writer_config.table_properties()
     }
 
     pub fn write_data_path(&self) -> Option<&str> {
-        self.write_data_path.as_deref()
+        self.writer_config.write_data_path()
     }
 
     pub fn write_folder_storage_path(&self) -> Option<&str> {
-        self.write_folder_storage_path.as_deref()
+        self.writer_config.write_folder_storage_path()
     }
 
     pub fn lakehouse_table(
@@ -126,10 +124,14 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
         }
         Ok(Arc::new(Self::new(
             Arc::clone(&children[0]),
-            self.table_url.clone(),
-            self.table_properties.clone(),
-            self.write_data_path.clone(),
-            self.write_folder_storage_path.clone(),
+            self.writer_config.table_url().clone(),
+            self.writer_config.table_properties().to_vec(),
+            self.writer_config
+                .write_data_path()
+                .map(ToString::to_string),
+            self.writer_config
+                .write_folder_storage_path()
+                .map(ToString::to_string),
             self.lakehouse_table.clone(),
         )))
     }
@@ -153,22 +155,17 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
 
         let input = self.input.execute(0, Arc::clone(&context))?;
         let input_schema = self.input.schema();
-        let table_url = self.table_url.clone();
-        let table_properties = self.table_properties.clone();
-        let write_data_path = self.write_data_path.clone();
-        let write_folder_storage_path = self.write_folder_storage_path.clone();
+        let writer_config = self.writer_config.clone();
         let lakehouse_table = self.lakehouse_table.clone();
         let output_schema = self.schema();
         let schema_for_adapter = output_schema.clone();
 
         let future = async move {
-            let store_ctx = delete_writer_common::store_context(&context, &table_url)?;
-            let table_meta = delete_writer_common::load_current_table_metadata(
-                &store_ctx,
-                &table_url,
-                &table_properties,
-            )
-            .await?;
+            let store_ctx =
+                delete_writer_common::store_context(&context, writer_config.table_url())?;
+            let table_meta = writer_config
+                .load_current_table_metadata(&store_ctx)
+                .await?;
             let current_schema = table_meta.current_schema().ok_or_else(|| {
                 DataFusionError::Plan(
                     "Iceberg table metadata is missing current schema".to_string(),
@@ -178,12 +175,7 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
                 .default_partition_spec()
                 .cloned()
                 .unwrap_or_else(crate::spec::PartitionSpec::unpartitioned_spec);
-            let data_dir = write_location::resolve_data_dir_from_options_and_properties(
-                write_data_path.as_deref(),
-                write_folder_storage_path.as_deref(),
-                &table_meta.properties,
-                &table_url,
-            );
+            let data_dir = writer_config.resolve_data_dir(&table_meta);
 
             // TODO: Prefer identifier/configured equality fields over full-row keys.
             let delete_spec = EqualityDeleteSpec::full_row(current_schema, &input_schema)?;
@@ -196,12 +188,7 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
                 if batch.num_rows() == 0 {
                     continue;
                 }
-                if table_meta.format_version < FormatVersion::V2 {
-                    return Err(DataFusionError::Plan(
-                        "Iceberg equality delete writes require table format-version 2 or higher"
-                            .to_string(),
-                    ));
-                }
+                delete_writer_common::ensure_equality_delete_writes(&table_meta)?;
                 if !default_spec.is_unpartitioned() {
                     // TODO: Group rows by partition and write partition-scoped delete files.
                     return Err(DataFusionError::NotImplemented(
@@ -240,7 +227,7 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
 
             let delete_file = write_equality_delete_file(
                 &store_ctx,
-                &table_url,
+                writer_config.table_url(),
                 &data_dir,
                 writer,
                 default_spec.spec_id(),
@@ -250,11 +237,11 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
             .await?;
             let requirements = commit_requirements(&table_meta);
             let commit_meta = CommitMeta {
-                table_uri: table_url.to_string(),
+                table_uri: writer_config.table_url().to_string(),
                 row_count: total_rows,
                 operation: Operation::Delete,
                 requirements,
-                table_properties,
+                table_properties: writer_config.table_properties().to_vec(),
                 lakehouse_table,
                 schema: None,
                 partition_spec: None,
@@ -285,7 +272,7 @@ impl DisplayAs for IcebergEqualityDeleteWriterExec {
                 write!(
                     f,
                     "IcebergEqualityDeleteWriterExec(table_path={})",
-                    self.table_url
+                    self.writer_config.table_url()
                 )
             }
         }

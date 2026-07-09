@@ -25,7 +25,6 @@ use crate::spec::schema::Schema;
 use crate::spec::transform::Transform;
 use crate::spec::types::{NestedField, StructType};
 
-#[expect(unused)]
 pub(crate) const UNPARTITIONED_LAST_ASSIGNED_ID: i32 = 999;
 pub(crate) const DEFAULT_PARTITION_SPEC_ID: i32 = 0;
 
@@ -167,6 +166,12 @@ impl PartitionSpec {
         self.fields.iter().map(|f| f.field_id).max()
     }
 
+    /// Return the Iceberg table metadata `last-partition-id` value for this spec.
+    pub fn last_assigned_field_id(&self) -> i32 {
+        self.highest_field_id()
+            .unwrap_or(UNPARTITIONED_LAST_ASSIGNED_ID)
+    }
+
     /// Check if the partition spec has sequential field ids starting from 1000.
     /// Required for spec version 1 in the reference implementation.
     pub fn has_sequential_ids(&self) -> bool {
@@ -270,5 +275,31 @@ impl PartitionSpecBuilder {
 impl Default for PartitionSpecBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn partitioned_spec_last_assigned_id_uses_highest_field_id() {
+        let spec = PartitionSpec::builder()
+            .add_field(1, "category", Transform::Identity)
+            .add_field(2, "date", Transform::Day)
+            .build();
+
+        assert_eq!(spec.highest_field_id(), Some(1001));
+        assert_eq!(spec.last_assigned_field_id(), 1001);
+    }
+
+    #[test]
+    fn unpartitioned_spec_last_assigned_id_matches_iceberg_default() {
+        let spec = PartitionSpec::unpartitioned_spec();
+        assert_eq!(spec.highest_field_id(), None);
+        assert_eq!(
+            spec.last_assigned_field_id(),
+            UNPARTITIONED_LAST_ASSIGNED_ID
+        );
     }
 }
