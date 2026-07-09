@@ -671,11 +671,13 @@ fn is_nullable(schema: &Schema) -> bool {
 }
 
 fn is_empty_object_schema(schema: &Schema) -> bool {
+    // In OpenAPI, `additionalProperties` defaults to `true` when omitted.
+    // Treat a schema as an "empty object" only when it is explicitly sealed.
     has_schema_type(schema, SchemaType::Object)
         && schema.properties.is_empty()
         && schema.required.is_empty()
         && schema.items.is_none()
-        && schema.additional_properties.is_none()
+        && matches!(schema.additional_properties, Some(AdditionalProperties::Bool(false)))
         && schema.one_of.is_empty()
         && schema.any_of.is_empty()
         && schema.all_of.is_empty()
