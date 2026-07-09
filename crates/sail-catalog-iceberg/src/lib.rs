@@ -109,6 +109,32 @@ mod table_update_tests {
     }
 
     #[test]
+    fn add_snapshot_update_preserves_summary_properties() {
+        let input = serde_json::json!({
+            "action": "add-snapshot",
+            "snapshot": {
+                "snapshot-id": 123,
+                "sequence-number": 2,
+                "timestamp-ms": 456,
+                "manifest-list": "s3://bucket/table/metadata/snap.avro",
+                "summary": {
+                    "operation": "delete",
+                    "added-delete-files": "1",
+                    "added-equality-delete-files": "1",
+                    "added-equality-deletes": "1",
+                    "total-delete-files": "1"
+                },
+                "schema-id": 0
+            }
+        });
+        let update: models::TableUpdate =
+            serde_json::from_value(input.clone()).expect("add-snapshot update must deserialize");
+        let value = serde_json::to_value(&update).expect("add-snapshot update must serialize");
+
+        assert_eq!(value, input);
+    }
+
+    #[test]
     fn commit_view_request_preserves_requirements_and_updates() {
         let request: models::CommitViewRequest = serde_json::from_value(serde_json::json!({
             "requirements": [{"type": "assert-view-uuid", "uuid": "22222222-2222-2222-2222-222222222222"}],
