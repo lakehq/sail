@@ -139,7 +139,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     generate_openapi_client(
         "spec/unity-catalog-all.yaml",
         std::path::Path::new(&std::env::var("OUT_DIR")?).join("unity_catalog_gen.rs"),
-        OpenApiConfig::new(),
+        OpenApiConfig {
+            excluded_schemas: ["ColumnTypeName".to_owned()].into_iter().collect(),
+            ..OpenApiConfig::new()
+        },
     )?;
 
     Ok(())

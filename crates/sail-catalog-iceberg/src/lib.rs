@@ -18,34 +18,21 @@ pub mod apis;
 mod models;
 mod provider;
 
+#[expect(unused_imports)]
+#[expect(clippy::enum_variant_names)]
 pub mod r#gen {
-    #![expect(unused_imports)]
-    #![expect(clippy::enum_variant_names)]
     include!(concat!(env!("OUT_DIR"), "/iceberg_rest_catalog_gen.rs"));
 
-    mod patch {
-        // The discriminator is missing for `ReportMetricsRequest` in the OpenAPI specification,
-        // so we need to patch the serde logic here.
-        // See also: https://github.com/apache/iceberg/issues/12696
-        #[derive(serde::Deserialize)]
-        #[serde(tag = "report-type")]
-        pub(super) enum ReportMetricsRequest {
-            #[serde(rename = "scan-report")]
-            ScanReport(Box<super::ScanReport>),
-            #[serde(rename = "commit-report")]
-            CommitReport(Box<super::CommitReport>),
-        }
-
-        impl TryFrom<ReportMetricsRequest> for super::ReportMetricsRequest {
-            type Error = String;
-
-            fn try_from(value: ReportMetricsRequest) -> Result<Self, Self::Error> {
-                Ok(match value {
-                    ReportMetricsRequest::ScanReport(value) => Self::ScanReport(value),
-                    ReportMetricsRequest::CommitReport(value) => Self::CommitReport(value),
-                })
-            }
-        }
+    // The discriminator is missing for `ReportMetricsRequest` in the OpenAPI specification,
+    // so this schema is excluded from generation and defined manually.
+    // See also: https://github.com/apache/iceberg/issues/12696
+    #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+    #[serde(tag = "report-type")]
+    pub enum ReportMetricsRequest {
+        #[serde(rename = "scan-report")]
+        ScanReport(Box<ScanReport>),
+        #[serde(rename = "commit-report")]
+        CommitReport(Box<CommitReport>),
     }
 }
 

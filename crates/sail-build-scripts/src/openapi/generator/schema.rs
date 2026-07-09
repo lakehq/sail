@@ -28,8 +28,7 @@ impl<'a> OpenApiGenerator<'a> {
     ) -> BuildResult<SchemaDefinition> {
         let mut inline = InlineSchemas::new(name);
         let schema = self.resolve_schema(schema)?;
-        let schema =
-            self.schema_definition_inner(type_name(name), Some(name), schema, &mut inline, false)?;
+        let schema = self.schema_definition_inner(type_name(name), schema, &mut inline, false)?;
         Ok(SchemaDefinition {
             module_name: inline.module_name(),
             inline_definitions: inline.definitions,
@@ -40,20 +39,14 @@ impl<'a> OpenApiGenerator<'a> {
     fn schema_definition_inner(
         &self,
         type_name: RustName,
-        serde_name: Option<&str>,
         schema: &'a Schema,
         inline: &mut InlineSchemas,
         in_module: bool,
     ) -> BuildResult<SchemaDefinition> {
-        let serde_type = serde_name
-            .and_then(|name| self.config.serde_types.get(name))
-            .cloned();
-
         if let Some(variants) = string_enum_variants(schema)? {
             return Ok(SchemaDefinition::new(
                 type_name,
                 schema,
-                serde_type,
                 SchemaKind::Enum {
                     tag: None,
                     untagged: false,
@@ -67,7 +60,6 @@ impl<'a> OpenApiGenerator<'a> {
             return Ok(SchemaDefinition::new(
                 type_name,
                 schema,
-                serde_type,
                 SchemaKind::Enum {
                     tag: Some(tag.to_owned()),
                     untagged: false,
@@ -77,7 +69,7 @@ impl<'a> OpenApiGenerator<'a> {
         }
 
         if !schema.one_of.is_empty() || !schema.any_of.is_empty() {
-            if !schema.properties.is_empty() && serde_type.is_none() {
+            if !schema.properties.is_empty() {
                 return Err(BuildError::InvalidInput(format!(
                     "anyOf or oneOf schemas with sibling properties are unsupported: {type_name}"
                 )));
@@ -94,7 +86,6 @@ impl<'a> OpenApiGenerator<'a> {
             return Ok(SchemaDefinition::new(
                 type_name,
                 schema,
-                serde_type,
                 SchemaKind::Enum {
                     tag: None,
                     untagged: true,
@@ -108,7 +99,6 @@ impl<'a> OpenApiGenerator<'a> {
             return Ok(SchemaDefinition::new(
                 type_name,
                 schema,
-                serde_type,
                 SchemaKind::Struct { fields },
             ));
         }
@@ -117,7 +107,6 @@ impl<'a> OpenApiGenerator<'a> {
             return Ok(SchemaDefinition::new(
                 type_name,
                 schema,
-                serde_type,
                 SchemaKind::Transparent {
                     rust_type: map_type,
                 },
@@ -134,7 +123,6 @@ impl<'a> OpenApiGenerator<'a> {
         Ok(SchemaDefinition::new(
             type_name,
             schema,
-            serde_type,
             SchemaKind::Transparent { rust_type },
         ))
     }
@@ -281,8 +269,7 @@ impl<'a> OpenApiGenerator<'a> {
         in_module: bool,
     ) -> BuildResult<RustType> {
         let type_name = type_name(suggested_name);
-        let definition =
-            self.schema_definition_inner(type_name.clone(), None, schema, inline, true)?;
+        let definition = self.schema_definition_inner(type_name.clone(), schema, inline, true)?;
         inline.definitions.push(definition);
         if in_module {
             Ok(RustType::Named {
@@ -620,7 +607,6 @@ pub(super) struct SchemaDefinition {
     type_name: RustName,
     summary: Option<String>,
     description: Option<String>,
-    serde_type: Option<String>,
     module_name: Option<RustName>,
     inline_definitions: Vec<SchemaDefinition>,
     kind: SchemaKind,
@@ -683,17 +669,11 @@ impl InlineSchemas {
 }
 
 impl SchemaDefinition {
-    fn new(
-        type_name: RustName,
-        schema: &Schema,
-        serde_type: Option<String>,
-        kind: SchemaKind,
-    ) -> Self {
+    fn new(type_name: RustName, schema: &Schema, kind: SchemaKind) -> Self {
         Self {
             type_name,
             summary: schema.summary.clone(),
             description: schema.description.clone(),
-            serde_type,
             module_name: None,
             inline_definitions: Vec::new(),
             kind,
@@ -727,11 +707,6 @@ impl SchemaDefinition {
     fn non_inline_tokens(&self) -> BuildResult<TokenStream> {
         let type_name = &self.type_name;
         let docs = doc_attrs(self.summary.as_deref(), self.description.as_deref());
-        let serde_type = self.serde_type.as_ref().map(|from_type| {
-            quote! {
-                #[serde(try_from = #from_type)]
-            }
-        });
         let derives = quote! { #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)] };
         match &self.kind {
             SchemaKind::Enum {
@@ -739,19 +714,15 @@ impl SchemaDefinition {
                 untagged,
                 variants,
             } => {
-                let serde_tag = if serde_type.is_none() {
-                    tag.as_ref()
-                        .map(|tag| quote! { #[serde(tag = #tag)] })
-                        .or_else(|| untagged.then(|| quote! { #[serde(untagged)] }))
-                } else {
-                    None
-                };
+                let serde_tag = tag
+                    .as_ref()
+                    .map(|tag| quote! { #[serde(tag = #tag)] })
+                    .or_else(|| untagged.then(|| quote! { #[serde(untagged)] }));
                 let variants = variants.iter().map(generate_enum_variant);
                 Ok(quote! {
                     #(#docs)*
                     #derives
                     #serde_tag
-                    #serde_type
                     pub enum #type_name {
                         #(#variants)*
                     }
@@ -762,24 +733,17 @@ impl SchemaDefinition {
                 Ok(quote! {
                     #(#docs)*
                     #derives
-                    #serde_type
                     pub struct #type_name {
                         #(#fields)*
                     }
                 })
             }
-            SchemaKind::Transparent { rust_type } => {
-                let serde_transparent = serde_type
-                    .is_none()
-                    .then(|| quote! { #[serde(transparent)] });
-                Ok(quote! {
-                    #(#docs)*
-                    #derives
-                    #serde_transparent
-                    #serde_type
-                    pub struct #type_name(pub #rust_type);
-                })
-            }
+            SchemaKind::Transparent { rust_type } => Ok(quote! {
+                #(#docs)*
+                #derives
+                #[serde(transparent)]
+                pub struct #type_name(pub #rust_type);
+            }),
         }
     }
 }

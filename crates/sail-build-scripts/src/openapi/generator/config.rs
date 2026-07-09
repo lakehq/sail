@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 /// Configuration for OpenAPI code generation.
 #[derive(Clone, Debug, Default)]
@@ -13,11 +13,6 @@ pub struct OpenApiConfig {
     /// This is useful for endpoints that are not needed by the target crate or that use currently
     /// unsupported OpenAPI features.
     pub excluded_operations: BTreeSet<String>,
-    /// Schema-specific serde conversion hints.
-    ///
-    /// Each entry maps schema name to a type that will be used to emit
-    /// `#[serde(try_from = "...")]` on the generated schema.
-    pub serde_types: BTreeMap<String, String>,
 }
 
 impl OpenApiConfig {
