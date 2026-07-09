@@ -74,6 +74,13 @@ except ImportError:
 # ============================================================================
 
 
+def _redact_credentials(url: str) -> str:
+    """Mask any ``user:pass@`` userinfo in a URL/DSN before it appears in an error message."""
+    import re  # noqa: PLC0415
+
+    return re.sub(r"(://)[^/@\s]*@", r"\1<redacted>@", url)
+
+
 def _jdbc_url_to_dsn(url: str, user: str | None, password: str | None) -> str:
     """Strip the ``jdbc:`` prefix and embed credentials into the DSN.
 
@@ -82,7 +89,7 @@ def _jdbc_url_to_dsn(url: str, user: str | None, password: str | None) -> str:
         jdbc:postgresql://host:5432/db  ->  postgresql://user:pass@host:5432/db
     """
     if not url.startswith("jdbc:"):
-        msg = f"Invalid JDBC URL: {url!r}. Expected format: jdbc:<subprotocol>://<host>:<port>/<database>"
+        msg = f"Invalid JDBC URL: {_redact_credentials(url)!r}. Expected format: jdbc:<subprotocol>://<host>:<port>/<database>"
         raise ValueError(msg)
     dsn = url[5:]  # strip 'jdbc:'
 
@@ -91,7 +98,7 @@ def _jdbc_url_to_dsn(url: str, user: str | None, password: str | None) -> str:
         try:
             idx = dsn.index(sep)
         except ValueError:
-            msg = f"Invalid JDBC URL: {url!r}. Expected format: jdbc:<subprotocol>://<host>:<port>/<database>"
+            msg = f"Invalid JDBC URL: {_redact_credentials(url)!r}. Expected format: jdbc:<subprotocol>://<host>:<port>/<database>"
             raise ValueError(msg) from None
         scheme = dsn[:idx]
         rest = dsn[idx + len(sep) :]
@@ -350,6 +357,23 @@ def _iter_arrow_chunks(table_obj: pa.Table, batch_size: int) -> Iterator[pa.Tabl
         yield table_obj.slice(start, batch_size)
 
 
+def _owned_sequences(cur, dbtable: str) -> list[tuple[str, str]]:
+    """Return ``(sequence, column)`` pairs for sequences OWNED BY a column of *dbtable*.
+
+    A ``serial`` column's default reads such a sequence, which is dependency-linked to
+    the target; the link must be broken before the target can be dropped in the atomic
+    swap. ``to_regclass`` yields NULL (matching nothing) when the target is absent.
+    """
+    cur.execute(
+        "SELECT dep.objid::regclass::text, att.attname "
+        "FROM pg_depend dep "
+        "JOIN pg_attribute att ON att.attrelid = dep.refobjid AND att.attnum = dep.refobjsubid "
+        "WHERE dep.refobjid = to_regclass(%s) AND dep.classid = 'pg_class'::regclass AND dep.deptype = 'a'",
+        (dbtable,),
+    )
+    return [(row[0], row[1]) for row in cur.fetchall()]
+
+
 def _safe_error(exc: BaseException, dsn: str) -> str:
     """Return ``str(exc)`` with the DSN (and any ``scheme://creds@host``) scrubbed.
 
@@ -434,17 +458,19 @@ class PgWriteEngine:
         qsentinel = _quote_qualified(sentinel)
 
         try:
-            with psycopg.connect(self.dsn, autocommit=True) as lock_conn, lock_conn.cursor() as cur:
-                cur.execute(f"SELECT pg_advisory_lock({lock_key})")
-                try:
-                    cur.execute(f"CREATE TABLE IF NOT EXISTS {qsentinel} (done BOOLEAN)")
-                    cur.execute(f"SELECT COUNT(*) FROM {qsentinel}")  # noqa: S608
-                    row = cur.fetchone()
-                    if row[0] == 0:  # type: ignore[index]
-                        cur.execute(f"TRUNCATE {qtarget}")
-                        cur.execute(f"INSERT INTO {qsentinel} VALUES (TRUE)")  # noqa: S608
-                finally:
-                    cur.execute(f"SELECT pg_advisory_unlock({lock_key})")
+            # Single transaction with a txn-scoped advisory lock (auto-released on commit/
+            # rollback): TRUNCATE and the sentinel insert must commit together, else a crash
+            # between them leaves the target truncated but unmarked, and another partition
+            # would TRUNCATE again after rows were ingested — wiping them.
+            with psycopg.connect(self.dsn) as conn, conn.cursor() as cur:
+                cur.execute(f"SELECT pg_advisory_xact_lock({lock_key})")
+                cur.execute(f"CREATE TABLE IF NOT EXISTS {qsentinel} (done BOOLEAN)")
+                cur.execute(f"SELECT COUNT(*) FROM {qsentinel}")  # noqa: S608
+                row = cur.fetchone()
+                if row[0] == 0:  # type: ignore[index]
+                    cur.execute(f"TRUNCATE {qtarget}")
+                    cur.execute(f"INSERT INTO {qsentinel} VALUES (TRUE)")  # noqa: S608
+                conn.commit()
         except Exception as e:
             safe_msg = _safe_error(e, self.dsn)
             msg = f"Truncate-mode advisory-lock failed for {self.dbtable!r}: {safe_msg}"
@@ -511,13 +537,25 @@ class PgWriteEngine:
             staging_name = _staging_name_atomic(self.dbtable, self.run_id)
             qstaging = _quote_qualified(staging_name)
             qtarget = _quote_qualified(self.dbtable)
+            qrename = _quote_identifier(_split_schema(self.dbtable)[1])
             try:
                 with psycopg.connect(self.dsn) as conn:  # NOT autocommit — single txn
                     with conn.cursor() as cur:
+                        # Detach sequences OWNED BY the target (serial columns) so DROP is not
+                        # refused, then re-own and re-sync them onto the swapped-in table.
+                        owned = _owned_sequences(cur, self.dbtable)
+                        for seq, _ in owned:
+                            cur.execute(f"ALTER SEQUENCE {seq} OWNED BY NONE")
                         cur.execute(f"DROP TABLE IF EXISTS {qtarget}")
-                        # RENAME target is the bare table name (staging's schema is kept).
-                        qrename = _quote_qualified(_split_schema(self.dbtable)[1])
                         cur.execute(f"ALTER TABLE {qstaging} RENAME TO {qrename}")
+                        for seq, col in owned:
+                            qcol = _quote_identifier(col)
+                            cur.execute(f"ALTER SEQUENCE {seq} OWNED BY {qtarget}.{qcol}")
+                            cur.execute(
+                                f"SELECT setval(%s, COALESCE(MAX({qcol}), 1), MAX({qcol}) IS NOT NULL) "  # noqa: S608
+                                f"FROM {qtarget}",
+                                (seq,),
+                            )
                     conn.commit()
             except Exception as e:
                 safe_msg = _safe_error(e, self.dsn)
@@ -588,11 +626,15 @@ def _parse_sqlserver_url(rest: str) -> tuple[str, dict[str, object]]:
     ``(sqlalchemy_url, connect_args)`` pair for the ``mssql+pymssql`` dialect.
 
     Form: ``[user:pass@]host[\\instance][:port][;key=value[;...]]``. Known params:
-    ``databaseName`` -> URL db segment; ``encrypt`` -> ``encryption`` (require/off);
-    ``applicationIntent=ReadOnly`` -> ``read_only=True``. ``trustServerCertificate`` is
-    accepted but ignored (FreeTDS controls trust, not a per-connection flag). Unknown
-    params are dropped (pymssql would reject them).
+    ``databaseName`` -> URL db segment; ``user``/``username`` and ``password`` -> URL
+    userinfo (the common MS JDBC form, e.g. ``...;user=alice;password=s3cret``) when the
+    authority has none; ``encrypt`` -> ``encryption`` (require/off); ``applicationIntent=
+    ReadOnly`` -> ``read_only=True``. ``trustServerCertificate`` is accepted but ignored
+    (FreeTDS controls trust, not a per-connection flag). Unknown params are dropped
+    (pymssql would reject them).
     """
+    from urllib.parse import quote  # noqa: PLC0415
+
     authority, _, param_str = rest.partition(";")
     userinfo, host, instance, port = _split_sqlserver_authority(authority)
 
@@ -605,6 +647,15 @@ def _parse_sqlserver_url(rest: str) -> tuple[str, dict[str, object]]:
             params[key.strip().lower()] = value.strip()
 
     database = params.get("databasename", "")
+
+    # Credentials commonly arrive as ;user=;password= params rather than in the authority.
+    # Only synthesise userinfo from params when the authority carried none (authority wins).
+    if not userinfo:
+        user = params.get("user") or params.get("username")
+        if user:
+            password = params.get("password")
+            creds = quote(user, safe="") + (f":{quote(password, safe='')}" if password else "")
+            userinfo = f"{creds}@"
 
     # pymssql addresses a named instance via ``server\instance`` (TDS resolves the port).
     host_segment = f"{host}\\{instance}" if instance else host
@@ -632,7 +683,7 @@ def _sqlalchemy_url(dsn: str) -> tuple[str, dict]:
     """
     scheme, sep, rest = dsn.partition("://")
     if not sep:
-        msg = f"Cannot build a SQLAlchemy URL from {dsn!r}"
+        msg = f"Cannot build a SQLAlchemy URL from {_redact_credentials(dsn)!r}"
         raise ValueError(msg)
     if scheme == "mysql":
         return f"mysql+pymysql://{rest}", {}
@@ -640,6 +691,33 @@ def _sqlalchemy_url(dsn: str) -> tuple[str, dict]:
         return _parse_sqlserver_url(rest)
     msg = f"Unsupported JDBC subprotocol for writes: {scheme!r}"
     raise ValueError(msg)
+
+
+def _pg_table_exists(dsn: str, dbtable: str) -> bool:
+    import psycopg  # noqa: PLC0415
+
+    with psycopg.connect(dsn) as conn, conn.cursor() as cur:
+        cur.execute("SELECT to_regclass(%s)", (dbtable,))
+        return cur.fetchone()[0] is not None  # type: ignore[index]
+
+
+def _sqlalchemy_table_exists(url: str, connect_args: dict, dbtable: str) -> bool:
+    import sqlalchemy as sa  # noqa: PLC0415
+    from sqlalchemy import NullPool  # noqa: PLC0415
+
+    schema, table = _split_schema(dbtable)
+    engine = sa.create_engine(url, connect_args=connect_args, poolclass=NullPool)
+    try:
+        return sa.inspect(engine).has_table(table, schema=schema)
+    finally:
+        engine.dispose()
+
+
+def _missing_target_error(dbtable: str) -> str:
+    return (
+        f"Target table {dbtable!r} does not exist. The jdbc writer requires the table to exist "
+        f"(auto-creating it from the DataFrame schema is not yet supported); create it first."
+    )
 
 
 class SqlAlchemyWriteEngine:
@@ -689,8 +767,8 @@ class SqlAlchemyWriteEngine:
         # Short-lived, single-connection engine — skip the connection pool.
         return sa.create_engine(self.url, poolclass=NullPool, connect_args=self.connect_args)
 
-    def _staging(self, partition_id: int) -> str:
-        return f"{self.table}{_STAGING_PREFIX}{self.run_id}_{partition_id}"
+    def _staging(self, token: str) -> str:
+        return f"{self.table}{_STAGING_PREFIX}{self.run_id}_{token}"
 
     @staticmethod
     def _qualified(prep, schema: str | None, name: str) -> str:
@@ -726,8 +804,7 @@ class SqlAlchemyWriteEngine:
         staging_cols = [
             sa.Column(c.name, c.type, nullable=c.nullable, primary_key=c.primary_key) for c in target.columns
         ]
-        # Drop-then-create: staging names are deterministic, so a retried task must not fail on
-        # (nor reuse the rows of) a leftover from a prior attempt.
+        # Drop-then-create so a leftover from a prior attempt never carries stale rows forward.
         staging_table = sa.Table(staging, sa.MetaData(), *staging_cols, schema=self.schema)
         with engine.begin() as conn:
             conn.execute(sa.schema.DropTable(staging_table, if_exists=True))
@@ -744,7 +821,12 @@ class SqlAlchemyWriteEngine:
         try:
             if table_obj is not None and table_obj.num_rows > 0:
                 if self.overwrite:
-                    staging = self._staging(partition_id)
+                    # Unique per call, not by partition_id (always 0 here — see _ArrowWriter):
+                    # a shared name would let one partition drop another's staging mid-write.
+                    # commit()/abort() read the names back from results, so this is sufficient.
+                    import uuid  # noqa: PLC0415
+
+                    staging = self._staging(uuid.uuid4().hex[:12])
                     staging_table = self._create_staging_like_target(engine, staging)
                     self._insert_arrow(engine, staging_table, table_obj)
                 else:
@@ -829,6 +911,8 @@ class _ArrowWriter(DataSourceArrowWriter):
     def write(self, iterator: Iterator[pa.RecordBatch]) -> WriterCommitMessage:
         from pyspark import TaskContext  # noqa: PLC0415
 
+        # Sail does not populate Spark's TaskContext on the write path, so pid is 0 for
+        # every partition. It is used only for logging/PartitionResult, never for correctness.
         ctx = TaskContext.get()
         pid = ctx.partitionId() if ctx is not None else 0
         return _JdbcCommitMessage(self._engine.write_partition(pid, iterator))
@@ -968,7 +1052,7 @@ class JdbcDataSource(DataSource):
             msg = "Option 'url' is required for the jdbc data source"
             raise ValueError(msg)
         if not url.startswith("jdbc:"):
-            msg = f"Invalid JDBC URL: {url!r}. Expected format: jdbc:<subprotocol>://<host>:<port>/<database>"
+            msg = f"Invalid JDBC URL: {_redact_credentials(url)!r}. Expected format: jdbc:<subprotocol>://<host>:<port>/<database>"
             raise ValueError(msg)
 
         # --- table source ---
@@ -1155,6 +1239,8 @@ class JdbcDataSource(DataSource):
                     raise ValueError(msg)
             else:
                 overwrite_mode = "append"
+            if not _pg_table_exists(conn_str, dbtable):
+                raise ValueError(_missing_target_error(dbtable))
             return JdbcDataSourceWriter(
                 conn_str=conn_str,
                 dbtable=dbtable,
@@ -1165,6 +1251,8 @@ class JdbcDataSource(DataSource):
 
         if subprotocol in ("mysql", "sqlserver"):
             sa_url, connect_args = _sqlalchemy_url(conn_str)
+            if not _sqlalchemy_table_exists(sa_url, connect_args, dbtable):
+                raise ValueError(_missing_target_error(dbtable))
             return SqlAlchemyDataSourceWriter(
                 url=sa_url,
                 dbtable=dbtable,

@@ -557,24 +557,45 @@ def pg_dsn(pg_container):
     return f"postgresql://{_PG_USER}:{_PG_PASSWORD}@{host}:{port}/{_PG_DB}"
 
 
-@pytest.fixture
-def write_table(pg_dsn, request):
-    """Create an empty write-target table and drop it after the test.
+def _managed_table(pg_dsn, table, ddl):
+    """Create *table* via *ddl*, yield its name, and drop it afterwards.
 
-    The table name is passed via ``request.param``:
-        @pytest.mark.parametrize("write_table", ["my_table"], indirect=True)
-
-    Column layout: id INTEGER, name TEXT, score DOUBLE PRECISION
+    Shared scaffold for the write-target fixtures; ``ddl`` is the only thing that varies.
     """
     import psycopg
 
-    table = request.param
     with psycopg.connect(pg_dsn, autocommit=True) as conn, conn.cursor() as cur:
         cur.execute(f'DROP TABLE IF EXISTS "{table}"')
-        cur.execute(f'CREATE TABLE "{table}" (id INTEGER, name TEXT, score DOUBLE PRECISION)')
-    yield table
-    with psycopg.connect(pg_dsn, autocommit=True) as conn, conn.cursor() as cur:
-        cur.execute(f'DROP TABLE IF EXISTS "{table}"')
+        cur.execute(ddl)
+    try:
+        yield table
+    finally:
+        with psycopg.connect(pg_dsn, autocommit=True) as conn, conn.cursor() as cur:
+            cur.execute(f'DROP TABLE IF EXISTS "{table}"')
+
+
+@pytest.fixture
+def write_table(pg_dsn, request):
+    """Empty write target (``id INTEGER, name TEXT, score DOUBLE PRECISION``).
+
+    Name via ``request.param``: ``@pytest.mark.parametrize("write_table", ["my_table"], indirect=True)``.
+    """
+    yield from _managed_table(
+        pg_dsn, request.param, f'CREATE TABLE "{request.param}" (id INTEGER, name TEXT, score DOUBLE PRECISION)'
+    )
+
+
+@pytest.fixture
+def serial_write_table(pg_dsn, request):
+    """Write target with a SERIAL primary key.
+
+    Exercises the atomic swap's owned-sequence handling: LIKE INCLUDING ALL ties the
+    staging's default to the target's sequence, which must be detached before DROP and
+    re-synced onto the swapped-in table.
+    """
+    yield from _managed_table(
+        pg_dsn, request.param, f'CREATE TABLE "{request.param}" (id SERIAL PRIMARY KEY, name TEXT)'
+    )
 
 
 def _read_pg_table(spark, jdbc_opts, table: str):
@@ -603,6 +624,16 @@ def test_write_append_basic(spark, jdbc_opts, write_table):
     assert result.count() == 3  # noqa: PLR2004
     names = {r.name for r in result.collect()}
     assert names == {"Alice", "Bob", "Charlie"}
+
+
+def test_write_missing_target_raises(spark, jdbc_opts):
+    """Writing to a non-existent target fails fast with a clear message (no auto-create)."""
+    from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+
+    schema = StructType([StructField("id", IntegerType()), StructField("name", StringType())])
+    df = spark.createDataFrame([(1, "Alice")], schema)
+    with pytest.raises(Exception, match="does not exist"):
+        df.write.format("jdbc").option("dbtable", "no_such_table_xyz").options(**jdbc_opts).mode("append").save()
 
 
 @pytest.mark.parametrize("write_table", ["wt_overwrite"], indirect=True)
@@ -638,9 +669,9 @@ def test_write_overwrite_small_batchsize_writes_all_rows(spark, jdbc_opts, write
     df = spark.createDataFrame([(i, f"n{i}") for i in range(1, 6)], schema)
 
     # batchsize 2 over 5 rows exercises the chunk loop incl. a partial final chunk.
-    df.write.format("jdbc").option("dbtable", write_table).option("batchsize", "2").options(
-        **jdbc_opts
-    ).mode("overwrite").save()
+    df.write.format("jdbc").option("dbtable", write_table).option("batchsize", "2").options(**jdbc_opts).mode(
+        "overwrite"
+    ).save()
 
     result = _read_pg_table(spark, jdbc_opts, write_table)
     assert result.count() == 5  # noqa: PLR2004
@@ -736,6 +767,34 @@ def test_write_overwrite_atomic_replaces(spark, jdbc_opts, write_table):
     result = _read_pg_table(spark, jdbc_opts, write_table)
     assert result.count() == 1
     assert result.collect()[0].name == "Charlie"
+
+
+@pytest.mark.parametrize("serial_write_table", ["wt_atomic_serial"], indirect=True)
+def test_write_overwrite_atomic_serial_sequence(spark, jdbc_opts, pg_dsn, serial_write_table):
+    """atomic overwrite works on a serial/owned-sequence column and leaves the sequence
+    usable and past the loaded max. Regression: DROP was refused because the staging
+    default depended on the target's owned sequence.
+    """
+    import psycopg
+    from pyspark.sql.types import IntegerType, StringType, StructField, StructType
+
+    schema = StructType([StructField("id", IntegerType()), StructField("name", StringType())])
+    first = spark.createDataFrame([(1, "Alice"), (2, "Bob")], schema)
+    second = spark.createDataFrame([(10, "Charlie"), (11, "Dave")], schema)
+
+    first.write.format("jdbc").option("dbtable", serial_write_table).options(**jdbc_opts).mode("append").save()
+    second.write.format("jdbc").option("dbtable", serial_write_table).option("overwriteMode", "atomic").options(
+        **jdbc_opts
+    ).mode("overwrite").save()
+
+    result = _read_pg_table(spark, jdbc_opts, serial_write_table)
+    assert sorted(r.name for r in result.collect()) == ["Charlie", "Dave"]
+
+    # The serial default must still work and hand out an id past the loaded max (11).
+    with psycopg.connect(pg_dsn, autocommit=True) as conn, conn.cursor() as cur:
+        cur.execute(f'INSERT INTO "{serial_write_table}" (name) VALUES (%s) RETURNING id', ("Eve",))  # noqa: S608
+        new_id = cur.fetchone()[0]
+    assert new_id > 11  # noqa: PLR2004
 
 
 @pytest.mark.parametrize("write_table", ["wt_truncate_overwrite"], indirect=True)

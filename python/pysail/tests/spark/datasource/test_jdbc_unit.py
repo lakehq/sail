@@ -21,6 +21,17 @@ try:
 except ImportError:
     pytest.skip("JDBC data source requires the PySpark Python DataSource API (4.0+)", allow_module_level=True)
 
+
+@pytest.fixture
+def stub_target_exists(monkeypatch):
+    """Stub out the driver-side target-existence check for tests that exercise writer
+    dispatch/option resolution rather than connectivity."""
+    from pysail.spark.datasource import jdbc as jdbc_mod
+
+    monkeypatch.setattr(jdbc_mod, "_pg_table_exists", lambda *_a, **_k: True)
+    monkeypatch.setattr(jdbc_mod, "_sqlalchemy_table_exists", lambda *_a, **_k: True)
+
+
 # ---------------------------------------------------------------------------
 # _filter_to_sql
 # ---------------------------------------------------------------------------
@@ -77,6 +88,20 @@ def test_jdbc_url_to_dsn_unit():
 
     with pytest.raises(ValueError, match="Invalid JDBC URL"):
         _jdbc_url_to_dsn("postgresql://localhost/db", None, None)
+
+
+def test_error_messages_redact_credentials():
+    """Credentials embedded in a URL must not leak into error messages."""
+    from pysail.spark.datasource.jdbc import _jdbc_url_to_dsn, _redact_credentials
+
+    assert _redact_credentials("postgresql://user:s3cret@host/db") == "postgresql://<redacted>@host/db"
+    assert _redact_credentials("jdbc:postgresql://host/db") == "jdbc:postgresql://host/db"
+
+    # A malformed URL with embedded credentials must be scrubbed in the raised message.
+    with pytest.raises(ValueError, match="Invalid JDBC URL") as exc:
+        _jdbc_url_to_dsn("postgresql://alice:topsecret@host/db", None, None)
+    assert "topsecret" not in str(exc.value)
+    assert "<redacted>" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------
@@ -147,8 +172,9 @@ def test_quote_identifier_unit():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("stub_target_exists")
 def test_write_supported_dialects_return_writers():
-    """PostgreSQL, MySQL and SQL Server URLs return a writer."""
+    """PostgreSQL, MySQL and SQL Server URLs return a writer (dispatch, not connectivity)."""
     from pyspark.sql.types import IntegerType, StructField, StructType
 
     from pysail.spark.datasource.jdbc import (
@@ -166,6 +192,22 @@ def test_write_supported_dialects_return_writers():
     for url, expected in cases:
         ds = JdbcDataSource(options={"url": url, "dbtable": "t"})
         assert isinstance(ds.writer(schema, overwrite=False), expected)
+
+
+def test_sqlalchemy_table_exists_detects_missing(tmp_path):
+    """_sqlalchemy_table_exists reflects the live database, not the DataFrame."""
+    sa = pytest.importorskip("sqlalchemy")
+
+    from pysail.spark.datasource.jdbc import _sqlalchemy_table_exists
+
+    url = f"sqlite:///{tmp_path / 'x.db'}"
+    setup = sa.create_engine(url)
+    with setup.begin() as conn:
+        conn.execute(sa.text("CREATE TABLE present (id INTEGER)"))
+    setup.dispose()
+
+    assert _sqlalchemy_table_exists(url, {}, "present") is True
+    assert _sqlalchemy_table_exists(url, {}, "absent") is False
 
 
 @pytest.mark.parametrize("bad", ["0", "-1"])
@@ -186,10 +228,8 @@ def test_write_batchsize_must_be_positive(bad):
 
 
 def test_sqlalchemy_staging_create_is_retry_safe(tmp_path):
-    """A retried task must not fail on a staging table left by a prior attempt.
-
-    Staging names are deterministic, so a second create of the same name (as happens on
-    Spark task retry) must drop-then-create rather than raise "table already exists".
+    """Re-creating a staging table of the same name must drop-then-create, not raise
+    "table already exists" (defends against a leftover from a crashed prior attempt).
     """
     sa = pytest.importorskip("sqlalchemy")
 
@@ -201,17 +241,52 @@ def test_sqlalchemy_staging_create_is_retry_safe(tmp_path):
         conn.execute(sa.text("CREATE TABLE t (id INTEGER)"))
     setup.dispose()
 
-    writer = SqlAlchemyWriteEngine(
-        url=url, dbtable="t", columns=["id"], overwrite=True, batch_size=1000, run_id="run"
-    )
+    writer = SqlAlchemyWriteEngine(url=url, dbtable="t", columns=["id"], overwrite=True, batch_size=1000, run_id="run")
     engine = writer._create_engine()  # noqa: SLF001
     try:
-        staging = writer._staging(0)  # noqa: SLF001
+        staging = writer._staging("tok")  # noqa: SLF001
         writer._create_staging_like_target(engine, staging)  # noqa: SLF001
-        # Simulated retry: same deterministic staging name, must not raise.
-        writer._create_staging_like_target(engine, staging)  # noqa: SLF001
+        writer._create_staging_like_target(engine, staging)  # second create must not raise  # noqa: SLF001
     finally:
         engine.dispose()
+
+
+def test_sqlalchemy_overwrite_distinct_partitions_no_data_loss(tmp_path):
+    """Two partitions in one overwrite must not clobber each other's staging.
+
+    Sail leaves partitionId() at 0 for every partition, so a partition-id-derived staging
+    name would collide and one partition would drop another's rows mid-write. Names are
+    uniquified per write_partition call instead; committing both must keep every row.
+    """
+    sa = pytest.importorskip("sqlalchemy")
+    import pyarrow as pa
+
+    from pysail.spark.datasource.jdbc import SqlAlchemyWriteEngine
+
+    url = f"sqlite:///{tmp_path / 'target.db'}"
+    setup = sa.create_engine(url)
+    with setup.begin() as conn:
+        conn.execute(sa.text("CREATE TABLE t (id INTEGER, name TEXT)"))
+        conn.execute(sa.text("INSERT INTO t VALUES (99, 'old')"))
+    setup.dispose()
+
+    writer = SqlAlchemyWriteEngine(
+        url=url, dbtable="t", columns=["id", "name"], overwrite=True, batch_size=1000, run_id="run"
+    )
+    b1 = pa.RecordBatch.from_pydict({"id": [1, 2], "name": ["a", "b"]})
+    b2 = pa.RecordBatch.from_pydict({"id": [3, 4], "name": ["c", "d"]})
+    # Both partitions report id 0 (as Sail does); the staging names must still differ.
+    r1 = writer.write_partition(0, [b1])
+    r2 = writer.write_partition(0, [b2])
+    assert r1.staging_table != r2.staging_table
+
+    assert writer.commit([r1, r2]) == 4  # noqa: PLR2004
+
+    check = sa.create_engine(url)
+    with check.begin() as conn:
+        rows = sorted(conn.execute(sa.text("SELECT id, name FROM t")).fetchall())
+    check.dispose()
+    assert rows == [(1, "a"), (2, "b"), (3, "c"), (4, "d")]  # old row gone, both partitions kept
 
 
 def test_write_engines_reject_nonpositive_batch_size():
@@ -242,6 +317,9 @@ def test_sqlalchemy_url_translation():
     from pysail.spark.datasource.jdbc import _sqlalchemy_url
 
     assert _sqlalchemy_url("mysql://u:p@h:3306/db") == ("mysql+pymysql://u:p@h:3306/db", {})
+    # host-only forms (no credentials, no explicit port) must parse too
+    assert _sqlalchemy_url("mysql://h/db") == ("mysql+pymysql://h/db", {})
+    assert _sqlalchemy_url("mysql://h:3306/db") == ("mysql+pymysql://h:3306/db", {})
     url, connect_args = _sqlalchemy_url("sqlserver://u:p@h:1433;databaseName=db")
     assert url == "mssql+pymssql://u:p@h:1433/db"
     assert connect_args == {}
@@ -287,6 +365,33 @@ def test_sqlserver_url_parsing_preserves_params():
     _, ca5 = _parse_sqlserver_url("h:1433;databaseName=db;someFutureParam=x")
     assert "somefutureparam" not in ca5
     assert ca5 == {}
+
+
+def test_sqlserver_url_credentials_as_params():
+    """MS JDBC commonly carries credentials as ;user=;password= params, not in the
+    authority. Those must land in the SQLAlchemy URL userinfo, not be dropped.
+    """
+    from pysail.spark.datasource.jdbc import _parse_sqlserver_url
+
+    # The canonical MS form: creds as semicolon params
+    url, _ = _parse_sqlserver_url("h;databaseName=db;user=alice;password=s3cret")
+    assert url == "mssql+pymssql://alice:s3cret@h/db"
+
+    # `username` is accepted as an alias for `user`
+    url2, _ = _parse_sqlserver_url("h:1433;databaseName=db;username=bob;password=pw")
+    assert url2 == "mssql+pymssql://bob:pw@h:1433/db"
+
+    # Special characters in the password are percent-encoded so the URL stays parseable
+    url3, _ = _parse_sqlserver_url("h;databaseName=db;user=alice;password=p@ss/w:rd")
+    assert url3 == "mssql+pymssql://alice:p%40ss%2Fw%3Ard@h/db"
+
+    # User without a password
+    url4, _ = _parse_sqlserver_url("h;databaseName=db;user=alice")
+    assert url4 == "mssql+pymssql://alice@h/db"
+
+    # Credentials already in the authority win; params do not override them
+    url5, _ = _parse_sqlserver_url("u:p@h:1433;databaseName=db;user=alice;password=s3cret")
+    assert url5 == "mssql+pymssql://u:p@h:1433/db"
 
 
 def test_write_options_no_url_raises():
@@ -351,6 +456,7 @@ def test_pg_write_engine_staging_name():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("stub_target_exists")
 def test_overwrite_mode_default_is_atomic():
     """JdbcDataSource.writer(overwrite=True) uses 'atomic' by default."""
     from pyspark.sql.types import IntegerType, StructField, StructType
@@ -364,6 +470,7 @@ def test_overwrite_mode_default_is_atomic():
     assert writer._engine.overwrite_mode == "atomic"  # noqa: SLF001
 
 
+@pytest.mark.usefixtures("stub_target_exists")
 def test_overwrite_mode_truncate_valid():
     """overwriteMode='truncate' is accepted."""
     from pyspark.sql.types import IntegerType, StructField, StructType
