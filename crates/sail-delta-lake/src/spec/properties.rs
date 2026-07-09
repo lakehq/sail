@@ -429,8 +429,7 @@ fn parse_non_negative_i64(s: &str) -> Option<i64> {
 
 fn parse_interval(s: &str) -> Option<Duration> {
     // [Credit]: <https://github.com/delta-io/delta-kernel-rs/blob/f105333a003232d7284f1a8f06cca3b6d6b232a9/kernel/src/table_properties/deserialize.rs#L142-L146>
-    const SECONDS_PER_MINUTE: u64 = 60;
-    const SECONDS_PER_HOUR: u64 = 60 * SECONDS_PER_MINUTE;
+    const SECONDS_PER_HOUR: u64 = 60 * 60;
     const SECONDS_PER_DAY: u64 = 24 * SECONDS_PER_HOUR;
     const SECONDS_PER_WEEK: u64 = 7 * SECONDS_PER_DAY;
 
@@ -448,10 +447,14 @@ fn parse_interval(s: &str) -> Option<Duration> {
         "microsecond" | "microseconds" => Some(Duration::from_micros(number)),
         "millisecond" | "milliseconds" => Some(Duration::from_millis(number)),
         "second" | "seconds" => Some(Duration::from_secs(number)),
-        "minute" | "minutes" => Some(Duration::from_secs(number * SECONDS_PER_MINUTE)),
-        "hour" | "hours" => Some(Duration::from_secs(number * SECONDS_PER_HOUR)),
-        "day" | "days" => Some(Duration::from_secs(number * SECONDS_PER_DAY)),
-        "week" | "weeks" => Some(Duration::from_secs(number * SECONDS_PER_WEEK)),
+        "minute" | "minutes" => (number <= u64::MAX / 60).then(|| Duration::from_mins(number)),
+        "hour" | "hours" => {
+            (number <= u64::MAX / SECONDS_PER_HOUR).then(|| Duration::from_hours(number))
+        }
+        "day" | "days" => number.checked_mul(SECONDS_PER_DAY).map(Duration::from_secs),
+        "week" | "weeks" => number
+            .checked_mul(SECONDS_PER_WEEK)
+            .map(Duration::from_secs),
         _ => None,
     }
 }

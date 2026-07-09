@@ -220,8 +220,7 @@ impl HigherOrderUDFImpl for SparkArraySort {
         };
 
         let mut perm: Vec<u32> = Vec::with_capacity(list_values.len());
-        for (row, w) in offsets.windows(2).enumerate() {
-            let (start, end) = (w[0], w[1]);
+        for (row, &[start, end]) in offsets.array_windows::<2>().enumerate() {
             let n = end - start;
             if n == 0 {
                 continue;

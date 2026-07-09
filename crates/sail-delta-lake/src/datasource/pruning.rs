@@ -92,20 +92,19 @@ pub async fn prune_files(
 
     for (action, keep) in all_files.into_iter().zip(files_to_prune.iter()) {
         if *keep {
-            if let Some(limit) = limit {
-                if let Some(stats) = action
+            if let Some(limit) = limit
+                && let Some(stats) = action
                     .get_stats()
                     .map_err(|e| datafusion::common::DataFusionError::External(Box::new(e)))?
-                {
-                    if rows_collected <= limit as i64 {
-                        rows_collected += stats.num_records;
-                        files.push(action);
-                    } else {
-                        break;
-                    }
+            {
+                if rows_collected <= limit as i64 {
+                    rows_collected += stats.num_records;
+                    files.push(action);
                 } else {
-                    pruned_without_stats.push(action);
+                    break;
                 }
+            } else if limit.is_some() {
+                pruned_without_stats.push(action);
             } else {
                 files.push(action);
             }
