@@ -1,20 +1,36 @@
 from pathlib import Path
+from urllib.parse import urlparse
+from urllib.request import url2pathname
 
+import pyarrow.parquet as pq
+import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pyiceberg.io.pyarrow import PyArrowFileIO
-from pyiceberg.manifest import ManifestContent, read_manifest_list
+from pyiceberg.manifest import DataFileContent, ManifestContent, read_manifest_list
+from pyspark.sql.dataframe import DataFrame as SparkDataFrame
 
 from pysail.testing.spark.steps.iceberg import (
     _current_manifest_list,
     _current_snapshot,
     _find_latest_metadata,
+    _latest_metadata_path,
+    _metadata_file_version,
     _pyarrow_input_file,
 )
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 
+UNPARTITIONED_LAST_PARTITION_ID = 999
+
 
 def _uri_sql(path: Path) -> str:
     return escape_sql_string_literal(path.as_uri())
+
+
+def _local_file_path(uri: str) -> Path:
+    parsed = urlparse(uri)
+    if parsed.scheme not in ("", "file"):
+        pytest.fail(f"cannot inspect non-local file URI: {uri}")
+    return Path(url2pathname(f"//{parsed.netloc}{parsed.path}" if parsed.netloc else parsed.path))
 
 
 def _drop_table(spark, name: str) -> None:
@@ -39,6 +55,27 @@ def _current_manifest_entries(table_path: Path, content: ManifestContent):
         if manifest.content == content:
             entries.extend(manifest.fetch_manifest_entry(io))
     return entries
+
+
+def _assert_current_snapshot_metadata(
+    table_path: Path,
+    metadata: dict,
+    *,
+    expected_metadata_version: int,
+    expected_snapshot_count: int,
+) -> dict:
+    snapshot = _current_snapshot(metadata)
+    assert metadata["current-snapshot-id"] == snapshot["snapshot-id"]
+    assert metadata["last-sequence-number"] == snapshot["sequence-number"]
+    assert metadata["last-partition-id"] == UNPARTITIONED_LAST_PARTITION_ID
+    assert metadata["refs"]["main"]["snapshot-id"] == snapshot["snapshot-id"]
+    assert metadata["snapshot-log"][-1]["snapshot-id"] == snapshot["snapshot-id"]
+    assert len(metadata["snapshots"]) == expected_snapshot_count
+    assert _metadata_file_version(_latest_metadata_path(table_path)) == expected_metadata_version
+    assert metadata["metadata-log"][-1]["metadata-file"].endswith(
+        f"/metadata/v{expected_metadata_version - 1}.metadata.json"
+    )
+    return snapshot
 
 
 def test_iceberg_merge_mor_update_delete_insert_writes_delete_manifest_and_reads_rows(spark, tmp_path):
@@ -107,13 +144,28 @@ def test_iceberg_merge_mor_update_delete_insert_writes_delete_manifest_and_reads
         ]
 
         metadata = _find_latest_metadata(table_path)
-        current_snapshot = _current_snapshot(metadata)
+        current_snapshot = _assert_current_snapshot_metadata(
+            table_path,
+            metadata,
+            expected_metadata_version=3,
+            expected_snapshot_count=2,
+        )
         assert current_snapshot["summary"]["operation"] == "overwrite"
-        expected_snapshot_count = 2
-        assert len(metadata["snapshots"]) == expected_snapshot_count
+        assert current_snapshot["summary"]["total-data-files"] == "2"
+        assert current_snapshot["summary"]["total-delete-files"] == "1"
+        assert current_snapshot["summary"]["total-records"] == "5"
 
         manifests = _current_manifest_list(metadata)["manifests"]
         expected_deleted_row_count = 2
+        data_manifests = [manifest for manifest in manifests if manifest.get("content") == "data"]
+        delete_manifests = [manifest for manifest in manifests if manifest.get("content") == "deletes"]
+        assert any(manifest["sequence-number"] < current_snapshot["sequence-number"] for manifest in data_manifests)
+        assert any(
+            manifest["sequence-number"] == current_snapshot["sequence-number"]
+            and (manifest.get("added-files-count") or 0) > 0
+            for manifest in data_manifests
+        )
+        assert all(manifest["sequence-number"] == current_snapshot["sequence-number"] for manifest in delete_manifests)
         assert _manifest_count(manifests, content="deletes", key="added-files-count") >= 1
         assert _manifest_count(manifests, content="deletes", key="added-rows-count") >= expected_deleted_row_count
         assert _manifest_count(manifests, content="data", key="deleted-files-count") == 0
@@ -126,6 +178,103 @@ def test_iceberg_merge_mor_update_delete_insert_writes_delete_manifest_and_reads
         assert delete_entries
         assert all(entry.data_file.file_path.startswith(custom_prefix) for entry in data_entries)
         assert all(entry.data_file.file_path.startswith(f"{custom_prefix}delete-") for entry in delete_entries)
+        referenced_data_files = {entry.data_file.file_path for entry in data_entries}
+        deleted_row_file_paths = [
+            path
+            for entry in delete_entries
+            for path in pq.read_table(_local_file_path(entry.data_file.file_path), columns=["file_path"])
+            .column("file_path")
+            .to_pylist()
+        ]
+        assert deleted_row_file_paths
+        assert all(entry.data_file.content == DataFileContent.POSITION_DELETES for entry in delete_entries)
+        assert all(path in referenced_data_files for path in deleted_row_file_paths)
+        assert all(entry.data_file.sort_order_id is None for entry in delete_entries)
+        assert all(not entry.data_file.equality_ids for entry in delete_entries)
+        assert all(getattr(entry.data_file, "content_offset", None) is None for entry in delete_entries)
+        assert all(getattr(entry.data_file, "content_size_in_bytes", None) is None for entry in delete_entries)
+        assert sum(entry.data_file.record_count for entry in delete_entries) >= expected_deleted_row_count
+    finally:
+        _drop_table(spark, table_name)
+
+
+def test_iceberg_dataframe_merge_into_mor_update_delete_insert(spark, tmp_path):
+    if not hasattr(SparkDataFrame, "mergeInto"):
+        pytest.skip("DataFrame.mergeInto requires Spark 4.0+ (missing in this PySpark)")
+
+    table_name = "iceberg_dataframe_merge_mor"
+    table_path = tmp_path / table_name
+
+    _drop_table(spark, table_name)
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (
+              id INT,
+              value STRING,
+              flag STRING
+            )
+            USING iceberg
+            LOCATION '{_uri_sql(table_path)}'
+            TBLPROPERTIES (
+              'format-version' = '2',
+              'write.merge.mode' = 'merge-on-read'
+            )
+            """
+        )
+        spark.sql(
+            """
+            INSERT INTO iceberg_dataframe_merge_mor
+            SELECT * FROM VALUES
+              (1, 'old', 'keep'),
+              (2, 'old', 'update'),
+              (3, 'old', 'delete')
+            """
+        )
+
+        source_df = spark.createDataFrame(
+            [(2, "new", "insert"), (3, "ignored", "delete"), (4, "ins", "insert")],
+            "src_id INT, src_value STRING, src_flag STRING",
+        )
+        (
+            source_df.mergeInto(table_name, F.expr("id = src_id"))
+            .whenMatched(F.expr("flag = 'update'"))
+            .update(assignments={"value": F.col("src_value")})
+            .whenMatched(F.expr("flag = 'delete'"))
+            .delete()
+            .whenNotMatched()
+            .insert(
+                assignments={
+                    "id": F.col("src_id"),
+                    "value": F.col("src_value"),
+                    "flag": F.col("src_flag"),
+                }
+            )
+            .merge()
+        )
+
+        rows = [
+            tuple(row)
+            for row in spark.sql("SELECT id, value, flag FROM iceberg_dataframe_merge_mor ORDER BY id").collect()
+        ]
+        assert rows == [
+            (1, "old", "keep"),
+            (2, "new", "update"),
+            (4, "ins", "insert"),
+        ]
+
+        metadata = _find_latest_metadata(table_path)
+        snapshot = _assert_current_snapshot_metadata(
+            table_path,
+            metadata,
+            expected_metadata_version=3,
+            expected_snapshot_count=2,
+        )
+        assert snapshot["summary"]["operation"] == "overwrite"
+        assert snapshot["summary"]["added-position-deletes"] == "2"
+        assert snapshot["summary"]["total-data-files"] == "2"
+        assert snapshot["summary"]["total-delete-files"] == "1"
+        assert snapshot["summary"]["total-records"] == "5"
     finally:
         _drop_table(spark, table_name)
 
@@ -208,6 +357,7 @@ def test_iceberg_merge_rejects_position_deletes_on_v1_table(spark, tmp_path):
             SELECT * FROM VALUES (1, 'new') AS src(id, value)
             """
         )
+        before_metadata_path = _latest_metadata_path(table_path)
 
         with pytest.raises(Exception, match=r"format-version 2|position delete writes"):
             spark.sql(
@@ -222,6 +372,55 @@ def test_iceberg_merge_rejects_position_deletes_on_v1_table(spark, tmp_path):
 
         rows = [tuple(row) for row in spark.sql("SELECT id, value FROM iceberg_merge_v1_position_delete").collect()]
         assert rows == [(1, "old")]
+        assert _latest_metadata_path(table_path) == before_metadata_path
+        assert len(_find_latest_metadata(table_path)["snapshots"]) == 1
+    finally:
+        _drop_table(spark, table_name)
+
+
+def test_iceberg_merge_rejects_position_deletes_on_v3_table_without_metadata_commit(spark, tmp_path):
+    table_name = "iceberg_merge_v3_position_delete"
+    table_path = tmp_path / table_name
+
+    _drop_table(spark, table_name)
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (
+              id INT,
+              value STRING
+            )
+            USING iceberg
+            LOCATION '{_uri_sql(table_path)}'
+            TBLPROPERTIES (
+              'format-version' = '3',
+              'write.merge.mode' = 'merge-on-read'
+            )
+            """
+        )
+        spark.sql("INSERT INTO iceberg_merge_v3_position_delete VALUES (1, 'old')")
+        spark.sql(
+            """
+            CREATE OR REPLACE TEMP VIEW iceberg_merge_v3_source AS
+            SELECT * FROM VALUES (1, 'new') AS src(id, value)
+            """
+        )
+        before_metadata_path = _latest_metadata_path(table_path)
+
+        with pytest.raises(Exception, match=r"deletion vectors|v3 MERGE MOR position delete"):
+            spark.sql(
+                f"""
+                MERGE INTO {table_name} AS t
+                USING iceberg_merge_v3_source AS s
+                ON t.id = s.id
+                WHEN MATCHED THEN
+                  UPDATE SET value = s.value
+                """
+            ).collect()
+
+        rows = [tuple(row) for row in spark.sql("SELECT id, value FROM iceberg_merge_v3_position_delete").collect()]
+        assert rows == [(1, "old")]
+        assert _latest_metadata_path(table_path) == before_metadata_path
         assert len(_find_latest_metadata(table_path)["snapshots"]) == 1
     finally:
         _drop_table(spark, table_name)

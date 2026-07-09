@@ -6,6 +6,7 @@ from urllib.request import url2pathname
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 from pyiceberg.io.pyarrow import PyArrowFileIO
 from pyiceberg.manifest import (
     DataFile,
@@ -35,6 +36,8 @@ from pysail.testing.spark.steps.iceberg import (
 )
 from pysail.testing.spark.utils.sql import escape_sql_string_literal
 from pysail.tests.spark.iceberg.utils import create_sql_catalog
+
+UNPARTITIONED_LAST_PARTITION_ID = 999
 
 
 def _uri_sql(path: Path) -> str:
@@ -177,6 +180,27 @@ def _delete_manifest_count(table_path: Path, key: str) -> int:
     return sum(manifest.get(key) or 0 for manifest in manifests if manifest.get("content") == "deletes")
 
 
+def _assert_current_snapshot_metadata(
+    table_path: Path,
+    metadata: dict,
+    *,
+    expected_metadata_version: int,
+    expected_snapshot_count: int,
+) -> dict:
+    snapshot = _current_snapshot(metadata)
+    assert metadata["current-snapshot-id"] == snapshot["snapshot-id"]
+    assert metadata["last-sequence-number"] == snapshot["sequence-number"]
+    assert metadata["last-partition-id"] == UNPARTITIONED_LAST_PARTITION_ID
+    assert metadata["refs"]["main"]["snapshot-id"] == snapshot["snapshot-id"]
+    assert metadata["snapshot-log"][-1]["snapshot-id"] == snapshot["snapshot-id"]
+    assert len(metadata["snapshots"]) == expected_snapshot_count
+    assert _metadata_file_version(_latest_metadata_path(table_path)) == expected_metadata_version
+    assert metadata["metadata-log"][-1]["metadata-file"].endswith(
+        f"/metadata/v{expected_metadata_version - 1}.metadata.json"
+    )
+    return snapshot
+
+
 def test_iceberg_sql_delete_writes_equality_delete_file_and_filters_rows(spark, tmp_path):
     table_name = "iceberg_sql_equality_delete"
     table_path = tmp_path / table_name
@@ -217,14 +241,32 @@ def test_iceberg_sql_delete_writes_equality_delete_file_and_filters_rows(spark, 
         assert rows == [(1, "keep-1", "keep"), (3, "keep-3", "keep")]
 
         metadata = _find_latest_metadata(table_path)
-        snapshot = _current_snapshot(metadata)
+        snapshot = _assert_current_snapshot_metadata(
+            table_path,
+            metadata,
+            expected_metadata_version=3,
+            expected_snapshot_count=2,
+        )
         summary = snapshot["summary"]
         assert summary["operation"] == "delete"
         assert summary["added-delete-files"] == "1"
         assert summary["added-equality-delete-files"] == "1"
         assert summary["added-equality-deletes"] == "1"
-        assert summary["deleted-records"] == "1"
+        assert "deleted-records" not in summary
         assert "added-position-delete-files" not in summary
+        assert summary["total-data-files"] == "1"
+        assert summary["total-delete-files"] == "1"
+        assert summary["total-records"] == "3"
+
+        manifests = _current_manifest_list(metadata)["manifests"]
+        data_manifests = [manifest for manifest in manifests if manifest.get("content") == "data"]
+        delete_manifests = [manifest for manifest in manifests if manifest.get("content") == "deletes"]
+        assert data_manifests
+        assert all(manifest["sequence-number"] < snapshot["sequence-number"] for manifest in data_manifests)
+        assert len(delete_manifests) == 1
+        assert delete_manifests[0]["sequence-number"] == snapshot["sequence-number"]
+        assert delete_manifests[0]["added-files-count"] == 1
+        assert delete_manifests[0]["added-rows-count"] == 1
 
         assert _delete_manifest_count(table_path, "added-files-count") == 1
         assert _delete_manifest_count(table_path, "added-rows-count") == 1
@@ -239,6 +281,57 @@ def test_iceberg_sql_delete_writes_equality_delete_file_and_filters_rows(spark, 
 
         delete_rows = pq.read_table(_local_table_path(delete_file.file_path)).to_pylist()
         assert delete_rows == [{"id": 2, "name": "drop-2", "flag": "drop"}]
+    finally:
+        _drop_table(spark, table_name)
+
+
+def test_iceberg_sql_delete_rejects_partitioned_equality_delete_without_metadata_commit(spark, tmp_path):
+    table_name = "iceberg_sql_equality_delete_partitioned_reject"
+    table_path = tmp_path / table_name
+
+    _drop_table(spark, table_name)
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (
+              id BIGINT,
+              flag STRING,
+              part STRING
+            )
+            USING iceberg
+            PARTITIONED BY (part)
+            LOCATION '{_uri_sql(table_path)}'
+            TBLPROPERTIES ('format-version' = '2')
+            """
+        )
+        spark.sql(
+            """
+            INSERT INTO iceberg_sql_equality_delete_partitioned_reject
+            SELECT * FROM VALUES
+              (1, 'keep', 'A'),
+              (2, 'drop', 'A'),
+              (3, 'keep', 'B')
+            """
+        )
+        before_metadata_path = _latest_metadata_path(table_path)
+
+        with pytest.raises(Exception, match="partitioned tables are not supported"):
+            spark.sql("DELETE FROM iceberg_sql_equality_delete_partitioned_reject WHERE flag = 'drop'").collect()
+
+        assert _latest_metadata_path(table_path) == before_metadata_path
+        metadata = _find_latest_metadata(table_path)
+        assert len(metadata["snapshots"]) == 1
+        rows = [
+            tuple(row)
+            for row in spark.sql(
+                "SELECT id, flag, part FROM iceberg_sql_equality_delete_partitioned_reject ORDER BY id"
+            ).collect()
+        ]
+        assert rows == [
+            (1, "keep", "A"),
+            (2, "drop", "A"),
+            (3, "keep", "B"),
+        ]
     finally:
         _drop_table(spark, table_name)
 
