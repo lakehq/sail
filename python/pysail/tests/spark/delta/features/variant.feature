@@ -307,8 +307,8 @@ Feature: Delta Lake Variant support
       | path                                 | value           |
       | protocol.minReaderVersion            | 3               |
       | protocol.minWriterVersion            | 7               |
-      | protocol.readerFeatures              | ["variantShredding"] |
-      | protocol.writerFeatures              | ["variantShredding", "appendOnly", "invariants"] |
+      | protocol.readerFeatures              | ["variantType", "variantShredding"] |
+      | protocol.writerFeatures              | ["variantType", "appendOnly", "invariants", "variantShredding"] |
       | metaData.schemaString.fields[0].type | "integer"       |
     When query
       """
@@ -319,3 +319,27 @@ Feature: Delta Lake Variant support
     Then query result ordered
       | id |
       | 1  |
+
+  Scenario: ALTER TABLE adds stable VariantType dependency for stable VariantShredding
+    Given variable location for temporary directory delta_variant_shredding_stable_alter
+    Given final statement
+      """
+      DROP TABLE IF EXISTS delta_variant_shredding_stable_alter
+      """
+    Given statement template
+      """
+      CREATE TABLE delta_variant_shredding_stable_alter (
+        id INT
+      )
+      USING DELTA
+      LOCATION {{ location.sql }}
+      """
+    Given statement
+      """
+      ALTER TABLE delta_variant_shredding_stable_alter
+      SET TBLPROPERTIES ('delta.feature.variantShredding' = 'supported')
+      """
+    Then delta log latest effective protocol and metadata contains
+      | path                    | value                                                           |
+      | protocol.readerFeatures | ["variantType", "variantShredding"]                              |
+      | protocol.writerFeatures | ["variantType", "appendOnly", "invariants", "variantShredding"] |

@@ -288,6 +288,9 @@ fn enable_variant_shredding_feature(
     writer_features: &mut Vec<TableFeature>,
     feature: TableFeature,
 ) {
+    if feature == TableFeature::VariantShredding {
+        enable_variant_type_feature(reader_features, writer_features, TableFeature::VariantType);
+    }
     push_feature(reader_features, feature.clone());
     push_feature(writer_features, feature);
     enable_legacy_writer_features(writer_features);
@@ -465,7 +468,7 @@ pub fn protocol_for_create(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     use super::{protocol_for_create, protocol_for_metadata};
     use crate::spec::{
@@ -654,14 +657,75 @@ mod tests {
             protocol_for_create(false, false, false, false, false, false, false, &config)?;
         assert_eq!(protocol.min_reader_version(), 3);
         assert_eq!(protocol.min_writer_version(), 7);
-        assert!(!protocol.has_reader_feature(&TableFeature::VariantType));
-        assert!(!protocol.has_writer_feature(&TableFeature::VariantType));
+        assert!(protocol.has_reader_feature(&TableFeature::VariantType));
+        assert!(protocol.has_writer_feature(&TableFeature::VariantType));
         assert!(protocol.has_reader_feature(&TableFeature::VariantShredding));
         assert!(protocol.has_writer_feature(&TableFeature::VariantShredding));
         assert!(protocol.has_writer_feature(&TableFeature::AppendOnly));
         assert!(protocol.has_writer_feature(&TableFeature::Invariants));
         assert!(!protocol.has_reader_feature(&TableFeature::VariantShreddingPreview));
         assert!(!protocol.has_writer_feature(&TableFeature::VariantShreddingPreview));
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_create_stable_shredding_adds_stable_variant_type_alongside_preview()
+    -> DeltaResult<()> {
+        let mut config = HashMap::new();
+        config.insert(
+            "delta.feature.variantShredding".to_string(),
+            "supported".to_string(),
+        );
+        config.insert(
+            "delta.feature.variantType-preview".to_string(),
+            "supported".to_string(),
+        );
+        let protocol =
+            protocol_for_create(false, false, false, false, false, false, false, &config)?;
+
+        assert!(protocol.has_reader_feature(&TableFeature::VariantType));
+        assert!(protocol.has_writer_feature(&TableFeature::VariantType));
+        assert!(protocol.has_reader_feature(&TableFeature::VariantTypePreview));
+        assert!(protocol.has_writer_feature(&TableFeature::VariantTypePreview));
+        assert!(protocol.has_reader_feature(&TableFeature::VariantShredding));
+        assert!(protocol.has_writer_feature(&TableFeature::VariantShredding));
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_create_stable_and_preview_shredding_adds_stable_variant_type_once()
+    -> DeltaResult<()> {
+        let mut config = HashMap::new();
+        config.insert(
+            "delta.feature.variantShredding".to_string(),
+            "supported".to_string(),
+        );
+        config.insert(
+            "delta.feature.variantShredding-preview".to_string(),
+            "supported".to_string(),
+        );
+        let protocol =
+            protocol_for_create(false, false, false, false, false, false, false, &config)?;
+
+        assert!(protocol.has_reader_feature(&TableFeature::VariantType));
+        assert!(protocol.has_writer_feature(&TableFeature::VariantType));
+        assert!(!protocol.has_reader_feature(&TableFeature::VariantTypePreview));
+        assert!(!protocol.has_writer_feature(&TableFeature::VariantTypePreview));
+        assert!(protocol.has_reader_feature(&TableFeature::VariantShredding));
+        assert!(protocol.has_writer_feature(&TableFeature::VariantShredding));
+        assert!(protocol.has_reader_feature(&TableFeature::VariantShreddingPreview));
+        assert!(protocol.has_writer_feature(&TableFeature::VariantShreddingPreview));
+
+        let reader_features = protocol.reader_features().unwrap_or(&[]);
+        let writer_features = protocol.writer_features().unwrap_or(&[]);
+        assert_eq!(
+            reader_features.len(),
+            reader_features.iter().collect::<HashSet<_>>().len()
+        );
+        assert_eq!(
+            writer_features.len(),
+            writer_features.iter().collect::<HashSet<_>>().len()
+        );
         Ok(())
     }
 
