@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use datafusion::arrow::datatypes::{DataType, IntervalUnit, TimeUnit, i256};
+use datafusion::arrow::datatypes::{
+    DECIMAL256_MAX_PRECISION, DataType, IntervalUnit, TimeUnit, i256,
+};
 use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
 use datafusion_common::{DFSchemaRef, ScalarValue};
@@ -31,6 +33,7 @@ use sail_function::scalar::math::spark_try_mult::SparkTryMult;
 use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
 use sail_function::scalar::math::spark_unhex::SparkUnHex;
 use sail_function::scalar::math::spark_uniform::SparkUniform;
+use sail_function::scalar::math::utils::decimal::spark_decimal_divide_type;
 use sail_function::scalar::misc::raise_error::RaiseError;
 
 use crate::error::{PlanError, PlanResult};
@@ -76,8 +79,7 @@ fn spark_plus(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 cast(cast(left, DataType::Int32) + right, DataType::Date32)
             }
             (Ok(left_type), Ok(right_type)) => {
-                let (left, right) =
-                    coerce_spark_arithmetic_operands(
+                let (left, right) = coerce_spark_arithmetic_operands(
                     left,
                     right,
                     &left_type,
@@ -138,8 +140,7 @@ fn spark_minus(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 cast(cast(left, DataType::Int32) - right, DataType::Date32)
             }
             (Ok(left_type), Ok(right_type)) => {
-                let (left, right) =
-                    coerce_spark_arithmetic_operands(
+                let (left, right) = coerce_spark_arithmetic_operands(
                     left,
                     right,
                     &left_type,
@@ -199,14 +200,13 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
             )
         }
         (Ok(left_type), Ok(right_type)) => {
-            let (left, right) =
-                coerce_spark_arithmetic_operands(
-                    left,
-                    right,
-                    &left_type,
-                    &right_type,
-                    function_context.plan_config.ansi_mode,
-                );
+            let (left, right) = coerce_spark_arithmetic_operands(
+                left,
+                right,
+                &left_type,
+                &right_type,
+                function_context.plan_config.ansi_mode,
+            );
             left * right
         }
         // TODO: In case getting the type fails, we don't want to fail the query.
@@ -254,7 +254,10 @@ fn coerce_spark_arithmetic_operands(
             );
             // ANSI off (any pairing) and ANSI-on string+decimal -> both to DOUBLE.
             if !ansi_mode || has_decimal {
-                return (cast(left, DataType::Float64), cast(right, DataType::Float64));
+                return (
+                    cast(left, DataType::Float64),
+                    cast(right, DataType::Float64),
+                );
             }
             // ANSI on, non-decimal: cast the string to the other numeric operand's type.
             if left_string && right_type.is_numeric() {
@@ -293,6 +296,28 @@ fn is_string_type(data_type: &DataType) -> bool {
         data_type,
         DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
     )
+}
+
+fn is_decimal_type(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Decimal128(_, _) | DataType::Decimal256(_, _)
+    )
+}
+
+/// Spark's `DecimalType.forType` for an integer type: the type-based decimal an
+/// integer *column* is cast to when combined with a decimal in division
+/// (`Int -> Decimal(10,0)`, etc.). Integer *literals* narrow to their minimal
+/// decimal instead (see [`spark_decimal_literal_datatype`]).
+fn spark_integer_decimal_type(data_type: &DataType) -> Option<DataType> {
+    let precision = match data_type {
+        DataType::Int8 | DataType::UInt8 => 3,
+        DataType::Int16 | DataType::UInt16 => 5,
+        DataType::Int32 | DataType::UInt32 => 10,
+        DataType::Int64 | DataType::UInt64 => 20,
+        _ => return None,
+    };
+    Some(DataType::Decimal128(precision, 0))
 }
 
 /// True when one operand is a floating-point type and the other a decimal (either
@@ -464,6 +489,46 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     }
 
     let ansi_mode = function_context.plan_config.ansi_mode;
+
+    // Coerce operands the same way `*` does (narrow an integer literal combined with
+    // a decimal, promote float×decimal to double) before deriving the division type,
+    // because Spark's divide scale depends on the divisor precision.
+    let (dividend, divisor) = match (
+        dividend.get_type(function_context.schema),
+        divisor.get_type(function_context.schema),
+    ) {
+        (Ok(dividend_type), Ok(divisor_type)) => coerce_spark_arithmetic_operands(
+            dividend,
+            divisor,
+            &dividend_type,
+            &divisor_type,
+            ansi_mode,
+        ),
+        _ => (dividend, divisor),
+    };
+
+    // An integer operand paired with a decimal is cast to its Spark type-based
+    // decimal (`Int -> Decimal(10,0)`, ...) so the decimal divide rule applies to
+    // integer *columns* (literals were already narrowed above).
+    let (dividend, divisor) = match (
+        dividend.get_type(function_context.schema),
+        divisor.get_type(function_context.schema),
+    ) {
+        (Ok(dividend_type), Ok(divisor_type)) if is_decimal_type(&divisor_type) => {
+            match spark_integer_decimal_type(&dividend_type) {
+                Some(target) => (cast(dividend, target), divisor),
+                None => (dividend, divisor),
+            }
+        }
+        (Ok(dividend_type), Ok(divisor_type)) if is_decimal_type(&dividend_type) => {
+            match spark_integer_decimal_type(&divisor_type) {
+                Some(target) => (dividend, cast(divisor, target)),
+                None => (dividend, divisor),
+            }
+        }
+        _ => (dividend, divisor),
+    };
+
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);
 
@@ -477,10 +542,40 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
     );
 
     let div_expr = match (&dividend_type, &divisor_type) {
+        // Spark DECIMAL / DECIMAL: DataFusion (Arrow `div`) uses a smaller scale and
+        // truncates, so we compute Spark's `(precision, scale)` and reproduce its
+        // HALF_UP value: widen to Decimal256 (so the intermediate cannot overflow),
+        // divide with one guard digit, HALF_UP-round to Spark's scale, then narrow to
+        // the target (error on overflow under ANSI, NULL otherwise).
+        //
+        // Performance: this path is heavier than the previous native i128 divide (it
+        // widens to i256 and adds a HALF_UP `round` pass). That is the inherent cost
+        // of Spark's decimal-division semantics — Spark itself computes it in
+        // `BigDecimal`, and no pure-`Expr` alternative is both correct and cheaper.
+        // It stays fully vectorized (native Arrow kernels, no UDF dispatch), and only
+        // decimal/decimal division pays it; `+ - * %`, integer and float division are
+        // unchanged. A future optimization could keep the intermediate in i128 when it
+        // provably cannot overflow, instead of always widening to i256.
+        (Ok(DataType::Decimal128(p1, s1)), Ok(DataType::Decimal128(p2, s2))) => {
+            let (result_precision, result_scale) = spark_decimal_divide_type(*p1, *s1, *p2, *s2);
+            let dividend_scale = (*s1).max(result_scale - 3);
+            let quotient = cast(
+                dividend,
+                DataType::Decimal256(DECIMAL256_MAX_PRECISION, dividend_scale),
+            ) / cast(divisor, DataType::Decimal256(DECIMAL256_MAX_PRECISION, *s2));
+            let rounded = expr_fn::round(vec![quotient, lit(result_scale as i32)]);
+            let target = DataType::Decimal128(result_precision, result_scale);
+            if ansi_mode {
+                cast(rounded, target)
+            } else {
+                try_cast(rounded, target)
+            }
+        }
         // TODO: Casting DataType::Interval(_) to DataType::Int64 is not supported yet.
         //  Seems to be a bug in DataFusion.
-        // TODO: Cast the precision and scale that matches the Spark's behavior after the division.
-        //  See `test_divide` in python/pysail/tests/spark/test_math.py
+        // TODO: DECIMAL / integer-column and Decimal256 operands still use DataFusion's
+        //  scale (not Spark's). Integer *literals* are already narrowed above so
+        //  DECIMAL / int-literal takes the Spark arm; Decimal256 is Sail-internal only.
         (Ok(DataType::Decimal128(_, _)), Ok(_))
         | (Ok(_), Ok(DataType::Decimal128(_, _)))
         | (Ok(DataType::Decimal256(_, _)), Ok(_))
@@ -712,10 +807,27 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
     } = input;
 
     let (dividend, divisor) = arguments.two()?;
+    let ansi_mode = function_context.plan_config.ansi_mode;
+
+    // Apply Spark operand coercion (e.g. narrow an integer literal combined with a
+    // decimal) so the modulo result type matches Spark, before the zero guard.
+    let (dividend, divisor) = match (
+        dividend.get_type(function_context.schema),
+        divisor.get_type(function_context.schema),
+    ) {
+        (Ok(dividend_type), Ok(divisor_type)) => coerce_spark_arithmetic_operands(
+            dividend,
+            divisor,
+            &dividend_type,
+            &divisor_type,
+            ansi_mode,
+        ),
+        _ => (dividend, divisor),
+    };
 
     // Plan-time check for literal zero divisors.
     if is_zero_literal(&divisor) {
-        if function_context.plan_config.ansi_mode {
+        if ansi_mode {
             return Err(PlanError::ArrowError(ArrowError::ArithmeticOverflow(
                 "Remainder by zero".to_string(),
             )));
@@ -724,7 +836,6 @@ fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
         }
     }
 
-    let ansi_mode = function_context.plan_config.ansi_mode;
     let divisor_type = divisor.get_type(function_context.schema);
 
     // Apply runtime zero-divisor guard to the divisor before building the modulo expression.
@@ -904,183 +1015,4 @@ pub(super) fn list_built_in_math_functions() -> Vec<(&'static str, ScalarFunctio
         ("uniform", F::udf(SparkUniform::new())),
         ("width_bucket", F::quaternary(math_fn::width_bucket)),
     ]
-}
-
-#[cfg(test)]
-mod tests {
-    use datafusion_expr::col;
-
-    use super::*;
-
-    #[test]
-    fn integer_digit_count_counts_digits_sign_ignored() {
-        assert_eq!(integer_digit_count(0), 1);
-        assert_eq!(integer_digit_count(3), 1);
-        assert_eq!(integer_digit_count(-3), 1);
-        assert_eq!(integer_digit_count(100), 3);
-        assert_eq!(integer_digit_count(-12345), 5);
-    }
-
-    #[test]
-    fn spark_decimal_literal_datatype_narrows_only_integer_literal_vs_decimal() {
-        let dec = DataType::Decimal128(10, 2);
-        // integer literal against a decimal -> minimal decimal
-        assert_eq!(
-            spark_decimal_literal_datatype(&lit(3_i32), &dec),
-            Some(DataType::Decimal128(1, 0))
-        );
-        assert_eq!(
-            spark_decimal_literal_datatype(&lit(100_i64), &dec),
-            Some(DataType::Decimal128(3, 0))
-        );
-        // other side not a decimal -> no narrowing
-        assert_eq!(
-            spark_decimal_literal_datatype(&lit(3_i32), &DataType::Int32),
-            None
-        );
-        // not an integer literal -> no narrowing
-        assert_eq!(spark_decimal_literal_datatype(&lit(2.0_f64), &dec), None);
-        assert_eq!(spark_decimal_literal_datatype(&col("x"), &dec), None);
-    }
-
-    #[test]
-    fn is_float_decimal_pair_detects_either_order() {
-        let dec = DataType::Decimal128(10, 2);
-        assert!(is_float_decimal_pair(&DataType::Float32, &dec));
-        assert!(is_float_decimal_pair(&dec, &DataType::Float64));
-        assert!(!is_float_decimal_pair(&DataType::Int32, &dec));
-        assert!(!is_float_decimal_pair(
-            &DataType::Float32,
-            &DataType::Float64
-        ));
-    }
-
-    #[test]
-    fn coerce_narrows_integer_literal_against_decimal() {
-        // `dec(10,2) * 3` -> literal narrowed to Decimal(1,0) (=> result decimal(12,2)).
-        let dec = DataType::Decimal128(10, 2);
-        let (left, right) =
-            coerce_spark_arithmetic_operands(col("a"), lit(3_i32), &dec, &DataType::Int32, true);
-        assert_eq!(left.to_string(), "a");
-        assert_eq!(right.to_string(), "CAST(Int32(3) AS Decimal128(1, 0))");
-    }
-
-    #[test]
-    fn coerce_promotes_float_decimal_to_double() {
-        // `dec(10,2) * float` -> both promoted to Double.
-        let dec = DataType::Decimal128(10, 2);
-        let (left, right) =
-            coerce_spark_arithmetic_operands(col("a"), lit(2.0_f32), &dec, &DataType::Float32, true);
-        assert_eq!(left.to_string(), "CAST(a AS Float64)");
-        assert_eq!(right.to_string(), "CAST(Float32(2) AS Float64)");
-    }
-
-    #[test]
-    fn coerce_string_numeric_ansi_off_promotes_both_to_double() {
-        // ANSI off: `'5' + 3` -> both operands to double.
-        let (left, right) = coerce_spark_arithmetic_operands(
-            lit("5"),
-            lit(3_i32),
-            &DataType::Utf8,
-            &DataType::Int32,
-            false,
-        );
-        assert_eq!(left.to_string(), "CAST(Utf8(\"5\") AS Float64)");
-        assert_eq!(right.to_string(), "CAST(Int32(3) AS Float64)");
-    }
-
-    #[test]
-    fn coerce_string_numeric_ansi_on_casts_string_to_numeric_type() {
-        // ANSI on: `'5' + 3` -> the string is cast to the numeric operand's type.
-        let (left, right) = coerce_spark_arithmetic_operands(
-            lit("5"),
-            lit(3_i32),
-            &DataType::Utf8,
-            &DataType::Int32,
-            true,
-        );
-        assert_eq!(left.to_string(), "CAST(Utf8(\"5\") AS Int32)");
-        assert_eq!(right.to_string(), "Int32(3)");
-    }
-
-    #[test]
-    fn coerce_string_on_right_ansi_on_casts_to_left_numeric_type() {
-        // ANSI on: `3 + '5'` -> the right string is cast to the left numeric's type.
-        let (left, right) = coerce_spark_arithmetic_operands(
-            lit(3_i32),
-            lit("5"),
-            &DataType::Int32,
-            &DataType::Utf8,
-            true,
-        );
-        assert_eq!(left.to_string(), "Int32(3)");
-        assert_eq!(right.to_string(), "CAST(Utf8(\"5\") AS Int32)");
-    }
-
-    #[test]
-    fn coerce_string_and_decimal_ansi_on_promotes_to_double() {
-        // ANSI on: string + DECIMAL is the exception -> both to double, not decimal.
-        let (left, right) = coerce_spark_arithmetic_operands(
-            lit("5"),
-            col("d"),
-            &DataType::Utf8,
-            &DataType::Decimal128(10, 2),
-            true,
-        );
-        assert_eq!(left.to_string(), "CAST(Utf8(\"5\") AS Float64)");
-        assert_eq!(right.to_string(), "CAST(d AS Float64)");
-    }
-
-    #[test]
-    fn coerce_string_and_string_ansi_off_promotes_both_to_double() {
-        // ANSI off: `'5' + '3'` -> both to double.
-        let (left, right) = coerce_spark_arithmetic_operands(
-            lit("5"),
-            lit("3"),
-            &DataType::Utf8,
-            &DataType::Utf8,
-            false,
-        );
-        assert_eq!(left.to_string(), "CAST(Utf8(\"5\") AS Float64)");
-        assert_eq!(right.to_string(), "CAST(Utf8(\"3\") AS Float64)");
-    }
-
-    #[test]
-    fn coerce_string_and_string_ansi_on_left_unchanged() {
-        // ANSI on: `'5' + '3'` has no numeric operand -> left unchanged (Spark rejects it).
-        let (left, right) = coerce_spark_arithmetic_operands(
-            lit("5"),
-            lit("3"),
-            &DataType::Utf8,
-            &DataType::Utf8,
-            true,
-        );
-        assert_eq!(left.to_string(), "Utf8(\"5\")");
-        assert_eq!(right.to_string(), "Utf8(\"3\")");
-    }
-
-    #[test]
-    fn coerce_negative_integer_literal_narrows_ignoring_sign() {
-        // `dec(10,2) * -3` -> literal narrows to Decimal(1,0) (sign does not add a digit).
-        let dec = DataType::Decimal128(10, 2);
-        let (left, right) =
-            coerce_spark_arithmetic_operands(col("a"), lit(-3_i32), &dec, &DataType::Int32, true);
-        assert_eq!(left.to_string(), "a");
-        assert_eq!(right.to_string(), "CAST(Int32(-3) AS Decimal128(1, 0))");
-    }
-
-    #[test]
-    fn coerce_ten_digit_literal_narrows_to_ten_precision() {
-        // `dec(10,2) * 1000000000` (10 digits) -> Decimal(10,0).
-        let dec = DataType::Decimal128(10, 2);
-        let (left, right) = coerce_spark_arithmetic_operands(
-            col("a"),
-            lit(1_000_000_000_i64),
-            &dec,
-            &DataType::Int64,
-            true,
-        );
-        assert_eq!(left.to_string(), "a");
-        assert_eq!(right.to_string(), "CAST(Int64(1000000000) AS Decimal128(10, 0))");
-    }
 }

@@ -31,3 +31,30 @@ pub fn round_decimal_base(
         )
     }
 }
+
+/// Spark's `adjustPrecisionScale`: when a computed decimal precision exceeds 38,
+/// cap it at 38 and reduce the scale, keeping at least `min(scale, 6)` fractional
+/// digits (`MINIMUM_ADJUSTED_SCALE`). DataFusion's coercion instead caps the
+/// scale at 38, which diverges from Spark for wide results.
+pub fn adjust_precision_scale(precision: i32, scale: i32) -> (u8, i8) {
+    let max_precision = DECIMAL128_MAX_PRECISION as i32;
+    if precision <= max_precision {
+        (precision as u8, scale as i8)
+    } else {
+        let int_digits = precision - scale;
+        let min_scale = scale.min(6);
+        let adjusted_scale = (max_precision - int_digits).max(min_scale);
+        (DECIMAL128_MAX_PRECISION, adjusted_scale as i8)
+    }
+}
+
+/// Result `(precision, scale)` of Spark `DECIMAL(p1,s1) / DECIMAL(p2,s2)`:
+/// scale `max(6, s1 + p2 + 1)` (Spark's `MINIMUM_ADJUSTED_SCALE` floor of 6) and
+/// precision `(p1 - s1) + s2 + scale`, then [`adjust_precision_scale`]. Arrow's
+/// `div` kernel uses a different (smaller) scale, so division must apply this rule
+/// to match Spark.
+pub fn spark_decimal_divide_type(p1: u8, s1: i8, p2: u8, s2: i8) -> (u8, i8) {
+    let scale = max(6, s1 as i32 + p2 as i32 + 1);
+    let precision = (p1 as i32 - s1 as i32) + s2 as i32 + scale;
+    adjust_precision_scale(precision, scale)
+}
