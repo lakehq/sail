@@ -733,7 +733,7 @@ data:
     ProjectionExec: expr=[#85@0 as i_item_id, #86@1 as i_item_desc, #87@2 as i_category, #88@3 as i_class, #89@4 as i_current_price, #90@5 as itemrevenue, #91@6 as revenueratio]
       SortPreservingMergeExec: [#87@2 ASC, #88@3 ASC, #85@0 ASC, #86@1 ASC, #91@6 ASC], fetch=100
         SortExec: TopK(fetch=100), expr=[#87@2 ASC, #88@3 ASC, #85@0 ASC, #86@1 ASC, #91@6 ASC], preserve_partitioning=[true]
-          ProjectionExec: expr=[#35@0 as #85, #38@1 as #86, #46@2 as #87, #44@3 as #88, #39@4 as #89, sum(web_sales.#23)@5 as #90, sum(web_sales.#23)@5 * Some(100),10,0 / CASE WHEN sum(sum(web_sales.#23)) PARTITION BY [item.#44] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@6 = Some(0),27,2 THEN CAST(raise_error(Division by zero) AS Decimal128(27, 2)) ELSE sum(sum(web_sales.#23)) PARTITION BY [item.#44] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@6 END as #91]
+          ProjectionExec: expr=[#35@0 as #85, #38@1 as #86, #46@2 as #87, #44@3 as #88, #39@4 as #89, sum(web_sales.#23)@5 as #90, sum(web_sales.#23)@5 * Some(100),3,0 / CASE WHEN sum(sum(web_sales.#23)) PARTITION BY [item.#44] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@6 = Some(0),27,2 THEN CAST(raise_error(Division by zero) AS Decimal128(27, 2)) ELSE sum(sum(web_sales.#23)) PARTITION BY [item.#44] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@6 END as #91]
             WindowAggExec: wdw=[sum(sum(web_sales.#23)) PARTITION BY [item.#44] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "sum(sum(web_sales.#23)) PARTITION BY [item.#44] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Decimal128(27, 2), nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
               SortExec: expr=[#44@3 ASC NULLS LAST], preserve_partitioning=[true]
                 RepartitionExec: partitioning=Hash([#44@3], 4), input_partitions=4
@@ -1540,7 +1540,7 @@ data:
     ProjectionExec: expr=[#85@0 as i_item_id, #86@1 as i_item_desc, #87@2 as i_category, #88@3 as i_class, #89@4 as i_current_price, #90@5 as itemrevenue, #91@6 as revenueratio]
       SortPreservingMergeExec: [#87@2 ASC, #88@3 ASC, #85@0 ASC, #86@1 ASC, #91@6 ASC], fetch=100
         SortExec: TopK(fetch=100), expr=[#87@2 ASC, #88@3 ASC, #85@0 ASC, #86@1 ASC, #91@6 ASC], preserve_partitioning=[true]
-          ProjectionExec: expr=[#35@0 as #85, #38@1 as #86, #46@2 as #87, #44@3 as #88, #39@4 as #89, sum(catalog_sales.#23)@5 as #90, sum(catalog_sales.#23)@5 * Some(100),10,0 / CASE WHEN sum(sum(catalog_sales.#23)) PARTITION BY [item.#44] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@6 = Some(0),27,2 THEN CAST(raise_error(Division by zero) AS Decimal128(27, 2)) ELSE sum(sum(catalog_sales.#23)) PARTITION BY [item.#44] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@6 END as #91]
+          ProjectionExec: expr=[#35@0 as #85, #38@1 as #86, #46@2 as #87, #44@3 as #88, #39@4 as #89, sum(catalog_sales.#23)@5 as #90, sum(catalog_sales.#23)@5 * Some(100),3,0 / CASE WHEN sum(sum(catalog_sales.#23)) PARTITION BY [item.#44] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@6 = Some(0),27,2 THEN CAST(raise_error(Division by zero) AS Decimal128(27, 2)) ELSE sum(sum(catalog_sales.#23)) PARTITION BY [item.#44] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@6 END as #91]
             WindowAggExec: wdw=[sum(sum(catalog_sales.#23)) PARTITION BY [item.#44] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "sum(sum(catalog_sales.#23)) PARTITION BY [item.#44] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Decimal128(27, 2), nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
               SortExec: expr=[#44@3 ASC NULLS LAST], preserve_partitioning=[true]
                 RepartitionExec: partitioning=Hash([#44@3], 4), input_partitions=4
@@ -3802,7 +3802,7 @@ data:
       ScalarSubqueryExec: subqueries=3
         SortPreservingMergeExec: [#421@0 ASC, #422@1 ASC], fetch=100
           SortExec: TopK(fetch=100), expr=[#421@0 ASC, #422@1 ASC], preserve_partitioning=[true]
-            ProjectionExec: expr=[#131@2 as #421, #132@3 as #422, #132@3 / __common_expr_4@0 * Some(100),10,0 as #423, #276@4 as #424, #276@4 / __common_expr_4@0 * Some(100),10,0 as #425, #420@5 as #426, #420@5 / __common_expr_4@0 * Some(100),10,0 as #427, __common_expr_5@1 as #428]
+            ProjectionExec: expr=[#131@2 as #421, #132@3 as #422, #132@3 / __common_expr_4@0 * Some(100),3,0 as #423, #276@4 as #424, #276@4 / __common_expr_4@0 * Some(100),3,0 as #425, #420@5 as #426, #420@5 / __common_expr_4@0 * Some(100),3,0 as #427, __common_expr_5@1 as #428]
               ProjectionExec: expr=[CASE WHEN __common_expr_6@0 = Some(0),23,6 THEN CAST(raise_error(Division by zero) AS Decimal128(23, 6)) ELSE __common_expr_6@0 END as __common_expr_4, __common_expr_6@0 as __common_expr_5, #131@1 as #131, #132@2 as #132, #276@3 as #276, #420@4 as #420]
                 ProjectionExec: expr=[(#132@0 + #276@1 + #420@2) / Some(3),10,0 as __common_expr_6, #131@3 as #131, #132@0 as #132, #276@1 as #276, #420@2 as #420]
                   HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#131@0, #419@0)], filter=CAST(#132@0 AS Decimal128(19, 3)) >= Some(9),1,1 * #420@2 AND CAST(#132@0 AS Decimal128(20, 3)) <= Some(11),2,1 * #420@2 AND CAST(#276@1 AS Decimal128(19, 3)) >= Some(9),1,1 * #420@2 AND CAST(#276@1 AS Decimal128(20, 3)) <= Some(11),2,1 * #420@2 AND CAST(#420@2 AS Decimal128(19, 3)) >= Some(9),1,1 * #132@0 AND CAST(#420@2 AS Decimal128(20, 3)) <= Some(11),2,1 * #132@0 AND CAST(#420@2 AS Decimal128(19, 3)) >= Some(9),1,1 * #276@1 AND CAST(#420@2 AS Decimal128(20, 3)) <= Some(11),2,1 * #276@1, projection=[#132@1, #276@2, #420@4, #131@0]
@@ -4039,7 +4039,7 @@ data:
     == Physical Plan ==
     ProjectionExec: expr=[#287@0 as promotions, #288@1 as total, #289@2 as ((promotions / total) * 100)]
       SortExec: TopK(fetch=100), expr=[#288@1 ASC], preserve_partitioning=[false]
-        ProjectionExec: expr=[#152@0 as #287, #286@1 as #288, CAST(#152@0 AS Decimal128(15, 4)) / CASE WHEN #286@1 = Some(0),17,2 THEN CAST(raise_error(Division by zero) AS Decimal128(15, 4)) ELSE CAST(#286@1 AS Decimal128(15, 4)) END * Some(100),10,0 as #289]
+        ProjectionExec: expr=[#152@0 as #287, #286@1 as #288, CAST(#152@0 AS Decimal128(15, 4)) / CASE WHEN #286@1 = Some(0),17,2 THEN CAST(raise_error(Division by zero) AS Decimal128(15, 4)) ELSE CAST(#286@1 AS Decimal128(15, 4)) END * Some(100),3,0 as #289]
           CrossJoinExec
             ProjectionExec: expr=[sum(store_sales.#15)@0 as #152]
               AggregateExec: mode=Final, gby=[], aggr=[sum(store_sales.#15)]
@@ -4228,7 +4228,7 @@ data:
                                                                         HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#61@0, #66@1)], projection=[#64@1, #66@2, #67@3, #68@4, #69@5, #70@6, #71@7, #72@8, #75@9, #76@10, #83@11]
                                                                           CoalescePartitionsExec
                                                                             ProjectionExec: expr=[#15@0 as #61]
-                                                                              FilterExec: CAST(sum(catalog_sales.#25)@1 AS Decimal128(30, 2)) > Some(2),10,0 * sum(catalog_returns.#57 + catalog_returns.#58 + catalog_returns.#59)@2, projection=[#15@0]
+                                                                              FilterExec: CAST(sum(catalog_sales.#25)@1 AS Decimal128(21, 2)) > Some(2),1,0 * sum(catalog_returns.#57 + catalog_returns.#58 + catalog_returns.#59)@2, projection=[#15@0]
                                                                                 AggregateExec: mode=FinalPartitioned, gby=[#15@0 as #15], aggr=[sum(catalog_sales.#25), sum(catalog_returns.#57 + catalog_returns.#58 + catalog_returns.#59)]
                                                                                   RepartitionExec: partitioning=Hash([#15@0], 4), input_partitions=4
                                                                                     AggregateExec: mode=Partial, gby=[#15@0 as #15], aggr=[sum(catalog_sales.#25), sum(catalog_returns.#57 + catalog_returns.#58 + catalog_returns.#59)]
@@ -4316,7 +4316,7 @@ data:
                                                                       HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(#61@0, #66@1)], projection=[#64@1, #66@2, #67@3, #68@4, #69@5, #70@6, #71@7, #72@8, #75@9, #76@10, #83@11]
                                                                         CoalescePartitionsExec
                                                                           ProjectionExec: expr=[#15@0 as #61]
-                                                                            FilterExec: CAST(sum(catalog_sales.#25)@1 AS Decimal128(30, 2)) > Some(2),10,0 * sum(catalog_returns.#57 + catalog_returns.#58 + catalog_returns.#59)@2, projection=[#15@0]
+                                                                            FilterExec: CAST(sum(catalog_sales.#25)@1 AS Decimal128(21, 2)) > Some(2),1,0 * sum(catalog_returns.#57 + catalog_returns.#58 + catalog_returns.#59)@2, projection=[#15@0]
                                                                               AggregateExec: mode=FinalPartitioned, gby=[#15@0 as #15], aggr=[sum(catalog_sales.#25), sum(catalog_returns.#57 + catalog_returns.#58 + catalog_returns.#59)]
                                                                                 RepartitionExec: partitioning=Hash([#15@0], 4), input_partitions=4
                                                                                   AggregateExec: mode=Partial, gby=[#15@0 as #15], aggr=[sum(catalog_sales.#25), sum(catalog_returns.#57 + catalog_returns.#58 + catalog_returns.#59)]
@@ -6378,7 +6378,7 @@ data:
     ProjectionExec: expr=[#74@0 as i_item_id, #75@1 as i_item_desc, #76@2 as i_category, #77@3 as i_class, #78@4 as i_current_price, #79@5 as itemrevenue, #80@6 as revenueratio]
       SortPreservingMergeExec: [#76@2 ASC, #77@3 ASC, #74@0 ASC, #75@1 ASC, #80@6 ASC]
         SortExec: expr=[#76@2 ASC, #77@3 ASC, #74@0 ASC, #75@1 ASC, #80@6 ASC], preserve_partitioning=[true]
-          ProjectionExec: expr=[#24@0 as #74, #27@1 as #75, #35@2 as #76, #33@3 as #77, #28@4 as #78, sum(store_sales.#15)@5 as #79, sum(store_sales.#15)@5 * Some(100),10,0 / CASE WHEN sum(sum(store_sales.#15)) PARTITION BY [item.#33] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@6 = Some(0),27,2 THEN CAST(raise_error(Division by zero) AS Decimal128(27, 2)) ELSE sum(sum(store_sales.#15)) PARTITION BY [item.#33] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@6 END as #80]
+          ProjectionExec: expr=[#24@0 as #74, #27@1 as #75, #35@2 as #76, #33@3 as #77, #28@4 as #78, sum(store_sales.#15)@5 as #79, sum(store_sales.#15)@5 * Some(100),3,0 / CASE WHEN sum(sum(store_sales.#15)) PARTITION BY [item.#33] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@6 = Some(0),27,2 THEN CAST(raise_error(Division by zero) AS Decimal128(27, 2)) ELSE sum(sum(store_sales.#15)) PARTITION BY [item.#33] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@6 END as #80]
             WindowAggExec: wdw=[sum(sum(store_sales.#15)) PARTITION BY [item.#33] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "sum(sum(store_sales.#15)) PARTITION BY [item.#33] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Decimal128(27, 2), nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
               SortExec: expr=[#33@3 ASC NULLS LAST], preserve_partitioning=[true]
                 RepartitionExec: partitioning=Hash([#33@3], 4), input_partitions=4
