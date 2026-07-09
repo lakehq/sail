@@ -313,7 +313,7 @@ data:
         SortPreservingMergeExec: [#34@1 DESC NULLS LAST]
           SortExec: expr=[#34@1 DESC NULLS LAST], preserve_partitioning=[true]
             ProjectionExec: expr=[#0@0 as #33, sum(partsupp.#3 * partsupp.#2)@1 as #34]
-              FilterExec: CAST(sum(partsupp.#3 * partsupp.#2)@1 AS Decimal128(38, 12)) > scalar_subquery(<pending>)
+              FilterExec: CAST(sum(partsupp.#3 * partsupp.#2)@1 AS Decimal128(38, 6)) > scalar_subquery(<pending>)
                 AggregateExec: mode=FinalPartitioned, gby=[#0@0 as #0], aggr=[sum(partsupp.#3 * partsupp.#2)]
                   RepartitionExec: partitioning=Hash([#0@0], 4), input_partitions=4
                     AggregateExec: mode=Partial, gby=[#0@0 as #0], aggr=[sum(partsupp.#3 * partsupp.#2)]
@@ -327,7 +327,7 @@ data:
                               DataSourceExec: partitions=1, partition_sizes=[1]
                             ProjectionExec: expr=[_0@0 as #0, _1@1 as #1, _2@2 as #2, _3@3 as #3]
                               DataSourceExec: partitions=1, partition_sizes=[1]
-        ProjectionExec: expr=[sum(partsupp.#19 * partsupp.#18)@0 * Some(1000000),10,10 as #32]
+        ProjectionExec: expr=[CAST(round(CAST(sum(partsupp.#19 * partsupp.#18)@0 AS Decimal256(76, 2)) * Some(1000000),76,10, 6) AS Decimal128(38, 6)) as #32]
           AggregateExec: mode=Final, gby=[], aggr=[sum(partsupp.#19 * partsupp.#18)]
             CoalescePartitionsExec
               AggregateExec: mode=Partial, gby=[], aggr=[sum(partsupp.#19 * partsupp.#18)]

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{
-    DECIMAL256_MAX_PRECISION, DataType, IntervalUnit, TimeUnit, i256,
+    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DataType, IntervalUnit, TimeUnit, i256,
 };
 use datafusion::arrow::error::ArrowError;
 use datafusion::functions::expr_fn;
@@ -33,7 +33,9 @@ use sail_function::scalar::math::spark_try_mult::SparkTryMult;
 use sail_function::scalar::math::spark_try_subtract::SparkTrySubtract;
 use sail_function::scalar::math::spark_unhex::SparkUnHex;
 use sail_function::scalar::math::spark_uniform::SparkUniform;
-use sail_function::scalar::math::utils::decimal::spark_decimal_divide_type;
+use sail_function::scalar::math::utils::decimal::{
+    spark_decimal_divide_type, spark_decimal_multiply_type,
+};
 use sail_function::scalar::misc::raise_error::RaiseError;
 
 use crate::error::{PlanError, PlanResult};
@@ -200,14 +202,36 @@ fn spark_multiply(input: ScalarFunctionInput) -> PlanResult<Expr> {
             )
         }
         (Ok(left_type), Ok(right_type)) => {
-            let (left, right) = coerce_spark_arithmetic_operands(
-                left,
-                right,
-                &left_type,
-                &right_type,
-                function_context.plan_config.ansi_mode,
-            );
-            left * right
+            let ansi_mode = function_context.plan_config.ansi_mode;
+            let (left, right) =
+                coerce_spark_arithmetic_operands(left, right, &left_type, &right_type, ansi_mode);
+            let (left, right) =
+                coerce_integer_operand_to_decimal(left, right, function_context.schema);
+            // Spark caps a decimal product's precision at 38 by REDUCING the scale
+            // (adjustPrecisionScale) and HALF_UP-rounding the value; DataFusion keeps
+            // the full scale. Only intervene when the product would exceed precision 38
+            // — the common (non-capped) product is exact and stays native.
+            match (
+                left.get_type(function_context.schema),
+                right.get_type(function_context.schema),
+            ) {
+                (Ok(DataType::Decimal128(p1, s1)), Ok(DataType::Decimal128(p2, s2)))
+                    if u16::from(p1) + u16::from(p2) + 1 > u16::from(DECIMAL128_MAX_PRECISION) =>
+                {
+                    let (result_precision, result_scale) =
+                        spark_decimal_multiply_type(p1, s1, p2, s2);
+                    let product = cast(left, DataType::Decimal256(DECIMAL256_MAX_PRECISION, s1))
+                        * cast(right, DataType::Decimal256(DECIMAL256_MAX_PRECISION, s2));
+                    let rounded = expr_fn::round(vec![product, lit(i32::from(result_scale))]);
+                    let target = DataType::Decimal128(result_precision, result_scale);
+                    if ansi_mode {
+                        cast(rounded, target)
+                    } else {
+                        try_cast(rounded, target)
+                    }
+                }
+                _ => left * right,
+            }
         }
         // TODO: In case getting the type fails, we don't want to fail the query.
         //  Future work is needed here, ideally we create something like `Operator::SparkMultiply`.
@@ -318,6 +342,33 @@ fn spark_integer_decimal_type(data_type: &DataType) -> Option<DataType> {
         _ => return None,
     };
     Some(DataType::Decimal128(precision, 0))
+}
+
+/// Casts an integer operand paired with a decimal to its Spark type-based decimal
+/// (`Int -> Decimal(10,0)`, ...) so the decimal arithmetic rule applies to integer
+/// *columns* — bare integer literals are narrowed separately by
+/// [`coerce_spark_arithmetic_operands`]. Used by `/` and `*` (the operators whose
+/// decimal result type depends on the widened integer's precision).
+fn coerce_integer_operand_to_decimal(
+    left: Expr,
+    right: Expr,
+    schema: &DFSchemaRef,
+) -> (Expr, Expr) {
+    match (left.get_type(schema), right.get_type(schema)) {
+        (Ok(left_type), Ok(right_type)) if is_decimal_type(&right_type) => {
+            match spark_integer_decimal_type(&left_type) {
+                Some(target) => (cast(left, target), right),
+                None => (left, right),
+            }
+        }
+        (Ok(left_type), Ok(right_type)) if is_decimal_type(&left_type) => {
+            match spark_integer_decimal_type(&right_type) {
+                Some(target) => (left, cast(right, target)),
+                None => (left, right),
+            }
+        }
+        _ => (left, right),
+    }
 }
 
 /// True when one operand is a floating-point type and the other a decimal (either
@@ -507,27 +558,8 @@ fn spark_divide(input: ScalarFunctionInput) -> PlanResult<Expr> {
         _ => (dividend, divisor),
     };
 
-    // An integer operand paired with a decimal is cast to its Spark type-based
-    // decimal (`Int -> Decimal(10,0)`, ...) so the decimal divide rule applies to
-    // integer *columns* (literals were already narrowed above).
-    let (dividend, divisor) = match (
-        dividend.get_type(function_context.schema),
-        divisor.get_type(function_context.schema),
-    ) {
-        (Ok(dividend_type), Ok(divisor_type)) if is_decimal_type(&divisor_type) => {
-            match spark_integer_decimal_type(&dividend_type) {
-                Some(target) => (cast(dividend, target), divisor),
-                None => (dividend, divisor),
-            }
-        }
-        (Ok(dividend_type), Ok(divisor_type)) if is_decimal_type(&dividend_type) => {
-            match spark_integer_decimal_type(&divisor_type) {
-                Some(target) => (dividend, cast(divisor, target)),
-                None => (dividend, divisor),
-            }
-        }
-        _ => (dividend, divisor),
-    };
+    let (dividend, divisor) =
+        coerce_integer_operand_to_decimal(dividend, divisor, function_context.schema);
 
     let dividend_type = dividend.get_type(function_context.schema);
     let divisor_type = divisor.get_type(function_context.schema);

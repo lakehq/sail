@@ -456,20 +456,163 @@ Feature: Spark type coercion for the +, -, * operators
          |-- result: decimal(12,2) (nullable = true)
         """
 
-  Rule: Further Spark coercion divergences beyond + - * % / (bug-hunt, not yet implemented)
-    # Validated against Spark 4.1.1. The precision-38 capping for `*` is not covered yet.
+  Rule: Decimal multiply caps precision at 38 with Spark's adjustPrecisionScale
+    # When p1+p2+1 > 38 Spark caps precision at 38 and REDUCES the scale to
+    # max(38 - intDigits, min(scale, 6)), HALF_UP-rounding the value. DataFusion keeps
+    # the full scale. Non-capped products (the common case) are exact and unchanged.
 
-    @sail-bug
-    Scenario: decimal multiply capped at precision 38 uses adjustPrecisionScale
-      # Spark caps precision at 38: adjustedScale = max(38 - intDigits, min(scale, 6)) => decimal(38,6).
-      # Sail currently produces decimal(38,15).
+    Scenario: capped multiply reduces the scale to the minimum adjusted scale
       When query
         """
-        SELECT typeof(CAST(1.0 AS DECIMAL(38,10)) * CAST(2.0 AS DECIMAL(10,5))) AS t
+        SELECT typeof(CAST(1.0 AS DECIMAL(38,10)) * CAST(2.0 AS DECIMAL(10,5))) AS t,
+               CAST(1.0 AS DECIMAL(38,10)) * CAST(2.0 AS DECIMAL(10,5)) AS r
         """
       Then query result
-        | t             |
-        | decimal(38,6) |
+        | t             | r        |
+        | decimal(38,6) | 2.000000 |
+
+    Scenario: capped multiply rounds HALF_UP with carry
+      # 9.99999999 * 9.99999 = 99.9998999000...; HALF_UP to 6 digits carries to 99.999900.
+      When query
+        """
+        SELECT typeof(CAST(9.99999999 AS DECIMAL(38,10)) * CAST(9.99999 AS DECIMAL(10,5))) AS t,
+               CAST(9.99999999 AS DECIMAL(38,10)) * CAST(9.99999 AS DECIMAL(10,5)) AS r
+        """
+      Then query result
+        | t             | r         |
+        | decimal(38,6) | 99.999900 |
+
+    Scenario: capped multiply rounds HALF_UP by magnitude when negative
+      When query
+        """
+        SELECT CAST(-1.23456789 AS DECIMAL(38,10)) * CAST(2.11111 AS DECIMAL(10,5)) AS a,
+               CAST(1.23456789 AS DECIMAL(38,10)) * CAST(2.11111 AS DECIMAL(10,5)) AS b
+        """
+      Then query result
+        | a         | b        |
+        | -2.606309 | 2.606309 |
+
+    Scenario: capped multiply keeps a larger adjusted scale when it fits
+      # p=41, scale 20 => adjusted scale max(38-21, 6) = 17.
+      When query
+        """
+        SELECT typeof(CAST(1.5 AS DECIMAL(20,10)) * CAST(2.5 AS DECIMAL(20,10))) AS t,
+               CAST(1.5 AS DECIMAL(20,10)) * CAST(2.5 AS DECIMAL(20,10)) AS r
+        """
+      Then query result
+        | t              | r                   |
+        | decimal(38,17) | 3.75000000000000000 |
+
+    Scenario: capped multiply reduces the scale to zero
+      When query
+        """
+        SELECT typeof(CAST(1.0 AS DECIMAL(38,0)) * CAST(2.0 AS DECIMAL(10,0))) AS t,
+               CAST(1.0 AS DECIMAL(38,0)) * CAST(2.0 AS DECIMAL(10,0)) AS r
+        """
+      Then query result
+        | t             | r |
+        | decimal(38,0) | 2 |
+
+    Scenario: capped multiply of a very wide product uses i256
+      When query
+        """
+        SELECT typeof(CAST(1.23 AS DECIMAL(38,20)) * CAST(4.56 AS DECIMAL(38,20))) AS t,
+               CAST(1.23 AS DECIMAL(38,20)) * CAST(4.56 AS DECIMAL(38,20)) AS r
+        """
+      Then query result
+        | t             | r        |
+        | decimal(38,6) | 5.608800 |
+
+    Scenario: a NULL operand makes a capped multiply NULL
+      When query
+        """
+        SELECT typeof(CAST(NULL AS DECIMAL(38,10)) * CAST(2.0 AS DECIMAL(10,5))) AS t,
+               CAST(NULL AS DECIMAL(38,10)) * CAST(2.0 AS DECIMAL(10,5)) AS a,
+               CAST(2.0 AS DECIMAL(38,10)) * CAST(NULL AS DECIMAL(10,5)) AS b
+        """
+      Then query result
+        | t             | a    | b    |
+        | decimal(38,6) | NULL | NULL |
+
+    Scenario: capped multiply of a decimal by an integer column
+      When query
+        """
+        SELECT typeof(a * b) AS t, a * b AS r
+        FROM VALUES (CAST(1.5 AS DECIMAL(38,10)), CAST(2 AS INT)) AS t(a, b)
+        """
+      Then query result
+        | t             | r        |
+        | decimal(38,6) | 3.000000 |
+
+    Scenario: capped multiply over multiple rows
+      When query
+        """
+        SELECT a * b AS r
+        FROM VALUES
+          (CAST(1.0 AS DECIMAL(38,10)), CAST(2.0 AS DECIMAL(10,5))),
+          (CAST(3.5 AS DECIMAL(38,10)), CAST(2.0 AS DECIMAL(10,5))),
+          (CAST(-1.5 AS DECIMAL(38,10)), CAST(2.0 AS DECIMAL(10,5)))
+          AS t(a, b)
+        ORDER BY a
+        """
+      Then query result ordered
+        | r         |
+        | -3.000000 |
+        | 2.000000  |
+        | 7.000000  |
+
+  Rule: Decimal multiply (non-capped) and special values
+    Scenario: decimal multiply decimal keeps the exact product type
+      When query
+        """
+        SELECT typeof(CAST(2.5 AS DECIMAL(10,2)) * CAST(3.0 AS DECIMAL(10,2))) AS t,
+               CAST(2.5 AS DECIMAL(10,2)) * CAST(3.0 AS DECIMAL(10,2)) AS r
+        """
+      Then query result
+        | t             | r      |
+        | decimal(21,4) | 7.5000 |
+
+    Scenario: multiply sign combinations
+      When query
+        """
+        SELECT CAST(-2.5 AS DECIMAL(10,2)) * CAST(3.0 AS DECIMAL(10,2)) AS a,
+               CAST(2.5 AS DECIMAL(10,2)) * CAST(-3.0 AS DECIMAL(10,2)) AS b
+        """
+      Then query result
+        | a       | b       |
+        | -7.5000 | -7.5000 |
+
+    Scenario: decimal multiply over multiple rows with a NULL
+      When query
+        """
+        SELECT a * b AS r
+        FROM VALUES
+          (CAST(2.5 AS DECIMAL(10,2)), CAST(3.0 AS DECIMAL(10,2))),
+          (CAST(NULL AS DECIMAL(10,2)), CAST(3.0 AS DECIMAL(10,2))),
+          (CAST(-2.5 AS DECIMAL(10,2)), CAST(3.0 AS DECIMAL(10,2)))
+          AS t(a, b)
+        """
+      Then query result
+        | r       |
+        | -7.5000 |
+        | 7.5000  |
+        | NULL    |
+
+    Scenario: IEEE special values propagate through double multiply
+      When query
+        """
+        SELECT typeof(CAST('Infinity' AS DOUBLE) * CAST(2.0 AS DOUBLE)) AS t,
+               CAST('Infinity' AS DOUBLE) * CAST(2.0 AS DOUBLE) AS a,
+               CAST('NaN' AS DOUBLE) * CAST(2.0 AS DOUBLE) AS b,
+               CAST('Infinity' AS DOUBLE) * CAST(0.0 AS DOUBLE) AS c,
+               CAST('Infinity' AS DOUBLE) * CAST(2.0 AS DECIMAL(10,2)) AS d
+        """
+      Then query result
+        | t      | a        | b   | c   | d        |
+        | double | Infinity | NaN | NaN | Infinity |
+
+  Rule: Further Spark coercion divergences (bug-hunt, not yet implemented)
+    # Validated against Spark 4.1.1.
 
     @sail-bug
     Scenario: ANSI string plus integer widens to bigint like Spark

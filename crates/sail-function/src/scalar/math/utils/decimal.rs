@@ -32,20 +32,34 @@ pub fn round_decimal_base(
     }
 }
 
+/// Spark's `DecimalType.MINIMUM_ADJUSTED_SCALE`: the minimum number of fractional
+/// digits preserved when a wide decimal result is capped at precision 38.
+pub const SPARK_MINIMUM_ADJUSTED_SCALE: i32 = 6;
+
 /// Spark's `adjustPrecisionScale`: when a computed decimal precision exceeds 38,
-/// cap it at 38 and reduce the scale, keeping at least `min(scale, 6)` fractional
-/// digits (`MINIMUM_ADJUSTED_SCALE`). DataFusion's coercion instead caps the
-/// scale at 38, which diverges from Spark for wide results.
+/// cap it at 38 and reduce the scale, keeping at least
+/// `min(scale, SPARK_MINIMUM_ADJUSTED_SCALE)` fractional digits. DataFusion's
+/// coercion instead caps the scale at 38, which diverges from Spark for wide results.
 pub fn adjust_precision_scale(precision: i32, scale: i32) -> (u8, i8) {
     let max_precision = DECIMAL128_MAX_PRECISION as i32;
     if precision <= max_precision {
         (precision as u8, scale as i8)
     } else {
         let int_digits = precision - scale;
-        let min_scale = scale.min(6);
+        let min_scale = scale.min(SPARK_MINIMUM_ADJUSTED_SCALE);
         let adjusted_scale = (max_precision - int_digits).max(min_scale);
         (DECIMAL128_MAX_PRECISION, adjusted_scale as i8)
     }
+}
+
+/// Result `(precision, scale)` of Spark `DECIMAL(p1,s1) * DECIMAL(p2,s2)`:
+/// precision `p1 + p2 + 1` and scale `s1 + s2`, then [`adjust_precision_scale`]
+/// (which reduces the scale when the precision exceeds 38). DataFusion caps the
+/// precision at 38 but keeps the full scale, diverging from Spark for wide products.
+pub fn spark_decimal_multiply_type(p1: u8, s1: i8, p2: u8, s2: i8) -> (u8, i8) {
+    let precision = p1 as i32 + p2 as i32 + 1;
+    let scale = s1 as i32 + s2 as i32;
+    adjust_precision_scale(precision, scale)
 }
 
 /// Result `(precision, scale)` of Spark `DECIMAL(p1,s1) / DECIMAL(p2,s2)`:
