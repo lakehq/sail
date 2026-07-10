@@ -178,8 +178,8 @@ Out of scope for the current implementation:
 
 ## Table Format & Metadata Contract
 
-The auth/transport contract above covers *how Sail talks to HMS*. A separate
-contract covers *what Sail writes to HMS* for each table format, and how it reads
+The auth/transport contract above covers _how Sail talks to HMS_. A separate
+contract covers _what Sail writes to HMS_ for each table format, and how it reads
 it back. This is the layer most contributors will actually touch.
 
 Spark retrofitted HMS to behave like its catalog abstraction. The compatibility
