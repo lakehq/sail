@@ -110,11 +110,14 @@ async fn plan_iceberg_merge(
         writer
     };
 
-    Ok(Arc::new(IcebergCommitExec::new(
-        Arc::new(CoalescePartitionsExec::new(commit_input)),
-        table_url,
-        writer_options.lakehouse_table.clone(),
-    )))
+    Ok(Arc::new(
+        IcebergCommitExec::new(
+            Arc::new(CoalescePartitionsExec::new(commit_input)),
+            table_url,
+            writer_options.lakehouse_table.clone(),
+        )
+        .with_expected_snapshot_id(node.expected_snapshot_id()),
+    ))
 }
 
 async fn plan_iceberg_delete(

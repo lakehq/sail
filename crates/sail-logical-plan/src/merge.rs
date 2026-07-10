@@ -163,6 +163,9 @@ pub struct RowLevelWriteNode {
     target_partition_by: Vec<String>,
     target_options: Vec<OptionLayer>,
     target_lakehouse_table: Option<LakehouseExecutionContext>,
+    /// `Some` marks a row-level write whose target scan must still match at commit time.
+    /// The inner value is `None` when the target had no snapshot when it was read.
+    expected_snapshot_id: Option<Option<i64>>,
     with_schema_evolution: bool,
     #[educe(PartialOrd(ignore))]
     schema: DFSchemaRef,
@@ -188,6 +191,7 @@ impl RowLevelWriteNode {
             target_partition_by: options.target.partition_by.clone(),
             target_options: options.target.options.clone(),
             target_lakehouse_table: options.target.lakehouse_table.clone(),
+            expected_snapshot_id: None,
             with_schema_evolution: options.with_schema_evolution,
             raw_target,
             raw_source: Some(raw_source),
@@ -199,6 +203,11 @@ impl RowLevelWriteNode {
             merge_options: Some(options),
             schema,
         }
+    }
+
+    pub fn with_expected_snapshot_id(mut self, expected_snapshot_id: Option<Option<i64>>) -> Self {
+        self.expected_snapshot_id = expected_snapshot_id;
+        self
     }
 
     /// Create a DELETE write node carrying the condition for the physical planner.
@@ -228,6 +237,7 @@ impl RowLevelWriteNode {
             target_partition_by: Vec::new(),
             target_options: options,
             target_lakehouse_table: lakehouse_table,
+            expected_snapshot_id: None,
             with_schema_evolution: false,
             schema: Arc::new(DFSchema::empty()),
         }
@@ -291,6 +301,10 @@ impl RowLevelWriteNode {
 
     pub fn target_lakehouse_table(&self) -> Option<&LakehouseExecutionContext> {
         self.target_lakehouse_table.as_ref()
+    }
+
+    pub fn expected_snapshot_id(&self) -> Option<Option<i64>> {
+        self.expected_snapshot_id
     }
 
     pub fn with_schema_evolution(&self) -> bool {
@@ -406,6 +420,7 @@ impl UserDefinedLogicalNodeCore for RowLevelWriteNode {
             target_partition_by: self.target_partition_by.clone(),
             target_options: self.target_options.clone(),
             target_lakehouse_table: self.target_lakehouse_table.clone(),
+            expected_snapshot_id: self.expected_snapshot_id,
             with_schema_evolution: self.with_schema_evolution,
             schema: self.schema.clone(),
         })

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::logical_expr::logical_plan::builder::LogicalPlanBuilder;
-use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, Result};
 use datafusion_expr::logical_plan::Extension;
 use datafusion_expr::{Expr, LogicalPlan, TableScan, TableSource};
@@ -20,6 +20,7 @@ use crate::logical::table_source::IcebergTableSource;
 /// UPDATE clauses are represented by position deletes, and UPDATE/INSERT output
 /// rows are appended as new data files.
 pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
+    let expected_snapshot_id = Some(merge_target_snapshot_id(info.target.as_ref())?);
     let row_index_column = merge_needs_position_deletes(&info).then_some(MERGE_ROW_INDEX_COLUMN);
     let mut target_plan = ensure_merge_metadata_columns(
         info.target.as_ref().clone(),
@@ -75,11 +76,29 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         expansion.row_index_delete_plan.map(Arc::new),
         expansion.options,
         expansion.output_schema,
-    );
+    )
+    .with_expected_snapshot_id(expected_snapshot_id);
 
     Ok(LogicalPlan::Extension(Extension {
         node: Arc::new(write_node),
     }))
+}
+
+fn merge_target_snapshot_id(plan: &LogicalPlan) -> Result<Option<i64>> {
+    let mut snapshot_id = None;
+    plan.apply(|node| {
+        if let LogicalPlan::TableScan(scan) = node
+            && let Some(source) = scan.source.downcast_ref::<IcebergTableSource>()
+        {
+            snapshot_id = source
+                .provider()
+                .current_snapshot()
+                .map(|snapshot| snapshot.snapshot_id());
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(snapshot_id)
 }
 
 fn merge_needs_position_deletes(info: &MergeInfo) -> bool {

@@ -924,6 +924,10 @@ message IcebergCommitExecNode {
   bytes input = 1;
   string table_url = 2;
   string lakehouse_table_json = 3;
+  // Whether commit must validate the target snapshot captured while planning a row-level write.
+  bool validate_read_snapshot = 4;
+  // Absent when validation is required and the target had no current snapshot.
+  optional int64 expected_snapshot_id = 5;
 }
 
 message IcebergManifestScanExecNode {
