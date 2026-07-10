@@ -3,6 +3,7 @@ use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, Tre
 use datafusion_common::{
     Column, DFSchemaRef, DataFusionError, Result as DataFusionResult, ScalarValue,
 };
+use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::utils::find_aggregate_exprs;
 use datafusion_expr::{
     Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, SortExpr, Volatility, bitwise_and,
@@ -289,6 +290,21 @@ impl PlanResolver<'_> {
         having: Option<Expr>,
     ) -> PlanResult<(Vec<NamedExpr>, Option<Expr>)> {
         let Some(ordering) = Self::input_sort_ordering(input) else {
+            return Ok((projections, having));
+        };
+        // The plan builder normalizes the copy inside the aggregate plan, and the copy kept
+        // in the projections must stay identical for the rebase to columns to succeed.
+        let Ok(ordering) = ordering
+            .into_iter()
+            .map(|sort| {
+                Ok(SortExpr {
+                    expr: normalize_col(sort.expr, input)?,
+                    asc: sort.asc,
+                    nulls_first: sort.nulls_first,
+                })
+            })
+            .collect::<DataFusionResult<Vec<_>>>()
+        else {
             return Ok((projections, having));
         };
         let ordering = &ordering;
