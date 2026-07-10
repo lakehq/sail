@@ -26,6 +26,24 @@ mod schema;
 
 pub const UNASSIGNED_SEQUENCE_NUMBER: i64 = -1;
 
+fn optional_avro_int(value: &AvroValue) -> Result<Option<i32>, String> {
+    match value {
+        AvroValue::Int(value) => Ok(Some(*value)),
+        AvroValue::Union(_, value) => optional_avro_int(value.as_ref()),
+        AvroValue::Null => Ok(None),
+        _ => Err("int or null".to_string()),
+    }
+}
+
+fn optional_avro_long(value: &AvroValue) -> Result<Option<i64>, String> {
+    match value {
+        AvroValue::Long(value) => Ok(Some(*value)),
+        AvroValue::Union(_, value) => optional_avro_long(value.as_ref()),
+        AvroValue::Null => Ok(None),
+        _ => Err("long or null".to_string()),
+    }
+}
+
 /// Snapshots are embedded in table metadata, but the list of manifests for a
 /// snapshot are stored in a separate manifest list file.
 ///
@@ -303,46 +321,73 @@ impl ManifestList {
                 let manifest_path = string(get("manifest_path").ok_or("manifest_path")?)?;
                 let manifest_length = long(get("manifest_length").ok_or("manifest_length")?)?;
                 let partition_spec_id = int(get("partition_spec_id").ok_or("partition_spec_id")?)?;
-                let content = int(get("content").unwrap_or(&AvroValue::Int(0)))?;
-                let sequence_number = long(get("sequence_number").ok_or("sequence_number")?)?;
-                let min_sequence_number =
-                    long(get("min_sequence_number").ok_or("min_sequence_number")?)?;
+                let v2_field_presence = [
+                    get("content").is_some(),
+                    get("sequence_number").is_some(),
+                    get("min_sequence_number").is_some(),
+                ];
+                let is_v1_shape = v2_field_presence.iter().all(|present| !present);
+                if !is_v1_shape && !v2_field_presence.iter().all(|present| *present) {
+                    return Err("incomplete V2 manifest list tracking fields".to_string());
+                }
+                let content = match get("content") {
+                    Some(value) => optional_avro_int(value)?.ok_or("content cannot be null")?,
+                    None => 0,
+                };
+                let sequence_number = match get("sequence_number") {
+                    Some(value) => {
+                        optional_avro_long(value)?.ok_or("sequence_number cannot be null")?
+                    }
+                    None => 0,
+                };
+                let min_sequence_number = match get("min_sequence_number") {
+                    Some(value) => {
+                        optional_avro_long(value)?.ok_or("min_sequence_number cannot be null")?
+                    }
+                    None => 0,
+                };
                 let added_snapshot_id = long(get("added_snapshot_id").ok_or("added_snapshot_id")?)?;
                 let added_files_count = get("added_files_count")
                     .or_else(|| get("added_data_files_count"))
-                    .and_then(|v| {
-                        if let AvroValue::Int(x) = v {
-                            Some(*x)
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(0);
+                    .map(optional_avro_int)
+                    .transpose()?
+                    .flatten();
                 let existing_files_count = get("existing_files_count")
                     .or_else(|| get("existing_data_files_count"))
-                    .and_then(|v| {
-                        if let AvroValue::Int(x) = v {
-                            Some(*x)
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(0);
+                    .map(optional_avro_int)
+                    .transpose()?
+                    .flatten();
                 let deleted_files_count = get("deleted_files_count")
                     .or_else(|| get("deleted_data_files_count"))
-                    .and_then(|v| {
-                        if let AvroValue::Int(x) = v {
-                            Some(*x)
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(0);
-                let added_rows_count = long(get("added_rows_count").ok_or("added_rows_count")?)?;
-                let existing_rows_count =
-                    long(get("existing_rows_count").ok_or("existing_rows_count")?)?;
-                let deleted_rows_count =
-                    long(get("deleted_rows_count").ok_or("deleted_rows_count")?)?;
+                    .map(optional_avro_int)
+                    .transpose()?
+                    .flatten();
+                let added_rows_count = get("added_rows_count")
+                    .map(optional_avro_long)
+                    .transpose()?
+                    .flatten();
+                let existing_rows_count = get("existing_rows_count")
+                    .map(optional_avro_long)
+                    .transpose()?
+                    .flatten();
+                let deleted_rows_count = get("deleted_rows_count")
+                    .map(optional_avro_long)
+                    .transpose()?
+                    .flatten();
+                if !is_v1_shape
+                    && [
+                        added_files_count.is_some(),
+                        existing_files_count.is_some(),
+                        deleted_files_count.is_some(),
+                        added_rows_count.is_some(),
+                        existing_rows_count.is_some(),
+                        deleted_rows_count.is_some(),
+                    ]
+                    .iter()
+                    .any(|present| !present)
+                {
+                    return Err("missing required V2 manifest list counts or rows".to_string());
+                }
 
                 let partitions = match get("partitions") {
                     Some(AvroValue::Union(_, inner)) => match inner.as_ref() {
@@ -417,12 +462,12 @@ impl ManifestList {
                     sequence_number,
                     min_sequence_number,
                     added_snapshot_id,
-                    added_files_count: Some(added_files_count),
-                    existing_files_count: Some(existing_files_count),
-                    deleted_files_count: Some(deleted_files_count),
-                    added_rows_count: Some(added_rows_count),
-                    existing_rows_count: Some(existing_rows_count),
-                    deleted_rows_count: Some(deleted_rows_count),
+                    added_files_count,
+                    existing_files_count,
+                    deleted_files_count,
+                    added_rows_count,
+                    existing_rows_count,
+                    deleted_rows_count,
                     partitions,
                     key_metadata,
                     first_row_id,
@@ -927,5 +972,93 @@ impl From<_serde::ManifestFileV1> for ManifestFile {
             key_metadata: v1.key_metadata,
             first_row_id: None,
         }
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    fn v1_manifest_list_record_with_unknown_counts() -> AvroValue {
+        AvroValue::Record(vec![
+            (
+                "manifest_path".to_string(),
+                AvroValue::String("metadata/manifest.avro".to_string()),
+            ),
+            ("manifest_length".to_string(), AvroValue::Long(10)),
+            ("partition_spec_id".to_string(), AvroValue::Int(0)),
+            ("added_snapshot_id".to_string(), AvroValue::Long(7)),
+            (
+                "added_data_files_count".to_string(),
+                AvroValue::Union(0, Box::new(AvroValue::Null)),
+            ),
+            (
+                "existing_data_files_count".to_string(),
+                AvroValue::Union(0, Box::new(AvroValue::Null)),
+            ),
+            (
+                "deleted_data_files_count".to_string(),
+                AvroValue::Union(0, Box::new(AvroValue::Null)),
+            ),
+            (
+                "added_rows_count".to_string(),
+                AvroValue::Union(0, Box::new(AvroValue::Null)),
+            ),
+            (
+                "existing_rows_count".to_string(),
+                AvroValue::Union(0, Box::new(AvroValue::Null)),
+            ),
+            (
+                "deleted_rows_count".to_string(),
+                AvroValue::Union(0, Box::new(AvroValue::Null)),
+            ),
+        ])
+    }
+
+    #[test]
+    fn v2_fallback_preserves_unknown_v1_counts() {
+        let manifest = ManifestList::parse_manifest_v2_fallback(
+            &v1_manifest_list_record_with_unknown_counts(),
+        )
+        .expect("V1 manifest list entry");
+
+        assert_eq!(manifest.content, ManifestContentType::Data);
+        assert_eq!(manifest.sequence_number, 0);
+        assert_eq!(manifest.min_sequence_number, 0);
+        assert_eq!(manifest.added_files_count, None);
+        assert_eq!(manifest.existing_files_count, None);
+        assert_eq!(manifest.deleted_files_count, None);
+        assert_eq!(manifest.added_rows_count, None);
+        assert_eq!(manifest.existing_rows_count, None);
+        assert_eq!(manifest.deleted_rows_count, None);
+    }
+
+    #[test]
+    fn v2_fallback_rejects_malformed_present_fields() {
+        let AvroValue::Record(mut fields) = v1_manifest_list_record_with_unknown_counts() else {
+            unreachable!("fixture is a record")
+        };
+        fields.push((
+            "sequence_number".to_string(),
+            AvroValue::String("not-a-sequence".to_string()),
+        ));
+
+        assert!(ManifestList::parse_manifest_v2_fallback(&AvroValue::Record(fields)).is_err());
+
+        let AvroValue::Record(mut nullable_v2_fields) =
+            v1_manifest_list_record_with_unknown_counts()
+        else {
+            unreachable!("fixture is a record")
+        };
+        nullable_v2_fields.extend([
+            ("content".to_string(), AvroValue::Int(0)),
+            ("sequence_number".to_string(), AvroValue::Long(3)),
+            ("min_sequence_number".to_string(), AvroValue::Long(3)),
+        ]);
+        assert!(
+            ManifestList::parse_manifest_v2_fallback(&AvroValue::Record(nullable_v2_fields))
+                .is_err()
+        );
     }
 }

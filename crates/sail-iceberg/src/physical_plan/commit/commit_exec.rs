@@ -810,7 +810,11 @@ impl ExecutionPlan for IcebergCommitExec {
                 }
 
                 // Build transaction and action based on operation
-                let tx = Transaction::new(table_url.to_string(), snapshot);
+                let tx = Transaction::new(
+                    table_url.to_string(),
+                    snapshot,
+                    table_meta.last_sequence_number,
+                );
                 let manifest_meta = tx.default_manifest_metadata(
                     &schema_iceberg,
                     &partition_spec_for_commit,
@@ -839,6 +843,7 @@ impl ExecutionPlan for IcebergCommitExec {
                             Some(manifest_meta),
                         )
                         .with_added_delete_files(commit_info.delete_files.clone())
+                        .with_partition_specs(table_meta.partition_specs.clone())
                         .with_row_lineage_start_row_id(row_lineage_start_row_id);
                         struct LocalOverwriteOperation;
                         impl SnapshotProduceOperation for LocalOverwriteOperation {
@@ -859,6 +864,7 @@ impl ExecutionPlan for IcebergCommitExec {
                             Some(manifest_meta),
                         )
                         .with_added_delete_files(commit_info.delete_files.clone())
+                        .with_partition_specs(table_meta.partition_specs.clone())
                         .with_row_lineage_start_row_id(row_lineage_start_row_id);
                         struct LocalDeleteOperation;
                         impl SnapshotProduceOperation for LocalDeleteOperation {

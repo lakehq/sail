@@ -10,6 +10,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
+
 use bytes::Bytes;
 use object_store::ObjectStoreExt;
 
@@ -18,18 +20,18 @@ use crate::io::StoreContext;
 use crate::spec::manifest::ManifestWriterBuilder;
 use crate::spec::manifest_list::ManifestListWriter;
 use crate::spec::{
-    DataFile, FormatVersion, MAIN_BRANCH, ManifestContentType, Operation, PartitionSpec, Schema,
-    SnapshotBuilder, SnapshotReference, SnapshotRetention, TableRequirement, TableUpdate,
+    DataFile, FormatVersion, MAIN_BRANCH, ManifestContentType, ManifestStatus, Operation,
+    PartitionSpec, Schema, SnapshotBuilder, SnapshotReference, SnapshotRetention, TableRequirement,
+    TableUpdate,
 };
 use crate::utils::join_table_uri;
 
-fn active_file_count(manifest: &crate::spec::manifest_list::ManifestFile) -> i64 {
-    i64::from(manifest.added_files_count.unwrap_or(0))
-        + i64::from(manifest.existing_files_count.unwrap_or(0))
+fn active_file_count(manifest: &crate::spec::manifest_list::ManifestFile) -> Option<i64> {
+    Some(i64::from(manifest.added_files_count?) + i64::from(manifest.existing_files_count?))
 }
 
-fn active_row_count(manifest: &crate::spec::manifest_list::ManifestFile) -> i64 {
-    manifest.added_rows_count.unwrap_or(0) + manifest.existing_rows_count.unwrap_or(0)
+fn active_row_count(manifest: &crate::spec::manifest_list::ManifestFile) -> Option<i64> {
+    Some(manifest.added_rows_count? + manifest.existing_rows_count?)
 }
 
 fn previous_total(
@@ -52,25 +54,36 @@ fn with_manifest_totals<'a>(
     added_position_deletes: u64,
     added_equality_deletes: u64,
 ) -> crate::spec::snapshots::Summary {
-    let mut total_data_files = 0;
-    let mut total_delete_files = 0;
-    let mut total_records = 0;
+    let mut total_data_files = Some(0);
+    let mut total_delete_files = Some(0);
+    let mut total_records = Some(0);
     for manifest in manifests {
         match manifest.content {
             ManifestContentType::Data => {
-                total_data_files += active_file_count(manifest);
-                total_records += active_row_count(manifest);
+                total_data_files = total_data_files
+                    .zip(active_file_count(manifest))
+                    .map(|(total, active)| total + active);
+                total_records = total_records
+                    .zip(active_row_count(manifest))
+                    .map(|(total, active)| total + active);
             }
             ManifestContentType::Deletes => {
-                total_delete_files += active_file_count(manifest);
+                total_delete_files = total_delete_files
+                    .zip(active_file_count(manifest))
+                    .map(|(total, active)| total + active);
             }
         }
     }
 
-    summary = summary
-        .with_property("total-data-files", total_data_files.to_string())
-        .with_property("total-delete-files", total_delete_files.to_string())
-        .with_property("total-records", total_records.to_string());
+    if let Some(total_data_files) = total_data_files {
+        summary = summary.with_property("total-data-files", total_data_files.to_string());
+    }
+    if let Some(total_delete_files) = total_delete_files {
+        summary = summary.with_property("total-delete-files", total_delete_files.to_string());
+    }
+    if let Some(total_records) = total_records {
+        summary = summary.with_property("total-records", total_records.to_string());
+    }
 
     if let Some(previous_position_deletes) =
         previous_total(parent_summary, "total-position-deletes", is_bootstrap)
@@ -91,6 +104,102 @@ fn with_manifest_totals<'a>(
     summary
 }
 
+fn delete_manifest_inputs(
+    manifest_metadata: &crate::spec::manifest::ManifestMetadata,
+    partition_specs: &[PartitionSpec],
+    delete_files: &[DataFile],
+) -> Result<Vec<(crate::spec::manifest::ManifestMetadata, Vec<DataFile>)>, String> {
+    let mut files_by_spec = BTreeMap::<i32, Vec<DataFile>>::new();
+    for delete_file in delete_files {
+        files_by_spec
+            .entry(delete_file.partition_spec_id)
+            .or_default()
+            .push(delete_file.clone());
+    }
+
+    files_by_spec
+        .into_iter()
+        .map(|(spec_id, files)| {
+            let partition_spec = partition_specs
+                .iter()
+                .chain(std::iter::once(&manifest_metadata.partition_spec))
+                .find(|spec| spec.spec_id() == spec_id)
+                .cloned()
+                .ok_or_else(|| {
+                    format!(
+                        "cannot write Iceberg delete manifest: partition spec {spec_id} is missing from table metadata"
+                    )
+                })?;
+            let mut delete_metadata = manifest_metadata.clone();
+            delete_metadata.partition_spec = partition_spec;
+            delete_metadata.content = ManifestContentType::Deletes;
+            Ok((delete_metadata, files))
+        })
+        .collect()
+}
+
+fn manifest_counts_are_complete(manifest_file: &crate::spec::manifest_list::ManifestFile) -> bool {
+    manifest_file.added_files_count.is_some()
+        && manifest_file.existing_files_count.is_some()
+        && manifest_file.deleted_files_count.is_some()
+        && manifest_file.added_rows_count.is_some()
+        && manifest_file.existing_rows_count.is_some()
+        && manifest_file.deleted_rows_count.is_some()
+}
+
+async fn populate_retained_manifest_counts(
+    store_ctx: &StoreContext,
+    manifest_file: &mut crate::spec::manifest_list::ManifestFile,
+) -> Result<(), String> {
+    if manifest_counts_are_complete(manifest_file) {
+        return Ok(());
+    }
+
+    let manifest = crate::io::load_manifest(store_ctx, manifest_file.manifest_path.as_str())
+        .await
+        .map_err(|error| {
+            format!(
+                "failed to load retained manifest {} to recover missing counts: {error}",
+                manifest_file.manifest_path
+            )
+        })?;
+    let mut file_counts = [0i32; 3];
+    let mut row_counts = [0i64; 3];
+    for entry in manifest.entries() {
+        let index = match entry.status {
+            ManifestStatus::Added => 0,
+            ManifestStatus::Existing => 1,
+            ManifestStatus::Deleted => 2,
+        };
+        file_counts[index] = file_counts[index]
+            .checked_add(1)
+            .ok_or_else(|| "Iceberg manifest file count overflow".to_string())?;
+        let record_count = i64::try_from(entry.data_file.record_count)
+            .map_err(|_| "Iceberg manifest row count overflow".to_string())?;
+        row_counts[index] = row_counts[index]
+            .checked_add(record_count)
+            .ok_or_else(|| "Iceberg manifest row count overflow".to_string())?;
+    }
+
+    manifest_file
+        .added_files_count
+        .get_or_insert(file_counts[0]);
+    manifest_file
+        .existing_files_count
+        .get_or_insert(file_counts[1]);
+    manifest_file
+        .deleted_files_count
+        .get_or_insert(file_counts[2]);
+    manifest_file.added_rows_count.get_or_insert(row_counts[0]);
+    manifest_file
+        .existing_rows_count
+        .get_or_insert(row_counts[1]);
+    manifest_file
+        .deleted_rows_count
+        .get_or_insert(row_counts[2]);
+    Ok(())
+}
+
 pub trait SnapshotProduceOperation: Send + Sync {
     fn operation(&self) -> &'static str;
 }
@@ -101,6 +210,7 @@ pub struct SnapshotProducer<'a> {
     pub added_delete_files: Vec<DataFile>,
     pub store_ctx: Option<StoreContext>,
     pub manifest_metadata: Option<crate::spec::manifest::ManifestMetadata>,
+    pub partition_specs: Vec<PartitionSpec>,
     pub write_path_mode: crate::utils::WritePathMode,
     /// If true, create a snapshot with no parent (for bootstrap scenarios)
     pub is_bootstrap: bool,
@@ -120,6 +230,7 @@ impl<'a> SnapshotProducer<'a> {
             added_delete_files: Vec::new(),
             store_ctx,
             manifest_metadata,
+            partition_specs: Vec::new(),
             write_path_mode: crate::utils::WritePathMode::Absolute,
             is_bootstrap: false,
             row_lineage_start_row_id: None,
@@ -145,6 +256,11 @@ impl<'a> SnapshotProducer<'a> {
 
     pub fn with_added_delete_files(mut self, delete_files: Vec<DataFile>) -> Self {
         self.added_delete_files = delete_files;
+        self
+    }
+
+    pub fn with_partition_specs(mut self, partition_specs: Vec<PartitionSpec>) -> Self {
+        self.partition_specs = partition_specs;
         self
     }
 
@@ -236,6 +352,8 @@ impl<'a> SnapshotProducer<'a> {
             }
         };
         let format_version = metadata.format_version;
+        let delete_manifest_inputs =
+            delete_manifest_inputs(&metadata, &self.partition_specs, &self.added_delete_files)?;
 
         let store_ctx = self
             .store_ctx
@@ -247,7 +365,7 @@ impl<'a> SnapshotProducer<'a> {
         let new_sequence_number = if self.is_bootstrap {
             1 // First snapshot starts at sequence 1
         } else {
-            self.tx.snapshot().sequence_number() + 1
+            self.tx.next_sequence_number()?
         };
 
         let parent_snapshot = self.tx.snapshot();
@@ -279,7 +397,10 @@ impl<'a> SnapshotProducer<'a> {
                 "snapshot producer: found parent manifest files: {}",
                 parent_manifest_list.entries().len()
             );
-            parent_manifest_entries.extend(parent_manifest_list.entries().iter().cloned());
+            for mut manifest_file in parent_manifest_list.into_entries() {
+                populate_retained_manifest_counts(store_ctx, &mut manifest_file).await?;
+                parent_manifest_entries.push(manifest_file);
+            }
         }
 
         let new_added_rows: i64 = self
@@ -351,10 +472,7 @@ impl<'a> SnapshotProducer<'a> {
             new_manifest_files.push(manifest_file_builder.build()?);
         }
 
-        let added_delete_files = self.added_delete_files.clone();
-        if !added_delete_files.is_empty() {
-            let mut delete_metadata = metadata.clone();
-            delete_metadata.content = ManifestContentType::Deletes;
+        for (delete_metadata, added_delete_files) in delete_manifest_inputs {
             let mut writer =
                 ManifestWriterBuilder::new(None, None, delete_metadata.clone()).build();
             for df in &added_delete_files {
@@ -506,5 +624,322 @@ impl<'a> SnapshotProducer<'a> {
         }];
 
         Ok(ActionCommit::new(updates, requirements))
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::spec::manifest::ManifestMetadata;
+    use crate::spec::manifest_list::ManifestFile;
+    use crate::spec::types::values::{Literal, PrimitiveLiteral};
+    use crate::spec::types::{NestedField, PrimitiveType, Type};
+    use crate::spec::{DataContentType, DataFileFormat, Transform};
+
+    fn nullable_manifest_list_bytes(manifest_path: &str, manifest_length: i64) -> Vec<u8> {
+        #[derive(serde::Serialize)]
+        struct NullableManifestCounts<'a> {
+            manifest_path: &'a str,
+            manifest_length: i64,
+            partition_spec_id: i32,
+            added_snapshot_id: i64,
+            added_data_files_count: Option<i32>,
+            existing_data_files_count: Option<i32>,
+            deleted_data_files_count: Option<i32>,
+            added_rows_count: Option<i64>,
+            existing_rows_count: Option<i64>,
+            deleted_rows_count: Option<i64>,
+        }
+
+        let schema = apache_avro::Schema::parse_str(
+            r#"{
+              "type": "record",
+              "name": "manifest_file",
+              "fields": [
+                {"name": "manifest_path", "type": "string"},
+                {"name": "manifest_length", "type": "long"},
+                {"name": "partition_spec_id", "type": "int"},
+                {"name": "added_snapshot_id", "type": "long"},
+                {"name": "added_data_files_count", "type": ["null", "int"], "default": null},
+                {"name": "existing_data_files_count", "type": ["null", "int"], "default": null},
+                {"name": "deleted_data_files_count", "type": ["null", "int"], "default": null},
+                {"name": "added_rows_count", "type": ["null", "long"], "default": null},
+                {"name": "existing_rows_count", "type": ["null", "long"], "default": null},
+                {"name": "deleted_rows_count", "type": ["null", "long"], "default": null}
+              ]
+            }"#,
+        )
+        .expect("nullable manifest list schema");
+        let mut writer = apache_avro::Writer::new(&schema, Vec::new());
+        writer
+            .append_ser(NullableManifestCounts {
+                manifest_path,
+                manifest_length,
+                partition_spec_id: 2,
+                added_snapshot_id: 7,
+                added_data_files_count: None,
+                existing_data_files_count: None,
+                deleted_data_files_count: None,
+                added_rows_count: None,
+                existing_rows_count: None,
+                deleted_rows_count: None,
+            })
+            .expect("nullable manifest list entry");
+        writer.into_inner().expect("nullable manifest list bytes")
+    }
+
+    fn manifest_file(content: ManifestContentType) -> ManifestFile {
+        ManifestFile::builder()
+            .with_manifest_path("metadata/manifest.avro")
+            .with_content(content)
+            .build()
+            .expect("manifest file")
+    }
+
+    fn delete_file(path: &str, partition_spec_id: i32) -> DataFile {
+        DataFile {
+            content: DataContentType::PositionDeletes,
+            file_path: path.to_string(),
+            file_format: DataFileFormat::Parquet,
+            partition: vec![],
+            record_count: 1,
+            file_size_in_bytes: 1,
+            column_sizes: HashMap::new(),
+            value_counts: HashMap::new(),
+            null_value_counts: HashMap::new(),
+            nan_value_counts: HashMap::new(),
+            lower_bounds: HashMap::new(),
+            upper_bounds: HashMap::new(),
+            block_size_in_bytes: None,
+            key_metadata: None,
+            split_offsets: vec![],
+            equality_ids: vec![],
+            sort_order_id: None,
+            first_row_id: None,
+            partition_spec_id,
+            referenced_data_file: Some("data.parquet".to_string()),
+            content_offset: None,
+            content_size_in_bytes: None,
+        }
+    }
+
+    #[test]
+    fn manifest_totals_omit_only_totals_with_unknown_active_counts() {
+        let data_with_unknown_counts = manifest_file(ManifestContentType::Data);
+        let deletes_with_unknown_files = manifest_file(ManifestContentType::Deletes);
+        let summary = with_manifest_totals(
+            crate::spec::snapshots::Summary::new(Operation::Append),
+            &crate::spec::snapshots::Summary::new(Operation::Append),
+            false,
+            [&data_with_unknown_counts, &deletes_with_unknown_files],
+            0,
+            0,
+        );
+
+        assert!(
+            !summary
+                .additional_properties
+                .contains_key("total-data-files")
+        );
+        assert!(!summary.additional_properties.contains_key("total-records"));
+        assert!(
+            !summary
+                .additional_properties
+                .contains_key("total-delete-files")
+        );
+    }
+
+    #[test]
+    fn delete_manifest_inputs_group_files_by_historical_partition_spec() {
+        let schema = Schema::builder().build().expect("schema");
+        let current_spec = PartitionSpec::builder().with_spec_id(2).build();
+        let historical_spec = PartitionSpec::builder().with_spec_id(1).build();
+        let metadata = ManifestMetadata::new(
+            Arc::new(schema),
+            0,
+            current_spec.clone(),
+            FormatVersion::V2,
+            ManifestContentType::Data,
+        );
+        let files = vec![
+            delete_file("delete-1-a.parquet", 1),
+            delete_file("delete-2.parquet", 2),
+            delete_file("delete-1-b.parquet", 1),
+        ];
+
+        let groups = delete_manifest_inputs(&metadata, &[historical_spec], &files)
+            .expect("partition specs should resolve");
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].0.partition_spec.spec_id(), 1);
+        assert_eq!(groups[0].0.content, ManifestContentType::Deletes);
+        assert_eq!(groups[0].1.len(), 2);
+        assert!(groups[0].1.iter().all(|file| file.partition_spec_id == 1));
+        assert_eq!(groups[1].0.partition_spec.spec_id(), 2);
+        assert_eq!(groups[1].0.content, ManifestContentType::Deletes);
+        assert_eq!(groups[1].1.len(), 1);
+        assert!(groups[1].1.iter().all(|file| file.partition_spec_id == 2));
+    }
+
+    #[test]
+    fn delete_manifest_inputs_reject_missing_partition_spec() {
+        let metadata = ManifestMetadata::new(
+            Arc::new(Schema::builder().build().expect("schema")),
+            0,
+            PartitionSpec::builder().with_spec_id(2).build(),
+            FormatVersion::V2,
+            ManifestContentType::Data,
+        );
+
+        let error = delete_manifest_inputs(&metadata, &[], &[delete_file("delete.parquet", 1)])
+            .expect_err("unknown partition spec must fail");
+
+        assert!(error.contains("partition spec 1 is missing"));
+    }
+
+    #[test]
+    fn snapshot_producer_writes_historical_delete_manifests_and_table_sequence() {
+        futures::executor::block_on(async {
+            struct RowDeltaOperation;
+            impl SnapshotProduceOperation for RowDeltaOperation {
+                fn operation(&self) -> &'static str {
+                    "overwrite"
+                }
+            }
+
+            let table_url = url::Url::parse("file:///tmp/iceberg-table/").expect("table URL");
+            let store: Arc<dyn object_store::ObjectStore> =
+                Arc::new(object_store::memory::InMemory::new());
+            let store_ctx = StoreContext::new(store, &table_url).expect("store context");
+            let schema = Schema::builder()
+                .with_fields(vec![Arc::new(NestedField::required(
+                    1,
+                    "part",
+                    Type::Primitive(PrimitiveType::Int),
+                ))])
+                .build()
+                .expect("schema");
+            let historical_spec = PartitionSpec::builder()
+                .with_spec_id(1)
+                .add_field_with_id(1, 1000, "part", Transform::Identity)
+                .build();
+            let current_spec = PartitionSpec::builder().with_spec_id(2).build();
+            let metadata = ManifestMetadata::new(
+                Arc::new(schema),
+                0,
+                current_spec.clone(),
+                FormatVersion::V2,
+                ManifestContentType::Data,
+            );
+            let mut parent_manifest_writer =
+                ManifestWriterBuilder::new(None, None, metadata.clone()).build();
+            let mut parent_data_file = delete_file("data.parquet", 2);
+            parent_data_file.content = DataContentType::Data;
+            parent_data_file.referenced_data_file = None;
+            parent_manifest_writer.add(parent_data_file);
+            let parent_manifest_bytes = parent_manifest_writer
+                .finish()
+                .to_avro_bytes_v2()
+                .expect("parent manifest bytes");
+            store_ctx
+                .prefixed
+                .put(
+                    &object_store::path::Path::from("metadata/parent-manifest.avro"),
+                    object_store::PutPayload::from(Bytes::from(parent_manifest_bytes.clone())),
+                )
+                .await
+                .expect("parent manifest");
+            let parent_list_bytes = nullable_manifest_list_bytes(
+                "metadata/parent-manifest.avro",
+                parent_manifest_bytes.len() as i64,
+            );
+            store_ctx
+                .prefixed
+                .put(
+                    &object_store::path::Path::from("metadata/parent-list.avro"),
+                    object_store::PutPayload::from(Bytes::from(parent_list_bytes)),
+                )
+                .await
+                .expect("parent manifest list");
+            let parent_snapshot = SnapshotBuilder::new()
+                .with_snapshot_id(7)
+                .with_sequence_number(3)
+                .with_manifest_list("metadata/parent-list.avro".to_string())
+                .with_summary(crate::spec::snapshots::Summary::new(Operation::Append))
+                .build()
+                .expect("parent snapshot");
+            let transaction = Transaction::new(table_url.to_string(), parent_snapshot, 11);
+            let mut historical_delete = delete_file("delete-1.parquet", 1);
+            historical_delete.partition = vec![Some(Literal::Primitive(PrimitiveLiteral::Int(42)))];
+            let action_commit = SnapshotProducer::new(
+                &transaction,
+                vec![],
+                Some(store_ctx.clone()),
+                Some(metadata),
+            )
+            .with_added_delete_files(vec![historical_delete, delete_file("delete-2.parquet", 2)])
+            .with_partition_specs(vec![historical_spec, current_spec])
+            .commit(RowDeltaOperation)
+            .await
+            .expect("row delta snapshot");
+            let snapshot = action_commit
+                .updates()
+                .iter()
+                .find_map(|update| match update {
+                    TableUpdate::AddSnapshot { snapshot } => Some(snapshot),
+                    _ => None,
+                })
+                .expect("added snapshot");
+
+            assert_eq!(snapshot.sequence_number(), 12);
+            assert_eq!(
+                snapshot
+                    .summary()
+                    .additional_properties
+                    .get("total-data-files"),
+                Some(&"1".to_string())
+            );
+            assert_eq!(
+                snapshot
+                    .summary()
+                    .additional_properties
+                    .get("total-records"),
+                Some(&"1".to_string())
+            );
+            let manifest_list = crate::io::load_manifest_list(&store_ctx, snapshot.manifest_list())
+                .await
+                .expect("manifest list");
+            let delete_manifests = manifest_list
+                .entries()
+                .iter()
+                .filter(|manifest| manifest.content == ManifestContentType::Deletes)
+                .collect::<Vec<_>>();
+            assert_eq!(delete_manifests.len(), 2);
+            for manifest_file in delete_manifests {
+                let manifest =
+                    crate::io::load_manifest(&store_ctx, manifest_file.manifest_path.as_str())
+                        .await
+                        .expect("delete manifest");
+                assert_eq!(
+                    manifest.metadata().partition_spec.spec_id(),
+                    manifest_file.partition_spec_id
+                );
+                assert_eq!(manifest.metadata().content, ManifestContentType::Deletes);
+                assert!(manifest.entries().iter().all(|entry| {
+                    entry.data_file.partition_spec_id == manifest_file.partition_spec_id
+                }));
+                if manifest_file.partition_spec_id == 1 {
+                    assert_eq!(manifest.metadata().partition_spec.fields().len(), 1);
+                    assert_eq!(
+                        manifest.entries()[0].data_file.partition,
+                        vec![Some(Literal::Primitive(PrimitiveLiteral::Int(42)))]
+                    );
+                }
+            }
+        });
     }
 }

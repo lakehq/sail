@@ -102,7 +102,7 @@ pub(crate) async fn bootstrap_snapshot_action_commit(
         .build()
         .map_err(DataFusionError::Execution)?;
 
-    let tx = Transaction::new(table_url.to_string(), empty_snapshot);
+    let tx = Transaction::new(table_url.to_string(), empty_snapshot, 0);
     let manifest_meta = crate::spec::manifest::ManifestMetadata::new(
         Arc::new(schema_iceberg.clone()),
         schema_iceberg.schema_id(),
@@ -183,7 +183,7 @@ pub async fn bootstrap_new_table_with_style(
         .build()
         .map_err(DataFusionError::Execution)?;
 
-    let tx = Transaction::new(table_url.to_string(), empty_snapshot);
+    let tx = Transaction::new(table_url.to_string(), empty_snapshot, 0);
     let manifest_meta = crate::spec::manifest::ManifestMetadata::new(
         Arc::new(iceberg_schema.clone()),
         iceberg_schema.schema_id(),
