@@ -152,6 +152,10 @@ True
 >>> re.search(r"first(?:_value)?\([^\n]* ORDER BY \[", explain, re.IGNORECASE) is None
 True
 
+>>> df = spark.createDataFrame([(30, 'c'), (10, 'a'), (20, 'b')], ("v", "k")).repartition(2, "k")
+>>> df.sortWithinPartitions("k").groupBy().agg(F.first("v")).collect()
+[Row(first(v)=10)]
+
 # Each test in this group is a different edge case
 >>> spark.sql("SELECT sum(v) AS s FROM (SELECT * FROM VALUES (CAST(1e16 AS DOUBLE),'b'),(CAST(1.0 AS DOUBLE),'c'),(CAST(-1e16 AS DOUBLE),'a') AS t(v, k) ORDER BY k)").collect()
 [Row(s=1.0)]
