@@ -59,3 +59,32 @@
 >>> right = spark.createDataFrame([('a',), ('b',)], ("k",))
 >>> left.join(right, "k").orderBy(F.desc("k")).groupBy().agg(F.first("v")).collect()
 [Row(first(v)=2)]
+
+>>> df = spark.createDataFrame([("Alice", 2), ("Bob", 5), ("Alice", None)], ("name", "age"))
+>>> w = Window.partitionBy("name")
+
+>>> result = df.orderBy("age").select("name", "age", F.first("age").over(w).alias("f"), F.last("age").over(w).alias("l"))
+>>> sorted(result.collect(), key=lambda r: (r.name, r.age if r.age is not None else -1))
+[Row(name='Alice', age=None, f=None, l=2), Row(name='Alice', age=2, f=None, l=2), Row(name='Bob', age=5, f=5, l=5)]
+
+>>> result = df.orderBy("age").select("name", "age", (F.last("age").over(w) + F.last("age").over(w)).alias("s"))
+>>> sorted(result.collect(), key=lambda r: (r.name, r.age if r.age is not None else -1))
+[Row(name='Alice', age=None, s=4), Row(name='Alice', age=2, s=4), Row(name='Bob', age=5, s=10)]
+
+>>> spark.sql("SELECT listagg(k) AS s FROM (SELECT * FROM VALUES (30,'c'),(10,'a'),(20,'b') AS t(v, k) ORDER BY v)").collect()
+[Row(s='abc')]
+
+>>> spark.sql("SELECT g, first(v) AS f FROM (SELECT * FROM VALUES (30, 1), (10, 1), (20, 2) AS t(v, g) ORDER BY v) GROUP BY g HAVING first(v) > 15").collect()
+[Row(g=2, f=20)]
+
+>>> pdf = spark.createDataFrame([(30, 'c', 'x'), (10, 'a', 'x'), (20, 'b', 'y')], ("v", "k", "p"))
+>>> pdf.orderBy("k").groupBy().pivot("p").agg(F.first("v")).collect()
+[Row(x=10, y=20)]
+
+>>> spark.sql("SELECT g, first(v) AS f FROM (SELECT * FROM VALUES (30, 1), (10, 1), (20, 2) AS t(v, g) ORDER BY v) GROUP BY CUBE(g) ORDER BY g NULLS FIRST").collect()
+[Row(g=None, f=10), Row(g=1, f=10), Row(g=2, f=20)]
+
+>>> w2 = Window.partitionBy("name").orderBy("age")
+>>> result = df.orderBy("age").select("name", "age", F.nth_value("age", 2).over(w2).alias("n"))
+>>> sorted(result.collect(), key=lambda r: (r.name, r.age if r.age is not None else -1))
+[Row(name='Alice', age=None, n=None), Row(name='Alice', age=2, n=2), Row(name='Bob', age=5, n=None)]
