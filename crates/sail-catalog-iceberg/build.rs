@@ -16,11 +16,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=build.rs");
 
     generate_openapi_client(
-        "spec/unity-catalog-all.yaml",
-        std::path::Path::new(&std::env::var("OUT_DIR")?).join("unity_catalog_gen.rs"),
+        "spec/iceberg-rest-catalog.yaml",
+        std::path::Path::new(&std::env::var("OUT_DIR")?).join("iceberg_rest_catalog_gen.rs"),
         OpenApiConfig {
-            excluded_operations: [].into_iter().collect(),
-            excluded_schemas: ["ColumnTypeName".to_owned()].into_iter().collect(),
+            excluded_operations: ["getToken".to_owned()].into_iter().collect(),
+            excluded_schemas: ["ReportMetricsRequest".to_owned()].into_iter().collect(),
         },
     )?;
 

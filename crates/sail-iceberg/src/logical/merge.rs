@@ -34,7 +34,7 @@ pub fn expand_merge_node(info: MergeInfo) -> Result<LogicalPlan> {
         .collect();
     trace!(
         "iceberg merge target schema after metadata columns: {:?}",
-        &target_fields
+        target_fields
     );
     if !target_fields.iter().any(|n| n == MERGE_FILE_COLUMN)
         || row_index_column.is_some_and(|c| !target_fields.iter().any(|n| n == c))

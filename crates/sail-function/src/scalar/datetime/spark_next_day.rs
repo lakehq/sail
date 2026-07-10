@@ -64,17 +64,15 @@ impl ScalarUDFImpl for SparkNextDay {
                         | ScalarValue::LargeUtf8(day_of_week)
                         | ScalarValue::Utf8View(day_of_week),
                     ) => {
-                        if let Some(days) = days {
-                            if let Some(day_of_week) = day_of_week {
-                                match parse_day_of_week(day_of_week.as_str()) {
-                                    Some(weekday) => Ok(ColumnarValue::Scalar(
-                                        ScalarValue::Date32(spark_next_day(*days, weekday)),
-                                    )),
-                                    None if self.ansi_mode => illegal_day_of_week_err(day_of_week),
-                                    None => Ok(ColumnarValue::Scalar(ScalarValue::Date32(None))),
-                                }
-                            } else {
-                                Ok(ColumnarValue::Scalar(ScalarValue::Date32(None)))
+                        if let Some(days) = days
+                            && let Some(day_of_week) = day_of_week
+                        {
+                            match parse_day_of_week(day_of_week.as_str()) {
+                                Some(weekday) => Ok(ColumnarValue::Scalar(ScalarValue::Date32(
+                                    spark_next_day(*days, weekday),
+                                ))),
+                                None if self.ansi_mode => illegal_day_of_week_err(day_of_week),
+                                None => Ok(ColumnarValue::Scalar(ScalarValue::Date32(None))),
                             }
                         } else {
                             Ok(ColumnarValue::Scalar(ScalarValue::Date32(None)))
