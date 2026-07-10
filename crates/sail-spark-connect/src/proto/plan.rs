@@ -1099,10 +1099,21 @@ impl TryFrom<RelType> for RelationNode {
                     .into_iter()
                     .map(|r| r.try_into())
                     .collect::<SparkResult<_>>()?;
-                Ok(RelationNode::Query(spec::QueryNode::WithRelations {
-                    root: Box::new(root.try_into()?),
-                    references,
-                }))
+                let root_plan: spec::Plan = root.try_into()?;
+                match root_plan {
+                    spec::Plan::Query(query_plan) => {
+                        Ok(RelationNode::Query(spec::QueryNode::WithRelations {
+                            root: Box::new(query_plan),
+                            references,
+                        }))
+                    }
+                    spec::Plan::Command(command_plan) => {
+                        Ok(RelationNode::Command(spec::CommandNode::WithRelations {
+                            root: Box::new(command_plan),
+                            references,
+                        }))
+                    }
+                }
             }
             RelType::Transpose(_) => Err(SparkError::todo("transpose")),
             RelType::UnresolvedTableValuedFunction(_) => {
