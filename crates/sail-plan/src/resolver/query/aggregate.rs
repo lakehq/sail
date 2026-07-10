@@ -388,6 +388,7 @@ impl PlanResolver<'_> {
     fn is_order_irrelevant_aggregate(
         function: &expr::AggregateFunction,
         schema: &DFSchemaRef,
+        has_grouping: bool,
     ) -> PlanResult<bool> {
         let udf = function.func.as_ref();
         if udf == min_max::min_udaf().as_ref()
@@ -398,8 +399,8 @@ impl PlanResolver<'_> {
             || udf == bit_and_or_xor::bit_xor_udaf().as_ref()
             || udf == bool_and_or::bool_and_udaf().as_ref()
             || udf == bool_and_or::bool_or_udaf().as_ref()
-            || udf == sum::sum_udaf().as_ref()
-            || udf == average::avg_udaf().as_ref()
+            || (!has_grouping
+                && (udf == sum::sum_udaf().as_ref() || udf == average::avg_udaf().as_ref()))
         {
             return Ok(true);
         }
@@ -421,12 +422,16 @@ impl PlanResolver<'_> {
         Ok(false)
     }
 
-    fn requires_input_order(aggregates: &[Expr], schema: &DFSchemaRef) -> PlanResult<bool> {
+    fn requires_input_order(
+        aggregates: &[Expr],
+        schema: &DFSchemaRef,
+        has_grouping: bool,
+    ) -> PlanResult<bool> {
         for aggregate in aggregates {
             let Expr::AggregateFunction(function) = aggregate else {
                 return Ok(true);
             };
-            if !Self::is_order_irrelevant_aggregate(function, schema)? {
+            if !Self::is_order_irrelevant_aggregate(function, schema, has_grouping)? {
                 return Ok(true);
             }
         }
@@ -442,8 +447,12 @@ impl PlanResolver<'_> {
                     return Ok(Transformed::no(plan));
                 };
                 let aggregate_exprs = find_aggregate_exprs(&aggregate.aggr_expr);
-                if !Self::requires_input_order(&aggregate_exprs, aggregate.input.schema())
-                    .map_err(|error| DataFusionError::External(Box::new(error)))?
+                if !Self::requires_input_order(
+                    &aggregate_exprs,
+                    aggregate.input.schema(),
+                    !aggregate.group_expr.is_empty(),
+                )
+                .map_err(|error| DataFusionError::External(Box::new(error)))?
                 {
                     return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate)));
                 }

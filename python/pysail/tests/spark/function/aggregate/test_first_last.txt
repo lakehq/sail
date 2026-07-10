@@ -155,11 +155,12 @@ True
 # Each test in this group is a different edge case
 >>> spark.sql("SELECT sum(v) AS s FROM (SELECT * FROM VALUES (CAST(1e16 AS DOUBLE),'b'),(CAST(1.0 AS DOUBLE),'c'),(CAST(-1e16 AS DOUBLE),'a') AS t(v, k) ORDER BY k)").collect()
 [Row(s=1.0)]
+>>> spark.sql("SELECT avg(v) AS a FROM (SELECT * FROM VALUES (CAST(1e16 AS DOUBLE),'b'),(CAST(1.0 AS DOUBLE),'c'),(CAST(-1e16 AS DOUBLE),'a') AS t(v, k) ORDER BY k)").collect()
+[Row(a=0.3333333333333333)]
+
 >>> spark.sql("SELECT sum(v) AS s FROM (SELECT * FROM VALUES (CAST(1e16 AS DOUBLE),'a'),(CAST(-1e16 AS DOUBLE),'b'),(CAST(1.0 AS DOUBLE),'c') AS t(v, k) ORDER BY k)").collect()
 [Row(s=1.0)]
 >>> spark.sql("SELECT sum(v) AS s FROM VALUES (CAST(-1e16 AS DOUBLE)),(CAST(1e16 AS DOUBLE)),(CAST(1.0 AS DOUBLE)) AS t(v)").collect()
 [Row(s=1.0)]
 >>> spark.sql("SELECT sum(v) AS s FROM VALUES (CAST(-1e16 AS DOUBLE)),(CAST(1.0 AS DOUBLE)),(CAST(1e16 AS DOUBLE)) AS t(v)").collect()
 [Row(s=0.0)]
->>> spark.sql("SELECT avg(v) AS a FROM (SELECT * FROM VALUES (CAST(1e16 AS DOUBLE),'b'),(CAST(1.0 AS DOUBLE),'c'),(CAST(-1e16 AS DOUBLE),'a') AS t(v, k) ORDER BY k)").collect()
-[Row(a=0.3333333333333333)]
