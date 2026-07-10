@@ -28,11 +28,6 @@ pub(crate) struct WindowRewriter<'s> {
 
 impl WindowRewriter<'_> {
     fn requires_input_order(function: &WindowFunction, schema: &DFSchemaRef) -> PlanResult<bool> {
-        // A DISTINCT window aggregate cannot take an `order_by`.
-        // Also, `collect_set`, the case that gets here, is unordered in Spark anyway.
-        if function.params.distinct {
-            return Ok(false);
-        }
         let function_requires_order = match &function.fun {
             WindowFunctionDefinition::AggregateUDF(udaf) => {
                 !PlanResolver::is_order_irrelevant_udaf(
