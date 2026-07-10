@@ -987,12 +987,12 @@ impl DeltaTableFormat {
             .map_err(|e| DataFusionError::External(Box::new(e)))?
             .clone();
         ensure_not_catalog_managed_delta(&snapshot, "ALTER TABLE ADD CONSTRAINT")?;
-        let key = format!("delta.constraints.{name}");
+        let key = format!("delta.constraints.{}", name.to_lowercase());
         if snapshot
             .metadata()
             .configuration()
             .keys()
-            .any(|existing| existing.eq_ignore_ascii_case(&key))
+            .any(|existing| existing.to_lowercase() == key)
         {
             return plan_err!("Delta constraint '{name}' already exists");
         }
