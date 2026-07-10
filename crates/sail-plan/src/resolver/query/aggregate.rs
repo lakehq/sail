@@ -1,3 +1,4 @@
+use datafusion::functions_aggregate::first_last::{FirstValue, LastValue};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     Column, DFSchemaRef, DataFusionError, Result as DataFusionResult, ScalarValue,
@@ -281,10 +282,6 @@ impl PlanResolver<'_> {
             .build()?)
     }
 
-    // Aggs whose result depends on the order of the input rows and that accept an `order_by`.
-    // Spark treats `First`/`Last` as order-relevant.
-    const ORDER_SENSITIVE_AGGREGATES: &'static [&'static str] = &["first_value", "last_value"];
-
     // Sorts directly below aggs determine results of order-sensitive aggs (e.g., first, last).
     fn attach_input_ordering(
         input: &LogicalPlan,
@@ -320,7 +317,10 @@ impl PlanResolver<'_> {
         Ok(expr
             .transform_down(|e| match e {
                 Expr::AggregateFunction(mut function)
-                    if Self::ORDER_SENSITIVE_AGGREGATES.contains(&function.func.name())
+                // Aggs whose result depends on the order of the input rows and that accept an `order_by`.
+                // Spark treats `First`/`Last` as order-relevant.
+                    if (function.func.inner().is::<FirstValue>()
+                        || function.func.inner().is::<LastValue>())
                         && function.params.order_by.is_empty() =>
                 {
                     function.params.order_by = ordering.to_vec();
