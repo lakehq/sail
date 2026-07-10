@@ -1,6 +1,6 @@
 use std::cmp::Ordering;
-use std::collections::hash_map::Entry;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::fmt::Formatter;
 use std::sync::{Arc, RwLock};
 
@@ -13,12 +13,12 @@ use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::{
-    collect_partitioned, with_new_children_if_necessary, DisplayAs, DisplayFormatType,
-    ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    collect_partitioned, with_new_children_if_necessary,
 };
 use datafusion::prelude::SessionContext;
 use datafusion_common::{
-    internal_datafusion_err, DFSchema, DFSchemaRef, DataFusionError, Result, Statistics,
+    DFSchema, DFSchemaRef, DataFusionError, Result, Statistics, internal_datafusion_err,
 };
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;

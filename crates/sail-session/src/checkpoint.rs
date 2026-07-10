@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use datafusion::arrow::datatypes::SchemaRef;
-use datafusion::physical_plan::{execute_stream_partitioned, ExecutionPlan};
+use datafusion::physical_plan::{ExecutionPlan, execute_stream_partitioned};
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 use futures::StreamExt;
@@ -62,7 +62,7 @@ impl CheckpointStore for ObjectStoreCheckpointStore {
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use datafusion_common::{internal_datafusion_err, DataFusionError};
+    use datafusion_common::{DataFusionError, internal_datafusion_err};
 
     use super::*;
 

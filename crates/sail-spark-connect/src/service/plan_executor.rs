@@ -11,7 +11,7 @@ use futures::stream;
 use log::{debug, warn};
 use sail_common::spec;
 use sail_common_datafusion::cached_relation::{
-    cleanup_cached_relation, cleanup_checkpoint_path, CachedRelation, CachedRelationRegistry,
+    CachedRelation, CachedRelationRegistry, cleanup_cached_relation, cleanup_checkpoint_path,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
