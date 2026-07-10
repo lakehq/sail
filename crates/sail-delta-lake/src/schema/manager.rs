@@ -16,8 +16,8 @@ use sail_common_datafusion::catalog::CatalogTableColumnIdentity;
 
 use super::mapping::{annotate_new_fields_for_column_mapping, compute_max_column_id};
 use crate::spec::{
-    ColumnMappingMode, ColumnMetadataKey, DeltaError as DeltaTableError, DeltaResult, Metadata,
-    MetadataValue, Protocol, StructField, StructType, TableFeature, TableProperties,
+    ColumnMappingMode, ColumnMetadataKey, DataType, DeltaError as DeltaTableError, DeltaResult,
+    Metadata, MetadataValue, Protocol, StructField, StructType, TableFeature, TableProperties,
     contains_timestampntz, contains_variant,
 };
 
@@ -201,6 +201,16 @@ pub fn metadata_for_create_with_struct_type(
     created_time: i64,
     configuration: HashMap<String, String>,
 ) -> DeltaResult<Metadata> {
+    for partition_column in &partition_columns {
+        if schema
+            .field(partition_column)
+            .is_some_and(|field| matches!(field.data_type(), DataType::Variant(_)))
+        {
+            return Err(DeltaTableError::schema(format!(
+                "VARIANT column `{partition_column}` cannot be used as a partition column"
+            )));
+        }
+    }
     Metadata::try_new(
         None,
         None,
@@ -473,10 +483,67 @@ pub fn protocol_for_create(
 mod tests {
     use std::collections::{HashMap, HashSet};
 
-    use super::{protocol_for_create, protocol_for_metadata};
+    use super::{metadata_for_create_with_struct_type, protocol_for_create, protocol_for_metadata};
     use crate::spec::{
         ColumnMetadataKey, DataType, DeltaResult, Metadata, StructField, StructType, TableFeature,
     };
+
+    #[test]
+    fn metadata_for_create_rejects_variant_partition_column() -> DeltaResult<()> {
+        let schema = StructType::try_new([
+            StructField::nullable("id", DataType::INTEGER),
+            StructField::nullable("payload", DataType::unshredded_variant()),
+        ])?;
+
+        let result = metadata_for_create_with_struct_type(
+            schema,
+            vec!["payload".to_string()],
+            0,
+            HashMap::new(),
+        );
+
+        assert!(
+            matches!(&result, Err(error) if error.to_string().contains(
+                "VARIANT column `payload` cannot be used as a partition column"
+            )),
+            "expected a Variant partition-column error, got {result:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn metadata_for_create_allows_non_partitioned_variant_column() -> DeltaResult<()> {
+        let schema = StructType::try_new([
+            StructField::nullable("id", DataType::INTEGER),
+            StructField::nullable("payload", DataType::unshredded_variant()),
+        ])?;
+
+        let metadata =
+            metadata_for_create_with_struct_type(schema.clone(), Vec::new(), 0, HashMap::new())?;
+
+        assert_eq!(metadata.parse_schema()?, schema);
+        assert!(metadata.partition_columns().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn metadata_for_create_allows_scalar_partition_column() -> DeltaResult<()> {
+        let schema = StructType::try_new([
+            StructField::nullable("id", DataType::INTEGER),
+            StructField::nullable("payload", DataType::unshredded_variant()),
+        ])?;
+
+        let metadata = metadata_for_create_with_struct_type(
+            schema.clone(),
+            vec!["id".to_string()],
+            0,
+            HashMap::new(),
+        )?;
+
+        assert_eq!(metadata.parse_schema()?, schema);
+        assert_eq!(metadata.partition_columns(), &["id".to_string()]);
+        Ok(())
+    }
 
     #[test]
     fn protocol_for_create_treats_in_commit_timestamp_as_writer_only() -> DeltaResult<()> {

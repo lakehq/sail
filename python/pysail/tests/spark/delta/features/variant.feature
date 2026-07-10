@@ -1,6 +1,24 @@
 @spark-4
 Feature: Delta Lake Variant support
 
+  Scenario: Variant columns cannot be partition columns
+    Given variable location for temporary directory delta_variant_partition
+    Given final statement
+      """
+      DROP TABLE IF EXISTS delta_variant_partition_table
+      """
+    When query template
+      """
+      CREATE TABLE delta_variant_partition_table (
+        id INT,
+        payload VARIANT
+      )
+      USING DELTA
+      LOCATION {{ location.sql }}
+      PARTITIONED BY (payload)
+      """
+    Then query error (?s).*VARIANT column `payload` cannot be used as a partition column.*
+
   Scenario: Write and read a Variant column
     Given variable location for temporary directory delta_variant
     Given final statement
