@@ -31,7 +31,6 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 percent-encoding = { workspace = true }
-progenitor-client = { workspace = true }
 secrecy = { workspace = true }
 chrono = { workspace = true }
 
@@ -43,7 +42,3 @@ tempfile = { workspace = true }
 
 [build-dependencies]
 sail-build-scripts = { path = "../sail-build-scripts" }
-progenitor = { workspace = true }
-prettyplease = { workspace = true }
-serde_yaml = { workspace = true }
-syn = { workspace = true }

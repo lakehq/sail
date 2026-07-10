@@ -337,11 +337,20 @@ impl OperationDefinition {
                 ));
             }
         };
-        let success_body = generate_response_body_expression(&self.success_response.rust_type);
+        let success_body = generate_response_body_expression(success_type);
+        let success_status_check = if self.success_response.rust_type.is_unit() {
+            quote! { status.is_success() }
+        } else {
+            quote! { status.as_u16() == #success_status }
+        };
         let error_body = if self.error_responses.is_empty() {
             quote! {
                 response.error_for_status_ref()?;
-                Err(ApiError::Unknown(format!("unexpected non-error HTTP status: {status}")))
+                Err(ApiError::Unknown(Response {
+                    inner: (),
+                    status,
+                    headers,
+                }))
             }
         } else {
             let arms = self
@@ -354,9 +363,11 @@ impl OperationDefinition {
                     #(#arms)*
                     _ => {
                         response.error_for_status_ref()?;
-                        return Err(ApiError::Unknown(format!(
-                            "unexpected non-error HTTP status: {status}"
-                        )));
+                        return Err(ApiError::Unknown(Response {
+                            inner: (),
+                            status,
+                            headers,
+                        }));
                     }
                 };
                 Err(ApiError::Response(Response {
@@ -384,7 +395,7 @@ impl OperationDefinition {
                 let response = request.send().await?;
                 let status = response.status();
                 let headers = response.headers().clone();
-                if status.as_u16() == #success_status {
+                if #success_status_check {
                     let inner = #success_body;
                     return Ok(Response {
                         inner,
@@ -605,7 +616,18 @@ fn generate_response_body_expression(rust_type: &RustType) -> TokenStream {
     if rust_type.is_unit() {
         quote! { () }
     } else {
-        quote! { response.json::<#rust_type>().await? }
+        quote! {
+            match response.json::<#rust_type>().await {
+                Ok(value) => value,
+                Err(_) => {
+                    return Err(ApiError::Unknown(Response {
+                        inner: (),
+                        status,
+                        headers,
+                    }));
+                }
+            }
+        }
     }
 }
 
