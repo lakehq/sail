@@ -5,7 +5,7 @@ use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 
 use crate::config::loader::{
-    deserialize_non_empty_string, deserialize_non_zero, deserialize_unknown_unit, ConfigDefinition,
+    ConfigDefinition, deserialize_non_empty_string, deserialize_non_zero, deserialize_unknown_unit,
 };
 use crate::config::observer::{
     serialize_non_empty_string, serialize_non_zero, serialize_optional_secret,

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::Float64Array;
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use rand::rng;
 use rand_distr::{Distribution, StandardNormal};
@@ -62,7 +62,7 @@ impl ScalarUDFImpl for Randn {
                     ScalarValue::Int64(Some(value)) => *value,
                     ScalarValue::UInt64(Some(value)) => *value as i64,
                     ScalarValue::Int64(None) | ScalarValue::UInt64(None) | ScalarValue::Null => {
-                        return invoke_no_seed(number_rows)
+                        return invoke_no_seed(number_rows);
                     }
                     _ => return exec_err!("`randn` expects an integer seed, got {scalar}"),
                 };

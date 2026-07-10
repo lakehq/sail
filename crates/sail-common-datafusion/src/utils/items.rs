@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 use std::fmt::Debug;
 
-use datafusion_common::{plan_datafusion_err, plan_err, Result};
+use datafusion_common::{Result, plan_datafusion_err, plan_err};
 use either::Either;
 
 /// A trait for taking items from a container of expected size.

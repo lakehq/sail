@@ -3,7 +3,7 @@ use arrow::array::{
     StringViewArray,
 };
 use arrow::datatypes::DataType;
-use datafusion_common::{exec_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, exec_err};
 use datasketches::hash_value::{raw_bytes, sign_extend};
 use datasketches::hll::{HllSketch, HllType, HllUnion};
 

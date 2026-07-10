@@ -18,15 +18,15 @@ use datafusion::arrow::array::{ArrayRef, BooleanArray, Int64Array};
 use datafusion::arrow::buffer::BooleanBuffer;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::execution::context::TaskContext;
 use datafusion::execution::SessionStateBuilder;
+use datafusion::execution::context::TaskContext;
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result, Statistics};
+use datafusion_common::{DataFusionError, Result, Statistics, internal_err};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties, PhysicalExpr};
 use futures::stream::{self, StreamExt, TryStreamExt};
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
@@ -36,15 +36,15 @@ use sail_common_datafusion::rename::physical_plan::rename_physical_plan;
 use url::Url;
 
 use crate::datasource::scan::{
-    file_scan_projection_for_schema, map_statistics_to_schema, sanitize_statistics_for_schema,
-    FileScanParams, TableStatsMode,
+    FileScanParams, TableStatsMode, file_scan_projection_for_schema, map_statistics_to_schema,
+    sanitize_statistics_for_schema,
 };
-use crate::datasource::{build_file_scan_config, DeltaScanConfig};
+use crate::datasource::{DeltaScanConfig, build_file_scan_config};
 use crate::deletion_vector::DeletionVectorBitmap;
 use crate::delta_log::LogStoreRef;
-use crate::physical_plan::{decode_adds_from_batch, meta_adds, COL_ACTION};
+use crate::physical_plan::{COL_ACTION, decode_adds_from_batch, meta_adds};
 use crate::schema::{arrow_field_physical_name, get_physical_schema};
-use crate::session_extension::{load_table_uncached, load_table_with_config, DeltaTableCache};
+use crate::session_extension::{DeltaTableCache, load_table_uncached, load_table_with_config};
 use crate::snapshot::{CatalogManagedCommitSet, DeltaSnapshotConfig};
 use crate::spec::StructType;
 use crate::table::DeltaSnapshot;
@@ -928,8 +928,8 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
-    use datafusion::physical_plan::empty::EmptyExec;
     use datafusion::physical_plan::ExecutionPlan;
+    use datafusion::physical_plan::empty::EmptyExec;
     use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
     use datafusion_common::{DataFusionError, Result, ScalarValue};
     use url::Url;

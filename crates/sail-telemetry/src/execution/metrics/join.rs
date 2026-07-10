@@ -1,5 +1,5 @@
-use datafusion::physical_plan::metrics::MetricValue;
 use datafusion::physical_plan::Metric;
+use datafusion::physical_plan::metrics::MetricValue;
 
 use crate::common::KeyValue;
 use crate::execution::metrics::{MetricEmitter, MetricHandled};

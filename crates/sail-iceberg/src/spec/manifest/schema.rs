@@ -12,14 +12,14 @@
 
 use std::collections::BTreeMap;
 
+use apache_avro::Schema as AvroSchema;
 use apache_avro::schema::{
     ArraySchema, DecimalSchema, FixedSchema, Name, RecordField as AvroRecordField,
     RecordFieldOrder, RecordSchema,
 };
-use apache_avro::Schema as AvroSchema;
 use serde_json::{Number, Value as JsonValue};
 
-use crate::spec::avro_utils::{optional, record_field, FIELD_ID_ATTR};
+use crate::spec::avro_utils::{FIELD_ID_ATTR, optional, record_field};
 use crate::spec::types::{PrimitiveType, StructType, Type};
 
 const ELEMENT_ID: &str = "element-id";
@@ -247,11 +247,7 @@ fn array_of_longs(element_id: i32, required: bool) -> AvroSchema {
         items: Box::new(AvroSchema::Long),
         attributes: attrs,
     });
-    if required {
-        array
-    } else {
-        optional(array)
-    }
+    if required { array } else { optional(array) }
 }
 
 fn array_of_ints(element_id: i32, required: bool) -> AvroSchema {
@@ -264,11 +260,7 @@ fn array_of_ints(element_id: i32, required: bool) -> AvroSchema {
         items: Box::new(AvroSchema::Int),
         attributes: attrs,
     });
-    if required {
-        array
-    } else {
-        optional(array)
-    }
+    if required { array } else { optional(array) }
 }
 
 fn int_key_map(

@@ -2,16 +2,16 @@ use std::borrow::Cow;
 use std::sync::Arc;
 use std::time::Duration;
 
-use datafusion::common::{plan_err, DataFusionError, Result};
+use datafusion::common::{DataFusionError, Result, plan_err};
 use datafusion::execution::TaskContext;
 use datafusion::physical_plan::ExecutionPlan;
 use futures::TryStreamExt;
 use opentelemetry::metrics::MeterProvider;
 use opentelemetry_sdk::metrics::{InMemoryMetricExporter, SdkMeterProvider};
 
+use crate::TracingExecOptions;
 use crate::execution::physical_plan::TracingExec;
 use crate::metrics::{MetricManager, MetricRegistry};
-use crate::TracingExecOptions;
 
 fn format_raw_metrics(plan: &dyn ExecutionPlan) -> String {
     let Some(metrics) = plan.metrics() else {

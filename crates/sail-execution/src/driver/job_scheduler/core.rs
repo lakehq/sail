@@ -11,13 +11,13 @@ use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::ActorContext;
 
+use crate::driver::DriverActor;
 use crate::driver::job_scheduler::state::{
     JobDescriptor, JobState, StageState, TaskAttemptDescriptor, TaskRegionState, TaskState,
 };
 use crate::driver::job_scheduler::topology::TaskRegionTopology;
 use crate::driver::job_scheduler::{JobAction, JobScheduler, JobSchedulerOptions};
 use crate::driver::output::build_job_output;
-use crate::driver::DriverActor;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey};
 use crate::job_graph::{
@@ -169,12 +169,11 @@ impl JobScheduler {
         for (r, region) in job.topology.regions.iter().enumerate() {
             let failed = region.tasks.iter().any(|t| {
                 let attempts = &job.stages[t.stage].tasks[t.partition].attempts;
-                if let Some(attempt) = attempts.last() {
-                    if matches!(attempt.state, TaskState::Failed | TaskState::Canceled)
-                        && attempts.len() >= options.task_max_attempts
-                    {
-                        return true;
-                    }
+                if let Some(attempt) = attempts.last()
+                    && matches!(attempt.state, TaskState::Failed | TaskState::Canceled)
+                    && attempts.len() >= options.task_max_attempts
+                {
+                    return true;
                 }
                 false
             });
@@ -204,10 +203,10 @@ impl JobScheduler {
 
             for t in &region.tasks {
                 let attempts = &job.stages[t.stage].tasks[t.partition].attempts;
-                if let Some(attempt) = attempts.last() {
-                    if matches!(attempt.state, TaskState::Failed) {
-                        failed = true;
-                    }
+                if let Some(attempt) = attempts.last()
+                    && matches!(attempt.state, TaskState::Failed)
+                {
+                    failed = true;
                 }
             }
 
@@ -431,10 +430,10 @@ impl JobScheduler {
         for (s, stage) in job.stages.iter().enumerate() {
             for (t, task) in stage.tasks.iter().enumerate() {
                 for attempt in task.attempts.iter() {
-                    if matches!(attempt.state, TaskState::Failed) {
-                        if let Some(cause) = &attempt.cause {
-                            causes.entry((s, t)).or_default().push(cause);
-                        }
+                    if matches!(attempt.state, TaskState::Failed)
+                        && let Some(cause) = &attempt.cause
+                    {
+                        causes.entry((s, t)).or_default().push(cause);
                     }
                 }
             }

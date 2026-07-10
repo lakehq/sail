@@ -11,10 +11,10 @@ use sail_catalog::provider::{
 };
 use sail_catalog::utils::quote_namespace_if_needed;
 use sail_common_datafusion::catalog::iceberg::{
-    is_iceberg_table_properties, ICEBERG_TABLE_TYPE_KEY, ICEBERG_TABLE_TYPE_VALUE,
+    ICEBERG_TABLE_TYPE_KEY, ICEBERG_TABLE_TYPE_VALUE, is_iceberg_table_properties,
 };
 use sail_common_datafusion::catalog::{
-    identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
+    DatabaseStatus, TableColumnStatus, TableKind, TableStatus, identity_partition_fields,
 };
 use sail_common_datafusion::column_features::{
     ColumnFeatureKey, ColumnFeatures, ColumnFeaturesBuilder,
@@ -836,9 +836,9 @@ mod tests {
     use sail_common_hms::hms::{FieldSchema, SerDeInfo, StorageDescriptor, Table};
 
     use super::{
-        build_generic_table, build_view, columns_from_spark_properties, database_to_status,
-        inject_spark_metadata, is_view_table, map_to_vec, validate_namespace, GenericTableFormat,
-        COMMENT_KEY, SPARK_DATASOURCE_PROVIDER_KEY, SPARK_SCHEMA_KEY, VIRTUAL_VIEW_TYPE,
+        COMMENT_KEY, GenericTableFormat, SPARK_DATASOURCE_PROVIDER_KEY, SPARK_SCHEMA_KEY,
+        VIRTUAL_VIEW_TYPE, build_generic_table, build_view, columns_from_spark_properties,
+        database_to_status, inject_spark_metadata, is_view_table, map_to_vec, validate_namespace,
     };
 
     #[test]
@@ -893,12 +893,16 @@ mod tests {
             Some(super::EXTERNAL_TABLE_TYPE)
         );
         let properties = map_to_vec(table.parameters.as_ref());
-        assert!(properties
-            .iter()
-            .any(|(k, v)| k == super::EXTERNAL_KEY && v == super::EXTERNAL_TRUE));
-        assert!(properties
-            .iter()
-            .any(|(k, v)| k == COMMENT_KEY && v == "comment"));
+        assert!(
+            properties
+                .iter()
+                .any(|(k, v)| k == super::EXTERNAL_KEY && v == super::EXTERNAL_TRUE)
+        );
+        assert!(
+            properties
+                .iter()
+                .any(|(k, v)| k == COMMENT_KEY && v == "comment")
+        );
     }
 
     #[test]
@@ -927,9 +931,11 @@ mod tests {
         .unwrap();
 
         let properties = map_to_vec(table.parameters.as_ref());
-        assert!(properties
-            .iter()
-            .any(|(k, v)| k == SPARK_DATASOURCE_PROVIDER_KEY && v == "delta"));
+        assert!(
+            properties
+                .iter()
+                .any(|(k, v)| k == SPARK_DATASOURCE_PROVIDER_KEY && v == "delta")
+        );
     }
 
     #[test]
@@ -1152,12 +1158,16 @@ mod tests {
         let props = map_to_vec(table.parameters.as_ref());
         assert!(props.iter().any(|(k, v)| k == "owner" && v == "alice"));
         assert!(props.iter().any(|(k, _)| k == SPARK_SCHEMA_KEY));
-        assert!(props
-            .iter()
-            .any(|(k, v)| k == "spark.sql.sources.schema.partCol.0" && v == "day"));
-        assert!(props
-            .iter()
-            .any(|(k, v)| k == "spark.sql.sources.provider" && v == "parquet"));
+        assert!(
+            props
+                .iter()
+                .any(|(k, v)| k == "spark.sql.sources.schema.partCol.0" && v == "day")
+        );
+        assert!(
+            props
+                .iter()
+                .any(|(k, v)| k == "spark.sql.sources.provider" && v == "parquet")
+        );
         assert!(props.iter().any(|(k, _)| k == "spark.sql.create.version"));
     }
 
@@ -1576,9 +1586,11 @@ mod tests {
 
         let error = super::table_to_status("hms", &namespace, &table).unwrap_err();
 
-        assert!(error
-            .to_string()
-            .contains("Partition columns missing in Spark schema metadata: day"));
+        assert!(
+            error
+                .to_string()
+                .contains("Partition columns missing in Spark schema metadata: day")
+        );
     }
 
     #[test]
@@ -1667,9 +1679,11 @@ mod tests {
 
         let error = super::table_to_status("hms", &namespace, &table).unwrap_err();
 
-        assert!(error
-            .to_string()
-            .contains("Missing split property part spark.sql.sources.schema.part.0"));
+        assert!(
+            error
+                .to_string()
+                .contains("Missing split property part spark.sql.sources.schema.part.0")
+        );
     }
 
     #[test]

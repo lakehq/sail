@@ -20,9 +20,9 @@ use super::{
     ActionCommit, SnapshotProduceOperation, SnapshotProducer, Transaction, TransactionAction,
 };
 use crate::io::StoreContext;
+use crate::spec::DataFile;
 use crate::spec::manifest::ManifestMetadata;
 use crate::spec::manifest_list::ManifestList;
-use crate::spec::DataFile;
 
 pub struct FastAppendAction {
     check_duplicate: bool,

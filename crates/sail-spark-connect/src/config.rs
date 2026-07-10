@@ -55,12 +55,13 @@ impl SparkRuntimeConfig {
     }
 
     fn validate_removed_key(key: &str, value: &str) -> SparkResult<()> {
-        if let Some(entry) = SPARK_CONFIG.get(key) {
-            if entry.removed.is_some() && entry.default_value != Some(value) {
-                return Err(SparkError::invalid(format!(
-                    "configuration has been removed: {key}"
-                )));
-            }
+        if let Some(entry) = SPARK_CONFIG.get(key)
+            && entry.removed.is_some()
+            && entry.default_value != Some(value)
+        {
+            return Err(SparkError::invalid(format!(
+                "configuration has been removed: {key}"
+            )));
         }
         Ok(())
     }
@@ -208,9 +209,9 @@ fn get_pyspark_major_version() -> Option<u64> {
 }
 
 pub(crate) fn get_pyspark_version() -> SparkResult<String> {
+    use pyo3::Python;
     use pyo3::prelude::PyAnyMethods;
     use pyo3::types::PyModule;
-    use pyo3::Python;
 
     Python::attach(|py| {
         let module = PyModule::import(py, "pyspark")?;

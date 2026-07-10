@@ -13,12 +13,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::arrow::array::{new_null_array, ArrayRef};
+use datafusion::arrow::array::{ArrayRef, new_null_array};
 use datafusion::arrow::datatypes::{FieldRef, Schema, SchemaRef};
 use datafusion::arrow::record_batch::RecordBatch;
 use datafusion_common::{DataFusionError, Result};
-use object_store::path::Path as ObjectPath;
 use object_store::ObjectStoreExt;
+use object_store::path::Path as ObjectPath;
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use sail_common_datafusion::array::record_batch::cast_record_batch_relaxed_tz;
 use url::Url;
@@ -31,13 +31,13 @@ use crate::operations::write::file_writer::location_generator::{
 };
 use crate::operations::write::partition::split_record_batch_by_partition;
 use crate::operations::write::variant_shredding::{
-    apply_variant_shredding_plan, build_variant_shredding_plan,
-    unshred_shredded_variants_for_write, VariantShreddingPlan,
+    VariantShreddingPlan, apply_variant_shredding_plan, build_variant_shredding_plan,
+    unshred_shredded_variants_for_write,
 };
-use crate::spec::schema::Schema as IcebergSchema;
-use crate::spec::types::values::Literal;
-use crate::spec::types::NestedField;
 use crate::spec::DataFile;
+use crate::spec::schema::Schema as IcebergSchema;
+use crate::spec::types::NestedField;
+use crate::spec::types::values::Literal;
 use crate::utils::conversions::to_scalar;
 
 enum PartitionWriterState {
@@ -275,15 +275,15 @@ impl IcebergTableWriter {
             let writer = self.finish_partition_state(state).await?;
             let (bytes, meta) = writer.close().await?;
             let (rel, full) = self.generator.with_partition_dir(Some(partition_dir));
-            log::trace!("iceberg.table_writer.flush_partition.writing: {}", &full);
+            log::trace!("iceberg.table_writer.flush_partition.writing: {}", full);
             self.store
                 .put(&full, object_store::PutPayload::from(bytes))
                 .await
                 .map_err(|e| e.to_string())?;
             log::trace!(
                 "iceberg.table_writer.flush_partition.written: rel={} full={}",
-                &rel,
-                &full
+                rel,
+                full
             );
             let file_path = match self.table_url.join(&rel) {
                 Ok(u) => u.to_string(),

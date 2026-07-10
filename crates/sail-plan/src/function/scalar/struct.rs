@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use datafusion::functions::expr_fn;
-use datafusion_expr::{expr, Expr, ScalarUDF};
+use datafusion_expr::{Expr, ScalarUDF, expr};
 use sail_function::scalar::struct_function::StructFunction;
 
 use crate::error::{PlanError, PlanResult};

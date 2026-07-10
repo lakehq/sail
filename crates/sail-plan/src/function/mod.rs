@@ -87,10 +87,12 @@ pub use generator::get_outer_built_in_generator_functions;
 pub(super) fn transform_count_star_wildcard_expr(arguments: Vec<Expr>) -> Vec<Expr> {
     match arguments.as_slice() {
         #[expect(deprecated)]
-        [Expr::Wildcard {
-            qualifier: None,
-            options: _,
-        }] => {
+        [
+            Expr::Wildcard {
+                qualifier: None,
+                options: _,
+            },
+        ] => {
             vec![Expr::Literal(COUNT_STAR_EXPANSION, None)]
         }
         _ => arguments,

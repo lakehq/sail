@@ -3,7 +3,7 @@ use std::sync::Arc;
 use datafusion::arrow::array::{Array, ArrayRef, StructArray};
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion_common::cast::as_struct_array;
-use datafusion_common::{exec_datafusion_err, exec_err, plan_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_datafusion_err, exec_err, plan_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 #[derive(Debug, PartialEq, Eq, Hash)]

@@ -1,6 +1,6 @@
+use chumsky::Parser;
 use chumsky::input::Input;
 use chumsky::span::SimpleSpan;
-use chumsky::Parser;
 use sail_sql_parser::ast::data_type::DataType;
 use sail_sql_parser::ast::expression::{Expr, IntervalLiteral};
 use sail_sql_parser::ast::identifier::{ObjectName, QualifiedWildcard};
@@ -17,10 +17,10 @@ use sail_sql_parser::token::{Punctuation, Token};
 
 use crate::error::{SqlError, SqlResult};
 use crate::literal::datetime::{
-    create_date_parser, create_time_parser, create_timestamp_parser, DateValue, TimeValue,
-    TimestampValue,
+    DateValue, TimeValue, TimestampValue, create_date_parser, create_time_parser,
+    create_timestamp_parser,
 };
-use crate::literal::interval::{parse_unqualified_interval_string, IntervalValue};
+use crate::literal::interval::{IntervalValue, parse_unqualified_interval_string};
 
 fn map_parser_input<'a, C>(
     (t, s): &'a (Token<'a>, SimpleSpan<usize, C>),

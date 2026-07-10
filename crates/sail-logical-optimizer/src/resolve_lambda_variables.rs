@@ -1,7 +1,7 @@
 use datafusion::optimizer::{AnalyzerRule, ApplyOrder, OptimizerConfig, OptimizerRule};
+use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::Result;
 use datafusion_expr::LogicalPlan;
 
 #[derive(Debug, Default)]

@@ -24,9 +24,9 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
-use futures::stream::once;
+use datafusion_common::{DataFusionError, Result, internal_err};
 use futures::StreamExt;
+use futures::stream::once;
 use parquet::file::properties::WriterProperties;
 use sail_common_datafusion::catalog::{CatalogPartitionField, LakehouseExecutionContext};
 use sail_common_datafusion::datasource::PhysicalSinkMode;
@@ -36,7 +36,7 @@ use crate::datasource::type_converter::{arrow_schema_to_iceberg, iceberg_schema_
 use crate::operations::write::config::WriterConfig;
 use crate::operations::write::table_writer::IcebergTableWriter;
 use crate::physical_plan::action_schema::{
-    encode_add_data_files, encode_commit_meta, iceberg_action_schema, CommitMeta,
+    CommitMeta, encode_add_data_files, encode_commit_meta, iceberg_action_schema,
 };
 use crate::physical_plan::writer_options::IcebergWriterExecOptions;
 use crate::schema_evolution::{SchemaEvolver, SchemaMode};
@@ -233,18 +233,17 @@ impl IcebergWriterExec {
         if let Some(prop_url) = crate::utils::parse_absolute_url(raw) {
             if prop_url.scheme() == table_url.scheme()
                 && prop_url.host_str() == table_url.host_str()
-            {
-                if let (Ok(prop_path), Some(base_path)) = (
+                && let (Ok(prop_path), Some(base_path)) = (
                     crate::utils::url_to_object_path(&prop_url),
                     base_path.as_ref(),
-                ) {
-                    let prop_str = prop_path.as_ref();
-                    let base_str = base_path.as_ref();
-                    if let Some(stripped) = prop_str.strip_prefix(base_str) {
-                        let rel = stripped.trim_start_matches('/').trim_matches('/');
-                        if !rel.is_empty() {
-                            return Some(rel.to_string());
-                        }
+                )
+            {
+                let prop_str = prop_path.as_ref();
+                let base_str = base_path.as_ref();
+                if let Some(stripped) = prop_str.strip_prefix(base_str) {
+                    let rel = stripped.trim_start_matches('/').trim_matches('/');
+                    if !rel.is_empty() {
+                        return Some(rel.to_string());
                     }
                 }
             }

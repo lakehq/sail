@@ -3,7 +3,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 
 use datafusion::common::parquet_config::DFParquetWriterVersion;
-use datafusion::common::{internal_datafusion_err, Result};
+use datafusion::common::{Result, internal_datafusion_err};
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
 use datafusion::execution::{SessionState, SessionStateBuilder};
 use datafusion::functions_aggregate::first_last::first_value_udaf;
@@ -24,7 +24,7 @@ use sail_execution::job_runner::{ClusterJobRunner, LocalJobRunner};
 use sail_execution::worker_manager::{
     KubernetesWorkerManager, KubernetesWorkerManagerOptions, LocalWorkerManager,
 };
-use sail_physical_optimizer::{get_physical_optimizers, PhysicalOptimizerOptions};
+use sail_physical_optimizer::{PhysicalOptimizerOptions, get_physical_optimizers};
 use sail_server::actor::{ActorHandle, ActorSystem};
 
 use crate::catalog::create_catalog_manager;

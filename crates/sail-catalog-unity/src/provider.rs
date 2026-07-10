@@ -11,7 +11,6 @@
 // limitations under the License.
 
 use std::collections::HashMap;
-use std::str::FromStr;
 use std::sync::Arc;
 
 use arrow::datatypes::DataType;
@@ -30,16 +29,17 @@ use sail_catalog::provider::{
 use sail_catalog::utils::{get_property, quote_name_if_needed, quote_namespace_if_needed};
 use sail_common::http::SAIL_USER_AGENT;
 use sail_common_datafusion::catalog::delta::{
-    unity_table_id_value, DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
+    DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
 };
 use sail_common_datafusion::catalog::{
-    identity_partition_fields, DatabaseStatus, TableColumnStatus, TableKind, TableStatus,
+    DatabaseStatus, TableColumnStatus, TableKind, TableStatus, identity_partition_fields,
 };
 
 use crate::data_type::{
     data_type_to_unity_type, unity_struct_field_type_json, unity_type_to_data_type,
 };
-use crate::unity::{types, Client};
+use crate::r#gen;
+use crate::r#gen::ApiClient;
 
 pub(crate) const DEFAULT_URI: &str = "http://localhost:8080/api/2.1/unity-catalog";
 
@@ -68,7 +68,7 @@ impl UnityCatalogProvider {
         })
     }
 
-    async fn get_client(&self) -> CatalogResult<Client> {
+    async fn get_client(&self) -> CatalogResult<ApiClient> {
         let mut headers = reqwest::header::HeaderMap::new();
 
         if let Some(token) = self.options.credentials.retrieve().await? {
@@ -84,8 +84,8 @@ impl UnityCatalogProvider {
             reqwest::header::HeaderValue::from_static(SAIL_USER_AGENT),
         );
 
-        Ok(Client::new_with_client_and_headers(
-            &self.options.uri,
+        Ok(ApiClient::new(
+            self.options.uri.clone(),
             self.http_client.clone(),
             headers,
         ))
@@ -118,16 +118,17 @@ impl UnityCatalogProvider {
 
     async fn create_managed_staging_location(
         &self,
-        client: &Client,
+        client: &ApiClient,
         catalog_name: &str,
         schema_name: &str,
         table: &str,
     ) -> CatalogResult<String> {
-        let request = types::CreateStagingTable::builder()
-            .name(self.object_name(table))
-            .catalog_name(self.object_name(catalog_name))
-            .schema_name(self.object_name(schema_name));
-        let response = match client.create_staging_table().body(request).send().await {
+        let request = r#gen::CreateStagingTable {
+            name: self.object_name(table),
+            catalog_name: self.object_name(catalog_name),
+            schema_name: self.object_name(schema_name),
+        };
+        let response = match client.create_staging_table(request).await {
             Ok(response) => response,
             Err(e) => {
                 return Err(CatalogError::External(format!(
@@ -135,7 +136,7 @@ impl UnityCatalogProvider {
                 )));
             }
         };
-        response.into_inner().staging_location.ok_or_else(|| {
+        response.inner.staging_location.ok_or_else(|| {
             CatalogError::External(
                 "Unity Catalog staging table response is missing a staging location".to_string(),
             )
@@ -152,7 +153,7 @@ impl UnityCatalogProvider {
 
     fn schema_info_to_database_status(
         &self,
-        schema_info: types::SchemaInfo,
+        schema_info: r#gen::SchemaInfo,
         catalog_name: &str,
         schema_name: Option<&str>,
     ) -> DatabaseStatus {
@@ -164,37 +165,39 @@ impl UnityCatalogProvider {
         };
         let database = vec![catalog_name.to_string(), schema_name];
 
-        let mut properties: HashMap<String, String> =
-            schema_info.properties.map(|p| p.0).unwrap_or_default();
-        if let Some(created_at) = schema_info.created_at {
-            if !properties.contains_key("created_at") {
-                properties.insert("created_at".to_string(), created_at.to_string());
-            }
+        let mut properties: HashMap<String, String> = schema_info
+            .properties
+            .map(|p| p.0.into_iter().collect())
+            .unwrap_or_default();
+        if let Some(created_at) = schema_info.created_at
+            && !properties.contains_key("created_at")
+        {
+            properties.insert("created_at".to_string(), created_at.to_string());
         }
-        if let Some(created_by) = schema_info.created_by {
-            if !properties.contains_key("created_by") {
-                properties.insert("created_by".to_string(), created_by);
-            }
+        if let Some(created_by) = schema_info.created_by
+            && !properties.contains_key("created_by")
+        {
+            properties.insert("created_by".to_string(), created_by);
         }
-        if let Some(owner) = schema_info.owner {
-            if !properties.contains_key("owner") {
-                properties.insert("owner".to_string(), owner);
-            }
+        if let Some(owner) = schema_info.owner
+            && !properties.contains_key("owner")
+        {
+            properties.insert("owner".to_string(), owner);
         }
-        if let Some(schema_id) = schema_info.schema_id {
-            if !properties.contains_key("schema_id") {
-                properties.insert("schema_id".to_string(), schema_id);
-            }
+        if let Some(schema_id) = schema_info.schema_id
+            && !properties.contains_key("schema_id")
+        {
+            properties.insert("schema_id".to_string(), schema_id);
         }
-        if let Some(updated_at) = schema_info.updated_at {
-            if !properties.contains_key("updated_at") {
-                properties.insert("updated_at".to_string(), updated_at.to_string());
-            }
+        if let Some(updated_at) = schema_info.updated_at
+            && !properties.contains_key("updated_at")
+        {
+            properties.insert("updated_at".to_string(), updated_at.to_string());
         }
-        if let Some(updated_by) = schema_info.updated_by {
-            if !properties.contains_key("updated_by") {
-                properties.insert("updated_by".to_string(), updated_by);
-            }
+        if let Some(updated_by) = schema_info.updated_by
+            && !properties.contains_key("updated_by")
+        {
+            properties.insert("updated_by".to_string(), updated_by);
         }
 
         DatabaseStatus {
@@ -208,11 +211,11 @@ impl UnityCatalogProvider {
 
     fn table_info_to_table_status(
         &self,
-        table_info: types::TableInfo,
+        table_info: r#gen::TableInfo,
         catalog_name: &str,
         schema_name: &str,
     ) -> CatalogResult<TableStatus> {
-        let types::TableInfo {
+        let r#gen::TableInfo {
             catalog_name: table_catalog_name,
             columns,
             comment,
@@ -239,12 +242,13 @@ impl UnityCatalogProvider {
         let mut partition_by: Vec<String> = vec![];
         // If all partition indices are 0, treat the table as unpartitioned.
         // This can happen in the Unity Catalog endpoint in OneLake.
+        let columns = columns.unwrap_or_default();
         let ignore_partition_index =
             !columns.is_empty() && columns.iter().all(|col| col.partition_index == Some(0));
         let columns = columns
             .into_iter()
             .map(|col| {
-                let types::ColumnInfo {
+                let r#gen::ColumnInfo {
                     comment,
                     name,
                     nullable,
@@ -262,22 +266,22 @@ impl UnityCatalogProvider {
                 } else {
                     partition_index
                 };
-                if partition_index.is_some() {
-                    if let Some(col_name) = &name {
-                        partition_by.push(col_name.to_string());
-                    }
+                if partition_index.is_some()
+                    && let Some(col_name) = &name
+                {
+                    partition_by.push(col_name.to_string());
                 }
                 Ok(TableColumnStatus {
                     name: name.unwrap_or_default(),
                     data_type: unity_type_to_data_type(
-                        type_name,
+                        type_name.map(|type_name| *type_name),
                         type_json,
                         type_text,
                         type_precision,
                         type_scale,
                         type_interval_type,
                     )?,
-                    nullable,
+                    nullable: nullable.unwrap_or(true),
                     comment,
                     default: None,
                     generated_always_as: None,
@@ -293,7 +297,9 @@ impl UnityCatalogProvider {
             .map(|f| f.to_string().to_lowercase())
             .unwrap_or_else(|| "delta".to_string());
 
-        let mut properties: HashMap<String, String> = properties.map(|p| p.0).unwrap_or_default();
+        let mut properties: HashMap<String, String> = properties
+            .map(|p| p.0.into_iter().collect())
+            .unwrap_or_default();
 
         let comment = comment.or(get_property(&properties, "comment"));
 
@@ -321,7 +327,7 @@ impl UnityCatalogProvider {
         }
         let is_external = table_type
             .as_ref()
-            .is_none_or(|table_type| matches!(table_type, types::TableType::External));
+            .is_none_or(|table_type| matches!(&**table_type, r#gen::TableType::External));
         if let Some(table_type) = table_type {
             properties.insert("table_type".to_string(), table_type.to_string());
         }
@@ -381,30 +387,32 @@ impl CatalogProvider for UnityCatalogProvider {
 
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
 
-        let request = types::CreateSchema::builder()
-            .catalog_name(self.object_name(&catalog_name))
-            .name(self.object_name(&schema_name))
-            .comment(comment)
-            .properties(if props.is_empty() {
+        let request = r#gen::CreateSchema {
+            catalog_name: self.object_name(&catalog_name),
+            name: self.object_name(&schema_name),
+            comment,
+            properties: if props.is_empty() {
                 None
             } else {
-                Some(types::SecurablePropertiesMap::from(props))
-            });
+                Some(Box::new(r#gen::SecurablePropertiesMap(
+                    props.into_iter().collect(),
+                )))
+            },
+            storage_root: None,
+        };
 
-        let result = client.create_schema().body(request).send().await;
+        let result = client.create_schema(request).await;
 
         match result {
             Ok(response) => {
-                let schema_info = response.into_inner();
+                let schema_info = response.inner;
                 Ok(self.schema_info_to_database_status(
                     schema_info,
                     &catalog_name,
                     Some(&schema_name),
                 ))
             }
-            Err(progenitor_client::Error::UnexpectedResponse(response))
-                if response.status().as_u16() == 409 && if_not_exists =>
-            {
+            Err(e) if e.status() == Some(reqwest::StatusCode::CONFLICT) && if_not_exists => {
                 self.get_database(database).await
             }
             Err(e) => Err(CatalogError::External(format!(
@@ -422,20 +430,18 @@ impl CatalogProvider for UnityCatalogProvider {
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
         let full_name = self.qualified_object_name(&[&catalog_name, &schema_name]);
 
-        let result = client.get_schema().full_name(&full_name).send().await;
+        let result = client.get_schema(full_name.clone()).await;
 
         match result {
             Ok(response) => {
-                let schema_info = response.into_inner();
+                let schema_info = response.inner;
                 Ok(self.schema_info_to_database_status(
                     schema_info,
                     &catalog_name,
                     Some(&schema_name),
                 ))
             }
-            Err(progenitor_client::Error::UnexpectedResponse(response))
-                if response.status().as_u16() == 404 =>
-            {
+            Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => {
                 Err(CatalogError::NotFound(CatalogObject::Schema, full_name))
             }
             Err(e) => Err(CatalogError::External(format!("Failed to get schema: {e}"))),
@@ -458,20 +464,19 @@ impl CatalogProvider for UnityCatalogProvider {
                 return Err(CatalogError::InvalidArgument(format!(
                     "invalid prefix: {}",
                     quote_namespace_if_needed(x)
-                )))
+                )));
             }
         };
         let result = client
-            .list_schemas()
-            .catalog_name(self.object_name(&catalog_name))
-            .send()
+            .list_schemas(self.object_name(&catalog_name), None, None)
             .await;
 
         match result {
             Ok(response) => {
-                let list_response = response.into_inner();
+                let list_response = response.inner;
                 Ok(list_response
                     .schemas
+                    .unwrap_or_default()
                     .into_iter()
                     .map(|schema_info| {
                         self.schema_info_to_database_status(schema_info, &catalog_name, None)
@@ -499,26 +504,11 @@ impl CatalogProvider for UnityCatalogProvider {
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
         let full_name = self.qualified_object_name(&[&catalog_name, &schema_name]);
 
-        let result = client
-            .delete_schema()
-            .full_name(full_name)
-            .force(cascade)
-            .send()
-            .await;
+        let result = client.delete_schema(full_name, Some(cascade)).await;
 
         match result {
             Ok(_) => Ok(()),
-            Err(progenitor_client::Error::InvalidResponsePayload(bytes, _))
-                if bytes.as_ref() == b"200 OK" =>
-            {
-                Ok(())
-            }
-            Err(e) if e.status().is_some_and(|status| status.is_success()) => Ok(()),
-            Err(progenitor_client::Error::UnexpectedResponse(response))
-                if response.status().as_u16() == 404 && if_exists =>
-            {
-                Ok(())
-            }
+            Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) && if_exists => Ok(()),
             Err(e) => Err(CatalogError::External(format!(
                 "Failed to drop schema: {e}"
             ))),
@@ -590,12 +580,9 @@ impl CatalogProvider for UnityCatalogProvider {
             }
         }
 
-        let data_source_format = types::DataSourceFormat::from_str(&format.trim().to_uppercase())
-            .map_err(|e| {
-            CatalogError::InvalidArgument(format!("Invalid data source format: {e}"))
-        })?;
+        let data_source_format = parse_data_source_format(&format)?;
 
-        let unity_columns: Vec<types::ColumnInfo> = columns
+        let unity_columns: Vec<r#gen::ColumnInfo> = columns
             .iter()
             .enumerate()
             .map(|(idx, col)| {
@@ -627,10 +614,10 @@ impl CatalogProvider for UnityCatalogProvider {
                     .iter()
                     .position(|p| p.column.trim().to_lowercase() == col.name.trim().to_lowercase())
                     .map(|i| i as i32);
-                Ok(types::ColumnInfo {
+                Ok(r#gen::ColumnInfo {
                     comment: col.comment.clone(),
                     name: Some(col.name.clone()),
-                    nullable: col.nullable,
+                    nullable: Some(col.nullable),
                     partition_index,
                     position: Some(idx as i32),
                     type_interval_type,
@@ -643,7 +630,7 @@ impl CatalogProvider for UnityCatalogProvider {
                         )?
                         .to_string(),
                     ),
-                    type_name: Some(unity_type.type_name),
+                    type_name: Some(Box::new(unity_type.type_name)),
                     type_precision,
                     type_scale,
                     type_text: Some(unity_type.type_text),
@@ -660,9 +647,9 @@ impl CatalogProvider for UnityCatalogProvider {
         }
 
         let table_type = if is_external {
-            types::TableType::External
+            r#gen::TableType::External
         } else {
-            types::TableType::Managed
+            r#gen::TableType::Managed
         };
         let storage_location = if is_external {
             location.ok_or_else(|| {
@@ -686,46 +673,47 @@ impl CatalogProvider for UnityCatalogProvider {
                 .await?
         };
 
-        let request = types::CreateTable::builder()
-            .name(self.object_name(table))
-            .catalog_name(self.object_name(&catalog_name))
-            .schema_name(self.object_name(&schema_name))
-            .table_type(table_type)
-            .data_source_format(data_source_format)
-            .columns(unity_columns)
-            .storage_location(storage_location)
-            .comment(comment)
-            .properties(if props.is_empty() {
+        let request = r#gen::CreateTable {
+            name: self.object_name(table),
+            catalog_name: self.object_name(&catalog_name),
+            schema_name: self.object_name(&schema_name),
+            table_type: Box::new(table_type),
+            data_source_format: Box::new(data_source_format),
+            columns: unity_columns,
+            storage_location,
+            comment,
+            properties: if props.is_empty() {
                 None
             } else {
-                Some(types::SecurablePropertiesMap::from(props))
-            });
+                Some(Box::new(r#gen::SecurablePropertiesMap(
+                    props.into_iter().collect(),
+                )))
+            },
+        };
 
-        let result = client.create_table().body(request).send().await;
+        let result = client.create_table(request).await;
 
         match result {
             Ok(response) => {
-                let table_info = response.into_inner();
+                let table_info = response.inner;
                 self.table_info_to_table_status(table_info, &catalog_name, &schema_name)
             }
-            Err(progenitor_client::Error::UnexpectedResponse(response))
-                if response.status().as_u16() == 409 && mode.ignore_if_exists() =>
+            Err(e)
+                if e.status() == Some(reqwest::StatusCode::CONFLICT) && mode.ignore_if_exists() =>
             {
                 self.get_table(database, table).await
             }
-            Err(progenitor_client::Error::UnexpectedResponse(response)) => {
-                let status = response.status();
-                let body = response
-                    .text()
-                    .await
-                    .unwrap_or_else(|e| format!("<failed to read response body: {e}>"));
-                Err(CatalogError::External(format!(
-                    "Failed to create table: HTTP {status}: {body}"
-                )))
+            Err(e) => {
+                if let Some(status) = e.status() {
+                    Err(CatalogError::External(format!(
+                        "Failed to create table: HTTP {status}: {e}"
+                    )))
+                } else {
+                    Err(CatalogError::External(format!(
+                        "Failed to create table: {e}"
+                    )))
+                }
             }
-            Err(e) => Err(CatalogError::External(format!(
-                "Failed to create table: {e}"
-            ))),
         }
     }
 
@@ -738,16 +726,14 @@ impl CatalogProvider for UnityCatalogProvider {
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
         let full_name = self.qualified_object_name(&[&catalog_name, &schema_name, table]);
 
-        let result = client.get_table().full_name(&full_name).send().await;
+        let result = client.get_table(full_name.clone(), None, None).await;
 
         match result {
             Ok(response) => {
-                let table_info = response.into_inner();
+                let table_info = response.inner;
                 self.table_info_to_table_status(table_info, &catalog_name, &schema_name)
             }
-            Err(progenitor_client::Error::UnexpectedResponse(response))
-                if response.status().as_u16() == 404 =>
-            {
+            Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => {
                 Err(CatalogError::NotFound(CatalogObject::Table, full_name))
             }
             Err(e) => Err(CatalogError::External(format!("Failed to get table: {e}"))),
@@ -763,17 +749,20 @@ impl CatalogProvider for UnityCatalogProvider {
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
 
         let result = client
-            .list_tables()
-            .catalog_name(self.object_name(&catalog_name))
-            .schema_name(self.object_name(&schema_name))
-            .send()
+            .list_tables(
+                self.object_name(&catalog_name),
+                self.object_name(&schema_name),
+                None,
+                None,
+            )
             .await;
 
         match result {
             Ok(response) => {
-                let list_response = response.into_inner();
+                let list_response = response.inner;
                 list_response
                     .tables
+                    .unwrap_or_default()
                     .into_iter()
                     .map(|table_info| {
                         self.table_info_to_table_status(table_info, &catalog_name, &schema_name)
@@ -808,22 +797,9 @@ impl CatalogProvider for UnityCatalogProvider {
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
         let full_name = self.qualified_object_name(&[&catalog_name, &schema_name, table]);
 
-        match client.delete_table().full_name(full_name).send().await {
+        match client.delete_table(full_name).await {
             Ok(_) => Ok(()),
-            // The OSS Unity Catalog server currently returns a plain "200 OK" body
-            // for DELETE even though the OpenAPI spec declares a JSON response.
-            Err(progenitor_client::Error::InvalidResponsePayload(bytes, _))
-                if bytes.as_ref() == b"200 OK" =>
-            {
-                Ok(())
-            }
-            Err(e) if e.status().is_some_and(|status| status.is_success()) => Ok(()),
-            Err(e)
-                if e.status()
-                    .is_some_and(|status| status.as_u16() == 404 && if_exists) =>
-            {
-                Ok(())
-            }
+            Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) && if_exists => Ok(()),
             Err(e) => Err(CatalogError::External(format!("Failed to drop table: {e}"))),
         }
     }
@@ -911,7 +887,7 @@ impl CatalogProvider for UnityCatalogProvider {
                 "Unity Catalog Delta commit expects exactly one update payload".to_string(),
             ));
         };
-        let commit: types::DeltaCommit = serde_json::from_value(update.clone()).map_err(|e| {
+        let commit: r#gen::DeltaCommit = serde_json::from_value(update.clone()).map_err(|e| {
             CatalogError::InvalidArgument(format!("Invalid Delta commit payload: {e}"))
         })?;
 
@@ -921,33 +897,32 @@ impl CatalogProvider for UnityCatalogProvider {
             .map_err(|e| CatalogError::External(format!("Failed to load client: {e}")))?;
 
         let _ = (database, table);
-        match client.commit().body(commit).send().await {
+        match client.commit(commit).await {
             Ok(_) => Ok(LakehouseCommitOutcome::Committed { context, payload }),
             // The OSS Unity Catalog server currently returns a plain "200 OK" body
             // for Delta commits even though the OpenAPI spec declares a JSON response.
-            Err(progenitor_client::Error::InvalidResponsePayload(bytes, _))
-                if bytes.as_ref() == b"200 OK" =>
-            {
+            // Such responses are considered unknown errors since JSON deserialization fails.
+            Err(e) if e.status().is_some_and(|s| s.is_success()) => {
                 Ok(LakehouseCommitOutcome::Committed { context, payload })
             }
-            Err(e) if e.status().is_some_and(|status| status.as_u16() == 409) => Err(
+            Err(e) if e.status() == Some(reqwest::StatusCode::CONFLICT) => Err(
                 CatalogError::Conflict(format!("Unity Catalog Delta commit conflict: {e}")),
             ),
-            Err(e) if e.status().is_some_and(|status| status.as_u16() == 400) => {
+            Err(e) if e.status() == Some(reqwest::StatusCode::BAD_REQUEST) => {
                 Err(CatalogError::InvalidArgument(format!(
                     "Unity Catalog Delta commit invalid argument: {e}"
                 )))
             }
-            Err(e) if e.status().is_some_and(|status| status.as_u16() == 401) => Err(
+            Err(e) if e.status() == Some(reqwest::StatusCode::UNAUTHORIZED) => Err(
                 CatalogError::Unauthorized(format!("Unity Catalog Delta commit unauthorized: {e}")),
             ),
-            Err(e) if e.status().is_some_and(|status| status.as_u16() == 403) => Err(
+            Err(e) if e.status() == Some(reqwest::StatusCode::FORBIDDEN) => Err(
                 CatalogError::Forbidden(format!("Unity Catalog Delta commit forbidden: {e}")),
             ),
-            Err(e) if e.status().is_some_and(|status| status.as_u16() == 429) => Err(
+            Err(e) if e.status() == Some(reqwest::StatusCode::TOO_MANY_REQUESTS) => Err(
                 CatalogError::RateLimited(format!("Unity Catalog Delta commit rate limited: {e}")),
             ),
-            Err(e) if e.status().is_some_and(|status| status.as_u16() == 501) => Err(
+            Err(e) if e.status() == Some(reqwest::StatusCode::NOT_IMPLEMENTED) => Err(
                 CatalogError::NotSupported(format!("Unity Catalog Delta commit endpoint: {e}")),
             ),
             Err(e) => Err(CatalogError::External(format!(
@@ -1003,7 +978,7 @@ impl CatalogProvider for UnityCatalogProvider {
             ))
         })?;
 
-        let request = types::DeltaGetCommits {
+        let request = r#gen::DeltaGetCommits {
             end_version: request.end_version,
             start_version: request.start_version,
             table_id: table_id.to_string(),
@@ -1016,9 +991,9 @@ impl CatalogProvider for UnityCatalogProvider {
         let (catalog_name, schema_name) = self.get_catalog_and_schema_name(database)?;
         let full_name = self.qualified_object_name(&[&catalog_name, &schema_name, table]);
 
-        match client.get_commits().body(request).send().await {
+        match client.get_commits(request).await {
             Ok(response) => {
-                let response = response.into_inner();
+                let response = response.inner;
                 Ok(DeltaRatifiedCommitResponse {
                     latest_table_version: response.latest_table_version,
                     commits: response
@@ -1034,15 +1009,15 @@ impl CatalogProvider for UnityCatalogProvider {
                         .collect(),
                 })
             }
-            Err(e) if e.status().is_some_and(|status| status.as_u16() == 400) => {
+            Err(e) if e.status() == Some(reqwest::StatusCode::BAD_REQUEST) => {
                 Err(CatalogError::InvalidArgument(format!(
                     "Unity Catalog Delta commit discovery invalid argument: {e}"
                 )))
             }
-            Err(e) if e.status().is_some_and(|status| status.as_u16() == 404) => {
+            Err(e) if e.status() == Some(reqwest::StatusCode::NOT_FOUND) => {
                 Err(CatalogError::NotFound(CatalogObject::Table, full_name))
             }
-            Err(e) if e.status().is_some_and(|status| status.as_u16() == 501) => {
+            Err(e) if e.status() == Some(reqwest::StatusCode::NOT_IMPLEMENTED) => {
                 Err(CatalogError::NotSupported(format!(
                     "Unity Catalog Delta commit discovery endpoint: {e}"
                 )))
@@ -1085,6 +1060,22 @@ impl CatalogProvider for UnityCatalogProvider {
         Err(CatalogError::NotSupported(
             "Open source Unity Catalog does not support dropping views".to_string(),
         ))
+    }
+}
+
+fn parse_data_source_format(format: &str) -> CatalogResult<r#gen::DataSourceFormat> {
+    match format.trim().to_ascii_uppercase().as_str() {
+        "DELTA" => Ok(r#gen::DataSourceFormat::Delta),
+        "CSV" => Ok(r#gen::DataSourceFormat::Csv),
+        "JSON" => Ok(r#gen::DataSourceFormat::Json),
+        "AVRO" => Ok(r#gen::DataSourceFormat::Avro),
+        "PARQUET" => Ok(r#gen::DataSourceFormat::Parquet),
+        "ORC" => Ok(r#gen::DataSourceFormat::Orc),
+        "TEXT" => Ok(r#gen::DataSourceFormat::Text),
+        "ICEBERG" => Ok(r#gen::DataSourceFormat::Iceberg),
+        other => Err(CatalogError::InvalidArgument(format!(
+            "Invalid data source format: {other}"
+        ))),
     }
 }
 
@@ -1292,7 +1283,7 @@ mod tests {
     #[test]
     #[expect(clippy::panic)]
     fn test_table_info_accepts_null_columns_and_lowercase_column_type_name() {
-        let response: types::ListTablesResponse = serde_json::from_value(serde_json::json!({
+        let response: r#gen::ListTablesResponse = serde_json::from_value(serde_json::json!({
             "tables": [{
                 "catalog_name": "catalog",
                 "schema_name": "schema",
@@ -1315,7 +1306,7 @@ mod tests {
         let provider =
             UnityCatalogProvider::new("test".to_string(), empty_options("catalog", true)).unwrap();
 
-        let mut tables = response.tables.into_iter();
+        let mut tables = response.tables.unwrap_or_default().into_iter();
         let empty_table = provider
             .table_info_to_table_status(tables.next().unwrap(), "catalog", "schema")
             .unwrap();
@@ -1341,7 +1332,7 @@ mod tests {
     #[test]
     #[expect(clippy::panic)]
     fn test_table_info_ignores_onelake_all_zero_partition_indexes() {
-        let response: types::TableInfo = serde_json::from_value(serde_json::json!({
+        let response: r#gen::TableInfo = serde_json::from_value(serde_json::json!({
             "catalog_name": "catalog",
             "schema_name": "schema",
             "name": "typed_table",
@@ -1383,7 +1374,7 @@ mod tests {
     #[test]
     #[expect(clippy::panic)]
     fn test_table_info_preserves_real_partition_index() {
-        let response: types::TableInfo = serde_json::from_value(serde_json::json!({
+        let response: r#gen::TableInfo = serde_json::from_value(serde_json::json!({
             "catalog_name": "catalog",
             "schema_name": "schema",
             "name": "typed_table",

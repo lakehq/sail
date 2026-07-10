@@ -2,7 +2,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{FieldRef, Schema};
-use datafusion::common::{plan_datafusion_err, plan_err, Result};
+use datafusion::common::{Result, plan_datafusion_err, plan_err};
 use datafusion::logical_expr::{LambdaParametersProgress, ValueOrLambda};
 use datafusion::physical_expr::expressions::{LambdaExpr, LambdaVariable};
 use datafusion::physical_expr::{HigherOrderFunctionExpr, PhysicalExpr};
@@ -12,12 +12,12 @@ use datafusion_proto::physical_plan::{
     PhysicalExtensionCodec, PhysicalPlanDecodeContext, PhysicalProtoConverterExtension,
 };
 use datafusion_proto::protobuf::{
-    physical_expr_node, PhysicalExprNode, PhysicalExtensionExprNode, PhysicalPlanNode,
+    PhysicalExprNode, PhysicalExtensionExprNode, PhysicalPlanNode, physical_expr_node,
 };
 use prost::Message;
 
-use crate::plan::gen::extended_physical_expr_node::ExprKind;
-use crate::plan::gen::{
+use crate::plan::r#gen::extended_physical_expr_node::ExprKind;
+use crate::plan::r#gen::{
     ExtendedPhysicalExprNode, HigherOrderUdfExprNode, LambdaExprNode, LambdaVariableExprNode,
 };
 use crate::proto::decode::{try_decode_field_ref, try_decode_higher_order_udf};
@@ -176,7 +176,7 @@ impl RemotePhysicalProtoConverter {
         let param_sets = match fun.lambda_parameters(0, &value_or_lambda)? {
             LambdaParametersProgress::Complete(params) => params,
             LambdaParametersProgress::Partial(_) => {
-                return plan_err!("`{}` returned partial lambda parameters", fun.name())
+                return plan_err!("`{}` returned partial lambda parameters", fun.name());
             }
         };
 

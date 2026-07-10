@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::Schema;
 use datafusion::arrow::record_batch::RecordBatch;
-use datafusion::common::{exec_datafusion_err, plan_err, Result};
+use datafusion::common::{Result, exec_datafusion_err, plan_err};
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
 use datafusion::physical_expr::expressions::UnKnownColumn;
 use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
@@ -11,11 +11,11 @@ use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::repartition::BatchPartitioner;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    internal_err, DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
-    PlanProperties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
+    internal_err,
 };
-use futures::future::try_join_all;
 use futures::StreamExt;
+use futures::future::try_join_all;
 use sail_physical_plan::repartition::RowRoundRobinPartitioner;
 
 use crate::plan::ListListDisplay;

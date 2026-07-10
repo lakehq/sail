@@ -181,6 +181,9 @@ message ExtendedScalarUdf {
     SparkToXmlUdf spark_to_xml = 29;
     SparkBinUdf spark_bin = 30;
     SparkNegativeUdf spark_negative = 31;
+    SparkFromXmlUdf spark_from_xml = 32;
+    SparkCeilUdf spark_ceil = 33;
+    SparkFloorUdf spark_floor = 34;
   }
 }
 
@@ -246,6 +249,10 @@ message SparkToXmlUdf {
     string session_timezone = 1;
 }
 
+message SparkFromXmlUdf {
+  string session_timezone = 1;
+}
+
 message SparkUnixTimestampUdf {
   string timezone = 1;
 }
@@ -279,6 +286,14 @@ message SparkDateUdf {
 
 message SparkVariantGetUdf {
   bool safe = 1;
+}
+
+message SparkCeilUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkFloorUdf {
+  bool ansi_mode = 1;
 }
 
 message SparkNextDayUdf {

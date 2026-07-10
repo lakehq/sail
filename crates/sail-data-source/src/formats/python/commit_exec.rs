@@ -15,7 +15,7 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use datafusion_common::{exec_err, internal_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, exec_err, internal_err};
 use futures::StreamExt;
 
 use super::executor::{InProcessExecutor, PythonExecutor};
@@ -162,10 +162,9 @@ impl ExecutionPlan for PythonDataSourceWriteCommitExec {
                     &mut commit_messages,
                     &mut seen_partitions,
                     &mut first_error,
-                ) {
-                    if first_error.is_none() {
-                        first_error = Some(e.to_string());
-                    }
+                ) && first_error.is_none()
+                {
+                    first_error = Some(e.to_string());
                 }
             }
 
@@ -352,9 +351,11 @@ mod tests {
         let exec = Arc::new(PythonDataSourceWriteCommitExec::new(input1, vec![], 2));
 
         let new_exec = exec.clone().with_new_children(vec![input2]).unwrap();
-        assert!(new_exec
-            .downcast_ref::<PythonDataSourceWriteCommitExec>()
-            .is_some());
+        assert!(
+            new_exec
+                .downcast_ref::<PythonDataSourceWriteCommitExec>()
+                .is_some()
+        );
     }
 
     #[test]

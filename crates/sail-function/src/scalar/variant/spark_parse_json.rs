@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 /// [Credit]: <https://github.com/datafusion-contrib/datafusion-variant/blob/51e0d4be62d7675e9b7b56ed1c0b0a10ae4a28d7/src/json_to_variant.rs>
-use arrow::array::{new_null_array, Array, ArrayRef, StringViewArray, StructArray};
+use arrow::array::{Array, ArrayRef, StringViewArray, StructArray, new_null_array};
 use arrow::compute::cast;
 use arrow_schema::{DataType, Field, Fields};
 use datafusion::common::exec_datafusion_err;
@@ -13,7 +13,7 @@ use datafusion_expr_common::signature::Volatility;
 use parquet_variant_compute::{VariantArrayBuilder, VariantType};
 use parquet_variant_json::append_json;
 use sail_common_datafusion::variant::{
-    variant_metadata_field, VARIANT_METADATA_FIELD_NAME, VARIANT_VALUE_FIELD_NAME,
+    VARIANT_METADATA_FIELD_NAME, VARIANT_VALUE_FIELD_NAME, variant_metadata_field,
 };
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
@@ -210,13 +210,14 @@ impl ScalarUDFImpl for SparkParseJson {
         // without parsing any rows. Placed after coerce_types has validated the
         // string arg type; the JSON parse itself is per-row, so there is no
         // batch-level validation that this short-circuit could silence.
-        if let Some(ColumnarValue::Array(arr)) = args.args.first() {
-            if !arr.is_empty() && arr.null_count() == arr.len() {
-                return Ok(ColumnarValue::Array(new_null_array(
-                    args.return_field.data_type(),
-                    arr.len(),
-                )));
-            }
+        if let Some(ColumnarValue::Array(arr)) = args.args.first()
+            && !arr.is_empty()
+            && arr.null_count() == arr.len()
+        {
+            return Ok(ColumnarValue::Array(new_null_array(
+                args.return_field.data_type(),
+                arr.len(),
+            )));
         }
 
         let safe = self.safe;
@@ -377,7 +378,7 @@ pub(crate) fn convert_variant_binaryview_to_binary(
 #[cfg(test)]
 mod tests {
     use datafusion::logical_expr::{ReturnFieldArgs, ScalarFunctionArgs};
-    use datafusion_common::{exec_err, ScalarValue};
+    use datafusion_common::{ScalarValue, exec_err};
     use parquet_variant::{Variant, VariantBuilder};
     use parquet_variant_compute::VariantArray;
     use sail_common_datafusion::variant::is_variant_metadata_field;

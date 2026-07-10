@@ -3,8 +3,8 @@ use datafusion::arrow::datatypes::SchemaRef;
 use sail_common_datafusion::array::serde::ArrowSerializer;
 use sail_common_datafusion::catalog::{FunctionStatus, LakehouseOperation};
 use sail_common_datafusion::datasource::{
-    is_lakehouse_format, TableFormatAlterTableOperation, TableFormatCreateTableColumn,
-    TableFormatCreateTableInfo, TableFormatRegistry,
+    TableFormatAlterTableOperation, TableFormatCreateTableColumn, TableFormatCreateTableInfo,
+    TableFormatRegistry, is_lakehouse_format,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::plan::PlanService;
@@ -14,8 +14,8 @@ use crate::error::{CatalogError, CatalogObject, CatalogResult};
 use crate::lakehouse::{
     LakehouseCreateMaterialization, LakehouseCreatePlan, LakehouseCreateRequest,
 };
-use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId};
 use crate::manager::CatalogManager;
+use crate::manager::tracker::{CatalogFunctionId, CatalogLogicalPlanId};
 use crate::provider::{
     AlterTableOptions, CreateDatabaseOptions, CreateTableOptions, CreateTemporaryViewOptions,
     CreateViewOptions, DropDatabaseOptions, DropTableOptions, DropTemporaryViewOptions,

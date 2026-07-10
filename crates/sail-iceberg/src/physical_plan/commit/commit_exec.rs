@@ -25,21 +25,21 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
-use futures::stream::once;
+use datafusion_common::{DataFusionError, Result, internal_err};
 use futures::StreamExt;
+use futures::stream::once;
 use object_store::ObjectStoreExt;
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use url::Url;
 
 use crate::catalog_support::commit::{
-    catalog_requirements, table_metadata_location, CatalogCommitOutcome, CatalogTableInfo,
-    IcebergCatalogCommitCoordinator, IcebergCatalogCommitMode,
+    CatalogCommitOutcome, CatalogTableInfo, IcebergCatalogCommitCoordinator,
+    IcebergCatalogCommitMode, catalog_requirements, table_metadata_location,
 };
 use crate::io::StoreContext;
 use crate::operations::bootstrap::{
-    bootstrap_first_snapshot, bootstrap_new_table_with_style, bootstrap_snapshot_action_commit,
-    NewTableMetadataStyle, PersistStrategy,
+    NewTableMetadataStyle, PersistStrategy, bootstrap_first_snapshot,
+    bootstrap_new_table_with_style, bootstrap_snapshot_action_commit,
 };
 use crate::operations::helpers::format_version_for_schema;
 use crate::operations::{SnapshotProduceOperation, Transaction, TransactionAction};
@@ -899,7 +899,7 @@ impl ExecutionPlan for IcebergCommitExec {
                     }
                 }
 
-                log::trace!("commit_exec: applying updates: {:?}", &action_updates);
+                log::trace!("commit_exec: applying updates: {:?}", action_updates);
                 let mut newest_snapshot_seq: Option<i64> = None;
                 let mut newest_snapshot_added_rows: Option<i64> = None;
                 let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
@@ -924,10 +924,10 @@ impl ExecutionPlan for IcebergCommitExec {
                         _ => {}
                     }
                 }
-                if let Some(seq) = newest_snapshot_seq {
-                    if seq > table_meta.last_sequence_number {
-                        table_meta.last_sequence_number = seq;
-                    }
+                if let Some(seq) = newest_snapshot_seq
+                    && seq > table_meta.last_sequence_number
+                {
+                    table_meta.last_sequence_number = seq;
                 }
                 table_meta.last_updated_ms = timestamp_ms;
                 if let Some(added_rows) = newest_snapshot_added_rows {
@@ -965,9 +965,9 @@ impl ExecutionPlan for IcebergCommitExec {
 
                 log::trace!(
                     "Writing metadata: {} snapshot_id={:?} table_url={}",
-                    &new_meta_rel,
+                    new_meta_rel,
                     table_meta.current_snapshot_id,
-                    &table_url
+                    table_url
                 );
 
                 let new_meta_path = object_store::path::Path::from(new_meta_rel.as_str());

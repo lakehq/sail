@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use datafusion::prelude::SessionContext;
-use fastrace::collector::SpanContext;
 use fastrace::Span;
+use fastrace::collector::SpanContext;
 use log::{info, warn};
 use sail_common_datafusion::cached_relation::cleanup_cached_relations;
 use sail_common_datafusion::extension::SessionExtensionAccessor;
@@ -67,19 +67,18 @@ impl SessionManagerActor {
                 Err(e) => Err(e.into()),
             }
         };
-        if let Ok(context) = &context {
-            if let Ok(active_at) = context
+        if let Ok(context) = &context
+            && let Ok(active_at) = context
                 .extension::<ActivityTracker>()
                 .and_then(|tracker| tracker.track_activity())
-            {
-                ctx.send_with_delay(
-                    SessionManagerEvent::ProbeIdleSession {
-                        session_id,
-                        instant: active_at,
-                    },
-                    self.options.session_timeout,
-                );
-            }
+        {
+            ctx.send_with_delay(
+                SessionManagerEvent::ProbeIdleSession {
+                    session_id,
+                    instant: active_at,
+                },
+                self.options.session_timeout,
+            );
         }
         let _ = result.send(context);
         ActorAction::Continue
@@ -92,17 +91,15 @@ impl SessionManagerActor {
         instant: Instant,
     ) -> ActorAction {
         let session = self.sessions.get_mut(&session_id);
-        if let Some(session) = session {
-            if let ServerSessionState::Running { context } = &mut session.state {
-                if let Ok(tracker) = context.extension::<ActivityTracker>() {
-                    if tracker.active_at().is_ok_and(|x| x <= instant) {
-                        info!("removing idle session {session_id}");
-                        Self::delete_session(ctx, session_id, context);
-                        session.deleted_at = Some(Utc::now());
-                        session.state = ServerSessionState::Deleting;
-                    }
-                }
-            }
+        if let Some(session) = session
+            && let ServerSessionState::Running { context } = &mut session.state
+            && let Ok(tracker) = context.extension::<ActivityTracker>()
+            && tracker.active_at().is_ok_and(|x| x <= instant)
+        {
+            info!("removing idle session {session_id}");
+            Self::delete_session(ctx, session_id, context);
+            session.deleted_at = Some(Utc::now());
+            session.state = ServerSessionState::Deleting;
         }
         ActorAction::Continue
     }

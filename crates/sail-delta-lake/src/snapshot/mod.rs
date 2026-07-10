@@ -33,11 +33,11 @@ use serde_json::Value;
 use url::Url;
 
 use crate::checkpoint::{
-    latest_replayable_version, load_replayed_table_header, load_replayed_table_state,
-    ReplayedTableState,
+    ReplayedTableState, latest_replayable_version, load_replayed_table_header,
+    load_replayed_table_state,
 };
-use crate::delta_log::segment_files::ReplayedTableHeader;
 use crate::delta_log::LogStore;
+use crate::delta_log::segment_files::ReplayedTableHeader;
 use crate::schema::{
     arrow_field_physical_name, arrow_schema_reorder_partitions, protocol_supports_type_widening,
     schema_contains_type_widening_metadata, validate_type_widening_metadata,
@@ -64,8 +64,8 @@ mod stats;
 
 pub use config::DeltaSnapshotConfig;
 pub(crate) use config::{
-    catalog_managed_commit_file_name, catalog_managed_commit_path, CatalogManagedCommitFile,
-    CatalogManagedCommitSet,
+    CatalogManagedCommitFile, CatalogManagedCommitSet, catalog_managed_commit_file_name,
+    catalog_managed_commit_path,
 };
 
 pub struct DeltaSnapshot {
@@ -172,7 +172,7 @@ impl DeltaSnapshot {
                         Err(crate::spec::DeltaError::MissingVersion) => {
                             return Err(DeltaTableError::invalid_table_location(
                                 "No commit files found in _delta_log",
-                            ))
+                            ));
                         }
                         Err(err) => return Err(err),
                     }
@@ -190,7 +190,7 @@ impl DeltaSnapshot {
             .await
             {
                 Ok(Some(replayed)) => {
-                    return Self::from_replayed_header(log_store, config, replayed)
+                    return Self::from_replayed_header(log_store, config, replayed);
                 }
                 Ok(None) => {}
                 Err(err) => {
@@ -602,7 +602,7 @@ impl DeltaSnapshot {
     pub async fn all_tombstones(
         &self,
         log_store: &dyn LogStore,
-    ) -> DeltaResult<impl Iterator<Item = Remove>> {
+    ) -> DeltaResult<impl Iterator<Item = Remove> + use<>> {
         Ok(self
             .tombstones(log_store)
             .try_collect::<Vec<_>>()
@@ -613,7 +613,7 @@ impl DeltaSnapshot {
     pub async fn unexpired_tombstones(
         &self,
         log_store: &dyn LogStore,
-    ) -> DeltaResult<impl Iterator<Item = Remove>> {
+    ) -> DeltaResult<impl Iterator<Item = Remove> + use<>> {
         let retention_timestamp = Utc::now().timestamp_millis()
             - self
                 .table_properties()
@@ -1001,14 +1001,14 @@ mod tests {
     use std::collections::{BTreeMap, HashMap};
     use std::sync::Arc;
 
-    use object_store::memory::InMemory;
     use object_store::ObjectStore;
+    use object_store::memory::InMemory;
     use once_cell::sync::OnceCell;
     use url::Url;
 
     use super::DeltaSnapshot;
     use crate::datasource::DeltaScanConfig;
-    use crate::delta_log::{default_logstore, LogStoreRef, StorageConfig};
+    use crate::delta_log::{LogStoreRef, StorageConfig, default_logstore};
     use crate::logical::table_source::DeltaTableSource;
     use crate::snapshot::{CatalogManagedCommitSet, DeltaSnapshotConfig};
     use crate::spec::{
@@ -1429,9 +1429,11 @@ mod tests {
         let protocol = Protocol::new(1, 7, None, Some(vec![TableFeature::VacuumProtocolCheck]));
         let snapshot = test_snapshot(protocol, test_metadata([]), Vec::new());
 
-        assert!(snapshot
-            .build_version_checksum(None, None)
-            .unwrap()
-            .is_none());
+        assert!(
+            snapshot
+                .build_version_checksum(None, None)
+                .unwrap()
+                .is_none()
+        );
     }
 }

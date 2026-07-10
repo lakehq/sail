@@ -4,9 +4,9 @@ use std::task::{Context, Poll};
 
 use datafusion::arrow::compute::concat_batches;
 use datafusion::prelude::SessionContext;
+use fastrace::Span;
 use fastrace::collector::SpanContext;
 use fastrace::future::FutureExt;
-use fastrace::Span;
 use futures::stream;
 use log::{debug, warn};
 use sail_common::spec;
@@ -16,29 +16,29 @@ use sail_common_datafusion::cached_relation::{
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
 use sail_plan::{resolve_and_execute_plan, resolve_physical_plan};
-use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
-use tonic::codegen::tokio_stream::Stream;
 use tonic::Status;
+use tonic::codegen::tokio_stream::Stream;
+use tonic::codegen::tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::executor::{
-    read_stream, to_arrow_batch, Executor, ExecutorBatch, ExecutorMetadata, ExecutorOutput,
-    ExecutorOutputStream,
+    Executor, ExecutorBatch, ExecutorMetadata, ExecutorOutput, ExecutorOutputStream, read_stream,
+    to_arrow_batch,
 };
 use crate::session::SparkSession;
 use crate::spark::connect::execute_plan_response::{
     ResponseType, ResultComplete, SqlCommandResult,
 };
 use crate::spark::connect::{
-    relation, CachedRemoteRelation, CheckpointCommand, CheckpointCommandResult,
+    CachedRemoteRelation, CheckpointCommand, CheckpointCommandResult,
     CommonInlineUserDefinedDataSource, CommonInlineUserDefinedFunction,
     CommonInlineUserDefinedTableFunction, CreateDataFrameViewCommand, ExecutePlanResponse,
     GetResourcesCommand, LocalRelation, MergeIntoTableCommand, Relation,
     RemoveCachedRemoteRelationCommand, SqlCommand, StreamingQueryCommand,
     StreamingQueryCommandResult, StreamingQueryListenerBusCommand, StreamingQueryManagerCommand,
     StreamingQueryManagerCommandResult, WriteOperation, WriteOperationV2,
-    WriteStreamOperationStart, WriteStreamOperationStartResult,
+    WriteStreamOperationStart, WriteStreamOperationStartResult, relation,
 };
 use crate::streaming::timeout_millis;
 
@@ -397,7 +397,7 @@ pub(crate) async fn handle_execute_streaming_query_command(
         | Command::Exception(false) => {
             return Err(SparkError::invalid(format!(
                 "invalid streaming query command: {command:?}"
-            )))
+            )));
         }
     };
     let result = StreamingQueryCommandResult {
@@ -472,18 +472,18 @@ pub(crate) async fn handle_execute_streaming_query_manager_command(
             Some(ResultType::ResetTerminated(true))
         }
         Command::AddListener(_) => {
-            return Err(SparkError::NotImplemented("add listener".to_string()))
+            return Err(SparkError::NotImplemented("add listener".to_string()));
         }
         Command::RemoveListener(_) => {
-            return Err(SparkError::NotImplemented("remove listener".to_string()))
+            return Err(SparkError::NotImplemented("remove listener".to_string()));
         }
         Command::ListListeners(_) => {
-            return Err(SparkError::NotImplemented("list listeners".to_string()))
+            return Err(SparkError::NotImplemented("list listeners".to_string()));
         }
         Command::Active(false) | Command::ResetTerminated(false) => {
             return Err(SparkError::invalid(format!(
                 "invalid streaming query manager command: {command:?}"
-            )))
+            )));
         }
     };
     let result = StreamingQueryManagerCommandResult { result_type };
@@ -815,7 +815,7 @@ pub(crate) async fn handle_execute_register_datasource(
         None => {
             return Err(SparkError::invalid(
                 "RegisterDataSource requires a python_data_source",
-            ))
+            ));
         }
     };
 
@@ -828,17 +828,20 @@ pub(crate) async fn handle_execute_register_datasource(
 
         // Register format in session's TableFormatRegistry with embedded pickled class
         // This provides session isolation - the format is only visible to this session
-        if let Ok(registry) = ctx.extension::<TableFormatRegistry>() {
-            let format = Arc::new(PythonTableFormat::with_pickled_class(name.clone(), command));
-            // Ignore error if already registered (allows re-registration to update)
-            if let Err(e) = registry.register(format) {
-                warn!("Failed to register python datasource {}: {}", name, e);
+        match ctx.extension::<TableFormatRegistry>() {
+            Ok(registry) => {
+                let format = Arc::new(PythonTableFormat::with_pickled_class(name.clone(), command));
+                // Ignore error if already registered (allows re-registration to update)
+                if let Err(e) = registry.register(format) {
+                    warn!("Failed to register python datasource {}: {}", name, e);
+                }
+                log::info!("Registered session-scoped datasource: {}", name);
             }
-            log::info!("Registered session-scoped datasource: {}", name);
-        } else {
-            return Err(SparkError::internal(
-                "TableFormatRegistry not found in session context",
-            ));
+            _ => {
+                return Err(SparkError::internal(
+                    "TableFormatRegistry not found in session context",
+                ));
+            }
         }
     }
 

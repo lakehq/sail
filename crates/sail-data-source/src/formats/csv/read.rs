@@ -15,7 +15,7 @@ use object_store::ObjectStoreExt;
 
 use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
 use crate::listing::utils::infer_listing_compression;
-use crate::options::gen::CsvReadOptions;
+use crate::options::r#gen::CsvReadOptions;
 
 #[derive(Debug, Clone)]
 pub struct CsvReadFormat {
@@ -73,7 +73,7 @@ impl ReadFormat for CsvReadFormat {
                     .await
                     .map_err(|err| {
                         DataFusionError::Context(
-                            format!("Error when processing CSV file {}", &object.location),
+                            format!("Error when processing CSV file {}", object.location),
                             Box::new(err),
                         )
                     })?;

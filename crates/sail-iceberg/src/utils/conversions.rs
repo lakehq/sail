@@ -16,9 +16,9 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    new_empty_array, Array, ArrayRef, BooleanArray, Date32Array, Float32Array, Float64Array,
-    Int32Array, Int64Array, MapArray, StringArray, StructArray, TimestampMicrosecondArray,
-    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
+    Array, ArrayRef, BooleanArray, Date32Array, Float32Array, Float64Array, Int32Array, Int64Array,
+    MapArray, StringArray, StructArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+    TimestampNanosecondArray, TimestampSecondArray, new_empty_array,
 };
 use datafusion::arrow::buffer::OffsetBuffer;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, TimeUnit};

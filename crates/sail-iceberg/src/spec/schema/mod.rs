@@ -30,7 +30,7 @@ mod visitor;
 
 pub use utils::*;
 
-use crate::schema::visitor::{visit_struct, SchemaVisitor};
+use crate::schema::visitor::{SchemaVisitor, visit_struct};
 use crate::{ListType, MapType};
 
 /// Type alias for schema id.

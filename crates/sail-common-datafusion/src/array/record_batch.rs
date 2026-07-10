@@ -2,8 +2,8 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    new_null_array, Array, ArrayRef, LargeListArray, ListArray, MapArray, PrimitiveArray,
-    RecordBatch, RecordBatchOptions, StructArray,
+    Array, ArrayRef, LargeListArray, ListArray, MapArray, PrimitiveArray, RecordBatch,
+    RecordBatchOptions, StructArray, new_null_array,
 };
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{
@@ -117,24 +117,23 @@ fn cast_array_recursively(src: &ArrayRef, target_type: &DataType) -> Result<Arra
     // Handle timestamp timezone metadata adjustments before diving into nested logic.
     if let (DataType::Timestamp(src_unit, _), DataType::Timestamp(target_unit, target_tz)) =
         (src_type, target_type)
+        && src_unit == target_unit
     {
-        if src_unit == target_unit {
-            let adjusted = match src_unit {
-                TimeUnit::Second => {
-                    adjust_timestamp_timezone::<TimestampSecondType>(src, target_tz.clone())?
-                }
-                TimeUnit::Millisecond => {
-                    adjust_timestamp_timezone::<TimestampMillisecondType>(src, target_tz.clone())?
-                }
-                TimeUnit::Microsecond => {
-                    adjust_timestamp_timezone::<TimestampMicrosecondType>(src, target_tz.clone())?
-                }
-                TimeUnit::Nanosecond => {
-                    adjust_timestamp_timezone::<TimestampNanosecondType>(src, target_tz.clone())?
-                }
-            };
-            return Ok(adjusted);
-        }
+        let adjusted = match src_unit {
+            TimeUnit::Second => {
+                adjust_timestamp_timezone::<TimestampSecondType>(src, target_tz.clone())?
+            }
+            TimeUnit::Millisecond => {
+                adjust_timestamp_timezone::<TimestampMillisecondType>(src, target_tz.clone())?
+            }
+            TimeUnit::Microsecond => {
+                adjust_timestamp_timezone::<TimestampMicrosecondType>(src, target_tz.clone())?
+            }
+            TimeUnit::Nanosecond => {
+                adjust_timestamp_timezone::<TimestampNanosecondType>(src, target_tz.clone())?
+            }
+        };
+        return Ok(adjusted);
     }
 
     match (src_type, target_type) {
