@@ -1,0 +1,22 @@
+>>> from pyspark.sql import functions as F
+>>> df = spark.createDataFrame(
+...     [("Alice", 2), ("Bob", 5), ("Alice", None)],
+...     ("name", "age"),
+... )
+>>> result = (
+...     df.orderBy("age")
+...     .select("name", "age")
+...     .groupBy("name")
+...     .agg(F.first("age"))
+... )
+>>> sorted(result.collect(), key=lambda r: r.name)
+[Row(name='Alice', first(age)=None), Row(name='Bob', first(age)=5)]
+
+>>> result = (
+...     df.orderBy("age")
+...     .select("name", "age")
+...     .groupBy("name")
+...     .agg(F.last("age"))
+... )
+>>> sorted(result.collect(), key=lambda r: r.name)
+[Row(name='Alice', last(age)=2), Row(name='Bob', last(age)=5)]

@@ -288,10 +288,10 @@ impl PlanResolver<'_> {
         projections: Vec<NamedExpr>,
         having: Option<Expr>,
     ) -> PlanResult<(Vec<NamedExpr>, Option<Expr>)> {
-        let LogicalPlan::Sort(sort) = input else {
+        let Some(ordering) = Self::input_sort_ordering(input) else {
             return Ok((projections, having));
         };
-        let ordering = &sort.expr;
+        let ordering = &ordering;
         let projections = projections
             .into_iter()
             .map(|x| {
@@ -311,6 +311,36 @@ impl PlanResolver<'_> {
             .map(|x| Self::attach_ordering_to_aggregates(x, ordering))
             .transpose()?;
         Ok((projections, having))
+    }
+
+    // Finds the sort that determines the input row order of an aggregate, looking through
+    // row-order-preserving wrappers remapping the sort keys through each projection.
+    fn input_sort_ordering(input: &LogicalPlan) -> Option<Vec<SortExpr>> {
+        match input {
+            LogicalPlan::Sort(sort) => Some(sort.expr.clone()),
+            LogicalPlan::SubqueryAlias(alias) => Self::input_sort_ordering(alias.input.as_ref()),
+            LogicalPlan::Filter(filter) => Self::input_sort_ordering(filter.input.as_ref()),
+            LogicalPlan::Limit(limit) => Self::input_sort_ordering(limit.input.as_ref()),
+            LogicalPlan::Projection(projection) => {
+                let ordering = Self::input_sort_ordering(projection.input.as_ref())?;
+                ordering
+                    .into_iter()
+                    .map(|sort| {
+                        let index = projection
+                            .expr
+                            .iter()
+                            .position(|e| e.clone().unalias() == sort.expr)?;
+                        let (qualifier, field) = projection.schema.qualified_field(index);
+                        Some(SortExpr {
+                            expr: Expr::from(Column::from((qualifier, field))),
+                            asc: sort.asc,
+                            nulls_first: sort.nulls_first,
+                        })
+                    })
+                    .collect()
+            }
+            _ => None,
+        }
     }
 
     fn attach_ordering_to_aggregates(expr: Expr, ordering: &[SortExpr]) -> PlanResult<Expr> {

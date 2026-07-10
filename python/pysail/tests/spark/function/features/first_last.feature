@@ -65,7 +65,6 @@ Feature: first / last / any_value inherit ordering from an adjacent ORDER BY
 
   Rule: An aliased derived table behaves identically to an unaliased one
 
-    @sail-bug
     Scenario: first respects the inner ORDER BY through an aliased derived table
       When query
         """
@@ -76,7 +75,6 @@ Feature: first / last / any_value inherit ordering from an adjacent ORDER BY
         | result |
         | 20     |
 
-    @sail-bug
     Scenario: last respects the inner ORDER BY through an aliased derived table
       When query
         """
@@ -87,7 +85,6 @@ Feature: first / last / any_value inherit ordering from an adjacent ORDER BY
         | result |
         | 30     |
 
-    @sail-bug
     Scenario: first respects the inner ORDER BY through an aliased derived table with a column list
       When query
         """
