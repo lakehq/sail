@@ -430,7 +430,7 @@ impl<'a> OpenApiGenerator<'a> {
             ));
         }
         let variants = if !discriminator.mapping.is_empty() {
-            self.discriminator_variants_from_mapping(discriminator, inline, in_module)?
+            self.discriminator_variants_from_mapping(discriminator, None, inline, in_module)?
         } else if !schema.one_of.is_empty() {
             self.discriminator_variants_from_schemas(
                 discriminator,
@@ -447,12 +447,16 @@ impl<'a> OpenApiGenerator<'a> {
     fn discriminator_variants_from_mapping(
         &self,
         discriminator: &crate::openapi::spec::Discriminator,
+        references: Option<&BTreeSet<&str>>,
         inline: &mut InlineSchemas,
         in_module: bool,
     ) -> BuildResult<Vec<EnumVariant>> {
         discriminator
             .mapping
             .iter()
+            .filter(|(_, reference)| {
+                references.is_none_or(|references| references.contains(reference.as_str()))
+            })
             .map(|(value, reference)| {
                 self.discriminator_variant(
                     value.clone(),
@@ -530,6 +534,7 @@ impl<'a> OpenApiGenerator<'a> {
         }
 
         let mut inherited_discriminator = None;
+        let mut references = BTreeSet::new();
         for schema in schemas {
             let MaybeRef::Ref(reference) = *schema else {
                 return Ok(None);
@@ -544,6 +549,7 @@ impl<'a> OpenApiGenerator<'a> {
                 Some((existing, _)) if existing == base_reference => {}
                 Some(_) => return Ok(None),
             }
+            references.insert(reference.reference.as_str());
         }
 
         let Some((_, discriminator)) = inherited_discriminator else {
@@ -553,8 +559,12 @@ impl<'a> OpenApiGenerator<'a> {
             return Ok(None);
         }
         let tag = discriminator.property_name.clone();
-        let variants =
-            self.discriminator_variants_from_mapping(discriminator, inline, in_module)?;
+        let variants = self.discriminator_variants_from_mapping(
+            discriminator,
+            Some(&references),
+            inline,
+            in_module,
+        )?;
 
         Ok(Some((tag, variants)))
     }
