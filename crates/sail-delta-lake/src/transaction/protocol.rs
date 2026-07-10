@@ -194,21 +194,7 @@ impl ProtocolChecker {
         protocol: &Protocol,
         schema: &Schema,
     ) -> Result<(), TransactionError> {
-        let contains_timestampntz = contains_timestampntz(schema.fields());
-        let required_features: Option<&[TableFeature]> = match protocol.min_writer_version() {
-            0..=6 => None,
-            _ => protocol.writer_features(),
-        };
-
-        if let Some(table_features) = required_features {
-            if !table_features.contains(&TableFeature::TimestampWithoutTimezone)
-                && contains_timestampntz
-            {
-                return Err(TransactionError::TableFeaturesRequired(
-                    TableFeature::TimestampWithoutTimezone,
-                ));
-            }
-        } else if contains_timestampntz {
+        if contains_timestampntz(schema.fields()) && !self.supports_timestamp_ntz_schema(protocol) {
             return Err(TransactionError::TableFeaturesRequired(
                 TableFeature::TimestampWithoutTimezone,
             ));
@@ -221,26 +207,29 @@ impl ProtocolChecker {
         protocol: &Protocol,
         schema: &Schema,
     ) -> Result<(), TransactionError> {
-        let contains_variant = contains_variant(schema.fields());
-        if contains_variant
-            && !(protocol.min_reader_version() >= 3
-                && protocol.min_writer_version() >= 7
-                && protocol
-                    .reader_features()
-                    .unwrap_or(&[])
-                    .iter()
-                    .any(TableFeature::is_variant_type_feature)
-                && protocol
-                    .writer_features()
-                    .unwrap_or(&[])
-                    .iter()
-                    .any(TableFeature::is_variant_type_feature))
-        {
+        if contains_variant(schema.fields()) && !self.supports_variant_schema(protocol) {
             return Err(TransactionError::TableFeaturesRequired(
                 TableFeature::VariantType,
             ));
         }
         Ok(())
+    }
+
+    pub fn supports_timestamp_ntz_schema(&self, protocol: &Protocol) -> bool {
+        protocol.min_reader_version() >= 3
+            && protocol.min_writer_version() >= 7
+            && protocol.has_reader_feature(&TableFeature::TimestampWithoutTimezone)
+            && protocol.has_writer_feature(&TableFeature::TimestampWithoutTimezone)
+    }
+
+    pub fn supports_variant_schema(&self, protocol: &Protocol) -> bool {
+        protocol.min_reader_version() >= 3
+            && protocol.min_writer_version() >= 7
+            && [TableFeature::VariantType, TableFeature::VariantTypePreview]
+                .iter()
+                .any(|feature| {
+                    protocol.has_reader_feature(feature) && protocol.has_writer_feature(feature)
+                })
     }
 
     pub fn check_can_write_variant_shredding_to_protocol(
