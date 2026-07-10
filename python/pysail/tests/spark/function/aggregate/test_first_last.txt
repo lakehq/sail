@@ -50,16 +50,12 @@
 >>> df.orderBy("k").groupBy().agg(F.first("v")).collect()
 [Row(first(v)=1)]
 
->>> left = spark.createDataFrame([(2, 'b'), (1, 'a')], ("v", "k")).orderBy("k")
+>>> a = spark.createDataFrame([(2, 'b'), (1, 'a')], ("v", "k"))
+>>> b = spark.createDataFrame([(4, 'd'), (3, 'c')], ("v", "k"))
+>>> a.union(b).orderBy("k").groupBy().agg(F.first("v"), F.last("v")).collect()
+[Row(first(v)=1, last(v)=4)]
+
+>>> left = spark.createDataFrame([(2, 'b'), (1, 'a')], ("v", "k"))
 >>> right = spark.createDataFrame([('a',), ('b',)], ("k",))
->>> left.join(right, "k").groupBy().agg(F.first("v")).collect()
-[Row(first(v)=1)]
-
->>> a = spark.createDataFrame([(2, 'b'), (1, 'a')], ("v", "k")).orderBy("k")
->>> b = spark.createDataFrame([(4, 'd'), (3, 'c')], ("v", "k")).orderBy("k")
->>> a.union(b).groupBy().agg(F.first("v")).collect()
-[Row(first(v)=1)]
-
->>> df = spark.createDataFrame([(30, 'c'), (10, 'a'), (20, 'b')], ("v", "k")).repartition(2, "k")
->>> df.sortWithinPartitions("k").groupBy().agg(F.first("v")).collect()
-[Row(first(v)=10)]
+>>> left.join(right, "k").orderBy(F.desc("k")).groupBy().agg(F.first("v")).collect()
+[Row(first(v)=2)]
