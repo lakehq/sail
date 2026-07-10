@@ -59,11 +59,12 @@ impl SparkDate {
         invoke_args: &ScalarFunctionArgs,
     ) -> Result<ColumnarValue> {
         let format_arg = &args[1];
+        let to_date = ToDateFunc::new();
         match &args[0] {
             ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
                 Some(value) => {
-                    let date =
-                        value.and_then(|s| date_formatted_row(s, 0, format_arg, invoke_args));
+                    let date = value
+                        .and_then(|s| date_formatted_row(s, 0, format_arg, invoke_args, &to_date));
                     Ok(ColumnarValue::Scalar(ScalarValue::Date32(date)))
                 }
                 _ => exec_err!("Unsupported data type {scalar:?} for function spark_date"),
@@ -74,18 +75,21 @@ impl SparkDate {
                     array.len(),
                     format_arg,
                     invoke_args,
+                    &to_date,
                 ),
                 DataType::LargeUtf8 => date_formatted_array(
                     as_large_string_array(array)?.iter(),
                     array.len(),
                     format_arg,
                     invoke_args,
+                    &to_date,
                 ),
                 DataType::Utf8View => date_formatted_array(
                     as_string_view_array(array)?.iter(),
                     array.len(),
                     format_arg,
                     invoke_args,
+                    &to_date,
                 ),
                 other => exec_err!("expected string array for `date`, got {other}"),
             },
@@ -202,10 +206,11 @@ fn date_formatted_array<'a>(
     len: usize,
     format_arg: &ColumnarValue,
     invoke_args: &ScalarFunctionArgs,
+    to_date: &ToDateFunc,
 ) -> Result<ColumnarValue> {
     let mut builder = Date32Array::builder(len);
     for (row, value) in values.enumerate() {
-        let date = value.and_then(|s| date_formatted_row(s, row, format_arg, invoke_args));
+        let date = value.and_then(|s| date_formatted_row(s, row, format_arg, invoke_args, to_date));
         match date {
             Some(days) => builder.append_value(days),
             None => builder.append_null(),
@@ -220,9 +225,10 @@ fn date_formatted_row(
     row: usize,
     format_arg: &ColumnarValue,
     invoke_args: &ScalarFunctionArgs,
+    to_date: &ToDateFunc,
 ) -> Option<i32> {
     let format = string_value_at(format_arg, row).ok().flatten()?;
-    date_with_to_date_func(value, format, invoke_args)
+    date_with_to_date_func(value, format, invoke_args, to_date)
 }
 
 /// Parses one value/format pair via DataFusion's `to_date`, returning `None` on failure.
@@ -230,8 +236,10 @@ fn date_with_to_date_func(
     value: &str,
     format: &str,
     invoke_args: &ScalarFunctionArgs,
+    to_date: &ToDateFunc,
 ) -> Option<i32> {
     // Invoke DataFusion per row so one parse failure becomes one NULL, not a batch error.
+    // Its formatted-date parser is private, so this avoids duplicating its behavior.
     let args = ScalarFunctionArgs {
         args: vec![
             ColumnarValue::Scalar(ScalarValue::Utf8(Some(value.to_string()))),
@@ -242,7 +250,7 @@ fn date_with_to_date_func(
         return_field: invoke_args.return_field.clone(),
         config_options: Arc::clone(&invoke_args.config_options),
     };
-    match ToDateFunc::new().invoke_with_args(args) {
+    match to_date.invoke_with_args(args) {
         Ok(ColumnarValue::Scalar(ScalarValue::Date32(days))) => days,
         _ => None,
     }
