@@ -3,6 +3,7 @@
 >>> import pandas as pd
 >>> from pyspark.sql.functions import pandas_udf
 >>> import re
+>>> import tempfile
 
 >>> df = spark.createDataFrame(
 ...     [("Alice", 2), ("Bob", 5), ("Alice", None)],
@@ -131,6 +132,21 @@
 >>> result = df.orderBy("k").select(F.sum("v").over(w_desc).alias("s"), F.last("v").over(w_none).alias("l"))
 >>> result.collect()
 [Row(s=30, l=10), Row(s=50, l=10), Row(s=60, l=10)]
+
+>>> result = df.orderBy("k").select(
+...     "*",
+...     F.sum("v").over(w_desc).alias("s"),
+...     F.last("v").over(w_none).alias("l"),
+... )
+>>> result.columns
+['v', 'k', 'g', 's', 'l']
+>>> result.select("*").columns
+['v', 'k', 'g', 's', 'l']
+>>> with tempfile.TemporaryDirectory() as path:
+...     result.write.mode("overwrite").parquet(path)
+...     written_columns = spark.read.parquet(path).columns
+>>> written_columns
+['v', 'k', 'g', 's', 'l']
 
 >>> stable = spark.createDataFrame([(30, "c"), (10, "a"), (20, "b")], ("v", "k")).coalesce(1)
 >>> stable.alias("inner").orderBy("k").alias("outer").select("v").groupBy().agg(F.first("v").alias("f"), F.last("v").alias("l")).collect()

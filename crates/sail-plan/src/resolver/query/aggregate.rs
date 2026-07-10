@@ -361,15 +361,7 @@ impl PlanResolver<'_> {
                 } else {
                     match child {
                         Some(child) if child.starts_with(&required) => Some(child),
-                        Some(child) => {
-                            for sort in child {
-                                if !required.iter().any(|x| x.expr == sort.expr) {
-                                    required.push(sort);
-                                }
-                            }
-                            Some(required)
-                        }
-                        None => Some(required),
+                        _ => Some(required),
                     }
                 }
             }
@@ -522,7 +514,7 @@ impl PlanResolver<'_> {
                     return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate)));
                 }
 
-                let (input, found) = Self::require_input_sort_inner(Arc::unwrap_or_clone(
+                let (input, found, _) = Self::require_input_sort_inner(Arc::unwrap_or_clone(
                     Arc::clone(&aggregate.input),
                 ))
                 .map_err(|error| DataFusionError::External(Box::new(error)))?;
@@ -535,7 +527,9 @@ impl PlanResolver<'_> {
             .data()?)
     }
 
-    pub(crate) fn require_input_sort_inner(plan: LogicalPlan) -> PlanResult<(LogicalPlan, bool)> {
+    pub(crate) fn require_input_sort_inner(
+        plan: LogicalPlan,
+    ) -> PlanResult<(LogicalPlan, bool, bool)> {
         match plan {
             LogicalPlan::Sort(sort) => Ok((
                 LogicalPlan::Extension(Extension {
@@ -543,6 +537,7 @@ impl PlanResolver<'_> {
                         sort.input, sort.expr, sort.fetch, false,
                     )),
                 }),
+                true,
                 true,
             )),
             LogicalPlan::Limit(mut limit) => {
@@ -557,16 +552,17 @@ impl PlanResolver<'_> {
                     &mut limit.input,
                     Arc::new(LogicalPlan::default()),
                 ));
-                let (input, found) = match fetch {
+                let (input, found, global) = match fetch {
                     Some(fetch) => Self::require_input_sort_with_fetch(input, fetch)?,
                     None => Self::require_input_sort_inner(input)?,
                 };
                 limit.input = Arc::new(input);
-                Ok((LogicalPlan::Limit(limit), found))
+                Ok((LogicalPlan::Limit(limit), found, global))
             }
             LogicalPlan::Extension(extension) => {
-                if extension.node.as_any().is::<RequiredSortNode>() {
-                    return Ok((LogicalPlan::Extension(extension), true));
+                if let Some(sort) = extension.node.as_any().downcast_ref::<RequiredSortNode>() {
+                    let global = !sort.preserve_partitioning();
+                    return Ok((LogicalPlan::Extension(extension), true, global));
                 }
                 if let Some(sort) = extension
                     .node
@@ -583,22 +579,23 @@ impl PlanResolver<'_> {
                             )),
                         }),
                         true,
+                        false,
                     ));
                 }
                 if !extension.node.as_any().is::<MonotonicIdNode>()
                     && !extension.node.as_any().is::<SparkPartitionIdNode>()
                 {
-                    return Ok((LogicalPlan::Extension(extension), false));
+                    return Ok((LogicalPlan::Extension(extension), false, false));
                 }
 
                 let plan = LogicalPlan::Extension(extension);
                 let expressions = plan.expressions();
                 let child = plan.inputs().one()?.clone();
-                let (child, found) = Self::require_input_sort_inner(child)?;
+                let (child, found, global) = Self::require_input_sort_inner(child)?;
                 if found {
-                    Ok((plan.with_new_exprs(expressions, vec![child])?, true))
+                    Ok((plan.with_new_exprs(expressions, vec![child])?, true, global))
                 } else {
-                    Ok((plan, false))
+                    Ok((plan, false, false))
                 }
             }
             plan => {
@@ -611,7 +608,7 @@ impl PlanResolver<'_> {
                         | LogicalPlan::Unnest(_)
                 );
                 if !transparent {
-                    return Ok((plan, false));
+                    return Ok((plan, false, false));
                 }
 
                 // Unnest's with_new_exprs requires no expressions and rebuilds from its own exec_columns.
@@ -621,11 +618,11 @@ impl PlanResolver<'_> {
                     plan.expressions()
                 };
                 let child = plan.inputs().one()?.clone();
-                let (child, found) = Self::require_input_sort_inner(child)?;
+                let (child, found, global) = Self::require_input_sort_inner(child)?;
                 if found {
-                    Ok((plan.with_new_exprs(expressions, vec![child])?, true))
+                    Ok((plan.with_new_exprs(expressions, vec![child])?, true, global))
                 } else {
-                    Ok((plan, false))
+                    Ok((plan, false, false))
                 }
             }
         }
@@ -634,7 +631,7 @@ impl PlanResolver<'_> {
     fn require_input_sort_with_fetch(
         plan: LogicalPlan,
         fetch: usize,
-    ) -> PlanResult<(LogicalPlan, bool)> {
+    ) -> PlanResult<(LogicalPlan, bool, bool)> {
         match plan {
             LogicalPlan::Sort(sort) => Ok((
                 LogicalPlan::Extension(Extension {
@@ -645,6 +642,7 @@ impl PlanResolver<'_> {
                         false,
                     )),
                 }),
+                true,
                 true,
             )),
             plan => {
@@ -657,11 +655,11 @@ impl PlanResolver<'_> {
 
                 let expressions = plan.expressions();
                 let child = plan.inputs().one()?.clone();
-                let (child, found) = Self::require_input_sort_with_fetch(child, fetch)?;
+                let (child, found, global) = Self::require_input_sort_with_fetch(child, fetch)?;
                 if found {
-                    Ok((plan.with_new_exprs(expressions, vec![child])?, true))
+                    Ok((plan.with_new_exprs(expressions, vec![child])?, true, global))
                 } else {
-                    Ok((plan, false))
+                    Ok((plan, false, false))
                 }
             }
         }
