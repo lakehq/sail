@@ -68,20 +68,27 @@ impl SparkDate {
                 }
                 _ => exec_err!("Unsupported data type {scalar:?} for function spark_date"),
             },
-            ColumnarValue::Array(array) => {
-                let len = array.len();
-                let mut builder = Date32Array::builder(len);
-                for row in 0..len {
-                    let value = string_value_at(&args[0], row)?;
-                    let date =
-                        value.and_then(|s| date_formatted_row(s, row, format_arg, invoke_args));
-                    match date {
-                        Some(days) => builder.append_value(days),
-                        None => builder.append_null(),
-                    }
-                }
-                Ok(ColumnarValue::Array(Arc::new(builder.finish())))
-            }
+            ColumnarValue::Array(array) => match array.data_type() {
+                DataType::Utf8 => date_formatted_array(
+                    as_string_array(array)?.iter(),
+                    array.len(),
+                    format_arg,
+                    invoke_args,
+                ),
+                DataType::LargeUtf8 => date_formatted_array(
+                    as_large_string_array(array)?.iter(),
+                    array.len(),
+                    format_arg,
+                    invoke_args,
+                ),
+                DataType::Utf8View => date_formatted_array(
+                    as_string_view_array(array)?.iter(),
+                    array.len(),
+                    format_arg,
+                    invoke_args,
+                ),
+                other => exec_err!("expected string array for `date`, got {other}"),
+            },
         }
     }
 }
@@ -187,6 +194,24 @@ fn string_value_at(arg: &ColumnarValue, row: usize) -> Result<Option<&str>> {
             None => exec_err!("Unexpected scalar type encountered '{scalar}'"),
         },
     }
+}
+
+/// Parses a typed string array using the format argument, returning NULL per row on failure.
+fn date_formatted_array<'a>(
+    values: impl Iterator<Item = Option<&'a str>>,
+    len: usize,
+    format_arg: &ColumnarValue,
+    invoke_args: &ScalarFunctionArgs,
+) -> Result<ColumnarValue> {
+    let mut builder = Date32Array::builder(len);
+    for (row, value) in values.enumerate() {
+        let date = value.and_then(|s| date_formatted_row(s, row, format_arg, invoke_args));
+        match date {
+            Some(days) => builder.append_value(days),
+            None => builder.append_null(),
+        }
+    }
+    Ok(ColumnarValue::Array(Arc::new(builder.finish())))
 }
 
 /// Parses a single value against the format argument at `row`, returning the Date32 days.
