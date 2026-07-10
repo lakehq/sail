@@ -23,28 +23,19 @@ impl SparkDate {
     /// When `is_try` is true, returns NULL on invalid input (for try_cast).
     /// When `is_try` is false, throws an error on invalid input (for cast).
     pub fn new(is_try: bool) -> Self {
+        let string = Coercion::new_exact(TypeSignatureClass::Native(logical_string()));
         // Only try mode accepts the 2-argument formatted form; the non-try form is a
         // synonym for `cast(expr AS DATE)` and accepts a single argument.
         let signature = if is_try {
             Signature::one_of(
                 vec![
-                    TypeSignature::Coercible(vec![Coercion::new_exact(
-                        TypeSignatureClass::Native(logical_string()),
-                    )]),
-                    TypeSignature::Coercible(vec![
-                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
-                        Coercion::new_exact(TypeSignatureClass::Native(logical_string())),
-                    ]),
+                    TypeSignature::Coercible(vec![string.clone()]),
+                    TypeSignature::Coercible(vec![string.clone(), string]),
                 ],
                 Volatility::Immutable,
             )
         } else {
-            Signature::coercible(
-                vec![Coercion::new_exact(TypeSignatureClass::Native(
-                    logical_string(),
-                ))],
-                Volatility::Immutable,
-            )
+            Signature::coercible(vec![string], Volatility::Immutable)
         };
         Self { signature, is_try }
     }
@@ -69,6 +60,14 @@ impl SparkDate {
     ) -> Result<ColumnarValue> {
         let format_arg = &args[1];
         match &args[0] {
+            ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
+                Some(value) => {
+                    let date =
+                        value.and_then(|s| date_formatted_row(s, 0, format_arg, invoke_args));
+                    Ok(ColumnarValue::Scalar(ScalarValue::Date32(date)))
+                }
+                _ => exec_err!("Unsupported data type {scalar:?} for function spark_date"),
+            },
             ColumnarValue::Array(array) => {
                 let len = array.len();
                 let mut builder = Date32Array::builder(len);
@@ -83,14 +82,6 @@ impl SparkDate {
                 }
                 Ok(ColumnarValue::Array(Arc::new(builder.finish())))
             }
-            ColumnarValue::Scalar(scalar) => match scalar.try_as_str() {
-                Some(value) => {
-                    let date =
-                        value.and_then(|s| date_formatted_row(s, 0, format_arg, invoke_args));
-                    Ok(ColumnarValue::Scalar(ScalarValue::Date32(date)))
-                }
-                _ => exec_err!("Unsupported data type {scalar:?} for function spark_date"),
-            },
         }
     }
 }
