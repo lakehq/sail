@@ -497,8 +497,8 @@ fn spark_datasource_provider(logical_format: &str) -> Option<&'static str> {
 
 pub(crate) fn table_location(table: &Table) -> Option<String> {
     let storage = table.sd.as_ref()?;
-    if extract_property(table.parameters.as_ref(), SPARK_DATASOURCE_PROVIDER_KEY).is_some() {
-        if let Some(path) = storage
+    if extract_property(table.parameters.as_ref(), SPARK_DATASOURCE_PROVIDER_KEY).is_some()
+        && let Some(path) = storage
             .serde_info
             .as_ref()
             .and_then(|serde| {
@@ -506,9 +506,8 @@ pub(crate) fn table_location(table: &Table) -> Option<String> {
             })
             .map(str::trim)
             .filter(|path| !path.is_empty())
-        {
-            return Some(path.to_string());
-        }
+    {
+        return Some(path.to_string());
     }
     storage.location.as_ref().map(ToString::to_string)
 }
