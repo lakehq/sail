@@ -7,26 +7,16 @@ use datafusion::arrow::compute::take_arrays;
 use datafusion::arrow::datatypes::UInt32Type;
 use datafusion::arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion::common::runtime::SpawnedTask;
-use datafusion::config::ConfigOptions;
 use datafusion::execution::{SendableRecordBatchStream, TaskContext};
-use datafusion::physical_expr::{conjunction, Partitioning};
+use datafusion::physical_expr::Partitioning;
 use datafusion::physical_plan::execution_plan::{
     CardinalityEffect, EvaluationType, SchedulingType,
 };
-use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::filter_pushdown::{
-    ChildPushdownResult, FilterDescription, FilterPushdownPhase, FilterPushdownPropagation,
-    PushedDown,
-};
-use datafusion::physical_plan::projection::{
-    all_columns, make_with_child, update_expr, ProjectionExec,
-};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
-    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PhysicalExpr,
-    PlanProperties,
+    DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, PlanProperties,
 };
-use datafusion_common::{internal_err, plan_err, Result, Statistics};
+use datafusion_common::{Result, Statistics, internal_err, plan_err};
 use futures::{Stream, StreamExt};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::repartition::{
@@ -493,84 +483,10 @@ impl ExecutionPlan for ExplicitRepartitionExec {
         CardinalityEffect::Equal
     }
 
-    fn try_swapping_with_projection(
-        &self,
-        projection: &ProjectionExec,
-    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
-        // No benefit if projection does not narrow the schema
-        if projection.expr().len() >= projection.input().schema().fields().len() {
-            return Ok(None);
-        }
-
-        // Skip if projection expressions are not simple column references
-        if projection.benefits_from_input_partitioning()[0] || !all_columns(projection.expr()) {
-            return Ok(None);
-        }
-
-        let new_projection = make_with_child(projection, self.input())?;
-        // Handle all partitioning variants — 'ProjectionPushdown' runs before 'RewriteExplicitRepartition'
-        let new_partitioning = match &self.properties.partitioning {
-            Partitioning::Hash(partitions, size) => {
-                let mut new_partitions = vec![];
-                for partition in partitions {
-                    let Some(new_partition) = update_expr(partition, projection.expr(), false)?
-                    else {
-                        return Ok(None);
-                    };
-                    new_partitions.push(new_partition);
-                }
-                Partitioning::Hash(new_partitions, *size)
-            }
-            other => other.clone(),
-        };
-        Ok(Some(Arc::new(ExplicitRepartitionExec::new(
-            new_projection,
-            new_partitioning,
-        ))))
-    }
-
-    fn gather_filters_for_pushdown(
-        &self,
-        _phase: FilterPushdownPhase,
-        parent_filters: Vec<Arc<dyn PhysicalExpr>>,
-        _config: &ConfigOptions,
-    ) -> Result<FilterDescription> {
-        FilterDescription::from_children(parent_filters, &self.children())
-    }
-
-    fn handle_child_pushdown_result(
-        &self,
-        _phase: FilterPushdownPhase,
-        child_pushdown_result: ChildPushdownResult,
-        _config: &ConfigOptions,
-    ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
-        // Collect parent filters that the child did not support
-        let unsupported_filters: Vec<Arc<dyn PhysicalExpr>> = child_pushdown_result
-            .parent_filters
-            .iter()
-            .filter(|&f| matches!(f.all(), PushedDown::No))
-            .map(|f| Arc::clone(&f.filter))
-            .collect();
-
-        if unsupported_filters.is_empty() {
-            return Ok(FilterPushdownPropagation::if_all(child_pushdown_result));
-        }
-
-        // Build a single conjunctive predicate from the unsupported filters
-        // and insert a FilterExec between this ExplicitRepartitionExec and its child.
-        let predicate = conjunction(unsupported_filters);
-        let new_child = Arc::new(FilterExec::try_new(predicate, Arc::clone(self.input()))?);
-        let new_explicit_repartition = Arc::new(ExplicitRepartitionExec::new(
-            new_child,
-            self.properties.partitioning.clone(),
-        ));
-
-        Ok(FilterPushdownPropagation::with_parent_pushdown_result(vec![
-            PushedDown::Yes;
-            child_pushdown_result
-                .parent_filters
-                .len()
-        ])
-        .with_updated_node(new_explicit_repartition))
-    }
+    // TODO: Implement the logic to push down filters or projections.
+    //   The filters and projections are safe to push down if they are
+    //   column references. For other expressions, we may not want to
+    //   push them down since the evaluation can be potentially expensive,
+    //   and the presence of explicit repartitioning indicates that the user
+    //   wants to evaluate these expressions after repartitioning.
 }
