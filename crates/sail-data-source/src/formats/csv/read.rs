@@ -73,7 +73,7 @@ impl ReadFormat for CsvReadFormat {
                     .await
                     .map_err(|err| {
                         DataFusionError::Context(
-                            format!("Error when processing CSV file {}", &object.location),
+                            format!("Error when processing CSV file {}", object.location),
                             Box::new(err),
                         )
                     })?;

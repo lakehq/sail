@@ -38,7 +38,6 @@ impl TableFormat for NoopTableFormat {
             input,
             partition_by,
             bucket_by,
-            sort_order: _,
             ..
         } = info;
 

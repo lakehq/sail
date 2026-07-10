@@ -25,8 +25,8 @@ impl Default for ServerBuilderOptions {
         Self {
             // Disables Nagle's algorithm
             nodelay: true,
-            keepalive: Some(std::time::Duration::from_secs(60)),
-            http2_keepalive_interval: Some(std::time::Duration::from_secs(60)),
+            keepalive: Some(std::time::Duration::from_mins(1)),
+            http2_keepalive_interval: Some(std::time::Duration::from_mins(1)),
             http2_keepalive_timeout: Some(std::time::Duration::from_secs(10)),
             http2_adaptive_window: Some(true),
         }
