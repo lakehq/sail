@@ -79,6 +79,19 @@ pub fn sidecar_file_path(sidecar_filename: &str) -> Path {
     }
 }
 
+pub fn sidecar_log_path(sidecar_filename: &str) -> String {
+    sidecar_file_path(sidecar_filename)
+        .as_ref()
+        .trim_start_matches(&format!("{DELTA_LOG_DIR}{DELIMITER}"))
+        .to_string()
+}
+
+pub fn sidecar_file_name(sidecar_filename: &str) -> String {
+    sidecar_log_path(sidecar_filename)
+        .trim_start_matches(&format!("{SIDECARS_DIR}{DELIMITER}"))
+        .to_string()
+}
+
 pub fn uuid_checkpoint_path(version: i64, uuid: &Uuid) -> Path {
     Path::from(format!(
         "{DELTA_LOG_DIR}/{version:020}.checkpoint.{uuid}.parquet"
@@ -277,6 +290,15 @@ mod tests {
         assert_eq!(
             sidecar_file_path("_sidecars/part.parquet").as_ref(),
             "_delta_log/_sidecars/part.parquet"
+        );
+        assert_eq!(sidecar_log_path("part.parquet"), "_sidecars/part.parquet");
+        assert_eq!(
+            sidecar_log_path("_delta_log/_sidecars/part.parquet"),
+            "_sidecars/part.parquet"
+        );
+        assert_eq!(
+            sidecar_file_name("_delta_log/_sidecars/part.parquet"),
+            "part.parquet"
         );
     }
 

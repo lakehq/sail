@@ -1,20 +1,24 @@
-//! Spark-compatible concat_ws function that handles arrays.
+//! Spark-compatible `concat_ws` function that handles arrays.
 //!
-//! In Spark, `concat_ws(sep, a, b, ...)` joins strings with separator.
-//! If any argument is an array, its elements are joined with the separator.
-//! Null values (both scalar and array elements) are skipped.
+//! In Spark, `concat_ws(sep, a, b, ...)` joins strings with a separator. If any
+//! argument is an array, its elements are joined too. Null values (scalar and
+//! array elements) are skipped; a null separator yields a null row.
+//!
+//! The kernel uses one reused `String` buffer + `StringBuilder`, downcasting each
+//! argument once into a typed accessor before the row loop to avoid per-element
+//! allocation.
 
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    Array, ArrayRef, AsArray, FixedSizeListArray, GenericListArray, GenericListViewArray,
-    OffsetSizeTrait, StringArray,
+    new_null_array, Array, ArrayRef, AsArray, GenericListArray, LargeStringArray, OffsetSizeTrait,
+    StringArray, StringBuilder, StringViewArray,
 };
 use datafusion::arrow::datatypes::DataType;
-use datafusion_common::cast::as_generic_string_array;
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::Result;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
+use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
 use crate::functions_utils::make_scalar_function;
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -50,18 +54,15 @@ impl ScalarUDFImpl for SparkConcatWs {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs { args, .. } = args;
-        if args.is_empty() {
-            return Ok(ColumnarValue::Scalar(ScalarValue::Utf8(
-                Some(String::new()),
-            )));
-        }
-
-        // Use make_scalar_function to handle scalar/array conversion uniformly
-        make_scalar_function(concat_ws_inner, vec![])(&args)
+        // Arity is enforced by `coerce_types` at planning time.
+        make_scalar_function(concat_ws_inner, vec![])(&args.args)
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        // Spark errors on `concat_ws()` with no separator (WRONG_NUM_ARGS).
+        if arg_types.is_empty() {
+            return Err(invalid_arg_count_exec_err("concat_ws", (1, i32::MAX), 0));
+        }
         arg_types
             .iter()
             .map(|arg_type| match arg_type {
@@ -70,11 +71,11 @@ impl ScalarUDFImpl for SparkConcatWs {
                 DataType::LargeUtf8 => Ok(DataType::LargeUtf8),
                 DataType::List(field)
                 | DataType::ListView(field)
-                | DataType::FixedSizeList(field, _) => Ok(DataType::List(field.clone())),
+                | DataType::FixedSizeList(field, _) => Ok(DataType::List(Arc::clone(field))),
                 DataType::LargeList(field) | DataType::LargeListView(field) => {
-                    Ok(DataType::LargeList(field.clone()))
+                    Ok(DataType::LargeList(Arc::clone(field)))
                 }
-                //Attempt to coerce other types to Utf8.
+                // Spark casts any other scalar (numbers, booleans, dates, binary, …) to STRING.
                 other => {
                     if other.is_nested() {
                         Ok(other.clone())
@@ -87,200 +88,161 @@ impl ScalarUDFImpl for SparkConcatWs {
     }
 }
 
-/// Inner function that processes arrays. First array is the separator.
+/// Join each row's parts with the separator. `args[0]` is the separator; the rest
+/// are value arguments (strings, or arrays whose elements are expanded).
 fn concat_ws_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
-    if args.is_empty() {
-        return Ok(Arc::new(StringArray::from(vec![Some(String::new())])));
+    // Arity is enforced by `coerce_types` at planning time; guard the invoke path
+    // too so a direct call that bypasses planning errors instead of panicking.
+    let [separator_arg, value_args @ ..] = args else {
+        return Err(invalid_arg_count_exec_err(
+            "concat_ws",
+            (1, i32::MAX),
+            args.len(),
+        ));
+    };
+    let num_rows = separator_arg.len();
+
+    // A null-typed separator makes every row null. Return an N-null column (not a
+    // single scalar) so the shape lines up with the other arguments.
+    if *separator_arg.data_type() == DataType::Null {
+        return Ok(new_null_array(&DataType::Utf8, num_rows));
     }
 
-    let num_rows = args[0].len();
-    let separator_arr = &args[0];
+    // Downcast every argument once, up front — the per-row loop then does no type
+    // dispatch and no per-element allocation.
+    let separator = StrCol::try_new(separator_arg)?;
+    let values = value_args
+        .iter()
+        .map(ConcatArg::try_new)
+        .collect::<Result<Vec<_>>>()?;
 
-    // Extract separator strings (None for null separators)
-    let separators = get_string_values(separator_arr)?;
+    let mut builder = StringBuilder::with_capacity(num_rows, 0);
+    let mut row_buf = String::new(); // reused across rows; capacity is kept after clear()
 
-    let mut results: Vec<Option<String>> = Vec::with_capacity(num_rows);
+    for row in 0..num_rows {
+        if separator.is_null(row) {
+            builder.append_null();
+            continue;
+        }
+        let sep = separator.value(row);
+        row_buf.clear();
+        let mut first = true;
+        for arg in &values {
+            arg.write_row(row, sep, &mut row_buf, &mut first)?;
+        }
+        builder.append_value(&row_buf);
+    }
 
-    for (row_idx, sep_opt) in separators.iter().enumerate() {
-        // Null separator -> null result
-        let separator = match sep_opt {
-            Some(s) => s.as_str(),
-            None => {
-                results.push(None);
-                continue;
+    Ok(Arc::new(builder.finish()))
+}
+
+/// A string column downcast once. `value`/`is_null` are then branch-only per row.
+enum StrCol<'a> {
+    Utf8(&'a StringArray),
+    LargeUtf8(&'a LargeStringArray),
+    Utf8View(&'a StringViewArray),
+}
+
+impl<'a> StrCol<'a> {
+    fn try_new(arr: &'a ArrayRef) -> Result<Self> {
+        match arr.data_type() {
+            DataType::Utf8 => Ok(Self::Utf8(arr.as_string::<i32>())),
+            DataType::LargeUtf8 => Ok(Self::LargeUtf8(arr.as_string::<i64>())),
+            DataType::Utf8View => Ok(Self::Utf8View(arr.as_string_view())),
+            other => Err(unsupported_data_type_exec_err("concat_ws", "STRING", other)),
+        }
+    }
+
+    fn value(&self, row: usize) -> &str {
+        match self {
+            Self::Utf8(a) => a.value(row),
+            Self::LargeUtf8(a) => a.value(row),
+            Self::Utf8View(a) => a.value(row),
+        }
+    }
+
+    fn is_null(&self, row: usize) -> bool {
+        match self {
+            Self::Utf8(a) => a.is_null(row),
+            Self::LargeUtf8(a) => a.is_null(row),
+            Self::Utf8View(a) => a.is_null(row),
+        }
+    }
+}
+
+/// A value argument, downcast once: a string column, an array of strings, or all-null.
+enum ConcatArg<'a> {
+    Null,
+    Str(StrCol<'a>),
+    List(&'a GenericListArray<i32>),
+    LargeList(&'a GenericListArray<i64>),
+}
+
+impl<'a> ConcatArg<'a> {
+    fn try_new(arr: &'a ArrayRef) -> Result<Self> {
+        match arr.data_type() {
+            DataType::Null => Ok(Self::Null),
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => {
+                Ok(Self::Str(StrCol::try_new(arr)?))
             }
-        };
-
-        let mut parts: Vec<String> = Vec::new();
-
-        // Process remaining arguments
-        for arg in &args[1..] {
-            collect_parts_from_array(arg, row_idx, &mut parts)?;
+            DataType::List(_) => Ok(Self::List(arr.as_list::<i32>())),
+            DataType::LargeList(_) => Ok(Self::LargeList(arr.as_list::<i64>())),
+            other => Err(unsupported_data_type_exec_err(
+                "concat_ws",
+                "STRING or ARRAY<STRING>",
+                other,
+            )),
         }
-
-        results.push(Some(parts.join(separator)));
     }
 
-    Ok(Arc::new(StringArray::from(results)))
-}
-
-/// Get string values from an array, returning Vec<Option<String>> for each row.
-fn get_string_values(arr: &ArrayRef) -> Result<Vec<Option<String>>> {
-    match arr.data_type() {
-        DataType::Null => {
-            // All nulls - separator is null for all rows
-            Ok(vec![None; arr.len()])
+    /// Append this argument's contribution for `row` directly into `buf`.
+    fn write_row(&self, row: usize, sep: &str, buf: &mut String, first: &mut bool) -> Result<()> {
+        match self {
+            Self::Null => {}
+            Self::Str(col) => {
+                if !col.is_null(row) {
+                    push_part(buf, col.value(row), sep, first);
+                }
+            }
+            Self::List(list) => write_list_elements(*list, row, sep, buf, first)?,
+            Self::LargeList(list) => write_list_elements(*list, row, sep, buf, first)?,
         }
-        DataType::Utf8 => {
-            let str_arr = arr.as_string::<i32>();
-            Ok((0..arr.len())
-                .map(|i| {
-                    if str_arr.is_null(i) {
-                        None
-                    } else {
-                        Some(str_arr.value(i).to_string())
-                    }
-                })
-                .collect())
-        }
-        DataType::LargeUtf8 => {
-            let str_arr = arr.as_string::<i64>();
-            Ok((0..arr.len())
-                .map(|i| {
-                    if str_arr.is_null(i) {
-                        None
-                    } else {
-                        Some(str_arr.value(i).to_string())
-                    }
-                })
-                .collect())
-        }
-        DataType::Utf8View => {
-            let str_arr = arr.as_string_view();
-            Ok((0..arr.len())
-                .map(|i| {
-                    if str_arr.is_null(i) {
-                        None
-                    } else {
-                        Some(str_arr.value(i).to_string())
-                    }
-                })
-                .collect())
-        }
-        other => exec_err!("concat_ws separator must be a string, got {:?}", other),
+        Ok(())
     }
 }
 
-/// Collect string parts from an array at a given row index.
-fn collect_parts_from_array(arr: &ArrayRef, row_idx: usize, parts: &mut Vec<String>) -> Result<()> {
-    if arr.is_null(row_idx) {
-        return Ok(()); // Null values are skipped
+/// Append the non-null elements of a list cell into `buf`.
+fn write_list_elements<O: OffsetSizeTrait>(
+    list: &GenericListArray<O>,
+    row: usize,
+    sep: &str,
+    buf: &mut String,
+    first: &mut bool,
+) -> Result<()> {
+    if list.is_null(row) {
+        return Ok(());
     }
-
-    match arr.data_type() {
-        DataType::Null => {
-            // Null type array - all values are null, skip
-        }
-        DataType::Utf8 => {
-            let str_arr = arr.as_string::<i32>();
-            parts.push(str_arr.value(row_idx).to_string());
-        }
-        DataType::LargeUtf8 => {
-            let str_arr = arr.as_string::<i64>();
-            parts.push(str_arr.value(row_idx).to_string());
-        }
-        DataType::Utf8View => {
-            let str_arr = arr.as_string_view();
-            parts.push(str_arr.value(row_idx).to_string());
-        }
-        DataType::List(_) => {
-            collect_parts_from_list::<i32>(arr.as_list(), row_idx, parts)?;
-        }
-        DataType::ListView(_) => {
-            collect_parts_from_list_view::<i32>(arr.as_list_view(), row_idx, parts)?;
-        }
-        DataType::FixedSizeList(_, _) => {
-            collect_parts_from_fixed_size_list(arr.as_fixed_size_list(), row_idx, parts)?;
-        }
-        DataType::LargeList(_) => {
-            collect_parts_from_list::<i64>(arr.as_list(), row_idx, parts)?;
-        }
-        DataType::LargeListView(_) => {
-            collect_parts_from_list_view::<i64>(arr.as_list_view(), row_idx, parts)?;
-        }
-        other => {
-            return exec_err!("concat_ws does not support data type {:?}", other);
+    let elements = list.value(row);
+    // An empty array (e.g. `array()`) or an all-null-typed array contributes
+    // nothing — Spark renders it as "", not an error.
+    if elements.is_empty() || *elements.data_type() == DataType::Null {
+        return Ok(());
+    }
+    let len = elements.len();
+    let elements = StrCol::try_new(&elements)?;
+    for i in 0..len {
+        if !elements.is_null(i) {
+            push_part(buf, elements.value(i), sep, first);
         }
     }
     Ok(())
 }
 
-/// Collect string parts from a list array at a given row index.
-fn collect_parts_from_list<O: OffsetSizeTrait>(
-    arr: &GenericListArray<O>,
-    row_idx: usize,
-    parts: &mut Vec<String>,
-) -> Result<()> {
-    if arr.is_null(row_idx) {
-        return Ok(());
+/// Write `part` into `buf`, prefixing the separator for everything after the first.
+fn push_part(buf: &mut String, part: &str, sep: &str, first: &mut bool) {
+    if !*first {
+        buf.push_str(sep);
     }
-    push_string_elements(&arr.value(row_idx), parts)
-}
-
-/// Collect string parts from a list-view array at a given row index.
-fn collect_parts_from_list_view<O: OffsetSizeTrait>(
-    arr: &GenericListViewArray<O>,
-    row_idx: usize,
-    parts: &mut Vec<String>,
-) -> Result<()> {
-    if arr.is_null(row_idx) {
-        return Ok(());
-    }
-    push_string_elements(&arr.value(row_idx), parts)
-}
-
-/// Collect string parts from a fixed-size list array at a given row index.
-fn collect_parts_from_fixed_size_list(
-    arr: &FixedSizeListArray,
-    row_idx: usize,
-    parts: &mut Vec<String>,
-) -> Result<()> {
-    if arr.is_null(row_idx) {
-        return Ok(());
-    }
-    push_string_elements(&arr.value(row_idx), parts)
-}
-
-/// Push every non-null string element from `values` into `parts`.
-fn push_string_elements(values: &ArrayRef, parts: &mut Vec<String>) -> Result<()> {
-    match values.data_type() {
-        DataType::Utf8 => {
-            let str_arr = as_generic_string_array::<i32>(values)?;
-            for i in 0..str_arr.len() {
-                if !str_arr.is_null(i) {
-                    parts.push(str_arr.value(i).to_string());
-                }
-            }
-        }
-        DataType::LargeUtf8 => {
-            let str_arr = as_generic_string_array::<i64>(values)?;
-            for i in 0..str_arr.len() {
-                if !str_arr.is_null(i) {
-                    parts.push(str_arr.value(i).to_string());
-                }
-            }
-        }
-        DataType::Utf8View => {
-            let str_arr = values.as_string_view();
-            for i in 0..str_arr.len() {
-                if !str_arr.is_null(i) {
-                    parts.push(str_arr.value(i).to_string());
-                }
-            }
-        }
-        other => {
-            return exec_err!("concat_ws array elements must be strings, got {:?}", other);
-        }
-    }
-    Ok(())
+    *first = false;
+    buf.push_str(part);
 }

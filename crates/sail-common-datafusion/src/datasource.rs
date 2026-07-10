@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use datafusion::arrow::datatypes::{DataType, FieldRef, Schema, SchemaRef};
 use datafusion::catalog::Session;
 use datafusion::common::plan_datafusion_err;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::LogicalPlan;
 use datafusion::physical_expr::{
     create_physical_sort_exprs, LexOrdering, LexRequirement, PhysicalSortRequirement,
@@ -14,7 +15,7 @@ use datafusion_common::{not_impl_err, plan_err, Constraints, DFSchema, DFSchemaR
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, TableSource};
 
-use crate::catalog::CatalogPartitionField;
+use crate::catalog::{CatalogPartitionField, LakehouseExecutionContext};
 use crate::extension::SessionExtension;
 use crate::logical_expr::ExprWithSource;
 
@@ -32,10 +33,7 @@ pub const MERGE_ROW_INDEX_COLUMN: &str = "__sail_file_row_index";
 /// Value is one of the [`RowLevelOperationType`] integer constants.
 pub const OPERATION_COLUMN: &str = "__sail_operation_type";
 
-/// Reserved write option name for the fully qualified catalog table name.
-///
-/// The planner carries this as typed private state on [`SinkInfo`]. User-visible option layers must
-/// reject this key so it cannot become part of the public write API.
+/// Reserved private write option name. User-visible option layers must reject this key.
 pub const CATALOG_TABLE_OPTION: &str = "__sail.catalog.table";
 
 /// Internal column carrying pre-aggregated MERGE source row counts on
@@ -64,12 +62,20 @@ pub enum OptionLayer {
 impl OptionLayer {
     /// Converts this option layer into an opaque key-value map.
     ///
-    /// This is used for data sources that have not yet migrated to the typed
-    /// option system. The returned map can be passed to existing code that
-    /// accepts `HashMap<String, String>`.
+    /// This is used when a data source consumes untyped key-value options.
+    /// The returned map can be passed to code that accepts `HashMap<String, String>`.
     pub fn into_opaque_options(self) -> HashMap<String, String> {
         match self {
-            OptionLayer::TablePropertyList { items } => items.into_iter().collect(),
+            OptionLayer::TablePropertyList { items } => items
+                .into_iter()
+                .map(|(key, value)| {
+                    if let Some(key) = key.strip_prefix("option.") {
+                        (key.to_string(), value)
+                    } else {
+                        (key, value)
+                    }
+                })
+                .collect(),
             OptionLayer::OptionList { items } => items.into_iter().collect(),
             OptionLayer::TableLocation { .. }
             | OptionLayer::AsOfTimestamp { .. }
@@ -182,11 +188,8 @@ pub struct BucketBy {
 #[derive(Debug, Clone)]
 pub struct SourceInfo {
     pub paths: Vec<String>,
-    /// Fully qualified catalog table name for catalog-coordinated reads.
-    ///
-    /// This is injected by the planner and must not be accepted from user-facing
-    /// data source options.
-    pub catalog_table: Option<Vec<String>>,
+    /// Unified lakehouse catalog context for catalog-coordinated reads.
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
     /// The (optional) schema of the data source including partitioning columns.
     pub schema: Option<Schema>,
     pub constraints: Constraints,
@@ -204,10 +207,58 @@ pub struct SourceInfo {
     pub read_case_sensitive: bool,
 }
 
+impl SourceInfo {
+    pub fn catalog_table(&self) -> Option<&[String]> {
+        self.lakehouse_table
+            .as_ref()
+            .map(|context| context.catalog_table())
+    }
+}
+
 /// Metadata about an existing table format instance needed during logical planning.
 #[derive(Debug, Clone)]
 pub struct TableFormatMetadata {
     pub schema: SchemaRef,
+    pub properties: Vec<(String, String)>,
+}
+
+/// A column definition used when a catalog DDL statement asks a table format
+/// to create storage metadata before registering the catalog object.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableFormatCreateTableColumn {
+    pub name: String,
+    pub data_type: DataType,
+    pub nullable: bool,
+    pub comment: Option<String>,
+    pub default: Option<String>,
+    pub generated_always_as: Option<String>,
+    pub identity: Option<crate::catalog::CatalogTableColumnIdentity>,
+}
+
+/// Information needed by a table format to initialize storage metadata for a
+/// plain catalog `CREATE TABLE`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableFormatCreateTableInfo {
+    pub path: String,
+    pub columns: Vec<TableFormatCreateTableColumn>,
+    pub comment: Option<String>,
+    pub partition_by: Vec<CatalogPartitionField>,
+    pub properties: Vec<(String, String)>,
+    pub replace: bool,
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
+}
+
+impl TableFormatCreateTableInfo {
+    pub fn catalog_table(&self) -> Option<&[String]> {
+        self.lakehouse_table
+            .as_ref()
+            .map(|context| context.catalog_table())
+    }
+}
+
+/// Storage metadata created by a table format before catalog registration.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct TableFormatCreateTableResult {
     pub properties: Vec<(String, String)>,
 }
 
@@ -223,11 +274,16 @@ pub struct SinkInfo {
     /// A later set of options can override earlier ones.
     /// The path for the sink is stored under the `"path"` key in options.
     pub options: Vec<OptionLayer>,
-    /// Fully qualified catalog table name for catalog-coordinated writes.
-    ///
-    /// This is injected by the planner and must not be accepted from user-facing
-    /// data source options.
-    pub catalog_table: Option<Vec<String>>,
+    /// Unified lakehouse catalog context for catalog-coordinated writes.
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
+}
+
+impl SinkInfo {
+    pub fn catalog_table(&self) -> Option<&[String]> {
+        self.lakehouse_table
+            .as_ref()
+            .map(|context| context.catalog_table())
+    }
 }
 
 /// Information required to create a logical DELETE plan for a table format.
@@ -236,6 +292,7 @@ pub struct DeleteInfo {
     pub table_name: Vec<String>,
     pub path: String,
     pub condition: Option<ExprWithSource>,
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
     /// The layers of options for the delete operation.
     /// A later layer can override earlier ones.
     pub options: Vec<OptionLayer>,
@@ -290,6 +347,7 @@ pub struct MergeTargetInfo {
     pub location: String,
     pub partition_by: Vec<String>,
     pub options: Vec<OptionLayer>,
+    pub lakehouse_table: Option<LakehouseExecutionContext>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -449,6 +507,18 @@ pub trait TableFormat: Send + Sync {
     /// Creates a logical plan for write.
     async fn create_writer(&self, ctx: &dyn Session, info: SinkInfo) -> Result<LogicalPlan>;
 
+    /// Creates storage metadata for a plain catalog `CREATE TABLE` before the
+    /// catalog object is registered. Formats that do not need storage metadata
+    /// at DDL time can keep the default no-op.
+    async fn create_table_metadata(
+        &self,
+        runtime_env: Arc<RuntimeEnv>,
+        info: TableFormatCreateTableInfo,
+    ) -> Result<TableFormatCreateTableResult> {
+        let _ = (runtime_env, info);
+        Ok(TableFormatCreateTableResult::default())
+    }
+
     /// Creates a logical plan for DELETE.
     async fn create_deleter(&self, ctx: &dyn Session, info: DeleteInfo) -> Result<LogicalPlan> {
         let _ = (ctx, info);
@@ -467,7 +537,9 @@ pub trait TableFormat: Send + Sync {
         runtime_env: Arc<datafusion::execution::runtime_env::RuntimeEnv>,
         path: &str,
         operation: TableFormatAlterTableOperation,
+        lakehouse_table: Option<LakehouseExecutionContext>,
     ) -> Result<()> {
+        let _ = lakehouse_table;
         match operation {
             TableFormatAlterTableOperation::SetTableProperties { changes, if_exists } => {
                 self.alter_table_properties(runtime_env, path, changes, if_exists)

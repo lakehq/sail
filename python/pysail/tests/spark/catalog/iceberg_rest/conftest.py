@@ -1,0 +1,251 @@
+"""Pytest fixtures for Iceberg REST catalog integration tests.
+
+Uses SeaweedFS for S3-compatible storage and Iceberg REST-compatible catalog
+servers.
+"""
+
+from __future__ import annotations
+
+import time
+from typing import TYPE_CHECKING
+
+import pytest
+from testcontainers.core.container import DockerContainer
+from testcontainers.core.network import Network
+from testcontainers.core.waiting_utils import wait_for_logs
+
+from pysail.testing.spark.session import spark_connect_server
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
+    from pathlib import Path
+
+NESSIE_NAMESPACE_SEPARATOR = "-"
+
+
+@pytest.fixture(scope="module")
+def docker_network() -> Generator[Network, None, None]:
+    """Create a Docker network for inter-container communication."""
+    network = Network()
+    network.create()
+    yield network
+    network.remove()
+
+
+@pytest.fixture(scope="module")
+def seaweedfs_container(
+    docker_network: Network,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Generator[DockerContainer, None, None]:
+    """Start a SeaweedFS container with S3 API enabled."""
+    # Write S3 IAM config so signed S3 requests with admin/password are accepted.
+    s3_config = (
+        '{"identities":[{"name":"admin","credentials":[{"accessKey":"admin","secretKey":"password"}]'
+        ',"actions":["Admin","Read","Write"]}]}'
+    )
+    tmp_dir = tmp_path_factory.mktemp("seaweedfs")
+    config_path = tmp_dir / "s3_config.json"
+    config_path.write_text(s3_config)
+
+    container = (
+        DockerContainer("chrislusf/seaweedfs:4.21")
+        .with_command("server -s3 -s3.port=8333 -master.volumeSizeLimitMB=64 -s3.config=/etc/seaweedfs/s3_config.json")
+        .with_volume_mapping(str(config_path), "/etc/seaweedfs/s3_config.json", "ro")
+        .with_exposed_ports(8333)
+        .with_network(docker_network)
+        .with_network_aliases("seaweedfs")
+    )
+    container.start()
+    wait_for_logs(container, "Start Seaweed S3 API", timeout=120)
+    yield container
+    container.stop()
+
+
+@pytest.fixture(scope="module")
+def seaweedfs_internal_endpoint() -> str:
+    """Internal S3 endpoint (within Docker network)."""
+    return "http://seaweedfs:8333"
+
+
+@pytest.fixture(scope="module")
+def seaweedfs_host_endpoint(seaweedfs_container: DockerContainer) -> str:
+    """Host-accessible S3 endpoint."""
+    host = seaweedfs_container.get_container_host_ip()
+    port = seaweedfs_container.get_exposed_port(8333)
+    return f"http://{host}:{port}"
+
+
+@pytest.fixture(scope="module")
+def _create_s3_bucket(seaweedfs_host_endpoint: str) -> None:
+    """Create the icebergdata bucket on SeaweedFS using boto3."""
+    import boto3
+    from botocore.config import Config
+
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=seaweedfs_host_endpoint,
+        aws_access_key_id="admin",
+        aws_secret_access_key="password",  # noqa: S106
+        region_name="us-east-1",
+        config=Config(signature_version="s3v4"),
+    )
+    # Retry bucket creation a few times to allow SeaweedFS to fully start
+    max_retries = 10
+    for attempt in range(max_retries):
+        try:
+            s3.create_bucket(Bucket="icebergdata")
+        except Exception:
+            if attempt == max_retries - 1:
+                raise
+            time.sleep(1)
+        else:
+            return
+
+
+@pytest.fixture(scope="module")
+def iceberg_rest_container(
+    docker_network: Network,
+    seaweedfs_container: DockerContainer,  # noqa: ARG001
+    seaweedfs_internal_endpoint: str,
+    _create_s3_bucket: None,
+) -> Generator[DockerContainer, None, None]:
+    """Start an Apache Iceberg REST catalog fixture."""
+    container = (
+        DockerContainer("apache/iceberg-rest-fixture:1.10.1")
+        .with_exposed_ports(8181)
+        .with_env("AWS_ACCESS_KEY_ID", "admin")
+        .with_env("AWS_SECRET_ACCESS_KEY", "password")
+        .with_env("AWS_REGION", "us-east-1")
+        .with_env("CATALOG_CATALOG__IMPL", "org.apache.iceberg.jdbc.JdbcCatalog")
+        .with_env("CATALOG_URI", "jdbc:sqlite:file:/tmp/iceberg_rest_mode=memory")
+        .with_env("CATALOG_WAREHOUSE", "s3://icebergdata/demo")
+        .with_env("CATALOG_IO__IMPL", "org.apache.iceberg.aws.s3.S3FileIO")
+        .with_env("CATALOG_S3_ENDPOINT", seaweedfs_internal_endpoint)
+        .with_env("CATALOG_S3_PATH__STYLE__ACCESS", "true")
+        .with_network(docker_network)
+        .with_network_aliases("iceberg-rest")
+    )
+    container.start()
+    wait_for_logs(container, "INFO org.eclipse.jetty.server.Server - Started ", timeout=120)
+    yield container
+    container.stop()
+
+
+@pytest.fixture(scope="module")
+def iceberg_rest_endpoint(iceberg_rest_container: DockerContainer) -> str:
+    """Host-accessible Iceberg REST catalog endpoint."""
+    host = iceberg_rest_container.get_container_host_ip()
+    port = iceberg_rest_container.get_exposed_port(8181)
+    return f"http://{host}:{port}"
+
+
+@pytest.fixture(scope="module")
+def remote(
+    iceberg_rest_endpoint: str,
+    seaweedfs_host_endpoint: str,
+) -> Generator[str, None, None]:
+    """Start Sail server with Iceberg REST catalog."""
+    catalog_config = f'[{{name="sail", type="iceberg-rest", uri="{iceberg_rest_endpoint}"}}]'
+    with spark_connect_server(
+        envs={
+            "SAIL_CATALOG__LIST": catalog_config,
+            "AWS_ACCESS_KEY_ID": "admin",
+            "AWS_SECRET_ACCESS_KEY": "password",
+            "AWS_REGION": "us-east-1",
+            "AWS_ENDPOINT": seaweedfs_host_endpoint,
+            "AWS_VIRTUAL_HOSTED_STYLE_REQUEST": "false",
+            "AWS_ALLOW_HTTP": "true",
+        },
+    ) as server:
+        yield server.remote
+
+
+def make_nessie_container(
+    docker_network: Network,
+    seaweedfs_internal_endpoint: str,
+    *,
+    config_path: Path | None = None,
+) -> DockerContainer:
+    """Build a Nessie server container with Iceberg REST enabled."""
+    container = (
+        DockerContainer("ghcr.io/projectnessie/nessie:0.107.5")
+        .with_exposed_ports(19120)
+        .with_env("NESSIE_CATALOG_DEFAULT_WAREHOUSE", "warehouse")
+        .with_env("NESSIE_CATALOG_WAREHOUSES_WAREHOUSE_LOCATION", "s3://icebergdata/nessie")
+        .with_env("NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_ENDPOINT", seaweedfs_internal_endpoint)
+        .with_env("NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_REGION", "us-east-1")
+        .with_env("NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_PATH_STYLE_ACCESS", "true")
+        .with_env("NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_AUTH_TYPE", "STATIC")
+        .with_env(
+            "NESSIE_CATALOG_SERVICE_S3_DEFAULT_OPTIONS_ACCESS_KEY",
+            "urn:nessie-secret:quarkus:nessie.catalog.secrets.s3default",
+        )
+        .with_env("NESSIE_CATALOG_SECRETS_S3DEFAULT_NAME", "admin")
+        .with_env("NESSIE_CATALOG_SECRETS_S3DEFAULT_SECRET", "password")
+        .with_network(docker_network)
+        .with_network_aliases("nessie")
+    )
+    if config_path is not None:
+        container = container.with_volume_mapping(
+            str(config_path),
+            "/tmp/nessie-application.properties",  # noqa: S108
+            "ro",
+        ).with_env("QUARKUS_CONFIG_LOCATIONS", "file:/tmp/nessie-application.properties")
+    return container
+
+
+@pytest.fixture(scope="module")
+def nessie_container(
+    docker_network: Network,
+    seaweedfs_container: DockerContainer,  # noqa: ARG001
+    seaweedfs_internal_endpoint: str,
+    _create_s3_bucket: None,
+) -> Generator[DockerContainer, None, None]:
+    """Start a Nessie server with Iceberg REST enabled."""
+    container = make_nessie_container(
+        docker_network,
+        seaweedfs_internal_endpoint,
+    )
+    container.start()
+    wait_for_logs(container, "Nessie 0.107.5", timeout=120)
+    yield container
+    container.stop()
+
+
+@pytest.fixture(scope="module")
+def nessie_iceberg_rest_endpoint(nessie_container: DockerContainer) -> str:
+    """Host-accessible Nessie Iceberg REST catalog endpoint."""
+    host = nessie_container.get_container_host_ip()
+    port = nessie_container.get_exposed_port(19120)
+    return f"http://{host}:{port}/iceberg"
+
+
+@pytest.fixture(scope="module")
+def nessie_container_custom_separator(
+    docker_network: Network,
+    seaweedfs_container: DockerContainer,  # noqa: ARG001
+    seaweedfs_internal_endpoint: str,
+    _create_s3_bucket: None,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Generator[DockerContainer, None, None]:
+    """Start a Nessie server whose Iceberg REST config uses a custom namespace separator."""
+    tmp_dir = tmp_path_factory.mktemp("nessie-custom-separator")
+    config_path = tmp_dir / "nessie-application.properties"
+    config_path.write_text(f"nessie.catalog.iceberg-config-defaults.namespace-separator={NESSIE_NAMESPACE_SEPARATOR}\n")
+    container = make_nessie_container(
+        docker_network,
+        seaweedfs_internal_endpoint,
+        config_path=config_path,
+    )
+    container.start()
+    wait_for_logs(container, "Nessie 0.107.5", timeout=120)
+    yield container
+    container.stop()
+
+
+@pytest.fixture(scope="module")
+def nessie_custom_separator_iceberg_rest_endpoint(nessie_container_custom_separator: DockerContainer) -> str:
+    """Host-accessible custom-separator Nessie Iceberg REST catalog endpoint."""
+    host = nessie_container_custom_separator.get_container_host_ip()
+    port = nessie_container_custom_separator.get_exposed_port(19120)
+    return f"http://{host}:{port}/iceberg"

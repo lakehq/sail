@@ -16,13 +16,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, Field, Fields};
+use sail_catalog::credentials::EmptyCatalogCredentials;
 use sail_catalog::provider::{
     CatalogPartitionField, CatalogProvider, CreateDatabaseOptions, CreateTableColumnOptions,
-    CreateTableOptions, DropDatabaseOptions, DropTableOptions, Namespace,
+    CreateTableMode, CreateTableOptions, DropDatabaseOptions, DropTableOptions, Namespace,
     RuntimeAwareCatalogProvider,
 };
 use sail_catalog_unity::unity::{types, Client};
-use sail_catalog_unity::UnityCatalogProvider;
+use sail_catalog_unity::{UnityCatalogOptions, UnityCatalogProvider};
 use sail_common::runtime::RuntimeHandle;
 use sail_common::spec::{
     SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
@@ -145,9 +146,12 @@ async fn setup_catalog(
         || {
             UnityCatalogProvider::new(
                 "sail".to_string(),
-                &Some(DEFAULT_CATALOG.to_string()),
-                &Some(rest_url.clone()),
-                &None,
+                UnityCatalogOptions {
+                    default_catalog: DEFAULT_CATALOG.to_string(),
+                    uri: rest_url.clone(),
+                    credentials: Arc::new(EmptyCatalogCredentials),
+                    quote_object_name: true,
+                },
             )
         },
         runtime.io().clone(),
@@ -675,8 +679,7 @@ async fn test_create_table() {
                 partition_by: vec![],
                 sort_by: vec![],
                 bucket_by: None,
-                if_not_exists: false,
-                replace: false,
+                mode: CreateTableMode::Create,
                 properties: vec![],
                 is_external: true,
                 is_write_precondition: false,
@@ -817,8 +820,7 @@ async fn test_create_table() {
                 partition_by: vec![],
                 sort_by: vec![],
                 bucket_by: None,
-                if_not_exists: false,
-                replace: false,
+                mode: CreateTableMode::Create,
                 properties: vec![],
                 is_external: true,
                 is_write_precondition: false,
@@ -840,8 +842,7 @@ async fn test_create_table() {
                 partition_by: vec![],
                 sort_by: vec![],
                 bucket_by: None,
-                if_not_exists: true,
-                replace: false,
+                mode: CreateTableMode::CreateIfNotExists,
                 properties: vec![],
                 is_external: true,
                 is_write_precondition: false,
@@ -895,8 +896,7 @@ async fn test_create_table() {
                 }],
                 sort_by: vec![],
                 bucket_by: None,
-                if_not_exists: false,
-                replace: false,
+                mode: CreateTableMode::Create,
                 properties: vec![
                     ("option.key1".to_string(), "value1".to_string()),
                     ("owner".to_string(), "mr. meow".to_string()),
@@ -1074,8 +1074,7 @@ async fn test_get_table() {
                 }],
                 sort_by: vec![],
                 bucket_by: None,
-                if_not_exists: false,
-                replace: false,
+                mode: CreateTableMode::Create,
                 properties: vec![
                     ("option.key1".to_string(), "value1".to_string()),
                     ("owner".to_string(), "mr. meow".to_string()),
@@ -1239,8 +1238,7 @@ async fn test_list_tables() {
                 partition_by: vec![],
                 sort_by: vec![],
                 bucket_by: None,
-                if_not_exists: false,
-                replace: false,
+                mode: CreateTableMode::Create,
                 properties: vec![],
                 is_external: true,
                 is_write_precondition: false,
@@ -1262,8 +1260,7 @@ async fn test_list_tables() {
                 partition_by: vec![],
                 sort_by: vec![],
                 bucket_by: None,
-                if_not_exists: false,
-                replace: false,
+                mode: CreateTableMode::Create,
                 properties: vec![],
                 is_external: true,
                 is_write_precondition: false,
@@ -1335,8 +1332,7 @@ async fn test_drop_table() {
                 partition_by: vec![],
                 sort_by: vec![],
                 bucket_by: None,
-                if_not_exists: false,
-                replace: false,
+                mode: CreateTableMode::Create,
                 properties: vec![],
                 is_external: true,
                 is_write_precondition: false,

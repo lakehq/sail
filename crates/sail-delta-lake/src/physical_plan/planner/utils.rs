@@ -152,7 +152,7 @@ pub fn build_standard_write_layers(
         ctx.table_exists(),
         writer_schema,
         write_context.clone(),
-        ctx.catalog_table().cloned(),
+        ctx.lakehouse_table().cloned(),
     )?);
 
     // DeltaCommitExec is single-partition; gather writer partitions first.
@@ -167,7 +167,7 @@ pub fn build_standard_write_layers(
         sink_mode.clone(),
         ctx.options().user_metadata.clone(),
         write_context.commit_context.clone(),
-        ctx.catalog_table().cloned(),
+        ctx.lakehouse_table().cloned(),
     )))
 }
 
@@ -242,6 +242,7 @@ pub async fn build_log_replay_pipeline_with_options(
         LogSegmentResolveOptions {
             commit_version_range: options.commit_version_range,
         },
+        snapshot.load_config().catalog_managed_commits.as_ref(),
     )
     .await?;
     build_log_replay_pipeline_with_files(

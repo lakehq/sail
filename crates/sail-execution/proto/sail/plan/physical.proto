@@ -64,18 +64,88 @@ message ExtendedPhysicalPlanNode {
     DeletionVectorRowsWriterExecNode deletion_vector_rows_writer = 49;
     CoalesceExecNode coalesce = 50;
     FileDeleteExecNode file_delete = 51;
+    NoopSinkExecNode noop_sink = 52;
+    CsvExecNode csv = 53;
+    ParquetExecNode parquet = 54;
   }
 }
 
 message ExtendedPhysicalExprNode {
   oneof ExprKind {
     CastColumnExprNode schema_evolution_cast = 1;
+    HigherOrderUdfExprNode higher_order_udf = 2;
+    LambdaExprNode lambda = 3;
+    LambdaVariableExprNode lambda_variable = 4;
   }
 }
 
 message CastColumnExprNode {
   bytes input_schema = 1;
   bytes target_schema = 2;
+}
+
+message LambdaExprNode {
+  repeated string params = 1;
+}
+
+message LambdaVariableExprNode {
+  uint32 index = 1;
+  bytes field = 2;
+}
+
+message HigherOrderUdfExprNode {
+  HigherOrderUdf udf = 1;
+}
+
+message HigherOrderUdf {
+  oneof HigherOrderUdfKind {
+    SparkArrayFilterUdf filter = 1;
+    SparkArrayTransformUdf transform = 2;
+    SparkArrayExistsUdf exists = 3;
+    SparkArrayForallUdf forall = 4;
+    SparkArrayAggregateUdf aggregate = 5;
+    SparkArraySortUdf sort = 6;
+  }
+}
+
+message SparkArrayAggregateUdf {
+  bool element_first = 1;
+}
+
+message SparkArrayExistsUdf {}
+
+message SparkArrayForallUdf {}
+
+message SparkArrayFilterUdf {
+  // True when the lambda parameters are `[index, element]` (an index-only
+  // lambda rewritten by the planner) instead of `[element, index]`.
+  //
+  // TODO: this flag exists only to work around a DataFusion 54 physical lambda
+  // alignment bug. `LambdaExpr::new` (datafusion-physical-expr 54,
+  // src/expressions/lambda.rs) collects the body's used column/variable indices,
+  // sorts them, and remaps the body to compact positions; the eval batch is
+  // built as `[captures..., all declared params]` and projected to those used
+  // indices. When an earlier declared param is unused and a later one is used
+  // (e.g. `(x, i) -> i % 2 = 0`), the remap misaligns and evaluation fails with
+  // "Field of physical LambdaVariable ... doesn't match batch field". No
+  // dedicated upstream issue exists yet (worth filing). Once fixed upstream, the
+  // `index_first` rewrite and this field can be removed.
+  bool index_first = 1;
+}
+
+message SparkArrayTransformUdf {
+  // True when the lambda parameters are `[index, element]` (an index-only
+  // lambda rewritten by the planner) instead of `[element, index]`. See the
+  // identical workaround documented on `SparkArrayFilterUdf.index_first`.
+  bool index_first = 1;
+}
+
+message SparkArraySortUdf {
+  // True when the comparator columns are fed in `[right, left]` order (a
+  // right-only comparator `(l, r) -> f(r)` rewritten by the planner to a
+  // single-parameter lambda). See the identical workaround documented on
+  // `SparkArrayFilterUdf.index_first`.
+  bool swapped = 1;
 }
 
 message ExtendedScalarUdf {
@@ -110,6 +180,7 @@ message ExtendedScalarUdf {
     SparkToCharUdf spark_to_char = 28;
     SparkToXmlUdf spark_to_xml = 29;
     SparkBinUdf spark_bin = 30;
+    SparkNegativeUdf spark_negative = 31;
   }
 }
 
@@ -126,7 +197,12 @@ message ExtendedAggregateUdf {
     PySparkGroupAggUdaf py_spark_group_agg = 2;
     PySparkGroupMapUdaf py_spark_group_map = 3;
     PySparkBatchCollectorUdaf py_spark_batch_collector = 4;
+    PercentileDiscUdaf percentile_disc = 5;
   }
+}
+
+message PercentileDiscUdaf {
+  bool ansi_mode = 1;
 }
 
 message StandardUdf {}
@@ -194,6 +270,7 @@ message TimestampNowUdf {
 message SparkTimestampUdf {
   optional string timezone = 1;
   bool is_try = 2;
+  bool ansi_mode = 3;
 }
 
 message SparkDateUdf {
@@ -227,6 +304,10 @@ message SparkParseJsonUdf {
 }
 
 message SparkPmodUdf {
+  bool ansi_mode = 1;
+}
+
+message SparkNegativeUdf {
   bool ansi_mode = 1;
 }
 
@@ -273,10 +354,16 @@ message StandardUdaf {}
 message ExtendedWindowUdf {
   oneof UdwfKind {
     StandardUdwf standard = 1;
+    SparkFirstLastValueUdwf spark_first_last_value = 2;
   }
 }
 
 message StandardUdwf {}
+
+message SparkFirstLastValueUdwf {
+  bool first = 1;
+  bool ignore_nulls = 2;
+}
 
 // Distinguishes Pandas (202) vs Arrow-native (252) grouped aggregate UDFs
 enum PySparkGroupAggKind {
@@ -497,6 +584,17 @@ message NdJsonExecNode {
   CompressionTypeVariant file_compression_type = 2;
 }
 
+message CsvExecNode {
+  bytes base_config = 1;
+  bytes options = 2;
+}
+
+message ParquetExecNode {
+  bytes base_config = 1;
+  bytes options = 2;
+  optional bytes predicate = 3;
+}
+
 message ArrowExecNode {
   bytes base_config = 1;
 }
@@ -605,7 +703,7 @@ message DeltaWriterExecNode {
   PhysicalSinkMode sink_mode = 7;
   map<string, string> metadata_configuration = 8;
   DeltaWriteContext write_context = 9;
-  repeated string catalog_table = 10;
+  string lakehouse_table_json = 10;
 }
 
 message DeltaCommitExecNode {
@@ -617,7 +715,7 @@ message DeltaCommitExecNode {
   PhysicalSinkMode sink_mode = 6;
   optional string user_metadata = 7;
   DeltaCommitContext commit_context = 8;
-  repeated string catalog_table = 9;
+  string lakehouse_table_json = 9;
 }
 
 message DeltaScanByAddsExecNode {
@@ -631,7 +729,8 @@ message DeltaScanByAddsExecNode {
   optional bytes pushdown_filter = 8;
   int64 version = 9;
   optional bytes statistics = 10;
-  repeated string catalog_table = 11;
+  string lakehouse_table_json = 11;
+  string catalog_managed_commits_json = 12;
   // TODO: Consider snapshot hints (partition columns, kernel schema) to avoid worker log reads.
 }
 
@@ -656,6 +755,10 @@ message DeltaRemoveActionsExecNode {
 }
 
 message ConsoleSinkExecNode {
+  bytes input = 1;
+}
+
+message NoopSinkExecNode {
   bytes input = 1;
 }
 
@@ -795,11 +898,13 @@ message IcebergWriterExecNode {
   bool table_exists = 5;
   string options = 6;
   bytes logical_input_schema = 7;
+  string lakehouse_table_json = 8;
 }
 
 message IcebergCommitExecNode {
   bytes input = 1;
   string table_url = 2;
+  string lakehouse_table_json = 3;
 }
 
 message IcebergManifestScanExecNode {

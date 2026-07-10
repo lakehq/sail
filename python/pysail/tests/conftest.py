@@ -19,10 +19,13 @@ def pytest_configure(config):
     # of pytest.
     # In common cases, plugins only access the configuration for the first time after this hook,
     # so the cache is not a problem.
-    config.inicfg["doctest_optionflags"] = "ELLIPSIS NORMALIZE_WHITESPACE IGNORE_EXCEPTION_DETAIL"
+    config.inicfg["doctest_optionflags"] = [
+        "ELLIPSIS",
+        "NORMALIZE_WHITESPACE",
+        "IGNORE_EXCEPTION_DETAIL",
+    ]
 
-    # Syrupy snapshots:
-    # Default Syrupy format is Amber (`.ambr`), but we prefer standard YAML multi-doc files.
+    # Default Syrupy snapshot format is Amber (`.ambr`), but we prefer standard YAML multi-doc files.
     default_ext = getattr(config.option, "default_extension", None)
     if default_ext is None:
         config.option.default_extension = "pysail.testing.snapshot.yaml.YamlSnapshotExtension"
@@ -36,7 +39,11 @@ def pytest_configure(config):
 
 
 def configure_sail_environment():
-    """Configure environment variables for PySail tests."""
+    """Configure environment variables for PySail tests.
+
+    The runtime configuration options cannot be changed, so we must ensure that
+    the configuration is in place before the first server is created.
+    """
 
     module = "pysail._native"
 

@@ -29,6 +29,7 @@ educe = { workspace = true }
 thiserror = { workspace = true }
 tonic = { workspace = true }
 chrono = { workspace = true }
+chumsky = { workspace = true }
 async-trait = { workspace = true }
 async-recursion = { workspace = true }
 lazy_static = { workspace = true }
@@ -47,3 +48,7 @@ indexmap = { workspace = true }
 log = { workspace = true }
 regex = { workspace = true }
 parquet-variant-compute = { workspace = true }
+
+[build-dependencies]
+serde = { workspace = true }
+serde_yaml = { workspace = true }

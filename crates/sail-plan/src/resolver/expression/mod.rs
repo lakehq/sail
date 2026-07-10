@@ -154,7 +154,7 @@ impl PlanResolver<'_> {
                 function,
                 arguments,
             } => {
-                self.resolve_expression_lambda_function(*function, arguments, schema, state)
+                self.resolve_expression_lambda_function(*function, arguments, None, schema, state)
                     .await
             }
             Expr::Window {

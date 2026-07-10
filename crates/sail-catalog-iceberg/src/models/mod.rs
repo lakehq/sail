@@ -252,6 +252,8 @@ pub mod view_history_entry;
 pub use self::view_history_entry::ViewHistoryEntry;
 pub mod view_metadata;
 pub use self::view_metadata::ViewMetadata;
+pub mod view_requirement;
+pub use self::view_requirement::ViewRequirement;
 pub mod view_update;
 pub use self::view_update::ViewUpdate;
 pub mod view_version;

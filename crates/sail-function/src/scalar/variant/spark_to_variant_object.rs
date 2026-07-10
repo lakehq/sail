@@ -9,10 +9,10 @@ use datafusion::logical_expr::{
 };
 use datafusion::scalar::ScalarValue;
 use parquet_variant_compute::{cast_to_variant, VariantType};
-use sail_common_datafusion::variant::variant_metadata_field;
+use sail_common_datafusion::variant::{variant_metadata_field, VARIANT_VALUE_FIELD_NAME};
 
 use crate::error::{invalid_arg_count_exec_err, unsupported_data_type_exec_err};
-use crate::scalar::variant::spark_parse_json::convert_binaryview_to_binary;
+use crate::scalar::variant::spark_parse_json::convert_variant_binaryview_to_binary;
 
 /// Recursively checks if a DataType contains Null (VOID) anywhere.
 fn contains_void_type(dt: &DataType) -> bool {
@@ -74,8 +74,8 @@ impl ScalarUDFImpl for SparkToVariantObjectUdf {
 
     fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
         Ok(DataType::Struct(Fields::from(vec![
+            Field::new(VARIANT_VALUE_FIELD_NAME, DataType::Binary, false),
             variant_metadata_field(DataType::Binary, false),
-            Field::new("value", DataType::Binary, false),
         ])))
     }
 
@@ -126,8 +126,8 @@ impl ScalarUDFImpl for SparkToVariantObjectUdf {
             ColumnarValue::Scalar(scalar) => {
                 if scalar.is_null() {
                     let fields = Fields::from(vec![
+                        Field::new(VARIANT_VALUE_FIELD_NAME, DataType::Binary, false),
                         variant_metadata_field(DataType::Binary, false),
-                        Field::new("value", DataType::Binary, false),
                     ]);
                     let null_struct = StructArray::new_null(fields, 1);
                     return Ok(ColumnarValue::Scalar(ScalarValue::Struct(Arc::new(
@@ -139,7 +139,7 @@ impl ScalarUDFImpl for SparkToVariantObjectUdf {
                     exec_datafusion_err!("to_variant_object: failed to convert to VARIANT: {e}")
                 })?;
                 let struct_array: StructArray = variant_array.into();
-                let struct_array = convert_binaryview_to_binary(struct_array)?;
+                let struct_array = convert_variant_binaryview_to_binary(struct_array)?;
                 Ok(ColumnarValue::Scalar(ScalarValue::Struct(Arc::new(
                     struct_array,
                 ))))
@@ -149,7 +149,7 @@ impl ScalarUDFImpl for SparkToVariantObjectUdf {
                     exec_datafusion_err!("to_variant_object: failed to convert to VARIANT: {e}")
                 })?;
                 let struct_array: StructArray = variant_array.into();
-                let struct_array = convert_binaryview_to_binary(struct_array)?;
+                let struct_array = convert_variant_binaryview_to_binary(struct_array)?;
                 Ok(ColumnarValue::Array(Arc::new(struct_array) as ArrayRef))
             }
         }

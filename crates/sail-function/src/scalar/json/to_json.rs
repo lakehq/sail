@@ -186,7 +186,7 @@ fn to_json_inner(args: &[ArrayRef]) -> Result<ArrayRef> {
 }
 
 fn array_to_json_strings(array: &ArrayRef, options: &ToJsonOptions) -> Result<ArrayRef> {
-    let mut builder = StringBuilder::with_capacity(array.len(), array.len() * 64);
+    let mut builder = StringBuilder::with_capacity(array.len(), array.get_buffer_memory_size());
 
     for i in 0..array.len() {
         if array.is_null(i) {

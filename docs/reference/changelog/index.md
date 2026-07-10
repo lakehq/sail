@@ -5,6 +5,82 @@ next: false
 
 # Changelog
 
+## 0.6.5
+
+_June 29, 2026_
+
+- Improved Delta Lake integration ([#1957](https://github.com/lakehq/sail/pull/1957), [#2097](https://github.com/lakehq/sail/pull/2097), [#2078](https://github.com/lakehq/sail/pull/2078), [#2110](https://github.com/lakehq/sail/pull/2110), [#2122](https://github.com/lakehq/sail/pull/2122), and [#2148](https://github.com/lakehq/sail/pull/2148)).
+- Improved Iceberg integration ([#1929](https://github.com/lakehq/sail/pull/1929), [#2097](https://github.com/lakehq/sail/pull/2097), [#2078](https://github.com/lakehq/sail/pull/2078), [#2119](https://github.com/lakehq/sail/pull/2119), and [#2134](https://github.com/lakehq/sail/pull/2134)).
+- Improved the OneLake catalog by supporting its Unity Catalog and Iceberg REST endpoints and supporting more authentication methods ([#2141](https://github.com/lakehq/sail/pull/2141)).
+- Fixed an issue with column default metadata handling for the Hive Metastore catalog ([#2058](https://github.com/lakehq/sail/pull/2058)).
+- Improved the internals for data sources ([#2047](https://github.com/lakehq/sail/pull/2047), [#2050](https://github.com/lakehq/sail/pull/2050), [#2069](https://github.com/lakehq/sail/pull/2069), [#2070](https://github.com/lakehq/sail/pull/2070), and [#2077](https://github.com/lakehq/sail/pull/2077)).
+- Added support for various write modes for file-based data sources ([#2053](https://github.com/lakehq/sail/pull/2053) and [#2068](https://github.com/lakehq/sail/pull/2068)).
+- Added support for the `USING` clause to create writable temporary views for data sources ([#2059](https://github.com/lakehq/sail/pull/2059)).
+- Added support for Parquet content-defined chunking options ([#2125](https://github.com/lakehq/sail/pull/2125)).
+- Added support for the `PIVOT` clause in SQL and the `pivot()` method in the Spark DataFrame API ([#2120](https://github.com/lakehq/sail/pull/2120) and [#2138](https://github.com/lakehq/sail/pull/2138)).
+- Added support for named window clauses in SQL ([#2039](https://github.com/lakehq/sail/pull/2039)).
+- Added support for the following SQL functions ([#2032](https://github.com/lakehq/sail/pull/2032), [#2006](https://github.com/lakehq/sail/pull/2006), [#2063](https://github.com/lakehq/sail/pull/2063), [#2094](https://github.com/lakehq/sail/pull/2094), [#2054](https://github.com/lakehq/sail/pull/2054), [#2057](https://github.com/lakehq/sail/pull/2057), [#2103](https://github.com/lakehq/sail/pull/2103), [#2106](https://github.com/lakehq/sail/pull/2106), [#2109](https://github.com/lakehq/sail/pull/2109), [#2123](https://github.com/lakehq/sail/pull/2123), and [#2127](https://github.com/lakehq/sail/pull/2127)):
+  - `aggregate`
+  - `exists`
+  - `filter`
+  - `forall`
+  - `transform`
+  - `to_char`
+  - `to_xml`
+  - `to_varchar`
+  - `try_to_time`
+  - `window`
+  - `window_time`
+- Improved the following SQL functions ([#1891](https://github.com/lakehq/sail/pull/1891), [#1962](https://github.com/lakehq/sail/pull/1962), [#2019](https://github.com/lakehq/sail/pull/2019), [#2028](https://github.com/lakehq/sail/pull/2028), [#2030](https://github.com/lakehq/sail/pull/2030), [#2031](https://github.com/lakehq/sail/pull/2031), [#2040](https://github.com/lakehq/sail/pull/2040), [#2054](https://github.com/lakehq/sail/pull/2054), [#2074](https://github.com/lakehq/sail/pull/2074), [#2082](https://github.com/lakehq/sail/pull/2082), [#2086](https://github.com/lakehq/sail/pull/2086), [#2094](https://github.com/lakehq/sail/pull/2094), [#2095](https://github.com/lakehq/sail/pull/2095), [#2100](https://github.com/lakehq/sail/pull/2100), [#2104](https://github.com/lakehq/sail/pull/2104), [#2121](https://github.com/lakehq/sail/pull/2121), [#2130](https://github.com/lakehq/sail/pull/2130), [#2142](https://github.com/lakehq/sail/pull/2142), and [#1225](https://github.com/lakehq/sail/pull/1225)):
+  - `array_position`
+  - `array_sort`
+  - `bin`
+  - `concat`
+  - `concat_ws`
+  - `get_json_object`
+  - `hll_sketch_agg`
+  - `hll_union`
+  - `hll_union_agg`
+  - `inline`
+  - `inline_outer`
+  - `kurtosis`
+  - `map_entries`
+  - `mode`
+  - `negative`
+  - `percentile_disc`
+  - `regr_avgx`
+  - `regr_avgy`
+  - `regr_count`
+  - `regr_intercept`
+  - `regr_r2`
+  - `regr_slope`
+  - `regr_sxx`
+  - `regr_sxy`
+  - `regr_syy`
+  - `regexp_extract`
+  - `schema_of_json`
+  - `skewness`
+  - `timestampadd`
+  - `theta_sketch_agg`
+  - `theta_union`
+  - `theta_union_agg`
+  - `to_number`
+  - `to_time`
+  - `to_timestamp`
+  - `try_to_timestamp`
+  - `xxhash64`
+- Improved variant data type handling ([#2142](https://github.com/lakehq/sail/pull/2142)).
+- Improved column handling in the Spark DataFrame API ([#2142](https://github.com/lakehq/sail/pull/2142)).
+- Added support for the `?` parameter marker in SQL queries ([#2142](https://github.com/lakehq/sail/pull/2142)).
+- Improved Spark compatibility for `EXPLAIN` output ([#2114](https://github.com/lakehq/sail/pull/2114)).
+- Fixed an issue with case-insensitive function name matching ([#2131](https://github.com/lakehq/sail/pull/2131)).
+- Fixed an issue where pending tasks could fail while workers were still launching ([#2081](https://github.com/lakehq/sail/pull/2081)).
+- Upgraded DataFusion to 54.0.0 and Arrow to 58.3.0 ([#1956](https://github.com/lakehq/sail/pull/1956), [#2065](https://github.com/lakehq/sail/pull/2065), and [#2066](https://github.com/lakehq/sail/pull/2066)).
+
+### Contributors
+
+Huge thanks to [@davidlghellin](https://github.com/davidlghellin), [@anarefolio](https://github.com/anarefolio), [@twsl](https://github.com/twsl), [@nis12ram](https://github.com/nis12ram), [@zemin-piao](https://github.com/zemin-piao), [@radmirnovii](https://github.com/radmirnovii) (_first-time contributor_), [@benzsevern](https://github.com/benzsevern) (_first-time contributor_), and [@ctydw123](https://github.com/ctydw123) (_first-time contributor_) for your contributions!
+
 ## 0.6.4
 
 _June 6, 2026_

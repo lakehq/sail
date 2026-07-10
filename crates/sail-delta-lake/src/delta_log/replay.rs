@@ -13,17 +13,17 @@ use super::{
     read_last_checkpoint_version_from_store, LogSegmentResolver, ReplayedTableHeader,
     ResolvedLogSegment,
 };
-use crate::kernel::checkpoints::{
+use crate::checkpoint::{
     decode_checkpoint_rows, read_checkpoint_main_rows_from_checkpoint_file,
     read_checkpoint_rows_from_checkpoint_file, replay_commit_actions_with_compactions,
     replay_commit_header_actions_with_compactions, ReconciledCheckpointState,
     ReconciledHeaderState, ReplayedTableState,
 };
-use crate::kernel::CatalogManagedCommitSet;
+use crate::delta_log::LogStore;
+use crate::snapshot::CatalogManagedCommitSet;
 use crate::spec::{
     is_json_checkpoint_filename, CheckpointActionRow, DeltaError as DeltaTableError, DeltaResult,
 };
-use crate::storage::LogStore;
 
 async fn read_checkpoint_header_from_checkpoint_file(
     root_store: Arc<dyn ObjectStore>,
