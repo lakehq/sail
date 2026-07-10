@@ -1082,9 +1082,11 @@ mod tests {
                     .map(|value| value.as_str()),
                 Some(format!("s3://warehouse/{logical_format}_items").as_str())
             );
-            assert!(!table_parameters
-                .iter()
-                .any(|(key, _)| key == SPARK_DATASOURCE_PATH_KEY));
+            assert!(
+                !table_parameters
+                    .iter()
+                    .any(|(key, _)| key == SPARK_DATASOURCE_PATH_KEY)
+            );
         }
     }
 
