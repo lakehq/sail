@@ -256,7 +256,15 @@ fn spark_to_xml_inner(array: &StructArray, options: &SparkToXmlOptions) -> Resul
             builder.append_null();
         } else {
             buf.clear();
-            write_struct(&mut buf, array, row, array.fields(), &options.row_tag, 0, options)?;
+            write_struct(
+                &mut buf,
+                array,
+                row,
+                array.fields(),
+                &options.row_tag,
+                0,
+                options,
+            )?;
             // Every writer prefixes its own leading newline; the root element has none.
             builder.append_value(buf.strip_prefix('\n').unwrap_or(&buf));
         }
@@ -446,7 +454,15 @@ fn write_array(
                             "to_xml: expected StructArray inside list '{field_name}'"
                         ))
                     })?;
-                write_struct(buf, child, item_idx, child_fields, field_name, depth, options)?;
+                write_struct(
+                    buf,
+                    child,
+                    item_idx,
+                    child_fields,
+                    field_name,
+                    depth,
+                    options,
+                )?;
             }
             DataType::List(inner_field) | DataType::LargeList(inner_field) => {
                 buf.push('\n');
@@ -597,9 +613,14 @@ fn write_map_entry(
 
     match values.data_type() {
         DataType::Struct(child_fields) => {
-            let child = values.as_any().downcast_ref::<StructArray>().ok_or_else(|| {
-                DataFusionError::Internal(format!("to_xml: expected StructArray for map value '{key}'"))
-            })?;
+            let child = values
+                .as_any()
+                .downcast_ref::<StructArray>()
+                .ok_or_else(|| {
+                    DataFusionError::Internal(format!(
+                        "to_xml: expected StructArray for map value '{key}'"
+                    ))
+                })?;
             write_struct(buf, child, i, child_fields, key, depth, options)?;
         }
         DataType::List(item_field) | DataType::LargeList(item_field) => {
@@ -637,8 +658,12 @@ fn write_map_entry(
                         })?;
                     write_struct(buf, child, elem_idx, child_fields, key, depth, options)?;
                 } else {
-                    let text =
-                        format_field_to_xml(&array_values, elem_idx, item_field.data_type(), options)?;
+                    let text = format_field_to_xml(
+                        &array_values,
+                        elem_idx,
+                        item_field.data_type(),
+                        options,
+                    )?;
                     buf.push('\n');
                     push_indent(buf, depth);
                     push_element(buf, key, &escape_text(&text));
@@ -1000,7 +1025,10 @@ mod tests {
 
     #[test]
     fn test_format_binary() {
-        assert_eq!(format_binary(&[0x48, 0x65, 0x6C, 0x6C, 0x6F]), "[48 65 6C 6C 6F]");
+        assert_eq!(
+            format_binary(&[0x48, 0x65, 0x6C, 0x6C, 0x6F]),
+            "[48 65 6C 6C 6F]"
+        );
         assert_eq!(format_binary(&[]), "[]");
         assert_eq!(format_binary(&[0x00, 0xFF]), "[00 FF]");
     }
