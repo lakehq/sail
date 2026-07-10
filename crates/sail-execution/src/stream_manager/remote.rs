@@ -168,10 +168,9 @@ impl RemoteStreamStorage {
         let prefix = shuffle_prefix(&url, key.job_id, Some(key.stage));
         Ok((
             store,
-            prefix.join(format!(
-                "partition-{}/attempt-{}",
-                key.partition, key.attempt
-            )),
+            prefix
+                .join(format!("partition-{}", key.partition))
+                .join(format!("attempt-{}", key.attempt)),
         ))
     }
 
