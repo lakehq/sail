@@ -340,7 +340,18 @@ impl OperationDefinition {
         let success_body = if self.success_response.rust_type.is_unit() {
             quote! { () }
         } else {
-            quote! { response.json::<#success_type>().await? }
+            quote! {
+                match response.json::<#success_type>().await {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return Err(ApiError::Unknown(Response {
+                            inner: (),
+                            status,
+                            headers,
+                        }));
+                    }
+                }
+            }
         };
         let success_status_check = if self.success_response.rust_type.is_unit() {
             quote! { status.is_success() }

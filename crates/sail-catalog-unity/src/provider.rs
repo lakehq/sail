@@ -899,6 +899,12 @@ impl CatalogProvider for UnityCatalogProvider {
         let _ = (database, table);
         match client.commit(commit).await {
             Ok(_) => Ok(LakehouseCommitOutcome::Committed { context, payload }),
+            // The OSS Unity Catalog server currently returns a plain "200 OK" body
+            // for Delta commits even though the OpenAPI spec declares a JSON response.
+            // Such responses are considered unknown errors since JSON deserialization fails.
+            Err(e) if e.status().is_some_and(|s| s.is_success()) => {
+                Ok(LakehouseCommitOutcome::Committed { context, payload })
+            }
             Err(e) if e.status() == Some(reqwest::StatusCode::CONFLICT) => Err(
                 CatalogError::Conflict(format!("Unity Catalog Delta commit conflict: {e}")),
             ),
