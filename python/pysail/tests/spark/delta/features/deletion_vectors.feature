@@ -128,6 +128,37 @@ Feature: Delta Lake Deletion Vectors (Merge-on-Read)
         | 3  | Gamma |
         | 4  | Delta |
 
+    Scenario: Existing deletion vectors remain active after disabling new deletion vectors
+      Given statement
+        """
+        DELETE FROM delta_dv_read WHERE id = 2
+        """
+      Then file tree in location matches
+        """
+        📂 <hex-prefix>
+          📄 deletion_vector_<uuid>.bin
+        📄 part-<id>.<codec>.parquet
+        """
+      Given statement
+        """
+        ALTER TABLE delta_dv_read
+        SET TBLPROPERTIES ('delta.enableDeletionVectors' = 'false')
+        """
+      Then delta log latest effective protocol and metadata contains
+        | path                                                     | value               |
+        | protocol.readerFeatures                                  | ["deletionVectors"] |
+        | protocol.writerFeatures                                  | ["deletionVectors"] |
+        | metaData.configuration['delta.enableDeletionVectors']    | "false"             |
+      When query
+        """
+        SELECT * FROM delta_dv_read ORDER BY id
+        """
+      Then query result ordered
+        | id | name  |
+        | 1  | Alpha |
+        | 3  | Gamma |
+        | 4  | Delta |
+
     Scenario: Aggregation after DV delete
       Given statement
         """
