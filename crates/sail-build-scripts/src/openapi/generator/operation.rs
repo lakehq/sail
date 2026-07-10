@@ -337,22 +337,7 @@ impl OperationDefinition {
                 ));
             }
         };
-        let success_body = if self.success_response.rust_type.is_unit() {
-            quote! { () }
-        } else {
-            quote! {
-                match response.json::<#success_type>().await {
-                    Ok(value) => value,
-                    Err(_) => {
-                        return Err(ApiError::Unknown(Response {
-                            inner: (),
-                            status,
-                            headers,
-                        }));
-                    }
-                }
-            }
-        };
+        let success_body = generate_response_body_expression(success_type);
         let success_status_check = if self.success_response.rust_type.is_unit() {
             quote! { status.is_success() }
         } else {
@@ -627,17 +612,12 @@ fn generate_headers(parameters: &[OperationParameter]) -> Vec<TokenStream> {
     output
 }
 
-fn generate_error_match_arm(
-    error_type: &RustName,
-    response: &OperationResponse,
-) -> BuildResult<TokenStream> {
-    let variant = type_name(response.status.variant()?);
-    let value = if response.rust_type.is_unit() {
-        quote! { #error_type::#variant }
+fn generate_response_body_expression(rust_type: &RustType) -> TokenStream {
+    if rust_type.is_unit() {
+        quote! { () }
     } else {
-        let rust_type = &response.rust_type;
         quote! {
-            #error_type::#variant(match response.json::<#rust_type>().await {
+            match response.json::<#rust_type>().await {
                 Ok(value) => value,
                 Err(_) => {
                     return Err(ApiError::Unknown(Response {
@@ -646,8 +626,21 @@ fn generate_error_match_arm(
                         headers,
                     }));
                 }
-            })
+            }
         }
+    }
+}
+
+fn generate_error_match_arm(
+    error_type: &RustName,
+    response: &OperationResponse,
+) -> BuildResult<TokenStream> {
+    let variant = type_name(response.status.variant()?);
+    let value = if response.rust_type.is_unit() {
+        quote! { #error_type::#variant }
+    } else {
+        let body = generate_response_body_expression(&response.rust_type);
+        quote! { #error_type::#variant(#body) }
     };
     if let Some((start, end)) = response.status.range() {
         let start = Literal::u16_unsuffixed(start);
