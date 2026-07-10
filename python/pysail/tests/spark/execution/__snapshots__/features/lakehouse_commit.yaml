@@ -42,8 +42,8 @@ data:
   |-
     == Physical Plan ==
     IcebergCommitExec(table_path=file://<tmp>/distributed_iceberg_commit/)
-      IcebergWriterExec(table_path=file://<tmp>/distributed_iceberg_commit/)
-        CoalescePartitionsExec
+      CoalescePartitionsExec
+        IcebergWriterExec(table_path=file://<tmp>/distributed_iceberg_commit/)
           RangeExec
   
   
@@ -54,7 +54,8 @@ data:
     partitions=4
     distribution=RoundRobin(channels=1)
     placement=Worker
-    RangeExec
+    IcebergWriterExec(table_path=file://<tmp>/distributed_iceberg_commit/)
+      RangeExec
   
     === stage 1 ===
     inputs=[StageInput(stage=0, mode=Shuffle)]
@@ -63,8 +64,7 @@ data:
     distribution=RoundRobin(channels=1)
     placement=Driver
     IcebergCommitExec(table_path=file://<tmp>/distributed_iceberg_commit/)
-      IcebergWriterExec(table_path=file://<tmp>/distributed_iceberg_commit/)
-        StageInputExec: input=0, partitioning=UnknownPartitioning(1)
+      StageInputExec: input=0, partitioning=UnknownPartitioning(1)
   
     === stage 2 ===
     inputs=[StageInput(stage=1, mode=Forward)]
