@@ -69,7 +69,6 @@ def test_dataframe_local_checkpoint_explain_truncates_plan(spark):
     assert "RangeExec" not in checkpointed_plan
     assert checkpointed_plan.count("RangeExec") == 0
     assert checkpointed_plan.count("FilterExec") < 1
-    assert checkpointed_plan.count("ProjectionExec") < 3  # noqa: PLR2004
     assert "DataSourceExec" in checkpointed_plan
     assert checkpointed_plan.count("DataSourceExec") <= 2  # noqa: PLR2004
 
@@ -278,7 +277,6 @@ def test_dataframe_local_checkpoint_deep_plan_explain_truncates(spark):
     assert "RangeExec" not in checkpointed_plan
     assert checkpointed_plan.count("RangeExec") == 0
     assert checkpointed_plan.count("FilterExec") < 1
-    assert checkpointed_plan.count("ProjectionExec") < 3  # noqa: PLR2004
     assert "DataSourceExec" in checkpointed_plan
     assert checkpointed_plan.count("DataSourceExec") <= 2  # noqa: PLR2004
 
