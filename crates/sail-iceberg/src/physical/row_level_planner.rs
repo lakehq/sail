@@ -14,13 +14,16 @@ use sail_data_source::options::ResolveOptions;
 use sail_logical_plan::merge::RowLevelWriteNode;
 
 use crate::options::r#gen::IcebergWriteOptions;
+use crate::physical_plan::equality_delete_writer_exec::ensure_full_row_equality_delete_preflight;
 use crate::physical_plan::{
     IcebergCommitExec, IcebergEqualityDeleteWriterExec, IcebergMergeDataRowsExec,
     IcebergPositionDeleteWriterExec, IcebergWriterExec, IcebergWriterExecOptions,
 };
+use crate::spec::{FormatVersion, TableMetadata};
 use crate::table::Table;
 use crate::table_format::{
-    IcebergTableFormat, catalog_managed_iceberg_from_options, metadata_location_from_options,
+    IcebergTableFormat, catalog_managed_iceberg_from_options,
+    ensure_iceberg_row_level_merge_on_read, metadata_location_from_options,
     split_iceberg_write_options_and_table_properties,
 };
 
@@ -67,6 +70,10 @@ async fn plan_iceberg_merge(
         metadata_location_for_load,
     )
     .await?;
+    ensure_current_row_level_mode(&table, RowLevelCommand::Merge)?;
+    if row_index_delete_plan.is_some() {
+        ensure_iceberg_merge_format_v2(table.metadata())?;
+    }
     let partition_columns = IcebergTableFormat::partition_columns_from_metadata(&table)?;
     let writer_options = resolve_row_level_writer_options(session_state, node)?;
 
@@ -121,6 +128,21 @@ async fn plan_iceberg_delete(
             "Iceberg equality-delete MOR DELETE requires a WHERE condition".to_string(),
         )
     })?;
+
+    let table_url =
+        IcebergTableFormat::parse_table_url(vec![node.target_location().to_string()]).await?;
+    let metadata_location = metadata_location_from_options(node.target_options());
+    let catalog_managed_table = catalog_managed_iceberg_from_options(node.target_options());
+    let metadata_location_for_load = catalog_managed_table.then_some(metadata_location).flatten();
+    let table = Table::load_with_metadata_location(
+        session_state,
+        table_url.clone(),
+        metadata_location_for_load,
+    )
+    .await?;
+    ensure_current_row_level_mode(&table, RowLevelCommand::Delete)?;
+    ensure_full_row_equality_delete_preflight(table.metadata())?;
+
     let delete_plan = LogicalPlanBuilder::from(node.raw_target().as_ref().clone())
         .filter(condition.expr.clone())?
         .build()?;
@@ -128,8 +150,6 @@ async fn plan_iceberg_delete(
         .create_physical_plan(&delete_plan, session_state)
         .await?;
 
-    let table_url =
-        IcebergTableFormat::parse_table_url(vec![node.target_location().to_string()]).await?;
     let writer_options = resolve_row_level_writer_options(session_state, node)?;
 
     let delete_input: Arc<dyn ExecutionPlan> =
@@ -148,6 +168,34 @@ async fn plan_iceberg_delete(
         table_url,
         writer_options.lakehouse_table.clone(),
     )))
+}
+
+fn ensure_current_row_level_mode(table: &Table, command: RowLevelCommand) -> Result<()> {
+    let property = match command {
+        RowLevelCommand::Delete => "write.delete.mode",
+        RowLevelCommand::Merge => "write.merge.mode",
+        RowLevelCommand::Update => "write.update.mode",
+    };
+    ensure_iceberg_row_level_merge_on_read(
+        command,
+        table
+            .metadata()
+            .properties
+            .get(property)
+            .map(String::as_str),
+    )
+}
+
+fn ensure_iceberg_merge_format_v2(table_meta: &TableMetadata) -> Result<()> {
+    match table_meta.format_version {
+        FormatVersion::V2 => Ok(()),
+        FormatVersion::V1 => plan_err!(
+            "Iceberg MERGE merge-on-read requires table format-version 2 for position deletes"
+        ),
+        FormatVersion::V3 => not_impl_err!(
+            "Iceberg v3 MERGE MOR position delete writes are not supported; v3 requires deletion vectors"
+        ),
+    }
 }
 
 fn resolve_row_level_writer_options(

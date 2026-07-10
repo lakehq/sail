@@ -48,6 +48,10 @@ def _drop_table(spark, name: str) -> None:
     spark.sql(f"DROP TABLE IF EXISTS {name}")
 
 
+def _parquet_file_paths(table_path: Path) -> set[Path]:
+    return {path.relative_to(table_path) for path in table_path.rglob("*.parquet")}
+
+
 class _EqualityDeleteManifestWriter(ManifestWriterV2):
     def content(self) -> ManifestContent:
         return ManifestContent.DELETES
@@ -218,6 +222,7 @@ def test_iceberg_sql_delete_writes_equality_delete_file_and_filters_rows(spark, 
             LOCATION '{_uri_sql(table_path)}'
             TBLPROPERTIES (
               'format-version' = '2',
+              'write.delete.mode' = 'merge-on-read',
               'write.data.path' = 'custom_data'
             )
             """
@@ -301,7 +306,10 @@ def test_iceberg_sql_delete_rejects_partitioned_equality_delete_without_metadata
             USING iceberg
             PARTITIONED BY (part)
             LOCATION '{_uri_sql(table_path)}'
-            TBLPROPERTIES ('format-version' = '2')
+            TBLPROPERTIES (
+              'format-version' = '2',
+              'write.delete.mode' = 'merge-on-read'
+            )
             """
         )
         spark.sql(
@@ -332,6 +340,73 @@ def test_iceberg_sql_delete_rejects_partitioned_equality_delete_without_metadata
             (2, "drop", "A"),
             (3, "keep", "B"),
         ]
+    finally:
+        _drop_table(spark, table_name)
+
+
+@pytest.mark.parametrize("delete_mode", [None, "copy-on-write"], ids=["default", "explicit-cow"])
+def test_iceberg_sql_delete_rejects_copy_on_write_before_scanning_empty_table(spark, tmp_path, delete_mode):
+    table_name = "iceberg_delete_copy_on_write_reject"
+    table_path = tmp_path / table_name
+    mode_property = "" if delete_mode is None else f", 'write.delete.mode' = '{delete_mode}'"
+
+    _drop_table(spark, table_name)
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (
+              id BIGINT,
+              name STRING
+            )
+            USING iceberg
+            LOCATION '{_uri_sql(table_path)}'
+            TBLPROPERTIES ('format-version' = '2'{mode_property})
+            """
+        )
+        before_metadata_path = _latest_metadata_path(table_path)
+        before_parquet_files = _parquet_file_paths(table_path)
+
+        with pytest.raises(Exception, match=r"write\.delete\.mode=copy-on-write|copy-on-write.*not supported"):
+            spark.sql("DELETE FROM iceberg_delete_copy_on_write_reject WHERE id = 1").collect()
+
+        assert spark.sql("SELECT * FROM iceberg_delete_copy_on_write_reject").collect() == []
+        assert _latest_metadata_path(table_path) == before_metadata_path
+        assert _parquet_file_paths(table_path) == before_parquet_files
+    finally:
+        _drop_table(spark, table_name)
+
+
+@pytest.mark.parametrize("column_type", ["FLOAT", "DOUBLE"])
+def test_iceberg_sql_delete_rejects_floating_equality_keys_without_file_side_effects(spark, tmp_path, column_type):
+    table_name = "iceberg_delete_floating_key_reject"
+    table_path = tmp_path / table_name
+
+    _drop_table(spark, table_name)
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (
+              id BIGINT,
+              measurement {column_type}
+            )
+            USING iceberg
+            LOCATION '{_uri_sql(table_path)}'
+            TBLPROPERTIES (
+              'format-version' = '2',
+              'write.delete.mode' = 'merge-on-read'
+            )
+            """
+        )
+        spark.sql("INSERT INTO iceberg_delete_floating_key_reject VALUES (1, 1.25)")
+        before_metadata_path = _latest_metadata_path(table_path)
+        before_parquet_files = _parquet_file_paths(table_path)
+
+        with pytest.raises(Exception, match=rf"identifier-field-invalid type {column_type.lower()}"):
+            spark.sql("DELETE FROM iceberg_delete_floating_key_reject WHERE id = 1").collect()
+
+        assert [row.id for row in spark.sql("SELECT id FROM iceberg_delete_floating_key_reject").collect()] == [1]
+        assert _latest_metadata_path(table_path) == before_metadata_path
+        assert _parquet_file_paths(table_path) == before_parquet_files
     finally:
         _drop_table(spark, table_name)
 
