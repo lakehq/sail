@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_schema::extension::{
-    ExtensionType, EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY,
+    EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY, ExtensionType,
 };
 use datafusion::arrow::datatypes as adt;
 use parquet_variant_compute::VariantType;
@@ -11,13 +11,13 @@ use sail_common::spec;
 use sail_common::spec::{
     SAIL_LIST_FIELD_NAME, SAIL_MAP_FIELD_NAME, SAIL_MAP_KEY_FIELD_NAME, SAIL_MAP_VALUE_FIELD_NAME,
 };
-use sail_common_datafusion::variant::{variant_metadata_field, VARIANT_VALUE_FIELD_NAME};
+use sail_common_datafusion::variant::{VARIANT_VALUE_FIELD_NAME, variant_metadata_field};
 use serde_json::json;
 
 use crate::config::DefaultTimestampType;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 /// Map SRID to CRS string for Arrow metadata.
 ///

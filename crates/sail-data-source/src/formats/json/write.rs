@@ -8,7 +8,7 @@ use datafusion_common::{DataFusionError, Result};
 use datafusion_datasource::file_format::FileFormat;
 
 use crate::listing::source::{ListingSinkInput, WriteFormat};
-use crate::options::gen::JsonWriteOptions;
+use crate::options::r#gen::JsonWriteOptions;
 
 #[derive(Debug, Clone)]
 pub struct JsonWriteFormat {

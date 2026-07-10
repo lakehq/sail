@@ -66,8 +66,8 @@ use std::sync::Arc;
 use arrow_array::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use arrow_array::ffi_stream::{ArrowArrayStreamReader, FFI_ArrowArrayStream};
 use arrow_array::{
-    ffi, make_array, RecordBatch, RecordBatchIterator, RecordBatchOptions, RecordBatchReader,
-    StructArray,
+    RecordBatch, RecordBatchIterator, RecordBatchOptions, RecordBatchReader, StructArray, ffi,
+    make_array,
 };
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, Field, Schema, SchemaRef};

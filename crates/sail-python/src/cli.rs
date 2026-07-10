@@ -1,5 +1,5 @@
 use pyo3::exceptions::PyRuntimeError;
-use pyo3::{pyfunction, PyErr, PyResult, Python};
+use pyo3::{PyErr, PyResult, Python, pyfunction};
 
 /// The Sail CLI entrypoint exposed to Python.
 #[pyfunction]

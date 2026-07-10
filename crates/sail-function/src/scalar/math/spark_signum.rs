@@ -3,11 +3,11 @@ use std::sync::Arc;
 use datafusion::arrow::array::{ArrayRef, AsArray, Float64Array};
 use datafusion::arrow::datatypes::{
     DataType, Decimal128Type, DurationMicrosecondType, DurationMillisecondType,
-    DurationNanosecondType, DurationSecondType, Float16Type, Float32Type, Float64Type, Int16Type,
-    Int32Type, Int64Type, Int8Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
-    IntervalYearMonthType, TimeUnit, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    DurationNanosecondType, DurationSecondType, Float16Type, Float32Type, Float64Type, Int8Type,
+    Int16Type, Int32Type, Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalUnit,
+    IntervalYearMonthType, TimeUnit, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, TypeSignature, Volatility,
 };
@@ -104,38 +104,22 @@ impl ScalarUDFImpl for SparkSignum {
             }
             ColumnarValue::Scalar(ScalarValue::Int8(val)) => {
                 Ok(ColumnarValue::Scalar(ScalarValue::Float64(val.map(|x| {
-                    if x == 0_i8 {
-                        0_f64
-                    } else {
-                        x.signum() as f64
-                    }
+                    if x == 0_i8 { 0_f64 } else { x.signum() as f64 }
                 }))))
             }
             ColumnarValue::Scalar(ScalarValue::Int16(val)) => {
                 Ok(ColumnarValue::Scalar(ScalarValue::Float64(val.map(|x| {
-                    if x == 0_i16 {
-                        0_f64
-                    } else {
-                        x.signum() as f64
-                    }
+                    if x == 0_i16 { 0_f64 } else { x.signum() as f64 }
                 }))))
             }
             ColumnarValue::Scalar(ScalarValue::Int32(val)) => {
                 Ok(ColumnarValue::Scalar(ScalarValue::Float64(val.map(|x| {
-                    if x == 0_i32 {
-                        0_f64
-                    } else {
-                        x.signum() as f64
-                    }
+                    if x == 0_i32 { 0_f64 } else { x.signum() as f64 }
                 }))))
             }
             ColumnarValue::Scalar(ScalarValue::Int64(val)) => {
                 Ok(ColumnarValue::Scalar(ScalarValue::Float64(val.map(|x| {
-                    if x == 0_i64 {
-                        0_f64
-                    } else {
-                        x.signum() as f64
-                    }
+                    if x == 0_i64 { 0_f64 } else { x.signum() as f64 }
                 }))))
             }
             ColumnarValue::Scalar(ScalarValue::Float16(val)) => {
@@ -149,22 +133,12 @@ impl ScalarUDFImpl for SparkSignum {
             }
             ColumnarValue::Scalar(ScalarValue::Float32(val)) => {
                 Ok(ColumnarValue::Scalar(ScalarValue::Float64(val.map(|x| {
-                    if x == 0_f32 {
-                        0_f64
-                    } else {
-                        x.signum() as f64
-                    }
+                    if x == 0_f32 { 0_f64 } else { x.signum() as f64 }
                 }))))
             }
-            ColumnarValue::Scalar(ScalarValue::Float64(val)) => {
-                Ok(ColumnarValue::Scalar(ScalarValue::Float64(val.map(|x| {
-                    if x == 0_f64 {
-                        0_f64
-                    } else {
-                        x.signum()
-                    }
-                }))))
-            }
+            ColumnarValue::Scalar(ScalarValue::Float64(val)) => Ok(ColumnarValue::Scalar(
+                ScalarValue::Float64(val.map(|x| if x == 0_f64 { 0_f64 } else { x.signum() })),
+            )),
             ColumnarValue::Scalar(ScalarValue::Decimal128(val, _precision, _scale)) => {
                 Ok(ColumnarValue::Scalar(ScalarValue::Float64(val.map(|x| {
                     if x == 0 {
@@ -178,11 +152,7 @@ impl ScalarUDFImpl for SparkSignum {
             }
             ColumnarValue::Scalar(ScalarValue::IntervalYearMonth(val)) => {
                 Ok(ColumnarValue::Scalar(ScalarValue::Float64(val.map(|x| {
-                    if x == 0_i32 {
-                        0_f64
-                    } else {
-                        x.signum() as f64
-                    }
+                    if x == 0_i32 { 0_f64 } else { x.signum() as f64 }
                 }))))
             }
             ColumnarValue::Scalar(ScalarValue::IntervalDayTime(val)) => {
@@ -223,11 +193,7 @@ impl ScalarUDFImpl for SparkSignum {
             | ColumnarValue::Scalar(ScalarValue::DurationMicrosecond(val))
             | ColumnarValue::Scalar(ScalarValue::DurationNanosecond(val)) => {
                 Ok(ColumnarValue::Scalar(ScalarValue::Float64(val.map(|x| {
-                    if x == 0_i64 {
-                        0_f64
-                    } else {
-                        x.signum() as f64
-                    }
+                    if x == 0_i64 { 0_f64 } else { x.signum() as f64 }
                 }))))
             }
             ColumnarValue::Array(array) => {
@@ -273,43 +239,27 @@ impl ScalarUDFImpl for SparkSignum {
                         Ok(Arc::new(result) as ArrayRef)
                     }
                     DataType::Int8 => {
-                        let result: Float64Array = array.as_primitive::<Int8Type>().unary(|x| {
-                            if x == 0_i8 {
-                                0_f64
-                            } else {
-                                x.signum() as f64
-                            }
-                        });
+                        let result: Float64Array = array
+                            .as_primitive::<Int8Type>()
+                            .unary(|x| if x == 0_i8 { 0_f64 } else { x.signum() as f64 });
                         Ok(Arc::new(result) as ArrayRef)
                     }
                     DataType::Int16 => {
-                        let result: Float64Array = array.as_primitive::<Int16Type>().unary(|x| {
-                            if x == 0_i16 {
-                                0_f64
-                            } else {
-                                x.signum() as f64
-                            }
-                        });
+                        let result: Float64Array = array
+                            .as_primitive::<Int16Type>()
+                            .unary(|x| if x == 0_i16 { 0_f64 } else { x.signum() as f64 });
                         Ok(Arc::new(result) as ArrayRef)
                     }
                     DataType::Int32 => {
-                        let result: Float64Array = array.as_primitive::<Int32Type>().unary(|x| {
-                            if x == 0_i32 {
-                                0_f64
-                            } else {
-                                x.signum() as f64
-                            }
-                        });
+                        let result: Float64Array = array
+                            .as_primitive::<Int32Type>()
+                            .unary(|x| if x == 0_i32 { 0_f64 } else { x.signum() as f64 });
                         Ok(Arc::new(result) as ArrayRef)
                     }
                     DataType::Int64 => {
-                        let result: Float64Array = array.as_primitive::<Int64Type>().unary(|x| {
-                            if x == 0_i64 {
-                                0_f64
-                            } else {
-                                x.signum() as f64
-                            }
-                        });
+                        let result: Float64Array = array
+                            .as_primitive::<Int64Type>()
+                            .unary(|x| if x == 0_i64 { 0_f64 } else { x.signum() as f64 });
                         Ok(Arc::new(result) as ArrayRef)
                     }
                     DataType::Float16 => {
@@ -323,23 +273,15 @@ impl ScalarUDFImpl for SparkSignum {
                         Ok(Arc::new(result) as ArrayRef)
                     }
                     DataType::Float32 => {
-                        let result: Float64Array = array.as_primitive::<Float32Type>().unary(|x| {
-                            if x == 0_f32 {
-                                0_f64
-                            } else {
-                                x.signum() as f64
-                            }
-                        });
+                        let result: Float64Array = array
+                            .as_primitive::<Float32Type>()
+                            .unary(|x| if x == 0_f32 { 0_f64 } else { x.signum() as f64 });
                         Ok(Arc::new(result) as ArrayRef)
                     }
                     DataType::Float64 => {
-                        let result: Float64Array = array.as_primitive::<Float64Type>().unary(|x| {
-                            if x == 0_f64 {
-                                0_f64
-                            } else {
-                                x.signum()
-                            }
-                        });
+                        let result: Float64Array = array
+                            .as_primitive::<Float64Type>()
+                            .unary(|x| if x == 0_f64 { 0_f64 } else { x.signum() });
                         Ok(Arc::new(result) as ArrayRef)
                     }
                     DataType::Decimal128(_p, _s) => {

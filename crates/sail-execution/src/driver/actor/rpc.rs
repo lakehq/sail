@@ -1,16 +1,16 @@
 use arrow_flight::flight_service_server::FlightServiceServer;
 use sail_common::config::GRPC_MAX_MESSAGE_LENGTH_DEFAULT;
-use sail_server::actor::ActorHandle;
 use sail_server::ServerBuilder;
+use sail_server::actor::ActorHandle;
 use tokio::net::{TcpListener, ToSocketAddrs};
 use tokio::sync::oneshot::Sender;
 use tonic::async_trait;
 use tonic::codec::CompressionEncoding;
 
-use crate::driver::actor::DriverActor;
-use crate::driver::gen::driver_service_server::DriverServiceServer;
-use crate::driver::server::DriverServer;
 use crate::driver::DriverEvent;
+use crate::driver::actor::DriverActor;
+use crate::driver::r#gen::driver_service_server::DriverServiceServer;
+use crate::driver::server::DriverServer;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::TaskStreamKey;
 use crate::stream::reader::TaskStreamSource;
@@ -66,7 +66,7 @@ impl DriverActor {
             .await?;
 
         ServerBuilder::new("sail_driver", Default::default())
-            .add_service(service, Some(crate::driver::gen::FILE_DESCRIPTOR_SET))
+            .add_service(service, Some(crate::driver::r#gen::FILE_DESCRIPTOR_SET))
             .await
             .add_service(flight_service, None)
             .await

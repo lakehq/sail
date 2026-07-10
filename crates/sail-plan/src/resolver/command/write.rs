@@ -8,8 +8,8 @@ use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Column, DFSchema, ScalarValue};
 use datafusion_expr::expr::{self, FieldMetadata, Sort, WindowFunctionParams};
 use datafusion_expr::{
-    col, lit, when, BinaryExpr, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder,
-    Operator, Projection, ScalarUDF, WindowFrame, WindowFunctionDefinition,
+    BinaryExpr, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, Operator,
+    Projection, ScalarUDF, WindowFrame, WindowFunctionDefinition, col, lit, when,
 };
 use sail_catalog::command::CatalogCommand;
 use sail_catalog::error::CatalogError;
@@ -28,8 +28,8 @@ use sail_common_datafusion::column_features::{
     ColumnFeatures, ColumnFeaturesBuilder, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
 use sail_common_datafusion::datasource::{
-    find_path_in_options, BucketBy, OptionLayer, SinkInfo, SinkMode, SourceInfo,
-    TableFormatRegistry,
+    BucketBy, OptionLayer, SinkInfo, SinkMode, SourceInfo, TableFormatRegistry,
+    find_path_in_options,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::logical_expr::ExprWithSource;
@@ -43,8 +43,8 @@ use sail_logical_plan::barrier::BarrierNode;
 
 use super::delta::parse_delta_generation_expr;
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 /// The write modes for all targets.
 ///
@@ -488,13 +488,13 @@ impl PlanResolver<'_> {
                             },
                         )
                         .await?;
-                    if let Some(location) = create_plan.table.status.location.clone() {
-                        if create_options.location.as_deref() != Some(location.as_str()) {
-                            create_options.location = Some(location.clone());
-                            sink_info.options.push(OptionLayer::OptionList {
-                                items: vec![("path".to_string(), location)],
-                            });
-                        }
+                    if let Some(location) = create_plan.table.status.location.clone()
+                        && create_options.location.as_deref() != Some(location.as_str())
+                    {
+                        create_options.location = Some(location.clone());
+                        sink_info.options.push(OptionLayer::OptionList {
+                            items: vec![("path".to_string(), location)],
+                        });
                     }
                     sink_info.lakehouse_table = Some(
                         create_plan

@@ -19,9 +19,9 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array, Int16Array,
-    Int32Array, Int64Array, Int8Array, LargeBinaryArray, LargeStringArray, NullArray, RecordBatch,
-    StringArray, TimestampMicrosecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    ArrayRef, BooleanArray, Date32Array, Decimal128Array, Float32Array, Float64Array, Int8Array,
+    Int16Array, Int32Array, Int64Array, LargeBinaryArray, LargeStringArray, NullArray, RecordBatch,
+    StringArray, TimestampMicrosecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
 };
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow_schema::SchemaRef;
@@ -151,7 +151,7 @@ pub fn record_batch_to_py_rows(py: Python<'_>, batch: &RecordBatch) -> Result<Ve
 
 /// Convert an Arrow value to a Python object, returning a proper error instead of panicking.
 macro_rules! to_py_value {
-    ($arr:expr, $row_idx:expr, $py:expr) => {{
+    ($arr:expr_2021, $row_idx:expr_2021, $py:expr_2021) => {{
         use pyo3::IntoPyObject;
         $arr.value($row_idx)
             .into_pyobject($py)
@@ -510,7 +510,7 @@ pub fn convert_rows_to_batch(schema: &SchemaRef, pickled_rows: &[Vec<u8>]) -> Re
 ///
 /// Generates the common pattern of extracting values from rows and building an array.
 macro_rules! build_primitive_array {
-    ($rows:expr, $col_idx:expr, $rust_ty:ty, $array_ty:ty) => {{
+    ($rows:expr_2021, $col_idx:expr_2021, $rust_ty:ty, $array_ty:ty) => {{
         let values: Vec<Option<$rust_ty>> = $rows
             .iter()
             .map(|row| extract_value(row, $col_idx))
@@ -528,7 +528,7 @@ fn build_array_from_rows(
 ) -> Result<ArrayRef> {
     /// Helper macro for string-like types.
     macro_rules! build_string_array {
-        ($rows:expr, $col_idx:expr, $array_ty:ty) => {{
+        ($rows:expr_2021, $col_idx:expr_2021, $array_ty:ty) => {{
             let values: Vec<Option<String>> = $rows
                 .iter()
                 .map(|row| extract_value(row, $col_idx))
@@ -541,7 +541,7 @@ fn build_array_from_rows(
 
     /// Helper macro for binary-like types.
     macro_rules! build_binary_array {
-        ($rows:expr, $col_idx:expr, $array_ty:ty) => {{
+        ($rows:expr_2021, $col_idx:expr_2021, $array_ty:ty) => {{
             let values: Vec<Option<Vec<u8>>> = $rows
                 .iter()
                 .map(|row| extract_value(row, $col_idx))

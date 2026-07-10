@@ -308,15 +308,8 @@ fn truncate_grpc_message(message: &str) -> String {
     let head_take = keep / 3;
     let tail_take = keep - head_take;
 
-    let mut head_end = head_take;
-    while head_end > 0 && !message.is_char_boundary(head_end) {
-        head_end -= 1;
-    }
-
-    let mut tail_start = message.len().saturating_sub(tail_take);
-    while tail_start < message.len() && !message.is_char_boundary(tail_start) {
-        tail_start += 1;
-    }
+    let head_end = message.floor_char_boundary(head_take);
+    let tail_start = message.ceil_char_boundary(message.len().saturating_sub(tail_take));
 
     format!(
         "{}{TRUNCATED_MARKER}{}",

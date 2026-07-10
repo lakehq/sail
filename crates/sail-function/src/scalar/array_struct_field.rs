@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    make_array, Array, ArrayRef, FixedSizeListArray, GenericListArray, OffsetSizeTrait, StructArray,
+    Array, ArrayRef, FixedSizeListArray, GenericListArray, OffsetSizeTrait, StructArray, make_array,
 };
 use datafusion::arrow::buffer::NullBuffer;
 use datafusion::arrow::datatypes::{DataType, Field, FieldRef};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::{
-    exec_datafusion_err, exec_err, internal_err, plan_datafusion_err, Result, ScalarValue,
+    Result, ScalarValue, exec_datafusion_err, exec_err, internal_err, plan_datafusion_err,
 };
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -188,7 +188,7 @@ impl ScalarUDFImpl for ArrayStructField {
                 return exec_err!(
                     "array_struct_field requires a list, got {}",
                     array.data_type()
-                )
+                );
             }
         };
         Ok(ColumnarValue::Array(out))

@@ -6,8 +6,8 @@ use crate::driver::DriverClientSet;
 use crate::rpc::ServerMonitor;
 use crate::stream_manager::StreamManager;
 use crate::task_runner::TaskRunner;
-use crate::worker::peer_tracker::PeerTracker;
 use crate::worker::WorkerOptions;
+use crate::worker::peer_tracker::PeerTracker;
 
 pub struct WorkerActor {
     options: WorkerOptions,

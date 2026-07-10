@@ -14,8 +14,8 @@ use sail_logical_plan::range::RangeNode;
 use sail_logical_plan::repartition::{ExplicitRepartitionKind, ExplicitRepartitionNode};
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 impl PlanResolver<'_> {
     /// Resolves a query plan that produces an empty relation.

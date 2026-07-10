@@ -15,10 +15,10 @@ use std::sync::Arc;
 
 use arrow_schema::extension::ExtensionType;
 use datafusion::arrow::datatypes::{
-    validate_decimal_precision_and_scale, DataType as ArrowDataType,
-    Decimal128Type as ArrowDecimal128Type, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
+    DataType as ArrowDataType, Decimal128Type as ArrowDecimal128Type, Field as ArrowField,
+    Schema as ArrowSchema, TimeUnit, validate_decimal_precision_and_scale,
 };
-use datafusion_common::{plan_datafusion_err, plan_err, Result};
+use datafusion_common::{Result, plan_datafusion_err, plan_err};
 use parquet::arrow::PARQUET_FIELD_ID_META_KEY;
 use parquet_variant_compute::VariantType;
 use rust_decimal::prelude::ToPrimitive;
@@ -29,9 +29,9 @@ use sail_common_datafusion::variant::{
 };
 use serde_json;
 
+use crate::ICEBERG_LIST_FIELD_NAME;
 use crate::spec::types::values::Literal;
 use crate::spec::{ListType, MapType, NestedField, PrimitiveType, Schema, StructType, Type};
-use crate::ICEBERG_LIST_FIELD_NAME;
 
 pub const ICEBERG_ARROW_FIELD_DOC_KEY: &str = "doc";
 pub const ICEBERG_FIELD_INITIAL_DEFAULT: &str = "iceberg.field.initial-default";

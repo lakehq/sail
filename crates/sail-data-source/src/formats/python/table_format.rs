@@ -12,7 +12,7 @@ use datafusion::execution::SessionState;
 use datafusion::logical_expr::{Extension, LogicalPlan, TableSource, UserDefinedLogicalNode};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_planner::{ExtensionPlanner, PhysicalPlanner};
-use datafusion_common::{internal_err, DFSchema, DFSchemaRef, Result};
+use datafusion_common::{DFSchema, DFSchemaRef, Result, internal_err};
 use datafusion_expr::{Expr, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::datasource::{

@@ -1,7 +1,7 @@
 use chumsky::container::OrderedSeq;
 use chumsky::extra::ParserExtra;
 use chumsky::input::{SliceInput, ValueInput};
-use chumsky::prelude::{any, choice, end, just, none_of, recursive, Input};
+use chumsky::prelude::{Input, any, choice, end, just, none_of, recursive};
 use chumsky::{ConfigParser, IterParser, Parser};
 
 use crate::options::ParserOptions;
@@ -248,7 +248,9 @@ where
     })
 }
 
-fn string<'a, I, E>(options: &ParserOptions) -> impl Parser<'a, I, (Token<'a>, I::Span), E>
+fn string<'a, I, E>(
+    options: &ParserOptions,
+) -> impl Parser<'a, I, (Token<'a>, I::Span), E> + use<'a, I, E>
 where
     I: Input<'a, Token = char> + ValueInput<'a> + SliceInput<'a, Slice = &'a str>,
     E: ParserExtra<'a, I> + 'a,
@@ -270,7 +272,7 @@ where
         dollar_quoted_string(),
     ));
 
-    let string = if options.allow_triple_quote_string {
+    if options.allow_triple_quote_string {
         choice((
             // Multi-quote delimiter must come before one-quote delimiter.
             raw_string("'''", |prefix| StringStyle::TripleSingleQuoted { prefix }),
@@ -288,14 +290,12 @@ where
         .boxed()
     } else {
         string.boxed()
-    };
-
-    string
+    }
 }
 
 pub fn create_lexer<'a, I, E>(
     options: &ParserOptions,
-) -> impl Parser<'a, I, Vec<(Token<'a>, I::Span)>, E>
+) -> impl Parser<'a, I, Vec<(Token<'a>, I::Span)>, E> + use<'a, I, E>
 where
     I: Input<'a, Token = char> + ValueInput<'a> + SliceInput<'a, Slice = &'a str>,
     E: ParserExtra<'a, I> + 'a,

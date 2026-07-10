@@ -6,7 +6,7 @@ use datafusion::arrow::datatypes::{
 use datafusion::functions::expr_fn;
 use datafusion_common::{DFSchemaRef, ScalarValue};
 use datafusion_expr::expr::{self, Expr};
-use datafusion_expr::{cast, lit, try_cast, when, BinaryExpr, ExprSchemable, Operator, ScalarUDF};
+use datafusion_expr::{BinaryExpr, ExprSchemable, Operator, ScalarUDF, cast, lit, try_cast, when};
 use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_spark::function::datetime::make_dt_interval::SparkMakeDtInterval;
 use datafusion_spark::function::datetime::make_interval::SparkMakeInterval;
@@ -138,7 +138,7 @@ fn interval_arithmetic(input: ScalarFunctionInput, unit: &str, op: Operator) -> 
         _ => {
             return Err(PlanError::invalid(format!(
                 "add_interval does not support interval unit type '{unit}'"
-            )))
+            )));
         }
     };
     Ok(Expr::BinaryExpr(BinaryExpr {
@@ -229,7 +229,7 @@ fn timestampadd(input: ScalarFunctionInput) -> PlanResult<Expr> {
         _ => {
             return Err(PlanError::invalid(
                 "timestampadd unit must be a string literal or keyword",
-            ))
+            ));
         }
     };
     let interval = timestampadd_interval(&unit, quantity)?;
@@ -287,7 +287,7 @@ fn datediff(input: ScalarFunctionInput) -> PlanResult<Expr> {
                 _ => {
                     return Err(PlanError::invalid(
                         "datediff unit must be a string literal or keyword",
-                    ))
+                    ));
                 }
             };
             match unit_str.as_str() {
@@ -435,15 +435,15 @@ pub(super) fn date_format(expr: Expr, format: Expr) -> Expr {
     // Handle standalone fractional seconds format (e.g., 'SSS' for milliseconds).
     // Chrono's %.Nf always includes a leading dot (e.g., ".000"), so for standalone
     // S-patterns we strip the dot using substr.
-    if let Expr::Literal(ref sv, _) = &format {
-        if let Some(Some(fmt)) = sv.try_as_str() {
-            if !fmt.is_empty() && fmt.chars().all(|c| c == 'S') {
-                let n = fmt.len();
-                let chrono_fmt = format!("%.{n}f");
-                let result = expr_fn::to_char(expr, lit(chrono_fmt));
-                return expr_fn::substr(result, lit(2i64));
-            }
-        }
+    if let Expr::Literal(sv, _) = &format
+        && let Some(Some(fmt)) = sv.try_as_str()
+        && !fmt.is_empty()
+        && fmt.chars().all(|c| c == 'S')
+    {
+        let n = fmt.len();
+        let chrono_fmt = format!("%.{n}f");
+        let result = expr_fn::to_char(expr, lit(chrono_fmt));
+        return expr_fn::substr(result, lit(2i64));
     }
     let format = to_chrono_fmt(format);
     expr_fn::to_char(expr, format)
@@ -700,7 +700,7 @@ fn utc_ntz_timestamp_and_unit(
         x => {
             return Err(PlanError::invalid(format!(
                 "invalid UTC NTZ timestamp type: {x:?}"
-            )))
+            )));
         }
     };
     let ts = cast(ts, DataType::Timestamp(unit, None));
@@ -979,7 +979,7 @@ fn window_field_type(
         other => {
             return Err(PlanError::invalid(format!(
                 "window requires a timestamp time column, got {other:?}"
-            )))
+            )));
         }
     })
 }
@@ -1032,7 +1032,7 @@ fn window_time(input: ScalarFunctionInput) -> PlanResult<Expr> {
         other => {
             return Err(PlanError::invalid(format!(
                 "window_time requires a window column (struct with start and end timestamps), got {other:?}"
-            )))
+            )));
         }
     };
     Ok(cast(

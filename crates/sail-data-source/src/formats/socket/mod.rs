@@ -9,14 +9,14 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema};
 use datafusion::catalog::Session;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::{LogicalPlan, TableSource};
-use datafusion_common::{not_impl_err, plan_err, Result};
+use datafusion_common::{Result, not_impl_err, plan_err};
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 use sail_common_datafusion::streaming::source::StreamSourceTableProvider;
 
 pub use crate::formats::socket::reader::SocketSourceExec;
 use crate::formats::socket::reader::SocketStreamSource;
-pub use crate::options::gen::SocketReadOptions;
 use crate::options::ResolveOptions;
+pub use crate::options::r#gen::SocketReadOptions;
 
 /// Read test data from a TCP socket for testing purposes.
 /// The record batches contain a single string column corresponding to lines read from the socket.

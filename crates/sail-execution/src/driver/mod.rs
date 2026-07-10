@@ -9,7 +9,7 @@ mod task_assigner;
 pub(super) mod worker_pool;
 
 #[expect(clippy::allow_attributes)]
-mod gen {
+mod r#gen {
     tonic::include_proto!("sail.driver");
 
     pub const FILE_DESCRIPTOR_SET: &[u8] =
@@ -19,5 +19,5 @@ mod gen {
 pub(crate) use actor::DriverActor;
 pub(crate) use client::DriverClientSet;
 pub(crate) use event::{DriverEvent, TaskStatus};
-pub(crate) use gen::driver_service_client::DriverServiceClient;
+pub(crate) use r#gen::driver_service_client::DriverServiceClient;
 pub use options::DriverOptions;

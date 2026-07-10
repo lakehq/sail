@@ -20,7 +20,7 @@ use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
 use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties};
-use datafusion_common::{internal_err, Result};
+use datafusion_common::{Result, internal_err};
 use futures::StreamExt;
 
 use super::executor::{InProcessExecutor, PythonExecutor};
@@ -257,9 +257,11 @@ mod tests {
 
         let new_exec = exec.clone().with_new_children(vec![input2]).unwrap();
 
-        assert!(new_exec
-            .downcast_ref::<PythonDataSourceWriteExec>()
-            .is_some());
+        assert!(
+            new_exec
+                .downcast_ref::<PythonDataSourceWriteExec>()
+                .is_some()
+        );
     }
 
     #[test]
@@ -273,17 +275,18 @@ mod tests {
         let exec = Arc::new(PythonDataSourceWriteExec::new(input, vec![], true));
 
         assert!(exec.clone().with_new_children(vec![]).is_err());
-        assert!(exec
-            .clone()
-            .with_new_children(vec![
-                Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
-                    schema.clone()
-                )),
-                Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
-                    schema.clone()
-                ))
-            ])
-            .is_err());
+        assert!(
+            exec.clone()
+                .with_new_children(vec![
+                    Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
+                        schema.clone()
+                    )),
+                    Arc::new(datafusion::physical_plan::empty::EmptyExec::new(
+                        schema.clone()
+                    ))
+                ])
+                .is_err()
+        );
     }
 
     #[test]

@@ -9,14 +9,14 @@ use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use datafusion::catalog::Session;
 use datafusion::datasource::provider_as_source;
 use datafusion::logical_expr::{LogicalPlan, TableSource};
-use datafusion_common::{plan_err, Result};
+use datafusion_common::{Result, plan_err};
 use sail_common_datafusion::datasource::{SinkInfo, SourceInfo, TableFormat};
 use sail_common_datafusion::streaming::source::StreamSourceTableProvider;
 
 pub use crate::formats::rate::reader::RateSourceExec;
 use crate::formats::rate::reader::RateStreamSource;
-use crate::options::gen::RateReadOptions;
 use crate::options::ResolveOptions;
+use crate::options::r#gen::RateReadOptions;
 
 /// Generate record batches at a fixed rate for testing purposes.
 /// The record batches contain two columns, a timestamp and an integer value.

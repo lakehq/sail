@@ -149,10 +149,10 @@ impl SparkFirstLastValueEvaluator {
     fn valid_index(&self, array: &ArrayRef, range: &Range<usize>) -> Option<usize> {
         if self.ignore_nulls {
             let slice = array.slice(range.start, range.end - range.start);
-            if let Some(nulls) = slice.nulls() {
-                if nulls.null_count() > 0 {
-                    return self.valid_index_with_nulls(nulls, range.start);
-                }
+            if let Some(nulls) = slice.nulls()
+                && nulls.null_count() > 0
+            {
+                return self.valid_index_with_nulls(nulls, range.start);
             }
         }
         match self.kind {

@@ -5,7 +5,7 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion_common::cast::{
     as_binary_array, as_binary_view_array, as_fixed_size_binary_array, as_large_binary_array,
 };
-use datafusion_common::{exec_err, Result};
+use datafusion_common::{Result, exec_err};
 use datafusion_expr::function::Hint;
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 use datafusion_functions::utils::make_scalar_function;

@@ -27,7 +27,7 @@ use datafusion::arrow::array::{
     Array, ArrayRef, BooleanArray, BooleanBuilder, Int32Array, Int64Array, PrimitiveArray,
     UInt64Array,
 };
-use datafusion::arrow::compute::{filter_record_batch, SortOptions};
+use datafusion::arrow::compute::{SortOptions, filter_record_batch};
 use datafusion::arrow::datatypes::{
     ArrowTimestampType, DataType, Schema, SchemaRef, TimeUnit, TimestampMicrosecondType,
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
@@ -43,12 +43,12 @@ use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, ExecutionPlanProperties, Partitioning,
     PlanProperties, SendableRecordBatchStream,
 };
-use datafusion_common::{internal_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_physical_expr::{Distribution, EquivalenceProperties};
-use futures::stream::{once, StreamExt};
+use futures::stream::{StreamExt, once};
 use sail_common_datafusion::catalog::LakehouseExecutionContext;
 use sail_common_datafusion::datasource::{
-    PhysicalSinkMode, RowLevelOperationType, MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN,
+    MERGE_SOURCE_METRIC_COLUMN, OPERATION_COLUMN, PhysicalSinkMode, RowLevelOperationType,
 };
 use url::Url;
 
@@ -56,14 +56,14 @@ use crate::conversion::DeltaTypeConverter;
 use crate::delta_log::get_object_store_from_context;
 use crate::physical_plan::writer_options::DeltaWriterExecOptions;
 use crate::physical_plan::{
-    delta_action_schema, encode_actions, DeltaWriteContext, ExecCommitMeta,
+    DeltaWriteContext, ExecCommitMeta, delta_action_schema, encode_actions,
 };
 use crate::spec::{
     Action, ColumnMappingMode, DeltaOperation, Metadata, Protocol, StructType, TableFeature,
     TableProperties,
 };
 use crate::transaction::OperationMetrics;
-use crate::writer::variant_shredding::{variant_top_level_columns, VariantShreddingConfig};
+use crate::writer::variant_shredding::{VariantShreddingConfig, variant_top_level_columns};
 use crate::writer::{DeltaWriter, WriterConfig};
 
 /// Counts internal row intent tags before they are stripped from writer input.
@@ -693,7 +693,7 @@ impl DeltaWriterExec {
             // Compute physical-to-logical mapping once before the loop
             let phys_to_logical = logical_kernel_for_mapping.as_ref().map(|logical_kernel| {
                 let map = Self::build_physical_to_logical_map(logical_kernel, kernel_mode);
-                log::trace!("phys_to_logical: {:?}", &map);
+                log::trace!("phys_to_logical: {:?}", map);
                 map
             });
 
@@ -728,8 +728,8 @@ impl DeltaWriterExec {
                     .collect();
                 log::trace!(
                     "input_batch_fields: {:?}, target_fields: {:?}",
-                    &input_names,
-                    &target_names
+                    input_names,
+                    target_names
                 );
 
                 let validated_batch = Self::validate_and_adapt_batch(

@@ -9,7 +9,7 @@ use datafusion::arrow::datatypes::{
     DataType, Field, FieldRef, Fields, Schema, SchemaRef, TimeUnit,
 };
 use parquet_variant::Variant;
-use parquet_variant_compute::{shred_variant, unshred_variant, VariantArray, VariantType};
+use parquet_variant_compute::{VariantArray, VariantType, shred_variant, unshred_variant};
 
 const MIN_FIELD_FREQUENCY: f64 = 0.10;
 const MAX_SHREDDED_FIELDS: usize = 300;
@@ -786,9 +786,11 @@ mod tests {
         let DataType::Struct(payload_fields) = payload_field.data_type() else {
             panic!("expected variant struct");
         };
-        assert!(payload_fields
-            .iter()
-            .any(|field| field.name() == "typed_value"));
+        assert!(
+            payload_fields
+                .iter()
+                .any(|field| field.name() == "typed_value")
+        );
         let typed_value = payload_fields
             .iter()
             .find(|field| field.name() == "typed_value")

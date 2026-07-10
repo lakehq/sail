@@ -24,14 +24,14 @@ use datafusion::arrow::array::{
 use datafusion::arrow::compute::{take, take_arrays};
 use datafusion::arrow::datatypes::{ArrowNativeType, DataType, Field, FieldRef};
 use datafusion_common::utils::adjust_offsets_for_slice;
-use datafusion_common::{exec_datafusion_err, exec_err, plan_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, exec_datafusion_err, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, HigherOrderFunctionArgs, HigherOrderReturnFieldArgs, HigherOrderSignature,
     HigherOrderUDFImpl, LambdaParametersProgress, ValueOrLambda, Volatility,
 };
 
 use crate::scalar::array::lambda_utils::{
-    coerce_single_list_arg, extract_list_values, value_lambda_pair, ListValuesResult,
+    ListValuesResult, coerce_single_list_arg, extract_list_values, value_lambda_pair,
 };
 
 /// The physical lambda evaluation batch is laid out as `[captures..., params...]`
@@ -220,8 +220,7 @@ impl HigherOrderUDFImpl for SparkArraySort {
         };
 
         let mut perm: Vec<u32> = Vec::with_capacity(list_values.len());
-        for (row, w) in offsets.windows(2).enumerate() {
-            let (start, end) = (w[0], w[1]);
+        for (row, &[start, end]) in offsets.array_windows::<2>().enumerate() {
             let n = end - start;
             if n == 0 {
                 continue;
@@ -289,7 +288,7 @@ mod tests {
     use datafusion_common::{DFSchema, ScalarValue};
     use datafusion_expr::execution_props::ExecutionProps;
     use datafusion_expr::expr::{HigherOrderFunction, LambdaVariable};
-    use datafusion_expr::{col, lambda, lit, Case, Expr, HigherOrderUDF};
+    use datafusion_expr::{Case, Expr, HigherOrderUDF, col, lambda, lit};
     use datafusion_physical_expr::create_physical_expr;
 
     use super::*;

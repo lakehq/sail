@@ -13,18 +13,18 @@
 use datafusion::catalog::Session;
 use sail_common_datafusion::datasource::OptionLayer;
 pub(crate) use sail_data_source::options::{
-    parsers, BuildPartialOptions, PartialOptions, ResolveOptions,
+    BuildPartialOptions, PartialOptions, ResolveOptions, parsers,
 };
 
 use crate::error::DataSourceResult;
 
-pub mod gen {
+pub mod r#gen {
     include!(concat!(env!("OUT_DIR"), "/options/iceberg.rs"));
 }
 
-impl ResolveOptions for gen::IcebergReadOptions {
+impl ResolveOptions for r#gen::IcebergReadOptions {
     fn resolve(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
-        let mut partial = gen::IcebergReadPartialOptions::initialize();
+        let mut partial = r#gen::IcebergReadPartialOptions::initialize();
         for layer in options {
             partial.merge(layer.build_partial_options()?);
         }
@@ -32,9 +32,9 @@ impl ResolveOptions for gen::IcebergReadOptions {
     }
 }
 
-impl ResolveOptions for gen::IcebergWriteOptions {
+impl ResolveOptions for r#gen::IcebergWriteOptions {
     fn resolve(_ctx: &dyn Session, options: Vec<OptionLayer>) -> DataSourceResult<Self> {
-        let mut partial = gen::IcebergWritePartialOptions::initialize();
+        let mut partial = r#gen::IcebergWritePartialOptions::initialize();
         for layer in options {
             partial.merge(layer.build_partial_options()?);
         }

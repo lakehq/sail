@@ -24,10 +24,10 @@ use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapter
 use super::commit::assemble_commit_plan;
 use super::context::PlannerContext;
 use super::metadata_predicate::{build_metadata_filter, predicate_requires_stats};
-use super::utils::{build_log_replay_pipeline_with_options, LogReplayOptions};
+use super::utils::{LogReplayOptions, build_log_replay_pipeline_with_options};
 use crate::physical_plan::{
-    prepare_delta_write_context, DeltaCommitContext, DeltaDiscoveryExec, DeltaScanByAddsExec,
-    DeltaWriterExecOptions,
+    DeltaCommitContext, DeltaDiscoveryExec, DeltaScanByAddsExec, DeltaWriterExecOptions,
+    prepare_delta_write_context,
 };
 use crate::spec::DeltaOperation;
 

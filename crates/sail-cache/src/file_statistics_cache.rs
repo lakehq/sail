@@ -123,8 +123,8 @@ mod tests {
     use chrono::DateTime;
     use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion::common::Statistics;
-    use object_store::path::Path;
     use object_store::ObjectMeta;
+    use object_store::path::Path;
 
     use super::*;
 
@@ -162,10 +162,12 @@ mod tests {
         let mut meta2 = meta.clone();
         meta2.size = 2048;
         let key2 = scoped_path(meta2.location.clone());
-        assert!(!cache
-            .get(&key2)
-            .map(|c| c.is_valid_for(&meta2))
-            .unwrap_or(false));
+        assert!(
+            !cache
+                .get(&key2)
+                .map(|c| c.is_valid_for(&meta2))
+                .unwrap_or(false)
+        );
 
         // different file
         let mut meta2 = meta;

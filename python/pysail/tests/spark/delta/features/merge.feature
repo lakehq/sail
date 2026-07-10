@@ -749,3 +749,76 @@ Feature: Delta Lake Merge
         | 2  | 2024 | 250   |
         | 3  | 2024 | 700   |
         | 4  | 2024 | 900   |
+
+
+  Rule: MERGE INTO with path-based target (delta.`/path/to/table` syntax)
+    Background:
+      Given variable location for temporary directory merge_path_target
+      Given final statement
+        """
+        DROP TABLE IF EXISTS delta_merge_path_target
+        """
+      Given final statement
+        """
+        DROP VIEW IF EXISTS src_merge_path_target
+        """
+      Given statement template
+        """
+        CREATE TABLE delta_merge_path_target (
+          id INT,
+          value STRING
+        )
+        USING DELTA LOCATION {{ location.sql }}
+        TBLPROPERTIES ('delta.constraints.positive_id' = 'id > 0')
+        """
+      Given statement
+        """
+        INSERT INTO delta_merge_path_target
+        SELECT * FROM VALUES
+          (1, 'old'),
+          (2, 'keep')
+        """
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_merge_path_target AS
+        SELECT * FROM VALUES
+          (1, 'new'),
+          (3, 'insert')
+        AS src(id, value)
+        """
+
+    Scenario: MERGE INTO with delta.`path` target using a temp view as source
+      Given statement template
+        """
+        MERGE INTO delta.`{{ location.string }}` AS tgt
+        USING src_merge_path_target AS src
+        ON tgt.id = src.id
+        WHEN MATCHED THEN UPDATE SET tgt.value = src.value
+        WHEN NOT MATCHED THEN INSERT *
+        """
+      When query
+        """
+        SELECT id, value FROM delta_merge_path_target ORDER BY id
+        """
+      Then query result ordered
+        | id | value  |
+        | 1  | new    |
+        | 2  | keep   |
+        | 3  | insert |
+
+    Scenario: MERGE INTO with delta.`path` target enforces CHECK constraints
+      Given statement
+        """
+        CREATE OR REPLACE TEMP VIEW src_merge_path_target_bad AS
+        SELECT * FROM VALUES
+          (0, 'bad')
+        AS src(id, value)
+        """
+      When query template
+        """
+        MERGE INTO delta.`{{ location.string }}` AS tgt
+        USING src_merge_path_target_bad AS src
+        ON tgt.id = src.id
+        WHEN NOT MATCHED THEN INSERT *
+        """
+      Then query error DELTA_VIOLATE_CONSTRAINT_WITH_VALUES
