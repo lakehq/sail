@@ -1,5 +1,5 @@
 @arithmetic_coercion
-Feature: Spark type coercion for the +, -, * operators
+Feature: Spark type coercion for the +, -, *, /, % operators and string operands
 
   # DataFusion's BinaryTypeCoercer does not perform these Spark coercions; Sail
   # applies them in the arithmetic plan builders (math.rs) so the *result type*
@@ -50,6 +50,19 @@ Feature: Spark type coercion for the +, -, * operators
       Then query result
         | t             | r      |
         | decimal(14,2) | 250.00 |
+
+    Scenario: a negative integer literal narrows the same as a positive one
+      # The literal -3 narrows to Decimal(1,0) (sign does not add a digit), so the
+      # result type matches `dec * 3`. Guards against a Negative(Literal) plan node
+      # skipping the narrowing.
+      When query
+        """
+        SELECT typeof(CAST(2.5 AS DECIMAL(10,2)) * -3) AS t,
+               CAST(2.5 AS DECIMAL(10,2)) * -3 AS r
+        """
+      Then query result
+        | t             | r     |
+        | decimal(12,2) | -7.50 |
 
   Rule: Float or double combined with a decimal promotes to double
     Scenario: float times decimal returns double

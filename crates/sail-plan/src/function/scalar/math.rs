@@ -391,6 +391,12 @@ fn spark_decimal_literal_datatype(expr: &Expr, other_type: &DataType) -> Option<
     };
     let value = match expr {
         Expr::Literal(scalar, _) => scalar_integer_value(scalar)?,
+        // A negative integer literal can appear as `Negative(Literal)` in the plan;
+        // the digit count is sign-agnostic so only the magnitude matters.
+        Expr::Negative(inner) => match inner.as_ref() {
+            Expr::Literal(scalar, _) => scalar_integer_value(scalar)?,
+            _ => return None,
+        },
         _ => return None,
     };
     let precision = integer_digit_count(value);
@@ -829,9 +835,9 @@ fn double2(func: impl Fn(Expr, Expr) -> Expr) -> impl Fn(Expr, Expr) -> Expr {
 
 /// Modulo operation with division-by-zero handling.
 ///
-/// In ANSI mode: raises error for integral/decimal modulo by zero.
-/// In non-ANSI mode: returns NULL for modulo by zero.
-/// Float/double modulo by zero returns NaN (IEEE 754).
+/// Modulo by zero (all numeric types, including float/double) matches Spark's `%`:
+/// in ANSI mode it raises an error, in non-ANSI mode it returns NULL — Spark does
+/// not fall back to IEEE `NaN` for a zero divisor.
 fn spark_modulo(input: ScalarFunctionInput) -> PlanResult<Expr> {
     let ScalarFunctionInput {
         arguments,
