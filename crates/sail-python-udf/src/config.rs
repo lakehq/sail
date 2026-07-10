@@ -10,7 +10,7 @@ use futures::StreamExt;
 use num_bigint::BigUint;
 use object_store::ObjectStoreExt;
 use pyo3::prelude::PyAnyMethods;
-use pyo3::types::PyModule;
+use pyo3::types::{PyDict, PyDictMethods, PyModule, PyModuleMethods};
 use pyo3::{Python, pyclass};
 use sha2::{Digest, Sha256};
 use url::Url;
@@ -177,8 +177,9 @@ impl PySparkUdfConfig {
             return Ok(());
         }
         let installed = self.resolve_artifacts(py)?;
-        sync_artifact_python_paths(py, &installed.python_paths)?;
-        invalidate_import_caches(py)?;
+        if sync_artifact_python_paths(py, &installed.python_paths)? {
+            invalidate_import_caches(py)?;
+        }
         Ok(())
     }
 
@@ -329,9 +330,11 @@ fn configure_spark_files(py: Python, root: &Path) -> PyUdfResult<()> {
 }
 
 fn clear_python_artifacts(py: Python) -> PyUdfResult<()> {
-    sync_artifact_python_paths(py, &[])?;
+    let paths_changed = sync_artifact_python_paths(py, &[])?;
     clear_spark_files(py);
-    invalidate_import_caches(py)?;
+    if paths_changed {
+        invalidate_import_caches(py)?;
+    }
     Ok(())
 }
 
@@ -348,18 +351,25 @@ fn clear_spark_files(py: Python) {
     }
 }
 
-fn sync_artifact_python_paths(py: Python, paths: &[String]) -> PyUdfResult<()> {
+fn sync_artifact_python_paths(py: Python, paths: &[String]) -> PyUdfResult<bool> {
     let sys = PyModule::import(py, "sys")?;
     let path_list = sys.getattr("path")?;
     let state = INSTALLED_ARTIFACT_PYTHON_PATHS.get_or_init(|| Mutex::new(vec![]));
     let mut installed = state.lock().map_err(|e| {
         PyUdfError::internal(format!("failed to lock installed artifact paths: {e}"))
     })?;
-
-    for path in installed
+    if *installed == paths {
+        return Ok(false);
+    }
+    let removed_paths = installed
         .iter()
         .filter(|path| !paths.iter().any(|next| next == *path))
-    {
+        .cloned()
+        .collect::<Vec<_>>();
+
+    evict_python_modules_from_paths(py, &removed_paths)?;
+
+    for path in &removed_paths {
         while path_list_contains(&path_list, path)? {
             path_list.call_method1("remove", (path.as_str(),))?;
         }
@@ -371,7 +381,56 @@ fn sync_artifact_python_paths(py: Python, paths: &[String]) -> PyUdfResult<()> {
     }
 
     *installed = paths.to_vec();
+    Ok(true)
+}
+
+fn evict_python_modules_from_paths(py: Python, paths: &[String]) -> PyUdfResult<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let paths = paths.iter().map(Path::new).collect::<Vec<_>>();
+    let modules = PyModule::import(py, "sys")?
+        .getattr("modules")?
+        .cast_into::<PyDict>()
+        .map_err(|e| {
+            PyUdfError::internal(format!("Python sys.modules is not a dictionary: {e}"))
+        })?;
+    let mut names = vec![];
+    for (name, module) in modules.iter() {
+        if !python_module_uses_artifact_path(&module, &paths) {
+            continue;
+        }
+        let Ok(mut name) = name.extract::<String>() else {
+            continue;
+        };
+        loop {
+            if !names.contains(&name) {
+                names.push(name.clone());
+            }
+            let Some((parent, _)) = name.rsplit_once('.') else {
+                break;
+            };
+            name = parent.to_string();
+        }
+    }
+    for name in names {
+        if modules.contains(&name)? {
+            modules.del_item(name)?;
+        }
+    }
     Ok(())
+}
+
+fn python_module_uses_artifact_path(
+    module: &pyo3::Bound<'_, pyo3::PyAny>,
+    paths: &[&Path],
+) -> bool {
+    module
+        .cast::<PyModule>()
+        .ok()
+        .and_then(|module| module.dict().get_item("__file__").ok().flatten())
+        .and_then(|path| path.extract::<String>().ok())
+        .is_some_and(|path| paths.iter().any(|root| Path::new(&path).starts_with(root)))
 }
 
 fn path_list_contains(path_list: &pyo3::Bound<'_, pyo3::PyAny>, path: &str) -> PyUdfResult<bool> {
