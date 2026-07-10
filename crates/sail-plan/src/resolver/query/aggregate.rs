@@ -6,8 +6,8 @@ use datafusion_common::{
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::utils::find_aggregate_exprs;
 use datafusion_expr::{
-    Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, SortExpr, Volatility, bitwise_and,
-    bitwise_shift_right, cast,
+    Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Projection, SortExpr, Volatility,
+    bitwise_and, bitwise_shift_right, cast,
 };
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -342,13 +342,9 @@ impl PlanResolver<'_> {
                 ordering
                     .into_iter()
                     .map(|sort| {
-                        let index = projection
-                            .expr
-                            .iter()
-                            .position(|e| e.clone().unalias() == sort.expr)?;
-                        let (qualifier, field) = projection.schema.qualified_field(index);
+                        let expr = Self::remap_through_projection(sort.expr, projection)?;
                         Some(SortExpr {
-                            expr: Expr::from(Column::from((qualifier, field))),
+                            expr,
                             asc: sort.asc,
                             nulls_first: sort.nulls_first,
                         })
@@ -357,6 +353,42 @@ impl PlanResolver<'_> {
             }
             _ => None,
         }
+    }
+
+    // Re-expresses a sort key over a projection's output by substituting projected
+    // subexpressions with their output columns; `None` if the key is not derivable.
+    fn remap_through_projection(expr: Expr, projection: &Projection) -> Option<Expr> {
+        let rewritten = expr
+            .transform_down(|e| {
+                match projection
+                    .expr
+                    .iter()
+                    .position(|p| p.clone().unalias() == e)
+                {
+                    Some(index) => {
+                        let (qualifier, field) = projection.schema.qualified_field(index);
+                        Ok(Transformed::new(
+                            Expr::from(Column::from((qualifier, field))),
+                            true,
+                            TreeNodeRecursion::Jump,
+                        ))
+                    }
+                    None => Ok(Transformed::no(e)),
+                }
+            })
+            .data()
+            .ok()?;
+        let mut derivable = true;
+        let _ = rewritten.apply(|e| {
+            if let Expr::Column(column) = e
+                && projection.schema.qualified_field_from_column(column).is_err()
+            {
+                derivable = false;
+                return Ok(TreeNodeRecursion::Stop);
+            }
+            Ok(TreeNodeRecursion::Continue)
+        });
+        derivable.then_some(rewritten)
     }
 
     fn attach_ordering_to_aggregates(expr: Expr, ordering: &[SortExpr]) -> PlanResult<Expr> {

@@ -20,3 +20,7 @@
 ... )
 >>> sorted(result.collect(), key=lambda r: r.name)
 [Row(name='Alice', last(age)=2), Row(name='Bob', last(age)=5)]
+
+>>> df = spark.createDataFrame([(30, 2, 2), (10, 5, -20), (20, 1, 1)], ("v", "a", "b"))
+>>> df.orderBy(df.a + df.b).select("v", "a", "b").groupBy().agg(F.first("v")).collect()
+[Row(first(v)=10)]
