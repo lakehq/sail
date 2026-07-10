@@ -293,21 +293,6 @@ impl PlanResolver<'_> {
         let Some(ordering) = Self::input_sort_ordering(input) else {
             return Ok((projections, having));
         };
-        // The plan builder normalizes the copy inside the aggregate plan, and the copy kept
-        // in the projections must stay identical for the rebase to columns to succeed.
-        let Ok(ordering) = ordering
-            .into_iter()
-            .map(|sort| {
-                Ok(SortExpr {
-                    expr: normalize_col(sort.expr, input)?,
-                    asc: sort.asc,
-                    nulls_first: sort.nulls_first,
-                })
-            })
-            .collect::<DataFusionResult<Vec<_>>>()
-        else {
-            return Ok((projections, having));
-        };
         let ordering = &ordering;
         let projections = projections
             .into_iter()
@@ -330,16 +315,32 @@ impl PlanResolver<'_> {
         Ok((projections, having))
     }
 
-    // Finds the sort that determines the input row order of an aggregate, looking through
-    // row-order-preserving wrappers remapping the sort keys through each projection.
-    fn input_sort_ordering(input: &LogicalPlan) -> Option<Vec<SortExpr>> {
+    // Finds the sort that determines the input row order, qualified against `input` so
+    // every attached copy of the expression renders identically.
+    pub(crate) fn input_sort_ordering(input: &LogicalPlan) -> Option<Vec<SortExpr>> {
+        Self::find_input_sort_ordering(input)?
+            .into_iter()
+            .map(|sort| {
+                Some(SortExpr {
+                    expr: normalize_col(sort.expr, input).ok()?,
+                    asc: sort.asc,
+                    nulls_first: sort.nulls_first,
+                })
+            })
+            .collect()
+    }
+
+    fn find_input_sort_ordering(input: &LogicalPlan) -> Option<Vec<SortExpr>> {
+        // Walks through row-order-preserving wrappers, remapping the sort keys through each projection.
         match input {
             LogicalPlan::Sort(sort) => Some(sort.expr.clone()),
-            LogicalPlan::SubqueryAlias(alias) => Self::input_sort_ordering(alias.input.as_ref()),
-            LogicalPlan::Filter(filter) => Self::input_sort_ordering(filter.input.as_ref()),
-            LogicalPlan::Limit(limit) => Self::input_sort_ordering(limit.input.as_ref()),
+            LogicalPlan::SubqueryAlias(alias) => {
+                Self::find_input_sort_ordering(alias.input.as_ref())
+            }
+            LogicalPlan::Filter(filter) => Self::find_input_sort_ordering(filter.input.as_ref()),
+            LogicalPlan::Limit(limit) => Self::find_input_sort_ordering(limit.input.as_ref()),
             LogicalPlan::Projection(projection) => {
-                let ordering = Self::input_sort_ordering(projection.input.as_ref())?;
+                let ordering = Self::find_input_sort_ordering(projection.input.as_ref())?;
                 ordering
                     .into_iter()
                     .map(|sort| {
@@ -382,7 +383,10 @@ impl PlanResolver<'_> {
         let mut derivable = true;
         let _ = rewritten.apply(|e| {
             if let Expr::Column(column) = e
-                && projection.schema.qualified_field_from_column(column).is_err()
+                && projection
+                    .schema
+                    .qualified_field_from_column(column)
+                    .is_err()
             {
                 derivable = false;
                 return Ok(TreeNodeRecursion::Stop);
