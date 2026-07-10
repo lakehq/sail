@@ -20,6 +20,5 @@ def test_lakehouse_file_writes_remain_parallel_on_workers(spark, tmp_path, table
     spark.range(0, 400, 1, 4).write.format(table_format).mode("overwrite").save(str(table_path))
 
     data_files = _data_files(table_path, table_format)
-    print(f"{table_format} local-cluster data files: {[path.name for path in data_files]}")
     assert len(data_files) == 4  # noqa: PLR2004
     assert spark.read.format(table_format).load(str(table_path)).count() == 400  # noqa: PLR2004
