@@ -4,8 +4,8 @@ use datafusion_common::{
 };
 use datafusion_expr::utils::find_aggregate_exprs;
 use datafusion_expr::{
-    Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Volatility, bitwise_and, bitwise_shift_right,
-    cast,
+    Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, SortExpr, Volatility, bitwise_and,
+    bitwise_shift_right, cast,
 };
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -188,6 +188,8 @@ impl PlanResolver<'_> {
         let having = having
             .map(|having| Self::rewrite_grouping_expr(having, &grouping_exprs, has_grouping_set))
             .transpose()?;
+        // Sorts directly below aggs determine results of order-sensitive aggs (e.g., first, last).
+        let (projections, having) = Self::attach_input_ordering(&input, projections, having)?;
         let mut aggregate_candidates = projections
             .iter()
             .map(|x| x.expr.clone())
@@ -277,6 +279,56 @@ impl PlanResolver<'_> {
         Ok(LogicalPlanBuilder::from(plan)
             .project(projections)?
             .build()?)
+    }
+
+    // Aggs whose result depends on the order of the input rows and that accept an `order_by`.
+    // Spark treats `First`/`Last` as order-relevant.
+    const ORDER_SENSITIVE_AGGREGATES: &'static [&'static str] = &["first_value", "last_value"];
+
+    // Sorts directly below aggs determine results of order-sensitive aggs (e.g., first, last).
+    fn attach_input_ordering(
+        input: &LogicalPlan,
+        projections: Vec<NamedExpr>,
+        having: Option<Expr>,
+    ) -> PlanResult<(Vec<NamedExpr>, Option<Expr>)> {
+        let LogicalPlan::Sort(sort) = input else {
+            return Ok((projections, having));
+        };
+        let ordering = &sort.expr;
+        let projections = projections
+            .into_iter()
+            .map(|x| {
+                let NamedExpr {
+                    name,
+                    expr,
+                    metadata,
+                } = x;
+                Ok(NamedExpr {
+                    name,
+                    expr: Self::attach_ordering_to_aggregates(expr, ordering)?,
+                    metadata,
+                })
+            })
+            .collect::<PlanResult<Vec<_>>>()?;
+        let having = having
+            .map(|x| Self::attach_ordering_to_aggregates(x, ordering))
+            .transpose()?;
+        Ok((projections, having))
+    }
+
+    fn attach_ordering_to_aggregates(expr: Expr, ordering: &[SortExpr]) -> PlanResult<Expr> {
+        Ok(expr
+            .transform_down(|e| match e {
+                Expr::AggregateFunction(mut function)
+                    if Self::ORDER_SENSITIVE_AGGREGATES.contains(&function.func.name())
+                        && function.params.order_by.is_empty() =>
+                {
+                    function.params.order_by = ordering.to_vec();
+                    Ok(Transformed::yes(Expr::AggregateFunction(function)))
+                }
+                e => Ok(Transformed::no(e)),
+            })
+            .data()?)
     }
 
     pub(super) fn has_grouping_set(grouping: &[Expr]) -> bool {
