@@ -232,7 +232,10 @@ def test_delete_advances_rest_catalog_metadata_location_with_equality_delete(
           flag STRING
         )
         USING iceberg
-        TBLPROPERTIES ('format-version' = '2')
+        TBLPROPERTIES (
+          'format-version' = '2',
+          'write.delete.mode' = 'merge-on-read'
+        )
         """
     )
     spark.sql(
