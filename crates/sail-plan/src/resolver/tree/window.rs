@@ -54,8 +54,7 @@ impl TreeNodeRewriter for WindowRewriter<'_> {
                             || udaf.inner().is::<ArrayAgg>()
                     }
                     WindowFunctionDefinition::WindowUDF(udwf) => {
-                        udwf.inner().is::<NthValue>()
-                            || udwf.inner().is::<SparkFirstLastValue>()
+                        udwf.inner().is::<NthValue>() || udwf.inner().is::<SparkFirstLastValue>()
                     }
                 };
                 if order_sensitive
