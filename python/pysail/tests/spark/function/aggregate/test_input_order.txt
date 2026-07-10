@@ -152,11 +152,21 @@ True
 >>> re.search(r"first(?:_value)?\([^\n]* ORDER BY \[", explain, re.IGNORECASE) is None
 True
 
+>>> df = spark.createDataFrame([(30, 'c'), (10, 'a'), (20, 'b')], ("v", "k"))
+>>> df.orderBy("k").withColumn("i", F.monotonically_increasing_id()).groupBy().agg(F.first("v")).collect()
+[Row(first(v)=10)]
+>>> df.orderBy("k").withColumn("p", F.spark_partition_id()).groupBy().agg(F.first("v")).collect()
+[Row(first(v)=10)]
+
+>>> dfe = spark.createDataFrame([(30, 'c', [1, 2]), (10, 'a', [3]), (20, 'b', [4, 5])], ("v", "k", "arr"))
+>>> dfe.orderBy("k").select("v", F.explode("arr").alias("e")).groupBy().agg(F.first("v")).collect()
+[Row(first(v)=10)]
+
 # Each test in this group is a different edge case
->>> spark.sql("SELECT sum(v) AS s FROM (SELECT * FROM VALUES (CAST(1e16 AS DOUBLE),'b'),(CAST(1.0 AS DOUBLE),'c'),(CAST(-1e16 AS DOUBLE),'a') AS t(v, k) ORDER BY k)").collect()
-[Row(s=1.0)]
 >>> spark.sql("SELECT avg(v) AS a FROM (SELECT * FROM VALUES (CAST(1e16 AS DOUBLE),'b'),(CAST(1.0 AS DOUBLE),'c'),(CAST(-1e16 AS DOUBLE),'a') AS t(v, k) ORDER BY k)").collect()
 [Row(a=0.3333333333333333)]
+>>> spark.sql("SELECT sum(v) AS s FROM (SELECT * FROM VALUES (CAST(1e16 AS DOUBLE),'b'),(CAST(1.0 AS DOUBLE),'c'),(CAST(-1e16 AS DOUBLE),'a') AS t(v, k) ORDER BY k)").collect()
+[Row(s=1.0)]
 
 # FIXME: These test cases fail. DataFusion's sum/avg reduces an entire Arrow batch using SIMD/tree-style summation.
 #   Spark adds each value sequentially, which is extremely slow.

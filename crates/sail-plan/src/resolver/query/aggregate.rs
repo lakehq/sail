@@ -7,17 +7,20 @@ use datafusion_common::{
     Column, DFSchemaRef, DataFusionError, Result as DataFusionResult, ScalarValue,
 };
 use datafusion_expr::expr_rewriter::normalize_col;
+use datafusion_expr::logical_plan::{FetchType, SkipType};
 use datafusion_expr::utils::find_aggregate_exprs;
 use datafusion_expr::{
-    Aggregate, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, Projection,
-    SortExpr, Volatility, bitwise_and, bitwise_shift_right, cast, expr,
+    Aggregate, AggregateUDF, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder,
+    Projection, SortExpr, Volatility, bitwise_and, bitwise_shift_right, cast,
 };
 use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::scalar::explode::Explode;
+use sail_logical_plan::monotonic_id::MonotonicIdNode;
 use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
+use sail_logical_plan::spark_partition_id::SparkPartitionIdNode;
 use sail_python_udf::get_udf_display_name;
 use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 
@@ -338,10 +341,68 @@ impl PlanResolver<'_> {
                 let [Expr::WindowFunction(function)] = window.window_expr.as_slice() else {
                     return None;
                 };
-                if function.params.order_by.is_empty() {
-                    Self::find_input_sort_ordering(window.input.as_ref())
+                let mut required = function
+                    .params
+                    .partition_by
+                    .iter()
+                    .cloned()
+                    .map(|expr| SortExpr {
+                        expr,
+                        asc: true,
+                        nulls_first: true,
+                    })
+                    .collect::<Vec<_>>();
+                required.extend(function.params.order_by.clone());
+
+                let child = Self::find_input_sort_ordering(window.input.as_ref());
+                if required.is_empty() {
+                    child
                 } else {
-                    Some(function.params.order_by.clone())
+                    match child {
+                        Some(child) if child.starts_with(&required) => Some(child),
+                        Some(child) => {
+                            for sort in child {
+                                if !required.iter().any(|x| x.expr == sort.expr) {
+                                    required.push(sort);
+                                }
+                            }
+                            Some(required)
+                        }
+                        None => Some(required),
+                    }
+                }
+            }
+            LogicalPlan::Unnest(unnest) => {
+                let ordering = Self::find_input_sort_ordering(unnest.input.as_ref())?;
+                let references_unnested_column = ordering.iter().any(|sort| {
+                    sort.expr.column_refs().iter().any(|column| {
+                        unnest
+                            .input
+                            .schema()
+                            .maybe_index_of_column(column)
+                            .is_none_or(|index| {
+                                unnest
+                                    .list_type_columns
+                                    .iter()
+                                    .any(|(unnested, _)| *unnested == index)
+                                    || unnest.struct_type_columns.contains(&index)
+                            })
+                    })
+                });
+                (!references_unnested_column).then_some(ordering)
+            }
+            LogicalPlan::Extension(extension) => {
+                let node = extension.node.as_any();
+                if let Some(sort) = node.downcast_ref::<RequiredSortNode>() {
+                    Some(sort.sort_expr().to_vec())
+                } else if let Some(sort) = node.downcast_ref::<SortWithinPartitionsNode>() {
+                    Some(sort.sort_expr().to_vec())
+                } else if let Some(node) = node.downcast_ref::<MonotonicIdNode>() {
+                    Self::find_input_sort_ordering(node.input().as_ref())
+                } else if let Some(node) = node.downcast_ref::<SparkPartitionIdNode>() {
+                    Self::find_input_sort_ordering(node.input().as_ref())
+                } else {
+                    None
                 }
             }
             _ => None,
@@ -385,12 +446,11 @@ impl PlanResolver<'_> {
         derivable.then_some(rewritten)
     }
 
-    fn is_order_irrelevant_aggregate(
-        function: &expr::AggregateFunction,
+    pub(crate) fn is_order_irrelevant_udaf(
+        udf: &AggregateUDF,
+        args: &[Expr],
         schema: &DFSchemaRef,
-        has_grouping: bool,
     ) -> PlanResult<bool> {
-        let udf = function.func.as_ref();
         if udf == min_max::min_udaf().as_ref()
             || udf == min_max::max_udaf().as_ref()
             || udf == count::count_udaf().as_ref()
@@ -399,8 +459,6 @@ impl PlanResolver<'_> {
             || udf == bit_and_or_xor::bit_xor_udaf().as_ref()
             || udf == bool_and_or::bool_and_udaf().as_ref()
             || udf == bool_and_or::bool_or_udaf().as_ref()
-            || (!has_grouping
-                && (udf == sum::sum_udaf().as_ref() || udf == average::avg_udaf().as_ref()))
         {
             return Ok(true);
         }
@@ -410,7 +468,7 @@ impl PlanResolver<'_> {
             || udf.inner().is::<SparkTrySum>()
             || udf.inner().is::<TryAvgFunction>()
         {
-            let Some(arg) = function.params.args.first() else {
+            let Some(arg) = args.first() else {
                 return Ok(false);
             };
             return Ok(!matches!(
@@ -431,7 +489,13 @@ impl PlanResolver<'_> {
             let Expr::AggregateFunction(function) = aggregate else {
                 return Ok(true);
             };
-            if !Self::is_order_irrelevant_aggregate(function, schema, has_grouping)? {
+            let udf = function.func.as_ref();
+            if !has_grouping
+                && (udf == sum::sum_udaf().as_ref() || udf == average::avg_udaf().as_ref())
+            {
+                continue;
+            }
+            if !Self::is_order_irrelevant_udaf(udf, &function.params.args, schema)? {
                 return Ok(true);
             }
         }
@@ -470,7 +534,7 @@ impl PlanResolver<'_> {
             .data()?)
     }
 
-    fn require_input_sort_inner(plan: LogicalPlan) -> PlanResult<(LogicalPlan, bool)> {
+    pub(crate) fn require_input_sort_inner(plan: LogicalPlan) -> PlanResult<(LogicalPlan, bool)> {
         match plan {
             LogicalPlan::Sort(sort) => Ok((
                 LogicalPlan::Extension(Extension {
@@ -480,28 +544,61 @@ impl PlanResolver<'_> {
                 }),
                 true,
             )),
+            LogicalPlan::Limit(mut limit) => {
+                let fetch = match (limit.get_skip_type()?, limit.get_fetch_type()?) {
+                    (SkipType::Literal(skip), FetchType::Literal(Some(fetch))) => Some(
+                        skip.checked_add(fetch)
+                            .ok_or_else(|| PlanError::invalid("LIMIT + OFFSET overflow"))?,
+                    ),
+                    _ => None,
+                };
+                let input = Arc::unwrap_or_clone(std::mem::replace(
+                    &mut limit.input,
+                    Arc::new(LogicalPlan::default()),
+                ));
+                let (input, found) = match fetch {
+                    Some(fetch) => Self::require_input_sort_with_fetch(input, fetch)?,
+                    None => Self::require_input_sort_inner(input)?,
+                };
+                limit.input = Arc::new(input);
+                Ok((LogicalPlan::Limit(limit), found))
+            }
             LogicalPlan::Extension(extension) => {
                 if extension.node.as_any().is::<RequiredSortNode>() {
                     return Ok((LogicalPlan::Extension(extension), true));
                 }
-                let Some(sort) = extension
+                if let Some(sort) = extension
                     .node
                     .as_any()
                     .downcast_ref::<SortWithinPartitionsNode>()
-                else {
+                {
+                    return Ok((
+                        LogicalPlan::Extension(Extension {
+                            node: Arc::new(RequiredSortNode::new(
+                                Arc::clone(sort.input()),
+                                sort.sort_expr().to_vec(),
+                                sort.fetch(),
+                                true,
+                            )),
+                        }),
+                        true,
+                    ));
+                }
+                if !extension.node.as_any().is::<MonotonicIdNode>()
+                    && !extension.node.as_any().is::<SparkPartitionIdNode>()
+                {
                     return Ok((LogicalPlan::Extension(extension), false));
-                };
-                Ok((
-                    LogicalPlan::Extension(Extension {
-                        node: Arc::new(RequiredSortNode::new(
-                            Arc::clone(sort.input()),
-                            sort.sort_expr().to_vec(),
-                            sort.fetch(),
-                            true,
-                        )),
-                    }),
-                    true,
-                ))
+                }
+
+                let plan = LogicalPlan::Extension(extension);
+                let expressions = plan.expressions();
+                let child = plan.inputs().one()?.clone();
+                let (child, found) = Self::require_input_sort_inner(child)?;
+                if found {
+                    Ok((plan.with_new_exprs(expressions, vec![child])?, true))
+                } else {
+                    Ok((plan, false))
+                }
             }
             plan => {
                 let transparent = matches!(
@@ -509,16 +606,57 @@ impl PlanResolver<'_> {
                     LogicalPlan::SubqueryAlias(_)
                         | LogicalPlan::Projection(_)
                         | LogicalPlan::Filter(_)
-                        | LogicalPlan::Limit(_)
                         | LogicalPlan::Window(_)
+                        | LogicalPlan::Unnest(_)
                 );
                 if !transparent {
                     return Ok((plan, false));
                 }
 
-                let expressions = plan.expressions();
+                // Unnest's with_new_exprs requires no expressions and rebuilds from its own exec_columns.
+                let expressions = if matches!(&plan, LogicalPlan::Unnest(_)) {
+                    vec![]
+                } else {
+                    plan.expressions()
+                };
                 let child = plan.inputs().one()?.clone();
                 let (child, found) = Self::require_input_sort_inner(child)?;
+                if found {
+                    Ok((plan.with_new_exprs(expressions, vec![child])?, true))
+                } else {
+                    Ok((plan, false))
+                }
+            }
+        }
+    }
+
+    fn require_input_sort_with_fetch(
+        plan: LogicalPlan,
+        fetch: usize,
+    ) -> PlanResult<(LogicalPlan, bool)> {
+        match plan {
+            LogicalPlan::Sort(sort) => Ok((
+                LogicalPlan::Extension(Extension {
+                    node: Arc::new(RequiredSortNode::new(
+                        sort.input,
+                        sort.expr,
+                        Some(sort.fetch.map_or(fetch, |old| old.min(fetch))),
+                        false,
+                    )),
+                }),
+                true,
+            )),
+            plan => {
+                if !matches!(
+                    plan,
+                    LogicalPlan::Projection(_) | LogicalPlan::SubqueryAlias(_)
+                ) {
+                    return Self::require_input_sort_inner(plan);
+                }
+
+                let expressions = plan.expressions();
+                let child = plan.inputs().one()?.clone();
+                let (child, found) = Self::require_input_sort_with_fetch(child, fetch)?;
                 if found {
                     Ok((plan.with_new_exprs(expressions, vec![child])?, true))
                 } else {

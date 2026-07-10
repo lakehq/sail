@@ -3,15 +3,15 @@ use std::mem;
 use std::sync::Arc;
 
 use datafusion::common::Result;
-use datafusion::functions_aggregate::array_agg::ArrayAgg;
-use datafusion::functions_aggregate::first_last::{FirstValue, LastValue};
-use datafusion::functions_window::nth_value::NthValue;
+use datafusion::functions_window::nth_value::{NthValue, NthValueKind};
 use datafusion::logical_expr::logical_plan::Window;
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
-use datafusion_expr::expr::WindowFunctionDefinition;
-use datafusion_expr::{Expr, LogicalPlan, WindowFrame, ident};
+use datafusion_common::{DFSchemaRef, DataFusionError};
+use datafusion_expr::expr::{WindowFunction, WindowFunctionDefinition};
+use datafusion_expr::{Expr, LogicalPlan, WindowFrame, WindowFrameUnits, ident};
 use sail_function::window::SparkFirstLastValue;
 
+use crate::error::PlanResult;
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::{PlanRewriter, empty_logical_plan};
@@ -24,6 +24,35 @@ pub(crate) struct WindowRewriter<'s> {
     /// multiple times in the expression tree (e.g. when a division-by-zero
     /// guard wraps a window-function divisor in a CASE expression).
     seen: HashMap<String, Expr>,
+}
+
+impl WindowRewriter<'_> {
+    fn requires_input_order(function: &WindowFunction, schema: &DFSchemaRef) -> PlanResult<bool> {
+        // A DISTINCT window aggregate cannot take an `order_by`.
+        // Also, `collect_set`, the case that gets here, is unordered in Spark anyway.
+        if function.params.distinct {
+            return Ok(false);
+        }
+        let function_requires_order = match &function.fun {
+            WindowFunctionDefinition::AggregateUDF(udaf) => {
+                !PlanResolver::is_order_irrelevant_udaf(
+                    udaf.as_ref(),
+                    &function.params.args,
+                    schema,
+                )?
+            }
+            WindowFunctionDefinition::WindowUDF(udwf) => {
+                udwf.inner().downcast_ref::<NthValue>().is_some_and(|nth| {
+                    matches!(nth.kind(), NthValueKind::First | NthValueKind::Last)
+                }) || udwf.inner().is::<SparkFirstLastValue>()
+            }
+        };
+        let frame_requires_order =
+            matches!(&function.fun, WindowFunctionDefinition::AggregateUDF(_))
+                && function.params.window_frame.units == WindowFrameUnits::Rows
+                && function.params.window_frame != WindowFrame::new(None);
+        Ok(function_requires_order || frame_requires_order)
+    }
 }
 
 impl<'s> PlanRewriter<'s> for WindowRewriter<'s> {
@@ -46,23 +75,35 @@ impl TreeNodeRewriter for WindowRewriter<'_> {
     fn f_up(&mut self, node: Expr) -> Result<Transformed<Expr>> {
         match node {
             Expr::WindowFunction(mut function) => {
-                let order_sensitive = match &function.fun {
-                    WindowFunctionDefinition::AggregateUDF(udaf) => {
-                        udaf.inner().is::<FirstValue>()
-                            || udaf.inner().is::<LastValue>()
-                            || udaf.inner().is::<ArrayAgg>()
-                    }
-                    WindowFunctionDefinition::WindowUDF(udwf) => {
-                        udwf.inner().is::<NthValue>() || udwf.inner().is::<SparkFirstLastValue>()
-                    }
-                };
-                if order_sensitive
-                    && !function.params.distinct
+                if Self::requires_input_order(&function, self.plan.schema())
+                    .map_err(|error| DataFusionError::External(Box::new(error)))?
                     && function.params.order_by.is_empty()
-                    && function.params.window_frame == WindowFrame::new(None)
-                    && let Some(ordering) = PlanResolver::input_sort_ordering(&self.plan)
                 {
-                    function.params.order_by = ordering;
+                    let mut attached = false;
+                    if function.params.window_frame.units == WindowFrameUnits::Rows
+                        && let Some(mut ordering) = PlanResolver::input_sort_ordering(&self.plan)
+                    {
+                        let partition_len = function.params.partition_by.len();
+                        let partition_is_prefix = ordering.len() >= partition_len
+                            && function.params.partition_by.iter().zip(&ordering).all(
+                                |(partition, sort)| {
+                                    sort.asc && sort.nulls_first && partition == &sort.expr
+                                },
+                            );
+                        if partition_is_prefix {
+                            ordering.drain(..partition_len);
+                        }
+                        // The ordering may be exactly the partition keys. Nothing left to attach.
+                        if !ordering.is_empty() {
+                            function.params.order_by = ordering;
+                            attached = true;
+                        }
+                    }
+                    if !attached {
+                        self.plan = PlanResolver::require_input_sort_inner(self.plan.clone())
+                            .map_err(|error| DataFusionError::External(Box::new(error)))?
+                            .0;
+                    }
                 }
                 let node = Expr::WindowFunction(function);
                 let name = node.schema_name().to_string();
