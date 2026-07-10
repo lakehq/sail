@@ -12,7 +12,9 @@ use super::{
     parse_commit_version_from_location, parse_compacted_json_versions_from_location,
     resolve_version_timestamp,
 };
-use crate::checkpoint::read_checkpoint_main_rows_from_checkpoint_file;
+use crate::checkpoint::{
+    read_checkpoint_main_rows_from_checkpoint_file, write_classic_checkpoint_from_v2_checkpoint,
+};
 use crate::delta_log::LogStore;
 use crate::snapshot::DeltaSnapshot;
 use crate::spec::{
@@ -148,8 +150,8 @@ pub(crate) async fn cleanup_expired_delta_log_files(
 /// Ensures a classic single-file checkpoint (`{version:020}.checkpoint.parquet`) exists at
 /// `version` when the checkpoint at that version is a UUID-named V2 checkpoint.
 ///
-/// The compat file is a byte-copy of a UUID-named V2 parquet main checkpoint to the classic
-/// filename. JSON manifests are never copied to a parquet checkpoint path.
+/// The compat file contains the complete checkpoint state, including file actions loaded from
+/// V2 sidecars. It is always encoded as Parquet regardless of the top-level V2 manifest format.
 async fn ensure_v2_compat_classic_checkpoint(
     object_store: Arc<dyn ObjectStore>,
     version: i64,
@@ -175,7 +177,6 @@ async fn ensure_v2_compat_classic_checkpoint(
             .next()
             .unwrap_or_default();
         if is_uuid_checkpoint_filename(filename)
-            && filename.ends_with(".parquet")
             && let Some(v) = parse_checkpoint_version_from_location(&meta.location)
             && v == version
         {
@@ -189,18 +190,8 @@ async fn ensure_v2_compat_classic_checkpoint(
         return Ok(());
     };
 
-    // Copy the UUID-named V2 main checkpoint to the classic path.
-    // `ObjectStore::copy` performs a server-side copy where the backend supports it and
-    // falls back to get+put otherwise.
-    match object_store.copy(&uuid_meta.location, &classic_path).await {
-        Ok(()) => {
-            debug!("Wrote V2 compat classic checkpoint at {}", classic_path);
-        }
-        Err(object_store::Error::AlreadyExists { .. }) => {
-            // A concurrent writer beat us to it — that's fine, the content is identical.
-        }
-        Err(err) => return Err(err.into()),
-    }
+    write_classic_checkpoint_from_v2_checkpoint(object_store, version, uuid_meta).await?;
+    debug!("Wrote V2 compat classic checkpoint at {}", classic_path);
 
     Ok(())
 }

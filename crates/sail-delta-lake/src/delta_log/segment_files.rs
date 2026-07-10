@@ -18,7 +18,8 @@ use crate::spec::{DeltaResult, is_uuid_checkpoint_filename, sidecar_log_path};
 /// The minimal set of Delta log files needed to reconstruct table state up to a given version.
 #[derive(Debug, Clone, Default)]
 pub struct LogSegmentFiles {
-    /// Parquet checkpoint files for the latest checkpoint at or before `max_version`.
+    /// Checkpoint files for the latest checkpoint at or before `max_version`.
+    /// UUID-named V2 top-level files may be JSON or Parquet.
     pub checkpoint_files: Vec<String>,
     /// Commit JSON files sorted by version, strictly newer than the latest checkpoint.
     pub commit_files: Vec<String>,
@@ -40,7 +41,7 @@ pub struct LogSegmentResolveOptions {
 /// List all Delta log files up to `max_version` from the given log store.
 ///
 /// Returns a [`LogSegmentFiles`] containing:
-/// - all parquet files belonging to the **latest** checkpoint at or before `max_version`
+/// - all files belonging to the **latest** checkpoint at or before `max_version`
 /// - all commit JSON files at or before `max_version`
 ///
 /// Commit files are **not** filtered against the checkpoint here.
