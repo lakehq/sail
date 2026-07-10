@@ -7,6 +7,7 @@ use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties};
+use sail_common::config::ShuffleMode;
 
 /// A job graph represents a distributed execution plan for a job.
 /// A job consists of multiple *stages*, where each stage has one or more
@@ -21,6 +22,7 @@ pub struct JobGraph {
     stages: Vec<Stage>,
     /// The output schema of the job.
     schema: SchemaRef,
+    shuffle_mode: ShuffleMode,
 }
 
 impl JobGraph {
@@ -165,7 +167,6 @@ impl fmt::Display for InputMode {
 #[derive(Debug, Clone, Copy)]
 pub enum OutputMode {
     Pipelined,
-    #[expect(unused)]
     Blocking,
 }
 

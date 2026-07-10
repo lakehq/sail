@@ -49,7 +49,7 @@ impl JobScheduler {
             "job {job_id} execution plan\n{}",
             DisplayableExecutionPlan::new(plan.as_ref()).indent(true)
         );
-        let graph = JobGraph::try_new(plan)?;
+        let graph = JobGraph::try_new_with_shuffle_mode(plan, self.options.shuffle_mode)?;
         debug!("job {job_id} job graph \n{graph}");
 
         let (output, stream) = build_job_output(ctx, job_id, graph.schema().clone());
@@ -653,7 +653,7 @@ impl JobScheduler {
                 }
             },
             OutputMode::Blocking => {
-                let uri = Err(ExecutionError::InternalError("not implemented".to_string()))?;
+                let uri = self.options.shuffle_storage_url.clone();
                 TaskInputLocator::Remote {
                     uri,
                     stage: input.stage,
@@ -697,7 +697,7 @@ impl JobScheduler {
         let locator = match stage.mode {
             OutputMode::Pipelined => TaskOutputLocator::Local { replicas },
             OutputMode::Blocking => {
-                let uri = Err(ExecutionError::InternalError("not implemented".to_string()))?;
+                let uri = self.options.shuffle_storage_url.clone();
                 TaskOutputLocator::Remote { uri }
             }
         };

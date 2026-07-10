@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use datafusion::prelude::SessionContext;
-use sail_common::config::AppConfig;
+use sail_common::config::{AppConfig, ShuffleCompression};
 use sail_common::runtime::RuntimeHandle;
 use sail_server::RetryStrategy;
 
@@ -22,6 +22,8 @@ pub struct WorkerOptions {
     pub task_stream_buffer: usize,
     pub task_stream_creation_timeout: Duration,
     pub rpc_retry_strategy: RetryStrategy,
+    pub shuffle_max_file_size: usize,
+    pub shuffle_compression: ShuffleCompression,
     pub runtime: RuntimeHandle,
     pub session: SessionContext,
 }
@@ -49,6 +51,8 @@ impl WorkerOptions {
                 config.cluster.task_stream_creation_timeout_secs,
             ),
             rpc_retry_strategy: (&config.cluster.rpc_retry_strategy).into(),
+            shuffle_max_file_size: config.execution.shuffle.max_file_size,
+            shuffle_compression: config.execution.shuffle.compression,
             runtime,
             session,
         }
@@ -73,6 +77,8 @@ impl WorkerOptions {
             task_stream_buffer: options.task_stream_buffer,
             task_stream_creation_timeout: options.task_stream_creation_timeout,
             rpc_retry_strategy: options.rpc_retry_strategy,
+            shuffle_max_file_size: options.shuffle_max_file_size,
+            shuffle_compression: options.shuffle_compression,
             runtime: runtime.clone(),
             session,
         }

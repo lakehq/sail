@@ -119,6 +119,8 @@ impl KubernetesWorkerManager {
             task_stream_buffer,
             task_stream_creation_timeout,
             rpc_retry_strategy,
+            shuffle_max_file_size,
+            shuffle_compression,
         } = options;
         let w3c_traceparent =
             SpanContext::current_local_parent().map(|x| x.encode_w3c_traceparent());
@@ -208,6 +210,23 @@ impl KubernetesWorkerManager {
             EnvVar {
                 name: ClusterConfigEnv::RPC_RETRY_STRATEGY.to_string(),
                 value: Some(rpc_retry_strategy),
+                value_from: None,
+            },
+            EnvVar {
+                name: "SAIL_EXECUTION__SHUFFLE__MAX_FILE_SIZE".to_string(),
+                value: Some(shuffle_max_file_size.to_string()),
+                value_from: None,
+            },
+            EnvVar {
+                name: "SAIL_EXECUTION__SHUFFLE__COMPRESSION".to_string(),
+                value: Some(
+                    match shuffle_compression {
+                        sail_common::config::ShuffleCompression::None => "none",
+                        sail_common::config::ShuffleCompression::Lz4 => "lz4",
+                        sail_common::config::ShuffleCompression::Zstd => "zstd",
+                    }
+                    .to_string(),
+                ),
                 value_from: None,
             },
         ];

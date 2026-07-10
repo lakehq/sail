@@ -5,6 +5,7 @@ use datafusion::common::{DataFusionError, Result, internal_datafusion_err, inter
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::{ExecutionPlan, execute_stream};
 use datafusion::prelude::SessionContext;
+use sail_common::config::ShuffleMode;
 use sail_common_datafusion::session::job::{JobRunner, JobRunnerHistory};
 use sail_common_datafusion::system::observable::{JobRunnerObserver, Observer, StateObservable};
 use sail_server::actor::{ActorHandle, ActorSystem};
@@ -78,12 +79,17 @@ impl JobRunner for LocalJobRunner {
 
 pub struct ClusterJobRunner {
     driver: ActorHandle<DriverActor>,
+    shuffle_mode: ShuffleMode,
 }
 
 impl ClusterJobRunner {
     pub fn new(system: &mut ActorSystem, options: DriverOptions) -> Self {
+        let shuffle_mode = options.shuffle_mode;
         let driver = system.spawn(options);
-        Self { driver }
+        Self {
+            driver,
+            shuffle_mode,
+        }
     }
 }
 
@@ -105,7 +111,7 @@ impl StateObservable<JobRunnerObserver> for ClusterJobRunner {
 #[tonic::async_trait]
 impl JobRunner for ClusterJobRunner {
     fn explain(&self, plan: Arc<dyn ExecutionPlan>) -> Result<Option<String>> {
-        JobGraph::try_new(plan)
+        JobGraph::try_new_with_shuffle_mode(plan, self.shuffle_mode)
             .map(|graph| Some(graph.to_string()))
             .map_err(|e| DataFusionError::External(Box::new(e)))
     }

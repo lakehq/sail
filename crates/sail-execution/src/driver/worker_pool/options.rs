@@ -1,6 +1,7 @@
 //! A dedicated module for worker pool options to ensure readonly access.
 use std::time::Duration;
 
+use sail_common::config::ShuffleCompression;
 use sail_server::RetryStrategy;
 
 use crate::driver::DriverOptions;
@@ -17,6 +18,8 @@ pub struct WorkerPoolOptions {
     pub task_stream_buffer: usize,
     pub task_stream_creation_timeout: Duration,
     pub rpc_retry_strategy: RetryStrategy,
+    pub shuffle_max_file_size: usize,
+    pub shuffle_compression: ShuffleCompression,
 }
 
 impl From<&DriverOptions> for WorkerPoolOptions {
@@ -32,6 +35,8 @@ impl From<&DriverOptions> for WorkerPoolOptions {
             task_stream_buffer: options.task_stream_buffer,
             task_stream_creation_timeout: options.task_stream_creation_timeout,
             rpc_retry_strategy: options.rpc_retry_strategy.clone(),
+            shuffle_max_file_size: options.shuffle_max_file_size,
+            shuffle_compression: options.shuffle_compression,
         }
     }
 }

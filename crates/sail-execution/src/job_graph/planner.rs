@@ -23,6 +23,7 @@ use datafusion::physical_plan::{
     ExecutionPlan, ExecutionPlanProperties, PlanProperties, with_new_children_if_necessary,
 };
 use sail_catalog_system::physical_plan::SystemTableExec;
+use sail_common::config::ShuffleMode;
 use sail_common_datafusion::utils::items::ItemTaker;
 use sail_data_source::listing::delete::FileDeleteExec;
 use sail_delta_lake::physical_plan::DeltaCommitExec;
@@ -39,12 +40,21 @@ use crate::job_graph::{
 use crate::plan::{ShuffleConsumption, StageInputExec};
 
 impl JobGraph {
+    #[cfg(test)]
     pub fn try_new(plan: Arc<dyn ExecutionPlan>) -> ExecutionResult<Self> {
+        Self::try_new_with_shuffle_mode(plan, ShuffleMode::Pipelined)
+    }
+
+    pub fn try_new_with_shuffle_mode(
+        plan: Arc<dyn ExecutionPlan>,
+        shuffle_mode: ShuffleMode,
+    ) -> ExecutionResult<Self> {
         let plan = ensure_single_input_partition_for_global_limit(plan)?;
         let plan = ensure_partitioned_hash_join_if_build_side_emits_unmatched_rows(plan)?;
         let mut graph = Self {
             stages: vec![],
             schema: plan.schema(),
+            shuffle_mode,
         };
         let last = build_job_graph(plan, PartitionUsage::Once, &mut graph)?.plan;
         let (last, inputs) = rewrite_inputs(last)?;
@@ -807,7 +817,7 @@ fn create_shuffle(
         ShuffleConsumption::Single => InputMode::Shuffle,
         ShuffleConsumption::Multiple => InputMode::Broadcast,
     };
-    Ok(stage_input_exec(stage, mode, properties))
+    create_shuffle_input(stage, mode, properties, graph)
 }
 
 /// Creates a shuffle stage with row-level round-robin distribution.
@@ -828,7 +838,31 @@ fn create_row_shuffle(
         ShuffleConsumption::Single => InputMode::Shuffle,
         ShuffleConsumption::Multiple => InputMode::Broadcast,
     };
-    Ok(stage_input_exec(stage, mode, properties))
+    create_shuffle_input(stage, mode, properties, graph)
+}
+
+/// In storage shuffle mode, collect each logical shuffle partition in a separate
+/// blocking stage. This turns the many task/channel streams produced by the upstream
+/// stage into one (or a few size-bounded) object-storage files per output partition.
+fn create_shuffle_input(
+    stage: usize,
+    mode: InputMode,
+    properties: Arc<PlanProperties>,
+    graph: &mut JobGraph,
+) -> ExecutionResult<Arc<dyn ExecutionPlan>> {
+    if graph.shuffle_mode == ShuffleMode::Pipelined {
+        return Ok(stage_input_exec(stage, mode, properties));
+    }
+
+    let merge = stage_input_exec(stage, mode, properties.clone());
+    let stage = push_stage_with_mode(
+        merge,
+        graph,
+        OutputDistribution::RoundRobin { channels: 1 },
+        TaskPlacement::Worker,
+        OutputMode::Blocking,
+    )?;
+    Ok(stage_input_exec(stage, InputMode::Forward, properties))
 }
 
 fn rewrite_inputs(
@@ -854,12 +888,22 @@ fn push_stage(
     distribution: OutputDistribution,
     placement: TaskPlacement,
 ) -> ExecutionResult<usize> {
+    push_stage_with_mode(plan, graph, distribution, placement, OutputMode::Pipelined)
+}
+
+fn push_stage_with_mode(
+    plan: Arc<dyn ExecutionPlan>,
+    graph: &mut JobGraph,
+    distribution: OutputDistribution,
+    placement: TaskPlacement,
+    mode: OutputMode,
+) -> ExecutionResult<usize> {
     let (plan, inputs) = rewrite_inputs(plan)?;
     let stage = Stage {
         inputs,
         plan,
         group: String::new(),
-        mode: OutputMode::Pipelined,
+        mode,
         distribution,
         placement,
     };
@@ -928,13 +972,14 @@ mod tests {
     use datafusion::physical_plan::union::UnionExec;
     use datafusion::physical_plan::{ExecutionPlan, ExecutionPlanProperties, displayable};
     use sail_catalog::command::CatalogCommand;
+    use sail_common::config::ShuffleMode;
     use sail_physical_plan::barrier::BarrierExec;
     use sail_physical_plan::catalog_command::CatalogCommandExec;
     use sail_physical_plan::coalesce::CoalesceExec;
     use sail_physical_plan::repartition::ExplicitRepartitionExec;
 
     use super::JobGraph;
-    use crate::job_graph::{InputMode, OutputDistribution, StageInput, TaskPlacement};
+    use crate::job_graph::{InputMode, OutputDistribution, OutputMode, StageInput, TaskPlacement};
     use crate::plan::StageInputExec;
 
     fn schema() -> SchemaRef {
@@ -980,6 +1025,35 @@ mod tests {
             [StageInput {
                 stage: 0,
                 mode: InputMode::Shuffle,
+            }]
+        ));
+    }
+
+    #[test]
+    fn test_storage_shuffle_inserts_a_blocking_merge_stage() {
+        let graph = JobGraph::try_new_with_shuffle_mode(
+            Arc::new(
+                RepartitionExec::try_new(empty_plan(), Partitioning::RoundRobinBatch(4)).unwrap(),
+            ),
+            ShuffleMode::Storage,
+        )
+        .unwrap();
+
+        assert_eq!(graph.stages().len(), 3);
+        assert!(matches!(graph.stages()[0].mode, OutputMode::Pipelined));
+        assert!(matches!(
+            graph.stages()[1].inputs.as_slice(),
+            [StageInput {
+                stage: 0,
+                mode: InputMode::Shuffle,
+            }]
+        ));
+        assert!(matches!(graph.stages()[1].mode, OutputMode::Blocking));
+        assert!(matches!(
+            graph.stages()[2].inputs.as_slice(),
+            [StageInput {
+                stage: 1,
+                mode: InputMode::Forward,
             }]
         ));
     }

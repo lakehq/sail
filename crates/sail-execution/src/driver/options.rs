@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use sail_common::config::AppConfig;
+use sail_common::config::{AppConfig, ShuffleCompression, ShuffleMode};
 use sail_common::runtime::RuntimeHandle;
 use sail_server::RetryStrategy;
 
@@ -25,6 +25,10 @@ pub struct DriverOptions {
     pub task_stream_buffer: usize,
     pub task_stream_creation_timeout: Duration,
     pub task_max_attempts: usize,
+    pub shuffle_mode: ShuffleMode,
+    pub shuffle_storage_url: String,
+    pub shuffle_max_file_size: usize,
+    pub shuffle_compression: ShuffleCompression,
     pub rpc_retry_strategy: RetryStrategy,
     pub runtime: RuntimeHandle,
     pub worker_manager: Arc<dyn WorkerManager>,
@@ -60,6 +64,10 @@ impl DriverOptions {
                 config.cluster.task_stream_creation_timeout_secs,
             ),
             task_max_attempts: config.cluster.task_max_attempts,
+            shuffle_mode: config.execution.shuffle.mode,
+            shuffle_storage_url: config.execution.shuffle.storage_url.clone(),
+            shuffle_max_file_size: config.execution.shuffle.max_file_size,
+            shuffle_compression: config.execution.shuffle.compression,
             runtime,
             worker_manager,
         }

@@ -86,6 +86,8 @@ impl WorkerPool {
             task_stream_buffer: self.options.task_stream_buffer,
             task_stream_creation_timeout: self.options.task_stream_creation_timeout,
             rpc_retry_strategy: self.options.rpc_retry_strategy.clone(),
+            shuffle_max_file_size: self.options.shuffle_max_file_size,
+            shuffle_compression: self.options.shuffle_compression,
         };
         let worker_manager = Arc::clone(&self.worker_manager);
         ctx.spawn(async move {

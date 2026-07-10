@@ -289,7 +289,32 @@ pub struct ExecutionConfig {
     pub default_parallelism: usize,
     pub collect_statistics: bool,
     pub use_row_number_estimates_to_optimize_partitioning: bool,
+    pub shuffle: ShuffleConfig,
     pub file_listing_cache: FileListingCacheConfig,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShuffleMode {
+    Pipelined,
+    Storage,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ShuffleCompression {
+    None,
+    Lz4,
+    Zstd,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ShuffleConfig {
+    pub mode: ShuffleMode,
+    pub storage_url: String,
+    pub max_file_size: usize,
+    pub compression: ShuffleCompression,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
