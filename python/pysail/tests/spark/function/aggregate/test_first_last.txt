@@ -46,12 +46,13 @@
 >>> sorted(result.collect(), key=lambda r: (r.name, r.age if r.age is not None else -1))
 [Row(name='Alice', age=None, l=2), Row(name='Alice', age=2, l=2), Row(name='Bob', age=5, l=5)]
 
->>> df = spark.createDataFrame([(30, 'c'), (10, 'a'), (20, 'b')], ("v", "k")).repartition(2, "k")
->>> df.sortWithinPartitions("k").groupBy().agg(F.first("v")).collect()
-[Row(first(v)=10)]
-
 >>> df = spark.createDataFrame([(1, 'a'), (2, 'a'), (3, 'a')], ("v", "k"))
 >>> df.orderBy("k").groupBy().agg(F.first("v")).collect()
+[Row(first(v)=1)]
+
+>>> left = spark.createDataFrame([(2, 'b'), (1, 'a')], ("v", "k")).orderBy("k")
+>>> right = spark.createDataFrame([('a',), ('b',)], ("k",))
+>>> left.join(right, "k").groupBy().agg(F.first("v")).collect()
 [Row(first(v)=1)]
 
 >>> a = spark.createDataFrame([(2, 'b'), (1, 'a')], ("v", "k")).orderBy("k")
@@ -59,7 +60,6 @@
 >>> a.union(b).groupBy().agg(F.first("v")).collect()
 [Row(first(v)=1)]
 
->>> left = spark.createDataFrame([(2, 'b'), (1, 'a')], ("v", "k")).orderBy("k")
->>> right = spark.createDataFrame([('a',), ('b',)], ("k",))
->>> left.join(right, "k").groupBy().agg(F.first("v")).collect()
-[Row(first(v)=1)]
+>>> df = spark.createDataFrame([(30, 'c'), (10, 'a'), (20, 'b')], ("v", "k")).repartition(2, "k")
+>>> df.sortWithinPartitions("k").groupBy().agg(F.first("v")).collect()
+[Row(first(v)=10)]

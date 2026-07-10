@@ -5,10 +5,12 @@ use std::sync::Arc;
 use datafusion::common::Result;
 use datafusion::functions_aggregate::array_agg::ArrayAgg;
 use datafusion::functions_aggregate::first_last::{FirstValue, LastValue};
+use datafusion::functions_window::nth_value::NthValue;
 use datafusion::logical_expr::logical_plan::Window;
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
 use datafusion_expr::expr::WindowFunctionDefinition;
 use datafusion_expr::{Expr, LogicalPlan, WindowFrame, ident};
+use sail_function::window::SparkFirstLastValue;
 
 use crate::resolver::PlanResolver;
 use crate::resolver::state::PlanResolverState;
@@ -44,11 +46,19 @@ impl TreeNodeRewriter for WindowRewriter<'_> {
     fn f_up(&mut self, node: Expr) -> Result<Transformed<Expr>> {
         match node {
             Expr::WindowFunction(mut function) => {
-                // Order-sensitive window aggs without ORDER BY inherit the input sort.
-                if let WindowFunctionDefinition::AggregateUDF(udaf) = &function.fun
-                    && (udaf.inner().is::<FirstValue>()
-                        || udaf.inner().is::<LastValue>()
-                        || udaf.inner().is::<ArrayAgg>())
+                // Order-sensitive window functions without ORDER BY inherit the input sort.
+                let order_sensitive = match &function.fun {
+                    WindowFunctionDefinition::AggregateUDF(udaf) => {
+                        udaf.inner().is::<FirstValue>()
+                            || udaf.inner().is::<LastValue>()
+                            || udaf.inner().is::<ArrayAgg>()
+                    }
+                    WindowFunctionDefinition::WindowUDF(udwf) => {
+                        udwf.inner().is::<NthValue>()
+                            || udwf.inner().is::<SparkFirstLastValue>()
+                    }
+                };
+                if order_sensitive
                     && !function.params.distinct
                     && function.params.order_by.is_empty()
                     && function.params.window_frame == WindowFrame::new(None)
