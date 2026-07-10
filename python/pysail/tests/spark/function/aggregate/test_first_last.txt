@@ -2,6 +2,7 @@
 >>> from pyspark.sql import Window
 >>> import pandas as pd
 >>> from pyspark.sql.functions import pandas_udf
+>>> import re
 
 >>> df = spark.createDataFrame(
 ...     [("Alice", 2), ("Bob", 5), ("Alice", None)],
@@ -110,9 +111,6 @@
 >>> spark.sql("SELECT first(DISTINCT v) AS f, last(DISTINCT v) AS l FROM (SELECT * FROM VALUES (30,'c'),(10,'a'),(20,'b') AS t(v, k) ORDER BY k)").collect()
 [Row(f=10, l=30)]
 
->>> spark.sql("SELECT sum(v) AS s FROM (SELECT * FROM VALUES (CAST(1e16 AS DOUBLE),'b'),(CAST(1.0 AS DOUBLE),'c'),(CAST(-1e16 AS DOUBLE),'a') AS t(v, k) ORDER BY k)").collect()
-[Row(s=1.0)]
-
 >>> @pandas_udf("long")
 ... def first_arrival(v: pd.Series) -> int:
 ...     return int(v.iloc[0])
@@ -122,3 +120,40 @@
 >>> dft = spark.createDataFrame([(1, 'a'), (2, 'a'), (3, 'a')], ("v", "k")).repartition(3)
 >>> dft.orderBy("k").groupBy().agg(F.first("v")).collect()
 [Row(first(v)=1)]
+
+>>> df = spark.createDataFrame([(30, "c", "x"), (10, "a", "x"), (20, "b", "x")], ("v", "k", "g"),).coalesce(1)
+>>> w_desc = Window.partitionBy("g").orderBy(F.desc("k"))
+>>> w_none = Window.partitionBy("g")
+>>> result = df.orderBy("k").select("v", "k", F.sum("v").over(w_desc).alias("s"), F.last("v").over(w_none).alias("l"))
+>>> sorted(result.collect(), key=lambda row: row.k)
+[Row(v=10, k='a', s=60, l=10), Row(v=20, k='b', s=50, l=10), Row(v=30, k='c', s=30, l=10)]
+
+>>> result = df.orderBy("k").select(F.sum("v").over(w_desc).alias("s"), F.last("v").over(w_none).alias("l"))
+>>> result.collect()
+[Row(s=30, l=10), Row(s=50, l=10), Row(s=60, l=10)]
+
+>>> stable = spark.createDataFrame([(30, "c"), (10, "a"), (20, "b")], ("v", "k")).coalesce(1)
+>>> stable.alias("inner").orderBy("k").alias("outer").select("v").groupBy().agg(F.first("v").alias("f"), F.last("v").alias("l")).collect()
+[Row(f=10, l=30)]
+
+>>> stable.orderBy("k").groupBy().agg(F.count("*").alias("n"), F.first("v").alias("f"), F.last("v").alias("l")).collect()
+[Row(n=3, f=10, l=30)]
+
+>>> spark.sql("SELECT first(DISTINCT v) AS f, last(DISTINCT v) AS l FROM (SELECT * FROM VALUES (30,'c'),(20,'b'),(10,'a'),(20,'d') AS t(v, k) ORDER BY k)").collect()
+[Row(f=10, l=20)]
+
+>>> spark.sql("SELECT skewness(v) AS sk FROM (SELECT * FROM VALUES (CAST(1e16 AS DOUBLE),'b'),(CAST(1.0 AS DOUBLE),'c'),(CAST(-1e16 AS DOUBLE),'a') AS t(v, k) ORDER BY k)").first().sk != 0.0
+True
+
+>>> stable.orderBy("k").groupBy().agg(first_arrival("v").alias("fa")).collect()
+[Row(fa=10)]
+
+>>> explain = spark.sql("EXPLAIN EXTENDED SELECT first(v) FROM (SELECT * FROM VALUES (30,'c'),(10,'a'),(20,'b') AS t(v, k) ORDER BY k)").first()[0]
+>>> re.search(r"first(?:_value)?\([^\n]* ORDER BY \[", explain, re.IGNORECASE) is None
+True
+
+>>> spark.sql("SELECT sum(v) AS s FROM (SELECT * FROM VALUES (CAST(1e16 AS DOUBLE),'b'),(CAST(1.0 AS DOUBLE),'c'),(CAST(-1e16 AS DOUBLE),'a') AS t(v, k) ORDER BY k)").collect()
+[Row(s=1.0)]
+
+>>> spark.sql("SELECT avg(v) AS a FROM (SELECT * FROM VALUES (CAST(1e16 AS DOUBLE),'b'),(CAST(1.0 AS DOUBLE),'c'),(CAST(-1e16 AS DOUBLE),'a') AS t(v, k) ORDER BY k)").collect()
+[Row(a=0.3333333333333333)]

@@ -1,5 +1,7 @@
-use datafusion::functions_aggregate::array_agg::ArrayAgg;
-use datafusion::functions_aggregate::first_last::{FirstValue, LastValue};
+use std::sync::Arc;
+
+use datafusion::functions_aggregate::{average, bit_and_or_xor, bool_and_or, count, min_max, sum};
+use datafusion_common::arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     Column, DFSchemaRef, DataFusionError, Result as DataFusionResult, ScalarValue,
@@ -7,12 +9,15 @@ use datafusion_common::{
 use datafusion_expr::expr_rewriter::normalize_col;
 use datafusion_expr::utils::find_aggregate_exprs;
 use datafusion_expr::{
-    Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Projection, SortExpr, Volatility,
-    bitwise_and, bitwise_shift_right, cast,
+    Aggregate, Expr, ExprSchemable, Extension, LogicalPlan, LogicalPlanBuilder, Projection,
+    SortExpr, Volatility, bitwise_and, bitwise_shift_right, cast, expr,
 };
+use datafusion_spark::function::aggregate::try_sum::SparkTrySum;
 use sail_common::spec;
 use sail_common_datafusion::utils::items::ItemTaker;
+use sail_function::aggregate::try_avg::TryAvgFunction;
 use sail_function::scalar::explode::Explode;
+use sail_logical_plan::sort::{RequiredSortNode, SortWithinPartitionsNode};
 use sail_python_udf::get_udf_display_name;
 use sail_python_udf::udf::pyspark_udaf::PySparkGroupAggregateUDF;
 
@@ -191,8 +196,6 @@ impl PlanResolver<'_> {
         let having = having
             .map(|having| Self::rewrite_grouping_expr(having, &grouping_exprs, has_grouping_set))
             .transpose()?;
-        // Sorts directly below aggs determine results of order-sensitive aggs (e.g., first, last).
-        let (projections, having) = Self::attach_input_ordering(&input, projections, having)?;
         let mut aggregate_candidates = projections
             .iter()
             .map(|x| x.expr.clone())
@@ -284,39 +287,6 @@ impl PlanResolver<'_> {
             .build()?)
     }
 
-    // Sorts directly below aggs determine results of order-sensitive aggs (e.g., first, last).
-    fn attach_input_ordering(
-        input: &LogicalPlan,
-        projections: Vec<NamedExpr>,
-        having: Option<Expr>,
-    ) -> PlanResult<(Vec<NamedExpr>, Option<Expr>)> {
-        let Some(ordering) = Self::input_sort_ordering(input) else {
-            return Ok((projections, having));
-        };
-        let ordering = &ordering;
-        let projections = projections
-            .into_iter()
-            .map(|x| {
-                let NamedExpr {
-                    name,
-                    expr,
-                    metadata,
-                } = x;
-                Ok(NamedExpr {
-                    name,
-                    expr: Self::attach_ordering_to_aggregates(expr, ordering)?,
-                    metadata,
-                })
-            })
-            .collect::<PlanResult<Vec<_>>>()?;
-        let having = having
-            .map(|x| Self::attach_ordering_to_aggregates(x, ordering))
-            .transpose()?;
-        Ok((projections, having))
-    }
-
-    // Finds the sort that determines the input row order, qualified against `input` so
-    // every attached copy of the expression renders identically.
     pub(crate) fn input_sort_ordering(input: &LogicalPlan) -> Option<Vec<SortExpr>> {
         Self::find_input_sort_ordering(input)?
             .into_iter()
@@ -331,11 +301,26 @@ impl PlanResolver<'_> {
     }
 
     fn find_input_sort_ordering(input: &LogicalPlan) -> Option<Vec<SortExpr>> {
-        // Walks through row-order-preserving wrappers, remapping the sort keys through each projection.
         match input {
             LogicalPlan::Sort(sort) => Some(sort.expr.clone()),
             LogicalPlan::SubqueryAlias(alias) => {
-                Self::find_input_sort_ordering(alias.input.as_ref())
+                let ordering = Self::find_input_sort_ordering(alias.input.as_ref())?;
+                ordering
+                    .into_iter()
+                    .map(|sort| {
+                        let expr = sort
+                            .expr
+                            .transform(|expr| match expr {
+                                Expr::Column(column) => Ok(Transformed::yes(Expr::Column(
+                                    Column::new_unqualified(column.name),
+                                ))),
+                                expr => Ok(Transformed::no(expr)),
+                            })
+                            .data()
+                            .ok()?;
+                        Some(SortExpr { expr, ..sort })
+                    })
+                    .collect()
             }
             LogicalPlan::Filter(filter) => Self::find_input_sort_ordering(filter.input.as_ref()),
             LogicalPlan::Limit(limit) => Self::find_input_sort_ordering(limit.input.as_ref()),
@@ -345,27 +330,31 @@ impl PlanResolver<'_> {
                     .into_iter()
                     .map(|sort| {
                         let expr = Self::remap_through_projection(sort.expr, projection)?;
-                        Some(SortExpr {
-                            expr,
-                            asc: sort.asc,
-                            nulls_first: sort.nulls_first,
-                        })
+                        Some(SortExpr { expr, ..sort })
                     })
                     .collect()
+            }
+            LogicalPlan::Window(window) => {
+                let [Expr::WindowFunction(function)] = window.window_expr.as_slice() else {
+                    return None;
+                };
+                if function.params.order_by.is_empty() {
+                    Self::find_input_sort_ordering(window.input.as_ref())
+                } else {
+                    Some(function.params.order_by.clone())
+                }
             }
             _ => None,
         }
     }
 
-    // Re-expresses a sort key over a projection's output by substituting projected
-    // subexpressions with their output columns; `None` if the key is not derivable.
     fn remap_through_projection(expr: Expr, projection: &Projection) -> Option<Expr> {
         let rewritten = expr
-            .transform_down(|e| {
+            .transform_down(|expr| {
                 match projection
                     .expr
                     .iter()
-                    .position(|p| p.clone().unalias() == e)
+                    .position(|projection| projection.clone().unalias() == expr)
                 {
                     Some(index) => {
                         let (qualifier, field) = projection.schema.qualified_field(index);
@@ -375,14 +364,14 @@ impl PlanResolver<'_> {
                             TreeNodeRecursion::Jump,
                         ))
                     }
-                    None => Ok(Transformed::no(e)),
+                    None => Ok(Transformed::no(expr)),
                 }
             })
             .data()
             .ok()?;
         let mut derivable = true;
-        let _ = rewritten.apply(|e| {
-            if let Expr::Column(column) = e
+        let _ = rewritten.apply(|expr| {
+            if let Expr::Column(column) = expr
                 && projection
                     .schema
                     .qualified_field_from_column(column)
@@ -396,23 +385,136 @@ impl PlanResolver<'_> {
         derivable.then_some(rewritten)
     }
 
-    fn attach_ordering_to_aggregates(expr: Expr, ordering: &[SortExpr]) -> PlanResult<Expr> {
-        Ok(expr
-            .transform_down(|e| match e {
-                Expr::AggregateFunction(mut function)
-                // Order-relevant aggs in Spark; `!distinct` excludes `collect_set` (unordered).
-                    if (function.func.inner().is::<FirstValue>()
-                        || function.func.inner().is::<LastValue>()
-                        || function.func.inner().is::<ArrayAgg>())
-                        && !function.params.distinct
-                        && function.params.order_by.is_empty() =>
+    fn is_order_irrelevant_aggregate(
+        function: &expr::AggregateFunction,
+        schema: &DFSchemaRef,
+    ) -> PlanResult<bool> {
+        let udf = function.func.as_ref();
+        if udf == min_max::min_udaf().as_ref()
+            || udf == min_max::max_udaf().as_ref()
+            || udf == count::count_udaf().as_ref()
+            || udf == bit_and_or_xor::bit_and_udaf().as_ref()
+            || udf == bit_and_or_xor::bit_or_udaf().as_ref()
+            || udf == bit_and_or_xor::bit_xor_udaf().as_ref()
+            || udf == bool_and_or::bool_and_udaf().as_ref()
+            || udf == bool_and_or::bool_or_udaf().as_ref()
+        {
+            return Ok(true);
+        }
+
+        if udf == sum::sum_udaf().as_ref()
+            || udf == average::avg_udaf().as_ref()
+            || udf.inner().is::<SparkTrySum>()
+            || udf.inner().is::<TryAvgFunction>()
+        {
+            let Some(arg) = function.params.args.first() else {
+                return Ok(false);
+            };
+            return Ok(!matches!(
+                arg.get_type(schema.as_ref())?,
+                DataType::Float16 | DataType::Float32 | DataType::Float64
+            ));
+        }
+
+        Ok(false)
+    }
+
+    fn requires_input_order(aggregates: &[Expr], schema: &DFSchemaRef) -> PlanResult<bool> {
+        for aggregate in aggregates {
+            let Expr::AggregateFunction(function) = aggregate else {
+                return Ok(true);
+            };
+            if !Self::is_order_irrelevant_aggregate(function, schema)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    pub(crate) fn preserve_order_sensitive_aggregate_sorts(
+        plan: LogicalPlan,
+    ) -> PlanResult<LogicalPlan> {
+        Ok(plan
+            .transform_up_with_subqueries(|plan| {
+                let LogicalPlan::Aggregate(mut aggregate) = plan else {
+                    return Ok(Transformed::no(plan));
+                };
+                let aggregate_exprs = find_aggregate_exprs(&aggregate.aggr_expr);
+                if !Self::requires_input_order(&aggregate_exprs, aggregate.input.schema())
+                    .map_err(|error| DataFusionError::External(Box::new(error)))?
                 {
-                    function.params.order_by = ordering.to_vec();
-                    Ok(Transformed::yes(Expr::AggregateFunction(function)))
+                    return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate)));
                 }
-                e => Ok(Transformed::no(e)),
+
+                let (input, found) = Self::require_input_sort_inner(Arc::unwrap_or_clone(
+                    Arc::clone(&aggregate.input),
+                ))
+                .map_err(|error| DataFusionError::External(Box::new(error)))?;
+                if !found {
+                    return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate)));
+                }
+                aggregate.input = Arc::new(input);
+                Ok(Transformed::yes(LogicalPlan::Aggregate(aggregate)))
             })
             .data()?)
+    }
+
+    fn require_input_sort_inner(plan: LogicalPlan) -> PlanResult<(LogicalPlan, bool)> {
+        match plan {
+            LogicalPlan::Sort(sort) => Ok((
+                LogicalPlan::Extension(Extension {
+                    node: Arc::new(RequiredSortNode::new(
+                        sort.input, sort.expr, sort.fetch, false,
+                    )),
+                }),
+                true,
+            )),
+            LogicalPlan::Extension(extension) => {
+                if extension.node.as_any().is::<RequiredSortNode>() {
+                    return Ok((LogicalPlan::Extension(extension), true));
+                }
+                let Some(sort) = extension
+                    .node
+                    .as_any()
+                    .downcast_ref::<SortWithinPartitionsNode>()
+                else {
+                    return Ok((LogicalPlan::Extension(extension), false));
+                };
+                Ok((
+                    LogicalPlan::Extension(Extension {
+                        node: Arc::new(RequiredSortNode::new(
+                            Arc::clone(sort.input()),
+                            sort.sort_expr().to_vec(),
+                            sort.fetch(),
+                            true,
+                        )),
+                    }),
+                    true,
+                ))
+            }
+            plan => {
+                let transparent = matches!(
+                    plan,
+                    LogicalPlan::SubqueryAlias(_)
+                        | LogicalPlan::Projection(_)
+                        | LogicalPlan::Filter(_)
+                        | LogicalPlan::Limit(_)
+                        | LogicalPlan::Window(_)
+                );
+                if !transparent {
+                    return Ok((plan, false));
+                }
+
+                let expressions = plan.expressions();
+                let child = plan.inputs().one()?.clone();
+                let (child, found) = Self::require_input_sort_inner(child)?;
+                if found {
+                    Ok((plan.with_new_exprs(expressions, vec![child])?, true))
+                } else {
+                    Ok((plan, false))
+                }
+            }
+        }
     }
 
     pub(super) fn has_grouping_set(grouping: &[Expr]) -> bool {
