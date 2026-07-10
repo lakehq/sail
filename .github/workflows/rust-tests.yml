@@ -19,6 +19,7 @@ jobs:
       # Coverage environment variables
       RUSTC_WORKSPACE_WRAPPER: ${{ github.workspace }}/.github/scripts/rustc-workspace-wrapper.sh
       LLVM_PROFILE_FILE: ${{ github.workspace }}/target/llvm-profiles/rust-unit/sail-%p-%m.profraw
+      RUST_MIN_STACK: 8388608
     steps:
       - uses: actions/checkout@v7
 

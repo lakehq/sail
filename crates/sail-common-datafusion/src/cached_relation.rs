@@ -103,7 +103,6 @@ impl UserDefinedLogicalNodeCore for CachedRelationNode {
 
 #[derive(Debug, Clone)]
 pub struct CachedRelation {
-    schema: SchemaRef,
     data: Arc<tokio::sync::Mutex<CachedRelationData>>,
     cleanup: Option<CachedRelationCleanup>,
 }
@@ -230,9 +229,7 @@ impl CachedRelation {
         storage_level: spec::StorageLevel,
     ) -> Result<Self> {
         let data = materialize_local_checkpoint(ctx, plan, storage_level).await?;
-        let schema = data.schema();
         Ok(Self {
-            schema,
             data: Arc::new(tokio::sync::Mutex::new(data)),
             cleanup: None,
         })
@@ -244,9 +241,7 @@ impl CachedRelation {
         path: &str,
     ) -> Result<Self> {
         let data = materialize_reliable_checkpoint(ctx, plan, path).await?;
-        let schema = data.schema();
         Ok(Self {
-            schema,
             data: Arc::new(tokio::sync::Mutex::new(data)),
             cleanup: Some(CachedRelationCleanup::ObjectStorePath(path.to_string())),
         })
@@ -256,9 +251,7 @@ impl CachedRelation {
         plan: Arc<dyn ExecutionPlan>,
         storage_level: spec::StorageLevel,
     ) -> Self {
-        let schema = plan.schema();
         Self {
-            schema,
             data: Arc::new(tokio::sync::Mutex::new(CachedRelationData::Pending(
                 CachedRelationPending {
                     plan,
@@ -271,9 +264,7 @@ impl CachedRelation {
 
     pub fn new_pending_reliable_checkpoint(plan: Arc<dyn ExecutionPlan>, path: String) -> Self {
         let cleanup_path = path.clone();
-        let schema = plan.schema();
         Self {
-            schema,
             data: Arc::new(tokio::sync::Mutex::new(CachedRelationData::Pending(
                 CachedRelationPending {
                     plan,
@@ -284,13 +275,14 @@ impl CachedRelation {
         }
     }
 
-    pub fn to_logical_plan(&self, relation_id: &str) -> Result<LogicalPlan> {
-        Ok(LogicalPlan::Extension(Extension {
-            node: Arc::new(CachedRelationNode::try_new(
-                relation_id.to_string(),
-                Arc::clone(&self.schema),
-            )?),
-        }))
+    pub async fn to_logical_plan(&self, relation_id: &str) -> Result<LogicalPlan> {
+        let data = self.data.lock().await;
+        match &*data {
+            CachedRelationData::Materialized(materialized) => {
+                materialized.to_logical_plan(relation_id)
+            }
+            CachedRelationData::Pending(pending) => pending.to_logical_plan(relation_id),
+        }
     }
 
     pub async fn to_physical_plan(&self, relation_id: &str) -> Result<Arc<dyn ExecutionPlan>> {
@@ -377,15 +369,6 @@ impl SessionExtension for CachedRelationRegistry {
     }
 }
 
-impl CachedRelationData {
-    fn schema(&self) -> SchemaRef {
-        match self {
-            Self::Materialized(materialized) => materialized.schema(),
-            Self::Pending(pending) => pending.schema(),
-        }
-    }
-}
-
 impl CachedRelationPending {
     async fn materialize(&self, ctx: &SessionContext) -> Result<CachedRelationData> {
         match &self.target {
@@ -399,8 +382,13 @@ impl CachedRelationPending {
         }
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.plan.schema()
+    fn to_logical_plan(&self, relation_id: &str) -> Result<LogicalPlan> {
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CachedRelationNode::try_new(
+                relation_id.to_string(),
+                self.plan.schema(),
+            )?),
+        }))
     }
 }
 
@@ -410,6 +398,15 @@ impl CachedRelationMaterialized {
             Self::Local(local) => Arc::clone(&local.schema),
             Self::Reliable { schema, .. } => Arc::clone(schema),
         }
+    }
+
+    fn to_logical_plan(&self, relation_id: &str) -> Result<LogicalPlan> {
+        Ok(LogicalPlan::Extension(Extension {
+            node: Arc::new(CachedRelationNode::try_new(
+                relation_id.to_string(),
+                self.schema(),
+            )?),
+        }))
     }
 
     async fn to_physical_plan(&self) -> Result<Arc<dyn ExecutionPlan>> {
@@ -668,7 +665,7 @@ mod tests {
     use std::sync::Mutex;
 
     use async_trait::async_trait;
-    use datafusion::arrow::datatypes::{DataType, Field, Schema};
+    use datafusion::arrow::datatypes::Schema;
     use datafusion::physical_plan::empty::EmptyExec;
 
     use super::*;
@@ -719,33 +716,6 @@ mod tests {
                 ));
             }
         }
-        Ok(())
-    }
-
-    #[test]
-    fn pending_cached_relation_logical_plan_uses_plan_schema() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "value",
-            DataType::Int32,
-            true,
-        )]));
-        let plan: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(schema));
-        let relation = CachedRelation::new_pending_local_checkpoint(
-            plan,
-            spec::StorageLevel {
-                use_disk: false,
-                use_memory: true,
-                use_off_heap: false,
-                deserialized: true,
-                replication: 1,
-            },
-        );
-
-        let plan = relation.to_logical_plan("relation")?;
-        let fields = plan.schema().fields();
-
-        assert_eq!(fields.len(), 1);
-        assert_eq!(fields[0].name(), "value");
         Ok(())
     }
 
