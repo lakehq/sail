@@ -1,4 +1,6 @@
 >>> from pyspark.sql import functions as F
+>>> from pyspark.sql import Window
+
 >>> df = spark.createDataFrame(
 ...     [("Alice", 2), ("Bob", 5), ("Alice", None)],
 ...     ("name", "age"),
@@ -24,3 +26,34 @@
 >>> df = spark.createDataFrame([(30, 2, 2), (10, 5, -20), (20, 1, 1)], ("v", "a", "b"))
 >>> df.orderBy(df.a + df.b).select("v", "a", "b").groupBy().agg(F.first("v")).collect()
 [Row(first(v)=10)]
+
+>>> spark.sql("""WITH sorted AS (SELECT * FROM VALUES (10,'b'),(20,'a'),(30,'d'),(40,'c') AS t(v, k) ORDER BY k) SELECT first(v) AS result FROM sorted""").collect()
+[Row(result=20)]
+
+>>> df = spark.createDataFrame([(30, 'c'), (10, 'a'), (20, 'b')], ("v", "k"))
+>>> df.orderBy("k").groupBy().agg(F.collect_list("v")).collect()
+[Row(collect_list(v)=[10, 20, 30])]
+
+>>> df = spark.createDataFrame([("Alice", 2), ("Bob", 5), ("Alice", None)], ("name", "age"))
+>>> w = Window.partitionBy("name")
+>>> result = df.orderBy("age").select("name", "age", F.first("age").over(w).alias("f"))
+>>> sorted(result.collect(), key=lambda r: (r.name, r.age if r.age is not None else -1))
+[Row(name='Alice', age=None, f=None), Row(name='Alice', age=2, f=None), Row(name='Bob', age=5, f=5)]
+
+>>> df = spark.createDataFrame([(30, 'c'), (10, 'a'), (20, 'b')], ("v", "k")).repartition(2, "k")
+>>> df.sortWithinPartitions("k").groupBy().agg(F.first("v")).collect()
+[Row(first(v)=10)]
+
+>>> df = spark.createDataFrame([(1, 'a'), (2, 'a'), (3, 'a')], ("v", "k"))
+>>> df.orderBy("k").groupBy().agg(F.first("v")).collect()
+[Row(first(v)=1)]
+
+>>> a = spark.createDataFrame([(2, 'b'), (1, 'a')], ("v", "k")).orderBy("k")
+>>> b = spark.createDataFrame([(4, 'd'), (3, 'c')], ("v", "k")).orderBy("k")
+>>> a.union(b).groupBy().agg(F.first("v")).collect()
+[Row(first(v)=1)]
+
+>>> left = spark.createDataFrame([(2, 'b'), (1, 'a')], ("v", "k")).orderBy("k")
+>>> right = spark.createDataFrame([('a',), ('b',)], ("k",))
+>>> left.join(right, "k").groupBy().agg(F.first("v")).collect()
+[Row(first(v)=1)]

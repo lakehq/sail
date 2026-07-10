@@ -1,3 +1,4 @@
+use datafusion::functions_aggregate::array_agg::ArrayAgg;
 use datafusion::functions_aggregate::first_last::{FirstValue, LastValue};
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
@@ -395,10 +396,11 @@ impl PlanResolver<'_> {
         Ok(expr
             .transform_down(|e| match e {
                 Expr::AggregateFunction(mut function)
-                // Aggs whose result depends on the order of the input rows and that accept an `order_by`.
-                // Spark treats `First`/`Last` as order-relevant.
+                // Order-relevant aggs in Spark; `!distinct` excludes `collect_set` (unordered).
                     if (function.func.inner().is::<FirstValue>()
-                        || function.func.inner().is::<LastValue>())
+                        || function.func.inner().is::<LastValue>()
+                        || function.func.inner().is::<ArrayAgg>())
+                        && !function.params.distinct
                         && function.params.order_by.is_empty() =>
                 {
                     function.params.order_by = ordering.to_vec();
