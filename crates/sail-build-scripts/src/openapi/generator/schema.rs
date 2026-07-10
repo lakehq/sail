@@ -411,7 +411,6 @@ impl<'a> OpenApiGenerator<'a> {
         Ok(EnumVariant {
             name: variant,
             rename,
-            aliases: Vec::new(),
             kind: EnumVariantKind::Tuple { rust_type },
         })
     }
@@ -430,7 +429,9 @@ impl<'a> OpenApiGenerator<'a> {
                 "discriminator anyOf variants are unsupported".to_owned(),
             ));
         }
-        let variants = if !schema.one_of.is_empty() {
+        let variants = if !discriminator.mapping.is_empty() {
+            self.discriminator_variants_from_mapping(discriminator, inline, in_module)?
+        } else if !schema.one_of.is_empty() {
             self.discriminator_variants_from_schemas(
                 discriminator,
                 &schema.one_of,
@@ -438,7 +439,7 @@ impl<'a> OpenApiGenerator<'a> {
                 in_module,
             )?
         } else {
-            self.discriminator_variants_from_mapping(discriminator, inline, in_module)?
+            Vec::new()
         };
         Ok(variants)
     }
@@ -449,19 +450,13 @@ impl<'a> OpenApiGenerator<'a> {
         inline: &mut InlineSchemas,
         in_module: bool,
     ) -> BuildResult<Vec<EnumVariant>> {
-        let mut references = BTreeMap::<String, Vec<String>>::new();
-        for (value, reference) in &discriminator.mapping {
-            references
-                .entry(reference.clone())
-                .or_default()
-                .push(value.clone());
-        }
-        references
-            .into_iter()
-            .map(|(reference, values)| {
+        discriminator
+            .mapping
+            .iter()
+            .map(|(value, reference)| {
                 self.discriminator_variant(
-                    &reference,
-                    values,
+                    value.clone(),
+                    reference,
                     &discriminator.property_name,
                     inline,
                     in_module,
@@ -486,10 +481,10 @@ impl<'a> OpenApiGenerator<'a> {
                     ));
                 };
                 let reference = &reference.reference;
-                let values = self.discriminator_values(discriminator, reference);
+                let (name, _) = self.resolve_schema_reference(reference)?;
                 self.discriminator_variant(
+                    name.to_owned(),
                     reference,
-                    values,
                     &discriminator.property_name,
                     inline,
                     in_module,
@@ -498,37 +493,15 @@ impl<'a> OpenApiGenerator<'a> {
             .collect()
     }
 
-    fn discriminator_values(
-        &self,
-        discriminator: &crate::openapi::spec::Discriminator,
-        reference: &str,
-    ) -> Vec<String> {
-        discriminator
-            .mapping
-            .iter()
-            .filter_map(|(value, candidate)| (candidate == reference).then_some(value.clone()))
-            .collect()
-    }
-
     fn discriminator_variant(
         &self,
+        value: String,
         reference: &str,
-        values: Vec<String>,
         tag: &str,
         inline: &mut InlineSchemas,
         in_module: bool,
     ) -> BuildResult<EnumVariant> {
-        let (name, schema) = self.resolve_schema_reference(reference)?;
-        let variant = type_name(name);
-        let rename = values
-            .first()
-            .ok_or_else(|| {
-                BuildError::InvalidInput(format!(
-                    "discriminator mapping for {reference} must have at least one value"
-                ))
-            })?
-            .clone();
-        let aliases = values.iter().skip(1).cloned().collect::<Vec<_>>();
+        let (_, schema) = self.resolve_schema_reference(reference)?;
         let fields = self
             .collect_object_fields(schema, inline, in_module)?
             .into_iter()
@@ -540,9 +513,8 @@ impl<'a> OpenApiGenerator<'a> {
             EnumVariantKind::Struct { fields }
         };
         Ok(EnumVariant {
-            name: variant,
-            rename: Some(rename),
-            aliases,
+            name: type_name(&value),
+            rename: Some(value),
             kind,
         })
     }
@@ -558,7 +530,6 @@ impl<'a> OpenApiGenerator<'a> {
         }
 
         let mut inherited_discriminator = None;
-        let mut references = Vec::new();
         for schema in schemas {
             let MaybeRef::Ref(reference) = *schema else {
                 return Ok(None);
@@ -573,23 +544,19 @@ impl<'a> OpenApiGenerator<'a> {
                 Some((existing, _)) if existing == base_reference => {}
                 Some(_) => return Ok(None),
             }
-            references.push(reference.reference.as_str());
         }
 
         let Some((_, discriminator)) = inherited_discriminator else {
             return Ok(None);
         };
-        let tag = discriminator.property_name.as_str();
-        let mut variants = Vec::new();
-        for reference in references {
-            let values = self.discriminator_values(discriminator, reference);
-            if values.is_empty() {
-                return Ok(None);
-            }
-            variants.push(self.discriminator_variant(reference, values, tag, inline, in_module)?);
+        if discriminator.mapping.is_empty() {
+            return Ok(None);
         }
+        let tag = discriminator.property_name.clone();
+        let variants =
+            self.discriminator_variants_from_mapping(discriminator, inline, in_module)?;
 
-        Ok(Some((tag.to_owned(), variants)))
+        Ok(Some((tag, variants)))
     }
 
     fn inherited_discriminator(
@@ -670,7 +637,6 @@ fn string_enum_variants(schema: &Schema) -> BuildResult<Option<Vec<EnumVariant>>
         variants.push(EnumVariant {
             name: type_name(value),
             rename: Some(value.clone()),
-            aliases: Vec::new(),
             kind: EnumVariantKind::Unit,
         });
     }
@@ -743,7 +709,6 @@ enum SchemaKind {
 struct EnumVariant {
     name: RustName,
     rename: Option<String>,
-    aliases: Vec<String>,
     kind: EnumVariantKind,
 }
 
@@ -936,22 +901,16 @@ fn generate_enum_variant(variant: &EnumVariant) -> TokenStream {
         .rename
         .as_ref()
         .map(|value| quote! { #[serde(rename = #value)] });
-    let aliases = variant
-        .aliases
-        .iter()
-        .map(|value| quote! { #[serde(alias = #value)] });
     match &variant.kind {
         EnumVariantKind::Unit => {
             quote! {
                 #rename
-                #(#aliases)*
                 #name,
             }
         }
         EnumVariantKind::Tuple { rust_type } => {
             quote! {
                 #rename
-                #(#aliases)*
                 #name(#rust_type),
             }
         }
@@ -959,7 +918,6 @@ fn generate_enum_variant(variant: &EnumVariant) -> TokenStream {
             let fields = fields.iter().map(generate_enum_variant_field);
             quote! {
                 #rename
-                #(#aliases)*
                 #name {
                     #(#fields)*
                 },
