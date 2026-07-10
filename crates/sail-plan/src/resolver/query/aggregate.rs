@@ -398,6 +398,8 @@ impl PlanResolver<'_> {
             || udf == bit_and_or_xor::bit_xor_udaf().as_ref()
             || udf == bool_and_or::bool_and_udaf().as_ref()
             || udf == bool_and_or::bool_or_udaf().as_ref()
+            || udf == sum::sum_udaf().as_ref()
+            || udf == average::avg_udaf().as_ref()
         {
             return Ok(true);
         }
