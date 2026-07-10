@@ -41,7 +41,7 @@ use crate::delta_log::{
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
-    Action, CommitAction, DeltaError, DeltaOperation, DeltaResult, Metadata, TableFeature,
+    Action, CommitAction, DeltaError, DeltaOperation, DeltaResult, Metadata, Stats, TableFeature,
     Transaction, VersionChecksum, checksum_path, staged_commit_path, temp_commit_path,
 };
 pub use crate::spec::{CommitConflictError, TransactionError};
@@ -823,6 +823,42 @@ fn protocol_has_reader_writer_feature(
         && protocol.has_writer_feature(feature)
 }
 
+fn validate_deletion_vector_add_stats(actions: &[Action]) -> DeltaResult<()> {
+    for (add, deletion_vector) in actions.iter().filter_map(|action| match action {
+        Action::Add(add) => add
+            .deletion_vector
+            .as_ref()
+            .map(|deletion_vector| (add, deletion_vector)),
+        _ => None,
+    }) {
+        let stats_json = add.stats.as_deref().ok_or_else(|| {
+            DeltaError::generic(format!(
+                "Add action `{}` with a deletion vector requires stats.numRecords",
+                add.path
+            ))
+        })?;
+        let stats = Stats::from_json_str(stats_json).map_err(|error| {
+            DeltaError::generic(format!(
+                "Add action `{}` with a deletion vector has invalid stats.numRecords: {error}",
+                add.path
+            ))
+        })?;
+        if stats.num_records < 0 {
+            return Err(DeltaError::generic(format!(
+                "Add action `{}` with a deletion vector has negative stats.numRecords: {}",
+                add.path, stats.num_records
+            )));
+        }
+        if deletion_vector.cardinality > stats.num_records {
+            return Err(DeltaError::generic(format!(
+                "Add action `{}` has deletion vector cardinality {} greater than stats.numRecords {}",
+                add.path, deletion_vector.cardinality, stats.num_records
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn validate_effective_commit_target(
     read_snapshot: Option<&Arc<DeltaSnapshot>>,
     actions: &[CommitAction],
@@ -875,6 +911,7 @@ fn validate_effective_commit_target(
     {
         return Err(TransactionError::TableFeaturesRequired(TableFeature::DeletionVectors).into());
     }
+    validate_deletion_vector_add_stats(&actions_as_actions)?;
 
     // TODO(cdf-writes): Data-changing operations still do not emit AddCDCFile actions. Until CDF
     // write support is implemented, reject all writes to tables with CDF enabled, regardless of
@@ -2206,8 +2243,9 @@ mod tests {
     use crate::delta_log::{StorageConfig, default_logstore, get_actions};
     use crate::schema::protocol_for_create;
     use crate::spec::{
-        Action, CommitAction, CommitInfo, DataType, DeltaError, DomainMetadata, Metadata, Protocol,
-        SaveMode, StructField, StructType, TableFeature, VersionChecksum, checksum_path,
+        Action, Add, CommitAction, CommitInfo, DataType, DeletionVectorDescriptor, DeltaError,
+        DomainMetadata, Metadata, Protocol, SaveMode, StorageType, StructField, StructType,
+        TableFeature, VersionChecksum, checksum_path,
     };
 
     fn test_log_store(store: Arc<dyn ObjectStore>) -> LogStoreRef {
@@ -2234,6 +2272,38 @@ mod tests {
                 .collect(),
         )
         .unwrap()
+    }
+
+    fn deletion_vector_add(stats: Option<&str>, cardinality: i64) -> Add {
+        Add {
+            path: "part-00000.parquet".to_string(),
+            partition_values: HashMap::new(),
+            size: 1,
+            modification_time: 0,
+            data_change: true,
+            stats: stats.map(str::to_string),
+            deletion_vector: Some(DeletionVectorDescriptor {
+                storage_type: StorageType::Inline,
+                path_or_inline_dv: "encoded-dv".to_string(),
+                offset: None,
+                size_in_bytes: 1,
+                cardinality,
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn deletion_vector_commit_actions(add: Add) -> Vec<CommitAction> {
+        vec![
+            CommitAction::Protocol(Protocol::new(
+                3,
+                7,
+                Some(vec![TableFeature::DeletionVectors]),
+                Some(vec![TableFeature::DeletionVectors]),
+            )),
+            CommitAction::Metadata(test_metadata([])),
+            CommitAction::Add(add),
+        ]
     }
 
     async fn read_commit_actions(log_store: &LogStoreRef, version: i64) -> Vec<Action> {
@@ -2658,6 +2728,43 @@ mod tests {
                 TableFeature::DomainMetadata
             ))
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn validate_effective_commit_target_rejects_invalid_deletion_vector_stats() {
+        let invalid_stats = [
+            ("missing stats", None, 1),
+            ("malformed stats", Some("{"), 1),
+            ("missing numRecords", Some(r#"{"tightBounds":true}"#), 1),
+            ("negative numRecords", Some(r#"{"numRecords":-1}"#), 1),
+            (
+                "deletion vector cardinality exceeds numRecords",
+                Some(r#"{"numRecords":4}"#),
+                5,
+            ),
+        ];
+
+        for (case, stats, cardinality) in invalid_stats {
+            let actions = deletion_vector_commit_actions(deletion_vector_add(stats, cardinality));
+            let result = validate_effective_commit_target(None, &actions);
+
+            assert!(result.is_err(), "{case} must reject the Add action");
+        }
+    }
+
+    #[test]
+    fn validate_effective_commit_target_accepts_valid_deletion_vector_stats() -> DeltaResult<()> {
+        for (num_records, cardinality) in [(5, 5), (6, 5)] {
+            let stats = format!(r#"{{"numRecords":{num_records}}}"#);
+            let actions = deletion_vector_commit_actions(deletion_vector_add(
+                Some(stats.as_str()),
+                cardinality,
+            ));
+
+            validate_effective_commit_target(None, &actions)?;
+        }
+
         Ok(())
     }
 }
