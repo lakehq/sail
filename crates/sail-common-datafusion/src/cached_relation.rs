@@ -309,10 +309,6 @@ impl CachedRelation {
             )),
         }
     }
-
-    fn into_cleanup(self) -> Option<CachedRelationCleanup> {
-        self.cleanup
-    }
 }
 
 #[derive(Debug, Default)]
@@ -354,12 +350,12 @@ impl CachedRelationRegistry {
         Ok(relations.remove(relation_id))
     }
 
-    pub fn drain(&self) -> Result<Vec<CachedRelation>> {
+    pub fn drain(&self) -> Result<Vec<(String, CachedRelation)>> {
         let mut relations = self
             .relations
             .write()
             .map_err(|e| internal_datafusion_err!("{e}"))?;
-        Ok(relations.drain().map(|(_, relation)| relation).collect())
+        Ok(relations.drain().collect())
     }
 }
 
@@ -614,6 +610,7 @@ fn create_arrow_checkpoint_scan(
         .collect();
     let config = FileScanConfigBuilder::new(object_store_url, Arc::new(source))
         .with_file_groups(file_groups)
+        .with_partitioned_by_file_group(true)
         .with_statistics(Statistics::new_unknown(schema))
         .build();
     Ok(DataSourceExec::from_data_source(config))
@@ -624,19 +621,55 @@ pub async fn cleanup_checkpoint_path(ctx: &SessionContext, path: &str) -> Result
     service.cleanup_checkpoint_path(ctx, path).await
 }
 
-pub async fn cleanup_cached_relation(ctx: &SessionContext, relation: CachedRelation) -> Result<()> {
-    match relation.into_cleanup() {
+pub async fn cleanup_cached_relation(
+    ctx: &SessionContext,
+    relation: &CachedRelation,
+) -> Result<()> {
+    match relation.cleanup.as_ref() {
         Some(CachedRelationCleanup::ObjectStorePath(path)) => {
-            cleanup_checkpoint_path(ctx, &path).await
+            cleanup_checkpoint_path(ctx, path).await
         }
         None => Ok(()),
     }
 }
 
+pub async fn remove_cached_relation(ctx: &SessionContext, relation_id: &str) -> Result<()> {
+    let registry = ctx.extension::<CachedRelationRegistry>()?;
+    let Some(relation) = registry.remove(relation_id)? else {
+        return Ok(());
+    };
+    if let Err(cleanup_error) = cleanup_cached_relation(ctx, &relation).await {
+        if let Err(restore_error) = registry.insert(relation_id.to_string(), relation) {
+            return Err(internal_datafusion_err!(
+                "failed to clean cached relation {relation_id}: {cleanup_error}; additionally failed to restore it: {restore_error}"
+            ));
+        }
+        return Err(cleanup_error);
+    }
+    Ok(())
+}
+
 pub async fn cleanup_cached_relations(ctx: &SessionContext) -> Result<()> {
-    let relations = ctx.extension::<CachedRelationRegistry>()?.drain()?;
-    for relation in relations {
-        cleanup_cached_relation(ctx, relation).await?;
+    let registry = ctx.extension::<CachedRelationRegistry>()?;
+    let relations = registry.drain()?;
+    let mut errors = vec![];
+    for (relation_id, relation) in relations {
+        if let Err(cleanup_error) = cleanup_cached_relation(ctx, &relation).await {
+            if let Err(restore_error) = registry.insert(relation_id.clone(), relation) {
+                errors.push(format!(
+                    "{relation_id}: {cleanup_error}; additionally failed to restore it: {restore_error}"
+                ));
+            } else {
+                errors.push(format!("{relation_id}: {cleanup_error}"));
+            }
+        }
+    }
+    if !errors.is_empty() {
+        return Err(internal_datafusion_err!(
+            "failed to clean {} cached relation(s): {}",
+            errors.len(),
+            errors.join("; ")
+        ));
     }
     Ok(())
 }
@@ -662,6 +695,7 @@ async fn write_disk_partition(ctx: &SessionContext, bytes: &[u8]) -> Result<RefC
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
     use std::sync::Mutex;
 
     use async_trait::async_trait;
@@ -677,9 +711,9 @@ mod tests {
         let plan: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
         let relation = CachedRelation::new_pending_reliable_checkpoint(plan, path.clone());
 
-        match relation.into_cleanup() {
+        match relation.cleanup.as_ref() {
             Some(CachedRelationCleanup::ObjectStorePath(actual)) => {
-                assert_eq!(actual, path);
+                assert_eq!(actual, &path);
             }
             other => {
                 return Err(internal_datafusion_err!(
@@ -706,9 +740,9 @@ mod tests {
         let relation = registry.get("relation")?.ok_or_else(|| {
             internal_datafusion_err!("cached relation missing after duplicate insert")
         })?;
-        match relation.into_cleanup() {
+        match relation.cleanup.as_ref() {
             Some(CachedRelationCleanup::ObjectStorePath(actual)) => {
-                assert_eq!(actual, first_path);
+                assert_eq!(actual, &first_path);
             }
             other => {
                 return Err(internal_datafusion_err!(
@@ -722,6 +756,22 @@ mod tests {
     #[derive(Default)]
     struct TestCheckpointStore {
         cleanup_paths: Mutex<Vec<String>>,
+        cleanup_failures: Mutex<HashSet<String>>,
+    }
+
+    impl TestCheckpointStore {
+        fn set_cleanup_failure(&self, path: &str, fail: bool) -> Result<()> {
+            let mut failures = self
+                .cleanup_failures
+                .lock()
+                .map_err(|e| internal_datafusion_err!("{e}"))?;
+            if fail {
+                failures.insert(path.to_string());
+            } else {
+                failures.remove(path);
+            }
+            Ok(())
+        }
     }
 
     #[async_trait]
@@ -739,20 +789,36 @@ mod tests {
         }
 
         async fn cleanup_checkpoint_path(&self, _ctx: &SessionContext, path: &str) -> Result<()> {
+            let should_fail = self
+                .cleanup_failures
+                .lock()
+                .map_err(|e| internal_datafusion_err!("{e}"))?
+                .contains(path);
             self.cleanup_paths
                 .lock()
                 .map_err(|e| internal_datafusion_err!("{e}"))?
                 .push(path.to_string());
-            Ok(())
+            if should_fail {
+                Err(internal_datafusion_err!(
+                    "failed to clean checkpoint path {path}"
+                ))
+            } else {
+                Ok(())
+            }
         }
+    }
+
+    fn checkpoint_context(store: Arc<TestCheckpointStore>) -> SessionContext {
+        let config = datafusion::prelude::SessionConfig::new()
+            .with_extension(Arc::new(CheckpointStoreService::new(store)))
+            .with_extension(Arc::new(CachedRelationRegistry::default()));
+        SessionContext::new_with_config(config)
     }
 
     #[tokio::test]
     async fn cleanup_checkpoint_path_delegates_to_store() -> Result<()> {
         let store = Arc::new(TestCheckpointStore::default());
-        let config = datafusion::prelude::SessionConfig::new()
-            .with_extension(Arc::new(CheckpointStoreService::new(store.clone())));
-        let ctx = SessionContext::new_with_config(config);
+        let ctx = checkpoint_context(store.clone());
         let path = "memory:///checkpoint-root/session/relation";
 
         cleanup_checkpoint_path(&ctx, path).await?;
@@ -762,6 +828,67 @@ mod tests {
             .lock()
             .map_err(|e| internal_datafusion_err!("{e}"))?;
         assert_eq!(paths.as_slice(), &[path.to_string()]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failed_cached_relation_cleanup_can_be_retried() -> Result<()> {
+        let store = Arc::new(TestCheckpointStore::default());
+        let ctx = checkpoint_context(store.clone());
+        let registry = ctx.extension::<CachedRelationRegistry>()?;
+        let relation_id = "relation";
+        let path = "memory:///checkpoint-root/session/relation";
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+        registry.insert(
+            relation_id.to_string(),
+            CachedRelation::new_pending_reliable_checkpoint(plan, path.to_string()),
+        )?;
+        store.set_cleanup_failure(path, true)?;
+
+        assert!(remove_cached_relation(&ctx, relation_id).await.is_err());
+        assert!(registry.get(relation_id)?.is_some());
+
+        store.set_cleanup_failure(path, false)?;
+        remove_cached_relation(&ctx, relation_id).await?;
+        assert!(registry.get(relation_id)?.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn session_cleanup_attempts_every_cached_relation() -> Result<()> {
+        let store = Arc::new(TestCheckpointStore::default());
+        let ctx = checkpoint_context(store.clone());
+        let registry = ctx.extension::<CachedRelationRegistry>()?;
+        let first_path = "memory:///checkpoint-root/session/first";
+        let second_path = "memory:///checkpoint-root/session/second";
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
+        registry.insert(
+            "first".to_string(),
+            CachedRelation::new_pending_reliable_checkpoint(
+                Arc::clone(&plan),
+                first_path.to_string(),
+            ),
+        )?;
+        registry.insert(
+            "second".to_string(),
+            CachedRelation::new_pending_reliable_checkpoint(plan, second_path.to_string()),
+        )?;
+        store.set_cleanup_failure(first_path, true)?;
+
+        assert!(cleanup_cached_relations(&ctx).await.is_err());
+        let mut paths = store
+            .cleanup_paths
+            .lock()
+            .map_err(|e| internal_datafusion_err!("{e}"))?
+            .clone();
+        paths.sort();
+        assert_eq!(paths, vec![first_path.to_string(), second_path.to_string()]);
+        assert!(registry.get("first")?.is_some());
+        assert!(registry.get("second")?.is_none());
+
+        store.set_cleanup_failure(first_path, false)?;
+        cleanup_cached_relations(&ctx).await?;
+        assert!(registry.get("first")?.is_none());
         Ok(())
     }
 }

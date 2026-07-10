@@ -32,9 +32,6 @@ impl CheckpointStore for ObjectStoreCheckpointStore {
             while let Some(batch) = stream.next().await {
                 batches.push(batch?);
             }
-            if batches.iter().all(|batch| batch.num_rows() == 0) {
-                continue;
-            }
             let bytes = write_record_batches_file(&batches, schema.as_ref())?;
             let file_path = checkpoint_path.child(&format!("part-{file_index:05}.arrow"));
             files.push(checkpoint_path.put_bytes(&file_path, bytes).await?);

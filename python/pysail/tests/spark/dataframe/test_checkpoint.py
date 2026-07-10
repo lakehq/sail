@@ -1,3 +1,4 @@
+import gc
 import os
 import shutil
 import time
@@ -22,6 +23,16 @@ pytestmark = pytest.mark.skipif(
 def spark_session_factory_fixture(remote):
     with spark_session_factory(remote) as sessions:
         yield sessions.create
+
+
+def _wait_for_checkpoint_files(checkpoint_path, *, present):
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        files_present = any(checkpoint_path.rglob("*.arrow"))
+        if files_present == present:
+            return
+        time.sleep(0.1)
+    assert any(checkpoint_path.rglob("*.arrow")) == present
 
 
 def test_dataframe_local_checkpoint_survives_source_removal(spark, tmp_path):
@@ -240,10 +251,42 @@ def test_dataframe_checkpoint_cleanup_on_session_stop(spark_session_factory, tmp
     assert any(checkpoint_path.rglob("*.arrow"))
 
     spark.stop()
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline and any(checkpoint_path.rglob("*.arrow")):
-        time.sleep(0.1)
-    assert not any(checkpoint_path.rglob("*.arrow"))
+    _wait_for_checkpoint_files(checkpoint_path, present=False)
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific checkpoint DataFrame cleanup")
+def test_dataframe_checkpoint_cleanup_on_dataframe_gc(spark, tmp_path):
+    checkpoint_path = tmp_path / "checkpoints"
+    spark.conf.set("spark.checkpoint.dir", str(checkpoint_path))
+    try:
+        checkpointed = spark.range(0, 5).checkpoint()
+        assert any(checkpoint_path.rglob("*.arrow"))
+
+        del checkpointed
+        gc.collect()
+        _wait_for_checkpoint_files(checkpoint_path, present=False)
+    finally:
+        spark.conf.unset("spark.checkpoint.dir")
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific derived checkpoint cleanup")
+def test_dataframe_checkpoint_cleanup_waits_for_derived_dataframe(spark, tmp_path):
+    checkpoint_path = tmp_path / "checkpoints"
+    spark.conf.set("spark.checkpoint.dir", str(checkpoint_path))
+    try:
+        checkpointed = spark.range(0, 5).checkpoint()
+        derived = checkpointed.repartition(2)
+        assert any(checkpoint_path.rglob("*.arrow"))
+
+        del checkpointed
+        gc.collect()
+        _wait_for_checkpoint_files(checkpoint_path, present=True)
+
+        del derived
+        gc.collect()
+        _wait_for_checkpoint_files(checkpoint_path, present=False)
+    finally:
+        spark.conf.unset("spark.checkpoint.dir")
 
 
 @pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific checkpoint partition preservation")
@@ -262,6 +305,27 @@ def test_dataframe_checkpoint_preserves_multiple_output_partitions(spark, tmp_pa
 
     partition_ids = {row.pid for row in checkpointed.selectExpr("spark_partition_id() AS pid").distinct().collect()}
     assert len(partition_ids) > 1
+
+
+@pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific checkpoint partition preservation")
+@pytest.mark.parametrize("local", [True, False], ids=["local", "reliable"])
+def test_dataframe_checkpoint_preserves_empty_partition_ids(spark, tmp_path, local):
+    df = spark.range(0, 1, numPartitions=4)
+    expected = df.selectExpr("id", "spark_partition_id() AS pid").collect()
+    assert expected[0].pid != 0
+
+    if local:
+        checkpointed = df.localCheckpoint()
+    else:
+        checkpoint_path = tmp_path / "checkpoints"
+        spark.conf.set("spark.checkpoint.dir", str(checkpoint_path))
+        try:
+            checkpointed = df.checkpoint()
+        finally:
+            spark.conf.unset("spark.checkpoint.dir")
+
+    actual = checkpointed.selectExpr("id", "spark_partition_id() AS pid").collect()
+    assert actual == expected
 
 
 @pytest.mark.skipif(is_jvm_spark(), reason="Sail-specific physical plan names and stack configuration")

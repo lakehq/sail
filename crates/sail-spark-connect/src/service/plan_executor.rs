@@ -11,7 +11,7 @@ use futures::stream;
 use log::{debug, warn};
 use sail_common::spec;
 use sail_common_datafusion::cached_relation::{
-    CachedRelation, CachedRelationRegistry, cleanup_cached_relation, cleanup_checkpoint_path,
+    CachedRelation, CachedRelationRegistry, cleanup_checkpoint_path, remove_cached_relation,
 };
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_common_datafusion::session::job::JobService;
@@ -617,12 +617,7 @@ pub(crate) async fn handle_execute_remove_cached_remote_relation_command(
     let relation = command
         .relation
         .required("remove cached remote relation relation")?;
-    if let Some(relation) = ctx
-        .extension::<CachedRelationRegistry>()?
-        .remove(&relation.relation_id)?
-    {
-        cleanup_cached_relation(ctx, relation).await?;
-    }
+    remove_cached_relation(ctx, &relation.relation_id).await?;
     let output = if metadata.reattachable {
         vec![ExecutorOutput::complete()]
     } else {
