@@ -362,6 +362,9 @@ pub fn protocol_for_create(
     if enable_identity_columns {
         writer_features.push(TableFeature::IdentityColumns);
     }
+    if table_properties.append_only() {
+        writer_features.push(TableFeature::AppendOnly);
+    }
     if enable_variant {
         enable_variant_type_features_for_schema(
             &mut reader_features,
@@ -825,6 +828,53 @@ mod tests {
         assert!(protocol.has_writer_feature(&TableFeature::CheckConstraints));
         assert!(protocol.has_reader_feature(&TableFeature::VariantType));
         assert!(protocol.has_writer_feature(&TableFeature::VariantType));
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_metadata_activates_append_only_from_true_property() -> DeltaResult<()> {
+        let schema = StructType::try_new([StructField::nullable("id", DataType::INTEGER)])?;
+        let configuration = HashMap::from([("delta.appendOnly".to_string(), "true".to_string())]);
+        let metadata = Metadata::try_new(None, None, schema, vec![], 0, configuration)?;
+
+        let protocol = protocol_for_metadata(&metadata)?;
+
+        assert_eq!(protocol.min_reader_version(), 1);
+        assert_eq!(protocol.min_writer_version(), 7);
+        assert_eq!(protocol.reader_features(), None);
+        assert_eq!(
+            protocol.writer_features(),
+            Some([TableFeature::AppendOnly].as_slice())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_metadata_ignores_append_only_false_property() -> DeltaResult<()> {
+        let schema = StructType::try_new([StructField::nullable("id", DataType::INTEGER)])?;
+        let configuration = HashMap::from([("delta.appendOnly".to_string(), "false".to_string())]);
+        let metadata = Metadata::try_new(None, None, schema, vec![], 0, configuration)?;
+
+        let protocol = protocol_for_metadata(&metadata)?;
+
+        assert_eq!(protocol.min_reader_version(), 1);
+        assert_eq!(protocol.min_writer_version(), 2);
+        assert_eq!(protocol.reader_features(), None);
+        assert_eq!(protocol.writer_features(), None);
+        Ok(())
+    }
+
+    #[test]
+    fn protocol_for_metadata_does_not_activate_append_only_when_unset() -> DeltaResult<()> {
+        let schema = StructType::try_new([StructField::nullable("id", DataType::INTEGER)])?;
+        let metadata = Metadata::try_new(None, None, schema, vec![], 0, HashMap::new())?;
+
+        let protocol = protocol_for_metadata(&metadata)?;
+
+        assert_eq!(protocol.min_reader_version(), 1);
+        assert_eq!(protocol.min_writer_version(), 2);
+        assert_eq!(protocol.reader_features(), None);
+        assert_eq!(protocol.writer_features(), None);
         Ok(())
     }
 
