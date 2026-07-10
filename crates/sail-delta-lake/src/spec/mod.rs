@@ -22,7 +22,7 @@ pub use actions::{
     DomainMetadata, Remove, RemoveOptions, Sidecar, StorageType, Transaction,
 };
 pub(crate) use actions::{LogicalFileKey, logical_file_key};
-pub use checkpoint::{CheckpointActionRow, LastCheckpointHint};
+pub use checkpoint::{CheckpointActionRow, LastCheckpointHint, LastCheckpointV2};
 pub use checksum::VersionChecksum;
 pub use datafusion::arrow::datatypes::SchemaRef;
 pub use error::{CommitConflictError, DeltaError, DeltaResult, TransactionError};

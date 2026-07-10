@@ -47,8 +47,8 @@ pub(crate) use crate::delta_log::{
 };
 use crate::spec::{
     Action, Add, CheckpointActionRow, CheckpointMetadata, DeltaError as DeltaTableError,
-    DeltaResult, DomainMetadata, LastCheckpointHint, LogicalFileKey, Metadata, Protocol, Remove,
-    Sidecar, TableFeature, TableProperties, Transaction, checkpoint_path,
+    DeltaResult, DomainMetadata, LastCheckpointHint, LastCheckpointV2, LogicalFileKey, Metadata,
+    Protocol, Remove, Sidecar, TableFeature, TableProperties, Transaction, checkpoint_path,
     is_json_checkpoint_filename, last_checkpoint_path, logical_file_key, sidecar_file_path,
     uuid_checkpoint_path,
 };
@@ -680,6 +680,7 @@ impl<'a> CheckpointManager<'a> {
             checkpoint_schema: None,
             checksum: None,
             tags: None,
+            v2_checkpoint: None,
         };
         let hint_bytes = serde_json::to_vec(&hint).map_err(DeltaTableError::generic_err)?;
         store.put(&last_checkpoint_path, hint_bytes.into()).await?;
@@ -693,7 +694,6 @@ impl<'a> CheckpointManager<'a> {
         state: ReconciledCheckpointState,
         store: Arc<dyn ObjectStore>,
     ) -> DeltaResult<()> {
-        let now_millis = Utc::now().timestamp_millis();
         let checkpoint_add_count = i64::try_from(state.adds.len())
             .map_err(|_| DeltaTableError::generic("add action count overflow"))?;
         let protocol = state.protocol.ok_or_else(|| {
@@ -718,8 +718,11 @@ impl<'a> CheckpointManager<'a> {
             augment: sidecar_augment,
         };
 
+        let mut sidecar_action_count = 0_i64;
         let sidecar_descriptor = match sidecar_batches.next_batch()? {
             Some(first_batch) => {
+                sidecar_action_count = i64::try_from(first_batch.num_rows())
+                    .map_err(|_| DeltaTableError::generic("checkpoint action count overflow"))?;
                 ensure_schema_supported_for_parquet(&first_batch)?;
                 let sidecar_writer = ParquetObjectWriter::new(store.clone(), sidecar_path.clone());
                 let mut writer =
@@ -730,6 +733,13 @@ impl<'a> CheckpointManager<'a> {
                     .await
                     .map_err(DeltaTableError::generic_err)?;
                 while let Some(batch) = sidecar_batches.next_batch()? {
+                    sidecar_action_count = sidecar_action_count
+                        .checked_add(i64::try_from(batch.num_rows()).map_err(|_| {
+                            DeltaTableError::generic("checkpoint action count overflow")
+                        })?)
+                        .ok_or_else(|| {
+                            DeltaTableError::generic("checkpoint action count overflow")
+                        })?;
                     writer
                         .write(&batch)
                         .await
@@ -741,7 +751,7 @@ impl<'a> CheckpointManager<'a> {
                     path: sidecar_filename,
                     size_in_bytes: i64::try_from(sidecar_meta.size)
                         .map_err(|_| DeltaTableError::generic("sidecar size overflow"))?,
-                    modification_time: now_millis,
+                    modification_time: sidecar_meta.last_modified.timestamp_millis(),
                     tags: None,
                 })
             }
@@ -807,18 +817,41 @@ impl<'a> CheckpointManager<'a> {
             .map_err(DeltaTableError::generic_err)?;
         let _ = writer.close().await.map_err(DeltaTableError::generic_err)?;
         let file_meta = store.head(&cp_path).await?;
+        let checkpoint_size = i64::try_from(file_meta.size)
+            .map_err(|_| DeltaTableError::generic("checkpoint size overflow"))?;
+        let sidecar_size = sidecar_descriptor
+            .as_ref()
+            .map_or(0, |sidecar| sidecar.size_in_bytes);
+        let total_action_count = main_row_count
+            .checked_add(sidecar_action_count)
+            .ok_or_else(|| DeltaTableError::generic("checkpoint action count overflow"))?;
+        let total_size_in_bytes = checkpoint_size
+            .checked_add(sidecar_size)
+            .ok_or_else(|| DeltaTableError::generic("checkpoint size overflow"))?;
+        let checkpoint_name = cp_path
+            .as_ref()
+            .strip_prefix("_delta_log/")
+            .unwrap_or(cp_path.as_ref())
+            .to_string();
 
         // Step 3: Write _last_checkpoint hint pointing to the UUID-named checkpoint.
         let last_checkpoint_path = last_checkpoint_path();
         let hint = LastCheckpointHint {
             version,
-            size: Some(main_row_count),
+            size: Some(total_action_count),
             parts: None,
-            size_in_bytes: Some(file_meta.size as i64),
+            size_in_bytes: Some(total_size_in_bytes),
             num_of_add_files: Some(checkpoint_add_count),
             checkpoint_schema: None,
             checksum: None,
             tags: None,
+            v2_checkpoint: Some(LastCheckpointV2 {
+                path: checkpoint_name,
+                size_in_bytes: checkpoint_size,
+                modification_time: file_meta.last_modified.timestamp_millis(),
+                non_file_actions: None,
+                sidecar_files: None,
+            }),
         };
         let hint_bytes = serde_json::to_vec(&hint).map_err(DeltaTableError::generic_err)?;
         store.put(&last_checkpoint_path, hint_bytes.into()).await?;
@@ -1388,20 +1421,23 @@ mod tests {
     use object_store::{ObjectMeta, ObjectStore, ObjectStoreExt};
     use parquet::arrow::AsyncArrowWriter;
     use parquet::arrow::async_writer::ParquetObjectWriter;
+    use url::Url;
+    use uuid::Uuid;
 
     use super::{
-        ReconciledCheckpointState, ReconciledHeaderState, checkpoint_fields,
+        CheckpointManager, ReconciledCheckpointState, ReconciledHeaderState, checkpoint_fields,
         decode_checkpoint_rows, encode_checkpoint_rows, read_checkpoint_rows_from_checkpoint_file,
         replay_commit_header_actions,
     };
     use crate::checkpoint::action_fields::{
         AddAugmentationConfig, normalize_checkpoint_batch_for_decode,
     };
+    use crate::delta_log::{StorageConfig, default_logstore};
     use crate::spec::{
         Action, Add, CheckpointActionRow, CheckpointMetadata, CommitInfo, DataType,
         DeletionVectorDescriptor, DeltaError as DeltaTableError, DeltaResult, DomainMetadata,
         Metadata, Protocol, Remove, Sidecar, StorageType, StructField, StructType, TableFeature,
-        Transaction, sidecar_file_path,
+        Transaction, last_checkpoint_path, sidecar_file_path,
     };
 
     fn encode_rows_for_test(rows: &Vec<CheckpointActionRow>) -> DeltaResult<RecordBatch> {
@@ -2027,6 +2063,129 @@ mod tests {
         assert_eq!(state.protocol.as_ref(), Some(&protocol));
         assert_eq!(state.metadata.as_ref(), Some(&metadata));
         assert!(state.adds.values().any(|entry| entry == &add));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parquet_v2_checkpoint_writes_complete_last_checkpoint_hint() -> DeltaResult<()> {
+        let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+        let table_url = Url::parse("memory:///").map_err(DeltaTableError::generic_err)?;
+        let log_store = default_logstore(store.clone(), store.clone(), &table_url, &StorageConfig);
+        let protocol = Protocol::new(
+            3,
+            7,
+            Some(vec![TableFeature::V2Checkpoint]),
+            Some(vec![TableFeature::V2Checkpoint]),
+        );
+        let metadata = test_metadata([("delta.checkpointPolicy", "v2")])?;
+        let mut state = ReconciledCheckpointState::default();
+        state.apply_action(Action::Protocol(protocol));
+        state.apply_action(Action::Metadata(metadata));
+        state.apply_action(Action::Txn(Transaction {
+            app_id: "checkpoint-app".to_string(),
+            version: 3,
+            last_updated: None,
+        }));
+        state.apply_action(Action::DomainMetadata(DomainMetadata {
+            domain: "test.checkpoint".to_string(),
+            configuration: "{}".to_string(),
+            removed: false,
+        }));
+        for (path, size) in [("part-000.parquet", 10), ("part-001.parquet", 20)] {
+            state.apply_action(Action::Add(Add {
+                path: path.to_string(),
+                partition_values: HashMap::new(),
+                size,
+                modification_time: 1,
+                data_change: true,
+                stats: Some("{\"numRecords\":1}".to_string()),
+                tags: None,
+                deletion_vector: None,
+                base_row_id: None,
+                default_row_commit_version: None,
+                clustering_provider: None,
+                commit_version: None,
+                commit_timestamp: None,
+            }));
+        }
+        state.apply_action(Action::Remove(Remove {
+            path: "removed.parquet".to_string(),
+            data_change: true,
+            deletion_timestamp: Some(2),
+            extended_file_metadata: Some(true),
+            partition_values: Some(HashMap::new()),
+            size: Some(5),
+            stats: None,
+            tags: None,
+            deletion_vector: None,
+            base_row_id: None,
+            default_row_commit_version: None,
+        }));
+
+        CheckpointManager::new(log_store.as_ref(), Uuid::nil())
+            .write_v2_checkpoint(5, state, store.clone())
+            .await?;
+
+        let hint_bytes = store.get(&last_checkpoint_path()).await?.bytes().await?;
+        let hint: serde_json::Value = serde_json::from_slice(&hint_bytes)?;
+        let v2_checkpoint = hint
+            .get("v2Checkpoint")
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| {
+                DeltaTableError::generic("_last_checkpoint must contain v2Checkpoint metadata")
+            })?;
+        let checkpoint_name = v2_checkpoint
+            .get("path")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| DeltaTableError::generic("v2Checkpoint.path must be present"))?;
+        assert!(checkpoint_name.starts_with("00000000000000000005.checkpoint."));
+        assert!(checkpoint_name.ends_with(".parquet"));
+
+        let checkpoint_path = Path::from(format!("_delta_log/{checkpoint_name}"));
+        let checkpoint_meta = store.head(&checkpoint_path).await?;
+        let checkpoint_size = i64::try_from(checkpoint_meta.size)
+            .map_err(|_| DeltaTableError::generic("test checkpoint size overflow"))?;
+        assert_eq!(
+            v2_checkpoint
+                .get("sizeInBytes")
+                .and_then(serde_json::Value::as_i64),
+            Some(checkpoint_size)
+        );
+        assert_eq!(
+            v2_checkpoint
+                .get("modificationTime")
+                .and_then(serde_json::Value::as_i64),
+            Some(checkpoint_meta.last_modified.timestamp_millis())
+        );
+
+        let checkpoint_rows =
+            read_checkpoint_rows_from_checkpoint_file(store.clone(), checkpoint_meta.clone())
+                .await?;
+        let expected_action_count = i64::try_from(checkpoint_rows.len())
+            .map_err(|_| DeltaTableError::generic("test action count overflow"))?;
+        let mut sidecar_size = 0_i64;
+        let expected_add_count = i64::try_from(
+            checkpoint_rows
+                .iter()
+                .filter(|row| row.add.is_some())
+                .count(),
+        )
+        .map_err(|_| DeltaTableError::generic("test add count overflow"))?;
+        for sidecar in checkpoint_rows
+            .iter()
+            .filter_map(|row| row.sidecar.as_ref())
+        {
+            sidecar_size = sidecar_size
+                .checked_add(sidecar.size_in_bytes)
+                .ok_or_else(|| DeltaTableError::generic("test sidecar size overflow"))?;
+        }
+        let expected_size_in_bytes = checkpoint_size
+            .checked_add(sidecar_size)
+            .ok_or_else(|| DeltaTableError::generic("test total checkpoint size overflow"))?;
+
+        assert_eq!(hint["size"].as_i64(), Some(expected_action_count));
+        assert_eq!(hint["sizeInBytes"].as_i64(), Some(expected_size_in_bytes));
+        assert_eq!(hint["numOfAddFiles"].as_i64(), Some(expected_add_count));
         Ok(())
     }
 
