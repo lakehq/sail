@@ -4,8 +4,8 @@ use datafusion::arrow::datatypes::DataType;
 use datafusion_common::ScalarValue;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::select_expr::SelectExpr;
-use datafusion_expr::{col, lit, Expr, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUDF};
-use rand::{rng, RngExt};
+use datafusion_expr::{Expr, Extension, LogicalPlan, LogicalPlanBuilder, ScalarUDF, col, lit};
+use rand::{RngExt, rng};
 use sail_common::spec;
 use sail_common::spec::{NullOrdering, SortDirection, SortOrder};
 use sail_function::scalar::array::spark_sequence::SparkSequence;
@@ -14,8 +14,8 @@ use sail_function::scalar::math::random::Random;
 use sail_logical_plan::sort::SortWithinPartitionsNode;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 /// Copied from `arrow_ord::rank::can_rank` (private in arrow-ord).
 fn can_rank(data_type: &DataType) -> bool {

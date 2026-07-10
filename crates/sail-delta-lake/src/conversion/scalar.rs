@@ -24,15 +24,15 @@ use std::sync::Arc;
 
 use chrono::{DateTime, TimeZone, Utc};
 use datafusion::arrow::array::{
-    Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int16Array, Int32Array, Int64Array,
-    Int8Array, LargeStringArray, RecordBatch, StringArray, UInt16Array, UInt32Array, UInt64Array,
-    UInt8Array,
+    Array, ArrayRef, BooleanArray, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array,
+    Int64Array, LargeStringArray, RecordBatch, StringArray, UInt8Array, UInt16Array, UInt32Array,
+    UInt64Array,
 };
-use datafusion::arrow::compute::{cast, cast_with_options, CastOptions};
+use datafusion::arrow::compute::{CastOptions, cast, cast_with_options};
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, TimeUnit};
-use datafusion::common::scalar::ScalarValue;
 use datafusion::common::Result as DataFusionResult;
-use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
+use datafusion::common::scalar::ScalarValue;
+use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 use serde_json::Value;
 
 use crate::spec::{DeltaError as DeltaTableError, DeltaResult as DeltaResultLocal, StatValue};
@@ -54,7 +54,7 @@ impl ScalarConverter {
         field_dt: &ArrowDataType,
     ) -> DataFusionResult<Option<ArrayRef>> {
         macro_rules! typed_array {
-            ($array_ty:ty, $extract:expr) => {{
+            ($array_ty:ty, $extract:expr_2021) => {{
                 let mut out = Vec::with_capacity(values.len());
                 for value in values {
                     match value {
@@ -555,7 +555,7 @@ mod tests {
     use datafusion::common::ScalarValue;
 
     use super::{
-        parse_optional_partition_value, parse_partition_value, NULL_PARTITION_VALUE_DATA_PATH,
+        NULL_PARTITION_VALUE_DATA_PATH, parse_optional_partition_value, parse_partition_value,
     };
 
     #[test]

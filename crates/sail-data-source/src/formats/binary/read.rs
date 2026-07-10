@@ -2,13 +2,13 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::SchemaRef;
 use datafusion::catalog::Session;
-use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::Result;
+use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 
 use crate::formats::binary::source::BinarySource;
 use crate::listing::source::{ListingFileSample, ListingScanInput, ReadFormat};
-use crate::options::gen::BinaryReadOptions;
+use crate::options::r#gen::BinaryReadOptions;
 
 #[derive(Debug, Clone)]
 pub struct BinaryReadFormat {

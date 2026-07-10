@@ -2,9 +2,9 @@ use datafusion::prelude::SessionContext;
 use log::warn;
 use sail_common::spec;
 use sail_common_datafusion::rename::schema::rename_schema;
-use sail_plan::explain::{explain_string, ExplainOptions};
-use sail_plan::resolver::plan::NamedPlan;
+use sail_plan::explain::{ExplainOptions, explain_string};
 use sail_plan::resolver::PlanResolver;
+use sail_plan::resolver::plan::NamedPlan;
 
 use crate::artifact::resolve_plan_config;
 use crate::config::get_pyspark_version;
@@ -30,7 +30,7 @@ use crate::spark::connect::analyze_plan_response::{
     SemanticHash as SemanticHashResponse, SparkVersion as SparkVersionResponse,
     TreeString as TreeStringResponse, Unpersist as UnpersistResponse,
 };
-use crate::spark::connect::{plan, StorageLevel};
+use crate::spark::connect::{StorageLevel, plan};
 
 async fn analyze_schema(ctx: &SessionContext, plan: sc::Plan) -> SparkResult<sc::DataType> {
     let resolver = PlanResolver::new(ctx, resolve_plan_config(ctx)?);

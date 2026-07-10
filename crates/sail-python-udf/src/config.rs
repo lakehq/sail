@@ -11,7 +11,7 @@ use num_bigint::BigUint;
 use object_store::ObjectStoreExt;
 use pyo3::prelude::PyAnyMethods;
 use pyo3::types::PyModule;
-use pyo3::{pyclass, Python};
+use pyo3::{Python, pyclass};
 use sha2::{Digest, Sha256};
 use url::Url;
 
@@ -336,14 +336,14 @@ fn clear_python_artifacts(py: Python) -> PyUdfResult<()> {
 }
 
 fn clear_spark_files(py: Python) {
-    if let Ok(module) = PyModule::import(py, "pyspark.core.files") {
-        if let Ok(spark_files) = module.getattr("SparkFiles") {
-            if let Err(error) = spark_files.setattr("_root_directory", Option::<String>::None) {
-                log::debug!("failed to clear SparkFiles root directory: {error}");
-            }
-            if let Err(error) = spark_files.setattr("_is_running_on_worker", false) {
-                log::debug!("failed to clear SparkFiles worker state: {error}");
-            }
+    if let Ok(module) = PyModule::import(py, "pyspark.core.files")
+        && let Ok(spark_files) = module.getattr("SparkFiles")
+    {
+        if let Err(error) = spark_files.setattr("_root_directory", Option::<String>::None) {
+            log::debug!("failed to clear SparkFiles root directory: {error}");
+        }
+        if let Err(error) = spark_files.setattr("_is_running_on_worker", false) {
+            log::debug!("failed to clear SparkFiles worker state: {error}");
         }
     }
 }

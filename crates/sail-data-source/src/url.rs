@@ -6,7 +6,7 @@ use chumsky::text::whitespace;
 use chumsky::{IterParser, Parser};
 use datafusion::catalog::Session;
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion_common::{not_impl_err, plan_datafusion_err, plan_err, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result, not_impl_err, plan_datafusion_err, plan_err};
 use glob::Pattern;
 use log::debug;
 use object_store::ObjectStoreExt;

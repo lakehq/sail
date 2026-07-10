@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use url::Url;
 
 use crate::error::{SparkError, SparkResult};
-use crate::proto::data_type::{parse_spark_data_type, DEFAULT_FIELD_NAME};
+use crate::proto::data_type::{DEFAULT_FIELD_NAME, parse_spark_data_type};
 use crate::session::SparkSession;
 use crate::spark::connect::LocalRelation;
 
@@ -39,13 +39,13 @@ impl Drop for SparkArtifactRegistry {
             Ok(state) => state,
             Err(error) => error.into_inner(),
         };
-        if let Some(dir) = state.artifact_dir.take() {
-            if let Err(error) = std::fs::remove_dir_all(&dir) {
-                log::warn!(
-                    "Failed to remove Spark session artifact directory {}: {error}",
-                    dir.display()
-                );
-            }
+        if let Some(dir) = state.artifact_dir.take()
+            && let Err(error) = std::fs::remove_dir_all(&dir)
+        {
+            log::warn!(
+                "Failed to remove Spark session artifact directory {}: {error}",
+                dir.display()
+            );
         }
         let artifact_uris = state
             .artifacts

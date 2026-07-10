@@ -1,3 +1,5 @@
+# ruff: noqa: EM101, EM102, TRY003
+
 import os
 import stat
 import tarfile

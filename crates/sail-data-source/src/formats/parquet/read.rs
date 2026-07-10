@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use datafusion::arrow::datatypes::{Fields, Schema, SchemaRef, TimeUnit};
 use datafusion::catalog::Session;
-use datafusion::datasource::physical_plan::parquet::metadata::{
-    ordering_from_parquet_metadata, DFParquetMetadata,
-};
-use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
 use datafusion::datasource::physical_plan::ParquetSource;
+use datafusion::datasource::physical_plan::parquet::CachedParquetFileReaderFactory;
+use datafusion::datasource::physical_plan::parquet::metadata::{
+    DFParquetMetadata, ordering_from_parquet_metadata,
+};
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::parsers::CompressionTypeVariant;
 use datafusion_common::{DataFusionError, Result};
@@ -16,7 +16,7 @@ use object_store::{ObjectMeta, ObjectStore};
 use sail_common_datafusion::schema_evolution::SchemaEvolutionPhysicalExprAdapterFactory;
 
 use crate::listing::source::{ListingFileMeta, ListingFileSample, ListingScanInput, ReadFormat};
-use crate::options::gen::ParquetReadOptions;
+use crate::options::r#gen::ParquetReadOptions;
 
 #[derive(Debug, Clone)]
 pub struct ParquetReadFormat {

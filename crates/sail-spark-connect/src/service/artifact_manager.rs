@@ -9,12 +9,12 @@ use object_store::{ObjectStoreExt, ObjectStoreScheme, PutPayload};
 use sail_common_datafusion::extension::SessionExtensionAccessor;
 use sail_python_udf::config::{PySparkArtifactKind, PySparkPythonArtifact};
 use sha2::{Digest, Sha256};
-use tonic::codegen::tokio_stream::Stream;
 use tonic::Status;
+use tonic::codegen::tokio_stream::Stream;
 use url::Url;
 use uuid::Uuid;
 
-use crate::artifact::{cleanup_artifact_uris, SparkArtifactRegistry};
+use crate::artifact::{SparkArtifactRegistry, cleanup_artifact_uris};
 use crate::error::{ProtoFieldExt, SparkError, SparkResult};
 use crate::session::SparkSession;
 use crate::spark::config::SPARK_SQL_ARTIFACT_COPY_FROM_LOCAL_TO_FS_ALLOW_DEST_LOCAL;
@@ -240,10 +240,10 @@ impl PendingArtifactUpdate {
 
 impl PendingArtifactUpdates {
     fn push(&mut self, update: Option<PendingArtifactUpdate>) {
-        if let Some(update) = update {
-            if !update.is_empty() {
-                self.updates.push(update);
-            }
+        if let Some(update) = update
+            && !update.is_empty()
+        {
+            self.updates.push(update);
         }
     }
 
@@ -516,8 +516,7 @@ async fn artifact_transport(
     let Some(base_uri) = &options.store_uri else {
         return Err(SparkError::invalid(format!(
             "artifact {name} is {} bytes, exceeding spark.artifact_inline_max_bytes={}, and spark.artifact_store_uri is not configured",
-            size,
-            options.inline_max_bytes
+            size, options.inline_max_bytes
         )));
     };
     let uri = artifact_object_uri(base_uri, artifacts.session_id(), sha256)?;
@@ -811,13 +810,13 @@ impl ChunkedArtifact {
 
 impl Drop for ChunkedArtifact {
     fn drop(&mut self) {
-        if let Some(path) = &self.path {
-            if let Err(error) = std::fs::remove_file(path) {
-                log::debug!(
-                    "failed to remove staging artifact file {}: {error}",
-                    path.display()
-                );
-            }
+        if let Some(path) = &self.path
+            && let Err(error) = std::fs::remove_file(path)
+        {
+            log::debug!(
+                "failed to remove staging artifact file {}: {error}",
+                path.display()
+            );
         }
     }
 }
@@ -867,12 +866,12 @@ async fn add_artifact_summary(
     let mut pending_update = None;
     if is_crc_successful {
         let normalized_name = normalize_artifact_name(&name)?;
-        if let Some(cache_hash) = cache_artifact_hash(&normalized_name)? {
-            if cache_hash != sha256 {
-                return Err(SparkError::invalid(format!(
-                    "cache artifact {normalized_name} content hash does not match its name"
-                )));
-            }
+        if let Some(cache_hash) = cache_artifact_hash(&normalized_name)?
+            && cache_hash != sha256
+        {
+            return Err(SparkError::invalid(format!(
+                "cache artifact {normalized_name} content hash does not match its name"
+            )));
         }
         let stored = store_artifact(&name, payload, artifact_dir, allow_local_fs_destination)?;
         let mut update = PendingArtifactUpdate {
@@ -906,13 +905,13 @@ async fn add_artifact_summary(
             {
                 Ok(result) => result,
                 Err(error) => {
-                    if let Some(path) = &stored.created_target_path {
-                        if let Err(remove_error) = std::fs::remove_file(path) {
-                            log::debug!(
-                                "failed to remove uncommitted artifact file {}: {remove_error}",
-                                path.display()
-                            );
-                        }
+                    if let Some(path) = &stored.created_target_path
+                        && let Err(remove_error) = std::fs::remove_file(path)
+                    {
+                        log::debug!(
+                            "failed to remove uncommitted artifact file {}: {remove_error}",
+                            path.display()
+                        );
                     }
                     return Err(error);
                 }
@@ -1064,19 +1063,17 @@ pub(crate) async fn handle_add_artifacts(
                         "received artifact chunk without an active chunked artifact",
                     ));
                 };
-                if is_complete {
-                    if let Some(chunked) = current_chunked.take() {
-                        pending_updates.push(
-                            finalize_chunked_artifact(
-                                chunked,
-                                &artifact_dir,
-                                &artifacts,
-                                allow_local_fs_destination,
-                                &mut summaries,
-                            )
-                            .await?,
-                        );
-                    }
+                if is_complete && let Some(chunked) = current_chunked.take() {
+                    pending_updates.push(
+                        finalize_chunked_artifact(
+                            chunked,
+                            &artifact_dir,
+                            &artifacts,
+                            allow_local_fs_destination,
+                            &mut summaries,
+                        )
+                        .await?,
+                    );
                 }
             }
         }

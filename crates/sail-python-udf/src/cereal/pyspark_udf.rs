@@ -2,12 +2,12 @@ use datafusion::arrow::datatypes::DataType;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::PyAnyMethods;
 use pyo3::types::PyModule;
-use pyo3::{intern, Bound, IntoPyObject, PyAny, Python};
+use pyo3::{Bound, IntoPyObject, PyAny, Python, intern};
 use sail_common::spec;
 
 use crate::cereal::{
-    build_input_types_json, check_python_udf_version, get_pyspark_version, should_write_config,
-    supports_kwargs, write_kwarg, PySparkVersion,
+    PySparkVersion, build_input_types_json, check_python_udf_version, get_pyspark_version,
+    should_write_config, supports_kwargs, write_kwarg,
 };
 use crate::config::PySparkUdfConfig;
 use crate::error::{PyUdfError, PyUdfResult};

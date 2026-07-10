@@ -2,21 +2,21 @@ use sail_python_udf::config::{PySparkArtifactKind, PySparkPythonArtifact};
 
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::task::definition::{LocalRelationResource, TaskLaunchContext, TaskResources};
-use crate::worker::gen;
+use crate::worker::r#gen;
 
-impl From<TaskLaunchContext> for gen::TaskLaunchContext {
+impl From<TaskLaunchContext> for r#gen::TaskLaunchContext {
     fn from(value: TaskLaunchContext) -> Self {
         let TaskLaunchContext { resources } = value;
-        gen::TaskLaunchContext {
+        r#gen::TaskLaunchContext {
             resources: Some(resources.into()),
         }
     }
 }
 
-impl TryFrom<gen::TaskLaunchContext> for TaskLaunchContext {
+impl TryFrom<r#gen::TaskLaunchContext> for TaskLaunchContext {
     type Error = ExecutionError;
 
-    fn try_from(value: gen::TaskLaunchContext) -> Result<Self, Self::Error> {
+    fn try_from(value: r#gen::TaskLaunchContext) -> Result<Self, Self::Error> {
         Ok(TaskLaunchContext {
             resources: value
                 .resources
@@ -27,13 +27,13 @@ impl TryFrom<gen::TaskLaunchContext> for TaskLaunchContext {
     }
 }
 
-impl From<TaskResources> for gen::TaskResources {
+impl From<TaskResources> for r#gen::TaskResources {
     fn from(value: TaskResources) -> Self {
         let TaskResources {
             python_artifacts,
             local_relation_resources,
         } = value;
-        gen::TaskResources {
+        r#gen::TaskResources {
             python_artifacts: python_artifacts.into_iter().map(|x| x.into()).collect(),
             local_relation_resources: local_relation_resources
                 .into_iter()
@@ -43,10 +43,10 @@ impl From<TaskResources> for gen::TaskResources {
     }
 }
 
-impl TryFrom<gen::TaskResources> for TaskResources {
+impl TryFrom<r#gen::TaskResources> for TaskResources {
     type Error = ExecutionError;
 
-    fn try_from(value: gen::TaskResources) -> Result<Self, Self::Error> {
+    fn try_from(value: r#gen::TaskResources) -> Result<Self, Self::Error> {
         Ok(TaskResources {
             python_artifacts: value
                 .python_artifacts
@@ -62,7 +62,7 @@ impl TryFrom<gen::TaskResources> for TaskResources {
     }
 }
 
-impl From<LocalRelationResource> for gen::LocalRelationResource {
+impl From<LocalRelationResource> for r#gen::LocalRelationResource {
     fn from(value: LocalRelationResource) -> Self {
         let LocalRelationResource {
             key,
@@ -71,7 +71,7 @@ impl From<LocalRelationResource> for gen::LocalRelationResource {
             sha256,
             size,
         } = value;
-        gen::LocalRelationResource {
+        r#gen::LocalRelationResource {
             key,
             data,
             uri,
@@ -81,10 +81,10 @@ impl From<LocalRelationResource> for gen::LocalRelationResource {
     }
 }
 
-impl TryFrom<gen::LocalRelationResource> for LocalRelationResource {
+impl TryFrom<r#gen::LocalRelationResource> for LocalRelationResource {
     type Error = ExecutionError;
 
-    fn try_from(value: gen::LocalRelationResource) -> Result<Self, Self::Error> {
+    fn try_from(value: r#gen::LocalRelationResource) -> Result<Self, Self::Error> {
         validate_local_relation_resource(&value)?;
         Ok(Self {
             key: value.key,
@@ -96,7 +96,7 @@ impl TryFrom<gen::LocalRelationResource> for LocalRelationResource {
     }
 }
 
-impl From<PySparkPythonArtifact> for gen::PySparkPythonArtifact {
+impl From<PySparkPythonArtifact> for r#gen::PySparkPythonArtifact {
     fn from(value: PySparkPythonArtifact) -> Self {
         let PySparkPythonArtifact {
             name,
@@ -107,7 +107,7 @@ impl From<PySparkPythonArtifact> for gen::PySparkPythonArtifact {
             size,
             kind,
         } = value;
-        gen::PySparkPythonArtifact {
+        r#gen::PySparkPythonArtifact {
             name,
             python_path,
             data,
@@ -119,10 +119,10 @@ impl From<PySparkPythonArtifact> for gen::PySparkPythonArtifact {
     }
 }
 
-impl TryFrom<gen::PySparkPythonArtifact> for PySparkPythonArtifact {
+impl TryFrom<r#gen::PySparkPythonArtifact> for PySparkPythonArtifact {
     type Error = ExecutionError;
 
-    fn try_from(value: gen::PySparkPythonArtifact) -> Result<Self, Self::Error> {
+    fn try_from(value: r#gen::PySparkPythonArtifact) -> Result<Self, Self::Error> {
         let kind = decode_pyspark_artifact_kind(value.kind)?;
         validate_pyspark_artifact(&value)?;
         Ok(Self {
@@ -137,7 +137,7 @@ impl TryFrom<gen::PySparkPythonArtifact> for PySparkPythonArtifact {
     }
 }
 
-fn validate_pyspark_artifact(value: &gen::PySparkPythonArtifact) -> ExecutionResult<()> {
+fn validate_pyspark_artifact(value: &r#gen::PySparkPythonArtifact) -> ExecutionResult<()> {
     if value.name.is_empty() {
         return Err(ExecutionError::InvalidArgument(
             "PySpark artifact name must not be empty".to_string(),
@@ -178,7 +178,7 @@ fn validate_pyspark_artifact(value: &gen::PySparkPythonArtifact) -> ExecutionRes
     }
 }
 
-fn validate_local_relation_resource(value: &gen::LocalRelationResource) -> ExecutionResult<()> {
+fn validate_local_relation_resource(value: &r#gen::LocalRelationResource) -> ExecutionResult<()> {
     if value.key.is_empty() {
         return Err(ExecutionError::InvalidArgument(
             "LocalRelation resource key must not be empty".to_string(),
@@ -220,23 +220,23 @@ fn validate_local_relation_resource(value: &gen::LocalRelationResource) -> Execu
 }
 
 fn decode_pyspark_artifact_kind(kind: i32) -> ExecutionResult<PySparkArtifactKind> {
-    let kind = gen::PySparkArtifactKind::try_from(kind).map_err(|e| {
+    let kind = r#gen::PySparkArtifactKind::try_from(kind).map_err(|e| {
         ExecutionError::InvalidArgument(format!("invalid PySpark artifact kind: {e}"))
     })?;
     match kind {
-        gen::PySparkArtifactKind::Unspecified => Err(ExecutionError::InvalidArgument(
+        r#gen::PySparkArtifactKind::Unspecified => Err(ExecutionError::InvalidArgument(
             "PySpark artifact kind must not be unspecified".to_string(),
         )),
-        gen::PySparkArtifactKind::PyFile => Ok(PySparkArtifactKind::PyFile),
-        gen::PySparkArtifactKind::File => Ok(PySparkArtifactKind::File),
-        gen::PySparkArtifactKind::Archive => Ok(PySparkArtifactKind::Archive),
+        r#gen::PySparkArtifactKind::PyFile => Ok(PySparkArtifactKind::PyFile),
+        r#gen::PySparkArtifactKind::File => Ok(PySparkArtifactKind::File),
+        r#gen::PySparkArtifactKind::Archive => Ok(PySparkArtifactKind::Archive),
     }
 }
 
-fn encode_pyspark_artifact_kind(kind: PySparkArtifactKind) -> gen::PySparkArtifactKind {
+fn encode_pyspark_artifact_kind(kind: PySparkArtifactKind) -> r#gen::PySparkArtifactKind {
     match kind {
-        PySparkArtifactKind::PyFile => gen::PySparkArtifactKind::PyFile,
-        PySparkArtifactKind::File => gen::PySparkArtifactKind::File,
-        PySparkArtifactKind::Archive => gen::PySparkArtifactKind::Archive,
+        PySparkArtifactKind::PyFile => r#gen::PySparkArtifactKind::PyFile,
+        PySparkArtifactKind::File => r#gen::PySparkArtifactKind::File,
+        PySparkArtifactKind::Archive => r#gen::PySparkArtifactKind::Archive,
     }
 }

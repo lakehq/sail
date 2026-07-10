@@ -56,12 +56,13 @@ impl SparkRuntimeConfig {
     }
 
     fn validate_removed_key(key: &str, value: &str) -> SparkResult<()> {
-        if let Some(entry) = SPARK_CONFIG.get(key) {
-            if entry.removed.is_some() && entry.default_value != Some(value) {
-                return Err(SparkError::invalid(format!(
-                    "configuration has been removed: {key}"
-                )));
-            }
+        if let Some(entry) = SPARK_CONFIG.get(key)
+            && entry.removed.is_some()
+            && entry.default_value != Some(value)
+        {
+            return Err(SparkError::invalid(format!(
+                "configuration has been removed: {key}"
+            )));
         }
         Ok(())
     }
@@ -232,7 +233,7 @@ fn parse_bytes_config(key: &str, value: &str) -> SparkResult<usize> {
         _ => {
             return Err(SparkError::invalid(format!(
                 "invalid byte unit for {key}: {value}"
-            )))
+            )));
         }
     };
     let bytes = number.checked_mul(multiplier).ok_or_else(|| {
@@ -243,9 +244,9 @@ fn parse_bytes_config(key: &str, value: &str) -> SparkResult<usize> {
 }
 
 pub(crate) fn get_pyspark_version() -> SparkResult<String> {
+    use pyo3::Python;
     use pyo3::prelude::PyAnyMethods;
     use pyo3::types::PyModule;
-    use pyo3::Python;
 
     Python::attach(|py| {
         let module = PyModule::import(py, "pyspark")?;

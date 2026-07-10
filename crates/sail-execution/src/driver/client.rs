@@ -1,9 +1,9 @@
 use sail_common_datafusion::error::CommonErrorCause;
 
 use crate::driver::event::TaskStatus;
-use crate::driver::gen;
-use crate::driver::gen::driver_service_client::DriverServiceClient;
-use crate::driver::gen::{
+use crate::driver::r#gen;
+use crate::driver::r#gen::driver_service_client::DriverServiceClient;
+use crate::driver::r#gen::{
     RegisterWorkerRequest, RegisterWorkerResponse, ReportTaskStatusRequest,
     ReportTaskStatusResponse,
 };
@@ -56,7 +56,7 @@ impl DriverClient {
     }
 
     pub async fn report_worker_heartbeat(&self, worker_id: WorkerId) -> ExecutionResult<()> {
-        let request = tonic::Request::new(gen::ReportWorkerHeartbeatRequest {
+        let request = tonic::Request::new(r#gen::ReportWorkerHeartbeatRequest {
             worker_id: worker_id.into(),
         });
         let response = self
@@ -65,7 +65,7 @@ impl DriverClient {
             .await?
             .report_worker_heartbeat(request)
             .await?;
-        let gen::ReportWorkerHeartbeatResponse {} = response.into_inner();
+        let r#gen::ReportWorkerHeartbeatResponse {} = response.into_inner();
         Ok(())
     }
 
@@ -74,7 +74,7 @@ impl DriverClient {
         worker_id: WorkerId,
         peer_worker_ids: Vec<WorkerId>,
     ) -> ExecutionResult<()> {
-        let request = tonic::Request::new(gen::ReportWorkerKnownPeersRequest {
+        let request = tonic::Request::new(r#gen::ReportWorkerKnownPeersRequest {
             worker_id: worker_id.into(),
             peer_worker_ids: peer_worker_ids.into_iter().map(|id| id.into()).collect(),
         });
@@ -84,7 +84,7 @@ impl DriverClient {
             .await?
             .report_worker_known_peers(request)
             .await?;
-        let gen::ReportWorkerKnownPeersResponse {} = response.into_inner();
+        let r#gen::ReportWorkerKnownPeersResponse {} = response.into_inner();
         Ok(())
     }
 
@@ -108,7 +108,7 @@ impl DriverClient {
             stage: key.stage as u64,
             partition: key.partition as u64,
             attempt: key.attempt as u64,
-            status: gen::TaskStatus::from(status) as i32,
+            status: r#gen::TaskStatus::from(status) as i32,
             message,
             cause,
             sequence,

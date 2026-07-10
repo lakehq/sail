@@ -5,7 +5,6 @@ from pandas.testing import assert_frame_equal
 from pyspark.sql.types import Row
 from pyspark.sql.window import Window
 
-from pysail.testing.spark.session import spark_connect_server
 from pysail.testing.spark.utils.common import is_jvm_spark
 
 pytestmark = pytest.mark.skipif(is_jvm_spark(), reason="Sail local-cluster mode only")
@@ -16,13 +15,6 @@ def _partition_count(df):
         yield pd.DataFrame({"n": [1]})
 
     return df.mapInPandas(counter, schema="n: long").count()
-
-
-@pytest.fixture(scope="module")
-def remote():
-    """Override the global remote fixture to use local-cluster mode for this module."""
-    with spark_connect_server(envs={"SAIL_MODE": "local-cluster"}) as server:
-        yield server.remote
 
 
 @pytest.fixture(scope="module")
@@ -230,6 +222,16 @@ def test_repartitioning_in_cluster_mode(large_dataset):
     coalesced_sum = coalesced.agg(F.sum("value")).collect()[0][0]
     assert coalesced_count == 1000  # noqa: PLR2004
     assert coalesced_sum == original_sum
+
+
+def test_parquet_directory_scan_reads_each_file_once_in_cluster_mode(spark, tmp_path):
+    path = tmp_path / "parquet_files"
+    path.mkdir()
+    pd.DataFrame({"id": [1]}).to_parquet(path / "part-0.parquet")
+    pd.DataFrame({"id": [2]}).to_parquet(path / "part-1.parquet")
+
+    rows = spark.read.parquet(str(path)).orderBy("id").collect()
+    assert rows == [Row(id=1), Row(id=2)]
 
 
 def test_coalesce_plan_contains_dedicated_exec_in_cluster_mode(spark):

@@ -5,17 +5,17 @@ use async_trait::async_trait;
 use chrono::Utc;
 use datafusion::arrow::datatypes::{DataType as ArrowDataType, Field, Schema, SchemaRef};
 use datafusion::catalog::Session;
-use datafusion::common::{not_impl_err, plan_err, DFSchema, DataFusionError, Result};
+use datafusion::common::{DFSchema, DataFusionError, Result, not_impl_err, plan_err};
 use datafusion::datasource::listing::ListingTableUrl;
-use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::SessionState;
+use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::logical_expr::{LogicalPlan, TableSource};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, Extension, UserDefinedLogicalNodeCore};
 use educe::Educe;
 use sail_common_datafusion::catalog::delta::{
-    unity_table_id_value, DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY,
+    DELTA_UNITY_TABLE_ID_KEY, DELTA_UNITY_TABLE_ID_LEGACY_KEY, unity_table_id_value,
 };
 use sail_common_datafusion::catalog::{
     CatalogPartitionField, CatalogTableColumnIdentity, CommitAuthority, LakehouseExecutionContext,
@@ -25,10 +25,10 @@ use sail_common_datafusion::column_features::{
     ColumnFeatureKey, ColumnFeatures, SAIL_WRITE_TARGET_NULLABLE_METADATA_KEY,
 };
 use sail_common_datafusion::datasource::{
-    create_sort_order, find_path_in_options, BucketBy, DeleteInfo, MergeInfo, OptionLayer,
-    PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo, TableFormat, TableFormatAlterTableOperation,
+    BucketBy, CATALOG_TABLE_OPTION, DeleteInfo, MergeInfo, OptionLayer, PhysicalSinkMode, SinkInfo,
+    SinkMode, SourceInfo, TableFormat, TableFormatAlterTableOperation,
     TableFormatCreateTableColumn, TableFormatCreateTableInfo, TableFormatCreateTableResult,
-    TableFormatMetadata, TableFormatRegistry, CATALOG_TABLE_OPTION,
+    TableFormatMetadata, TableFormatRegistry, create_sort_order, find_path_in_options,
 };
 use sail_common_datafusion::streaming::event::schema::is_flow_event_schema;
 use sail_common_datafusion::utils::items::ItemTaker;
@@ -41,7 +41,7 @@ use url::Url;
 use crate::catalog_managed::{metadata_with_catalog_managed, protocol_with_catalog_managed};
 use crate::datasource::actions::adds_to_remove_actions;
 use crate::delta_log::StorageConfig;
-use crate::options::gen::{DeltaReadOptions, DeltaWriteOptions};
+use crate::options::r#gen::{DeltaReadOptions, DeltaWriteOptions};
 use crate::physical_plan::planner::{DeltaPhysicalPlanner, DeltaPlannerConfig, PlannerContext};
 use crate::schema::type_widening::alter_column_type as alter_delta_column_type;
 use crate::schema::{
@@ -54,19 +54,18 @@ use crate::schema::{
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
+    ColumnMappingMode, ColumnMetadataKey, CommitAction, DataType as DeltaDataType, DeltaOperation,
+    MetadataValue, Protocol, SaveMode, StructField, StructType, TableFeature, TableProperties,
     canonicalize_and_validate_table_properties, contains_timestampntz_arrow,
-    contains_variant_arrow, route_table_property_key, ColumnMappingMode, ColumnMetadataKey,
-    CommitAction, DataType as DeltaDataType, DeltaOperation, MetadataValue, Protocol, SaveMode,
-    StructField, StructType, TableFeature, TableProperties,
+    contains_variant_arrow, route_table_property_key,
 };
 use crate::table::{
-    create_delta_table_with_object_store, create_logstore_with_object_store,
-    infer_delta_logical_metadata, infer_delta_logical_schema,
+    DeltaTable, catalog_managed_commit_context, create_delta_table_with_object_store,
+    create_logstore_with_object_store, infer_delta_logical_metadata, infer_delta_logical_schema,
     load_catalog_managed_commits_for_snapshot, open_table_with_object_store_and_table_config,
-    DeltaTable,
 };
 use crate::transaction::CommitBuilder;
-use crate::{create_delta_source, DeltaTableError};
+use crate::{DeltaTableError, create_delta_source};
 
 /// Delta Lake implementation of [`TableFormat`].
 #[derive(Debug)]
@@ -647,13 +646,14 @@ pub(crate) async fn plan_delta_write(
         .object_store_registry
         .get_store(&table_url)
         .map_err(|e| DataFusionError::External(Box::new(e)))?;
-    let lakehouse_planning_context = lakehouse_table.as_ref().filter(|context| {
-        context.table_identity.table_id.is_some()
-            && !matches!(
-                context.operation,
-                LakehouseOperation::Create | LakehouseOperation::Register
-            )
-    });
+    let lakehouse_planning_context = catalog_managed_commit_context(lakehouse_table.as_ref())
+        .filter(|context| {
+            context.table_identity.table_id.is_some()
+                && !matches!(
+                    context.operation,
+                    LakehouseOperation::Create | LakehouseOperation::Register
+                )
+        });
     let table = match open_delta_write_planning_table(
         ctx,
         table_url.clone(),
@@ -701,35 +701,36 @@ pub(crate) async fn plan_delta_write(
         .as_ref()
         .map(|snapshot| snapshot.metadata().partition_columns().clone());
 
-    if let Some(existing_partitions) = &existing_partition_columns {
-        if !partition_by.is_empty() && partition_by != *existing_partitions {
-            match mode {
-                PhysicalSinkMode::Append => {
-                    return plan_err!(
-                        "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
+    if let Some(existing_partitions) = &existing_partition_columns
+        && !partition_by.is_empty()
+        && partition_by != *existing_partitions
+    {
+        match mode {
+            PhysicalSinkMode::Append => {
+                return plan_err!(
+                    "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
                         Cannot change partitioning on append.",
-                        existing_partitions,
-                        partition_by
-                    );
-                }
-                PhysicalSinkMode::OverwriteIf { .. } => {
-                    return plan_err!(
-                        "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
-                        Cannot change partitioning with replaceWhere or conditional overwrite.",
-                        existing_partitions,
-                        partition_by
-                    );
-                }
-                PhysicalSinkMode::Overwrite if !delta_options.overwrite_schema => {
-                    return plan_err!(
-                        "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
-                        Set overwriteSchema=true to change partitioning.",
-                        existing_partitions,
-                        partition_by
-                    );
-                }
-                _ => {}
+                    existing_partitions,
+                    partition_by
+                );
             }
+            PhysicalSinkMode::OverwriteIf { .. } => {
+                return plan_err!(
+                    "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
+                        Cannot change partitioning with replaceWhere or conditional overwrite.",
+                    existing_partitions,
+                    partition_by
+                );
+            }
+            PhysicalSinkMode::Overwrite if !delta_options.overwrite_schema => {
+                return plan_err!(
+                    "Partition column mismatch. Table is partitioned by {:?}, but write specified {:?}. \
+                        Set overwriteSchema=true to change partitioning.",
+                    existing_partitions,
+                    partition_by
+                );
+            }
+            _ => {}
         }
     }
 
@@ -782,7 +783,7 @@ async fn open_delta_write_planning_table(
         ..Default::default()
     };
 
-    if let Some(lakehouse_table) = lakehouse_table {
+    if let Some(lakehouse_table) = catalog_managed_commit_context(lakehouse_table) {
         let log_store = create_logstore_with_object_store(
             Arc::clone(&object_store),
             table_url.clone(),

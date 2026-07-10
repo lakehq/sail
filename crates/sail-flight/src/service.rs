@@ -11,7 +11,7 @@ use arrow_flight::{
 use datafusion::execution::SendableRecordBatchStream;
 use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::prelude::SessionContext;
-use futures::{stream, Stream, StreamExt};
+use futures::{Stream, StreamExt, stream};
 use log::{debug, info};
 use prost::Message;
 use sail_common::spec;
@@ -92,7 +92,7 @@ impl FlightSqlService for SailFlightSqlService {
         query: CommandStatementQuery,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
-        debug!("get_flight_info_statement: {}", &query.query);
+        debug!("get_flight_info_statement: {}", query.query);
 
         let statement = parse_one_statement(&query.query)
             .map_err(|e| Status::invalid_argument(format!("parse error: {e}")))?;

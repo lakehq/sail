@@ -6,15 +6,32 @@ use arrow::datatypes::DataType;
 use sail_catalog::provider::{CatalogProvider, DropDatabaseOptions, DropTableOptions, Namespace};
 
 use crate::common::{
-    col, setup_kerberos_hms_catalog, setup_kerberos_hms_catalog_without_kinit,
+    KerberosHmsTestContext, col, is_kerberos_hms_subprocess,
+    run_kerberos_hms_catalog_test_in_subprocess, setup_kerberos_hms_catalog_from_subprocess_env,
     simple_database_options, simple_table_options,
 };
 
 #[tokio::test]
 #[ignore = "requires the Kerberos HMS testcontainers harness"]
 async fn test_kerberos_hms_database_and_table_round_trip() {
-    let context =
-        setup_kerberos_hms_catalog("test_kerberos_hms_database_and_table_round_trip").await;
+    run_kerberos_hms_catalog_test_in_subprocess(
+        "test_kerberos_hms_database_and_table_round_trip",
+        "kerberos_hms_database_and_table_round_trip_subprocess",
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "subprocess helper for the Kerberos HMS testcontainers harness"]
+async fn kerberos_hms_database_and_table_round_trip_subprocess() {
+    if !is_kerberos_hms_subprocess() {
+        return;
+    }
+    let context = setup_kerberos_hms_catalog_from_subprocess_env(true).await;
+    kerberos_hms_database_and_table_round_trip(context).await;
+}
+
+async fn kerberos_hms_database_and_table_round_trip(context: KerberosHmsTestContext) {
     let catalog = &context.catalog;
     let db_name = "kerberos_hms_db".to_string();
     let namespace = Namespace::try_from(vec![db_name.clone()]).unwrap();
@@ -69,9 +86,20 @@ async fn test_kerberos_hms_database_and_table_round_trip() {
 #[tokio::test]
 #[ignore = "requires the Kerberos HMS testcontainers harness"]
 async fn test_kerberos_hms_rejects_missing_credentials() {
-    let context =
-        setup_kerberos_hms_catalog_without_kinit("test_kerberos_hms_rejects_missing_credentials")
-            .await;
+    run_kerberos_hms_catalog_test_in_subprocess(
+        "test_kerberos_hms_rejects_missing_credentials",
+        "kerberos_hms_rejects_missing_credentials_subprocess",
+    )
+    .await;
+}
+
+#[tokio::test]
+#[ignore = "subprocess helper for the Kerberos HMS testcontainers harness"]
+async fn kerberos_hms_rejects_missing_credentials_subprocess() {
+    if !is_kerberos_hms_subprocess() {
+        return;
+    }
+    let context = setup_kerberos_hms_catalog_from_subprocess_env(false).await;
     let error = context.catalog.list_databases(None).await.unwrap_err();
 
     let message = error.to_string().to_ascii_lowercase();

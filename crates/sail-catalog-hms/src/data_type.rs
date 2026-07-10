@@ -3,7 +3,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Fields, TimeUnit};
 use sail_catalog::error::{CatalogError, CatalogResult};
 use sail_common_datafusion::column_features::ColumnFeatureKey;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub fn arrow_to_hive_type(data_type: &DataType) -> CatalogResult<String> {
     match data_type {
@@ -74,14 +74,14 @@ pub fn arrow_to_hive_type(data_type: &DataType) -> CatalogResult<String> {
             Ok(format!("struct<{}>", fields?.join(",")))
         }
         DataType::Map(field, _) => {
-            if let DataType::Struct(fields) = field.data_type() {
-                if fields.len() == 2 {
-                    return Ok(format!(
-                        "map<{},{}>",
-                        arrow_to_hive_type(fields[0].data_type())?,
-                        arrow_to_hive_type(fields[1].data_type())?
-                    ));
-                }
+            if let DataType::Struct(fields) = field.data_type()
+                && fields.len() == 2
+            {
+                return Ok(format!(
+                    "map<{},{}>",
+                    arrow_to_hive_type(fields[0].data_type())?,
+                    arrow_to_hive_type(fields[1].data_type())?
+                ));
             }
             Err(CatalogError::InvalidArgument(
                 "Map type must have key and value fields".to_string(),
@@ -746,9 +746,11 @@ mod tests {
     fn test_spark_struct_json_rejects_malformed_json() {
         let error =
             super::spark_struct_json_to_fields("{\"type\":\"struct\",\"fields\":[").unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("Failed to parse Spark schema JSON"));
+        assert!(
+            error
+                .to_string()
+                .contains("Failed to parse Spark schema JSON")
+        );
     }
 
     #[test]

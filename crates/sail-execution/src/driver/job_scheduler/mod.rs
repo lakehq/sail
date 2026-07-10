@@ -13,7 +13,7 @@ pub use state::TaskState;
 use crate::driver::job_scheduler::state::JobDescriptor;
 use crate::driver::output::JobOutputHandle;
 use crate::id::{IdGenerator, JobId, TaskKey, TaskStreamKey};
-use crate::proto::codec::{RemoteExecutionCodec, RemoteExecutionCodecConfig};
+use crate::proto::{RemoteExecutionCodec, RemoteExecutionCodecConfig};
 use crate::task::scheduling::TaskRegion;
 
 pub struct JobScheduler {

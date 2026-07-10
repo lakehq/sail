@@ -36,13 +36,13 @@ use crate::checkpoint::{
 };
 use crate::delta_log::cleanup::cleanup_expired_delta_log_files;
 use crate::delta_log::{
-    resolve_effective_protocol_and_metadata, resolve_version_timestamp, CommitOrBytes, LogStoreRef,
-    ObjectStoreRef,
+    CommitOrBytes, LogStoreRef, ObjectStoreRef, resolve_effective_protocol_and_metadata,
+    resolve_version_timestamp,
 };
 use crate::snapshot::DeltaSnapshotConfig;
 use crate::spec::{
-    checksum_path, staged_commit_path, temp_commit_path, Action, CommitAction, DeltaError,
-    DeltaOperation, DeltaResult, Metadata, TableFeature, Transaction, VersionChecksum,
+    Action, CommitAction, DeltaError, DeltaOperation, DeltaResult, Metadata, TableFeature,
+    Transaction, VersionChecksum, checksum_path, staged_commit_path, temp_commit_path,
 };
 pub use crate::spec::{CommitConflictError, TransactionError};
 use crate::table::DeltaSnapshot;
@@ -138,7 +138,7 @@ impl OperationMetrics {
     pub fn into_map(self) -> HashMap<String, Value> {
         let mut out = self.extra;
         macro_rules! insert_opt {
-            ($key:literal, $field:expr) => {
+            ($key:literal, $field:expr_2021) => {
                 if let Some(v) = $field {
                     out.insert($key.to_string(), Value::from(v));
                 }
@@ -347,12 +347,11 @@ impl OperationMetrics {
                 if self.num_copied_rows.is_none() {
                     self.num_copied_rows = self.num_output_rows;
                 }
-                if self.num_deleted_rows.is_none() {
-                    if let (Some(touched), Some(copied)) =
+                if self.num_deleted_rows.is_none()
+                    && let (Some(touched), Some(copied)) =
                         (self.num_touched_rows, self.num_copied_rows)
-                    {
-                        self.num_deleted_rows = Some(touched.saturating_sub(copied));
-                    }
+                {
+                    self.num_deleted_rows = Some(touched.saturating_sub(copied));
                 }
                 if self.rewrite_time_ms.is_none() {
                     self.rewrite_time_ms = self.write_time_ms;
@@ -380,15 +379,15 @@ impl OperationMetrics {
                 if self.rewrite_time_ms.is_none() {
                     self.rewrite_time_ms = self.write_time_ms;
                 }
-                if self.num_target_rows_deleted.is_none() {
-                    if let (Some(touched), Some(copied), Some(updated)) = (
+                if self.num_target_rows_deleted.is_none()
+                    && let (Some(touched), Some(copied), Some(updated)) = (
                         self.num_touched_rows,
                         self.num_target_rows_copied,
                         self.num_target_rows_updated,
-                    ) {
-                        self.num_target_rows_deleted =
-                            Some(touched.saturating_sub(copied.saturating_add(updated)));
-                    }
+                    )
+                {
+                    self.num_target_rows_deleted =
+                        Some(touched.saturating_sub(copied.saturating_add(updated)));
                 }
                 self.num_target_rows_inserted.get_or_insert(0);
                 self.num_target_rows_updated.get_or_insert(0);
@@ -776,27 +775,24 @@ fn finalize_attempt_actions(
     if read_snapshot.is_some()
         && !old_in_commit_timestamps_enabled
         && new_in_commit_timestamps_enabled
+        && let Some(in_commit_timestamp) = in_commit_timestamp
+        && let Some(metadata) = finalized_actions
+            .iter_mut()
+            .find_map(|action| match action {
+                CommitAction::Metadata(metadata) => Some(metadata),
+                _ => None,
+            })
     {
-        if let Some(in_commit_timestamp) = in_commit_timestamp {
-            if let Some(metadata) = finalized_actions
-                .iter_mut()
-                .find_map(|action| match action {
-                    CommitAction::Metadata(metadata) => Some(metadata),
-                    _ => None,
-                })
-            {
-                *metadata = metadata
-                    .clone()
-                    .add_config_key(
-                        "delta.inCommitTimestampEnablementVersion".to_string(),
-                        version.to_string(),
-                    )
-                    .add_config_key(
-                        "delta.inCommitTimestampEnablementTimestamp".to_string(),
-                        in_commit_timestamp.to_string(),
-                    );
-            }
-        }
+        *metadata = metadata
+            .clone()
+            .add_config_key(
+                "delta.inCommitTimestampEnablementVersion".to_string(),
+                version.to_string(),
+            )
+            .add_config_key(
+                "delta.inCommitTimestampEnablementTimestamp".to_string(),
+                in_commit_timestamp.to_string(),
+            );
     }
 
     Ok(finalized_actions)
@@ -1288,15 +1284,13 @@ impl std::future::IntoFuture for PreparedCommit {
                         // For creation attempts where the table now exists, ensure protocol/metadata match
                         // and strip creation-only actions before retrying as an append.
                         if creation_intent {
-                            if let Some(txn_protocol) = creation_protocol.as_ref() {
-                                if txn_protocol != snapshot.protocol() {
-                                    return Err(TransactionError::CommitConflict(
-                                        CommitConflictError::ProtocolChanged(
-                                            "protocol changed".into(),
-                                        ),
-                                    )
-                                    .into());
-                                }
+                            if let Some(txn_protocol) = creation_protocol.as_ref()
+                                && txn_protocol != snapshot.protocol()
+                            {
+                                return Err(TransactionError::CommitConflict(
+                                    CommitConflictError::ProtocolChanged("protocol changed".into()),
+                                )
+                                .into());
                             }
 
                             let metadata_compatible =
@@ -2037,9 +2031,9 @@ impl std::future::IntoFuture for PostCommit {
                 Ok(s) => Some(Arc::new(s)),
                 Err(e) => {
                     warn!(
-                            "Post-commit: failed to load state for version {} (post-commit activities skipped): {e}",
-                            this.version
-                        );
+                        "Post-commit: failed to load state for version {} (post-commit activities skipped): {e}",
+                        this.version
+                    );
                     None
                 }
             };
@@ -2072,20 +2066,19 @@ impl std::future::IntoFuture for PostCommit {
 
             // before hook — best-effort: the commit entry has already been durably written
             // to the log, so a hook failure here does not roll back the transaction.
-            if let Some(handler) = &this.custom_execute_handler {
-                if let Err(e) = handler
+            if let Some(handler) = &this.custom_execute_handler
+                && let Err(e) = handler
                     .before_post_commit_hook(
                         &this.log_store,
                         will_create_checkpoint,
                         post_commit_operation_id,
                     )
                     .await
-                {
-                    warn!(
-                        "before_post_commit_hook failed for version {}: {e}",
-                        this.version
-                    );
-                }
+            {
+                warn!(
+                    "before_post_commit_hook failed for version {}: {e}",
+                    this.version
+                );
             }
 
             // Checkpoint — best-effort: checkpoint creation is a performance optimization
@@ -2113,29 +2106,30 @@ impl std::future::IntoFuture for PostCommit {
 
             // Log cleanup
             let mut num_log_files_cleaned_up: u64 = 0;
-            if cleanup_logs_setting && checkpoint_created {
-                if let Some(s) = state.as_ref() {
-                    let retention_millis =
-                        i64::try_from(s.table_properties().log_retention_duration().as_millis())
-                            .unwrap_or(i64::MAX);
-                    let cutoff_timestamp = (Utc::now().timestamp_millis() - retention_millis)
-                        .div_euclid(24 * 60 * 60 * 1000)
-                        * (24 * 60 * 60 * 1000);
-                    match cleanup_expired_delta_log_files(
-                        s.as_ref(),
-                        this.log_store.as_ref(),
-                        cutoff_timestamp,
-                        Some(post_commit_operation_id),
-                    )
-                    .await
-                    {
-                        Ok(n) => num_log_files_cleaned_up = n as u64,
-                        Err(e) => {
-                            warn!(
-                                "Failed to clean up expired log files for version {}: {e}",
-                                this.version
-                            );
-                        }
+            if cleanup_logs_setting
+                && checkpoint_created
+                && let Some(s) = state.as_ref()
+            {
+                let retention_millis =
+                    i64::try_from(s.table_properties().log_retention_duration().as_millis())
+                        .unwrap_or(i64::MAX);
+                let cutoff_timestamp = (Utc::now().timestamp_millis() - retention_millis)
+                    .div_euclid(24 * 60 * 60 * 1000)
+                    * (24 * 60 * 60 * 1000);
+                match cleanup_expired_delta_log_files(
+                    s.as_ref(),
+                    this.log_store.as_ref(),
+                    cutoff_timestamp,
+                    Some(post_commit_operation_id),
+                )
+                .await
+                {
+                    Ok(n) => num_log_files_cleaned_up = n as u64,
+                    Err(e) => {
+                        warn!(
+                            "Failed to clean up expired log files for version {}: {e}",
+                            this.version
+                        );
                     }
                 }
             }
@@ -2171,20 +2165,19 @@ impl std::future::IntoFuture for PostCommit {
             }
 
             // after hook
-            if let Some(handler) = &this.custom_execute_handler {
-                if let Err(e) = handler
+            if let Some(handler) = &this.custom_execute_handler
+                && let Err(e) = handler
                     .after_post_commit_hook(
                         &this.log_store,
                         checkpoint_created,
                         post_commit_operation_id,
                     )
                     .await
-                {
-                    warn!(
-                        "after_post_commit_hook failed for version {}: {e}",
-                        this.version
-                    );
-                }
+            {
+                warn!(
+                    "after_post_commit_hook failed for version {}: {e}",
+                    this.version
+                );
             }
 
             Ok(FinalizedCommit {
@@ -2205,16 +2198,16 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    use object_store::memory::InMemory;
     use object_store::ObjectStore;
+    use object_store::memory::InMemory;
     use url::Url;
 
     use super::*;
-    use crate::delta_log::{default_logstore, get_actions, StorageConfig};
+    use crate::delta_log::{StorageConfig, default_logstore, get_actions};
     use crate::schema::protocol_for_create;
     use crate::spec::{
-        checksum_path, Action, CommitAction, CommitInfo, DataType, DeltaError, DomainMetadata,
-        Metadata, Protocol, SaveMode, StructField, StructType, TableFeature, VersionChecksum,
+        Action, CommitAction, CommitInfo, DataType, DeltaError, DomainMetadata, Metadata, Protocol,
+        SaveMode, StructField, StructType, TableFeature, VersionChecksum, checksum_path,
     };
 
     fn test_log_store(store: Arc<dyn ObjectStore>) -> LogStoreRef {

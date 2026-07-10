@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
+# ruff: noqa: EM102, FBT001, FBT002, I001, N812, PLR2004, RUF010, S101, S108, T201, TRY003
 
-import hashlib
 import os
 import re
 import shutil
@@ -76,7 +76,7 @@ def make_zip(path: Path, entries: dict[str, str | bytes]) -> None:
 def expect_raises(label: str, fn, pattern: str | None = None) -> str:
     try:
         fn()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         message = str(exc)
         if pattern is not None and re.search(pattern, message, flags=re.IGNORECASE) is None:
             raise AssertionError(f"{label} raised unexpected error: {message}") from exc
@@ -279,12 +279,7 @@ def case_pyfile_file_archive_and_jar_artifacts() -> None:
             medium_py.write_text("TEXT = " + repr("m" * 256) + "\nVALUE = 8\n", encoding="utf-8")
             spark.addArtifact(str(medium_py), pyfile=True)
             clear_artifact_root()
-            rows = (
-                spark.range(8)
-                .repartition(4)
-                .select(module_text_len_udf(medium_module)("id").alias("v"))
-                .collect()
-            )
+            rows = spark.range(8).repartition(4).select(module_text_len_udf(medium_module)("id").alias("v")).collect()
             assert {row.v for row in rows} == {256}
 
             chunk_module = f"k8s_chunk_module_{RUN_ID}"
@@ -292,12 +287,7 @@ def case_pyfile_file_archive_and_jar_artifacts() -> None:
             chunk_py.write_text("TEXT = " + repr("c" * 40000) + "\nVALUE = 9\n", encoding="utf-8")
             spark.addArtifact(str(chunk_py), pyfile=True)
             clear_artifact_root()
-            rows = (
-                spark.range(8)
-                .repartition(4)
-                .select(module_text_len_udf(chunk_module)("id").alias("v"))
-                .collect()
-            )
+            rows = spark.range(8).repartition(4).select(module_text_len_udf(chunk_module)("id").alias("v")).collect()
             assert {row.v for row in rows} == {40000}
 
             zip_module = f"k8s_zip_module_{RUN_ID}"
@@ -320,10 +310,7 @@ def case_pyfile_file_archive_and_jar_artifacts() -> None:
             def read_multi(_):
                 import importlib
 
-                return sum(
-                    int(importlib.import_module(f"k8s_multi_module_{RUN_ID}_{i}").VALUE)
-                    for i in range(3)
-                )
+                return sum(int(importlib.import_module(f"k8s_multi_module_{RUN_ID}_{i}").VALUE) for i in range(3))
 
             rows = spark.range(4).repartition(2).select(read_multi("id").alias("v")).collect()
             assert {row.v for row in rows} == {total_expected}
@@ -333,12 +320,7 @@ def case_pyfile_file_archive_and_jar_artifacts() -> None:
             file_path.write_text(file_payload, encoding="utf-8")
             spark.addArtifact(str(file_path), file=True)
             clear_artifact_root()
-            rows = (
-                spark.range(8)
-                .repartition(4)
-                .select(spark_file_text_udf(file_path.name)("id").alias("v"))
-                .collect()
-            )
+            rows = spark.range(8).repartition(4).select(spark_file_text_udf(file_path.name)("id").alias("v")).collect()
             assert {row.v for row in rows} == {file_payload}
 
             large_file = tmp / f"k8s_large_file_{RUN_ID}.txt"
@@ -346,12 +328,7 @@ def case_pyfile_file_archive_and_jar_artifacts() -> None:
             large_file.write_text(large_payload, encoding="utf-8")
             spark.addArtifact(str(large_file), file=True)
             clear_artifact_root()
-            rows = (
-                spark.range(8)
-                .repartition(4)
-                .select(spark_file_text_udf(large_file.name)("id").alias("v"))
-                .collect()
-            )
+            rows = spark.range(8).repartition(4).select(spark_file_text_udf(large_file.name)("id").alias("v")).collect()
             assert {len(row.v) for row in rows} == {70000}
 
             archive_dir = tmp / f"k8s_archive_payload_{RUN_ID}"

@@ -3,8 +3,8 @@ use std::sync::Arc;
 use datafusion::arrow::array::*;
 use datafusion::arrow::compute::take;
 use datafusion::arrow::datatypes::{
-    ArrowDictionaryKeyType, ArrowNativeType, ArrowNativeTypeOp, DataType, Int16Type, Int32Type,
-    Int64Type, Int8Type, TimeUnit, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    ArrowDictionaryKeyType, ArrowNativeType, ArrowNativeTypeOp, DataType, Int8Type, Int16Type,
+    Int32Type, Int64Type, TimeUnit, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use datafusion::error::{DataFusionError, Result};
 
@@ -43,17 +43,19 @@ pub fn spark_compatible_murmur3_hash<T: AsRef<[u8]>>(data: T, seed: u32) -> u32 
 
     #[inline]
     unsafe fn hash_bytes_by_int(data: &[u8], seed: u32) -> i32 {
-        // safety: data length must be aligned to 4 bytes
-        let mut h1 = seed as i32;
-        for i in (0..data.len()).step_by(4) {
-            let ints = data.as_ptr().add(i) as *const i32;
-            let mut half_word = ints.read_unaligned();
-            if cfg!(target_endian = "big") {
-                half_word = half_word.reverse_bits();
+        unsafe {
+            // safety: data length must be aligned to 4 bytes
+            let mut h1 = seed as i32;
+            for i in (0..data.len()).step_by(4) {
+                let ints = data.as_ptr().add(i) as *const i32;
+                let mut half_word = ints.read_unaligned();
+                if cfg!(target_endian = "big") {
+                    half_word = half_word.reverse_bits();
+                }
+                h1 = mix_h1(h1, mix_k1(half_word));
             }
-            h1 = mix_h1(h1, mix_k1(half_word));
+            h1
         }
-        h1
     }
     let data = data.as_ref();
     let len = data.len();
@@ -387,7 +389,7 @@ macro_rules! create_hashes_internal {
                         return Err(DataFusionError::Internal(format!(
                             "Unsupported dictionary type in hasher hashing: {}",
                             col.data_type(),
-                        )))
+                        )));
                     }
                 },
                 _ => {
@@ -425,13 +427,13 @@ mod tests {
     use std::sync::Arc;
 
     use datafusion::arrow::array::{
-        Array, ArrayRef, Float32Array, Float64Array, Int32Array, Int64Array, Int8Array, StringArray,
+        Array, ArrayRef, Float32Array, Float64Array, Int8Array, Int32Array, Int64Array, StringArray,
     };
 
     use super::create_murmur3_hashes;
 
     macro_rules! test_hashes_internal {
-        ($hash_method: ident, $input: expr, $initial_seeds: expr, $expected: expr) => {
+        ($hash_method: ident, $input: expr_2021, $initial_seeds: expr_2021, $expected: expr_2021) => {
             let i = $input;
             let mut hashes = $initial_seeds.clone();
             $hash_method(&[i], &mut hashes).unwrap();

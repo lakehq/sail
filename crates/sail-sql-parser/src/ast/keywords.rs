@@ -1,8 +1,8 @@
+use chumsky::Parser;
 use chumsky::extra::ParserExtra;
 use chumsky::input::{Input, InputRef, ValueInput};
 use chumsky::label::LabelError;
 use chumsky::prelude::custom;
-use chumsky::Parser;
 
 use crate::options::ParserOptions;
 use crate::span::TokenSpan;
@@ -48,7 +48,7 @@ where
 // maintenance overhead.
 
 macro_rules! keyword_types {
-    ([$(($_:expr, $name:ident),)* $(,)?]) => {
+    ([$(($_:expr_2021, $name:ident),)* $(,)?]) => {
         $(
             #[derive(Debug, Clone)]
             pub struct $name {

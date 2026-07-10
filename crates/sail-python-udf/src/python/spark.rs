@@ -3,7 +3,7 @@ use std::ffi::CString;
 use datafusion::arrow::datatypes::{DataType, SchemaRef};
 use pyo3::prelude::{PyAnyMethods, PyModule};
 use pyo3::sync::PyOnceLock;
-use pyo3::{intern, Bound, Py, PyAny, PyResult, Python};
+use pyo3::{Bound, Py, PyAny, PyResult, Python, intern};
 
 use crate::config::PySparkUdfConfig;
 use crate::conversion::TryToPy;

@@ -2,7 +2,7 @@ use std::fmt::{Debug, Formatter};
 
 use sail_common::debug::DebugBinary;
 
-use crate::worker::gen::{RunTaskRequest, TaskLaunchContext};
+use crate::worker::r#gen::{RunTaskRequest, TaskLaunchContext};
 
 struct DebugTaskLaunchContext<'a>(&'a Option<TaskLaunchContext>);
 

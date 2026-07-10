@@ -6,8 +6,8 @@ use crate::rpc::{ClientHandle, ClientOptions, ClientService};
 use crate::stream_service::TaskStreamFlightClient;
 use crate::task::definition::{TaskDefinition, TaskLaunchContext};
 use crate::worker::event::WorkerLocation;
-use crate::worker::gen::worker_service_client::WorkerServiceClient;
-use crate::worker::gen::{
+use crate::worker::r#gen::worker_service_client::WorkerServiceClient;
+use crate::worker::r#gen::{
     CleanUpJobRequest, CleanUpJobResponse, RunTaskRequest, RunTaskResponse, StopTaskRequest,
     StopTaskResponse, StopWorkerRequest, StopWorkerResponse,
 };
@@ -49,7 +49,7 @@ impl WorkerClient {
         launch_context: TaskLaunchContext,
         peers: Vec<WorkerLocation>,
     ) -> ExecutionResult<()> {
-        let definition = crate::task::gen::TaskDefinition::from(definition).encode_to_vec();
+        let definition = crate::task::r#gen::TaskDefinition::from(definition).encode_to_vec();
         let request = RunTaskRequest {
             job_id: key.job_id.into(),
             stage: key.stage as u64,

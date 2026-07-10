@@ -15,11 +15,11 @@ use sail_python_udf::get_udf_name;
 use sail_python_udf::udf::pyspark_udtf::{PySparkUDTF, PySparkUdtfKind};
 
 use crate::error::{PlanError, PlanResult};
+use crate::resolver::PlanResolver;
 use crate::resolver::expression::NamedExpr;
 use crate::resolver::function::PythonUdtf;
 use crate::resolver::state::PlanResolverState;
 use crate::resolver::tree::table_input::TableInputRewriter;
-use crate::resolver::PlanResolver;
 
 impl PlanResolver<'_> {
     pub(super) async fn resolve_query_common_inline_udtf(
@@ -96,7 +96,7 @@ impl PlanResolver<'_> {
                 return Err(PlanError::invalid(format!(
                     "PySpark UDTF type: {:?}",
                     function.eval_type,
-                )))
+                )));
             }
         };
         // Determine the number of passthrough columns before rewriting the plan

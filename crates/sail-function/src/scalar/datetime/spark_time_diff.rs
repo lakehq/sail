@@ -2,10 +2,12 @@ use std::sync::Arc;
 
 use datafusion::arrow::array::types::Time64MicrosecondType;
 use datafusion::arrow::array::{
-    new_null_array, Array, ArrayRef, AsArray, Int64Builder, PrimitiveArray, StringArrayType,
+    Array, ArrayRef, AsArray, Int64Array, Int64Builder, PrimitiveArray, StringArrayType,
+    new_null_array,
 };
+use datafusion::arrow::compute::binary;
 use datafusion::arrow::datatypes::{DataType, TimeUnit};
-use datafusion_common::{exec_err, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, exec_err};
 use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility};
 
 use crate::scalar::datetime::utils::to_time64_array;
@@ -91,10 +93,12 @@ impl ScalarUDFImpl for SparkTimeDiff {
                 (Some(unit), Some(start), Some(end)) => {
                     let divisor = match unit_divisor(unit) {
                         Some(d) => d,
-                        None => return exec_err!(
-                            "time_diff: unsupported unit '{}'. Supported: HOUR, MINUTE, SECOND, MILLISECOND, MICROSECOND",
-                            unit
-                        ),
+                        None => {
+                            return exec_err!(
+                                "time_diff: unsupported unit '{}'. Supported: HOUR, MINUTE, SECOND, MILLISECOND, MICROSECOND",
+                                unit
+                            );
+                        }
                     };
                     Some((end - start) / divisor)
                 }
@@ -128,21 +132,17 @@ impl ScalarUDFImpl for SparkTimeDiff {
             | ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(unit))) => {
                 let divisor = match unit_divisor(unit.as_str()) {
                     Some(d) => d,
-                    None => return exec_err!(
-                        "time_diff: unsupported unit '{}'. Supported: HOUR, MINUTE, SECOND, MILLISECOND, MICROSECOND",
-                        unit
-                    ),
-                };
-                let mut builder = Int64Builder::with_capacity(number_rows);
-                for i in 0..number_rows {
-                    if starts.is_null(i) || ends.is_null(i) {
-                        builder.append_null();
-                    } else {
-                        // Rust integer division truncates toward zero, matching Spark behavior.
-                        builder.append_value((ends.value(i) - starts.value(i)) / divisor);
+                    None => {
+                        return exec_err!(
+                            "time_diff: unsupported unit '{}'. Supported: HOUR, MINUTE, SECOND, MILLISECOND, MICROSECOND",
+                            unit
+                        );
                     }
-                }
-                Arc::new(builder.finish())
+                };
+                // Rust integer division truncates toward zero, matching Spark behavior.
+                // `binary` propagates nulls as the intersection of both inputs' null buffers.
+                let result: Int64Array = binary(&ends, &starts, |e, s| (e - s) / divisor)?;
+                Arc::new(result)
             }
             // Null scalar unit → all-null result.
             ColumnarValue::Scalar(ScalarValue::Utf8(None))
@@ -205,7 +205,7 @@ where
                     return exec_err!(
                         "time_diff: unsupported unit '{}'. Supported: HOUR, MINUTE, SECOND, MILLISECOND, MICROSECOND",
                         unit
-                    )
+                    );
                 }
             },
         }

@@ -3,8 +3,8 @@ use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
 use sail_common::spec;
 
 use crate::error::{PlanError, PlanResult};
-use crate::resolver::state::PlanResolverState;
 use crate::resolver::PlanResolver;
+use crate::resolver::state::PlanResolverState;
 
 mod aggregate;
 mod alias;

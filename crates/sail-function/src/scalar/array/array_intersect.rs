@@ -5,8 +5,8 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion::arrow::array::{
-    new_empty_array, new_null_array, Array, ArrayRef, GenericListArray, OffsetSizeTrait,
-    UInt32Array, UInt64Array,
+    Array, ArrayRef, GenericListArray, OffsetSizeTrait, UInt32Array, UInt64Array, new_empty_array,
+    new_null_array,
 };
 use datafusion::arrow::buffer::{NullBuffer, OffsetBuffer};
 use datafusion::arrow::compute::take;
@@ -15,7 +15,7 @@ use datafusion::arrow::row::{RowConverter, SortField};
 use datafusion_common::cast::{as_large_list_array, as_list_array};
 use datafusion_common::utils::take_function_args;
 use datafusion_common::{
-    assert_eq_or_internal_err, exec_err, internal_err, DataFusionError, Result,
+    DataFusionError, Result, assert_eq_or_internal_err, exec_err, internal_err,
 };
 use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -381,7 +381,7 @@ mod tests {
     use datafusion::arrow::buffer::OffsetBuffer;
     use datafusion::arrow::datatypes::{DataType, Field, Int32Type};
     use datafusion_common::config::ConfigOptions;
-    use datafusion_common::{exec_err, Result};
+    use datafusion_common::{Result, exec_err};
     use datafusion_expr::{ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl};
 
     use super::ArrayIntersect;

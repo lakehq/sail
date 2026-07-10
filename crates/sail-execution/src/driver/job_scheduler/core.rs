@@ -11,19 +11,19 @@ use sail_common_datafusion::error::CommonErrorCause;
 use sail_python_udf::error::PyErrExtractor;
 use sail_server::actor::ActorContext;
 
+use crate::driver::DriverActor;
 use crate::driver::job_scheduler::state::{
     JobDescriptor, JobState, StageState, TaskAttemptDescriptor, TaskRegionState, TaskState,
 };
 use crate::driver::job_scheduler::topology::TaskRegionTopology;
 use crate::driver::job_scheduler::{JobAction, JobScheduler, JobSchedulerOptions};
 use crate::driver::output::build_job_output;
-use crate::driver::DriverActor;
 use crate::error::{ExecutionError, ExecutionResult};
 use crate::id::{JobId, TaskKey, TaskKeyDisplay, TaskStreamKey};
 use crate::job_graph::{
     InputMode, JobGraph, OutputDistribution, OutputMode, Stage, StageInput, TaskPlacement,
 };
-use crate::proto::encode::{try_encode_physical_expr, try_encode_physical_plan};
+use crate::proto::{encode_remote_physical_expr, encode_remote_physical_plan};
 use crate::task::definition::{
     TaskDefinition, TaskInput, TaskInputKey, TaskInputLocator, TaskLaunchContext, TaskOutput,
     TaskOutputDistribution, TaskOutputLocator, TaskResources,
@@ -169,12 +169,11 @@ impl JobScheduler {
         for (r, region) in job.topology.regions.iter().enumerate() {
             let failed = region.tasks.iter().any(|t| {
                 let attempts = &job.stages[t.stage].tasks[t.partition].attempts;
-                if let Some(attempt) = attempts.last() {
-                    if matches!(attempt.state, TaskState::Failed | TaskState::Canceled)
-                        && attempts.len() >= options.task_max_attempts
-                    {
-                        return true;
-                    }
+                if let Some(attempt) = attempts.last()
+                    && matches!(attempt.state, TaskState::Failed | TaskState::Canceled)
+                    && attempts.len() >= options.task_max_attempts
+                {
+                    return true;
                 }
                 false
             });
@@ -204,10 +203,10 @@ impl JobScheduler {
 
             for t in &region.tasks {
                 let attempts = &job.stages[t.stage].tasks[t.partition].attempts;
-                if let Some(attempt) = attempts.last() {
-                    if matches!(attempt.state, TaskState::Failed) {
-                        failed = true;
-                    }
+                if let Some(attempt) = attempts.last()
+                    && matches!(attempt.state, TaskState::Failed)
+                {
+                    failed = true;
                 }
             }
 
@@ -431,10 +430,10 @@ impl JobScheduler {
         for (s, stage) in job.stages.iter().enumerate() {
             for (t, task) in stage.tasks.iter().enumerate() {
                 for attempt in task.attempts.iter() {
-                    if matches!(attempt.state, TaskState::Failed) {
-                        if let Some(cause) = &attempt.cause {
-                            causes.entry((s, t)).or_default().push(cause);
-                        }
+                    if matches!(attempt.state, TaskState::Failed)
+                        && let Some(cause) = &attempt.cause
+                    {
+                        causes.entry((s, t)).or_default().push(cause);
                     }
                 }
             }
@@ -526,7 +525,7 @@ impl JobScheduler {
         };
 
         self.codec.clear_task_resources()?;
-        let plan = try_encode_physical_plan(&self.codec, stage.plan.clone())?;
+        let plan = encode_remote_physical_plan(&self.codec, stage.plan.clone())?;
         let inputs = stage
             .inputs
             .iter()
@@ -686,7 +685,7 @@ impl JobScheduler {
                 let keys = keys
                     .iter()
                     .map(|expr| {
-                        let expr = try_encode_physical_expr(&self.codec, expr)?;
+                        let expr = encode_remote_physical_expr(&self.codec, expr)?;
                         Ok(Arc::from(expr))
                     })
                     .collect::<ExecutionResult<Vec<Arc<[u8]>>>>()?;

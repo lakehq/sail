@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
-use datafusion::arrow::array::{make_array, ArrayData, ArrayRef};
+use datafusion::arrow::array::{ArrayData, ArrayRef, make_array};
 use datafusion::arrow::compute::cast;
 use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::logical_expr::{Accumulator, Signature, Volatility};
 use datafusion_common::Result;
-use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::AggregateUDFImpl;
+use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use pyo3::{Py, PyAny, Python};
 
 use crate::accumulator::{BatchAggregateAccumulator, BatchAggregator};

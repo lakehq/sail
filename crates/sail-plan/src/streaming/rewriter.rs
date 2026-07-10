@@ -1,17 +1,17 @@
 use std::sync::Arc;
 
 use datafusion::common::tree_node::TreeNode;
-use datafusion::datasource::{source_as_provider, TableProvider};
+use datafusion::datasource::{TableProvider, source_as_provider};
 use datafusion::logical_expr::{Extension, LogicalPlan};
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
-use datafusion_common::{internal_err, not_impl_err, plan_err, Result};
+use datafusion_common::{Result, internal_err, not_impl_err, plan_err};
 use datafusion_expr::{
-    col, or, Explain, FetchType, Filter, Projection, SkipType, SubqueryAlias, TableScan, Union,
-    UserDefinedLogicalNode,
+    Explain, FetchType, Filter, Projection, SkipType, SubqueryAlias, TableScan, Union,
+    UserDefinedLogicalNode, col, or,
 };
 use sail_common_datafusion::rename::table_provider::RenameTableProvider;
 use sail_common_datafusion::streaming::event::schema::{
-    is_flow_event_schema, MARKER_FIELD_NAME, RETRACTED_FIELD_NAME,
+    MARKER_FIELD_NAME, RETRACTED_FIELD_NAME, is_flow_event_schema,
 };
 use sail_common_datafusion::streaming::source::{StreamSource, StreamSourceTableProvider};
 use sail_data_source::formats::console::ConsoleWriteNode;
@@ -102,9 +102,9 @@ impl TreeNodeRewriter for StreamingRewriter {
             LogicalPlan::Repartition(_) => {
                 not_impl_err!("streaming repartition: {plan:?}")
             }
-            LogicalPlan::TableScan(ref scan) => {
-                if let Ok(provider) = source_as_provider(&scan.source) {
-                    if let Some(source) = get_stream_source_opt(provider.as_ref()) {
+            LogicalPlan::TableScan(ref scan) => match source_as_provider(&scan.source) {
+                Ok(provider) => match get_stream_source_opt(provider.as_ref()) {
+                    Some(source) => {
                         let NamedStreamSource { source, names } = source;
                         let TableScan {
                             table_name,
@@ -124,17 +124,15 @@ impl TreeNodeRewriter for StreamingRewriter {
                                 *fetch,
                             )?),
                         })))
-                    } else {
-                        Ok(Transformed::yes(LogicalPlan::Extension(Extension {
-                            node: Arc::new(StreamSourceAdapterNode::try_new(Arc::new(plan))?),
-                        })))
                     }
-                } else {
-                    Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                    _ => Ok(Transformed::yes(LogicalPlan::Extension(Extension {
                         node: Arc::new(StreamSourceAdapterNode::try_new(Arc::new(plan))?),
-                    })))
-                }
-            }
+                    }))),
+                },
+                _ => Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                    node: Arc::new(StreamSourceAdapterNode::try_new(Arc::new(plan))?),
+                }))),
+            },
             LogicalPlan::Union(union) => Ok(Transformed::yes(LogicalPlan::Union(
                 Union::try_new_with_loose_types(union.inputs)?,
             ))),
@@ -212,8 +210,8 @@ fn get_stream_source_opt(provider: &dyn TableProvider) -> Option<NamedStreamSour
             names: None,
         })
     } else if let Some(rename) = provider.downcast_ref::<RenameTableProvider>() {
-        if let Some(stream) = get_stream_source_opt(rename.inner().as_ref()) {
-            Some(NamedStreamSource {
+        match get_stream_source_opt(rename.inner().as_ref()) {
+            Some(stream) => Some(NamedStreamSource {
                 source: stream.source,
                 names: Some(
                     rename
@@ -223,9 +221,8 @@ fn get_stream_source_opt(provider: &dyn TableProvider) -> Option<NamedStreamSour
                         .map(|f| f.name().clone())
                         .collect(),
                 ),
-            })
-        } else {
-            None
+            }),
+            _ => None,
         }
     } else {
         None

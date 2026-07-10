@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+# ruff: noqa: BLE001, EM102, I001, PLR2004, S101, T201, TRY003, TRY300
+
 import contextlib
 import csv
 import json
@@ -104,9 +106,7 @@ def run_spark_probe(client) -> None:
             with zipfile.ZipFile(py_zip, "w") as zf:
                 zf.writestr(
                     "k8s_artifact_math.py",
-                    "def score(x):\n"
-                    "    value = int(x)\n"
-                    "    return value * value + 31\n",
+                    "def score(x):\n    value = int(x)\n    return value * value + 31\n",
                 )
             spark.addArtifact(str(py_zip), pyfile=True)
 
@@ -118,9 +118,7 @@ def run_spark_probe(client) -> None:
 
             keys_after_add = s3_keys(client)
             print(f"S3 keys after addArtifact: {keys_after_add}")
-            assert any(
-                key.startswith("artifacts/sail-artifacts/sessions/") for key in keys_after_add
-            ), keys_after_add
+            assert any(key.startswith("artifacts/sail-artifacts/sessions/") for key in keys_after_add), keys_after_add
             assert len(keys_after_add) >= 4, keys_after_add
 
             @udf(IntegerType())

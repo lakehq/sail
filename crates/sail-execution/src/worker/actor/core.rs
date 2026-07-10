@@ -1,7 +1,7 @@
 use std::mem;
 
-use fastrace::future::FutureExt;
 use fastrace::Span;
+use fastrace::future::FutureExt;
 use log::info;
 use sail_server::actor::{Actor, ActorAction, ActorContext};
 
@@ -9,10 +9,10 @@ use crate::driver::DriverClientSet;
 use crate::rpc::{ClientOptions, ServerMonitor};
 use crate::stream_manager::{StreamManager, StreamManagerOptions};
 use crate::task_runner::TaskRunner;
+use crate::worker::WorkerActor;
 use crate::worker::event::WorkerEvent;
 use crate::worker::options::WorkerOptions;
 use crate::worker::peer_tracker::{PeerTracker, PeerTrackerOptions};
-use crate::worker::WorkerActor;
 
 #[tonic::async_trait]
 impl Actor for WorkerActor {

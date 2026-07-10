@@ -1,3 +1,5 @@
+# ruff: noqa: EM101, N802, TRY003
+
 import os
 
 
