@@ -1,5 +1,4 @@
 """Tests for artifact handling via SparkSession.addArtifact."""
-# ruff: noqa: SLF001
 
 import hashlib
 import tempfile
@@ -16,13 +15,6 @@ from pyspark.sql.types import IntegerType
 from pysail.testing.spark.session import spark_connect_server, spark_session_factory
 from pysail.testing.spark.utils.common import pyspark_version
 
-EXPECTED_ARTIFACT_VALUE = 42
-EXPECTED_MULTI_ARTIFACT_VALUE = 3
-EXPECTED_CHUNKED_ARTIFACT_VALUE = 123
-EXPECTED_COMMITTED_OBJECT_STORE_VALUE = 314
-EXPECTED_CONTEXT_FILE_VALUE = 37
-EXPECTED_CONTEXT_PLAIN_VALUE = 11
-EXPECTED_MULTIPART_OBJECT_STORE_VALUE = 509
 MULTIPART_ARTIFACT_PADDING_SIZE = 9 * 1024 * 1024
 
 
@@ -39,17 +31,17 @@ def _make_zip(path, module_name, code):
 def _artifact_statuses(spark, names):
     from pyspark.sql.connect.proto import base_pb2 as proto
 
-    manager = spark._client._artifact_manager
+    manager = spark._client._artifact_manager  # noqa: SLF001
     request = proto.ArtifactStatusesRequest(
-        session_id=manager._session_id,
-        user_context=manager._user_context,
+        session_id=manager._session_id,  # noqa: SLF001
+        user_context=manager._user_context,  # noqa: SLF001
         names=names,
     )
-    return manager._stub.ArtifactStatus(request, metadata=manager._metadata)
+    return manager._stub.ArtifactStatus(request, metadata=manager._metadata)  # noqa: SLF001
 
 
 def _session_artifact_dir(spark):
-    session_id = spark._client._artifact_manager._session_id
+    session_id = spark._client._artifact_manager._session_id  # noqa: SLF001
     session_hash = hashlib.sha256(session_id.encode()).hexdigest()
     return Path(tempfile.gettempdir()) / "sail-artifacts" / session_hash
 
@@ -61,7 +53,7 @@ def test_add_artifact_zip_as_pyfile(spark, tmp_path):
     executed by the Sail server.
     """
     zip_path = tmp_path / "sail_test_module.zip"
-    _make_zip(zip_path, "sail_test_module.py", f"VALUE = {EXPECTED_ARTIFACT_VALUE}\n")
+    _make_zip(zip_path, "sail_test_module.py", "VALUE = 42\n")
 
     spark.addArtifact(str(zip_path), pyfile=True)
 
@@ -72,7 +64,7 @@ def test_add_artifact_zip_as_pyfile(spark, tmp_path):
         return sail_test_module.VALUE
 
     rows = spark.range(1).select(read_artifact_value("id").alias("value")).collect()
-    assert rows[0].value == EXPECTED_ARTIFACT_VALUE
+    assert rows[0].value == 42  # noqa: PLR2004
 
 
 def test_add_artifact_pyfile_status_and_duplicate_contract(spark, tmp_path):
@@ -102,7 +94,7 @@ def test_add_artifact_pyfile_status_and_duplicate_contract(spark, tmp_path):
 
 def test_cache_artifact_status_tracks_cache_namespace(spark):
     payload = b"cache artifact payload"
-    artifact_hash = spark._client.cache_artifact(payload)
+    artifact_hash = spark._client.cache_artifact(payload)  # noqa: SLF001
 
     statuses = _artifact_statuses(
         spark,
@@ -123,10 +115,10 @@ def test_cache_artifact_rejects_name_that_does_not_match_content_hash(spark):
 
     data = b"cached local relation payload"
     wrong_hash = "0" * 64
-    manager = spark._client._artifact_manager
+    manager = spark._client._artifact_manager  # noqa: SLF001
     request = proto.AddArtifactsRequest(
-        session_id=manager._session_id,
-        user_context=manager._user_context,
+        session_id=manager._session_id,  # noqa: SLF001
+        user_context=manager._user_context,  # noqa: SLF001
         batch=proto.AddArtifactsRequest.Batch(
             artifacts=[
                 proto.AddArtifactsRequest.SingleChunkArtifact(
@@ -138,7 +130,7 @@ def test_cache_artifact_rejects_name_that_does_not_match_content_hash(spark):
     )
 
     with pytest.raises(Exception, match=r"content hash|SHA-256|INVALID"):
-        manager._retrieve_responses(iter([request]))
+        manager._retrieve_responses(iter([request]))  # noqa: SLF001
 
     statuses = _artifact_statuses(spark, [f"cache/{wrong_hash}"]).statuses
     assert not statuses[f"cache/{wrong_hash}"].exists
@@ -151,7 +143,7 @@ def test_create_dataframe_uses_chunked_cached_local_relation_when_threshold_is_l
         [(1, "a"), (2, "b")],
         schema="id long, value string",
     )
-    plan = df._plan.to_proto(spark._client)
+    plan = df._plan.to_proto(spark._client)  # noqa: SLF001
     assert plan.root.HasField("chunked_cached_local_relation")
 
     rows = df.orderBy("id").collect()
@@ -182,7 +174,7 @@ def test_chunked_cached_local_relation_respects_server_size_limits(spark, config
         [(1, "value")],
         schema="id long, value string",
     )
-    plan = df._plan.to_proto(spark._client)
+    plan = df._plan.to_proto(spark._client)  # noqa: SLF001
     assert plan.root.HasField("chunked_cached_local_relation")
 
     with pytest.raises(Exception, match=error):
@@ -203,14 +195,45 @@ def test_add_multiple_artifacts_as_pyfiles(spark, tmp_path):
         return sum(importlib.import_module(f"sail_multi_module_{i}").V for i in range(3))
 
     rows = spark.range(1).select(read_multi_artifact_values("id").alias("value")).collect()
-    assert rows[0].value == EXPECTED_MULTI_ARTIFACT_VALUE
+    assert rows[0].value == 3  # noqa: PLR2004
+
+
+def test_python_artifact_modules_are_isolated_between_sessions(tmp_path):
+    module_name = "sail_session_isolation_module"
+    first_module = tmp_path / "first" / f"{module_name}.py"
+    second_module = tmp_path / "second" / f"{module_name}.py"
+    first_module.parent.mkdir()
+    second_module.parent.mkdir()
+    first_module.write_text("VALUE = 101\n", encoding="utf-8")
+    second_module.write_text("VALUE = 202\n", encoding="utf-8")
+
+    with (
+        spark_connect_server() as server,
+        spark_session_factory(server.remote) as sessions,
+    ):
+        first_session = sessions.create()
+        second_session = sessions.create()
+        first_session.addArtifact(str(first_module), pyfile=True)
+        second_session.addArtifact(str(second_module), pyfile=True)
+
+        @udf(IntegerType())
+        def read_module_value(_):
+            import importlib
+
+            return importlib.import_module(module_name).VALUE
+
+        first_rows = first_session.range(1).select(read_module_value("id").alias("value")).collect()
+        second_rows = second_session.range(1).select(read_module_value("id").alias("value")).collect()
+
+        assert first_rows[0].value == 101  # noqa: PLR2004
+        assert second_rows[0].value == 202  # noqa: PLR2004
 
 
 def test_python_artifact_context_is_held_during_udf_execution(tmp_path):
     artifact_root = tmp_path / "artifact-root"
     file_path = tmp_path / "sail_context_file.txt"
     ready_path = tmp_path / "artifact-udf-ready"
-    file_path.write_text(str(EXPECTED_CONTEXT_FILE_VALUE), encoding="utf-8")
+    file_path.write_text("37", encoding="utf-8")
 
     with (
         spark_connect_server(envs={"SAIL_SPARK__ARTIFACT_ROOT": str(artifact_root)}) as server,
@@ -234,7 +257,7 @@ def test_python_artifact_context_is_held_during_udf_execution(tmp_path):
 
         @udf(IntegerType())
         def read_plain_value(_):
-            return EXPECTED_CONTEXT_PLAIN_VALUE
+            return 11
 
         artifact_values = []
         artifact_errors = []
@@ -259,25 +282,25 @@ def test_python_artifact_context_is_held_during_udf_execution(tmp_path):
             pytest.fail("artifact UDF did not start before timeout")
 
         rows = plain_session.range(1).select(read_plain_value("id").alias("value")).collect()
-        assert rows[0].value == EXPECTED_CONTEXT_PLAIN_VALUE
+        assert rows[0].value == 11  # noqa: PLR2004
 
         thread.join(timeout=10)
         if thread.is_alive():
             pytest.fail("artifact UDF did not finish before timeout")
         if artifact_errors:
             raise artifact_errors[0]
-        assert artifact_values == [EXPECTED_CONTEXT_FILE_VALUE]
+        assert artifact_values == [37]
 
 
 def test_add_artifacts_crc_failure_is_reported_without_storing(spark):
     from pyspark.sql.connect.proto import base_pb2 as proto
 
     data = b"crc payload"
-    manager = spark._client._artifact_manager
+    manager = spark._client._artifact_manager  # noqa: SLF001
     bad_crc = (zlib.crc32(data) + 1) & 0xFFFFFFFF
     request = proto.AddArtifactsRequest(
-        session_id=manager._session_id,
-        user_context=manager._user_context,
+        session_id=manager._session_id,  # noqa: SLF001
+        user_context=manager._user_context,  # noqa: SLF001
         batch=proto.AddArtifactsRequest.Batch(
             artifacts=[
                 proto.AddArtifactsRequest.SingleChunkArtifact(
@@ -288,7 +311,7 @@ def test_add_artifacts_crc_failure_is_reported_without_storing(spark):
         ),
     )
 
-    response = manager._retrieve_responses(iter([request]))
+    response = manager._retrieve_responses(iter([request]))  # noqa: SLF001
 
     assert response.artifacts[0].name == "files/sail_bad_crc.txt"
     assert not response.artifacts[0].is_crc_successful
@@ -299,14 +322,14 @@ def test_add_artifacts_crc_failure_is_reported_without_storing(spark):
 def test_chunked_pyfile_artifact_is_importable(spark):
     from pyspark.sql.connect.proto import base_pb2 as proto
 
-    data = f"VALUE = {EXPECTED_CHUNKED_ARTIFACT_VALUE}\n".encode()
+    data = b"VALUE = 123\n"
     first = data[:5]
     second = data[5:]
-    manager = spark._client._artifact_manager
+    manager = spark._client._artifact_manager  # noqa: SLF001
     requests = [
         proto.AddArtifactsRequest(
-            session_id=manager._session_id,
-            user_context=manager._user_context,
+            session_id=manager._session_id,  # noqa: SLF001
+            user_context=manager._user_context,  # noqa: SLF001
             begin_chunk=proto.AddArtifactsRequest.BeginChunkedArtifact(
                 name="pyfiles/sail_chunked_module.py",
                 total_bytes=len(data),
@@ -315,13 +338,13 @@ def test_chunked_pyfile_artifact_is_importable(spark):
             ),
         ),
         proto.AddArtifactsRequest(
-            session_id=manager._session_id,
-            user_context=manager._user_context,
+            session_id=manager._session_id,  # noqa: SLF001
+            user_context=manager._user_context,  # noqa: SLF001
             chunk=proto.AddArtifactsRequest.ArtifactChunk(data=second, crc=zlib.crc32(second)),
         ),
     ]
 
-    response = manager._retrieve_responses(iter(requests))
+    response = manager._retrieve_responses(iter(requests))  # noqa: SLF001
     assert response.artifacts[0].name == "pyfiles/sail_chunked_module.py"
     assert response.artifacts[0].is_crc_successful
 
@@ -332,7 +355,7 @@ def test_chunked_pyfile_artifact_is_importable(spark):
         return sail_chunked_module.VALUE
 
     rows = spark.range(1).select(read_chunked_value("id").alias("value")).collect()
-    assert rows[0].value == EXPECTED_CHUNKED_ARTIFACT_VALUE
+    assert rows[0].value == 123  # noqa: PLR2004
 
 
 def test_add_artifacts_batch_failure_does_not_commit_prior_pyfile(spark):
@@ -340,10 +363,10 @@ def test_add_artifacts_batch_failure_does_not_commit_prior_pyfile(spark):
 
     module_data = b"VALUE = 99\n"
     invalid_data = b"x"
-    manager = spark._client._artifact_manager
+    manager = spark._client._artifact_manager  # noqa: SLF001
     request = proto.AddArtifactsRequest(
-        session_id=manager._session_id,
-        user_context=manager._user_context,
+        session_id=manager._session_id,  # noqa: SLF001
+        user_context=manager._user_context,  # noqa: SLF001
         batch=proto.AddArtifactsRequest.Batch(
             artifacts=[
                 proto.AddArtifactsRequest.SingleChunkArtifact(
@@ -359,7 +382,7 @@ def test_add_artifacts_batch_failure_does_not_commit_prior_pyfile(spark):
     )
 
     with pytest.raises(Exception, match=r"relative path|\\.\\.|invalid"):
-        manager._retrieve_responses(iter([request]))
+        manager._retrieve_responses(iter([request]))  # noqa: SLF001
 
     @udf(IntegerType())
     def read_uncommitted_value(_):
@@ -375,10 +398,10 @@ def test_add_artifacts_rejects_unsupported_jvm_artifacts(spark, name):
     from pyspark.sql.connect.proto import base_pb2 as proto
 
     data = b"jvm artifact payload"
-    manager = spark._client._artifact_manager
+    manager = spark._client._artifact_manager  # noqa: SLF001
     request = proto.AddArtifactsRequest(
-        session_id=manager._session_id,
-        user_context=manager._user_context,
+        session_id=manager._session_id,  # noqa: SLF001
+        user_context=manager._user_context,  # noqa: SLF001
         batch=proto.AddArtifactsRequest.Batch(
             artifacts=[
                 proto.AddArtifactsRequest.SingleChunkArtifact(
@@ -390,7 +413,7 @@ def test_add_artifacts_rejects_unsupported_jvm_artifacts(spark, name):
     )
 
     with pytest.raises(Exception, match=r"JVM artifact is not supported|UNSUPPORTED"):
-        manager._retrieve_responses(iter([request]))
+        manager._retrieve_responses(iter([request]))  # noqa: SLF001
 
 
 def test_chunked_artifact_rejects_unsupported_jvm_artifact_without_committing(spark):
@@ -399,11 +422,11 @@ def test_chunked_artifact_rejects_unsupported_jvm_artifact_without_committing(sp
     data = b"chunked jvm artifact payload"
     first = data[:5]
     second = data[5:]
-    manager = spark._client._artifact_manager
+    manager = spark._client._artifact_manager  # noqa: SLF001
     requests = [
         proto.AddArtifactsRequest(
-            session_id=manager._session_id,
-            user_context=manager._user_context,
+            session_id=manager._session_id,  # noqa: SLF001
+            user_context=manager._user_context,  # noqa: SLF001
             begin_chunk=proto.AddArtifactsRequest.BeginChunkedArtifact(
                 name="jars/sail_chunked.jar",
                 total_bytes=len(data),
@@ -412,14 +435,14 @@ def test_chunked_artifact_rejects_unsupported_jvm_artifact_without_committing(sp
             ),
         ),
         proto.AddArtifactsRequest(
-            session_id=manager._session_id,
-            user_context=manager._user_context,
+            session_id=manager._session_id,  # noqa: SLF001
+            user_context=manager._user_context,  # noqa: SLF001
             chunk=proto.AddArtifactsRequest.ArtifactChunk(data=second, crc=zlib.crc32(second)),
         ),
     ]
 
     with pytest.raises(Exception, match=r"JVM artifact is not supported|UNSUPPORTED"):
-        manager._retrieve_responses(iter(requests))
+        manager._retrieve_responses(iter(requests))  # noqa: SLF001
 
     assert not (_session_artifact_dir(spark) / "jars" / "sail_chunked.jar").exists()
 
@@ -428,10 +451,10 @@ def test_chunked_artifact_rejects_incomplete_declared_size_without_large_allocat
     from pyspark.sql.connect.proto import base_pb2 as proto
 
     data = b"x"
-    manager = spark._client._artifact_manager
+    manager = spark._client._artifact_manager  # noqa: SLF001
     request = proto.AddArtifactsRequest(
-        session_id=manager._session_id,
-        user_context=manager._user_context,
+        session_id=manager._session_id,  # noqa: SLF001
+        user_context=manager._user_context,  # noqa: SLF001
         begin_chunk=proto.AddArtifactsRequest.BeginChunkedArtifact(
             name="files/sail_declared_huge.txt",
             total_bytes=10_000_000_000,
@@ -441,7 +464,7 @@ def test_chunked_artifact_rejects_incomplete_declared_size_without_large_allocat
     )
 
     with pytest.raises(Exception, match=r"missing data chunks|expected 1 chunks|10000000000"):
-        manager._retrieve_responses(iter([request]))
+        manager._retrieve_responses(iter([request]))  # noqa: SLF001
 
 
 def test_copy_from_local_to_fs_rejects_local_destination_by_default(tmp_path):
@@ -505,7 +528,7 @@ def test_failed_batch_does_not_delete_committed_object_store_artifact(tmp_path):
     artifact_root = tmp_path / "artifact-root"
     artifact_store = tmp_path / "artifact-store"
     module_path = tmp_path / "sail_committed_store_module.py"
-    module_data = f"VALUE = {EXPECTED_COMMITTED_OBJECT_STORE_VALUE}\n".encode()
+    module_data = b"VALUE = 314\n"
     module_path.write_bytes(module_data)
     invalid_data = b"x"
 
@@ -524,10 +547,10 @@ def test_failed_batch_does_not_delete_committed_object_store_artifact(tmp_path):
         committed_files = set(_artifact_store_files(artifact_store))
         assert committed_files
 
-        manager = session._client._artifact_manager
+        manager = session._client._artifact_manager  # noqa: SLF001
         request = proto.AddArtifactsRequest(
-            session_id=manager._session_id,
-            user_context=manager._user_context,
+            session_id=manager._session_id,  # noqa: SLF001
+            user_context=manager._user_context,  # noqa: SLF001
             batch=proto.AddArtifactsRequest.Batch(
                 artifacts=[
                     proto.AddArtifactsRequest.SingleChunkArtifact(
@@ -543,7 +566,7 @@ def test_failed_batch_does_not_delete_committed_object_store_artifact(tmp_path):
         )
 
         with pytest.raises(Exception, match=r"relative path|\\.\\.|invalid"):
-            manager._retrieve_responses(iter([request]))
+            manager._retrieve_responses(iter([request]))  # noqa: SLF001
 
         assert committed_files <= set(_artifact_store_files(artifact_store))
         assert not (artifact_root / "pyfiles" / "sail_same_content_alias.py").exists()
@@ -555,7 +578,7 @@ def test_failed_batch_does_not_delete_committed_object_store_artifact(tmp_path):
             return sail_committed_store_module.VALUE
 
         rows = session.range(1).select(read_committed_value("id").alias("value")).collect()
-        assert rows[0].value == EXPECTED_COMMITTED_OBJECT_STORE_VALUE
+        assert rows[0].value == 314  # noqa: PLR2004
 
 
 def test_duplicate_object_store_artifact_reuses_committed_object(tmp_path):
@@ -599,7 +622,7 @@ def test_large_object_store_artifact_can_be_materialized_without_local_source(tm
     artifact_store = tmp_path / "artifact-store"
     module_path = tmp_path / "sail_large_store_module.py"
     module_path.write_text(
-        f"VALUE = {EXPECTED_MULTIPART_OBJECT_STORE_VALUE}\nPADDING = {('x' * MULTIPART_ARTIFACT_PADDING_SIZE)!r}\n",
+        f"VALUE = 509\nPADDING = {('x' * MULTIPART_ARTIFACT_PADDING_SIZE)!r}\n",
         encoding="utf-8",
     )
 
@@ -632,7 +655,7 @@ def test_large_object_store_artifact_can_be_materialized_without_local_source(tm
             return sail_large_store_module.VALUE
 
         rows = session.range(1).select(read_large_store_value("id").alias("value")).collect()
-        assert rows[0].value == EXPECTED_MULTIPART_OBJECT_STORE_VALUE
+        assert rows[0].value == 509  # noqa: PLR2004
 
 
 @pytest.mark.skipif(

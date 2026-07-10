@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-# ruff: noqa: EM102, FBT001, FBT002, I001, N812, PLR2004, RUF010, S101, S108, T201, TRY003
 
-import os
+import os  # noqa: I001
 import re
 import shutil
 import subprocess
@@ -14,7 +13,7 @@ import zipfile
 import zlib
 from pathlib import Path
 
-from pyspark.sql import SparkSession, functions as F
+from pyspark.sql import SparkSession, functions as F  # noqa: N812
 from pyspark.sql.functions import udf
 from pyspark.sql.types import IntegerType, StringType
 
@@ -31,10 +30,10 @@ failures: list[str] = []
 
 
 def log(message: str) -> None:
-    print(message, flush=True)
+    print(message, flush=True)  # noqa: T201
 
 
-def kubectl_exec(script: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+def kubectl_exec(script: str, check: bool = True) -> subprocess.CompletedProcess[str]:  # noqa: FBT001, FBT002
     command = ["kubectl"]
     if KUBECTL_CONTEXT:
         command.extend(["--context", KUBECTL_CONTEXT])
@@ -79,9 +78,9 @@ def expect_raises(label: str, fn, pattern: str | None = None) -> str:
     except Exception as exc:
         message = str(exc)
         if pattern is not None and re.search(pattern, message, flags=re.IGNORECASE) is None:
-            raise AssertionError(f"{label} raised unexpected error: {message}") from exc
+            raise AssertionError(f"{label} raised unexpected error: {message}") from exc  # noqa: EM102, TRY003
         return message
-    raise AssertionError(f"{label} did not raise")
+    raise AssertionError(f"{label} did not raise")  # noqa: EM102, TRY003
 
 
 def new_spark(case_name: str) -> SparkSession:
@@ -168,7 +167,7 @@ def case_basic_k8s_execution() -> None:
     try:
         spark = new_spark("basic")
         rows = spark.range(20).repartition(4).agg(F.sum("id").alias("total")).collect()
-        assert rows[0].total == 190
+        assert rows[0].total == 190  # noqa: PLR2004, S101
     finally:
         stop_spark(spark)
 
@@ -190,10 +189,10 @@ def case_cache_artifacts_and_local_relations() -> None:
                 "files/not-cache",
             ],
         )
-        assert statuses[f"cache/{small_hash}"].exists
-        assert statuses[f"cache/{large_hash}"].exists
-        assert not statuses["cache/missing"].exists
-        assert not statuses["files/not-cache"].exists
+        assert statuses[f"cache/{small_hash}"].exists  # noqa: S101
+        assert statuses[f"cache/{large_hash}"].exists  # noqa: S101
+        assert not statuses["cache/missing"].exists  # noqa: S101
+        assert not statuses["files/not-cache"].exists  # noqa: S101
 
         wrong_hash = "0" * 64
         data = b"cached local relation payload"
@@ -218,13 +217,13 @@ def case_cache_artifacts_and_local_relations() -> None:
             lambda: manager._retrieve_responses(iter([bad_request])),
             r"content hash|SHA-256|INVALID",
         )
-        assert not artifact_statuses(spark, [f"cache/{wrong_hash}"])[f"cache/{wrong_hash}"].exists
+        assert not artifact_statuses(spark, [f"cache/{wrong_hash}"])[f"cache/{wrong_hash}"].exists  # noqa: S101
 
         spark.conf.set("spark.sql.session.localRelationCacheThreshold", str(1 << 30))
         inline_df = spark.createDataFrame([(1, "a"), (2, "b")], schema="id long, value string")
         inline_plan = inline_df._plan.to_proto(spark._client)
-        assert inline_plan.root.HasField("local_relation")
-        assert [(row.id, row.value) for row in inline_df.orderBy("id").collect()] == [
+        assert inline_plan.root.HasField("local_relation")  # noqa: S101
+        assert [(row.id, row.value) for row in inline_df.orderBy("id").collect()] == [  # noqa: S101
             (1, "a"),
             (2, "b"),
         ]
@@ -235,10 +234,10 @@ def case_cache_artifacts_and_local_relations() -> None:
             schema="id long, value string, flag boolean, score double",
         )
         cached_plan = cached_df._plan.to_proto(spark._client)
-        assert cached_plan.root.HasField("chunked_cached_local_relation")
-        assert len(cached_plan.root.chunked_cached_local_relation.dataHashes) >= 1
+        assert cached_plan.root.HasField("chunked_cached_local_relation")  # noqa: S101
+        assert len(cached_plan.root.chunked_cached_local_relation.dataHashes) >= 1  # noqa: S101
         rows = cached_df.orderBy("id").collect()
-        assert [(r.id, r.value, r.flag, r.score) for r in rows] == [
+        assert [(r.id, r.value, r.flag, r.score) for r in rows] == [  # noqa: S101
             (1, "a", True, 1.25),
             (2, "b", False, 2.5),
         ]
@@ -252,9 +251,9 @@ def case_cache_artifacts_and_local_relations() -> None:
         )
         multi_chunk_plan = multi_chunk_df._plan.to_proto(spark._client)
         relation = multi_chunk_plan.root.chunked_cached_local_relation
-        assert multi_chunk_plan.root.HasField("chunked_cached_local_relation")
-        assert len(relation.dataHashes) >= 2, list(relation.dataHashes)
-        assert [row.id for row in multi_chunk_df.orderBy("id").collect()] == list(range(9))
+        assert multi_chunk_plan.root.HasField("chunked_cached_local_relation")  # noqa: S101
+        assert len(relation.dataHashes) >= 2, list(relation.dataHashes)  # noqa: PLR2004, S101
+        assert [row.id for row in multi_chunk_df.orderBy("id").collect()] == list(range(9))  # noqa: S101
     finally:
         stop_spark(spark)
 
@@ -272,7 +271,7 @@ def case_pyfile_file_archive_and_jar_artifacts() -> None:
             small_py.write_text("VALUE = 7\n", encoding="utf-8")
             spark.addArtifact(str(small_py), pyfile=True)
             rows = spark.range(8).repartition(4).select(module_value_udf(small_module)("id").alias("v")).collect()
-            assert {row.v for row in rows} == {7}
+            assert {row.v for row in rows} == {7}  # noqa: S101
 
             medium_module = f"k8s_medium_module_{RUN_ID}"
             medium_py = tmp / f"{medium_module}.py"
@@ -280,7 +279,7 @@ def case_pyfile_file_archive_and_jar_artifacts() -> None:
             spark.addArtifact(str(medium_py), pyfile=True)
             clear_artifact_root()
             rows = spark.range(8).repartition(4).select(module_text_len_udf(medium_module)("id").alias("v")).collect()
-            assert {row.v for row in rows} == {256}
+            assert {row.v for row in rows} == {256}  # noqa: S101
 
             chunk_module = f"k8s_chunk_module_{RUN_ID}"
             chunk_py = tmp / f"{chunk_module}.py"
@@ -288,7 +287,7 @@ def case_pyfile_file_archive_and_jar_artifacts() -> None:
             spark.addArtifact(str(chunk_py), pyfile=True)
             clear_artifact_root()
             rows = spark.range(8).repartition(4).select(module_text_len_udf(chunk_module)("id").alias("v")).collect()
-            assert {row.v for row in rows} == {40000}
+            assert {row.v for row in rows} == {40000}  # noqa: S101
 
             zip_module = f"k8s_zip_module_{RUN_ID}"
             zip_path = tmp / f"{zip_module}.zip"
@@ -296,7 +295,7 @@ def case_pyfile_file_archive_and_jar_artifacts() -> None:
             spark.addArtifact(str(zip_path), pyfile=True)
             clear_artifact_root()
             rows = spark.range(4).repartition(2).select(module_value_udf(zip_module)("id").alias("v")).collect()
-            assert {row.v for row in rows} == {10}
+            assert {row.v for row in rows} == {10}  # noqa: S101
 
             total_expected = 0
             for i in range(3):
@@ -313,7 +312,7 @@ def case_pyfile_file_archive_and_jar_artifacts() -> None:
                 return sum(int(importlib.import_module(f"k8s_multi_module_{RUN_ID}_{i}").VALUE) for i in range(3))
 
             rows = spark.range(4).repartition(2).select(read_multi("id").alias("v")).collect()
-            assert {row.v for row in rows} == {total_expected}
+            assert {row.v for row in rows} == {total_expected}  # noqa: S101
 
             file_path = tmp / f"k8s_file_{RUN_ID}.txt"
             file_payload = "file artifact payload " * 8
@@ -321,7 +320,7 @@ def case_pyfile_file_archive_and_jar_artifacts() -> None:
             spark.addArtifact(str(file_path), file=True)
             clear_artifact_root()
             rows = spark.range(8).repartition(4).select(spark_file_text_udf(file_path.name)("id").alias("v")).collect()
-            assert {row.v for row in rows} == {file_payload}
+            assert {row.v for row in rows} == {file_payload}  # noqa: S101
 
             large_file = tmp / f"k8s_large_file_{RUN_ID}.txt"
             large_payload = "L" * 70000
@@ -329,7 +328,7 @@ def case_pyfile_file_archive_and_jar_artifacts() -> None:
             spark.addArtifact(str(large_file), file=True)
             clear_artifact_root()
             rows = spark.range(8).repartition(4).select(spark_file_text_udf(large_file.name)("id").alias("v")).collect()
-            assert {len(row.v) for row in rows} == {70000}
+            assert {len(row.v) for row in rows} == {70000}  # noqa: S101
 
             archive_dir = tmp / f"k8s_archive_payload_{RUN_ID}"
             archive_dir.mkdir()
@@ -349,7 +348,7 @@ def case_pyfile_file_archive_and_jar_artifacts() -> None:
                 )
                 .collect()
             )
-            assert {row.v for row in rows} == {"archive with fragment"}
+            assert {row.v for row in rows} == {"archive with fragment"}  # noqa: S101
 
             default_dir = tmp / f"k8s_default_archive_payload_{RUN_ID}"
             default_dir.mkdir()
@@ -371,7 +370,7 @@ def case_pyfile_file_archive_and_jar_artifacts() -> None:
                 )
                 .collect()
             )
-            assert {row.v for row in rows} == {"archive default dir"}
+            assert {row.v for row in rows} == {"archive default dir"}  # noqa: S101
 
             unsafe_archive = tmp / f"k8s_unsafe_archive_{RUN_ID}.zip"
             make_zip(unsafe_archive, {"../escape.txt": "unsafe"})
@@ -393,7 +392,7 @@ def case_pyfile_file_archive_and_jar_artifacts() -> None:
             )
 
         after_store_count = artifact_store_file_count()
-        assert after_store_count > before_store_count, (before_store_count, after_store_count)
+        assert after_store_count > before_store_count, (before_store_count, after_store_count)  # noqa: S101
     finally:
         stop_spark(spark)
         deadline = time.time() + 20
@@ -401,7 +400,7 @@ def case_pyfile_file_archive_and_jar_artifacts() -> None:
             if artifact_store_file_count() <= before_store_count:
                 break
             time.sleep(1)
-        assert artifact_store_file_count() <= before_store_count
+        assert artifact_store_file_count() <= before_store_count  # noqa: S101
 
 
 def case_protocol_errors_and_transactionality() -> None:
@@ -425,14 +424,14 @@ def case_protocol_errors_and_transactionality() -> None:
             ),
         )
         crc_response = manager._retrieve_responses(iter([crc_request]))
-        assert crc_response.artifacts[0].name == f"files/k8s_bad_crc_{RUN_ID}.txt"
-        assert not crc_response.artifacts[0].is_crc_successful
-        assert not artifact_statuses(spark, [f"files/k8s_bad_crc_{RUN_ID}.txt"])[
+        assert crc_response.artifacts[0].name == f"files/k8s_bad_crc_{RUN_ID}.txt"  # noqa: S101
+        assert not crc_response.artifacts[0].is_crc_successful  # noqa: S101
+        assert not artifact_statuses(spark, [f"files/k8s_bad_crc_{RUN_ID}.txt"])[  # noqa: S101
             f"files/k8s_bad_crc_{RUN_ID}.txt"
         ].exists
 
         direct_module = f"k8s_direct_chunk_module_{RUN_ID}"
-        direct_data = f"VALUE = 321\nTEXT = {repr('d' * 128)}\n".encode()
+        direct_data = f"VALUE = 321\nTEXT = {repr('d' * 128)}\n".encode()  # noqa: RUF010
         first = direct_data[:7]
         second = direct_data[7:]
         direct_requests = [
@@ -459,9 +458,9 @@ def case_protocol_errors_and_transactionality() -> None:
             ),
         ]
         direct_response = manager._retrieve_responses(iter(direct_requests))
-        assert direct_response.artifacts[0].is_crc_successful
+        assert direct_response.artifacts[0].is_crc_successful  # noqa: S101
         rows = spark.range(4).repartition(2).select(module_value_udf(direct_module)("id").alias("v")).collect()
-        assert {row.v for row in rows} == {321}
+        assert {row.v for row in rows} == {321}  # noqa: S101
 
         incomplete = b"x"
         incomplete_request = proto.AddArtifactsRequest(
@@ -531,7 +530,7 @@ def case_copy_from_local_to_fs() -> None:
             source = tmp / f"k8s_copy_source_{RUN_ID}.txt"
             payload = f"copy payload {RUN_ID}"
             source.write_text(payload, encoding="utf-8")
-            disabled_dest = f"/tmp/sail/k8s_copy_disabled_{RUN_ID}.txt"
+            disabled_dest = f"/tmp/sail/k8s_copy_disabled_{RUN_ID}.txt"  # noqa: S108
             expect_raises(
                 "copyFromLocalToFs local destination disabled",
                 lambda: spark.copyFromLocalToFs(str(source), disabled_dest),
@@ -539,10 +538,10 @@ def case_copy_from_local_to_fs() -> None:
             )
 
             spark.conf.set("spark.sql.artifact.copyFromLocalToFs.allowDestLocal", "true")
-            dest = f"/tmp/sail/k8s_copy_enabled_{RUN_ID}.txt"
+            dest = f"/tmp/sail/k8s_copy_enabled_{RUN_ID}.txt"  # noqa: S108
             spark.copyFromLocalToFs(str(source), dest)
             copied = kubectl_exec(f"cat {dest}").stdout
-            assert copied == payload
+            assert copied == payload  # noqa: S101
     finally:
         stop_spark(spark)
 

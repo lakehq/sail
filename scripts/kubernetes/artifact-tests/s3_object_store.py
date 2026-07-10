@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
-# ruff: noqa: BLE001, EM102, I001, PLR2004, S101, T201, TRY003, TRY300
+from __future__ import annotations  # noqa: I001
 
 import contextlib
 import csv
@@ -30,7 +28,7 @@ def kubectl_capture(args: list[str], *, check: bool = True) -> str:
     if KUBECTL_CONTEXT:
         command.extend(["--context", KUBECTL_CONTEXT])
     command.extend(args)
-    print("+", " ".join(command), flush=True)
+    print("+", " ".join(command), flush=True)  # noqa: T201
     proc = subprocess.run(
         command,
         text=True,
@@ -39,7 +37,7 @@ def kubectl_capture(args: list[str], *, check: bool = True) -> str:
         check=check,
     )
     if proc.stdout:
-        print(proc.stdout, end="" if proc.stdout.endswith("\n") else "\n")
+        print(proc.stdout, end="" if proc.stdout.endswith("\n") else "\n")  # noqa: T201
     return proc.stdout
 
 
@@ -57,7 +55,7 @@ def create_bucket():
     while True:
         try:
             client.create_bucket(Bucket=MINIO_BUCKET)
-            return client
+            return client  # noqa: TRY300
         except client.exceptions.BucketAlreadyOwnedByYou:
             return client
         except Exception:
@@ -79,7 +77,7 @@ def wait_for_empty_bucket(client) -> None:
         if not last_keys:
             return
         time.sleep(1)
-    raise AssertionError(f"artifact objects were not cleaned up: {last_keys}")
+    raise AssertionError(f"artifact objects were not cleaned up: {last_keys}")  # noqa: EM102, TRY003
 
 
 def run_spark_probe(client) -> None:
@@ -117,9 +115,11 @@ def run_spark_probe(client) -> None:
             spark.addArtifact(f"{archive_zip}#calc_bundle", archive=True)
 
             keys_after_add = s3_keys(client)
-            print(f"S3 keys after addArtifact: {keys_after_add}")
-            assert any(key.startswith("artifacts/sail-artifacts/sessions/") for key in keys_after_add), keys_after_add
-            assert len(keys_after_add) >= 4, keys_after_add
+            print(f"S3 keys after addArtifact: {keys_after_add}")  # noqa: T201
+            assert any(  # noqa: S101
+                key.startswith("artifacts/sail-artifacts/sessions/") for key in keys_after_add
+            ), keys_after_add
+            assert len(keys_after_add) >= 4, keys_after_add  # noqa: PLR2004, S101
 
             @udf(IntegerType())
             def binary_sum(x: int) -> int:
@@ -189,16 +189,16 @@ def run_spark_probe(client) -> None:
                 )
                 for i in range(6)
             ]
-            print(f"Computed artifact UDF rows: {actual}")
-            assert actual == expected
+            print(f"Computed artifact UDF rows: {actual}")  # noqa: T201
+            assert actual == expected  # noqa: S101
     finally:
         spark.stop()
     wait_for_empty_bucket(client)
-    print("S3 keys after Spark session stop: []")
+    print("S3 keys after Spark session stop: []")  # noqa: T201
 
 
 def dump_diagnostics() -> None:
-    print("\n--- Kubernetes diagnostics ---", flush=True)
+    print("\n--- Kubernetes diagnostics ---", flush=True)  # noqa: T201
     for args in [
         ["-n", NAMESPACE, "get", "pods", "-o", "wide"],
         ["-n", NAMESPACE, "get", "events", "--sort-by=.lastTimestamp"],
@@ -221,13 +221,13 @@ def dump_diagnostics() -> None:
 def main() -> int:
     try:
         client = create_bucket()
-        print(f"Created/verified bucket {MINIO_BUCKET}")
+        print(f"Created/verified bucket {MINIO_BUCKET}")  # noqa: T201
         run_spark_probe(client)
-    except Exception as error:
-        print(f"VALIDATION FAILED: {error}", file=sys.stderr)
+    except Exception as error:  # noqa: BLE001
+        print(f"VALIDATION FAILED: {error}", file=sys.stderr)  # noqa: T201
         dump_diagnostics()
         return 1
-    print("Kubernetes + MinIO artifact validation passed")
+    print("Kubernetes + MinIO artifact validation passed")  # noqa: T201
     return 0
 
 
