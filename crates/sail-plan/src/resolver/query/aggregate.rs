@@ -314,9 +314,10 @@ impl PlanResolver<'_> {
                         let expr = sort
                             .expr
                             .transform(|expr| match expr {
-                                Expr::Column(column) => Ok(Transformed::yes(Expr::Column(
-                                    Column::new_unqualified(column.name),
-                                ))),
+                                Expr::Column(mut column) => {
+                                    column.relation = Some(alias.alias.clone());
+                                    Ok(Transformed::yes(Expr::Column(column)))
+                                }
                                 expr => Ok(Transformed::no(expr)),
                             })
                             .data()
