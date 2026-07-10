@@ -15,11 +15,6 @@ mod data_type;
 mod provider;
 mod token;
 
-pub mod unity {
-    #![expect(clippy::allow_attributes)]
-    include!(concat!(env!("OUT_DIR"), "/unity_catalog.rs"));
-}
-
 #[expect(unused_imports)]
 #[expect(clippy::enum_variant_names)]
 pub mod r#gen {
@@ -71,6 +66,35 @@ pub mod r#gen {
         UserDefinedType,
         #[serde(rename = "TABLE_TYPE", alias = "table_type")]
         TableType,
+    }
+
+    impl std::fmt::Display for ColumnTypeName {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let value = match self {
+                Self::Boolean => "BOOLEAN",
+                Self::Byte => "BYTE",
+                Self::Short => "SHORT",
+                Self::Int => "INT",
+                Self::Long => "LONG",
+                Self::Float => "FLOAT",
+                Self::Double => "DOUBLE",
+                Self::Date => "DATE",
+                Self::Timestamp => "TIMESTAMP",
+                Self::TimestampNtz => "TIMESTAMP_NTZ",
+                Self::String => "STRING",
+                Self::Binary => "BINARY",
+                Self::Decimal => "DECIMAL",
+                Self::Interval => "INTERVAL",
+                Self::Array => "ARRAY",
+                Self::Struct => "STRUCT",
+                Self::Map => "MAP",
+                Self::Char => "CHAR",
+                Self::Null => "NULL",
+                Self::UserDefinedType => "USER_DEFINED_TYPE",
+                Self::TableType => "TABLE_TYPE",
+            };
+            f.write_str(value)
+        }
     }
 }
 
