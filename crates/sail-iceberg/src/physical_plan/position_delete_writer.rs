@@ -33,6 +33,8 @@ struct PositionDeleteRows {
 
 #[derive(Debug, Default)]
 pub(crate) struct PositionDeleteAccumulator {
+    // FIXME: Stream sorted positions into rolling delete files and aggregate all
+    // emitted files before commit instead of buffering every position per data file.
     rows_by_file: BTreeMap<String, PositionDeleteRows>,
 }
 

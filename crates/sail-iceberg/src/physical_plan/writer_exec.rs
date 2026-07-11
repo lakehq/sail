@@ -262,6 +262,8 @@ impl ExecutionPlan for IcebergWriterExec {
     }
 
     fn required_input_distribution(&self) -> Vec<Distribution> {
+        // FIXME: Write data in parallel and roll files by target size once writer
+        // commit metadata can be merged safely across output partitions.
         vec![Distribution::SinglePartition]
     }
 
