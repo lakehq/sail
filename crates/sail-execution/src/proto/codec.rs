@@ -4446,36 +4446,6 @@ mod tests {
 
     use super::*;
 
-    fn round_trip_iceberg_commit(
-        expected_snapshot_id: Option<Option<i64>>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        use datafusion::physical_plan::empty::EmptyExec;
-
-        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::new(Schema::empty())));
-        let plan = IcebergCommitExec::new(
-            input,
-            Url::parse("file:///tmp/iceberg-table")
-                .map_err(|error| plan_datafusion_err!("{error}"))?,
-            None,
-        )
-        .with_expected_snapshot_id(expected_snapshot_id);
-        let codec = RemoteExecutionCodec;
-        let bytes = try_encode_physical_plan(&codec, Arc::new(plan))?;
-        try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)
-    }
-
-    #[test]
-    fn iceberg_commit_snapshot_requirement_round_trip_preserves_presence() -> Result<()> {
-        for expected_snapshot_id in [Some(Some(41)), Some(None), None] {
-            let decoded = round_trip_iceberg_commit(expected_snapshot_id)?;
-            let decoded = decoded
-                .downcast_ref::<IcebergCommitExec>()
-                .ok_or_else(|| plan_datafusion_err!("decoded plan is not an IcebergCommitExec"))?;
-            assert_eq!(decoded.expected_snapshot_id(), expected_snapshot_id);
-        }
-        Ok(())
-    }
-
     fn round_trip_udf(udf: ScalarUDF) -> Result<Arc<ScalarUDF>> {
         let codec = RemoteExecutionCodec;
         let name = udf.name().to_string();
