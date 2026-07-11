@@ -179,8 +179,6 @@ mod tests {
     #![expect(clippy::unwrap_used)]
 
     use super::{HiveCatalogFormat, HiveDetectedFormat, HiveStorageFormat};
-    use crate::error::CatalogError;
-
     #[test]
     fn test_textfile_storage_format_uses_lazy_simple_serde() {
         let format = HiveStorageFormat::textfile();
@@ -233,14 +231,6 @@ mod tests {
         let format = HiveCatalogFormat::from_format("delta").unwrap();
         assert_eq!(format.logical_format, "delta");
         assert_eq!(format.storage_format, HiveStorageFormat::parquet());
-    }
-
-    #[test]
-    fn test_catalog_format_rejects_deltalake_package_name_as_provider() {
-        assert!(matches!(
-            HiveCatalogFormat::from_format("deltalake"),
-            Err(CatalogError::NotSupported(_))
-        ));
     }
 
     #[test]

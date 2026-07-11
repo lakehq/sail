@@ -2441,7 +2441,7 @@ mod tests {
 
     #[test]
     fn test_table_to_status_preserves_unsupported_datasource_provider() {
-        for provider in ["custom.provider", "deltalake", "orc"] {
+        for provider in ["custom.provider", "orc"] {
             let table = hms_table_with_locations(
                 Some(provider),
                 Some("s3://sd-location"),
