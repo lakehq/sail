@@ -17,10 +17,10 @@ What maintainers can rely on today:
 - Kerberos SASL frame wrapping (`auth-int` / `auth-conf`) with configurable minimum QOP (`min_sasl_qop`).
 - HMS endpoint lists with automatic failover on retryable transport/Thrift errors.
 - Basic metadata CRUD for databases and tables through `HmsCatalogProvider`.
-- Spark datasource v2 table interop for tables registered in HMS: Sail reads `parquet`, `csv`, `json`, `avro`, and `delta`. Sail writes `parquet`, `csv`, `json`, and `delta`; Avro write is not implemented yet. Sail resolves the table location from Spark's datasource metadata.
+- Table format resolution: when reading existing HMS metadata, Sail preserves the recorded provider and resolves its authoritative location without filtering providers by current execution support. Operations on the table are governed by the table format execution layer; see [Data Sources](../../guide/sources/index.md) for the supported set.
 - Iceberg-in-HMS tables: Sail detects HMS-registered Iceberg tables, resolves their metadata location, reads via the Iceberg table provider, and commits new snapshots under a per-table HMS lock with compare-and-swap precondition checking (`crates/sail-catalog-hms/src/managed_table.rs`).
 - A self-contained Kerberos integration harness built with `testcontainers`.
-- A DSV2 + Iceberg format interop harness (`python/pysail/tests/spark/catalog/hms/`) that round-trips tables between JVM Spark and Sail through a real HMS + MinIO.
+- A format interop harness (`python/pysail/tests/spark/catalog/hms/`) that round-trips tables between JVM Spark and Sail through a real HMS + MinIO.
 - CI wiring for the Rust ignored/Kerberos and Python HMS/Spark catalog-test lanes.
 
 What maintainers should not infer from the current test suite:
@@ -28,7 +28,7 @@ What maintainers should not infer from the current test suite:
 - Broad production readiness across HMS distributions and versions.
 - Support for Hive ACID or transactional HMS APIs.
 - Support for delegation tokens or TLS.
-- ORC engine support: Sail preserves `orc` as the provider for Spark `USING ORC` tables, but has no ORC reader. A Sail catalog accepts `USING ORC` for metadata purposes but cannot read the files.
+- Execution-layer gaps for any specific format. HMS read conversion preserves any recorded provider; whether Sail can operate on it is an execution-layer concern (see [Data Sources](../../guide/sources/index.md)) that the interop harness below exercises honestly, including xfails for current gaps.
 
 ## What Green Means
 
@@ -64,7 +64,7 @@ It is only partial evidence for HA behavior:
 - the current test suite covers ordered endpoint failover and retryable transport errors
 - it does not yet prove broader operational behavior such as DNS churn under long-lived production traffic, vendor-specific HA frontends, or multi-region deployment patterns
 
-### Format interop (DSV2 + Iceberg)
+### Format interop
 
 The format interop harness target is:
 
@@ -74,20 +74,17 @@ hatch run pytest -m integration python/pysail/tests/spark/catalog/hms -v
 
 When this target is green, it means Sail successfully:
 
-- round-trips `parquet`, `csv`, `json`, `avro` tables between JVM Spark and Sail through a real HMS + MinIO (Spark writes, Sail reads for all four; Sail writes, Spark reads for `parquet`, `csv`, `json`)
-- round-trips `delta` datasource tables (Spark writes, Sail reads)
+- round-trips datasource tables between JVM Spark and Sail through a real HMS + MinIO, in both directions for the formats Sail's execution layer supports (Spark writes → Sail reads; Sail writes → Spark reads)
 - round-trips Iceberg tables in both directions through HMS, exercising the `managed_table.rs` commit path
 - advances the Iceberg metadata pointer on Sail insert and rejects stale commits
-- preserves decimal/timestamp type fidelity, column comments, foreign table properties, and identity-partition pruning across the DSV2 formats
+- preserves decimal/timestamp type fidelity, column comments, foreign table properties, and identity-partition pruning across the supported formats
 
 This is evidence that the Spark datasource location handling in `sail_catalog_hms::convert` and the Iceberg managed-table commit machinery both work end to end against a real Hive Metastore and a reference JVM Spark.
 
 It is not evidence that:
 
-- ORC tables are readable (Sail has no ORC reader; ORC is metadata-detected only)
-- Sail can write Avro (the Sail-create/Spark-read Avro cases are xfailed: "Writer not implemented for this format"; Spark-written Avro is read back fine)
-- Hive `textfile` tables are readable (the format is metadata-detected, but Sail has no `textfile`/`LazySimpleSerDe` file reader yet; the textfile interop test is xfailed)
-- complex/nested types round-trip for DSV2 formats (the parquet `schema_matrix` and `mixed_complex_partitioned` tests are xfailed as "not yet working in Hive 4")
+- every format is fully readable and writable in both directions. The harness parametrizes the formats Sail supports (see [Data Sources](../../guide/sources/index.md)) and xfails the cases where the execution layer has a gap; green means the metadata path is correct, not that the execution layer has no gaps
+- complex/nested types round-trip for every format (some such cases are xfailed as "not yet working in Hive 4")
 
 ## Local Verification
 
@@ -160,7 +157,7 @@ Supported contract:
 - `_HOST` expansion for the principal based on the currently selected endpoint
 - metadata CRUD for databases, tables, and views
 - retried create/drop mutations normalize `AlreadyExists` and `NotFound` responses when the earlier attempt likely succeeded and only the response was lost
-- Spark datasource v2 table resolution: Sail recognizes Spark-registered datasource tables, resolves the Spark-recorded table location, and routes to the matching file-format reader (`parquet`, `csv`, `json`, `avro`, `delta`)
+- Spark-registered datasource table resolution: Sail recognizes Spark-registered datasource tables, resolves the Spark-recorded provider and location, and delegates read/write to Sail's table format execution layer
 - Unsupported Spark datasource providers do not fail metadata conversion. The declared provider remains authoritative even when its SerDe/InputFormat/OutputFormat describes a supported storage format. Listing and describe therefore preserve the provider identity; an operation that needs an unregistered table format fails later during planning
 - Iceberg-in-HMS table lifecycle: recognize HMS-registered Iceberg tables, resolve their current metadata file, read via the Iceberg table provider, and commit new snapshots under a per-table HMS lock with compare-and-swap precondition checking
 
@@ -174,7 +171,6 @@ Out of scope for the current implementation:
 - transactional HMS methods such as `open_txns`, `lock`, `heartbeat`, `allocate_table_write_ids`, or compaction APIs
 - Hortonworks or other distribution-specific compatibility promises
 - automatic keytab management inside Sail
-- ORC as an engine format: the `orc` provider is preserved in HMS metadata but Sail has no ORC reader; `USING ORC` is accepted for metadata but the files cannot be read
 
 ## Table Format & Metadata Contract
 

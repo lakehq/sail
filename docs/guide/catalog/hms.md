@@ -18,14 +18,11 @@ The following areas are supported:
 - HMS high-availability URI lists with endpoint failover.
 - Flat database namespaces.
 - Database, table, and view metadata stored in HMS.
-- Spark datasource v2 formats registered in HMS (`parquet`, `csv`, `json`, `avro`, `delta`): Sail resolves the table location from Spark's datasource metadata. Sail reads all five formats. Sail writes `parquet`, `csv`, `json`, and `delta`; Avro write is not implemented yet (Sail-create/Spark-read Avro is tracked as a known gap).
-- Iceberg tables registered in HMS: Sail resolves the Iceberg metadata location, reads via the Iceberg table provider, and commits new snapshots under a per-table lock with compare-and-swap precondition checking.
-- Hive native `textfile` tables: Sail detects the format at the HMS metadata layer (SerDe library string matching) and resolves the table location from the storage descriptor, but Sail has no `textfile`/`LazySimpleSerDe` file reader yet, so the files cannot be read until the reader and format mapping are implemented.
+- Table format resolution: when reading existing HMS metadata, Sail preserves the recorded provider and resolves its authoritative location without filtering providers by current execution support. Whether Sail can operate on the table depends on [Sail's data source support](../sources/index.md), not on HMS metadata conversion. Metadata-only listing and description remain available for unregistered providers; operations that need the format implementation fail later during planning.
 
 The following areas are not implemented yet:
 
 - Hive ACID or transactional HMS APIs such as transaction heartbeats, locks, or write ID allocation.
-- ORC as a first-class engine format: Sail preserves `orc` as the provider for Spark `USING ORC` tables, but has no ORC file reader, so an ORC table registered in HMS cannot be read by Sail today.
 - Delegation-token authentication.
 
 Hive Metastore can be configured using the following options:

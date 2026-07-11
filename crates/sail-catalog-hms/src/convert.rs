@@ -478,7 +478,6 @@ fn spark_datasource_provider(logical_format: &str) -> Option<String> {
     let provider = logical_format.trim().to_ascii_lowercase();
     match provider.as_str() {
         "textfile" | ICEBERG_TABLE_TYPE_VALUE => None,
-        "deltalake" => Some("delta".to_string()),
         _ => Some(provider),
     }
 }
@@ -501,7 +500,6 @@ fn table_provider_format(parameters: Option<&AHashMap<FastStr, FastStr>>) -> Opt
     let provider = extract_property(parameters, SPARK_DATASOURCE_PROVIDER_KEY)?;
     let provider = provider.trim().to_ascii_lowercase();
     match provider.as_str() {
-        "deltalake" => Some("delta".to_string()),
         "" => Some("unknown".to_string()),
         _ => Some(provider),
     }
@@ -706,7 +704,7 @@ fn reorder_spark_columns(
 /// The domain model, in priority order:
 ///
 /// 1. A Spark datasource provider is preserved after trimming and normalizing
-///    case. The explicit `deltalake` catalog alias is canonicalized to `delta`.
+///    case.
 /// 2. Only tables without a datasource marker are classified from their Hive
 ///    SerDe/InputFormat/OutputFormat metadata.
 /// 3. If neither is present or detectable, the format is `unknown`.
@@ -1713,7 +1711,7 @@ mod tests {
         );
         parameters.insert(
             FastStr::from_static_str("spark.sql.sources.provider"),
-            FastStr::from_static_str("deltalake"),
+            FastStr::from_static_str("delta"),
         );
         parameters.insert(
             FastStr::from_static_str("spark.sql.sources.schema.numPartCols"),
@@ -2443,7 +2441,7 @@ mod tests {
 
     #[test]
     fn test_table_to_status_preserves_unsupported_datasource_provider() {
-        for provider in ["custom.provider", "orc"] {
+        for provider in ["custom.provider", "deltalake", "orc"] {
             let table = hms_table_with_locations(
                 Some(provider),
                 Some("s3://sd-location"),
