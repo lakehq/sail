@@ -215,6 +215,7 @@ pub struct SnapshotProducer<'a> {
     /// If true, create a snapshot with no parent (for bootstrap scenarios)
     pub is_bootstrap: bool,
     pub row_lineage_start_row_id: Option<i64>,
+    pub merge_intent: bool,
 }
 
 impl<'a> SnapshotProducer<'a> {
@@ -234,6 +235,7 @@ impl<'a> SnapshotProducer<'a> {
             write_path_mode: crate::utils::WritePathMode::Absolute,
             is_bootstrap: false,
             row_lineage_start_row_id: None,
+            merge_intent: false,
         }
     }
 
@@ -251,6 +253,11 @@ impl<'a> SnapshotProducer<'a> {
 
     pub fn with_row_lineage_start_row_id(mut self, start_row_id: Option<i64>) -> Self {
         self.row_lineage_start_row_id = start_row_id;
+        self
+    }
+
+    pub fn with_merge_intent(mut self, merge_intent: bool) -> Self {
+        self.merge_intent = merge_intent;
         self
     }
 
@@ -272,7 +279,7 @@ impl<'a> SnapshotProducer<'a> {
     pub async fn commit(self, op: impl SnapshotProduceOperation) -> Result<ActionCommit, String> {
         let timestamp_ms = crate::utils::timestamp::monotonic_timestamp_ms();
         let is_overwrite = op.operation() == Operation::Overwrite.as_str();
-        let is_row_delta = !self.added_delete_files.is_empty();
+        let is_row_delta = self.merge_intent || !self.added_delete_files.is_empty();
         let operation = match op.operation() {
             "overwrite" => Operation::Overwrite,
             "delete" => Operation::Delete,
@@ -432,7 +439,7 @@ impl<'a> SnapshotProducer<'a> {
 
         let mut new_manifest_files = Vec::new();
         let added_data_files = self.added_data_files.clone();
-        if !added_data_files.is_empty() || self.added_delete_files.is_empty() {
+        if !added_data_files.is_empty() {
             let mut writer = ManifestWriterBuilder::new(None, None, metadata.clone()).build();
             for df in &added_data_files {
                 writer.add(df.clone());

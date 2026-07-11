@@ -62,11 +62,17 @@ pub struct BootstrapResult {
 }
 
 /// Bootstrap operation for SnapshotProducer
-struct BootstrapOperation;
+struct BootstrapOperation {
+    merge_intent: bool,
+}
 
 impl SnapshotProduceOperation for BootstrapOperation {
     fn operation(&self) -> &'static str {
-        "append"
+        if self.merge_intent {
+            "overwrite"
+        } else {
+            "append"
+        }
     }
 }
 
@@ -119,11 +125,14 @@ pub(crate) async fn bootstrap_snapshot_action_commit(
     )
     .with_bootstrap(true)
     .with_added_delete_files(commit_info.delete_files.clone())
+    .with_merge_intent(commit_info.merge_intent)
     .with_row_lineage_start_row_id(row_lineage_start_row_id)
     .with_write_path_mode(WritePathMode::Absolute);
 
     producer
-        .commit(BootstrapOperation)
+        .commit(BootstrapOperation {
+            merge_intent: commit_info.merge_intent,
+        })
         .await
         .map_err(DataFusionError::Execution)
 }
@@ -202,11 +211,14 @@ pub async fn bootstrap_new_table_with_style(
     )
     .with_bootstrap(true)
     .with_added_delete_files(commit_info.delete_files.clone())
+    .with_merge_intent(commit_info.merge_intent)
     .with_row_lineage_start_row_id(row_lineage_start_row_id)
     .with_write_path_mode(WritePathMode::Absolute);
 
     let action_commit = producer
-        .commit(BootstrapOperation)
+        .commit(BootstrapOperation {
+            merge_intent: commit_info.merge_intent,
+        })
         .await
         .map_err(DataFusionError::Execution)?;
 

@@ -462,7 +462,9 @@ impl ExecutionPlan for IcebergCommitExec {
                 )
             })?;
 
-            let effective_operation = if !added_delete_files.is_empty() {
+            let effective_operation = if commit_meta.merge_intent {
+                crate::spec::Operation::Overwrite
+            } else if !added_delete_files.is_empty() {
                 if added_data_files.is_empty() {
                     crate::spec::Operation::Delete
                 } else {
@@ -484,6 +486,7 @@ impl ExecutionPlan for IcebergCommitExec {
                 table_properties: commit_meta.table_properties,
                 lakehouse_table: commit_meta.lakehouse_table.or(lakehouse_table),
                 operation: effective_operation,
+                merge_intent: commit_meta.merge_intent,
                 schema: commit_meta.schema,
                 partition_spec: commit_meta.partition_spec,
             };
@@ -873,6 +876,7 @@ impl ExecutionPlan for IcebergCommitExec {
                         )
                         .with_added_delete_files(commit_info.delete_files.clone())
                         .with_partition_specs(table_meta.partition_specs.clone())
+                        .with_merge_intent(commit_info.merge_intent)
                         .with_row_lineage_start_row_id(row_lineage_start_row_id);
                         struct LocalOverwriteOperation;
                         impl SnapshotProduceOperation for LocalOverwriteOperation {

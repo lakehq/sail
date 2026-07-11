@@ -238,6 +238,7 @@ impl ExecutionPlan for IcebergEqualityDeleteWriterExec {
                 lakehouse_table,
                 schema: None,
                 partition_spec: None,
+                merge_intent: false,
             };
 
             let schema = iceberg_action_schema()?;

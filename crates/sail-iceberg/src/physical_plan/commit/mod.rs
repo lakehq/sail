@@ -30,6 +30,8 @@ pub struct IcebergCommitInfo {
     pub table_properties: Vec<(String, String)>,
     pub lakehouse_table: Option<LakehouseExecutionContext>,
     pub operation: Operation,
+    #[serde(default)]
+    pub merge_intent: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub schema: Option<Schema>,
     #[serde(skip_serializing_if = "Option::is_none")]

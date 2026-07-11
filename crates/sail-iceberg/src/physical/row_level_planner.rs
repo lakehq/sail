@@ -75,7 +75,8 @@ async fn plan_iceberg_merge(
         ensure_iceberg_merge_format_v2(table.metadata())?;
     }
     let partition_columns = IcebergTableFormat::partition_columns_from_metadata(&table)?;
-    let writer_options = resolve_row_level_writer_options(session_state, node)?;
+    let mut writer_options = resolve_row_level_writer_options(session_state, node)?;
+    writer_options.merge_intent = true;
 
     let data_rows: Arc<dyn ExecutionPlan> =
         Arc::new(IcebergMergeDataRowsExec::try_new(write_plan)?);

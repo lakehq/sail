@@ -7,6 +7,7 @@ import pyspark.sql.functions as F  # noqa: N812
 import pytest
 from pyiceberg.io.pyarrow import PyArrowFileIO
 from pyiceberg.manifest import DataFileContent, ManifestContent, read_manifest_list
+from pyiceberg.typedef import Record
 from pyspark.sql.dataframe import DataFrame as SparkDataFrame
 
 from pysail.testing.spark.steps.iceberg import (
@@ -475,5 +476,201 @@ def test_iceberg_merge_rejects_position_deletes_on_v3_table_without_metadata_com
         assert _latest_metadata_path(table_path) == before_metadata_path
         assert _parquet_file_paths(table_path) == before_parquet_files
         assert len(_find_latest_metadata(table_path)["snapshots"]) == 1
+    finally:
+        _drop_table(spark, table_name)
+
+
+def test_iceberg_merge_updates_rows_beyond_the_first_input_batch(spark, tmp_path):
+    table_name = "iceberg_merge_multi_batch"
+    table_path = tmp_path / table_name
+
+    _drop_table(spark, table_name)
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (
+              id BIGINT,
+              value STRING
+            )
+            USING iceberg
+            LOCATION '{_uri_sql(table_path)}'
+            TBLPROPERTIES (
+              'format-version' = '2',
+              'write.merge.mode' = 'merge-on-read'
+            )
+            """
+        )
+        spark.sql("INSERT INTO iceberg_merge_multi_batch SELECT id, 'old' FROM range(50000)")
+        assert len(_parquet_file_paths(table_path)) == 1
+        spark.sql(
+            """
+            CREATE OR REPLACE TEMP VIEW iceberg_merge_multi_batch_source AS
+            SELECT 20000L AS id, 'updated' AS value
+            """
+        )
+
+        spark.sql(
+            f"""
+            MERGE INTO {table_name} AS t
+            USING iceberg_merge_multi_batch_source AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN UPDATE SET value = s.value
+            """
+        ).collect()
+
+        rows = [
+            tuple(row)
+            for row in spark.sql("SELECT id, value FROM iceberg_merge_multi_batch WHERE id = 20000").collect()
+        ]
+        assert rows == [(20000, "updated")]
+    finally:
+        _drop_table(spark, table_name)
+
+
+def test_iceberg_merge_metadata_as_data_read_preserves_row_level_metadata(spark, tmp_path):
+    table_name = "iceberg_merge_metadata_as_data"
+    table_path = tmp_path / table_name
+
+    _drop_table(spark, table_name)
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (
+              id INT,
+              value STRING
+            )
+            USING iceberg
+            LOCATION '{_uri_sql(table_path)}'
+            OPTIONS (metadataAsDataRead 'true')
+            TBLPROPERTIES (
+              'format-version' = '2',
+              'write.merge.mode' = 'merge-on-read'
+            )
+            """
+        )
+        spark.sql("INSERT INTO iceberg_merge_metadata_as_data VALUES (1, 'old')")
+        spark.sql(
+            """
+            CREATE OR REPLACE TEMP VIEW iceberg_merge_metadata_as_data_source AS
+            SELECT 1 AS id, 'updated' AS value
+            """
+        )
+
+        spark.sql(
+            f"""
+            MERGE INTO {table_name} AS t
+            USING iceberg_merge_metadata_as_data_source AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN UPDATE SET value = s.value
+            """
+        ).collect()
+
+        rows = [
+            tuple(row) for row in spark.read.format("iceberg").load(table_path.as_uri()).select("id", "value").collect()
+        ]
+        assert rows == [(1, "updated")]
+    finally:
+        _drop_table(spark, table_name)
+
+
+def test_iceberg_merge_position_delete_round_trips_null_partition_value(spark, tmp_path):
+    table_name = "iceberg_merge_null_partition"
+    table_path = tmp_path / table_name
+
+    _drop_table(spark, table_name)
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (
+              id INT,
+              value STRING,
+              part STRING
+            )
+            USING iceberg
+            PARTITIONED BY (part)
+            LOCATION '{_uri_sql(table_path)}'
+            TBLPROPERTIES (
+              'format-version' = '2',
+              'write.merge.mode' = 'merge-on-read'
+            )
+            """
+        )
+        spark.sql("INSERT INTO iceberg_merge_null_partition VALUES (1, 'old', NULL)")
+        spark.sql(
+            """
+            CREATE OR REPLACE TEMP VIEW iceberg_merge_null_partition_source AS
+            SELECT 1 AS id, 'updated' AS value
+            """
+        )
+
+        spark.sql(
+            f"""
+            MERGE INTO {table_name} AS t
+            USING iceberg_merge_null_partition_source AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN UPDATE SET value = s.value
+            """
+        ).collect()
+
+        rows = [tuple(row) for row in spark.sql("SELECT id, value, part FROM iceberg_merge_null_partition").collect()]
+        assert rows == [(1, "updated", None)]
+        delete_entries = _current_manifest_entries(table_path, ManifestContent.DELETES)
+        assert len(delete_entries) == 1
+        assert delete_entries[0].data_file.partition == Record(None)
+    finally:
+        _drop_table(spark, table_name)
+
+
+def test_iceberg_noop_merge_reuses_parent_manifests_with_overwrite_snapshot(spark, tmp_path):
+    table_name = "iceberg_merge_noop_snapshot"
+    table_path = tmp_path / table_name
+
+    _drop_table(spark, table_name)
+    try:
+        spark.sql(
+            f"""
+            CREATE TABLE {table_name} (
+              id INT,
+              value STRING
+            )
+            USING iceberg
+            LOCATION '{_uri_sql(table_path)}'
+            TBLPROPERTIES (
+              'format-version' = '2',
+              'write.merge.mode' = 'merge-on-read'
+            )
+            """
+        )
+        spark.sql("INSERT INTO iceberg_merge_noop_snapshot VALUES (1, 'keep')")
+        spark.sql(
+            """
+            CREATE OR REPLACE TEMP VIEW iceberg_merge_noop_source AS
+            SELECT 2 AS id, 'unmatched' AS value
+            """
+        )
+
+        before_metadata = _find_latest_metadata(table_path)
+        before_manifest_paths = {manifest["manifest-path"] for manifest in _current_manifests(table_path)}
+        before_manifest_files = set((table_path / "metadata").glob("manifest-*.avro"))
+
+        spark.sql(
+            f"""
+            MERGE INTO {table_name} AS t
+            USING iceberg_merge_noop_source AS s
+            ON t.id = s.id
+            WHEN MATCHED THEN UPDATE SET value = s.value
+            """
+        ).collect()
+
+        after_metadata = _find_latest_metadata(table_path)
+        after_snapshot = _current_snapshot(after_metadata)
+        after_manifest_paths = {manifest["manifest-path"] for manifest in _current_manifests(table_path)}
+        after_manifest_files = set((table_path / "metadata").glob("manifest-*.avro"))
+        assert len(after_metadata["snapshots"]) == len(before_metadata["snapshots"]) + 1
+        assert after_snapshot["summary"]["operation"] == "overwrite"
+        assert after_manifest_paths == before_manifest_paths
+        assert after_manifest_files == before_manifest_files
+        rows = [tuple(row) for row in spark.sql("SELECT id, value FROM iceberg_merge_noop_snapshot").collect()]
+        assert rows == [(1, "keep")]
     finally:
         _drop_table(spark, table_name)

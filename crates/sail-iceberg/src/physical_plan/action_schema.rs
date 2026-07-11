@@ -40,6 +40,7 @@ pub struct CommitMeta {
     pub lakehouse_table: Option<LakehouseExecutionContext>,
     pub schema: Option<IcebergSchema>,
     pub partition_spec: Option<PartitionSpec>,
+    pub merge_intent: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +57,7 @@ pub struct CommitMetaAction {
     pub schema_json: Option<String>,
     /// Optional PartitionSpec JSON (rare) to avoid huge Arrow schema.
     pub partition_spec_json: Option<String>,
+    pub merge_intent: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,6 +73,8 @@ pub enum PartitionValue {
     /// Stored as decimal string because `serde_arrow` does not support `u128` natively.
     UInt128(String),
     Binary(Vec<u8>),
+    /// The marker payload is required because `serde_arrow` cannot serialize a unit union variant.
+    Null(bool),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,7 +82,7 @@ pub struct AddFileAction {
     pub content: String,
     pub file_path: String,
     pub file_format: String,
-    pub partition: Vec<Option<PartitionValue>>,
+    pub partition: Vec<PartitionValue>,
     pub record_count: u64,
     pub file_size_in_bytes: u64,
     pub column_sizes: BTreeMap<i32, u64>,
@@ -122,7 +126,7 @@ fn partition_value_union_type() -> DataType {
         reason = "partition_value_union_type is a process-global constant."
     )]
     let union_fields = UnionFields::try_new(
-        [0i8, 1, 2, 3, 4, 5, 6, 7, 8],
+        [0i8, 1, 2, 3, 4, 5, 6, 7, 8, 9],
         [
             Arc::new(Field::new("Boolean", DataType::Boolean, false)),
             Arc::new(Field::new("Int", DataType::Int32, false)),
@@ -137,6 +141,7 @@ fn partition_value_union_type() -> DataType {
                 DataType::List(Arc::new(Field::new("element", DataType::UInt8, false))),
                 false,
             )),
+            Arc::new(Field::new("Null", DataType::Boolean, false)),
         ],
     )
     .unwrap();
@@ -278,6 +283,9 @@ impl TryFrom<PartitionValue> for PrimitiveLiteral {
                     })
             }
             PartitionValue::Binary(x) => Ok(PrimitiveLiteral::Binary(x)),
+            PartitionValue::Null(_) => Err(DataFusionError::Internal(
+                "null partition marker cannot be converted to a primitive literal".to_string(),
+            )),
         }
     }
 }
@@ -290,8 +298,8 @@ impl TryFrom<DataFile> for AddFileAction {
             .partition
             .into_iter()
             .map(|opt| match opt {
-                None => Ok(None),
-                Some(Literal::Primitive(p)) => Ok(Some(p.into())),
+                None => Ok(PartitionValue::Null(false)),
+                Some(Literal::Primitive(p)) => Ok(p.into()),
                 Some(other) => Err(DataFusionError::Internal(format!(
                     "unsupported non-primitive partition literal in DataFile: {other:?}"
                 ))),
@@ -349,9 +357,9 @@ impl TryFrom<AddFileAction> for DataFile {
         let partition = a
             .partition
             .into_iter()
-            .map(|opt| match opt {
-                None => Ok(None),
-                Some(pv) => Ok(Some(Literal::Primitive(pv.try_into()?))),
+            .map(|value| match value {
+                PartitionValue::Null(_) => Ok(None),
+                value => Ok(Some(Literal::Primitive(value.try_into()?))),
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -457,6 +465,7 @@ pub fn encode_commit_meta(meta: CommitMeta) -> Result<RecordBatch> {
             lakehouse_table_json,
             schema_json,
             partition_spec_json,
+            merge_intent: meta.merge_intent,
         }),
     }];
     encode_actions(rows)
@@ -510,6 +519,7 @@ pub fn decode_actions_and_meta_from_batch(
                     lakehouse_table,
                     schema,
                     partition_spec,
+                    merge_intent: m.merge_intent,
                 });
             }
         }
@@ -532,7 +542,7 @@ mod tests {
             content: DataContentType::Data,
             file_path: "s3://bucket/a.parquet".to_string(),
             file_format: DataFileFormat::Parquet,
-            partition: vec![Some(Literal::Primitive(PrimitiveLiteral::Int(1)))],
+            partition: vec![Some(Literal::Primitive(PrimitiveLiteral::Int(1))), None],
             record_count: 10,
             file_size_in_bytes: 123,
             column_sizes: HashMap::from([(1, 10u64)]),
@@ -562,6 +572,7 @@ mod tests {
             lakehouse_table: None,
             schema: None,
             partition_spec: None,
+            merge_intent: false,
         };
 
         let schema = iceberg_action_schema()?;
@@ -582,7 +593,9 @@ mod tests {
         assert_eq!(deletes.len(), 1);
         assert_eq!(adds[0].file_path, df.file_path);
         assert_eq!(adds[0].record_count, df.record_count);
+        assert_eq!(adds[0].partition, df.partition);
         assert_eq!(deletes[0].content, DataContentType::PositionDeletes);
+        assert_eq!(deletes[0].partition, df.partition);
         assert_eq!(
             deletes[0].referenced_data_file.as_deref(),
             Some(df.file_path.as_str())
