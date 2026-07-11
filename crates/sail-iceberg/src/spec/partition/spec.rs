@@ -277,29 +277,3 @@ impl Default for PartitionSpecBuilder {
         Self::new()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn partitioned_spec_last_assigned_id_uses_highest_field_id() {
-        let spec = PartitionSpec::builder()
-            .add_field(1, "category", Transform::Identity)
-            .add_field(2, "date", Transform::Day)
-            .build();
-
-        assert_eq!(spec.highest_field_id(), Some(1001));
-        assert_eq!(spec.last_assigned_field_id(), 1001);
-    }
-
-    #[test]
-    fn unpartitioned_spec_last_assigned_id_matches_iceberg_default() {
-        let spec = PartitionSpec::unpartitioned_spec();
-        assert_eq!(spec.highest_field_id(), None);
-        assert_eq!(
-            spec.last_assigned_field_id(),
-            UNPARTITIONED_LAST_ASSIGNED_ID
-        );
-    }
-}

@@ -66,39 +66,3 @@ impl Transaction {
         OverwriteAction::new()
     }
 }
-
-#[cfg(test)]
-#[expect(clippy::expect_used)]
-mod tests {
-    use super::*;
-    use crate::spec::{Operation, SnapshotBuilder};
-
-    #[test]
-    fn transaction_allocates_sequence_after_table_sequence() {
-        let parent_snapshot = SnapshotBuilder::new()
-            .with_snapshot_id(7)
-            .with_sequence_number(3)
-            .with_manifest_list("metadata/snap-7.avro".to_string())
-            .with_summary(crate::spec::snapshots::Summary::new(Operation::Append))
-            .build()
-            .expect("parent snapshot");
-        let transaction = Transaction::new("file:///tmp/table".to_string(), parent_snapshot, 11);
-
-        assert_eq!(transaction.next_sequence_number(), Ok(12));
-    }
-
-    #[test]
-    fn transaction_rejects_sequence_number_overflow() {
-        let parent_snapshot = SnapshotBuilder::new()
-            .with_snapshot_id(7)
-            .with_sequence_number(3)
-            .with_manifest_list("metadata/snap-7.avro".to_string())
-            .with_summary(crate::spec::snapshots::Summary::new(Operation::Append))
-            .build()
-            .expect("parent snapshot");
-        let transaction =
-            Transaction::new("file:///tmp/table".to_string(), parent_snapshot, i64::MAX);
-
-        assert!(transaction.next_sequence_number().is_err());
-    }
-}

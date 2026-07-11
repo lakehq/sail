@@ -35,8 +35,8 @@ use sail_common_datafusion::catalog::{
     ScanAuthority,
 };
 use sail_common_datafusion::datasource::{
-    BucketBy, DeleteInfo, OptionLayer, PhysicalSinkMode, RowLevelCommand, SinkInfo, SinkMode,
-    SourceInfo, TableFormat, TableFormatAlterTableOperation, TableFormatCreateTableColumn,
+    BucketBy, DeleteInfo, OptionLayer, PhysicalSinkMode, SinkInfo, SinkMode, SourceInfo,
+    TableFormat, TableFormatAlterTableOperation, TableFormatCreateTableColumn,
     TableFormatCreateTableInfo, TableFormatCreateTableResult, TableFormatRegistry,
     create_sort_order, find_path_in_options,
 };
@@ -1104,29 +1104,6 @@ pub fn catalog_managed_iceberg_from_options(options: &[OptionLayer]) -> bool {
     })
 }
 
-pub(crate) fn ensure_iceberg_row_level_merge_on_read(
-    command: RowLevelCommand,
-    configured_mode: Option<&str>,
-) -> Result<()> {
-    let (operation, property) = match command {
-        RowLevelCommand::Delete => ("DELETE", "write.delete.mode"),
-        RowLevelCommand::Merge => ("MERGE", "write.merge.mode"),
-        RowLevelCommand::Update => ("UPDATE", "write.update.mode"),
-    };
-    let mode = configured_mode.unwrap_or("copy-on-write");
-    if mode.eq_ignore_ascii_case("merge-on-read") {
-        return Ok(());
-    }
-    if mode.eq_ignore_ascii_case("copy-on-write") {
-        return not_impl_err!(
-            "Iceberg {operation} with `{property}=copy-on-write` is not supported yet; set `{property}=merge-on-read`"
-        );
-    }
-    plan_err!(
-        "Unknown Iceberg row-level operation mode for `{property}`: {mode}; expected `copy-on-write` or `merge-on-read`"
-    )
-}
-
 #[expect(clippy::type_complexity)]
 pub fn split_iceberg_write_options_and_table_properties(
     options: Vec<OptionLayer>,
@@ -1289,21 +1266,6 @@ mod tests {
             "metadata.table-uuid".to_string(),
             "9f7c2fc5-2e7d-4a6a-b3f9-0f6a47a3522c".to_string(),
         )]));
-    }
-
-    #[test]
-    fn row_level_operations_require_explicit_merge_on_read() {
-        for command in [RowLevelCommand::Delete, RowLevelCommand::Merge] {
-            assert!(ensure_iceberg_row_level_merge_on_read(command, Some("merge-on-read")).is_ok());
-            assert!(
-                ensure_iceberg_row_level_merge_on_read(command, None)
-                    .is_err_and(|err| err.to_string().contains("copy-on-write"))
-            );
-            assert!(
-                ensure_iceberg_row_level_merge_on_read(command, Some("copy-on-write"))
-                    .is_err_and(|err| err.to_string().contains("copy-on-write"))
-            );
-        }
     }
 
     #[test]

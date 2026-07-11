@@ -54,7 +54,7 @@ Feature: from_xml parses an XML string into a struct value
         """
       Then query result
         | result |
-        | 3.5    |
+        | 3.5    |    
 
   Rule: Root tag is ignored
 

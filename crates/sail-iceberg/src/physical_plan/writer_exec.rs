@@ -44,14 +44,14 @@ use crate::physical_plan::action_schema::{
 };
 use crate::physical_plan::merge_row_projection::IcebergMergeRowProjection;
 use crate::physical_plan::position_delete_writer::PositionDeleteAccumulator;
+use crate::physical_plan::write_location;
 use crate::physical_plan::writer_options::IcebergWriterExecOptions;
-use crate::physical_plan::{delete_writer_common, write_location};
 use crate::schema_evolution::{SchemaEvolver, SchemaMode};
 use crate::spec::partition::{
     PartitionSpec as BoundPartitionSpec, UnboundPartitionField, UnboundPartitionSpec,
 };
 use crate::spec::schema::Schema as IcebergSchema;
-use crate::spec::{TableMetadata, TableRequirement};
+use crate::spec::{FormatVersion, TableMetadata, TableRequirement};
 use crate::table::metadata_loader::metadata_location_to_object_path_string;
 use crate::table_format::{
     catalog_managed_iceberg_from_properties, metadata_location_from_properties,
@@ -582,7 +582,20 @@ impl ExecutionPlan for IcebergWriterExec {
                             .to_string(),
                     )
                 })?;
-                delete_writer_common::ensure_position_delete_file_writes(table_metadata)?;
+                match table_metadata.format_version {
+                    FormatVersion::V1 => {
+                        return Err(DataFusionError::Plan(
+                            "Iceberg position delete writes require table format-version 2"
+                                .to_string(),
+                        ));
+                    }
+                    FormatVersion::V2 => {}
+                    FormatVersion::V3 => {
+                        return Err(DataFusionError::NotImplemented(
+                            "Iceberg v3 MERGE MOR position delete writes are not supported; v3 requires deletion vectors".to_string(),
+                        ));
+                    }
+                }
                 Some(PositionDeleteAccumulator::default())
             } else {
                 None

@@ -4920,44 +4920,6 @@ mod tests {
     }
 
     #[test]
-    fn test_round_trip_iceberg_merge_metadata_file_context() -> Result<()> {
-        use datafusion::arrow::datatypes::Field;
-        use datafusion::physical_plan::empty::EmptyExec;
-        use sail_common_datafusion::datasource::{MERGE_FILE_COLUMN, MERGE_ROW_INDEX_COLUMN};
-
-        let input_schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, true)]));
-        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(input_schema));
-        let original = IcebergMergeMetadataExec::try_new(
-            input,
-            "s3://bucket/table/data.parquet".to_string(),
-            7,
-            "[]".to_string(),
-            Some(MERGE_FILE_COLUMN.to_string()),
-            Some(MERGE_ROW_INDEX_COLUMN.to_string()),
-        )?;
-
-        let codec = RemoteExecutionCodec;
-        let bytes = try_encode_physical_plan(&codec, Arc::new(original))?;
-        let decoded = try_decode_physical_plan(&TaskContext::default(), &codec, &bytes)?;
-        let decoded = decoded
-            .downcast_ref::<IcebergMergeMetadataExec>()
-            .ok_or_else(|| plan_datafusion_err!("decoded plan is not IcebergMergeMetadataExec"))?;
-
-        assert_eq!(
-            decoded.data_file_path(),
-            Some("s3://bucket/table/data.parquet")
-        );
-        assert_eq!(decoded.data_file_partition_spec_id(), Some(7));
-        assert_eq!(decoded.data_file_partition_json(), Some("[]"));
-        assert_eq!(decoded.file_column_name(), Some(MERGE_FILE_COLUMN));
-        assert_eq!(
-            decoded.row_index_column_name(),
-            Some(MERGE_ROW_INDEX_COLUMN)
-        );
-        Ok(())
-    }
-
-    #[test]
     fn test_hash_output_partitioning_decodes_higher_order_key() -> Result<()> {
         use crate::task::definition::{TaskOutput, TaskOutputDistribution, TaskOutputLocator};
 

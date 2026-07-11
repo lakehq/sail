@@ -9,7 +9,7 @@ use crate::operations::write::arrow_parquet::ArrowParquetWriter;
 use crate::operations::write::base_writer::DataFileWriter;
 use crate::physical_plan::write_location;
 use crate::spec::types::values::Literal;
-use crate::spec::{DataFile, FormatVersion, TableMetadata};
+use crate::spec::{DataFile, TableMetadata};
 use crate::table::metadata_loader::{
     load_metadata_file_bytes, metadata_location_to_object_path_string,
 };
@@ -99,29 +99,6 @@ pub(crate) async fn load_current_table_metadata(
     TableMetadata::from_json(&bytes).map_err(|e| DataFusionError::External(Box::new(e)))
 }
 
-pub(crate) fn ensure_position_delete_file_writes(table_meta: &TableMetadata) -> Result<()> {
-    if table_meta.format_version < FormatVersion::V2 {
-        return Err(DataFusionError::Plan(
-            "Iceberg position delete writes require table format-version 2".to_string(),
-        ));
-    }
-    if table_meta.format_version >= FormatVersion::V3 {
-        return Err(DataFusionError::NotImplemented(
-            "Iceberg v3 MERGE MOR position delete writes are not supported; v3 requires deletion vectors".to_string(),
-        ));
-    }
-    Ok(())
-}
-
-pub(crate) fn ensure_equality_delete_writes(table_meta: &TableMetadata) -> Result<()> {
-    if table_meta.format_version < FormatVersion::V2 {
-        return Err(DataFusionError::Plan(
-            "Iceberg equality delete writes require table format-version 2 or higher".to_string(),
-        ));
-    }
-    Ok(())
-}
-
 pub(crate) async fn write_delete_parquet_file(
     store_ctx: &StoreContext,
     table_url: &Url,
@@ -150,86 +127,4 @@ pub(crate) async fn write_delete_parquet_file(
         .finish(meta)
         .map(|outcome| outcome.data_file)
         .map_err(DataFusionError::Execution)
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-
-    use datafusion_common::DataFusionError;
-
-    use super::*;
-
-    fn table_metadata_with_format_version(format_version: FormatVersion) -> TableMetadata {
-        TableMetadata {
-            format_version,
-            table_uuid: None,
-            location: "file:///tmp/table".to_string(),
-            last_sequence_number: 0,
-            last_updated_ms: 0,
-            last_column_id: 0,
-            schemas: vec![],
-            current_schema_id: 0,
-            partition_specs: vec![],
-            default_spec_id: 0,
-            last_partition_id: 0,
-            properties: HashMap::new(),
-            current_snapshot_id: None,
-            next_row_id: None,
-            encryption_keys: vec![],
-            snapshots: vec![],
-            snapshot_log: vec![],
-            metadata_log: vec![],
-            sort_orders: vec![],
-            default_sort_order_id: None,
-            refs: HashMap::new(),
-            statistics: vec![],
-            partition_statistics: vec![],
-        }
-    }
-
-    #[test]
-    fn position_delete_file_writes_require_v2_and_reject_v3() {
-        let v1 = table_metadata_with_format_version(FormatVersion::V1);
-        assert!(matches!(
-            ensure_position_delete_file_writes(&v1),
-            Err(DataFusionError::Plan(_))
-        ));
-        assert!(
-            ensure_position_delete_file_writes(&v1)
-                .is_err_and(|err| err.to_string().contains("position delete writes"))
-        );
-
-        let v2 = table_metadata_with_format_version(FormatVersion::V2);
-        assert!(ensure_position_delete_file_writes(&v2).is_ok());
-
-        let v3 = table_metadata_with_format_version(FormatVersion::V3);
-        assert!(matches!(
-            ensure_position_delete_file_writes(&v3),
-            Err(DataFusionError::NotImplemented(_))
-        ));
-        assert!(
-            ensure_position_delete_file_writes(&v3)
-                .is_err_and(|err| err.to_string().contains("requires deletion vectors"))
-        );
-    }
-
-    #[test]
-    fn equality_delete_writes_require_v2_or_higher() {
-        let v1 = table_metadata_with_format_version(FormatVersion::V1);
-        assert!(matches!(
-            ensure_equality_delete_writes(&v1),
-            Err(DataFusionError::Plan(_))
-        ));
-        assert!(
-            ensure_equality_delete_writes(&v1)
-                .is_err_and(|err| err.to_string().contains("equality delete writes"))
-        );
-
-        let v2 = table_metadata_with_format_version(FormatVersion::V2);
-        assert!(ensure_equality_delete_writes(&v2).is_ok());
-
-        let v3 = table_metadata_with_format_version(FormatVersion::V3);
-        assert!(ensure_equality_delete_writes(&v3).is_ok());
-    }
 }

@@ -198,12 +198,4 @@ mod tests {
         ));
         Ok(())
     }
-
-    #[test]
-    fn parquet_file_path_uses_data_dir_and_prefix() {
-        let path = parquet_file_path("custom/data/", "equality-delete");
-
-        assert!(path.starts_with("custom/data/equality-delete-"));
-        assert!(path.ends_with(".parquet"));
-    }
 }

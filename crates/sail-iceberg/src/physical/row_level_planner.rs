@@ -6,24 +6,19 @@ use datafusion::logical_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_planner::PhysicalPlanner;
-use sail_common_datafusion::datasource::{
-    MERGE_ROW_INDEX_COLUMN, PhysicalSinkMode, RowLevelCommand,
-};
+use sail_common_datafusion::datasource::{PhysicalSinkMode, RowLevelCommand};
 use sail_data_source::options::ResolveOptions;
 use sail_logical_plan::merge::RowLevelWriteNode;
 
 use crate::operations::SnapshotUpdateKind;
 use crate::options::r#gen::IcebergWriteOptions;
-use crate::physical_plan::equality_delete_writer_exec::ensure_full_row_equality_delete_preflight;
 use crate::physical_plan::merge_row_projection::IcebergMergeRowProjection;
 use crate::physical_plan::{
     IcebergCommitExec, IcebergEqualityDeleteWriterExec, IcebergWriterExec, IcebergWriterExecOptions,
 };
-use crate::spec::{FormatVersion, TableMetadata};
 use crate::table::Table;
 use crate::table_format::{
-    IcebergTableFormat, catalog_managed_iceberg_from_options,
-    ensure_iceberg_row_level_merge_on_read, metadata_location_from_options,
+    IcebergTableFormat, catalog_managed_iceberg_from_options, metadata_location_from_options,
     split_iceberg_write_options_and_table_properties,
 };
 
@@ -65,13 +60,6 @@ async fn plan_iceberg_merge(
     )
     .await?;
     ensure_current_row_level_mode(&table, RowLevelCommand::Merge)?;
-    if write_plan
-        .schema()
-        .field_with_name(MERGE_ROW_INDEX_COLUMN)
-        .is_ok()
-    {
-        ensure_iceberg_merge_format_v2(table.metadata())?;
-    }
     let partition_columns = IcebergTableFormat::partition_columns_from_metadata(&table)?;
     let writer_options = resolve_row_level_writer_options(session_state, node)?;
 
@@ -123,7 +111,6 @@ async fn plan_iceberg_delete(
     )
     .await?;
     ensure_current_row_level_mode(&table, RowLevelCommand::Delete)?;
-    ensure_full_row_equality_delete_preflight(table.metadata())?;
 
     let delete_plan = LogicalPlanBuilder::from(node.raw_target().as_ref().clone())
         .filter(condition.expr.clone())?
@@ -157,31 +144,27 @@ async fn plan_iceberg_delete(
 }
 
 fn ensure_current_row_level_mode(table: &Table, command: RowLevelCommand) -> Result<()> {
-    let property = match command {
-        RowLevelCommand::Delete => "write.delete.mode",
-        RowLevelCommand::Merge => "write.merge.mode",
-        RowLevelCommand::Update => "write.update.mode",
+    let (operation, property) = match command {
+        RowLevelCommand::Delete => ("DELETE", "write.delete.mode"),
+        RowLevelCommand::Merge => ("MERGE", "write.merge.mode"),
+        RowLevelCommand::Update => ("UPDATE", "write.update.mode"),
     };
-    ensure_iceberg_row_level_merge_on_read(
-        command,
-        table
-            .metadata()
-            .properties
-            .get(property)
-            .map(String::as_str),
-    )
-}
-
-fn ensure_iceberg_merge_format_v2(table_meta: &TableMetadata) -> Result<()> {
-    match table_meta.format_version {
-        FormatVersion::V2 => Ok(()),
-        FormatVersion::V1 => plan_err!(
-            "Iceberg MERGE merge-on-read requires table format-version 2 for position deletes"
-        ),
-        FormatVersion::V3 => not_impl_err!(
-            "Iceberg v3 MERGE MOR position delete writes are not supported; v3 requires deletion vectors"
-        ),
+    let mode = table
+        .metadata()
+        .properties
+        .get(property)
+        .map_or("copy-on-write", String::as_str);
+    if mode.eq_ignore_ascii_case("merge-on-read") {
+        return Ok(());
     }
+    if mode.eq_ignore_ascii_case("copy-on-write") {
+        return not_impl_err!(
+            "Iceberg {operation} with `{property}=copy-on-write` is not supported yet; set `{property}=merge-on-read`"
+        );
+    }
+    plan_err!(
+        "Unknown Iceberg row-level operation mode for `{property}`: {mode}; expected `copy-on-write` or `merge-on-read`"
+    )
 }
 
 fn resolve_row_level_writer_options(
