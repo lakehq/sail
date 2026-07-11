@@ -35,22 +35,26 @@ fn active_row_count(manifest: &crate::spec::manifest_list::ManifestFile) -> Opti
     Some(manifest.added_rows_count? + manifest.existing_rows_count?)
 }
 
-fn previous_total(
-    parent_summary: &crate::spec::snapshots::Summary,
-    key: &str,
-    is_bootstrap: bool,
-) -> Option<u64> {
-    if is_bootstrap {
-        Some(0)
-    } else {
-        parent_summary.additional_properties.get(key)?.parse().ok()
+#[derive(Debug, Clone, Copy)]
+enum DeleteRowTotalsBase<'a> {
+    Empty,
+    Parent(&'a crate::spec::snapshots::Summary),
+}
+
+impl DeleteRowTotalsBase<'_> {
+    fn previous_total(self, key: &str) -> Option<u64> {
+        match self {
+            Self::Empty => Some(0),
+            Self::Parent(parent_summary) => {
+                parent_summary.additional_properties.get(key)?.parse().ok()
+            }
+        }
     }
 }
 
 fn with_manifest_totals<'a>(
     mut summary: crate::spec::snapshots::Summary,
-    parent_summary: &crate::spec::snapshots::Summary,
-    is_bootstrap: bool,
+    delete_totals_base: DeleteRowTotalsBase<'_>,
     manifests: impl IntoIterator<Item = &'a crate::spec::manifest_list::ManifestFile>,
     added_position_deletes: u64,
     added_equality_deletes: u64,
@@ -87,7 +91,7 @@ fn with_manifest_totals<'a>(
     }
 
     if let Some(previous_position_deletes) =
-        previous_total(parent_summary, "total-position-deletes", is_bootstrap)
+        delete_totals_base.previous_total("total-position-deletes")
     {
         summary = summary.with_property(
             "total-position-deletes",
@@ -95,7 +99,7 @@ fn with_manifest_totals<'a>(
         );
     }
     if let Some(previous_equality_deletes) =
-        previous_total(parent_summary, "total-equality-deletes", is_bootstrap)
+        delete_totals_base.previous_total("total-equality-deletes")
     {
         summary = summary.with_property(
             "total-equality-deletes",
@@ -306,6 +310,18 @@ impl SnapshotUpdateKind {
 
     fn carries_parent_manifests(self) -> bool {
         matches!(self, Self::FastAppend | Self::RowDelta)
+    }
+
+    fn delete_totals_base<'a>(
+        self,
+        parent_summary: &'a crate::spec::snapshots::Summary,
+        is_bootstrap: bool,
+    ) -> DeleteRowTotalsBase<'a> {
+        if is_bootstrap || !self.carries_parent_manifests() {
+            DeleteRowTotalsBase::Empty
+        } else {
+            DeleteRowTotalsBase::Parent(parent_summary)
+        }
     }
 }
 
@@ -620,18 +636,15 @@ impl<'a> SnapshotProducer<'a> {
             );
         }
 
-        if update_kind.carries_parent_manifests() {
-            summary = with_manifest_totals(
-                summary,
-                parent_snapshot.summary(),
-                self.is_bootstrap,
-                parent_manifest_entries
-                    .iter()
-                    .chain(new_manifest_files.iter()),
-                added_position_deletes,
-                added_equality_deletes,
-            );
-        }
+        summary = with_manifest_totals(
+            summary,
+            update_kind.delete_totals_base(parent_snapshot.summary(), self.is_bootstrap),
+            parent_manifest_entries
+                .iter()
+                .chain(new_manifest_files.iter()),
+            added_position_deletes,
+            added_equality_deletes,
+        );
 
         let mut list_writer = ManifestListWriter::new();
         let mut total_manifest_count = 0;
@@ -839,8 +852,7 @@ mod tests {
         let deletes_with_unknown_files = manifest_file(ManifestContentType::Deletes);
         let summary = with_manifest_totals(
             crate::spec::snapshots::Summary::new(Operation::Append),
-            &crate::spec::snapshots::Summary::new(Operation::Append),
-            false,
+            DeleteRowTotalsBase::Parent(&crate::spec::snapshots::Summary::new(Operation::Append)),
             [&data_with_unknown_counts, &deletes_with_unknown_files],
             0,
             0,
@@ -856,6 +868,47 @@ mod tests {
             !summary
                 .additional_properties
                 .contains_key("total-delete-files")
+        );
+    }
+
+    #[test]
+    fn full_overwrite_recomputes_snapshot_totals_from_new_manifests() {
+        let parent_summary = crate::spec::snapshots::Summary::new(Operation::Append)
+            .with_property("total-position-deletes", "7")
+            .with_property("total-equality-deletes", "5");
+        let replacement_data = ManifestFile::builder()
+            .with_manifest_path("metadata/replacement.avro")
+            .with_content(ManifestContentType::Data)
+            .with_file_counts(2, 0, 0)
+            .with_row_counts(10, 0, 0)
+            .build()
+            .expect("replacement manifest");
+
+        let summary = with_manifest_totals(
+            crate::spec::snapshots::Summary::new(Operation::Overwrite),
+            SnapshotUpdateKind::FullOverwrite.delete_totals_base(&parent_summary, false),
+            [&replacement_data],
+            0,
+            0,
+        );
+
+        let totals = &summary.additional_properties;
+        assert_eq!(
+            totals.get("total-data-files").map(String::as_str),
+            Some("2")
+        );
+        assert_eq!(
+            totals.get("total-delete-files").map(String::as_str),
+            Some("0")
+        );
+        assert_eq!(totals.get("total-records").map(String::as_str), Some("10"));
+        assert_eq!(
+            totals.get("total-position-deletes").map(String::as_str),
+            Some("0")
+        );
+        assert_eq!(
+            totals.get("total-equality-deletes").map(String::as_str),
+            Some("0")
         );
     }
 
